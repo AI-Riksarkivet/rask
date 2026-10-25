@@ -113,8 +113,7 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   The annotator is no prerequisite: it is a client of the lakehouse with its own release (ADR 0171; local chart, release
   `annotator` in rask's namespace, `WAIT=false`), which `make k3s-up` installs AFTER rask (`make k3s-annotator`), as the
   e2e-stack lane does: its own Dapr state store on a CloudNativePG `Cluster` it renders, its own app token and route, and
-  rask's catalog and Dex by reference, with no OpenFGA or store credential; the product chart renders only its zone,
-  pointed at it by `frontend.annotatorUrl`. A fixture's `SET_FILES` passes an
+  rask's catalog and Dex by reference, with no OpenFGA or store credential; the product chart renders nothing of it. A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a
   test can render it through `chart_render.render_fixture`). The e2e lanes install ESO, Dapr and NATS through the same
@@ -231,8 +230,8 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   `dapr_rbac.secretReader.enabled: false`** (deploy/fixtures/dapr/values.yaml). No sidecar uses that store:
   every injected pod sets `dapr.io/disable-builtin-k8s-secret-store`.
 - **Every first-party pod names its own SA**, and the NATS fixture's server and nats-box run as their own
-  (`serviceAccount` values in deploy/fixtures/nats). A shared SA is allowed only where the sharers are one identity (`sa-web`
-  for the zones, `sa-maintenance` for the maintenance service); one-shot Jobs share `sa-jobs`.
+  (`serviceAccount` values in deploy/fixtures/nats). A shared SA is allowed only where the sharers are one identity
+  (`sa-maintenance` for the maintenance service); one-shot Jobs share `sa-jobs`.
 - **A binding names its subject through the helper the pod uses**, never through a free value with a
   `default` fallback: an unset value then puts the grant on the shared identity. Likewise a pod names its SA with the prefix `security-sa.yaml`
   renders it with, `lance.fullname` (the release name). `rask.fullname` is pinned to `rask` by

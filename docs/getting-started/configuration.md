@@ -38,9 +38,7 @@ authenticates every request itself. The route table:
 
 | Public prefix | Service | Path at the service |
 |---|---|---|
-| `/api/explorer/search` | search | `/api/search…` |
 | `/api/explorer/annotations` | annotator (the annotator fixture chart's own HTTPRoute) | `/api/annotations…` |
-| `/api/explorer` | viewer (incl. the objects browser) | `/api…` |
 | `/api/catalog` | catalog | `/…` |
 | `/api/lineage` | lineage | `/…` |
 | `/api/notifications` | notifications | unchanged |
@@ -52,8 +50,6 @@ The rewrite is Gateway API `URLRewrite` `ReplacePrefixMatch`. An unmatched `/api
 |---|---|
 | `route.parentRefs` | The Gateway the routes attach to (required). In development, `traefik-gateway` in kube-system. |
 | `route.hostnames` | Hostnames the platform's Gateway routes to this release. Required on a real deployment, which the render refuses with an empty list; empty, in development, the routes match every host the listener accepts. |
-| `route.edgeUrl` → `RASK_EDGE_URL` | The Gateway's in-cluster address, where the zones' server side sends `/api/*`. Required while the zones render. |
-| `route.edgeEgress` | NetworkPolicy egress rules admitting the zones to the Gateway's data plane pods; required under `networkPolicy.enabled`. |
 | `forwardedAllowIps` | The data plane's pod CIDR, trusted for `X-Forwarded-For` by every service the route publishes. |
 
 Locally there is no router: `make dev-micro` runs the fleet only. The zones' SSR reads `RASK_EDGE_URL` (default

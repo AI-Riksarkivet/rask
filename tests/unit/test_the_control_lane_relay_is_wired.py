@@ -46,7 +46,6 @@ def _render(*set_values: str) -> list[dict]:
     argv = [helm, "template", "rask", str(CHART), "--set", "image.localImages=true"]
     argv += [*PREREQ_ARGS, *RAY_ARGS]
     argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
-    argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in set_values:
         argv += ["--set", value]
     out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603

@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-	chartApps,
 	devScript,
 	FRONTEND_ROOT,
 	packageName,
@@ -18,7 +17,6 @@ import { e2eServers } from './workspace';
 
 const zones = zoneDirs();
 const config = routingConfig();
-const apps = chartApps();
 
 /** The catch-all zone: owns '/', so no base path and no routing entry of its own. */
 const CATCH_ALL = 'home';
@@ -34,16 +32,8 @@ describe('every zone directory is a declared application', () => {
 		expect(Object.keys(config.applications)).toContain(zone);
 	});
 
-	it.each(zones)('%s is in the chart frontend.apps list', (zone) => {
-		expect(apps.map((a) => a.name)).toContain(zone);
-	});
-
 	it('declares no application that has no zone directory', () => {
 		expect(Object.keys(config.applications).sort()).toEqual(zones);
-	});
-
-	it('lists no chart app that has no zone directory', () => {
-		expect(apps.map((a) => a.name).sort()).toEqual(zones);
 	});
 
 	it.each(zones)('%s is the package name too, so turbo can route to it', (zone) => {
@@ -54,20 +44,18 @@ describe('every zone directory is a declared application', () => {
 	});
 });
 
-describe('base path, routing config and Ingress route agree', () => {
+describe('base path and routing config agree', () => {
 	it.each(zones.filter((z) => z !== CATCH_ALL))('%s owns /<zone> everywhere', (zone) => {
 		// The base path IS the asset prefix (micro-frontends: independently deployed apps serve assets
 		// from one origin, so each needs a unique prefix). If it drifts from the path the proxy and the
-		// Ingress route, the zone's own chunks 404.
+		// zone's server route, the zone's own chunks 404.
 		expect(svelteBase(zone)).toBe(`/${zone}`);
 		expect(config.applications[zone]?.routing?.[0]?.paths).toEqual([`/${zone}`, `/${zone}/:path*`]);
-		expect(apps.find((a) => a.name === zone)?.path).toBe(`/${zone}`);
 	});
 
-	it('the catch-all zone has no base path and owns "/" in the chart', () => {
+	it('the catch-all zone has no base path and no routing entry of its own', () => {
 		expect(svelteBase(CATCH_ALL)).toBe('');
 		expect(config.applications[CATCH_ALL]?.routing).toBeUndefined();
-		expect(apps.find((a) => a.name === CATCH_ALL)?.catchAll).toBe(true);
 	});
 });
 

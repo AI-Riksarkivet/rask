@@ -87,28 +87,3 @@ export function packageName(zone: string): string {
 export function devScript(zone: string): string {
 	return JSON.parse(read(`microfrontends/${zone}/package.json`)).scripts?.dev ?? '';
 }
-
-export interface ChartApp {
-	name: string;
-	path: string | null;
-	catchAll: boolean;
-}
-
-/** `chart/values.yaml` → `frontend.apps`. Parsed from the flow-mapping list entries so this stays a
- *  dependency-free read (no YAML parser in the frontend workspace). */
-export function chartApps(): ChartApp[] {
-	const yaml = readFileSync(resolve(REPO_ROOT, 'chart/values.yaml'), 'utf8');
-	const block = /^\s{2}apps:\s*$/m.exec(yaml);
-	if (!block) return [];
-	const rest = yaml.slice(block.index + block[0].length);
-	const end = /^\s{0,2}\w/m.exec(rest);
-	const body = end ? rest.slice(0, end.index) : rest;
-	return [...body.matchAll(/^\s*-\s*\{([^}]*)\}/gm)].map((m) => {
-		const entry = m[1] ?? '';
-		return {
-			name: /name:\s*([\w-]+)/.exec(entry)?.[1] ?? '',
-			path: /path:\s*(\/[\w-]*)/.exec(entry)?.[1] ?? null,
-			catchAll: /catchAll:\s*true/.test(entry),
-		};
-	});
-}

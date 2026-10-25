@@ -39,8 +39,8 @@ The BFF is a bearer-forwarding proxy, not a policy engine. Its own rules:
   `401`.
 - **Reads on the lineage plane have a service-credential fallback.** `makeLineageProxy` attaches
   `LINEAGE_SERVICE_TOKEN` for `GET`/`HEAD` when there is no session, so a governed stack can serve
-  lineage reads without a per-user login. That subject is the web zones' ServiceAccount's
-  (`kubernetes~system:serviceaccount:<ns>:<release>-sa-web`): its reach is exactly what FGA grants it,
+  lineage reads without a per-user login. That subject is the client's own ServiceAccount's
+  (`kubernetes~system:serviceaccount:<ns>:<its service account>`): its reach is exactly what FGA grants it,
   and nothing else in the estate has this fallback.
 - **Signed-out page loads are redirected**, not 404ed: `isGatedPageRequest` sends a browser `GET` for
   HTML to the home zone's `/auth/login?redirect=…`. API routes are deliberately excluded so they keep

@@ -80,8 +80,6 @@ describe('nothing outside the frontend still points at a moved path', () => {
 	const SEARCHED = [
 		'Makefile',
 		'.docker/frontend.dockerfile',
-		'chart/templates/frontends.yaml',
-		'chart/templates/ingress.yaml',
 		'chart/values.yaml',
 		'scripts/verify_cross_zone_oidc.sh',
 		'scripts/verify_cross_zone_oidc.mjs',
@@ -106,11 +104,10 @@ describe('nothing outside the frontend still points at a moved path', () => {
 	 * annotation would be truncated mid-value and the gate would stop seeing real references.
 	 */
 	const codeOnly = (src: string): string =>
-		// HELM'S COMMENT FORM FIRST, and it spans lines. Four of the nine files searched are chart
-		// templates, where a comment is `{{- /* … */ -}}` and only its FIRST line ever starts with a
-		// `#`. `chart/templates/frontends.yaml` explains why its body-size knob sits above the BFF's
-		// own guard and names `@rask/api/serve-proxy` on a continuation line, so the line-wise pass
-		// below saw a bare sentence and reported the chart as using a retired package.
+		// HELM'S COMMENT FORM FIRST, and it spans lines. In a chart template a comment is
+		// `{{- /* … */ -}}` and only its FIRST line ever starts with a `#`, so a package named on a
+		// continuation line reads as a bare sentence to the line-wise pass below, and the chart would
+		// be reported as using a retired package.
 		src
 			.replace(/\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}/g, '')
 			.split('\n')

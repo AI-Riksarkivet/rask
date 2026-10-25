@@ -5,4 +5,4 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `{{- if and (not .Values.openbao.enabled) (not (.Values.signing).provisioned) }}`
 
-Renders no object, like `auth-consistency.yaml`: the platform's store, which nothing here seeds, must be told the signing keys exist (values.yaml `signing:`).
+Renders no object: it exists only to fail a render whose signers would never become Ready. The platform's store, which nothing here seeds, must be told the signing keys exist (values.yaml `signing:`).

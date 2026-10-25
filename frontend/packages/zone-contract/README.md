@@ -48,7 +48,6 @@ private to `manifest.test.ts`, which is how that file grew to nine unrelated con
 | `cross-zone-reload.ts` + test  | a cross-zone `<a>` hard-navigates — on Svelte's own compiler, not a regex         |
 | `link-targets.ts` + test       | every domain-relative link lands on a route that exists                           |
 | `bff-routes.test.ts`           | every BFF route has a caller, and each zone gets only the upstreams it uses       |
-| `live-stream.test.ts`          | a live query survives both idle timeouts                                          |
 | `poll-reason.test.ts`          | every deliberate poll states why                                                  |
 | `no-networkidle.test.ts`       | no e2e waits on `networkidle`                                                     |
 | `notification-surface.test.ts` | the run-notification bell is estate-wide, not lakehouse-only                      |

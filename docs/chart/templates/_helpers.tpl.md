@@ -22,19 +22,19 @@ NAMING CONTRACT (the one thing that makes the two planes agree):
 They render the SAME string only because the release is named `rask` AND `fullnameOverride: rask`. That is
 deliberate (ADR 0108: lance object names become `rask-*`), and `lance.fullname`
 is kept on `.Release.Name` rather than delegated to `rask.fullname` because ~40 grafted lance templates
-build sibling object names from a RAW `{{ .Release.Name }}-…` (the `-dapr-app-token` and `-frontend-session`
-Secrets, the `-pubsub-resiliency` Configuration). Delegating would
+build sibling object names from a RAW `{{ .Release.Name }}-…` (the `-dapr-app-token`
+Secret, the `-pubsub-resiliency` Configuration). Delegating would
 move the Deployments but not those, splitting the estate the moment release name ≠ fullnameOverride.
 Install under any other release name and the two planes diverge — keep them equal.
 
 LABELS: `rask.labels` emits app.kubernetes.io/name=rask, `lance.labels` emits =lance-ns. Kept distinct on
-purpose: rask workloads select on {name,instance,component} (fleet.yaml/frontends.yaml)
+purpose: rask workloads select on {name,instance,component} (fleet.yaml)
 while lance Services select on {component,instance} only (services.yaml). Different `name` values are what
 guarantee a rask selector can never adopt a lance pod inside the shared release.
 =====================================================================================================
 
 ---------------------------------------------------------------------------------------------------
-rask — the base chart's helpers (fleet: notifications, frontends, the cluster route —
+rask — the base chart's helpers (fleet: notifications, the cluster route —
 the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20 wave).
 ---------------------------------------------------------------------------------------------------
 
@@ -155,22 +155,6 @@ the old name), and it would not close the seam anyway: the historical column alr
 `service.version` is the CHART version, not the running image tag — it answers "which chart
 rendered this pod", not "which build emitted this span".
 
-## `{{- define "rask.zoneOtelEnv" -}}`
-
-THE SSR ZONES' OTel env — a FOURTH rendering, and deliberately not a fourth source of truth. Every
-value below comes from `lance.otlpEndpoint` / `rask.otelResourceAttrs`,
-the same derivations the other three use. What differs is only WHICH variables are emitted.
-
-`rask.otelEnv` cannot simply be reused here, and trying it is what produced this helper. That one
-renders RASK_OTEL_ENABLED — `service_kit`'s PYTHON opt-in, read by `Settings.otel_enabled` and
-meaningless to a Bun process — plus OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, which names a framework these
-pods do not run. Worse than merely inert: RASK_OTEL_ENABLED is one of the two flags that mark a pod
-as an OTLP LOG producer, and the zones export TRACES ONLY. A zone carrying it reads as a log
-exporter, which would earn it the `lance.dev/logs: otlp` label and delete the stdout of seven pods
-that have no other copy.
-
-No metric interval either: the zone SDK builds a tracer provider and no metric reader.
-
 ## `{{- if include "lance.otelEnabled" $root -}}`
 
 GATED ON `lance.otelEnabled`, NOT on `observability.enabled`. The narrow gate meant the chart's own
@@ -229,8 +213,7 @@ was renamed: no lance name collided with a rask name.
 
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
   age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecarRestricted,
-  sidecarResources.*,resiliency.enabled} · auth.oidc.{issuer,clientId} · dex.{enabled,port} · frontend.{apps,image.tag,
-  idleTimeoutSeconds,oidc.*} · route.edgeUrl · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
+  sidecarResources.*,resiliency.enabled} · auth.oidc.{issuer,audience} · dex.{enabled,port} · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   medallion.buckets · nats.url ·
   observability.{enabled,environment} · openbao.{enabled,port,externalAddr} · pubsub.name ·
   resources.{default,<component>} · objectStore.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·
@@ -507,7 +490,7 @@ Rollout drain: a preStop sleep holds SIGTERM until endpoint removal has propagat
 the Dapr sidecar, so in-flight requests drain instead of hitting connection-refused — this is what makes
 the apps' /readyz shutting_down branch actually reachable during a rollout. Pairs with pod-level
 terminationGracePeriodSeconds (grace > preStop + app drain). sh exists in every app image
-(python-slim for the fleet, oven/bun's debian base for the zones).
+(python-slim).
 
 ## `{{- define "rask.shutdownArg" -}}`
 
@@ -674,9 +657,7 @@ GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules
 
 ## `{{- $override := "" -}}{{- if gt (len .) 2 -}}{{- $override = index . 2 -}}{{- end -}}`
 
-Optional 3rd element: an explicit tag that beats image.tag — the per-zone `tag` on a
-frontend.apps entry, which is the only thing a zone boundary actually buys (independent
-deploy). A digest still wins over it, so a pinned reconciler is never overridden by a tag.
+Optional 3rd element: an explicit tag that beats image.tag. A digest still wins over it, so a pinned reconciler is never overridden by a tag.
 
 ## `{{- $perDigest := "" -}}{{- if $i.digests -}}{{- $perDigest = index $i.digests $name | default "" -}}{{- en...`
 
@@ -764,8 +745,7 @@ The API-audience token and cluster CA a reader of the SA issuer's discovery and 
 
 ## `{{- define "lance.oidcIssuer" -}}`
 
-The estate's one trust anchor, `auth.oidc.issuer`: every governed door's RASK_OIDC_ISSUER and every
-zone's OIDC_ISSUER render from it, so the browser and the doors cannot be configured with two issuers
+The estate's one trust anchor, `auth.oidc.issuer`: every governed door's RASK_OIDC_ISSUER renders from it
 ([[XC-148]]). Without the development Dex it is the platform's IdP, and the doors fetch the keys they
 check each token against from it, so an http issuer is refused at render: over http, whoever answers
 that address on the path chooses the keys.
@@ -1206,14 +1186,9 @@ list is how the first one drifted.
 
 ## `{{- define "rask.rayDashboardUrl" -}}`
 
-THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (the zones' Serve origin;
-the compute and annotator fixtures are given the same address as their own values). `ray.dashboardUrl`
+THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (the compute and
+annotator fixtures are given the same address as their own values). `ray.dashboardUrl`
 when set, else empty.
-
-## `{{- define "rask.rayServeOrigin" -}}`
-
-Ray Serve's HTTP ingress on the same plane: `frontend.serveUrl` when Serve lives elsewhere; a RayService's
-load-balanced serve Service; else the dashboard itself, whose external host serves the apps too.
 
 ## `{{- define "rask.catalogPublicPrefix" -}}`
 

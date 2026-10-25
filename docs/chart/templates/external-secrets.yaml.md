@@ -92,8 +92,4 @@ so the two sides agree by construction. Gated on either consumer: `dapr.enabled`
 `auth.enabled` (the env row), so neither reference can dangle. A rotation reaches a sidecar only when its
 pod restarts, since the injector reads the Secret at pod creation (docs/OPERATORS.md).
 
-The zones' session-cookie sealing key (AES-256-GCM) and the confidential client secret, shared by
-every zone (they all read the origin-wide cookie; home also exchanges the code). Rotating the
-sealing key signs everyone out, and reaches a zone only when it restarts.
-
 A third party's credential, provisioned in the store by the operator (values.yaml `secrets`).

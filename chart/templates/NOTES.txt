@@ -2,8 +2,6 @@ rask {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}" (namespac
 
 
 {{- $root := . }}
-{{- $st := false }}
-{{- with .Values.singleTenant }}{{- $st = .enabled }}{{- end }}
 Event-driven path:  catalog --Dapr publish--> [pubsub.jetstream over NATS] --> lineage /lineage-events --> Apache AGE
 
 Services (ClusterIP):
@@ -32,33 +30,18 @@ Services (ClusterIP):
 {{- end }}
 {{- end }}
 
-{{- with .Values.frontend }}
-{{- if .enabled }}
-
-Micro-frontend zones (SvelteKit SSR; the catch-all owns "/"):
-{{- range .apps }}
-{{- if or .catchAll $st }}
-  - {{ .name }}{{ if .catchAll }} (catch-all) -> /{{ else }} -> {{ .path }}{{ end }} ({{ include "rask.fullname" $root }}-{{ .name }}:{{ $root.Values.frontend.service.port }})
-{{- end }}
-{{- end }}
-{{- if not $st }}
-  (singleTenant.enabled=false — only the catch-all is deployed; domain zones render per project)
-{{- end }}
-{{- end }}
-{{- end }}
-
 {{- if .Values.route.enabled }}
 {{- with .Values.route.hostnames }}
 
-UI:  http://{{ first . }}/      API: http://{{ first . }}/api/catalog/livez
+API: http://{{ first . }}/api/catalog/livez
 {{- else }}
 
-UI:  http://<gateway-address>/      API: http://<gateway-address>/api/catalog/livez   (host-less routes, any Host)
+API: http://<gateway-address>/api/catalog/livez   (host-less routes, any Host)
 {{- end }}
 The routes attach to {{ range .Values.route.parentRefs }}{{ .namespace | default $root.Release.Namespace }}/{{ .name }} {{ end }}— the platform's Gateway serves them.
 {{- else }}
 
-Routes disabled — nothing publishes the zones or /api; port-forward a zone or a service directly.
+Routes disabled — nothing publishes /api; port-forward a service directly.
 {{- end }}
 
 {{- if .Values.observability.enabled }}
@@ -83,12 +66,9 @@ Dapr dashboard:  kubectl port-forward svc/{{ include "lance.fullname" $root }}-d
 Auth (Dex OIDC + OpenFGA): {{ if .enabled }}ENABLED{{ else }}off — set auth.enabled=true to demo governance{{ end }}
 {{- if .enabled }}
 {{- if not .bootstrapAdmin }}
-  No estate admin is seeded, so the estate-wide admin surfaces (/admin/events, /admin/streams,
-  /admin/tenants) stay closed. Install with --set auth.bootstrapAdmin=<idp-id>~<user id> to open them.
+  No estate admin is seeded, so the estate-wide admin doors (GET /management/v1/events among them)
+  stay closed. Install with --set auth.bootstrapAdmin=<idp-id>~<user id> to open them.
 {{- end }}
-  Admin ops pages (behind the zone BFF's admin gate): /admin/audit (compliance trail), /admin/dlq
-  (lineage DLQ replay), /admin/events (control-plane change feed), /admin/streams (JetStream health +
-  the dead-subscription detector), /admin/tenants (warehouse/tenant admin).
 {{- end }}
 {{- end }}
 

@@ -42,7 +42,6 @@ _OIDC_ARGS = [
     *PREREQ_ARGS,
     *RAY_ARGS,
     "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
-    "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
 ]  # fmt: skip
 
 _DEFAULT_ARGS = ["--set", "image.localImages=true", "--set", "objectStore.enabled=true"]

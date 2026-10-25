@@ -237,10 +237,10 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
 (XC-165). A real-deployment render refuses both the bundled Dex and the dev OpenBao.
 
 - **Dev (the openbao fixture).** `<release>-dev-credentials` holds `object-store-secret-key`,
-  `postgres-password`, `dapr-app-token`, `ray-auth-token` and `frontend-session-secret`. On a fresh install ESO's
+  `postgres-password`, `dapr-app-token` and `ray-auth-token`. On a fresh install ESO's
   Password generator creates it once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`). The OpenBao
   pod mounts it, and its seed writes the root to `secret/object-store-root` and each other generated field to its own
-  secret (`postgres`, `dapr-app-token`, `ray-auth-token`, `frontend-session`) as `@file`, deriving the scoped storage
+  secret (`postgres`, `dapr-app-token`, `ray-auth-token`) as `@file`, deriving the scoped storage
   secrets from the root (`lance.scopedSecretFn`, which
   `object-store-scoped-users` runs too). The Secret outlives an
   OpenBao replacement, so the AGE database and the object store, which keep what they were initialised with, see
@@ -262,7 +262,7 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   1. Change the key of `<release>-dev-credentials` (a real deployment: the field in the store) with a value
      generated in the cluster; wait for the seed's "the mounted credentials changed; seeding again".
   2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `object-store-root`, `observability-s3`,
-     `backup-s3`, `dapr-app-token`, `frontend-session`, `hf-token`) with the `force-sync`
+     `backup-s3`, `dapr-app-token`, `hf-token`) with the `force-sync`
      annotation, and wait for Ready. Their refresh is otherwise `externalSecrets.refreshInterval`, and a pod
      restarted before it takes the old value.
   3. Tell the server, when one holds the credential: `ALTER ROLE` inside AGE from stdin for `postgres-password`;
@@ -272,8 +272,7 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   4. Restart the consumers at once: a `secretKeyRef` env and the injector's app token are read at pod creation,
      so nothing rolls on its own. AGE: the sidecar Deployments, OpenFGA, the OTel Collector. The root: the
      sidecar Deployments, GreptimeDB and the Ray head (delete its pod; the RayCluster recreates it). The app
-     token and session key: the sidecar Deployments and the zones (an app token rotated as below refuses no
-     delivery in between). The HF token: the Ray head.
+     token: the sidecar Deployments (an app token rotated as below refuses no delivery in between). The HF token: the Ray head.
 - **The catalog's store identity needs no rotation (ADR 0170).** It holds no key pair: its pod projects a token for
   `objectStore.identity.audience`, which the kubelet replaces before it expires, and the catalog exchanges it through
   STS `AssumeRoleWithWebIdentity` for an hour's session, again once half of it is used. A catalog whose session cannot

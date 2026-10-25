@@ -94,7 +94,6 @@ _GENERATED = {
     "postgres-password": ("secret/postgres", "password"),
     "dapr-app-token": ("secret/dapr-app-token", "token"),
     "ray-auth-token": ("secret/ray-auth-token", "token"),
-    "frontend-session-secret": ("secret/frontend-session", "secret"),
 }
 
 #: What the stand-in store answers an init with, and the administrator token id the fixture generates: none may reach an

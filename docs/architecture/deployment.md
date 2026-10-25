@@ -2,7 +2,7 @@
 
 rask uses a **Helm chart at `chart/`** as the single deploy artifact for both
 local k3s and production Kubernetes. The chart is the product (ADR 0153): it
-renders rask's own services, zones and the objects they need, and installs no
+renders rask's own services and the objects they need, and installs no
 operator or control plane. Those are prerequisites the platform runs, each in the
 sections below; development installs them from `deploy/fixtures`, each its own
 release, before rask's (`make k3s-up`).
@@ -65,9 +65,8 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   `<release>-dapr-app-token` Secret daprd stamps the header from.
 - `dapr-state` (field `connection-string`): the Dapr state store's DSN, read by the logins of the apps the state store
   is scoped to.
-- `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector; `frontend-session` (field
-  `secret`, the zones' cookie sealing key), read by ESO; `oidc-client` (field `client-secret`, the IdP client secret),
-  read by ESO for the zones; `ray-auth-token` (field `token`), read by ESO when `ray.auth` is on.
+- `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector; `ray-auth-token` (field
+  `token`), read by ESO when `ray.auth` is on.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
   every verifier) and then `signing-key-<identity>` (field `seed`, read by that signer alone), described in values.yaml
   `signing:`; the render refuses the platform's store until its operator created them and `signing.provisioned` says so.
@@ -81,13 +80,11 @@ No secret holds a store root: rask presents none in production, and on the dev s
 `object-store-root`, which only ESO reads, for the store and its provisioning hook (ADR 0168). The dev seed
 (`chart/templates/openbao-seed.yaml`) writes the same list into the dev store; keep the two in step.
 
-ONE IdP CLIENT, ONE KEY (2026-08-09). `oidc-client` serves the zones' OIDC client (the frontend-session ExternalSecret
-in `external-secrets.yaml`): there is one IdP client that signs in (`auth.oidc.clientId`), so there is one secret. The
-lakehouse's audience (`auth.oidc.audience`) is a client nobody signs in as, so its secret is given to no service. Do NOT seed a second copy under another name: a rotation
-that updates one copy and not the other breaks a sign-in on a path nothing tests. The object store holds no copy at
-all: verifying a web-identity token needs only the client id, and RustFS reads an OIDC client secret from env alone
-(no `_FILE` variant, `.claude/skills/rask-rustfs/references/security.md` § Web identity), so a store given one would
-carry a credential in its environment.
+The store holds no IdP client secret. The lakehouse's audience (`auth.oidc.audience`) is a client nobody signs in as,
+so its secret is given to no service. The object store holds none either: verifying a web-identity token needs only the
+client id, and RustFS reads an OIDC client secret from env alone (no `_FILE` variant,
+`.claude/skills/rask-rustfs/references/security.md` § Web identity), so a store given one would carry a credential in
+its environment.
 
 ## Prerequisite: the Dapr control plane
 
@@ -111,8 +108,7 @@ In production also HA (`global.ha.enabled`) and an injector that drops every sid
 Every event rask moves (lineage, the catalog's control broadcast, the maintenance queues) rides Dapr pub/sub over **NATS JetStream, a prerequisite** (ADR 0153) the platform runs. The chart
 renders no server; it renders what is rask's: the address its clients dial, the stream definitions (the stream Job,
 which creates rask's streams on the bus as the `admin` user), and the bus users (`nats.auth.users`, one per app). Name
-the bus in `nats.url` (the render refuses without it) and its HTTP monitor in `nats.monitorUrl` for the lakehouse ops
-view. Each user's credential `nats-user-<user>` lives in the store; a store the chart does not seed needs them issued by
+the bus in `nats.url` (the render refuses without it). Each user's credential `nats-user-<user>` lives in the store; a store the chart does not seed needs them issued by
 the bus's operator and attested with `nats.auth.provisioned` (docs/OPERATORS.md § 7).
 
 What the bus must provide, and the version rask is tested against, are in `deploy/fixtures/nats` (the development
@@ -152,13 +148,13 @@ and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.ena
   `dapr-state-connection-string` (`postgres://<age.user>:<password>@<age.externalHost>:<age.port>/<age.stateDb>`),
   which the platform writes beside it. No chart value carries either.
 
-The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), each endpoint needs a `networkPolicy.extraEgress` entry, as an external NATS does; the OTLP backend and its query API take theirs in `observability.export.egress` and `observability.query.egress`, the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, and the platform's secret store its addresses in `openbao.egress`, each admitting only the pods that dial it. Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's own datastore, availability and
+The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), each endpoint needs a `networkPolicy.extraEgress` entry, as an external NATS does; the OTLP backend takes its in `observability.export.egress`, the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, and the platform's secret store its addresses in `openbao.egress`, each admitting only the pods that dial it. Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's own datastore, availability and
 backups belong to the platform, so production runs no `pg_dump` CronJob.
 
 ## Development stand-ins
 
 A real deployment brings its own identity provider, object store and secret store, and the chart takes them by
-reference (`auth.oidc.issuer`, https, `auth.oidc.clientId` and the lakehouse's own `auth.oidc.audience`, which the IdP
+reference (`auth.oidc.issuer`, https, and the lakehouse's own `auth.oidc.audience`, which the IdP
 issues to the clients it trusts; `objectStore.externalEndpoint` and the scoped
 credentials; `openbao.externalAddr`).
 Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
@@ -222,9 +218,9 @@ locally and in CI.
 | Image | Dockerfile | Notes |
 |---|---|---|
 | `lance-rest-catalog` | `rest-catalog.dockerfile` | The lakehouse image, one image for several deployments: `catalog`, `lineage` and `maintenance`, plus the chart's Jobs and hooks. It installs no client, so deleting a client changes nothing it builds. |
-| `media` | `media.dockerfile` | The viewer and search, clients of the lakehouse, one image for both; the product chart's explorer runs it. |
+| `media` | `media.dockerfile` | The viewer and search, clients of the lakehouse, one image for both; the product chart deploys neither. |
 | `flows`, `notifications`, `compute`, `annotator` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` and `annotator` each ship in their own chart (`deploy/fixtures/compute`, `deploy/fixtures/annotator`). |
-| `web-<zone>` (7 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the six domain zones (lakehouse, explorer, annotator, compute, models, studio) each pin a bare base `/<zone>`, and the cluster route (`<release>-web`) sends each base there as a `PathPrefix` match with no rewrite. Probes are TCP, because a zone's `/` 404s under its own base. tini as PID 1, non-root UID 10001. |
+| `web-<zone>` (7 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the six domain zones (lakehouse, explorer, annotator, compute, models, studio) each pin a bare base `/<zone>`. The zones are a client of the lakehouse, and the product chart deploys none of them (XC-181). tini as PID 1, non-root UID 10001. |
 | `ray-cluster`, `ray-<runner>` | `ray-cluster.dockerfile`, `ray-runner.dockerfile` | The development engine's head image and one image per sealed runner (`--runner <runner>`); neither is part of the product chart. |
 
 The one frontend dockerfile encodes a non-obvious build contract (documented in its header): `svelte-adapter-bun`
@@ -251,7 +247,7 @@ catalog's decision door, which answers its service account only when the product
 it ([[LH-442]]). The fixture chart publishes `/api/ray` and `/api/serve`
 with its own HTTPRoute on the same Gateway (`deploy/fixtures/compute/chart/templates/route.yaml`), and a NetworkPolicy
 admitting its app port. The address of the engine's dashboard is `ray.dashboardUrl`
-(`rask.rayDashboardUrl`), the zones' Serve origin; the annotator fixture names the same head for its Serve discovery
+(`rask.rayDashboardUrl`); the annotator fixture names the same head for its Serve discovery
 (its `serve.discoveryUrl`).
 
 In development `make k3s-up` installs the `kuberay-operator`, `ray-cluster` and `compute` fixtures
@@ -265,24 +261,21 @@ with `--address ray://…:10001`.
 
 `make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
-- **flows** and **notifications** — the studio flow-builder's server half and the per-subject inbox.
-- **the lakehouse** — catalog, lineage and maintenance, plus the viewer and search (the viewer carries the S3 object
-  browser). The annotator is a client with its own release, `deploy/fixtures/annotator` (ADR 0171): the chart renders
-  only its zone, which reaches that release's Service at `frontend.annotatorUrl`.
-- **frontend zones** — SvelteKit SSR apps on `:3000` each.
-- **The cluster route** (`templates/route.yaml`) — two Gateway API HTTPRoutes on the platform's Gateway
+- **notifications** — the per-subject inbox.
+- **the lakehouse** — catalog, lineage and maintenance. The clients (the zones, flows, the viewer and search, and the
+  annotator, which has its own release, `deploy/fixtures/annotator`, ADR 0171) are not rendered here.
+- **The cluster route** (`templates/route.yaml`) — Gateway API HTTPRoutes on the platform's Gateway
   (`route.parentRefs`): `<release>-api` sends each public `/api/*` prefix to its service, with a `URLRewrite`
   `ReplacePrefixMatch` where the service mounts another path (the table is `rask.apiRoutes` in `_helpers.tpl`), and
-  `<release>-web` sends `/<zone>`, `/dex` and `/` to the zones and Dex. A real deployment names the hosts the
+  `<release>-dex`, rendered only with `auth.enabled` and `dex.enabled`, sends `/dex` to the development Dex. A real deployment names the hosts the
   routes answer (`route.hostnames`), and the render refuses one that names none, since a host-less route claims every
   host its listener accepts ([[XC-146]]). No rask process sits at the edge: an
   unmatched `/api/*` is the Gateway's own 404, and every service authenticates each request itself. Only Core matches
   and `URLRewrite` are used, so any conformant implementation serves them (kgateway, the intended production edge;
   Envoy Gateway, Istio, Cilium); in development it is k3s's Traefik with its Gateway provider switched on by
   `deploy/k3s/traefik-gateway.yaml`, which `scripts/k3s-install.sh` installs (GatewayClass `traefik`, Gateway
-  `traefik-gateway` in kube-system, listener `web` on the node's port 80). The zones' server side reaches `/api/*`
-  through the same Gateway at `route.edgeUrl` (`RASK_EDGE_URL`). The Gateway must allow ~16 KB response headers,
-  64 MB request bodies and hour-long idle streams; that is Gateway policy, not route (ADR 0165).
+  `traefik-gateway` in kube-system, listener `web` on the node's port 80). The Gateway must allow 64 MB request bodies;
+  that is Gateway policy, not route (ADR 0165).
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
   OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA and the Dapr state store); see *Prerequisites in production*.
 - **Its own configuration of what it does not run**: the Dapr Components, Configurations and Resiliency, the NATS stream
@@ -294,17 +287,7 @@ Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` inst
 Dex, RustFS, OpenBao, the telemetry chain, and the development engine (the KubeRay operator, a Ray cluster and the
 `compute` chart). A platform brings its own.
 
-### Per-user login across the zones
-
-`frontend.oidc.enabled` moves in lockstep with `auth.enabled` (the chart refuses the half-governed pair,
-`templates/auth-consistency.yaml`) and needs a browser-reachable IdP: `auth.oidc.issuer`, the one issuer the governed
-doors also trust, and `frontend.oidc.publicOrigin`, which forms the home zone's `…/auth/callback` redirect. The `home` zone owns
-`/auth/{login,callback,logout}` and sets one sealed session cookie at path `/`; because the cluster route serves every zone
-under one origin, a login on one zone is a login on all of them, and every zone's BFF forwards the signed-in user's
-own bearer to the governed backends. The BFF is a confidential OIDC client; its client secret and the cookie's
-sealing key are the store's (`frontend-session-secret`), written by ESO into `<release>-frontend-session`, never a
-value. `scripts/verify_cross_zone_oidc.sh` drives a real headless Dex login through the edge origin and checks
-that the cookie carries across a zone boundary and that per-user authorization holds.
+### The first estate admin
 
 `auth.bootstrapAdmin` names the first estate admin by principal, `<idp-id>~<user id>` (the idp id `auth.oidc.connectors`
 gives their Dex connector; `dex~<userID>` for a development Dex user, LH-063), and the render refuses a bare name: a
@@ -329,8 +312,7 @@ everything over OTLP/HTTP to **`observability.export.endpoint`**, with the backe
 
 **The store, dashboards and alerting are a prerequisite, not part of the chart** (ADR 0153). A platform names
 its OTLP backend in `observability.export.endpoint` (values-prod leaves it empty and the render refuses
-that), the SQL/PromQL API the zones' audit viewer and experiment curves read in `observability.query.url`,
-and loads rask's alert rules, **`deploy/alerting/rules.yml`** (Prometheus rule-file format; proven by
+that), and loads rask's alert rules, **`deploy/alerting/rules.yml`** (Prometheus rule-file format; proven by
 `make alert-rules-check` and replayed against GreptimeDB by `make alert-rules-drill`), into its own
 evaluator. The store must meet the audit store's contract in `chart/values.yaml` `observability`.
 

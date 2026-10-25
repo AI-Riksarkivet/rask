@@ -35,10 +35,6 @@ _BASE = [
     *RAY_ARGS,
     "--set-string",
     "auth.oidc.issuer=http://dex.local:5556",
-    "--set-string",
-    "frontend.oidc.publicOrigin=http://rask.local",
-    "--set-string",
-    "frontend.oidc.clientSecret=abcdef0123456789abcdef0123456789",
 ]
 _MAINTENANCE = ("rask-maintenance",)
 

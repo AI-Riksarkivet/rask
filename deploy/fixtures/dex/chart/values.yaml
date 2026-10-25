@@ -6,11 +6,10 @@ image: ghcr.io/dexidp/dex:v2.42.0
 port: 5556
 # The issuer Dex serves, rask's `auth.oidc.issuer`; `make k3s-fixtures` passes DEV_ISSUER, as it does to rask.
 issuer: http://rask-dex:5556/dex
-# The origin of rask's zones, whose OIDC callback is `<publicOrigin>/auth/callback`; empty registers none, as rask's
-# default `frontend.oidc.publicOrigin` is. `make k3s-fixtures` passes DEV_ORIGIN.
+# The origin of a browser client, whose OIDC callback `<publicOrigin>/auth/callback` the sign-in client registers; empty
+# registers none. `make k3s-fixtures` passes DEV_ORIGIN.
 publicOrigin: ""
-# The sign-in client: rask's `auth.oidc.clientId`, the client its zones and the live lanes sign in as, and `dex.clientSecret`
-# the secret it seeds.
+# The fixture's own sign-in client, which the live lanes (and any web client) sign in as, and its secret.
 clientId: rask-web
 clientSecret: lance-catalog-secret
 # The lakehouse's audience: rask's `auth.oidc.audience`, which every governed door checks. Declared as a client that trusts

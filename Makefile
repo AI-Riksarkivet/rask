@@ -672,12 +672,6 @@ nats-auth: ## NATS auth e2e — each bus client admitted only to its own subject
 # `media` is the viewer and search, clients of the lakehouse that build apart from its image ([[XC-177]]); the product
 # chart's explorer runs it.
 COMPOSE_IMAGES = compute notifications flows annotator table-maintenance media
-# SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
-# all built from the one parametrized .docker/frontend.dockerfile via --build-arg
-# APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
-# fleet's — the compute SERVICE image owns the bare `compute` name, and there is a
-# compute ZONE.)
-# "home" is the catch-all; the rest are pinned to their /<zone> base path.
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 # Routed through scripts/helm.sh, which sets HELM_DRIVER=sql. NOT bare `helm`: the release lives in
 # Postgres, and against the default Secret backend helm reports it ABSENT and `upgrade --install`
@@ -692,7 +686,7 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl --namespace $(RELEASE_NAMESPACE)
 # the default render runs its containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
 # The object store fixture runs the upstream RustFS image by digest, which the node pulls; nothing here builds it.
-K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog
+K3S_IMAGES = $(COMPOSE_IMAGES) ray-cluster lance-rest-catalog
 # Where k3s-build leaves each image as an OCI tarball and k3s-import reads it: no docker daemon on either side.
 K3S_IMAGE_DIR ?= build/k3s-images
 
@@ -712,12 +706,9 @@ k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/, 
 	helm dependency build ./chart
 	./scripts/fixtures.sh --vendor
 
-k3s-build: ## Build all fleet + frontend zone + ray-cluster images as OCI tarballs in K3S_IMAGE_DIR (via Dagger, no docker)
+k3s-build: ## Build all fleet + ray-cluster images as OCI tarballs in K3S_IMAGE_DIR (via Dagger, no docker)
 	@for s in $(COMPOSE_IMAGES); do \
 	  bash scripts/dagger-image.sh --name $$s --out $(K3S_IMAGE_DIR)/$$s.tar || exit 1; \
-	done
-	@for a in $(ZONES); do \
-	  bash scripts/dagger-image.sh --zone $$a --out $(K3S_IMAGE_DIR)/web-$$a.tar || exit 1; \
 	done
 	bash scripts/dagger-image.sh --name ray-cluster --out $(K3S_IMAGE_DIR)/ray-cluster.tar
 	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
@@ -730,11 +721,10 @@ k3s-import: ## Side-load the k3s-build tarballs into k3s containerd as <image>:d
 	  sudo k3s ctr -n k8s.io images import --digests --index-name docker.io/library/$$s:dev $(K3S_IMAGE_DIR)/$$s.tar || exit 1; \
 	done
 
-# The LOCAL dev identity values. auth.enabled + frontend.oidc.enabled are ON in the chart's own
-# defaults (a security default must fail closed), and the chart REFUSES to render OIDC without a
-# browser-reachable issuer and origin, so the local loop supplies them here. Neither is a secret: the
-# session sealing key is generated in-cluster with every other dev credential ([[XC-004]]).
-# Override them from the environment for a differently-addressed dev cluster.
+# The LOCAL dev identity values. auth.enabled is ON in the chart's own defaults (a security default must
+# fail closed), and the chart REFUSES to render it without an issuer, so the local loop supplies the dev
+# Dex's here; DEV_ORIGIN is the browser origin the dex fixture registers a sign-in callback for. Neither is
+# a secret. Override them from the environment for a differently-addressed dev cluster.
 DEV_ISSUER          ?= http://localhost:8080/dex
 DEV_ORIGIN          ?= http://localhost:8080
 # The store address the catalog vends (LH-489): the rustfs fixture's node port on the node's own address, which a pod
@@ -746,7 +736,7 @@ DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 # THE CREDENTIAL KEYS A RELEASE MAY STILL CARRY from before [[XC-004]], dropped from every upgrade that
 # re-feeds the live values (`-f $$LIVE`). templates/prod-credentials.yaml refuses each of them as a value,
 # and `null` is how Helm removes a key a values file supplies. The two lists name the same keys.
-DROP_CREDENTIAL_VALUES := --set dapr.appToken=null --set frontend.oidc.sessionSecret=null \
+DROP_CREDENTIAL_VALUES := --set dapr.appToken=null \
   --set secrets.hfToken=null --set ray.auth.token=null --set age.password=null --set objectStore.secretKey=null \
   --set objectStore.maintenanceSecretKey=null \
   --set objectStore.catalogSecretKey=null --set objectStore.lineageSecretKey=null
@@ -810,7 +800,7 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	: # Measured 2026-09-09: every `make k3s-up` failed for as long as a non-empty pins file existed,
 	: # which is the state a pin is FOR. Base first (the live release's image settings, else side-loaded),
 	: # pins second, so the tags win and the registry survives.
-	IMGARGS="--set image.localImages=true --set-string frontend.image.tag=dev"; \
+	IMGARGS="--set image.localImages=true"; \
 	LIVE=$$(mktemp); \
 	if $(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
 	  IMGARGS="-f $$LIVE"; \
@@ -825,15 +815,13 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  $$IMGARGS \
 	  -f deploy/values-local.yaml \
 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) \
-	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) \
 	  --set-string vending.endpoint=$(DEV_VENDED_ENDPOINT) \
 	  $(DROP_CREDENTIAL_VALUES) \
 	  $$HFARGS \
 	  $${AWS_ACCESS_KEY_ID:+--set-string objectStore.accessKey=$$AWS_ACCESS_KEY_ID}
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
 	@$(MAKE) --no-print-directory k3s-annotator
-	@echo "UI → http://<node-ip>/   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
-	@echo "API → http://<node-ip>/api/catalog/livez"
+	@echo "API → http://<node-ip>/api/catalog/livez   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
 
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
 	./scripts/seed-corpus.sh
@@ -883,7 +871,7 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# clean, which is the worst direction for this failure to go. So the recipe keeps the upgrade's
 	@# status in rc and exits with it after the cleanup.
 	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
-	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f deploy/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
+	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f deploy/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
 	@# SINGLE QUOTES around the suggested command, never backticks: a backtick inside an echo is
 	@# COMMAND SUBSTITUTION, so `>> ... `make k3s-up` ...` RAN a full k3s-up as a side effect of
 	@# printing advice. Observed 2026-09-22 in this target's own output — "every stem converged —
@@ -957,7 +945,6 @@ kind-up: bootstrap ## Create the rask kind cluster (idempotent; deploy/kind/kind
 
 kind-images: ## Build the full :dev image set into docker's image store, which `kind load docker-image` reads (same builds k3s uses)
 	@for s in $(COMPOSE_IMAGES); do bash scripts/dagger-image.sh --name $$s --tag $$s:dev || exit 1; done
-	@for a in $(ZONES); do bash scripts/dagger-image.sh --zone $$a --tag web-$$a:dev || exit 1; done
 	bash scripts/dagger-image.sh --name ray-cluster --tag ray-cluster:dev
 	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 

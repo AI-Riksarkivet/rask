@@ -48,7 +48,6 @@ _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
 _DOORS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
 _SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "notifications"))
-_ZONES: Final = frozenset(f"Deployment/rask-web-{zone}" for zone in ("home", "lakehouse", "explorer", "annotator", "compute", "models", "studio"))
 _POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "CronJob/rask-pg-backup"})
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
 _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
@@ -57,7 +56,6 @@ _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", 
 EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "lineage-s3": {"store": frozenset({"lineage"}), "dapr": frozenset({"lineage"})},
     "maintenance-s3": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
-    "oidc-client": {"store": frozenset({"eso"}), "pods": _ZONES},
     "dapr-app-token": {"store": _DOORS | {"eso"}, "dapr": _DOORS, "pods": _SIDECARS},
     "signing-key-rask-sa-catalog": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},
     "signing-key-rask-sa-maintenance": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
@@ -75,7 +73,6 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "nats-server": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},
     "nats-route": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},
     "postgres": {"store": frozenset({"eso"}), "pods": _POSTGRES_CLIENTS},
-    "frontend-session": {"store": frozenset({"eso"}), "pods": _ZONES},
     "object-store-root": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-rustfs", "Job/rask-object-store-scoped-users-r1"})},
     "backup-s3": {"store": frozenset({"eso"}), "pods": frozenset({"CronJob/rask-control-root-backup", "CronJob/rask-pg-backup"})},
     "otel-collector-export": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-otel-collector"})},

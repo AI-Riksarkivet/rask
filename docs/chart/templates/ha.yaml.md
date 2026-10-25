@@ -14,9 +14,7 @@ every hop converges on its idempotency key).
 
 ONE RULE THROUGHOUT, and it is why every block below is gated: a `minAvailable: 1` PDB over a SINGLE
 replica blocks every voluntary drain, so a node cordon hangs instead of proceeding. Scale first, bound
-second. That gate used to apply only to the P5 micro-frontend zones (the cluster-routed north-south
-edge, where an unbounded drain defeats the replica bump); the backend list was a literal and ungated,
-so enabling PDBs without scaling wrote exactly the budget this warning describes.
+second.
 
 ## `{{- range $name, $svc := $.Values.services }}`
 
@@ -24,7 +22,7 @@ EVERY service in `.Values.services`, gated on replicas > 1 — the lakehouse pai
 lineage) and the fleet (notifications) alike, never a literal list. An ungated literal
 list, with PDBs enabled and a service left at one replica, writes a `minAvailable: 1` budget over a single pod, which blocks EVERY voluntary drain
 — a node cordon then hangs instead of proceeding. That is this file's own header warning, applied
-to the backends rather than only to the zones. Scale first, bound second, never the inverse.
+to every backend. Scale first, bound second, never the inverse.
 
 ## `behavior:`
 

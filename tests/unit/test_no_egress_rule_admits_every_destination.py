@@ -36,7 +36,6 @@ _OVERLAYS: dict[str, tuple[str, ...]] = {
     "default": (
         *chart_render.DEFAULT_ARGS, *chart_render.OBSERVABILITY_ARGS,
         "--set", "networkPolicy.enabled=true", "--set", "backups.volumeSnapshot.enabled=true",
-        "--set-string", "observability.query.url=http://greptimedb.observability:4000",
     ),
     "prod": chart_render.PROD_ARGS,
 }  # fmt: skip
@@ -45,7 +44,7 @@ _FIRST_PARTY_SOURCE = "rask/templates/"
 
 #: Every list of egress rules the render takes from values, by the overlay that renders the policy reading it.
 _STATED_RULES: dict[str, tuple[str, ...]] = {
-    "default": ("networkPolicy.apiServerEgress", "networkPolicy.extraEgress", "route.edgeEgress", "observability.export.egress", "observability.query.egress"),
+    "default": ("networkPolicy.apiServerEgress", "networkPolicy.extraEgress", "observability.export.egress"),
     "prod": ("auth.fgaEgress", "openbao.egress"),
 }
 

@@ -17,26 +17,6 @@ spec:
       app.kubernetes.io/instance: {{ $.Release.Name }}
 {{- end }}
 {{- end }}
-{{- if and .Values.frontend.enabled (gt (int (ternary .Values.frontend.replicas 1 (hasKey .Values.frontend "replicas"))) 1) }}
-{{- range .Values.frontend.apps }}
----
-# Zone PDBs (audit 2026-07-24): the P5 zones are the north-south edge (the Ingress path-routes
-# /<zone> → web-<zone>), so once replicas are bumped past 1 they need the same voluntary-disruption
-# bound as the backends — without one, a node drain may evict both replicas at once and the HA replica
-# count buys nothing. Gated on replicas > 1 (see the header: a 1-replica minAvailable=1 PDB blocks drains).
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: {{ include "lance.fullname" $ }}-web-{{ .name }}
-  labels: {{- include "lance.labels" $ | nindent 4 }}
-spec:
-  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
-  selector:
-    matchLabels:
-      app.kubernetes.io/component: web-{{ .name }}
-      app.kubernetes.io/instance: {{ $.Release.Name }}
-{{- end }}
-{{- end }}
 {{- if .Values.openfga.enabled }}
 ---
 # OpenFGA is the authz chokepoint — every governed catalog write and lineage read fails

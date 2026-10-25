@@ -15,7 +15,8 @@ Styling and component authoring live in **`rask-styling`**. Svelte 5 and SvelteK
 
 > The roster DRIFTED once and cost a wrong estate-wide audit: this table listed `train` and omitted
 > `models` after the swap. It is now checkable in one line — `git ls-files frontend/microfrontends | cut -d/ -f3 | sort -u` —
-> and must agree with `Makefile` `ZONES`, `home/microfrontends.json` and `chart/values.yaml` `frontend.apps`.
+> and must agree with `Makefile` `ZONES` and `home/microfrontends.json`. The product chart renders no zone (the zones are a
+> client of the lakehouse, XC-181).
 
 Package name equals directory name for all seven (`manifest.test.ts:53`). Base is a bare `/<zone>` — **no `/default/` segment exists**, and `cross-zone-reload.test.ts:38` asserts `/default/lakehouse` is not a zone path.
 
@@ -267,7 +268,7 @@ against a deployed zone.
 
 Under `svelte-adapter-bun` a relative `/api/*` resolves against the **incoming external origin**, so a server-side fetch leaves the cluster and comes back. `makeEdgeHandleFetch` (`packages/api/src/edge.ts`) rewrites `origin + '/api/'` → `edgeBase + path` during SSR.
 
-**One variable, one route table.** Every zone's server reaches `/api/*` through the cluster route at `RASK_EDGE_URL`: in-cluster the Gateway's in-cluster address (`route.edgeUrl`; on k3s `http://traefik.kube-system.svc.cluster.local`), in dev `http://localhost:8888` (the default, `DEFAULT_EDGE_URL`), where `make dev-frontends-k3s` port-forwards k3s Traefik's Gateway; `make dev-micro` starts no edge. The Vite dev `/api` proxies are separate and per zone (`compute`/`studio`/`models` → `VIEWER_BACKEND` :8888, `home`/`lakehouse` → `LANCE_BACKEND` :8001). The zones that issue relative `/api/*` during SSR (`home`, `lakehouse`, `compute`, `studio`, `models`) opt in with `makeZoneHooks(env, { edge: true })`; `explorer` and `annotator` reach their services through their own BFF routes. No zone restates which service owns a path: that is the route's (`rask-services-fleet`). The zones' egress to the Gateway's data plane is the NetworkPolicy `route.edgeEgress` states.
+**One variable, one route table.** Every zone's server reaches `/api/*` through the cluster route at `RASK_EDGE_URL`: in-cluster the Gateway's in-cluster address (on k3s `http://traefik.kube-system.svc.cluster.local`), in dev `http://localhost:8888` (the default, `DEFAULT_EDGE_URL`), where `make dev-frontends-k3s` port-forwards k3s Traefik's Gateway; `make dev-micro` starts no edge. The Vite dev `/api` proxies are separate and per zone (`compute`/`studio`/`models` → `VIEWER_BACKEND` :8888, `home`/`lakehouse` → `LANCE_BACKEND` :8001). The zones that issue relative `/api/*` during SSR (`home`, `lakehouse`, `compute`, `studio`, `models`) opt in with `makeZoneHooks(env, { edge: true })`; `explorer` and `annotator` reach their services through their own BFF routes. No zone restates which service owns a path: that is the route's (`rask-services-fleet`).
 
 ## Develop ONE zone, no cluster — `make dev-zone ZONE=<z>`
 
@@ -337,7 +338,7 @@ Turborepo 2.10.7 has a **built-in** microfrontends proxy. It reads `microfronten
 
 > A second, hand-rolled proxy sits at `packages/zone-contract/src/proxy.ts` (`PROXY_PORT ?? 5200`). Its `dev:proxy` turbo task is invoked by no root script and no Makefile target, and its claim that `bun run dev` starts it is false. `:3024` is the live dev origin; `:5200` survives only because `explorer`'s e2e defaults to it.
 
-**Prod.** Two Gateway API HTTPRoutes per release on the platform's Gateway (`chart/templates/route.yaml`): `<release>-api` routes each public `/api/*` prefix to its service (`rask.apiRoutes`, see `rask-services-fleet`), and `<release>-web` routes `/<zone>` → `rask-web-<zone>:3000`, `/dex` → Dex, and `/` → `rask-web-home:3000`; the longest `PathPrefix` wins. The zone rules carry **no `URLRewrite`**: the pod receives `/compute/jobs` and `paths.base` consumes it. Images are tagged `web-<zone>:<tag>`.
+**Prod.** The product chart renders no zone (the zones are a client of the lakehouse, XC-181): its HTTPRoutes on the platform's Gateway (`chart/templates/route.yaml`) are `<release>-api`, each public `/api/*` prefix to its service (`rask.apiRoutes`, see `rask-services-fleet`), and, with the development Dex, `<release>-dex` for `/dex`. A route to a zone carries **no `URLRewrite`**: the pod receives `/compute/jobs` and `paths.base` consumes it. Images are tagged `web-<zone>:<tag>`.
 
 This works only because of `patches/svelte-adapter-bun@1.0.1.patch`: upstream roots sirv at `client/<base>`, but SvelteKit already emits base-prefixed assets *inside* `build/client/`, so `/compute/_app/x.js` resolved to `client/compute/compute/_app/x.js` → 404. Probes are TCP, not httpGet, because a zone's `/` 404s under its base.
 
@@ -379,17 +380,16 @@ Hrefs are **flat and absolute** (`/lakehouse/catalog`, `/explorer/`, `/compute/`
 
 **Trailing slashes on zone-root hrefs are load-bearing.** Each zone's `paths.base` serves the trailing form, so a bare `/compute` costs a 308 per hop (`packages/ui/tests/nav-config.test.ts:49-60`).
 
-## Adding a zone — five places
+## Adding a zone — four places
 
-Globbed membership means there is no list to append to, but five files must agree or the gates fail:
+Globbed membership means there is no list to append to, but four files must agree or the gates fail:
 
 1. `microfrontends/home/microfrontends.json` — port + routing key
 2. `svelte.config.js` — `paths.base`
 3. `vite.config.ts` — port + `strictPort: true`. **The port is declared here and nowhere else**; a `--port` in the zone's `dev` script races this one, which is how `annotator` drifted onto another zone's port.
-4. `chart/values.yaml` `frontend.apps`
-5. `Makefile` `ZONES`
+4. `Makefile` `ZONES`
 
-`manifest.test.ts` and `deploy-path.test.ts` pin all five. R15 is law: a zone missing from the shared navbar is a defect regardless of scaffold status.
+`manifest.test.ts` and `deploy-path.test.ts` pin them. R15 is law: a zone missing from the shared navbar is a defect regardless of scaffold status.
 
 (There was a sixth: a `budget.json` ceiling per zone, gated by `budget.test.ts`. Removed 2026-08-04 — see that commit for why.)
 

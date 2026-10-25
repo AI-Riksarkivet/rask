@@ -51,7 +51,6 @@ def _component() -> dict[str, str]:
         *PREREQ_ARGS,
         *RAY_ARGS,
         "--set-string", "auth.oidc.issuer=http://auth/dex",
-        "--set-string", "frontend.oidc.publicOrigin=http://auth",
         "--set", "image.localImages=true",
     ]  # fmt: skip
     out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
@@ -108,7 +107,6 @@ def test_no_sibling_component_carries_these_keys() -> None:
         *PREREQ_ARGS,
         *RAY_ARGS,
         "--set-string", "auth.oidc.issuer=http://auth/dex",
-        "--set-string", "frontend.oidc.publicOrigin=http://auth",
         "--set", "image.localImages=true",
     ]  # fmt: skip
     out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603

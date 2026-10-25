@@ -192,26 +192,21 @@ func (m *Rask) Charts(
 // `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
 // `ray.dashboardUrl` names the estate's Ray, the one address every Ray consumer renders ([[CP-041]]). `nats.url` names the
 // platform's NATS bus the same way: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
-// the routes attach to, the hostnames it routes to this release, which a real deployment refuses to go without
-// ([[XC-146]]), and its in-cluster address (ADR 0165). `networkPolicy.apiServerEgress`, `route.edgeEgress` and
-// `openbao.egress` state the peers the isolation layer admits the API server, the Gateway and the platform's secret store
-// at, which no URL can derive ([[XC-143]]). `objectStore.externalEndpoint` names the platform's S3: a real deployment
+// the routes attach to and the hostnames it routes to this release, which a real deployment refuses to go without
+// ([[XC-146]], ADR 0165). `networkPolicy.apiServerEgress` and `openbao.egress` state the peers the isolation layer admits
+// the API server and the platform's secret store at, which no URL can derive ([[XC-143]]). `objectStore.externalEndpoint` names the platform's S3: a real deployment
 // refuses the development store (`templates/prod-credentials.yaml`), whose root signs every STS token on RustFS.
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string ray.dashboardUrl=http://ray.example.com:8265 " +
 	"--set-string nats.url=nats://nats.example.com:4222 " +
 	"--set route.parentRefs[0].name=edge --set route.parentRefs[0].namespace=edge-system " +
 	"--set route.hostnames[0]=lance.example.com " +
-	"--set route.edgeEgress[0].to[0].ipBlock.cidr=192.0.2.20/32 " +
-	"--set route.edgeEgress[0].ports[0].port=8080 " +
 	"--set networkPolicy.apiServerEgress[0].to[0].ipBlock.cidr=192.0.2.10/32 " +
 	"--set networkPolicy.apiServerEgress[0].ports[0].port=6443 " +
-	"--set-string route.edgeUrl=http://edge.edge-system.svc.cluster.local " +
 	"--api-versions external-secrets.io/v1/ExternalSecret " +
 	"--api-versions dapr.io/v1alpha1 " +
 	"--set-string auth.oidc.issuer=https://auth.example.com/dex " +
 	"--set-string auth.oidc.connectors.ldap=corp " +
-	"--set-string frontend.oidc.publicOrigin=http://localhost:8080 " +
 	"--set openbao.enabled=false " +
 	"--set-string openbao.externalAddr=https://vault.example.com:8200 " +
 	"--set openbao.egress[0].to[0].ipBlock.cidr=198.51.100.20/32 " +

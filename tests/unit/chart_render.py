@@ -45,7 +45,7 @@ SECRET_STORE_CIDR = "198.51.100.20/32"
 
 #: The prerequisites a render names: the APIs the chart checks through `.Capabilities`, the External Secrets Operator
 #: ([[XC-004]]) and Dapr ([[XC-128]]), the NATS bus's address ([[XC-129]]), and the platform's Gateway the routes attach
-#: to, its in-cluster address and the egress that reaches it (ADR 0165). Under `networkPolicy.enabled` the egress to
+#: to (ADR 0165). Under `networkPolicy.enabled` the egress to
 #: the API server, the telemetry backend and an external OpenFGA is the platform's to state too ([[XC-143]]). A cluster-less render names
 #: the cluster it targets. Without them every render refuses.
 PREREQ_ARGS: tuple[str, ...] = (
@@ -54,11 +54,8 @@ PREREQ_ARGS: tuple[str, ...] = (
     "--api-versions", "dapr.io/v1alpha1",
     "--set-string", f"nats.url={NATS_URL}",
     "--set-json", 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]',
-    "--set-string", "route.edgeUrl=http://edge.edge-system.svc.cluster.local",
-    "--set-json", 'route.edgeEgress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"edge-system"}}}],"ports":[{"protocol":"TCP","port":8080}]}]',
     "--set-json", f'networkPolicy.apiServerEgress=[{{"to":[{{"ipBlock":{{"cidr":"{API_SERVER_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":6443}}]}}]',
     "--set-json", 'observability.export.egress=[{"to":[{"ipBlock":{"cidr":"203.0.113.10/32"}}],"ports":[{"protocol":"TCP","port":4318}]}]',
-    "--set-json", 'observability.query.egress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"observability"}}}],"ports":[{"protocol":"TCP","port":4000}]}]',
     "--set-json", 'auth.fgaEgress=[{"to":[{"ipBlock":{"cidr":"198.51.100.10/32"}}],"ports":[{"protocol":"TCP","port":443}]}]',
 )  # fmt: skip
 
@@ -77,7 +74,6 @@ OBSERVABILITY_ARGS: tuple[str, ...] = tuple(arg for value in OBSERVABILITY_SETS 
 #: Ray guard itself.
 UNNAMED_RAY_ARGS: tuple[str, ...] = (
     "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
-    "--set-string", "frontend.oidc.publicOrigin=https://lance.example.com",
     *PREREQ_ARGS,
 )  # fmt: skip
 
@@ -92,7 +88,6 @@ DEFAULT_ARGS: tuple[str, ...] = ("--set", "image.localImages=true", "--set", "ob
 #: `scripts/prod_render_check.sh` supplies.
 PROD_ARGS: tuple[str, ...] = (
     "-f", str(REPO / "deploy/values-prod.yaml"),
-    "--set", "frontend.image.tag=v0",
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",
     "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",

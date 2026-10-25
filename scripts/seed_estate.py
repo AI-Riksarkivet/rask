@@ -235,12 +235,11 @@ DEMO_ESTATE = Estate(
         Grant("team:partners", "team", "project:beta"),
         # dave: a plain WRITER on the bucket — writes any stage, but is NOT a validator.
         Grant("user:dave", "writer", "warehouse:acme-bucket"),
-        # NO READ GRANT FOR THE WEB ZONES' SERVICE ACCOUNT (`kubernetes~system:serviceaccount:<ns>:<release>-sa-web`),
-        # and its absence is the control (Q17-8 / §F2-2 F2-4).
-        # `bff.ts` and `runs-feed.ts` send that identity ONLY when there is no session, so it is the
-        # ANONYMOUS principal — granting it reader on a tenant's tiers is granting the public those
-        # tiers. A human reads a tenant's lineage with their OWN bearer; if a surface needs to be public,
-        # grant this subject that surface explicitly and it becomes visible in the model.
+        # NO READ GRANT FOR A CLIENT'S OWN SERVICE ACCOUNT, and its absence is the control (Q17-8 / §F2-2 F2-4).
+        # A client that sends its own identity when there is no session makes it the ANONYMOUS principal —
+        # granting it reader on a tenant's tiers is granting the public those tiers. A human reads a tenant's
+        # lineage with their OWN bearer; if a surface needs to be public, grant this subject that surface
+        # explicitly and it becomes visible in the model.
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
         Grant("user:carol", "assignee", "role:validators"),
         Grant("role:validators#assignee", "validator", "namespace:acme-gold"),

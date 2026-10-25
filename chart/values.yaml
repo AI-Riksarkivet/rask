@@ -1,8 +1,7 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
 # Two systems now install from this one file:
-#   * the rask fleet (notifications),
-#     KubeRay Serve, the SvelteKit microfrontend zones;
+#   * the rask fleet (notifications);
 #   * the lance-ns lakehouse (catalog + lineage + maintenance), governance
 #     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
 #
@@ -25,15 +24,15 @@ nameOverride: ""
 imagePullSecrets: []
 
 # singleTenant gates the LEGACY single-tenant default workloads (the default
-# domain services + /default frontends + default Postgres/NATS/migration).
-# Default false => front-door-only install (the zones, the services the cluster route
+# domain services + default Postgres/NATS/migration).
+# Default false => front-door-only install (the services the cluster route
 # publishes, operators). Set true to restore the old single-tenant stack.
 # NOTE: the OBJECT STORE is
 # deliberately NOT in this list: objectStore.enabled alone gates the store's provisioning hooks
 # (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) because the lakehouse plane resolves the store
 # (`rask-rustfs:9000` in development) regardless of singleTenant.
 singleTenant:
-  # -- Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `objectStore.enabled`.
+  # -- Renders the single-tenant default workloads (every fleet service). False installs front-door services only; the object store is gated by `objectStore.enabled`.
   enabled: false
 
 # Optional override: if set, this Secret is used verbatim instead of the chart's `<release>-app`
@@ -106,7 +105,7 @@ services:
   # estate's. Its own app-id because an inbox aggregates lineage runs and catalog governance and
   # belongs to neither producer.
   #
-  # `frontDoor: true` because the bell polls /api/notifications in every zone, and the route publishes
+  # `frontDoor: true` because a client's bell polls /api/notifications, and the route publishes
   # it only on an install that renders this Deployment.
   #
   # replicas: 1 is the fleet default, not an actor constraint: Dapr placement distributes actor ids
@@ -294,17 +293,17 @@ image:
   # PER-COMPONENT pins (#135) — the reason a `helm upgrade` stopped being destructive.
   #
   # One `tag` above cannot describe this fleet. A real estate runs a catalog tag across 11 services,
-  # a different tag on notifications, a third across the 7 zones, and a
+  # a different tag on notifications, and a
   # DIGEST on one more. Rendering all of them from one value overwrites every image with a tag that is not on
   # the node — observed twice on 2026-08-06, once taking the whole fleet to ImagePullBackOff.
   #
   # Keys are the COMPONENT name the template passes to `rask.image` (`notifications`,
-  # `lance-rest-catalog`, `web-lakehouse`, …) — the same string that appears in the rendered
+  # `lance-rest-catalog`, …) — the same string that appears in the rendered
   # reference. `digests` beats `tags`, exactly as the global `digest` beats the global `tag`.
   #
-  #   tags:    { lance-rest-catalog: be-256ca0da, web-lakehouse: zone-14d8882d }
+  #   tags:    { lance-rest-catalog: be-256ca0da, notifications: be-14d8882d }
   #   digests: { notifications: "sha256:834d2e23…" }
-  # -- Per-component tag map keyed by component name (notifications, lance-rest-catalog, web-<zone>, ...); beats the global tag.
+  # -- Per-component tag map keyed by component name (notifications, lance-rest-catalog, ...); beats the global tag.
   tags: {} # @schema additionalProperties: {"type": "string"}
   # -- Per-component digest map keyed by component name; beats `tags` and the global tag.
   digests: {} # @schema additionalProperties: {"type": "string"}
@@ -499,10 +498,9 @@ security:
 # blocks it silently (kindnet hides the failure) — see the templates' job specs.
 networkPolicy:
   # NOTE (goal cond 8): the NATS pods are EXCLUDED from the general intra-namespace ingress allow; their
-  # only ingress is two explicit, port-scoped rules — 4222 (clients) from any in-namespace pod (the daprd
-  # sidecars live in nearly every app pod, so a label enumeration would be dishonest) and 8222 (monitor,
-  # varz/jsz for the admin ops view) from the web-admin zone pods ONLY. 6222/7422 stay closed — see
-  # network-policy.yaml (3e)/(3f).
+  # only ingress is one explicit, port-scoped rule — 4222 (clients) from any in-namespace pod (the daprd
+  # sidecars live in nearly every app pod, so a label enumeration would be dishonest). 6222/7422 and the 8222
+  # monitor stay closed — see network-policy.yaml (3f).
   # -- Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI.
   enabled: false
   # Extra `from` peers for the development store's policy — e.g. the external-secrets operator's namespace:
@@ -528,132 +526,6 @@ networkPolicy:
   # -- NetworkPolicy egress rules ({to, ports}) admitting the pods that call the Kubernetes API to its endpoints. Required under networkPolicy.enabled while any such pod renders.
   apiServerEgress: []
 
-
-# === Micro-frontend zones: the SvelteKit SSR zones deployed from the ONE parametrized
-# frontend.dockerfile (image <name>:tag). The catch-all `home` owns "/"; each domain zone is pinned to
-# its base path /<name> in svelte.config.js (host carries the project; path carries the domain) and gets
-# an Ingress rule (templates/ingress.yaml). image == app dir name under frontend/microfrontends/.
-frontend:
-  # -- Deploy the SvelteKit zone servers, one Deployment and Service per entry in `frontend.apps`.
-  enabled: true
-  # -- Replicas per zone Deployment; above 1 the chart also renders a PodDisruptionBudget per zone.
-  replicas: 1
-  # The Bun server's request-body ceiling for EVERY zone. `svelte-adapter-bun` defaults it to 512K,
-  # which silently 413s any real upload (a page scan is megabytes) from the server itself — before the
-  # route, so the answer is not our problem+json and the UI can only say "HTTP 413". Kept ABOVE the
-  # BFF's own 25 MB inference guard so that guard is what a user actually reads.
-  # -- Request-body ceiling of each zone's Bun server (BODY_SIZE_LIMIT), kept above the BFF's 25 MB inference guard.
-  bodySizeLimit: 32M
-  # The annotator's Service the annotator zone's server side proxies to (ANNOTATOR_API). The annotator is a client of
-  # the lakehouse with its own release (ADR 0171), so this chart names it and renders none of it.
-  # -- The annotator release's Service URL the annotator zone proxies to (ANNOTATOR_API), e.g. `http://rask-annotator:8103` from deploy/fixtures/annotator. Empty renders none.
-  annotatorUrl: ""
-  # The media plane's Services the explorer and annotator zones' server side proxy to (VIEWER_API, SEARCH_API). Viewer and
-  # search are clients of the lakehouse, so this chart names them and renders none of them.
-  # -- The media plane's viewer Service URL the explorer and annotator zones proxy to (VIEWER_API), e.g. `http://rask-viewer:8101`. Empty renders none.
-  viewerUrl: ""
-  # -- The media plane's search Service URL the explorer and annotator zones proxy to (SEARCH_API), e.g. `http://rask-search:8102`. Empty renders none.
-  searchUrl: ""
-  # Ray Serve's HTTP ingress origin, for the zones that run inference (studio's flow builder, the
-  # annotator's producer calls). Empty => the dashboard every Ray consumer names (`rask.rayServeOrigin`;
-  # an external dashboard host serves the apps too), so the builder cannot list an app it is unable to call.
-  # Set this when the engine serves Serve somewhere the dashboard does not.
-  # -- Ray Serve HTTP origin for zones that run inference; empty uses `ray.dashboardUrl`.
-  serveUrl: ''
-  image:
-    # The DEFAULT tag; shared across zones. A zone may override it with `tag:` on its apps entry below —
-    # that is what makes the zone split mean anything: independent deploy is the only thing a zone
-    # boundary buys, and one shared tag across every zone cancels it.
-    #
-    # An IMMUTABLE commit tag, never `dev`. `dev` was the default here and it cost a day: it is a
-    # MOVING pointer that no one owns, so the deployed UI was whatever last happened to claim the name
-    # — measured 2026-08-04 as an image predating both the media→explorer rename and the compositor
-    # removal, still serving a navbar reading "Search" with a dead top-level Workbench entry.
-    #
-    # The failure mode it creates is the reason this line matters more than it looks. Two lanes deploy
-    # this cluster; one rolls a verified tag out with `kubectl set image`, the other renders this chart.
-    # While the default was `dev`, EVERY chart render silently reverted the other lane's work (observed
-    # three times in one session, ~10 minutes apart) — and neither side saw an error, because pulling
-    # `dev` always succeeds. Pinning a commit makes the chart carry the intent, so a render REPRODUCES
-    # the fleet instead of overwriting it, and a disagreement shows up as a diff in git rather than as a
-    # UI that quietly rots back to last week.
-    #
-    # Bump this when new zone images are published (`dagger call zone-image --zone=<z> publish …`).
-    # -- Default image tag for every zone (an immutable commit tag); a zone overrides it with `tag` on its `apps` entry.
-    tag: "7ea481c"
-    # -- Image pull policy for the zone containers; empty falls back to `image.pullPolicy`.
-    pullPolicy: IfNotPresent
-  service:
-    # -- Port each zone's Bun server listens on and its Service exposes.
-    port: 3000
-  # -- Default CPU and memory requests/limits per zone container, used when `resources.web-<zone>` is not set.
-  resources:
-    requests: {cpu: "50m", memory: "64Mi"}
-    limits: {cpu: "500m", memory: "256Mi"}
-  podSecurityContext:
-    # -- Pod-level securityContext for zone pods: refuse to start a container running as root.
-    runAsNonRoot: true
-  securityContext:
-    # -- Container securityContext for zones: forbid privilege escalation.
-    allowPrivilegeEscalation: false
-    # -- Container securityContext capabilities for zones; drops ALL Linux capabilities.
-    capabilities: {drop: ["ALL"]}
-  # How long a zone's Bun server tolerates an idle connection, in seconds — the FIRST cut on a live query,
-  # not the edge. svelte-adapter-bun defaults it to 10, which turned `query.live` into a ~12s reconnect
-  # loop (nginx logged "upstream prematurely closed connection", upstream_response_time 12.001).
-  # 0 = disabled, and the measurement is why. 255 is Bun's maximum; the estate HAS a keepalive
-  # (`KEEPALIVE_MS` = 20s in feeds.remote.ts, which re-yields an unmoved cursor so bytes keep flowing)
-  # and a stream still died at **256.8s**, measured over a 290s hold with the edge at 3600s. So Bun's
-  # `idleTimeout` is not refreshed by outbound SSE writes: for a streaming response it behaves as a
-  # maximum connection LIFETIME, and no keepalive can beat it.
-  #
-  # The objection to disabling it — a wedged client holding a socket for ever — is answered by that same
-  # keepalive: every 20s the server WRITES to the socket, so a vanished peer fails the write and ends the
-  # generator. The liveness check moved into the application, where it can tell a silent estate from a
-  # silent client; the transport could not.
-  # ⚠ Templates must read this with `(hasKey $fe "idleTimeoutSeconds") | ternary …` — `| default 255`
-  # swallows this explicit 0 (the bug tests/unit/test_invariants.py now forbids chart-wide).
-  # -- Bun server idle timeout per connection in seconds (0 to 255); 0 disables it so live query streams are not cut.
-  idleTimeoutSeconds: 0
-  # The zones. home = the catch-all "/"; every other zone is pinned to /<name>.
-  # The union of both estates — one entry per zone directory (the zone-contract deploy-path gate
-  # pins this list to frontend/microfrontends/*).
-  # -- The zones to deploy: `name` (image `web-<name>`), `path` (/<name>) or `catchAll` for home at /, and an optional per-zone image `tag`.
-  apps:
-    - {name: home, catchAll: true}              # the platform home, "/"
-    # rask domain zones surviving R8+R9: compute (the Ray plane rask owns) and studio.
-    # storage folded into lakehouse, overview into compute (R16); discover retires at P7.
-    - {name: compute, path: /compute}
-    - {name: studio, path: /studio}
-    # The MODEL-LIFECYCLE zone. It began as R17's `train` (submit/runs/monitoring/
-    # analysis) and became `models` once lakehouse's models area physically migrated
-    # into it: registry + experiments + pipeline now sit beside training and the
-    # inference playground, so one zone answers everything about a model and the
-    # lakehouse keeps only its LINEAGE.
-    - {name: models, path: /models}
-    # lance-ns zones. `lakehouse` is the MERGED estate zone: catalog + lineage + models + admin were
-    # four separate zones on four Deployments, all reading the same catalog/lineage planes and all
-    # shipped from one shared image tag — four SSR servers and a full document reload between them,
-    # with none of the independent-deploy payoff. One zone, four areas under /lakehouse/<area>.
-    - {name: lakehouse, path: /lakehouse}
-    # The lance-media zones: full BFF zones like the rest — SSR on, the shared session handle, and
-    # same-origin /<zone>/api/* proxy routes to the media plane (VIEWER_API/SEARCH_API, `frontend.viewerUrl` and
-    # `frontend.searchUrl`) and to the annotator (ANNOTATOR_API, `frontend.annotatorUrl`), each a client with its own release.
-    - {name: explorer, path: /explorer}
-    - {name: annotator, path: /annotator}
-  # Per-user OIDC login (opt-in), shared across ALL zones — one origin, one sealed cookie, so a login on
-  # any zone is a login on every zone. The zones sign in at `auth.oidc.issuer` as `auth.oidc.clientId`.
-  # REQUIRED when enabled: publicOrigin (forms the home zone's /auth/callback redirect URI). The sealing
-  # key and the client secret come from the store.
-  oidc:
-    # ON BY DEFAULT, in lockstep with auth.enabled — the chart REFUSES the half-governed pair
-    # (templates/auth-consistency.yaml), so these two must move together or the render fails.
-    # -- Per-user OIDC login shared across all zones; must move together with `auth.enabled` (templates/auth-consistency.yaml).
-    enabled: true
-    # -- Browser-reachable app origin, e.g. https://app.example.com; forms the /auth/callback redirect URI. Required when `oidc.enabled`.
-    publicOrigin: "" # browser-reachable origin, e.g. https://app.example.com (forms the redirect URI)
-    # The session-cookie sealing key is not a value: it is the store's `frontend-session` (field `secret`), written
-    # by ESO into `<release>-frontend-session` beside the client secret.
 
 # === Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ============
 auth:
@@ -691,32 +563,28 @@ auth:
   # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
   # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
   # how it kept happening: a `helm upgrade` without `-f values-prod.yaml` reverts a governed estate to
-  # an open one, the session Secret stops rendering, and pods that still reference it fail to start
-  # (observed on rask-web-models, 2026-08-06). A security default must fail CLOSED, not open.
+  # an open one. A security default must fail CLOSED, not open.
   #
-  # This makes a bare `helm install` REFUSE rather than install: frontend.oidc.enabled is on too, and
-  # the chart already fails the render without an `auth.oidc.issuer`. That refusal is the point — an
+  # This makes a bare `helm install` REFUSE rather than install: the chart fails the render without an
+  # `auth.oidc.issuer`. That refusal is the point — an
   # ungoverned estate should require someone to ask for it (`--set auth.enabled=false`), never to
   # forget something.
-  # -- Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` and frontend OIDC configured or it refuses to render.
+  # -- Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` or it refuses to render.
   enabled: true
-  # THE ESTATE'S ONE IdP. Every governed door verifies a person's token against it and the zones sign in at
-  # it, so the browser's issuer and the doors' are one value and cannot disagree. With `dex.enabled` it is
+  # THE ESTATE'S ONE IdP. Every governed door verifies a person's token against it. With `dex.enabled` it is
   # the development Dex's (the DEV_ISSUER `make k3s-fixtures` gives the dex fixture), reached in-cluster at
   # `http://<release>-dex`: only then do the doors get that split-horizon discovery URL and
-  # RASK_OIDC_ALLOW_INSECURE, and the zones OIDC_INTERNAL_ISSUER. Without it the issuer is the platform's IdP,
+  # RASK_OIDC_ALLOW_INSECURE. Without it the issuer is the platform's IdP,
   # reached at its own https address (a `networkPolicy.extraEgress` rule), and the render refuses an http one.
   oidc:
-    # -- The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it) and the zones sign in at (`OIDC_ISSUER`). Required when `auth.enabled` or `frontend.oidc.enabled`; https unless `dex.enabled`.
+    # -- The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it). Required when `auth.enabled`; https unless `dex.enabled`.
     issuer: ""
-    # -- The OIDC client the zones sign in as (`OIDC_CLIENT_ID`), and the development Dex's sign-in client. Never the lakehouse's audience.
-    clientId: rask-web
     # THE LAKEHOUSE'S OWN AUDIENCE ([[LH-515]]). Every governed door accepts a person's token only when its `aud` names
     # this, so a token the IdP issued for another client is refused. The IdP issues it to the clients it trusts: the
     # development Dex declares a confidential audience client of this id, whose secret no client is given and whose
     # `trustedPeers` name the sign-in client, and a client asks for it with `auth.oidc.audienceScope` (measured on Dex
     # v2.42.0: the token's `aud` is then `[<audience>, <client>]`, and an untrusted client is refused the scope).
-    # -- The audience every governed door checks (`RASK_OIDC_AUDIENCE`); it must differ from `clientId`.
+    # -- The audience every governed door checks (`RASK_OIDC_AUDIENCE`); a client's own id is never it.
     audience: rask-lakehouse
     # -- The scope a client asks the IdP for to obtain a token for `audience`; empty is Dex's cross-client scope, `audience:server:client_id:<audience>`.
     audienceScope: ""
@@ -727,12 +595,6 @@ auth:
     # `local`, is `dex` whenever `dex.enabled`; without it every connector of the platform's Dex is named here.
     # -- The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes`. With `dex.enabled` the development Dex's `local` connector is `dex` unless named here; otherwise at least one entry is required.
     connectors: {}
-  # Permit auth.enabled=true WITHOUT a frontend sign-in flow. Off by default, and the chart REFUSES
-  # that combination (templates/auth-consistency.yaml): it installs green and then shows every user
-  # a governed UI with no way in, while the catalog 401s each read. Set this only for an estate that
-  # is deliberately API-only — it must be a decision, never an omission.
-  # -- Permit `auth.enabled` without a frontend sign-in flow, for a deliberately API-only estate; otherwise templates/auth-consistency.yaml refuses that combination.
-  allowHeadless: false
   # Lock root (top-level) namespace/table creation to warehouse-create-grant holders.
   #
   # DELIBERATELY UNSET, and that is what makes the control work. A key here is a key `hasKey` finds,
@@ -1395,7 +1257,7 @@ backups:
 # (single-node dev); the prod overlay turns the PDB on. Stateful stores (AGE, the object store) get HA from
 # their operators or the platform, NOT from here. ------------------------------------------------
 podDisruptionBudget:
-  # -- Renders a PodDisruptionBudget for each service and zone running more than one replica.
+  # -- Renders a PodDisruptionBudget for each service running more than one replica.
   enabled: false
   # -- minAvailable of every rendered PodDisruptionBudget.
   minAvailable: 1
@@ -1409,7 +1271,7 @@ autoscaling:
   #
   # The reference's preferred shape is a Pods-type p95 target, and it was costed rather than waved
   # at: `service_kit.setup_otel` already exports `http.server.*`, and KEDA's prometheus scaler would
-  # query the telemetry store's PromQL endpoint (`observability.query.url` + `/v1/prometheus`) — the
+  # query the telemetry store's PromQL endpoint (`/v1/prometheus`) — the
   # endpoint the platform's alert evaluator uses, so the query path is proven, not speculative. Declined 2026-08-28 (owner): it is a twelfth
   # subchart, its CRDs, and a new silent failure mode (scaler cannot reach GreptimeDB → no scaling,
   # no error) for an object no profile enables. Revisit when something actually turns this on.
@@ -1550,8 +1412,8 @@ ray:
   # ray-cluster fixtures provide one (deploy/fixtures, not for production).
   # -- rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them.
   enabled: true
-  # THE ONE RAY PLANE ([[CP-041]]): every Ray consumer renders its address from `rask.rayDashboardUrl`
-  # — the zones' Serve origin. The compute and annotator fixtures (deploy/fixtures/compute, deploy/fixtures/annotator)
+  # THE ONE RAY PLANE ([[CP-041]]): every Ray consumer renders its address from `rask.rayDashboardUrl`.
+  # The compute and annotator fixtures (deploy/fixtures/compute, deploy/fixtures/annotator)
   # are given the same address as their own values.
   # -- Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265.
   dashboardUrl: ""
@@ -1569,25 +1431,19 @@ route:
   # public prefix, and each service authenticates every request itself. Only Core matches and the URLRewrite filter are
   # used, so any conformant implementation serves them (kgateway, Envoy Gateway, Istio, Cilium; on k3s, Traefik's
   # Gateway provider, which `make k3s-install` switches on). What an implementation sizes for itself is the Gateway's
-  # policy, not a route's: allow response headers of 16 KB (a chart-heavy zone sends ~4 KB of modulepreload `Link`),
-  # request bodies of 64 MB (page images, Arrow imports), and an idle stream of an hour (a `query.live` generator yields
-  # only on change and SvelteKit's SSE transport sends no keepalive).
+  # policy, not a route's: allow request bodies of 64 MB (Arrow imports).
   #
   # A ROUTE WITH NO HOSTNAME IS A CLAIM ON EVERY HOST ITS GATEWAY'S LISTENER ACCEPTS. Two releases attached host-less to
   # one listener are rival claims on `/` and `/api`, and the Gateway gives a tie to the oldest route. So a real deployment
   # (`rask.isRealDeployment`) names its `hostnames` and the render refuses one that names none ([[XC-146]]); a
   # development estate may leave them empty, and a second install beside it sets its own `hostnames` or
   # `route.enabled=false`.
-  # -- Renders the HTTPRoutes publishing the zones on `/`, `/dex` and each `/api/*` prefix on the Gateway `parentRefs` names.
+  # -- Renders the HTTPRoutes publishing each `/api/*` prefix, and `/dex` with the development Dex, on the Gateway `parentRefs` names.
   enabled: true
   # -- Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`.
   parentRefs: []
   # -- Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts.
   hostnames: []
-  # -- In-cluster address of that Gateway (RASK_EDGE_URL): where the zones' server side sends `/api/*`, through the same routes a browser takes. Required while the zones render.
-  edgeUrl: ""
-  # -- NetworkPolicy egress rules ({to, ports}) admitting the zones to the Gateway's data plane pods, at the pod port a policy sees. Required under networkPolicy.enabled while the zones render.
-  edgeEgress: []
 
 # ==== cluster infra foundation (subchart dependencies, Chart.yaml) ==========
 # One `helm install` brings these up alongside the app. Turn off for a prod
@@ -1604,8 +1460,6 @@ nats:
   # Development gets a three-node bus from deploy/fixtures/nats, at `nats://rask-nats:4222` (deploy/values-local.yaml).
   # -- NATS JetStream address every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render.
   url: ""
-  # -- HTTP monitoring endpoint of the bus (varz/jsz) the lakehouse zone's ops view reads (e.g. http://rask-nats-headless:8222). Empty hides the panel.
-  monitorUrl: ""
   # Raft replication for every provisioned stream. A streamReplicas above the bus's node count makes `nats stream add`
   # fail outright rather than degrade.
   # -- Raft replica count for every stream the stream Job provisions; must not exceed the bus's node count.
@@ -1984,7 +1838,7 @@ openfga:
   playground:
     # -- Subchart passthrough: the OpenFGA browser playground; off, since it only runs with authn `none`.
     enabled: false
-  # NO BROWSER CALLS OpenFGA: the zones reach it only through the services. CORS stays closed by naming
+  # NO BROWSER CALLS OpenFGA: a client reaches it only through the services. CORS stays closed by naming
   # one origin under the reserved `.invalid` TLD (RFC 2606), which no page can have; an empty list is not
   # closed, because rs/cors reads an empty AllowedOrigins as `*`, and the subchart default is `*`.
   # -- Subchart passthrough: CORS for the OpenFGA HTTP API, closed by allowing only the unreachable origin `https://openfga.invalid`.
@@ -2100,8 +1954,6 @@ dex:
   enabled: true
   # -- Port of the development Dex's Service.
   port: 5556
-  # -- The development Dex's sign-in client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`).
-  clientSecret: lance-catalog-secret
 
 # === The secret store the Dapr secret store and ESO read: the platform's, or the dev OpenBao fixture =====
 # The chart renders no secret store ([[XC-149]], ADR 0153). Production names the platform's Vault or OpenBao; development
@@ -2317,15 +2169,6 @@ observability:
     auditHeaders:
       x-greptime-log-table-name: lance_audit
     # -- NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled.
-    egress: []
-  # The zones' audit viewer (home), the admin observability pages (lakehouse) and the experiment curves (models)
-  # read the store directly, as GREPTIME_API: SQL at `<url>/v1/sql`, PromQL at `<url>/v1/prometheus`.
-  query:
-    # -- Base URL of the store's SQL and PromQL API the zones read (GREPTIME_API); empty leaves those panels without data.
-    url: ""
-    # -- Table the audit viewer reads `lance.audit` records from; the same table `export.auditHeaders` routes them to.
-    auditTable: lance_audit
-    # -- NetworkPolicy egress rules ({to, ports}) admitting the zones to the store at `url`, at the port a policy sees. Required under networkPolicy.enabled while `url` is set.
     egress: []
   # -- Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request.
   samplingRate: "1" # Dapr trace sampling — full, so the catalog→lineage context always propagates

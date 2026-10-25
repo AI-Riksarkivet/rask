@@ -77,22 +77,6 @@ dapr.io/config: "lance-tracing"
 {{- end -}}
 
 
-{{- define "rask.zoneOtelEnv" -}}
-{{- $root := index . 0 -}}
-{{- $svc := index . 1 -}}
-{{- $o := $root.Values.observability -}}
-{{- if include "lance.otelEnabled" $root -}}
-- name: OTEL_EXPORTER_OTLP_ENDPOINT
-  value: "{{ include "lance.otlpEndpoint" $root }}"
-- name: OTEL_EXPORTER_OTLP_PROTOCOL
-  value: "http/protobuf"
-- name: OTEL_SERVICE_NAME
-  value: {{ $svc | quote }}
-- name: OTEL_RESOURCE_ATTRIBUTES
-  value: {{ include "rask.otelResourceAttrs" $root | quote }}
-{{- end }}
-{{- end -}}
-
 {{- define "rask.otelEnv" -}}
 {{- $root := index . 0 -}}
 {{- $svc := index . 1 -}}
@@ -556,7 +540,7 @@ securityContext:
 {{- end -}}
 
 {{- define "lance.oidcIssuer" -}}
-{{- $issuer := required "auth.oidc.issuer must name the IdP every governed door trusts and the zones sign in at: the development Dex's issuer with dex.enabled, the platform's IdP otherwise" .Values.auth.oidc.issuer -}}
+{{- $issuer := required "auth.oidc.issuer must name the IdP every governed door trusts: the development Dex's issuer with dex.enabled, the platform's IdP otherwise" .Values.auth.oidc.issuer -}}
 {{- if and (not .Values.dex.enabled) (not (hasPrefix "https://" $issuer)) -}}
 {{- fail (printf "auth.oidc.issuer=%s is not https. Without the development Dex (dex.enabled=false) the issuer is the platform's IdP, and every governed door fetches the keys it checks each token against from it: over http, whoever answers that address on the path chooses them. Name the IdP's https issuer." $issuer) -}}
 {{- end -}}
@@ -592,9 +576,6 @@ securityContext:
 
 {{- define "lance.oidcAudience" -}}
 {{- $audience := required "auth.oidc.audience names the lakehouse's own audience, which every governed door checks" .Values.auth.oidc.audience -}}
-{{- if eq $audience .Values.auth.oidc.clientId -}}
-{{- fail (printf "auth.oidc.audience=%s is the zones' sign-in client (auth.oidc.clientId): the lakehouse checks an audience of its own, so a token the IdP issued for a client is refused" $audience) -}}
-{{- end -}}
 {{- $audience -}}
 {{- end -}}
 
@@ -761,7 +742,6 @@ scoped_secret() {
 {{- if $v.ray.auth.enabled }}{{- $reads = append $reads "ray-auth-token" }}{{- end -}}
 {{- if include "lance.backupIdentity" . }}{{- $reads = append $reads "backup-s3" }}{{- end -}}
 {{- if or $v.dapr.enabled $v.auth.enabled }}{{- $reads = append $reads "dapr-app-token" }}{{- end -}}
-{{- if and $v.frontend.enabled $v.auth.enabled $v.frontend.oidc.enabled }}{{- $reads = concat $reads (list "frontend-session" "oidc-client") }}{{- end -}}
 {{- if $v.secrets.hfTokenInStore }}{{- $reads = append $reads "hf-token" }}{{- end -}}
 {{- range $files := include "lance.natsFiles" . | fromJson }}{{- $reads = concat $reads $files }}{{- end -}}
 {{- toJson ($reads | uniq | sortAlpha) -}}
@@ -953,14 +933,6 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- define "rask.rayDashboardUrl" -}}
 {{- if .Values.ray.dashboardUrl -}}
 {{- .Values.ray.dashboardUrl -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "rask.rayServeOrigin" -}}
-{{- if .Values.frontend.serveUrl -}}
-{{- .Values.frontend.serveUrl -}}
-{{- else -}}
-{{- include "rask.rayDashboardUrl" . -}}
 {{- end -}}
 {{- end -}}
 

@@ -87,4 +87,4 @@ def test_a_real_deployment_that_names_no_hostname_is_refused() -> None:
 def test_each_route_of_a_real_deployment_carries_the_hostnames_it_names() -> None:
     routes = {doc["metadata"]["name"]: doc["spec"].get("hostnames") for doc in render(*PROD_ARGS) if doc.get("kind") == "HTTPRoute"}
 
-    assert routes == {"rask-api": ["lance.example.com"], "rask-web": ["lance.example.com"]}
+    assert routes == {"rask-api": ["lance.example.com"]}

@@ -75,8 +75,7 @@ Endpoints (`packages/api/src/ray.ts`): `/api/ray/{health,jobs,cluster,actors,tas
 
 The lakehouse runs no stage, no training and no engine, so three frontend callers name routes no service
 serves: the `models` zone's `train.remote.ts` (`POST /api/train`) and the `lakehouse` zone's
-`promotions.remote.ts` (`/api/promotions`) have no route row, so the cluster route sends them to the `/`
-rule and `web-home` answers 404; the `compute` zone's `/transforms` page reaches the catalog through
+`promotions.remote.ts` (`/api/promotions`) have no route row, so the cluster route answers 404; the `compute` zone's `/transforms` page reaches the catalog through
 `/api/catalog`, and the catalog serves no transforms door, so it 404s there. `/api/ray` and `/api/serve` are
 routed only where the compute fixture chart is installed (its own HTTPRoute); without it the `compute` zone's
 `packages/api/src/ray.ts` calls and `studio`'s Serve-app discovery 404 the same way. The frontend is outside

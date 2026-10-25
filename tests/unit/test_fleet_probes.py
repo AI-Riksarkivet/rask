@@ -79,8 +79,6 @@ def test_the_chart_probes_READINESS_at_readyz_not_the_static_badge() -> None:
         if doc.get("kind") != "Deployment" or "rask-" not in doc["metadata"]["name"]:
             continue
         name = doc["metadata"]["name"]
-        if name.endswith(("-web-annotator", "-web-compute", "-web-explorer", "-web-home", "-web-lakehouse", "-web-models", "-web-studio")):
-            continue  # the web zones are not fleet apps
         for container in doc["spec"]["template"]["spec"].get("containers") or []:
             probe = (container.get("readinessProbe") or {}).get("httpGet") or {}
             path = probe.get("path")

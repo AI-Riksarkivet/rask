@@ -58,7 +58,6 @@ def _helm_template(*set_values: str) -> str:
     # every other render test testing its own subject rather than re-testing the guard.
     argv += [*PREREQ_ARGS, *RAY_ARGS]
     argv += ["--set", "auth.oidc.issuer=http://localhost:8080/dex"]
-    argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     for value in set_values:
         argv += ["--set", value]
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603

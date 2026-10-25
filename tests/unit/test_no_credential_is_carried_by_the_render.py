@@ -3,7 +3,7 @@
 A render is stored whole in the release (`helm get manifest`, `hooks`, `values`), every revision of it, so
 a credential that passes through one is a secret at rest outside the store. Three ways one used to: a
 template minting it (`randAlphaNum` for the Ray token), a value carrying it (`dapr.appToken`,
-`frontend.oidc.sessionSecret`, `objectStore.secretKey`, ...), and a template rendering it into a Secret or a Job.
+`objectStore.secretKey`, ...), and a template rendering it into a Secret or a Job.
 The credentials now live in the store and reach pods through ESO, a prerequisite the chart checks for.
 The dev store's are generated in-cluster; `test_the_dev_openbao_is_seeded_by_its_own_pod.py` runs that half.
 """

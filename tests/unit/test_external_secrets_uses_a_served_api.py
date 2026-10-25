@@ -50,8 +50,6 @@ def _rendered_eso() -> list[dict]:
             *RAY_ARGS,
             "--set-string",
             "auth.oidc.issuer=http://localhost:8080/dex",
-            "--set-string",
-            "frontend.oidc.publicOrigin=http://localhost:8080",
         ],
         capture_output=True,
         text=True,

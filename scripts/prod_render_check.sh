@@ -11,9 +11,8 @@ CHART="${CHART:-chart}"
 PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 
 # Every value the chart's `required` guards demand before it will render at all. values-prod sets
-# auth.enabled AND frontend.oidc.enabled — a governed backend with a UI that can sign in — so
-# templates/{auth-consistency,frontends}.yaml demand the three OIDC values on EVERY render here, and
-# _helpers.tpl demands a registry-qualified image.repository.
+# auth.enabled, so _helpers.tpl demands the OIDC issuer and connectors on EVERY render here, and a
+# registry-qualified image.repository.
 # One array, used by all four helm calls below: adding a fifth without them would fail the whole script
 # at that line with no message (set -e + command substitution), which is how this reached CI red.
 # Dummies on purpose: they satisfy the fail-closed guards and thereby also prove the guards do not block
@@ -32,12 +31,11 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name, and
 # auth.oidc.connectors the idp id of each of the platform's Dex connectors ([[LH-063]]),
 # auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]), openbao.externalAddr its secret
-# store ([[XC-149]]), and route.* the platform's Gateway, its in-cluster address and the egress that reaches it (ADR 0165),
+# store ([[XC-149]]), and route.parentRefs the platform's Gateway (ADR 0165),
 # and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA and its secret store, which
 # no URL can derive ([[XC-143]]).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set auth.oidc.issuer=https://auth.example.com/dex
-        --set frontend.oidc.publicOrigin=https://lance.example.com
         --set-json 'auth.oidc.connectors={"ldap":"corp"}'
         --set image.repository=ghcr.io/example/rask
         --set signing.provisioned=true
@@ -51,8 +49,6 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set-string openbao.externalAddr=https://vault.example.com:8200
         --set-json 'openbao.egress=[{"to":[{"ipBlock":{"cidr":"198.51.100.20/32"}}],"ports":[{"protocol":"TCP","port":8200}]}]'
         --set-json 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]'
-        --set-string route.edgeUrl=http://edge.edge-system.svc.cluster.local
-        --set-json 'route.edgeEgress=[{"to":[{"namespaceSelector":{"matchLabels":{"kubernetes.io/metadata.name":"edge-system"}}}],"ports":[{"protocol":"TCP","port":8080}]}]'
         --set-json 'networkPolicy.apiServerEgress=[{"to":[{"ipBlock":{"cidr":"192.0.2.10/32"}}],"ports":[{"protocol":"TCP","port":6443}]}]'
         --set-json 'observability.export.egress=[{"to":[{"ipBlock":{"cidr":"203.0.113.10/32"}}],"ports":[{"protocol":"TCP","port":4318}]}]'
         --set-json 'auth.fgaEgress=[{"to":[{"ipBlock":{"cidr":"198.51.100.10/32"}}],"ports":[{"protocol":"TCP","port":443}]}]')
@@ -60,7 +56,6 @@ OUT="$(mktemp)"
 trap 'rm -f "$OUT"' EXIT
 
 helm template rask "$CHART" -f "$PROD_VALUES" \
-  --set frontend.image.tag=v0 \
   --set backups.volumeSnapshot.snapshotClassName=csi-snapclass \
   --set route.hostnames[0]=lance.example.com "${COMMON[@]}" > "$OUT"
 
@@ -72,20 +67,15 @@ np=$(grep -c "kind: NetworkPolicy" "$OUT" || true)
 grep -q "default-deny" "$OUT" || fail "prod NetworkPolicy set missing default-deny"
 grep -q "name: rask-allow-secret-store-egress" "$OUT" || fail "prod NetworkPolicy set missing the egress that admits only the secret store's readers"
 # NATS isolation (goal cond 8): the general intra-namespace ingress allow must EXCLUDE the nats pods —
-# without the exclusion the explicit nats rules are decorative (NetworkPolicies are additive). Then the
-# two explicit rules must render: 4222 (clients, port-scoped from any in-namespace pod — the daprd
-# sidecars live in nearly every app pod) and 8222 (monitor) from the web-lakehouse zone pods. The windowed
-# greps pin the from-selector + port to THEIR rule, not a stray match elsewhere.
+# without the exclusion the explicit nats rule is decorative (NetworkPolicies are additive). Then the
+# one explicit rule must render: 4222 (clients, port-scoped from any in-namespace pod — the daprd
+# sidecars live in nearly every app pod). The windowed grep pins the port to THAT rule, not a stray match
+# elsewhere.
 grep -qF "values: [openbao, age, rustfs, nats, authorization-controller]" "$OUT" \
   || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/age/rustfs)"
 grep -q "name: rask-nats-clients" "$OUT" || fail "prod NetworkPolicy set missing the nats-clients (4222) rule"
 grep -A20 "name: rask-nats-clients" "$OUT" | grep -q "port: 4222" \
   || fail "the nats-clients rule must target the 4222 client port"
-grep -q "name: rask-nats-monitor" "$OUT" || fail "prod NetworkPolicy set missing the nats-monitor (8222) rule"
-grep -A20 "name: rask-nats-monitor" "$OUT" | grep -q "app.kubernetes.io/component: web-lakehouse" \
-  || fail "the nats-monitor rule must admit only the web-lakehouse component pods"
-grep -A20 "name: rask-nats-monitor" "$OUT" | grep -q "port: 8222" \
-  || fail "the nats-monitor rule must target the 8222 monitor port"
 
 # 2. OpenFGA and its Postgres are the platform's ([[XC-132]]): prod runs neither, and every client dials the endpoints
 # the deployer names.
@@ -109,29 +99,17 @@ grep -qE "image: \"?ghcr.io/cloudnative-pg/cloudnative-pg:" "$OUT" \
   && fail "prod must not run a CloudNativePG operator (it is a prerequisite)"
 grep -q "name: cnpg-validating-webhook-configuration$" "$OUT" && fail "prod must not render CloudNativePG's webhooks"
 
-# 4. PodDisruptionBudgets: the request-serving backends (catalog/lineage/gateway) + one per frontend zone (frontend.replicas=2 in prod; the zones are the Ingress-routed
-# north-south edge — audit 2026-07-24: the raw `>=5` count was inflated by the 5 Dapr-HA subchart PDBs,
-# so the missing zone PDBs sailed through). NAMED asserts on the PDB documents themselves, not a count.
-pdb=$(grep -c "kind: PodDisruptionBudget" "$OUT" || true)
+# 4. PodDisruptionBudgets: the request-serving backends (catalog/lineage). NAMED asserts on the PDB
+# documents themselves, not a count: a raw count is inflated by the subcharts' PDBs.
 pdb_names=$(awk '/^kind: PodDisruptionBudget$/{f=1} f&&/^  name: /{print $2; f=0}' "$OUT")
-# The zone half is DERIVED from the chart's own `frontend.apps`, not hand-listed. It WAS hand-listed —
-# `web-home web-lakehouse web-media web-annotator` — and by 2026-08-22 that literal named a zone which no
-# longer exists (`media`, retired with the R6/R20 media wave) while omitting FOUR that do (compute,
-# studio, models, explorer). So the assertion could not pass, and the three zones it did cover were the
-# only ones guarded. Nothing noticed for 923 commits because this script is step 6 of .dagger/charts.go's
-# chain and step 2 had been failing since 2026-08-04 — the roster drifted under a gate that never ran.
-# Deriving closes the class: a zone added to or removed from the chart moves this assertion with it.
-# Input-vs-output, not circular: the expected set comes from values.yaml, the actual from the render.
-zones=$(awk '/^  apps:/{f=1;next} f&&/^  [a-zA-Z]/{exit} f&&match($0,/name: [a-z0-9-]+/){print substr($0,RSTART+6,RLENGTH-6)}' "$CHART/values.yaml")
-[ -n "$zones" ] || fail "could not derive frontend.apps from $CHART/values.yaml — the PDB zone assertion would be vacuous"
-for p in catalog lineage $(sed 's/^/web-/' <<<"$zones"); do
+for p in catalog lineage; do
   grep -qx "rask-$p" <<<"$pdb_names" \
     || fail "prod is missing the rask-$p PodDisruptionBudget (got: $(tr '\n' ' ' <<<"$pdb_names"))"
 done
 
 # 5. Anti-affinity: the replicas:2 services spread across nodes (else one node loss defeats their PDB).
 spread=$(grep -c "topologySpreadConstraints:" "$OUT" || true)
-[ "$spread" -ge 4 ] || fail "prod must spread the 4 multi-replica services across nodes (>=4), got $spread"
+[ "$spread" -ge 3 ] || fail "prod must spread the 3 multi-replica services (catalog, lineage, notifications) across nodes (>=3), got $spread"
 
 # 6. Resource tiers: the memory-heavy workload in the release (the catalog's Arrow buffer) gets a 1Gi limit
 # above the shared 512Mi default; the object store is the platform's and outside the release. The default
@@ -239,8 +217,8 @@ unrendered=$(comm -23 <(sort -u <<<"$named") <(echo "$rendered"))
 [ -z "$unrendered" ] || fail "workloads name ServiceAccounts this render does not create: $(tr '\n' ' ' <<<"$unrendered")"
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
-[ "$automount" -ge 8 ] \
-  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=8 expected; 1 is the baseline)"
+[ "$automount" -ge 7 ] \
+  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=7 expected; 1 is the baseline)"
 grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
   || fail "prod must restrict the daprd sidecar (dapr.sidecarRestricted) — a pod is only as restricted as its loosest container"
 
@@ -252,4 +230,4 @@ grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
 grep -q "deployment.environment.name=prod" "$OUT" \
   || fail "prod telemetry must carry deployment.environment.name=prod (observability.environment) — it renders $(grep -oE 'deployment\.environment\.name=[^,\"]*' "$OUT" | sort -u | head -1)"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres+secret store external, Dapr control plane external, PDBs=$pdb (backends+zones named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, object-store-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres+secret store external, Dapr control plane external, PDBs=$(wc -l <<<"$pdb_names") (backends named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, object-store-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"

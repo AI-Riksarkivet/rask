@@ -64,7 +64,6 @@ _SERVICE_ACCOUNT_USER = re.compile(r"^system:serviceaccount:(?P<namespace>[^:]+)
 
 #: SAs more than one long-running workload may share, each because the sharers are ONE identity.
 _SHARED_IDENTITIES: dict[str, str] = {
-    "rask-sa-web": "every zone calls the backends as the one frontend.serviceIdentity",
     "rask-sa-maintenance": "the sweep and its work-queue executor are one maintenance identity",
 }
 
@@ -268,7 +267,7 @@ def test_no_first_party_service_account_can_read_a_secret_or_review_a_token(over
 
     # The walk sees the chart's pods and the subcharts', and the classifier reads rendered roles; without these every
     # assertion below passes by parsing nothing.
-    assert sum(pod.first_party for pod in pods) >= 15, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
+    assert sum(pod.first_party for pod in pods) >= 9, f"{overlay}: only {sum(p.first_party for p in pods)} first-party pod templates"
     # OpenFGA is the chart's one subchart and production names the platform's ([[XC-132]]), so the overlays that run it
     # prove the split.
     if overlay != "prod":

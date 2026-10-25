@@ -213,12 +213,9 @@ describe('the media zone does not proxy the annotation write surface', () => {
 	});
 });
 
-describe('the chart hands a zone only the upstreams its routes use', () => {
-	// Env is the other half of the same mistake: the routes can be scoped correctly while the chart
-	// still injects every service URL into every zone. media and annotator were each handed
-	// VIEWER_API + SEARCH_API + ANNOTATOR_API regardless of what they called, so the annotator pod
-	// carried a search URL it has no route for.
-	const chart = readFileSync(`${FRONTEND_ROOT}/../chart/templates/frontends.yaml`, 'utf8');
+describe('a zone reads only the upstreams its routes use', () => {
+	// Env is the other half of the same mistake: the routes can be scoped correctly while the deploy
+	// still injects every service URL into every zone, so a pod carries a URL it has no route for.
 
 	/** The `*_API` names a zone's own SERVER code actually reads out of $env.
 	 *
@@ -252,8 +249,7 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 			// to this grep, because a `+server.ts` reached them through `makeCatalogProxy(env)` — the
 			// `env.CATALOG_API` read living in @rask/api rather than in the zone. Now that identity and
 			// user-state are remote functions and the run feed is `feeds.remote.ts`, the zone names them
-			// itself, which is the more honest picture of what it needs. The chart already injects both
-			// (chart/templates/frontends.yaml).
+			// itself, which is the more honest picture of what it needs.
 			'CATALOG_API',
 			'LINEAGE_API',
 			'SEARCH_API',
@@ -268,27 +264,13 @@ describe('the chart hands a zone only the upstreams its routes use', () => {
 		//
 		// The assertion was correct when written and this is a deliberate widening, not a relaxation:
 		// what it protects is that a zone's declared upstreams match the routes it actually makes,
-		// in BOTH directions. The companion case below still fails if the chart stops injecting it.
+		// in BOTH directions.
 		// VIEWER_API is deliberately NOT asserted: the zone reaches the viewer through
 		// `makeViewerProxy(env)`, so the `env.VIEWER_API` read lives in @rask/api and this grep
 		// cannot see it — the same blind spot the media case above documents for CATALOG_API.
 		const used = upstreamsUsed('annotator');
 		expect(used.has('ANNOTATOR_API')).toBe(true);
 		expect(used.has('SEARCH_API'), 'the annotator searches now — see similar.remote.ts').toBe(true);
-	});
-
-	it('the chart injects SEARCH_API for every zone that searches', () => {
-		// The failure this catches is silent and only in-cluster: an uninjected upstream leaves the
-		// zone's remote function on its localhost dev default, so every call fails with nothing in
-		// the browser saying the URL was never set. Both searching zones must be inside the media
-		// block, and that block is already gated on `explorer.enabled`.
-		const lines = chart.split('\n');
-		const searchLine = lines.findIndex((l) => l.includes('name: SEARCH_API'));
-		expect(searchLine, 'the chart never injects SEARCH_API').toBeGreaterThan(-1);
-		// Not behind a single-zone guard any more — the line above it must not narrow it to one.
-		expect(lines[searchLine - 1] ?? '', 'SEARCH_API is gated to one zone again').not.toContain(
-			'eq .name "explorer"',
-		);
 	});
 });
 

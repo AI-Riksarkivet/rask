@@ -44,21 +44,19 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | age.user | string | `"lance"` | Postgres user every AGE client connects as; its password is the store's `postgres` secret (field `password`), never a value. |
 | allocator.arenaMax | int | `2` | MALLOC_ARENA_MAX set on every lakehouse container (lance.allocatorEnv) to cap glibc malloc arenas. Default 2. |
 | allocator.arrowMemoryPool | string | `"system"` | ARROW_DEFAULT_MEMORY_POOL on every lakehouse container; `system` routes Arrow through malloc so `arenaMax` bounds it. |
-| auth.allowHeadless | bool | `false` | Permit `auth.enabled` without a frontend sign-in flow, for a deliberately API-only estate; otherwise templates/auth-consistency.yaml refuses that combination. |
 | auth.audit | bool | `true` | Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it. |
 | auth.bootstrapAdmin | string | `""` | The person's principal (`<idp-id>~<user id>`, e.g. `dex~<userID>`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask; a bare name fails the render. Empty = human grants are made out of band. |
-| auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` and frontend OIDC configured or it refuses to render. |
+| auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` or it refuses to render. |
 | auth.externalDeciders | list | `[]` | ServiceAccounts outside this release that may ask the catalog's decision door, each `<namespace>:<name>` (e.g. `default:rask-sa-compute` for the compute fixture); bootstrap-admin grants each `decider`. Read only with auth on. |
 | auth.fgaApiUrl | string | `""` | The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer. |
 | auth.fgaEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false. |
 | auth.fgaModelId | string | `""` | Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model. |
 | auth.fgaStoreId | string | `""` | Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`. |
 | auth.issuerMirror.enabled | bool | `true` | Render the issuer mirror (templates/issuer-mirror.yaml) that republishes the SA issuer's discovery and JWKS unauthenticated for OpenFGA and the development store; off only for a publicly served issuer. |
-| auth.oidc.audience | string | `"rask-lakehouse"` | The audience every governed door checks (`RASK_OIDC_AUDIENCE`); it must differ from `clientId`. |
+| auth.oidc.audience | string | `"rask-lakehouse"` | The audience every governed door checks (`RASK_OIDC_AUDIENCE`); a client's own id is never it. |
 | auth.oidc.audienceScope | string | `""` | The scope a client asks the IdP for to obtain a token for `audience`; empty is Dex's cross-client scope, `audience:server:client_id:<audience>`. |
-| auth.oidc.clientId | string | `"rask-web"` | The OIDC client the zones sign in as (`OIDC_CLIENT_ID`), and the development Dex's sign-in client. Never the lakehouse's audience. |
 | auth.oidc.connectors | object | `{}` | The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes`. With `dex.enabled` the development Dex's `local` connector is `dex` unless named here; otherwise at least one entry is required. |
-| auth.oidc.issuer | string | `""` | The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it) and the zones sign in at (`OIDC_ISSUER`). Required when `auth.enabled` or `frontend.oidc.enabled`; https unless `dex.enabled`. |
+| auth.oidc.issuer | string | `""` | The OIDC issuer every governed door trusts (`RASK_OIDC_ISSUER`; a token is accepted only when its `iss` equals it). Required when `auth.enabled`; https unless `dex.enabled`. |
 | auth.serviceAccountIssuer | string | `"https://kubernetes.default.svc.cluster.local"` | The Kubernetes ServiceAccount token issuer every door verifies service tokens against (RASK_SA_ISSUER); must equal OpenFGA's issuer alias or the render fails. |
 | autoscaling.enabled | bool | `false` | Renders CPU-based HPAs for catalog and lineage. Needs metrics-server; off by default. |
 | autoscaling.maxReplicas | int | `5` | HPA maximum replicas for catalog and lineage. |
@@ -107,7 +105,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | dapr.sidecarResources.memoryLimit | string | `"256Mi"` | Memory limit for every injected daprd sidecar (`dapr.io/sidecar-memory-limit`). |
 | dapr.sidecarResources.memoryRequest | string | `"64Mi"` | Memory request for every injected daprd sidecar (`dapr.io/sidecar-memory-request`). |
 | dapr.sidecarRestricted | bool | `false` | Add the RuntimeDefault seccomp annotation to daprd for PodSecurity `restricted`; also set the injector's `sidecarDropALLCapabilities`. |
-| dex.clientSecret | string | `"lance-catalog-secret"` | The development Dex's sign-in client secret (demo value); seeded into OpenBao as `oidc-client` (field `client-secret`). |
 | dex.enabled | bool | `true` | This estate uses the development Dex (deploy/fixtures/dex, Service `<release>-dex`): the ingress serves it at /dex, and a real deployment refuses it. The chart renders no Dex. |
 | dex.port | int | `5556` | Port of the development Dex's Service. |
 | docs.enabled | bool | `false` | Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster. |
@@ -120,24 +117,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | externalSecrets.role | string | `"lance-infra"` | Vault role the operator's ServiceAccount assumes; also names its read policy. |
 | externalSecrets.serviceAccount | string | `"external-secrets"` | Name of the External Secrets Operator ServiceAccount the Vault role is bound to, so no other pod can assume it. |
 | forwardedAllowIps | string | `"127.0.0.1"` | Peers whose x-forwarded-* headers uvicorn trusts in every pod the route reaches (--forwarded-allow-ips). Set to the Gateway data plane's pod CIDR; `*` is refused. |
-| frontend.annotatorUrl | string | `""` | The annotator release's Service URL the annotator zone proxies to (ANNOTATOR_API), e.g. `http://rask-annotator:8103` from deploy/fixtures/annotator. Empty renders none. |
-| frontend.apps | list | `[{"catchAll":true,"name":"home"},{"name":"compute","path":"/compute"},{"name":"studio","path":"/studio"},{"name":"models","path":"/models"},{"name":"lakehouse","path":"/lakehouse"},{"name":"explorer","path":"/explorer"},{"name":"annotator","path":"/annotator"}]` | The zones to deploy: `name` (image `web-<name>`), `path` (/<name>) or `catchAll` for home at /, and an optional per-zone image `tag`. |
-| frontend.bodySizeLimit | string | `"32M"` | Request-body ceiling of each zone's Bun server (BODY_SIZE_LIMIT), kept above the BFF's 25 MB inference guard. |
-| frontend.enabled | bool | `true` | Deploy the SvelteKit zone servers, one Deployment and Service per entry in `frontend.apps`. |
-| frontend.idleTimeoutSeconds | int | `0` | Bun server idle timeout per connection in seconds (0 to 255); 0 disables it so live query streams are not cut. |
-| frontend.image.pullPolicy | string | `"IfNotPresent"` | Image pull policy for the zone containers; empty falls back to `image.pullPolicy`. |
-| frontend.image.tag | string | `"7ea481c"` | Default image tag for every zone (an immutable commit tag); a zone overrides it with `tag` on its `apps` entry. |
-| frontend.oidc.enabled | bool | `true` | Per-user OIDC login shared across all zones; must move together with `auth.enabled` (templates/auth-consistency.yaml). |
-| frontend.oidc.publicOrigin | string | `""` | Browser-reachable app origin, e.g. https://app.example.com; forms the /auth/callback redirect URI. Required when `oidc.enabled`. |
-| frontend.podSecurityContext.runAsNonRoot | bool | `true` | Pod-level securityContext for zone pods: refuse to start a container running as root. |
-| frontend.replicas | int | `1` | Replicas per zone Deployment; above 1 the chart also renders a PodDisruptionBudget per zone. |
-| frontend.resources | object | `{"limits":{"cpu":"500m","memory":"256Mi"},"requests":{"cpu":"50m","memory":"64Mi"}}` | Default CPU and memory requests/limits per zone container, used when `resources.web-<zone>` is not set. |
-| frontend.searchUrl | string | `""` | The media plane's search Service URL the explorer and annotator zones proxy to (SEARCH_API), e.g. `http://rask-search:8102`. Empty renders none. |
-| frontend.securityContext.allowPrivilegeEscalation | bool | `false` | Container securityContext for zones: forbid privilege escalation. |
-| frontend.securityContext.capabilities | object | `{"drop":["ALL"]}` | Container securityContext capabilities for zones; drops ALL Linux capabilities. |
-| frontend.serveUrl | string | `""` | Ray Serve HTTP origin for zones that run inference; empty uses `ray.dashboardUrl`. |
-| frontend.service.port | int | `3000` | Port each zone's Bun server listens on and its Service exposes. |
-| frontend.viewerUrl | string | `""` | The media plane's viewer Service URL the explorer and annotator zones proxy to (VIEWER_API), e.g. `http://rask-viewer:8101`. Empty renders none. |
 | fullnameOverride | string | `"rask"` | Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-<component>`. |
 | image.catalog | object | `{"repository":"lance-rest-catalog"}` | Lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one. |
 | image.digest | string | `""` | Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags. |
@@ -146,7 +125,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | image.pullPolicy | string | `"IfNotPresent"` | imagePullPolicy for first-party containers. |
 | image.repository | string | `""` | Registry prefix for every first-party image (e.g. ghcr.io/<org>/<repo>). Required unless localImages is true. |
 | image.tag | string | `"dev"` | Default tag for every first-party image when no per-component tag or digest is set. |
-| image.tags | object | `{}` | Per-component tag map keyed by component name (notifications, lance-rest-catalog, web-<zone>, ...); beats the global tag. |
+| image.tags | object | `{}` | Per-component tag map keyed by component name (notifications, lance-rest-catalog, ...); beats the global tag. |
 | imagePullSecrets | list | `[]` | List of pull Secrets ({name: ...}) added to every first-party pod and hook Job. Empty pulls anonymously. |
 | lifecycle.maintenanceTerminationGracePeriodSeconds | int | `120` | Grace period in seconds for maintenance pods, long enough that an in-flight sweep or Lance write is not SIGKILLed. |
 | lifecycle.preStopSeconds | int | `5` | Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first. |
@@ -194,7 +173,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | nats.auth.flagged | object | `{"maintenance.arrivalEnabled":{"maintenance":{"publish":["dlq.maintenance.arrival","$JS.API.CONSUMER.INFO.LINEAGE.maintenance-durable","$JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.>","$JS.ACK.LINEAGE.maintenance-durable.>"]}},"maintenance.controlEmit":{"maintenance":{"publish":["catalog.control.v1"]}}}` | Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable). |
 | nats.auth.provisioned | bool | `false` | Attests the platform's store holds every `nats-user-<user>`; required when the store is the platform's (`openbao.enabled` false). |
 | nats.auth.users | object | `{"admin":{"publish":["$JS.API.INFO","$JS.API.STREAM.LIST","$JS.API.STREAM.NAMES","$JS.API.STREAM.INFO.*","$JS.API.STREAM.CREATE.*","$JS.API.CONSUMER.NAMES.*","$JS.API.CONSUMER.INFO.*.*","$JS.API.CONSUMER.CREATE.*.>","$JS.API.CONSUMER.DELETE.*.*"],"subscribe":["_INBOX.>"]},"catalog":{"publish":["lineage.events.v1","catalog.control.v1","$JS.API.STREAM.NAMES","$JS.API.CONSUMER.CREATE.CATALOG_CONTROL","$JS.API.CONSUMER.INFO.CATALOG_CONTROL.*","$JS.ACK.CATALOG_CONTROL.>","probe.catalog"],"subscribe":["_INBOX.>"]},"lineage":{"publish":["lineage.events.v1","dlq.lineage.events","$JS.API.STREAM.NAMES","$JS.API.CONSUMER.INFO.LINEAGE.lineage-durable","$JS.API.CONSUMER.CREATE.LINEAGE.lineage-durable.>","$JS.ACK.LINEAGE.lineage-durable.>","$JS.API.CONSUMER.INFO.DLQ.lineage-dlq-durable","$JS.API.CONSUMER.CREATE.DLQ.lineage-dlq-durable.>","$JS.ACK.DLQ.lineage-dlq-durable.>","probe.lineage"],"subscribe":["_INBOX.>"]},"maintenance":{"publish":["lineage.events.v1","$JS.API.STREAM.NAMES","probe.maintenance"],"subscribe":["_INBOX.>"]},"monitor":{"publish":["$JS.API.INFO","$JS.API.STREAM.LIST","$JS.API.STREAM.NAMES","$JS.API.STREAM.INFO.*","$JS.API.CONSUMER.LIST.*","$JS.API.CONSUMER.NAMES.*","$JS.API.CONSUMER.INFO.*.*","$SYS.REQ.USER.INFO"],"subscribe":["_INBOX.>"]},"notifications":{"publish":["dlq.notifications","$JS.API.STREAM.NAMES","$JS.API.CONSUMER.INFO.LINEAGE.notifications-durable","$JS.API.CONSUMER.CREATE.LINEAGE.notifications-durable.>","$JS.ACK.LINEAGE.notifications-durable.>","$JS.API.CONSUMER.INFO.CATALOG_CONTROL.notifications-control-durable","$JS.API.CONSUMER.CREATE.CATALOG_CONTROL.notifications-control-durable.>","$JS.ACK.CATALOG_CONTROL.notifications-control-durable.>","$JS.API.CONSUMER.INFO.DLQ.notifications-durable","$JS.API.CONSUMER.CREATE.DLQ.notifications-durable.>","$JS.ACK.DLQ.notifications-durable.>","probe.notifications"],"subscribe":["_INBOX.>"]}}` | The bus user table, one user per Dapr app-id plus admin and monitor, each with publish and subscribe subject lists (never empty). |
-| nats.monitorUrl | string | `""` | HTTP monitoring endpoint of the bus (varz/jsz) the lakehouse zone's ops view reads (e.g. http://rask-nats-headless:8222). Empty hides the panel. |
 | nats.streamReplicas | int | `3` | Raft replica count for every stream the stream Job provisions; must not exceed the bus's node count. |
 | nats.url | string | `""` | NATS JetStream address every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render. |
 | networkPolicy.apiServerEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that call the Kubernetes API to its endpoints. Required under networkPolicy.enabled while any such pod renders. |
@@ -221,9 +199,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | observability.export.headers | object | `{"x-greptime-db-name":"public"}` | Headers sent on every export. |
 | observability.export.traceHeaders | object | `{"x-greptime-pipeline-name":"greptime_trace_v1"}` | Headers added to the trace export. |
 | observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the OTel Collector (contrib distribution). |
-| observability.query.auditTable | string | `"lance_audit"` | Table the audit viewer reads `lance.audit` records from; the same table `export.auditHeaders` routes them to. |
-| observability.query.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the zones to the store at `url`, at the port a policy sees. Required under networkPolicy.enabled while `url` is set. |
-| observability.query.url | string | `""` | Base URL of the store's SQL and PromQL API the zones read (GREPTIME_API); empty leaves those panels without data. |
 | observability.samplingRate | string | `"1"` | Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request. |
 | openbao.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false. |
 | openbao.enabled | bool | `true` | This estate uses the development store (deploy/fixtures/openbao, Service `<release>-openbao`): in memory, initialized and seeded by the scripts this chart renders (`<release>-openbao-seed`), its administrator token generated in-cluster. A real deployment refuses it. False reads the platform's store at `externalAddr`. |
@@ -244,7 +219,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.replicaCount | int | `1` | Subchart passthrough: number of OpenFGA server replicas. |
 | openfga.resources | object | `{"limits":{"memory":"2Gi"},"requests":{"cpu":"50m","memory":"512Mi"}}` | Subchart passthrough: CPU and memory requests/limits for the OpenFGA server. |
 | openfga.telemetry | object | `{"trace":{"enabled":false,"otlp":{"endpoint":"rask-otel-collector:4317"},"sampleRatio":0.001}}` | Subchart passthrough: OpenFGA OTLP tracing to the OTel Collector; off by default, ratio 0.001 because each Check emits ~1,900 spans. |
-| podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service and zone running more than one replica. |
+| podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service running more than one replica. |
 | podDisruptionBudget.minAvailable | int | `1` | minAvailable of every rendered PodDisruptionBudget. |
 | pubsub.controlName | string | `"catalog-control-pubsub"` | Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on. |
 | pubsub.name | string | `"lineage-pubsub"` | Name of the shared lineage publish Dapr pubsub component; each subscriber app gets a derived `<name>-<app-id>` component with its own queue group. |
@@ -258,9 +233,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | resources.fleet | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for fleet services (templates/fleet.yaml) that name no tier of their own. |
 | resources.lineage | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful. |
 | resources.otel-collector | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"300m","memory":"512Mi"}}` | CPU/memory requests and limits for the OTel Collector; memory limit matches its hardcoded 400 MiB memory_limiter. |
-| route.edgeEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the zones to the Gateway's data plane pods, at the pod port a policy sees. Required under networkPolicy.enabled while the zones render. |
-| route.edgeUrl | string | `""` | In-cluster address of that Gateway (RASK_EDGE_URL): where the zones' server side sends `/api/*`, through the same routes a browser takes. Required while the zones render. |
-| route.enabled | bool | `true` | Renders the HTTPRoutes publishing the zones on `/`, `/dex` and each `/api/*` prefix on the Gateway `parentRefs` names. |
+| route.enabled | bool | `true` | Renders the HTTPRoutes publishing each `/api/*` prefix, and `/dex` with the development Dex, on the Gateway `parentRefs` names. |
 | route.hostnames | list | `[]` | Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts. |
 | route.parentRefs | list | `[]` | Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`. |
 | secrets.hfTokenInStore | bool | `false` | True once the Hugging Face token is in the secret store at `<kvMount>/hf-token`; renders the `<release>-hf-token` ExternalSecret. False starts Ray pods without HF_TOKEN. |
@@ -309,7 +282,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | signing.doors | string | `"enforce"` | Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted. |
 | signing.enforce | bool | `true` | Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing. |
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there. |
-| singleTenant.enabled | bool | `false` | Renders the single-tenant default workloads (every fleet service, domain zones). False installs front-door services only; the object store is gated by `objectStore.enabled`. |
+| singleTenant.enabled | bool | `false` | Renders the single-tenant default workloads (every fleet service). False installs front-door services only; the object store is gated by `objectStore.enabled`. |
 | stateStore.componentVersion | string | `"v1"` | Version of the Dapr Postgres state store component. |
 | stateStore.enabled | bool | `true` | Render the Dapr Postgres state store component (actor state) on the AGE `stateDb`. |
 | stateStore.metadataTableName | string | `"dapr_metadata"` | Table the Dapr state store keeps its own metadata in. |

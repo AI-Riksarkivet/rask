@@ -46,7 +46,6 @@ def _render(*extra: str) -> list[dict]:
     cmd = ["helm", "template", "rask", str(REPO / "chart")]
     cmd += [*PREREQ_ARGS, *RAY_ARGS]
     cmd += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
-    cmd += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
     cmd += ["--set", "image.localImages=true", *extra]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
     return [d for d in yaml.load_all(out, Loader=FAST_LOADER) if d]

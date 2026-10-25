@@ -173,11 +173,11 @@ data:
     G=$DEV_CREDENTIALS
     {{- include "lance.scopedSecretFn" . | nindent 4 }}
     fingerprint() {
-      cat "$G/object-store-secret-key" "$G/postgres-password" "$G/dapr-app-token" "$G/ray-auth-token" "$G/frontend-session-secret"{{ if .Values.secrets.hfTokenInStore }} "$SUPPLIED_CREDENTIALS/hf-token"{{ end }} \
+      cat "$G/object-store-secret-key" "$G/postgres-password" "$G/dapr-app-token" "$G/ray-auth-token"{{ if .Values.secrets.hfTokenInStore }} "$SUPPLIED_CREDENTIALS/hf-token"{{ end }} \
         2>/dev/null | sha256sum | cut -d' ' -f1
     }
     derive() {
-      for k in object-store-secret-key postgres-password dapr-app-token ray-auth-token frontend-session-secret; do
+      for k in object-store-secret-key postgres-password dapr-app-token ray-auth-token; do
         [ -s "$G/$k" ] || { echo "the generated dev credential $k is missing, so this store stays not Ready" >&2; exit 1; }
       done
       root=$(cat "$G/object-store-secret-key")
@@ -193,8 +193,6 @@ data:
     bao kv put secret/dapr-state connection-string=@"$HOME/seed/dapr-state-dsn" >/dev/null
     bao kv put secret/dapr-app-token token=@"$G/dapr-app-token" >/dev/null
     bao kv put secret/ray-auth-token token=@"$G/ray-auth-token" >/dev/null
-    bao kv put secret/frontend-session secret=@"$G/frontend-session-secret" >/dev/null
-    bao kv put secret/oidc-client client-secret={{ .Values.dex.clientSecret }} >/dev/null
     {{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "lineage" .Values.objectStore.lineageAccessKey }}
     {{- if $id }}
     bao kv put secret/{{ $plane }}-s3 access_key={{ $id }} secret_key=@"$HOME/seed/scoped-{{ $id }}" >/dev/null

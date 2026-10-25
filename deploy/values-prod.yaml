@@ -8,12 +8,11 @@
 
 # --- App images: set a real release tag before applying (never :dev/:latest in prod). The chart's image
 # helper FAILS the render on an empty tag, so DON'T ship tag:"" here — uncomment and fill these. Each
-# first-party image takes its entry in `tags` (or `digests`), keyed by its name, else `tag`; the zones take
-# `frontend.image.tag`. -------
+# first-party image takes its entry in `tags` (or `digests`), keyed by its name, else `tag`. -------
 image:
   pullPolicy: IfNotPresent
   # tag: v1.2.3                                          # every first-party image without an entry below
-  # tags: { lance-rest-catalog: v1.2.3, media: v1.2.3 }  # the lakehouse image; the explorer's media image
+  # tags: { lance-rest-catalog: v1.2.3 }                # the lakehouse image
 
 # --- Governance ON — Dex OIDC + OpenFGA. auth.enabled governs the catalog + lineage. -----------------
 auth:
@@ -36,8 +35,7 @@ services:
   # --- Scaled 2026-08-27 (open_fastapi-audit: "No PodDisruptionBudget for any front-door fleet
   # service except the gateway, and values-prod leaves all of them single-replica"). Each of these
   # argues at its own definition site that it scales safely, and prod then left it at one — so a node
-  # drain on a cluster upgrade was a full outage window for each. notifications is the sharpest:
-  # every zone polls its bell.
+  # drain on a cluster upgrade was a full outage window for each.
   # notifications is DELIBERATELY ABSENT and must stay at 1, and the audit finding that asked for it
   # to be scaled is REFUTED here rather than quietly dropped. Its values.yaml entry argues two planes
   # tolerate replicas — Dapr placement spreads actor ids, and the bus subscription's queueGroupName
@@ -47,17 +45,6 @@ services:
   # double the FGA and actor load, silently, exactly when lineage or the sidecar is already slow.
   # Nothing but this note holds it at 1. What would unblock it is a cross-pod guard that SKIPS (not
   # an actor — actors are turn-based, so ticks would queue instead).
-frontend:
-  replicas: 2
-  # A governed backend needs a UI that can sign in. auth.enabled is true above, and
-  # templates/auth-consistency.yaml REFUSES that combination without a sign-in flow — the prod
-  # overlay could not render at all until this landed, which nothing noticed because the render
-  # check itself was unreachable (its `make prod-render-check` target did not exist).
-  # Its two secrets (the session sealing key and the client secret) come from the store: `secret` of
-  # `<kvMount>/frontend-session` and `client-secret` of `<kvMount>/oidc-client`; auth.oidc.issuer
-  # and publicOrigin are configuration, supplied at deploy, and the render fails closed on each.
-  oidc:
-    enabled: true
 podDisruptionBudget:
   enabled: true
   minAvailable: 1
@@ -157,7 +144,7 @@ ray:
 
 # --- The bundled Dex is the dev IdP (its users and client secret are published in this chart, XC-025); a real
 # deployment refuses it (templates/prod-credentials.yaml) and signs in through the platform's IdP, which the deployer
-# names as `auth.oidc.issuer` (https; the render refuses an http one) with its client as `auth.oidc.clientId`: every
+# names as `auth.oidc.issuer` (https; the render refuses an http one): every
 # governed door trusts that issuer and nothing else, and accepts only a token whose audience is `auth.oidc.audience`,
 # which the platform's IdP issues to the clients it trusts (`auth.oidc.audienceScope` names the scope they ask for).
 dex:
@@ -188,17 +175,13 @@ security:
 maintenance:
   olderThanDays: 7
 
-# The edge is the platform's Gateway (Gateway API; kgateway is the intended one): templates/route.yaml attaches the
-# zones' and every /api prefix's HTTPRoute to it. The deployer names the Gateway, the hostnames it routes to this release,
-# its in-cluster address and the NetworkPolicy egress that reaches its data plane pods; the render refuses any of them empty.
+# The edge is the platform's Gateway (Gateway API; kgateway is the intended one): templates/route.yaml attaches every
+# /api prefix's HTTPRoute to it. The deployer names the Gateway and the hostnames it routes to this release; the render
+# refuses either empty.
 route:
   enabled: true
   hostnames: [] # e.g. [lance.example.com]
 #   parentRefs: [{name: edge, namespace: kgateway-system, sectionName: https}]
-#   edgeUrl: http://edge.kgateway-system.svc.cluster.local
-#   edgeEgress:
-#     - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kgateway-system}}}]
-#       ports: [{protocol: TCP, port: 8080}]
 
 # The telemetry store, its dashboards and its alerting are the platform's (ADR 0153). rask's Collector exports to
 # the OTLP endpoint named here, and the platform's evaluator loads deploy/alerting/rules.yml.
@@ -210,9 +193,8 @@ observability:
   # was indistinguishable from dev in GreptimeDB. Measured on this render 2026-09-16:
   # `deployment.environment.name=rask`. An alert that fires on "the estate" cannot say which one.
   environment: prod
-  # `export.endpoint` (the platform's OTLP backend; the render refuses it empty) and `query.url` (its
-  # SQL/PromQL API for the zones) are the deployer's to name, each with the NetworkPolicy egress that reaches it
-  # (`export.egress`, `query.egress`: {to, ports} rules naming the backend's addresses). The store must meet the audit store's
+  # `export.endpoint` (the platform's OTLP backend; the render refuses it empty) is the deployer's to name, with the
+  # NetworkPolicy egress that reaches it (`export.egress`: {to, ports} rules naming the backend's addresses). The store must meet the audit store's
   # contract (values.yaml `observability`): refuse unauthenticated writes and deletes, admit
   # `otel-collector-export`.
 
@@ -226,7 +208,7 @@ observability:
 # nats (the platform's JetStream, REQUIRED):        # a prerequisite rask never installs (ADR 0153); bus down =
 #   url: nats://nats.internal:4222                   # no lineage ingest, no cascade. The stream Job provisions
 #   streamReplicas: 3                                # rask's streams on it (needs a 3+ node cluster)
-# ray (the one Ray plane):                           # Serve discovery and the zones' Serve origin read it
+# ray (the one Ray plane):                           # Serve discovery reads it
 #   dashboardUrl: https://ray.internal:8265
 # GPU metrics (NVIDIA DCGM operator): the engine's, beside its KubeRay and Kueue (ADR 0153) — the dcgm-exporter
 # is node-level infra (a DaemonSet the DCGM operator owns), scraped by the OTel Collector's prometheus receiver

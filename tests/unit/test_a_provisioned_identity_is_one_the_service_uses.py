@@ -65,8 +65,6 @@ def _render(*extra: str) -> str:
         *RAY_ARGS,
         "--set-string",
         "auth.oidc.issuer=http://localhost:8080/dex",
-        "--set-string",
-        "frontend.oidc.publicOrigin=http://localhost:8080",
         *extra,
     ]
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout
@@ -148,14 +146,14 @@ def test_the_catalog_presents_the_store_identity_the_chart_provisions_for_its_ac
 _LAKEHOUSE_DOORS = ("rask-catalog", "rask-lineage", "rask-notifications")
 
 
-def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_zones_client() -> None:
+def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it_trusts() -> None:
     """[[LH-515]] The lakehouse checks an audience of its own, which the IdP issues only to the clients it trusts.
 
     Measured on Dex v2.42.0: a client that asks for `audience:server:client_id:<audience>` gets an id token and an access
     token whose `aud` is `[<audience>, <client>]`, and only when the audience client lists it in `trustedPeers`; any
     other client is refused 400 for the scope. A public audience client would let anyone sign in as it (200, `aud` the
-    audience alone) and skip the trust. So the doors' audience is the dev Dex's audience client, distinct from the
-    zones' sign-in client, confidential and trusting exactly that client, and the zones ask for it.
+    audience alone) and skip the trust. So the doors' audience is the dev Dex's audience client, distinct from its
+    sign-in client, confidential and trusting exactly that client.
     """
     chart = render("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
     [config] = [yaml.safe_load(doc["data"]["config.yaml"]) for doc in render_fixture("dex") if doc.get("kind") == "ConfigMap"]
@@ -166,11 +164,8 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_zones_clie
         if doc.get("kind") == "Deployment" and doc["metadata"]["name"] in _LAKEHOUSE_DOORS
         for container in doc["spec"]["template"]["spec"]["containers"][:1]
     }
-    zones = {(env["OIDC_CLIENT_ID"], env.get("OIDC_SCOPES", "")) for _, _, container in containers(chart) if "OIDC_CLIENT_ID" in (env := env_of(container))}
 
     [audience] = set(doors.values())
-    [(client, scopes)] = zones
+    [client] = set(clients) - {audience}
     assert sorted(doors) == sorted(_LAKEHOUSE_DOORS)
-    assert audience != client
     assert (clients[audience].get("public", False), clients[audience].get("trustedPeers")) == (False, [client])
-    assert f"audience:server:client_id:{audience}" in scopes.split()

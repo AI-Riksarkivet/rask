@@ -7,12 +7,12 @@
 #       name resolution — the audit's named footgun);
 #   (3) targeted allows for the guarded stores (the secret store ← the pods whose sidecar reads it,
 #       as ingress on the dev store and egress to the platform's; age-postgres:5432 ← its real clients; the object store:9000 ← the data plane; nats ← 4222 intra-namespace
-#       + 8222 admin-only, other ports closed) — every OTHER pod gets plain intra-namespace ingress,
+#       only, other ports closed) — every OTHER pod gets plain intra-namespace ingress,
 #       EXCLUDING the guarded stores so the targeted lists stay exclusive (NetworkPolicies are
 #       additive: the general allow must NOT cover the stores);
 #   (4) values-prod flips `networkPolicy.enabled` — the LIVE verification runbook is todo_fable
 #       §7a (all pods Ready, e2e suites green, and a negative probe: a request to the secret store
-#       from the web pod must time out).
+#       from a pod outside its client list must time out).
 # Egress posture (tier 1): intra-namespace open + DNS + the Dapr control plane; the INGRESS rules do
 # the guarding — a connection needs BOTH the source's egress and the destination's ingress to allow.
 # Every egress rule names its peers: the API server, the Gateway, the telemetry backend and the
@@ -158,27 +158,6 @@ spec:
     matchLabels: { app.kubernetes.io/component: otel-collector }
   policyTypes: [Egress]
   egress: {{- include "lance.egressRules" (list "observability.export.egress" $o.export.egress "the telemetry backend at observability.export.endpoint") | nindent 4 }}
-{{- end }}
-{{- with ($o.query).url }}
-{{- if $.Values.frontend.enabled }}
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "lance.fullname" $ }}-allow-telemetry-query-egress
-  labels: {{- include "lance.labels" $ | nindent 4 }}
-spec:
-  podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/component
-        operator: In
-        values:
-          {{- range $.Values.frontend.apps }}
-          - web-{{ .name }}
-          {{- end }}
-  policyTypes: [Egress]
-  egress: {{- include "lance.egressRules" (list "observability.query.egress" $o.query.egress "the telemetry store's query API at observability.query.url") | nindent 4 }}
-{{- end }}
 {{- end }}
 {{- with .Values.networkPolicy.extraEgress }}
 ---
@@ -360,32 +339,8 @@ spec:
       ports:
         - { protocol: TCP, port: {{ .Values.objectStore.port }} }
 ---
-# The front door: the micro-frontend zones accept ingress from ANYWHERE (the Gateway's data plane,
-# NodePort, port-forward) — they are the intended entry points and carry their own L7 guards (OIDC on the
-# apps behind). The cluster route sends /<zone> to web-<zone>, so they MUST be admitted here or a
-# policy-enforcing CNI (prod) drops all Gateway→zone traffic.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "lance.fullname" . }}-front-door
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/component
-        operator: In
-        values:
-          {{- if .Values.frontend.enabled }}
-          {{- range .Values.frontend.apps }}
-          - web-{{ .name }}
-          {{- end }}
-          {{- end }}
-  policyTypes: [Ingress]
-  ingress:
-    - {}
----
 # The services the cluster route publishes (`rask.apiRoutes`) accept the Gateway's traffic on their app
-# port and nothing else, from anywhere, as the zones do: the Gateway's data plane lives in the platform's
+# port and nothing else, from anywhere: the Gateway's data plane lives in the platform's
 # namespace, and every one of these services authenticates each request itself. The port is the bound:
 # daprd's ports on the same pod stay intra-namespace only.
 {{- range $row := include "rask.apiRoutes" . | fromJsonArray }}
@@ -403,66 +358,18 @@ spec:
         - { protocol: TCP, port: {{ $row.port }} }
 ---
 {{- end }}
-{{- if .Values.frontend.enabled }}
-# The zones' server side reaches /api/* through the Gateway (RASK_EDGE_URL), which sits outside this
-# namespace. A policy sees the data plane's POD port, after the Service's translation, so the rule is the
-# platform's to state (`route.edgeEgress`) rather than derived from the URL.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "lance.fullname" . }}-allow-edge-egress
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchExpressions:
-      - key: app.kubernetes.io/component
-        operator: In
-        values:
-          {{- range .Values.frontend.apps }}
-          - web-{{ .name }}
-          {{- end }}
-  policyTypes: [Egress]
-  egress:
-    {{- include "lance.egressRules" (list "route.edgeEgress" .Values.route.edgeEgress "the Gateway's data plane pods: the zones' server side sends /api/* through it") | nindent 4 }}
----
-{{- end }}
-# (3e) nats:8222 — the NATS monitoring endpoint (varz/connz/jsz), surfaced in the ops view that now
-# lives at /lakehouse/admin. NATS is on the (3a) exclusion list, so the two nats rules here are its
-# ONLY ingress: this one admits the 8222 monitor port from the LAKEHOUSE zone pods alone; (3f) below
-# admits client traffic on 4222. The bus is a prerequisite: these select the upstream nats chart's pods
-# when the bus runs in this namespace (the dev fixture), and a bus elsewhere is reached through
-# `networkPolicy.extraEgress`. component=nats (not just name) so nats-box is not a target.
-#
-# This said web-admin until 2026-07-25. The 7→4 zone merge deleted that component, so the rule
-# selected NOTHING and the ops view could not reach varz/jsz in prod — a default-deny netpol fails
-# CLOSED and silently, which is why nobody noticed: the only symptom is an empty panel.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "lance.fullname" . }}-nats-monitor
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: nats
-      app.kubernetes.io/component: nats
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels: { app.kubernetes.io/component: web-lakehouse }
-      ports:
-        - { protocol: TCP, port: 8222 }
----
-# (3f) nats:4222 — the client port. Admitted from ANY intra-namespace pod, port-scoped, and honestly so:
+# (3f) nats:4222 — the client port, and the bus's ONLY ingress: NATS is on the (3a) exclusion list. The bus is a
+# prerequisite: this selects the upstream nats chart's pods when the bus runs in this namespace (the dev fixture), and a
+# bus elsewhere is reached through `networkPolicy.extraEgress`. component=nats (not just name) so nats-box is not a target.
+# Admitted from ANY intra-namespace pod, port-scoped, and honestly so:
 # the legitimate clients are the daprd SIDECARS, which live inside every dapr.io/enabled app pod
 # (catalog, lineage, maintenance, notifications) plus the nats-box hook Jobs
 # (stream provision + DLQ tooling) — i.e. nearly every first-party pod in the namespace, and the set
 # follows the dapr.io/enabled ANNOTATION, which no label selector can see. Enumerating component labels
 # would restate that near-total list and silently strand the next sidecar carrier (a wedged bus, not a
 # security win), so the deliberate shape is pod-open/port-closed. The isolation gained vs the old (3a)
-# blanket allow is the PORTS: 6222 (cluster routes) + 7422 (leafnodes) are now unreachable, and 8222 is
-# admin-only via (3e).
+# blanket allow is the PORTS: 6222 (cluster routes) + 7422 (leafnodes) are now unreachable, and so is the
+# 8222 monitor: no pod the release renders reads it.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

@@ -7,7 +7,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 CREDENTIALS — no chart value carries one, and a real deployment carries no published dev secret.
 
-Renders no object, on the `auth-consistency.yaml` precedent: it exists only to fail a render that
+Renders no object: it exists only to fail a render that
 would otherwise install cleanly and be indefensible afterwards.
 
 1. A CREDENTIAL PASSED AS A VALUE IS REFUSED ON EVERY RENDER ([[XC-004]]). A value is stored in the
