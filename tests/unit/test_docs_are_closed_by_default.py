@@ -38,11 +38,13 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 
-#: Every served entrypoint, as (import path, expression yielding the app).
-#: All 14 of them — the audit's count — because a gate covering some of the apps is how three of these
-#: stayed ungated while four siblings carried a flag.
+#: Every lakehouse entrypoint, as (import path, expression yielding the app): a gate covering some of the apps is how
+#: three of them stayed ungated while four siblings carried a flag. A client's app is its own suite's to gate.
 ENTRYPOINTS: list[tuple[str, str]] = [
-    ("compute", "app"),
+    ("catalog.main", "app"),
+    ("lineage.main", "app"),
+    ("maintenance.service", "app"),
+    ("notifications", "app"),
 ]
 
 _PROBE = """

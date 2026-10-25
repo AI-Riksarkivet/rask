@@ -28,7 +28,7 @@ from pydantic import BaseModel
 
 #: Every app `make_service_app` builds; the gateway builds its own `FastAPI` and is a proxy, not a
 #: fleet API surface.
-FLEET_APPS = ["compute", "flows", "notifications"]
+FLEET_APPS = ["notifications"]
 
 
 class _Body(BaseModel):

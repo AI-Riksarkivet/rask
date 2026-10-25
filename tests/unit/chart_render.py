@@ -139,17 +139,6 @@ def render(*extra: str) -> tuple[dict, ...]:
     return tuple(doc for doc in yaml.load_all(render_text(*extra), Loader=FAST_LOADER) if isinstance(doc, dict))
 
 
-#: What the annotator's release ([[XC-167]], ADR 0171) refuses to render without: the APIs of its actors, its state Cluster
-#: and its app token, and rask's issuer, which it accepts tokens from.
-ANNOTATOR_FIXTURE_ARGS: tuple[str, ...] = (
-    "--api-versions", "dapr.io/v1alpha1",
-    "--api-versions", "postgresql.cnpg.io/v1/Cluster",
-    "--api-versions", "generators.external-secrets.io/v1alpha1/Password",
-    "--api-versions", "external-secrets.io/v1/ExternalSecret",
-    "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
-)  # fmt: skip
-
-
 @functools.cache
 def render_fixture(name: str, *extra: str) -> tuple[dict, ...]:
     """Every mapping document a development fixture (`deploy/fixtures/<name>`) renders, as `scripts/fixtures.sh` installs it.

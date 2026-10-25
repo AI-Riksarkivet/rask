@@ -39,7 +39,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 #: The apps composed through `make_service_app`.
-FACTORY_APPS = ["compute", "flows", "notifications"]
+FACTORY_APPS = ["notifications"]
 
 
 def _app(module: str):

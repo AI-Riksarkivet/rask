@@ -24,7 +24,7 @@ from collections.abc import Callable
 import pytest
 import yaml
 
-from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_SETS, REPO, containers, render, render_fixture, render_text
+from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_SETS, REPO, containers, render, render_text
 
 
 _FLAG = "--timeout-graceful-shutdown="
@@ -111,8 +111,8 @@ def test_a_lifecycle_that_leaves_no_drain_refuses_to_RENDER(lifecycle: dict[str,
     assert refusal in refused.value.stderr, refused.value.stderr
 
 
-#: The init each image a chart runs uvicorn from declares as its ENTRYPOINT (`.docker/rest-catalog.dockerfile`,
-#: `notifications.dockerfile`, `flows.dockerfile`, `compute.dockerfile`).
+#: The init each image the product chart runs uvicorn from declares as its ENTRYPOINT (`.docker/rest-catalog.dockerfile`,
+#: `notifications.dockerfile`).
 #: What a uvicorn container's command line begins with: uvicorn itself, or the tracer that execs it.
 _LAUNCHERS = {"uvicorn", "opentelemetry-instrument"}
 
@@ -122,7 +122,6 @@ _LAUNCHERS = {"uvicorn", "opentelemetry-instrument"}
     [
         pytest.param(lambda: render(*_overlay({})), id="observability-off"),
         pytest.param(lambda: render(*_overlay({}), *(arg for item in OBSERVABILITY_SETS for arg in ("--set", item))), id="observability-on"),
-        pytest.param(lambda: render_fixture("compute", "--set", "auth.oidc.issuer=https://auth.example.com/dex"), id="the-compute-fixture"),
     ],
 )
 def test_every_uvicorn_runs_under_its_images_init_never_as_its_containers_pid_1(docs: Callable[[], tuple[dict, ...]]) -> None:
