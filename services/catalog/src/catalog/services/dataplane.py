@@ -1581,10 +1581,12 @@ def _json_arrow_to_pa_type(dt: dict[str, Any]) -> pa.DataType:
 
 #: Lance prefixes a caller-expression failure with this, whatever exception class it picks.
 _USER_INPUT_MARKER = "Invalid user input"
-#: Lance appends the Rust source location that raised — ``, /home/runner/work/lance/lance/rust/…:150:14``.
+#: The Rust source location Lance writes after each error it raises — ``, /home/runner/work/lance/lance/rust/…:150:14``.
 #: Useful in a server log, noise in an API response, and it publishes the build path of a vendored library
-#: to every caller. Trimmed from the detail; the log line still carries the original exception.
-_RUST_SOURCE_SUFFIX = re.compile(r",\s*/\S+\.rs:\d+:\d+\s*\.?\s*$")
+#: to every caller. Removed from the detail wherever it sits: a nested error carries one per layer, and the outer
+#: layer's text follows the inner one's (measured live on pylance 13.0.0, explain_plan's parse error). The log line
+#: still carries the original exception.
+_RUST_SOURCE_LOCATION = re.compile(r",\s*/\S+?\.rs:\d+:\d+")
 
 
 def clean_lance_message(message: str) -> str:
@@ -1596,7 +1598,7 @@ def clean_lance_message(message: str) -> str:
     survives — Lance frequently names the columns that DO exist, which is the whole value of the message.
     """
     body = message.split(_USER_INPUT_MARKER, 1)[1].lstrip(": ") if _USER_INPUT_MARKER in message else message
-    return _RUST_SOURCE_SUFFIX.sub("", body).strip()
+    return _RUST_SOURCE_LOCATION.sub("", body).strip()
 
 
 #: The most AND/OR connectives a caller's SQL fragment may carry. Lance's planner recurses once per

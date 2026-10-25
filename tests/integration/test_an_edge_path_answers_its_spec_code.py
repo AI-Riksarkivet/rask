@@ -14,6 +14,7 @@ declaration, and Lance panics inside the first write.
 from __future__ import annotations
 
 import io
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -81,7 +82,9 @@ def test_an_edge_path_answers_the_spec_code(client: TestClient, send: Callable[[
     response = send(client)
 
     assert (response.status_code, response.json().get("code")) == (status, code), response.text
-    assert "file://" not in response.json().get("detail", ""), "a refusal's detail names the table's storage location"
+    detail = response.json().get("detail", "")
+    assert "file://" not in detail, "a refusal's detail names the table's storage location"
+    assert re.search(r"\.rs:\d+", detail) is None, "a refusal's detail names a Rust source location of Lance's build"
 
 
 @pytest.mark.parametrize(
