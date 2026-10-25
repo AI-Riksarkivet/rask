@@ -36,6 +36,7 @@ import unicodedata
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from datetime import UTC, datetime
+from http import HTTPStatus
 from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple, Self, cast, override
 from urllib.parse import unquote
@@ -2164,6 +2165,47 @@ async def delete_tuples(
         _audit_tuples("access_tuple_delete", removed, actor, origin)
         _audit_tuples("access_tuple_delete", absent, actor, origin, reason="tuple_absent")
     return removed
+
+
+#: Relations that hold bookkeeping rather than a grant: no permission reads them, and a scan counting an object's grants
+#: leaves them out.
+ADMIN_REVISION: Final = "admin_revision"
+BOOKKEEPING_RELATIONS: Final = frozenset({ADMIN_REVISION})
+
+
+async def commit_unless_changed(
+    client: OpenFgaClient,
+    *,
+    deletes: list[ClientTuple],
+    writes: list[ClientTuple],
+    actor: str,
+    origin: TupleOrigin,
+) -> bool:
+    """Apply ``deletes`` and ``writes`` as ONE Write that commits only on the state they were read from; whether it did.
+
+    OpenFGA applies a Write all-or-nothing and, without ``on_duplicate_writes=IGNORE``, refuses it whole when a delete is
+    absent or a write already present, answering 400 ``write_failed_due_to_invalid_input`` for either (measured on the
+    pinned server's memory datastore 2026-10-25: neither half of a refused Write is applied). On a SQL datastore two
+    Writes that overlap in time can instead meet in the database, and the loser's transaction is rolled back and
+    answered 409 (gRPC Aborted, "transactional write failed due to conflict" in the pinned v1.18.3). Either way nothing
+    committed, so of two writers that read one state and each delete or write the same tuple, one commits and the
+    other is told ``False`` and should read again.
+
+    NOT RETRIED. A Write whose answer was lost may have committed, and its retry would then be refused as if another
+    writer had won; an outage fails closed with ``ServiceUnavailableError`` instead, an unknown outcome to the caller.
+    Every tuple a committed Write changed is audited; a refused one changed nothing.
+    """
+    reject_stored_clock(writes)
+    try:
+        await client.write(ClientWriteRequest(writes=writes or None, deletes=deletes or None))
+    except _FAIL_CLOSED as exc:
+        if isinstance(exc, ApiException) and (_delete_reported_absent(exc) or exc.status == HTTPStatus.CONFLICT):
+            return False
+        log.error("openfga_write_unavailable", exc_info=True)
+        raise ServiceUnavailableError("authorization service unavailable") from exc
+    _audit_tuples("access_tuple_delete", deletes, actor, origin)
+    _audit_tuples("access_tuple_write", writes, actor, origin)
+    return True
 
 
 async def revoke_object_tuples(

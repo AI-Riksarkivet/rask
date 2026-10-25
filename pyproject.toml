@@ -225,6 +225,7 @@ extend-select = ["TID251", "FAST001"]
 "service_kit.governed.fga.provision".msg = "Only the registered bootstrap may provision an OpenFGA store/model."
 "service_kit.governed.fga.delete_tuples".msg = "Tuple revokes happen only at the registered revoking sites."
 "service_kit.governed.fga.revoke_object_tuples".msg = "Tuple revokes happen only at the registered revoking sites."
+"service_kit.governed.fga.commit_unless_changed".msg = "Arbitrated tuple writes happen only at the registered sites."
 "service_kit.governed.fga.hierarchy_edge_tuples".msg = "Hierarchy edges are seeded only by fga.py."
 "torch".msg = "No model framework in a shared seam: models live in sealed runners/."
 "pyannote".msg = "No model framework in a shared seam: models live in sealed runners/."

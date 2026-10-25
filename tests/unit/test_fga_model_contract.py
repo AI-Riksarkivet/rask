@@ -380,6 +380,9 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     ("classification", "parent", "estate"): "tuple's object IS the dropped object; the estate is never dropped",
     # Subject types, not governed objects with a lifecycle of their own — nothing drops them.
     ("project", "team", "team"): "team is a subject type, not a droppable object",
+    # A project's admin revision ([[LH-434]]): `revision` has no relations and no door makes or drops one, and the
+    # project's delete removes the tuple with every other tuple on the project.
+    ("project", "admin_revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
     ("namespace", "managed_access", "role"): "role is a subject type, not a droppable object",
     ("warehouse", "managed_access", "role"): "role is a subject type, not a droppable object",
     # A project cannot be deleted while a warehouse claims it — `projects.py`'s emptiness refusal

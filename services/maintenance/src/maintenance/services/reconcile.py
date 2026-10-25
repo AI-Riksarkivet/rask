@@ -602,7 +602,9 @@ async def _scan_tuples(client: Any) -> tuple[TupleScan, str | None]:
         page, token = await fga.read_tuples(client, page_size=_TUPLE_PAGE_SIZE, continuation_token=token)
         for item in page:
             obj_type, _, obj_id = str(item.object).partition(":")
-            if not obj_id:
+            # A bookkeeping tuple is no grant: a project holding only its admin revision is as stranded as one
+            # holding nothing.
+            if not obj_id or item.relation in fga.BOOKKEEPING_RELATIONS:
                 continue
             bucket = scan.counts_by_type.setdefault(obj_type, {})
             bucket[obj_id] = bucket.get(obj_id, 0) + 1

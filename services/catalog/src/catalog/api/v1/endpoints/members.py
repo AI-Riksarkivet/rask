@@ -22,7 +22,7 @@ not there is a no-op, not a 404".
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 from fastapi import APIRouter, Path, status
 from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
@@ -55,11 +55,19 @@ ProjectId = Annotated[str, Path(min_length=3, max_length=63, pattern=r"^[a-z0-9]
 #: is what makes ``can_grant_admin: admin`` safe — it is the pairing Lakekeeper's model calls
 #: "lock-out protection" and states as ``project_admin``'s first purpose.
 ADMINISTRATIVE: frozenset[str] = frozenset({"admin"})
+#: How many times an admin revoke reads the project's admins: once, and once more after another revoke moved them.
+ADMIN_REVOKE_READS: Final = 2
 
 
 def _user_string(raw: str) -> str:
     """``gina`` -> ``user:gina``; an object of a model type (``role:…#assignee``) passes through (`fga.grantee_object`)."""
     return fga.grantee_object(raw)
+
+
+def _revision_number(subject: str) -> int:
+    """The ``n`` of a ``revision:<n>`` subject; ``0`` for one that names no number, which the next revision outgrows."""
+    _, _, number = subject.partition(":")
+    return int(number) if number.isdigit() else 0
 
 
 def _direct_grants(tuples: list[Any], obj: str) -> list[Member]:
@@ -164,16 +172,29 @@ async def revoke_member(
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
 
-    existing = await fga.read_object_tuples(wired, obj)
-    if not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
-        return MemberList(members=_direct_grants(existing, obj))
-
-    if payload.relation in ADMINISTRATIVE and len([t for t in existing if t.object == obj and t.relation in ADMINISTRATIVE]) <= 1:
-        raise ConcurrentModificationError(
-            f"{user} holds the only remaining admin on this project — grant another admin first, or nobody will be able to administer or delete it"
-        )
-
-    await fga.delete_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")  # noqa: TID251
+    target = fga.ClientTuple(user=user, relation=payload.relation, object=obj)
+    for _ in range(ADMIN_REVOKE_READS):
+        existing = await fga.read_object_tuples(wired, obj)
+        if not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
+            return MemberList(members=_direct_grants(existing, obj))
+        if payload.relation not in ADMINISTRATIVE:
+            await fga.delete_tuples(wired, [target], actor=actor, origin="grant_api")  # noqa: TID251
+            break
+        if len([t for t in existing if t.object == obj and t.relation in ADMINISTRATIVE]) <= 1:
+            raise ConcurrentModificationError(
+                f"{user} holds the only remaining admin on this project — grant another admin first, or nobody will be able to administer or delete it"
+            )
+        # The store arbitrates the guard ([[LH-434]]): the count above is a read, and two revokes of two admins
+        # each read two. Deleting the admin tuple and moving the admin revision in one Write that refuses a moved
+        # revision lets exactly one of them commit; the other reads again and judges the admins it finds.
+        revisions = [t for t in existing if t.object == obj and t.relation == fga.ADMIN_REVISION]
+        following = 1 + max((_revision_number(t.user) for t in revisions), default=0)
+        moved = fga.ClientTuple(user=f"revision:{following}", relation=fga.ADMIN_REVISION, object=obj)
+        stale = [fga.ClientTuple(user=t.user, relation=t.relation, object=obj) for t in revisions]
+        if await fga.commit_unless_changed(wired, deletes=[target, *stale], writes=[moved], actor=actor, origin="grant_api"):  # noqa: TID251
+            break
+    else:
+        raise ConcurrentModificationError("the project's admins changed while this revoke ran, twice — read them again and retry")
     audit("project.members.revoke", SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
     # THE SHARPER HALF. After this the subject can no longer see the project, so no visibility-gated
     # feed could ever tell them — which is precisely why the control lane runs no visibility check and

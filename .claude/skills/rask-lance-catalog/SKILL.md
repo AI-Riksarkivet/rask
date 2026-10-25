@@ -214,7 +214,12 @@ holds tuples for it. `POST /management/v1/projects` writes the record AND the `p
 machine identity names the person in `admin` and is never admin itself, LH-433, `fga_deps.project_admin_for`; a
 service account's subject is never a person, `is_person_subject`) in
 one operation (estate-admin gated on `can_observe_events` at the root), which is what stops existence
-and permission drifting apart. There is **no bootstrap exception** in warehouse-create any more: one
+and permission drifting apart. **A project always keeps a direct admin** ([[LH-434]]): the members door
+(`DELETE /management/v1/projects/{id}/members`) refuses the last one 409 code 14, and the store arbitrates the guard.
+An admin revoke deletes the admin tuple and moves `project#admin_revision` (`revision:<n>` to `<n+1>`, a bookkeeping
+relation no permission reads) in ONE Write without ignoring duplicates (`fga.commit_unless_changed`), so of two
+overlapping revokes one commits and the other re-reads and judges again; a refused Write is a 400 on the memory
+datastore and a 409 rollback on a SQL one. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create any more: one
 door, and a warehouse-owner cannot ride a create into project admin.
 
 Check order at every create door: **identity (401) → shape (`InvalidInput` 400) → parent exists

@@ -208,3 +208,36 @@ def test_a_revoke_the_server_says_was_never_there_is_not_audited_as_a_revoke(cap
     assert not claimed, "an absent tuple's delete was audited as a confirmed revoke — the trail asserts a removal the server denied performing"
     noop = [r for r in caplog.records if getattr(r, "audit.reason", None) == "tuple_absent"]
     assert noop, "the absence left NO trail at all — an auditor cannot distinguish 'never attempted' from 'attempted, was already gone'"
+
+
+class _WriteRefusedClient:
+    """One Write, answered with ``exc``."""
+
+    def __init__(self, exc: BaseException) -> None:
+        self.exc = exc
+
+    async def write(self, *_a: object, **_k: object) -> None:
+        raise self.exc
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        pytest.param(ApiException(status=409, reason="Conflict"), id="a-sql-datastore-rolled-back-the-loser"),
+        pytest.param(ApiException(status=503, reason="Service Unavailable"), id="an-outage"),
+    ],
+)
+def test_commit_unless_changed_reports_a_rolled_back_write_and_fails_closed_on_an_outage(exc: ApiException) -> None:
+    """[[LH-434]] A 409 is a Write a SQL datastore rolled back for another one that overlapped it, so nothing committed and the
+    caller reads again; an outage is an unknown outcome and fails closed. The memory datastore never answers 409, so the
+    integration test on a real OpenFGA cannot reach this branch."""
+    tup = ClientTuple(user="revision:2", relation="admin_revision", object="project:acme")
+
+    async def commit() -> bool:
+        return await fga.commit_unless_changed(_client(_WriteRefusedClient(exc)), deletes=[], writes=[tup], actor="a", origin="grant_api")  # noqa: TID251
+
+    if exc.status == 409:
+        assert asyncio.run(commit()) is False
+    else:
+        with pytest.raises(fga.ServiceUnavailableError):
+            asyncio.run(commit())

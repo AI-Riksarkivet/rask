@@ -52,10 +52,17 @@ type role
     define project: [project]
     define assignee: [user, team#member, role#assignee]
 
+# A revision of a project's admin set ([[LH-434]]). It confers nothing: it is the subject of `project#admin_revision`.
+type revision
+
 # A project = a tenant. Owned by a team (members become admins). Holds one warehouse.
 type project
   relations
     define team: [team]
+    # BOOKKEEPING, NOT A RUNG: no permission reads it. An admin revoke deletes the admin tuple and this
+    # relation's `revision:<n>` and writes `revision:<n+1>` in ONE Write, which the store refuses whole when
+    # another revoke moved the revision first, so two overlapping revokes cannot both pass the last-admin guard.
+    define admin_revision: [revision]
     define admin: [user, role#assignee] or member from team
     define member: [user, team#member, role#assignee] or admin
     # ---- the admin SPLIT. Additive: `admin` implies all three, so nobody loses a rung by their

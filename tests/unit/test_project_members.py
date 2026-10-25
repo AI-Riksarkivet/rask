@@ -2,13 +2,9 @@
 
 The gap: ``project#admin``/``member`` were writable only by ``seed_project_admin`` at create time and
 by the estate-gated raw tuple editor, so a project admin could not invite anyone into their own
-tenant. These pin the behaviour that closes it, and — more importantly — the two properties that make
-``can_grant_admin: admin`` safe to ship:
-
-1. **Per-rung gating.** Granting ``admin`` and granting ``member`` are separate authorities
-   (``can_grant_admin`` / ``can_grant_member``), not one blanket "tenant admin" bar.
-2. **The last admin cannot be revoked.** Without it, admin-grantable means admin-strandable: a tenant
-   with no admin can be neither administered nor deleted from inside the product.
+tenant. These pin how the grant door writes and how the door lists. The property that makes
+``can_grant_admin: admin`` safe to ship, that a project always keeps a direct admin, is driven against a real
+OpenFGA in ``services/catalog/tests/test_a_project_always_keeps_a_direct_admin.py``.
 
 Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set ``asyncio_mode``).
 """
@@ -20,7 +16,6 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from lance_namespace import ConcurrentModificationError
 
 from catalog.api.v1.endpoints import members
 from catalog.core.config import Settings
@@ -36,20 +31,17 @@ def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:
 
 
 class _Harness:
-    """Records the gate checks, the writes and the deletes the endpoint issues."""
+    """Answers the gate and records the writes the endpoint issues."""
 
     def __init__(self, existing: list[SimpleNamespace] | None = None, *, allow: bool = True) -> None:
         self.existing = existing if existing is not None else []
         self.allow = allow
-        self.gated: list[tuple[str, str]] = []  # (relation, object)
         self.written: list[Any] = []
-        self.deleted: list[Any] = []
 
     def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from catalog.api import fga_deps
 
         async def fake_require(_c: object, _s: object, _t: object, *, relation: str, obj: str) -> None:
-            self.gated.append((relation, obj))
             if not self.allow:
                 raise ForbiddenError(f"{relation} required on {obj}")
 
@@ -60,23 +52,9 @@ class _Harness:
             self.written.extend(tuples)
             self.existing.extend(_tuple(t.user, t.relation, t.object) for t in tuples)
 
-        async def fake_delete(_c: object, tuples: list[Any], **_kw: object) -> None:
-            self.deleted.extend(tuples)
-
         monkeypatch.setattr(fga_deps, "require_relation", fake_require)
         monkeypatch.setattr(members.fga, "read_object_tuples", fake_read)
         monkeypatch.setattr(members.fga, "write_tuples", fake_write)
-        monkeypatch.setattr(members.fga, "delete_tuples", fake_delete)
-
-
-class _RecordingControl:
-    """The control bus's seat. Holds the events a door actually announced."""
-
-    def __init__(self) -> None:
-        self.events: list[Any] = []
-
-    async def emit(self, event: Any) -> None:
-        self.events.append(event)
 
 
 def _client() -> Any:
@@ -86,9 +64,9 @@ def _client() -> Any:
     return object()
 
 
-def _control(control: _RecordingControl | None = None) -> Any:
-    """The injected control emitter; a door handed ``None`` announces into the void, as before."""
-    return control if control is not None else NoopControlEmitter()
+def _control() -> Any:
+    """The injected control emitter, announcing into the void."""
+    return NoopControlEmitter()
 
 
 def _settings(*, fga_enabled: bool = True) -> Settings:
@@ -99,27 +77,14 @@ def _token() -> PersonPrincipal:
     return PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
 
 
-def _grant(h: _Harness, user: str, relation: str, control: _RecordingControl | None = None) -> members.MemberList:
+def _grant(h: _Harness, user: str, relation: str) -> members.MemberList:
     body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(members.grant_member("acme", body, _client(), _control(control), _settings(), _token()))
-
-
-def _revoke(h: _Harness, user: str, relation: str, control: _RecordingControl | None = None) -> members.MemberList:
-    body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(members.revoke_member("acme", body, _client(), _control(control), _settings(), _token()))
+    return asyncio.run(members.grant_member("acme", body, _client(), _control(), _settings(), _token()))
 
 
 # --------------------------------------------------------------------------- #
-# The gate — per rung, on the project object
+# The gate, on the project object
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("rung", ["admin"])
-def test_granting_is_gated_on_that_rungs_own_action(monkeypatch: pytest.MonkeyPatch, rung: str) -> None:
-    h = _Harness()
-    h.install(monkeypatch)
-    _grant(h, "dex~bob", rung)
-    assert h.gated == [(f"can_grant_{rung}", "project:acme")]
 
 
 def test_a_denied_gate_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,47 +124,6 @@ def test_regranting_what_someone_already_holds_is_a_noop(monkeypatch: pytest.Mon
     h.install(monkeypatch)
     _grant(h, "dex~bob", "member")
     assert h.written == []
-
-
-# --------------------------------------------------------------------------- #
-# Revoke — and the invariant that makes admin-grantable safe
-# --------------------------------------------------------------------------- #
-
-
-def test_revoking_the_last_admin_is_refused_and_named(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The lock-out guard. Without it, admin-grantable means admin-STRANDABLE: `can_administer` gates
-    membership AND delete, so a tenant with no admin can be neither administered nor retired from
-    inside the product — recoverable only by estate intervention."""
-    h = _Harness([_tuple("user:dex~alice", "admin", "project:acme")])
-    h.install(monkeypatch)
-    with pytest.raises(ConcurrentModificationError, match="only remaining admin"):
-        _revoke(h, "dex~alice", "admin")
-    assert h.deleted == []
-
-
-def test_revoking_an_admin_is_allowed_while_another_remains(monkeypatch: pytest.MonkeyPatch) -> None:
-    h = _Harness([_tuple("user:dex~alice", "admin", "project:acme"), _tuple("user:dex~bob", "admin", "project:acme")])
-    h.install(monkeypatch)
-    _revoke(h, "dex~bob", "admin")
-    assert len(h.deleted) == 1
-    assert h.deleted[0].user == "user:dex~bob"
-
-
-def test_revoking_the_last_MEMBER_is_fine(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only `admin` is administrative. Stranding is about who can GRANT, not about who is present."""
-    h = _Harness([_tuple("user:dex~alice", "admin", "project:acme"), _tuple("user:dex~gina", "member", "project:acme")])
-    h.install(monkeypatch)
-    _revoke(h, "dex~gina", "member")
-    assert len(h.deleted) == 1
-
-
-def test_revoking_something_absent_is_a_noop_not_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The caller asked for a state and that state already holds."""
-    h = _Harness([_tuple("user:dex~alice", "admin", "project:acme")])
-    h.install(monkeypatch)
-    out = _revoke(h, "dex~nobody", "member")
-    assert h.deleted == []
-    assert members.Member(user="user:dex~alice", relation="admin") in out.members
 
 
 # --------------------------------------------------------------------------- #

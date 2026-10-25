@@ -1620,3 +1620,18 @@ tests:
       - user: user:root_admin
         object: classification:pii
         assertions: { can_apply: false, can_grant_apply: false }
+
+  - name: a project's admin revision is bookkeeping and grants nothing
+    # [[LH-434]] An admin revoke moves `admin_revision` in the Write that deletes the admin tuple, so the
+    # store refuses one of two overlapping revokes. No permission reads it: the revision is no subject of any
+    # rung, and an admin's rungs stand beside it.
+    tuples:
+      - { user: revision:1, relation: admin_revision, object: project:solo }
+      - { user: user:sole_admin, relation: admin, object: project:solo }
+    check:
+      - user: revision:1
+        object: project:solo
+        assertions: { admin_revision: true, admin: false, member: false, can_administer: false, can_grant_admin: false, can_read_assignments: false }
+      - user: user:sole_admin
+        object: project:solo
+        assertions: { admin_revision: false, can_administer: true, can_grant_admin: true }
