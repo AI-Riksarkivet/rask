@@ -55,6 +55,7 @@ from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
 from catalog.services import blob_serving, dataplane, table_create
+from service_kit.governed import fga
 from service_kit.governed.audit import audit_read
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
@@ -168,6 +169,9 @@ async def create_table(
     # The payload's schema metadata becomes the table's, so a reserved key in it is a forged claim
     # whether or not the lineage stamp would later overwrite it ([[LH-208]]).
     provenance_guard.refuse_reserved_keys((table.schema.metadata or {}).keys(), door="create payload")
+    namespace = parse_identifier(id)[:-1]
+    if (labels := provenance_guard.field_labels(table.schema)) and (parent := await resolver.object("namespace", namespace)) is not None:
+        await fga_deps.require_classifier_to_set_labels(client, settings, token, obj=parent, label=fga.canonical_object_id(namespace), labels=labels)
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
@@ -359,6 +363,7 @@ async def update_table(
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
+    client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -370,6 +375,8 @@ async def update_table(
     reject_unsupported_properties(body.properties)
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
+    expressions = [expression for _, expression in body.updates or []]
+    await fga_deps.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
     response: UpdateTableResponse = await run_in_threadpool(
         partial(dataplane.update_table, table, so, body, transaction_properties=lineage_deps.door_stamp(token, UPDATE))
     )

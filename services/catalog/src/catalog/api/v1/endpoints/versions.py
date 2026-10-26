@@ -239,6 +239,12 @@ async def create_table_version(
             so,
         )
         await fga_deps.judge_staged_run(settings, token, client, resolver, ns=table.namespace, segments=segments, run=run, adds_data=adds_data)
+        if staged.creates:
+            # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
+            labels = await run_in_threadpool(managed_versions.staged_field_labels, staged, so)
+            await fga_deps.require_classifier_to_set_labels(
+                client, settings, token, obj=fga.table_object(table.resolved.require_uuid()), label=canonical, labels=labels
+            )
     except BaseException:
         await run_in_threadpool(managed_versions.refuse, staged, so)
         raise

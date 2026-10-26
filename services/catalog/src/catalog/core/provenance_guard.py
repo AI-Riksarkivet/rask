@@ -80,6 +80,23 @@ def refuse_reserved_keys(keys: Iterable[str | bytes], *, door: str) -> None:
         )
 
 
+def field_labels(schema: pa.Schema) -> dict[str, dict[str, str]]:
+    """Every field of ``schema`` carrying ``rask.*`` metadata, nested ones included: its dotted path and those keys."""
+    found: dict[str, dict[str, str]] = {}
+
+    def walk(field: pa.Field, prefix: str) -> None:
+        path = f"{prefix}{field.name}"
+        if governed := {_text(key): _text(value) for key, value in (field.metadata or {}).items() if _text(key).startswith("rask.")}:
+            found[path] = governed
+        if pa.types.is_struct(field.type):
+            for index in range(field.type.num_fields):
+                walk(field.type.field(index), f"{path}.")
+
+    for field in schema:
+        walk(field, "")
+    return found
+
+
 def _is_primary_key(field: pa.Field) -> bool:
     value = (field.metadata or {}).get(PRIMARY_KEY_METADATA)
     return value is not None and value.strip().lower() in _PRIMARY_KEY_TRUE

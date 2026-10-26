@@ -133,6 +133,7 @@ async def add_columns(
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
+    client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -141,6 +142,8 @@ async def add_columns(
     ADD_COLUMNS event carrying the NEW per-version schema, so the feed records the add at its version."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
+    expressions = [column.expression for column in body.new_columns or [] if column.expression]
+    await fga_deps.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
     response = await run_in_threadpool(partial(dataplane.add_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, ADD_COLUMNS)))
     await lineage_deps.emit_measured_write(
         emitter,

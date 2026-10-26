@@ -341,25 +341,67 @@ def _covered(table_location: str, base: str, sanctioned_bases: Sequence[str]) ->
 CLASSIFICATION_KEY: Final = "rask.classification"
 
 
-def classified_columns(dataset: Any) -> tuple[str, ...]:
-    """The names of this dataset's fields carrying :data:`CLASSIFICATION_KEY`, sorted.
+def labelled_fields(dataset: Any) -> dict[int, tuple[str, dict[str, str]]]:  # noqa: ANN401 — a lance.LanceDataset
+    """Every field carrying ``rask.*`` metadata, nested ones included, keyed by its Lance field id: its dotted path and
+    those keys.
 
-    NAMES for the human-readable refusal, resolved from the schema at read time; the CLASSIFICATION
-    itself lives on the field and travels with it through a rename, so nothing here is keyed on a name.
+    KEYED BY FIELD ID, the identity Lance gives a field: a rename keeps it and its metadata, while a re-type re-mints the
+    id with no metadata (measured on pylance 13.0.0), which is what a door's commit is held to
+    (``dataplane.commit_stamped``'s ``keeps_labels``).
+
+    Raises:
+        OSError: The dataset's schema could not be read.
+    """
+    found: dict[int, tuple[str, dict[str, str]]] = {}
+
+    def walk(field: Any, prefix: str) -> None:  # noqa: ANN401 — a lance.LanceField
+        path = f"{prefix}{field.name()}"
+        governed = {str(key): str(value) for key, value in (field.metadata or {}).items() if str(key).startswith("rask.")}
+        if governed:
+            found[int(field.id())] = (path, governed)
+        for child in field.children():
+            walk(child, f"{path}.")
+
+    for field in dataset.lance_schema.fields():
+        walk(field, "")
+    return found
+
+
+def classified_columns(dataset: Any) -> tuple[str, ...]:  # noqa: ANN401 — a lance.LanceDataset
+    """The dotted paths of this ref's fields carrying :data:`CLASSIFICATION_KEY`, nested ones included, sorted.
+
+    NAMES for the human-readable refusal; the CLASSIFICATION itself lives on the field and travels with it through a
+    rename.
+
+    Raises:
+        OSError: The ref's schema could not be read, which no caller may read as "nothing is classified".
+    """
+    return tuple(sorted(path for path, governed in labelled_fields(dataset).values() if CLASSIFICATION_KEY in governed))
+
+
+def classified_in_any_ref(dataset: Any, *, branch: str = "") -> tuple[str, ...]:  # noqa: ANN401 — a lance.LanceDataset
+    """The classified paths of every ref of the table ``dataset`` is a ref of (``branch``, ``""`` for main), each named
+    ``<ref>:<path>`` for a branch, sorted.
+
+    A credential for any ref reads every ref's files: a stock client opens a branch with the table's own credential
+    (``checkout_version((branch, None))``), and a branch reads its parent's fragments through a base on the table root
+    (`lance_docs/lancemultibasebranchingblobv2.md` § Building block 3), so a label on one ref holds every vend back
+    ([[LH-207]]). A ref whose schema cannot be read is named as unreadable rather than left out, and refs that cannot be
+    listed hold the vend back too.
     """
     try:
-        schema = dataset.lance_schema
-        names = [str(name) for name in dataset.schema.names]
-    except (AttributeError, OSError):  # a dataset whose schema cannot be read is not vendable on its columns
-        return ()
-    found: list[str] = []
-    for name in names:
+        main = dataset if not branch else dataset.checkout_version(("main", None))
+        found = set(classified_columns(main))
+        branches = list(dataset.branches.list())
+    except (AttributeError, ValueError, OSError):
+        log.warning("vend_refs_unreadable", exc_info=True)
+        return ("<refs unreadable>",)
+    for name in branches:
         try:
-            metadata = schema.field(name).metadata or {}
-        except (KeyError, ValueError):  # a nested path the flat name list cannot address
-            continue
-        if CLASSIFICATION_KEY in metadata:
-            found.append(name)
+            found.update(f"{name}:{path}" for path in classified_columns(dataset.checkout_version((name, None))))
+        except (AttributeError, ValueError, OSError):
+            log.warning("vend_branch_schema_unreadable", extra={"branch": name}, exc_info=True)
+            found.add(f"{name}:<unreadable>")
     return tuple(sorted(found))
 
 
@@ -372,12 +414,13 @@ class VendFacts(BaseModel):
     bases: list[BasePathRef] = Field(default_factory=list)
     #: The same bases in the table location's own spelling — what the session policy grants.
     base_uris: tuple[str, ...] = ()
-    #: Fields carrying :data:`CLASSIFICATION_KEY` ([[LH-058]]).
+    #: Fields carrying :data:`CLASSIFICATION_KEY` on any ref of the table ([[LH-058]], [[LH-207]]).
     classified: tuple[str, ...] = ()
 
 
 def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str = "") -> VendFacts:
-    """The version, declared bases and classified columns of the REF being vended, from ONE open under the catalog's own credential.
+    """The version and declared bases of the REF being vended, and the classified columns of every ref of its table, read
+    under the catalog's own credential.
 
     The version is the client's optimistic-append base; 0 for a declared-only/new table with no
     readable dataset yet. The bases are what the vended policy must also be able to READ — a table
@@ -385,9 +428,10 @@ def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str
     the table prefix alone is scoped to less than the table is (§ H12, measured: 69 datasets a tick
     refused compaction because the maintainer could not probe a declared base).
 
-    All three come off the same handle deliberately: this read already existed for the version, and a
-    second open to learn the bases would double the manifest reads on every vend. The handle is
-    :func:`catalog.core.namespace.open_location`'s, the open every other read of the table makes.
+    The version and bases come off the one handle :func:`catalog.core.namespace.open_location` opens, the open every
+    other read of the table makes. The classified columns cost one more manifest read per branch, and one for main when
+    the ref is a branch (:func:`classified_in_any_ref`): a label on any ref holds the credential back, since it reads
+    every ref's files.
 
     ``branch`` IS THE REF THE CREDENTIAL IS FOR ([[LH-279]]), so it is the ref these facts describe: a
     base planted on ``tree/<b>`` is invisible from main (lh279 m7), and a branch credential read through
@@ -421,7 +465,7 @@ def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str
         read_version=int(ds.version),
         bases=refs,
         base_uris=uris,
-        classified=classified_columns(ds),
+        classified=classified_in_any_ref(ds, branch=branch),
     )
 
 

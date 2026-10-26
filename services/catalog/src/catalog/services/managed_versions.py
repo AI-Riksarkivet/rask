@@ -345,7 +345,7 @@ def _refuse_changed_schema_governance(proposed: lance.LanceDataset, current: lan
         kept, was = _field_at(after, path), _field_at(before, path)
         if kept is None or was is None or not kept.equals(was, check_metadata=True):
             raise InvalidInputError(f"commit refused: provenance or key column {path!r} is changed or dropped; it is kept by every commit")
-    if _governed_field_metadata(after) != _governed_field_metadata(before):
+    if provenance_guard.field_labels(after) != provenance_guard.field_labels(before):
         raise InvalidInputError("commit refused: field metadata under rask.* is changed only through update_field_metadata")
 
 
@@ -359,23 +359,6 @@ def _field_at(schema: pa.Schema, path: str) -> pa.Field | None:
             return None
         field = field.type.field(part)
     return field
-
-
-def _governed_field_metadata(schema: pa.Schema) -> dict[str, dict[bytes, bytes]]:
-    governed: dict[str, dict[bytes, bytes]] = {}
-
-    def walk(field: pa.Field, prefix: str) -> None:
-        path = f"{prefix}{field.name}"
-        keys = {key: value for key, value in (field.metadata or {}).items() if key.startswith(b"rask.")}
-        if keys:
-            governed[path] = keys
-        if pa.types.is_struct(field.type):
-            for index in range(field.type.num_fields):
-                walk(field.type.field(index), f"{path}.")
-
-    for field in schema:
-        walk(field, "")
-    return governed
 
 
 def _refuse_config(proposed: lance.LanceDataset, current: lance.LanceDataset | None) -> None:
@@ -835,6 +818,11 @@ LINEAGE_OPERATION: dict[str, str] = {
     "ReserveFragments": lineage_emit.COMPACT_TABLE,
     "Overwrite": lineage_emit.OVERWRITE_TABLE,
 }
+
+
+def staged_field_labels(staged: StagedVersion, so: StorageOptions) -> dict[str, dict[str, str]]:
+    """The ``rask.*`` metadata on the staged version's fields, by dotted path: what a table's first version labels."""
+    return provenance_guard.field_labels(_open(staged, so).schema)
 
 
 def lineage_operation(staged: StagedVersion) -> str:

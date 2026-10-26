@@ -404,6 +404,13 @@ def _create_a_table(stock: lance_namespace.LanceNamespace) -> None:
     lance.write_dataset(_keyed([9], ["z"]), namespace_client=stock, table_id=["db", "u"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
 
 
+def _create_a_labelled_table(stock: lance_namespace.LanceNamespace) -> None:
+    labelled = _keyed([9], ["z"])
+    fields = [field.with_metadata({**(field.metadata or {}), b"rask.classification": b"pii"}) if field.name == "v" else field for field in labelled.schema]
+    rows = labelled.cast(pa.schema(fields, metadata=labelled.schema.metadata))
+    lance.write_dataset(rows, namespace_client=stock, table_id=["db", "u"], mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+
+
 def _append_a_held_key(stock: lance_namespace.LanceNamespace) -> None:
     lance.write_dataset(_keyed([1], ["again"]), namespace_client=stock, table_id=_TABLE, mode="append")
 
@@ -595,6 +602,7 @@ def _data_staged_under_an_index_label(stock: lance_namespace.LanceNamespace) -> 
         pytest.param(_compact, {"can_maintain"}, False, 403, 15, ("db$t", 4), id="a-writer-cannot-stage-a-compaction"),
         pytest.param(_append_a_new_key, {"can_write_data"}, False, 403, 15, ("db$t", 4), id="a-maintainer-cannot-stage-an-append"),
         pytest.param(_create_a_table, {"can_write_data"}, False, 403, 15, ("db$u", 1), id="a-maintainer-cannot-commit-a-tables-first-version"),
+        pytest.param(_create_a_labelled_table, {"can_classify"}, False, 403, 15, ("db$u", 1), id="a-first-version-labels-a-field-only-for-a-classifier"),
         pytest.param(_compact, set(), False, 503, 17, ("db$t", 4), id="a-compaction-waits-for-the-sweeps-clone-list"),
         pytest.param(_compact_on_a_clone_list_past_its_age, set(), False, 503, 17, ("db$t", 4), id="a-compaction-waits-for-a-fresh-clone-list"),
         pytest.param(_compact_a_table_a_clone_reads_through, set(), False, 406, 0, ("db$t", 4), id="a-table-a-clone-reads-through-is-not-compacted"),

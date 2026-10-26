@@ -414,6 +414,8 @@ type namespace
     # The classifier rung, cascading like `maintainer` — one grant per tenant reaches every table
     # beneath it. See `type warehouse` for why this is not the reference's `tag` type.
     define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or classifier from parent
+    # Labelling a table this namespace holds; asked where the table is not made yet, a create carrying a label ([[LH-207]]).
+    define can_classify: classifier
     # Publication, inherited — see the `warehouse` rung. A publisher here may bless a version of any
     # table in this stage without being able to destroy one.
     define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or publisher from parent

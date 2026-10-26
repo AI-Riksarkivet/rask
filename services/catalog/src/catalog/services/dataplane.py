@@ -20,6 +20,7 @@ import io
 import itertools
 import logging
 import re
+import tempfile
 import uuid
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
@@ -112,6 +113,7 @@ from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
+from catalog.core.vending import classified_columns, labelled_fields
 from catalog.services import changes, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
 from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, data_directories, location_claims, trash
@@ -1211,9 +1213,15 @@ def commit_stamped[T](
     *,
     branch: str | None = None,
     opened: lance.LanceDataset | None = None,
+    keeps_labels: bool = False,
 ) -> tuple[int, T]:
     """Commit the transaction ``plan`` builds on the latest version of ``branch`` (``None`` = main) with ``properties``;
     return the version.
+
+    ``keeps_labels`` holds a schema door to the rule ``version/create`` applies to a stock commit ([[LH-207]]): a field's
+    ``rask.*`` metadata changes only through ``update_field_metadata``, which asks ``can_classify``. Measured on pylance
+    13.0.0, a same-type re-type re-mints the field id with no metadata and a drop removes the field, either of which would
+    leave a classified table directly vendable; such a commit is discarded before its finalize.
 
     Every catalog door's commit carries the ``rask.*`` stamp ([[LH-497]]), and most Lance operations take no transaction
     properties (pylance 13.0.0: ``update``, ``delete``, ``add_columns``, ``alter_columns``, ``drop_columns``, both metadata
@@ -1236,6 +1244,7 @@ def commit_stamped[T](
     Raises:
         ConcurrentModificationError: Every attempt lost its race.
         TableChangedError: The table changed since the door's resolution.
+        InvalidInputError: ``keeps_labels`` and the commit loses or changes a field's ``rask.*`` metadata.
     """
     table_id = table.segments
     ref = recorded_branch(branch)
@@ -1254,6 +1263,8 @@ def commit_stamped[T](
         version = dataset.version + 1
         finalize_id = manifest_bytes.detached_id()
         try:
+            if keeps_labels:
+                _refuse_a_lost_label(dataset, detached)
             fs, base = dataset_fs(location, so)
             versions = f"{base.rstrip('/')}/_versions"
             with fs.open_input_stream(f"{versions}/d{detached.version}.manifest") as source:
@@ -1281,6 +1292,56 @@ def commit_stamped[T](
             discard_detached_manifest(location, so, detached.version)
         return version, measured
     raise ConcurrentModificationError(f"the commit lost the race for the next version {_STAMPED_COMMIT_ATTEMPTS} times; retry it")
+
+
+#: What Lance raises planning an expression it cannot resolve: an unknown column is a ``ValueError`` (pylance 13.0.0).
+_UNPLANNED: Final = (ValueError, OSError, RuntimeError, pa.ArrowException)
+
+
+def _plans(dataset: lance.LanceDataset, expression: str) -> bool:
+    try:
+        dataset.to_table(columns={"probe": expression}, limit=0)
+    except _UNPLANNED:
+        return False
+    return True
+
+
+def expressions_reading_a_label(dataset: Any, expressions: Sequence[str]) -> list[str]:  # noqa: ANN401 — a lance.LanceDataset
+    """The ``expressions`` that read a classified column of this ref, each as given ([[LH-207]]).
+
+    LANCE RESOLVES THE COLUMNS, not a reading of the SQL here: each expression is planned on an empty table of the ref's
+    schema and on one with every top-level column holding a label left out (copying a struct copies the field under it).
+    One that plans on the first and not the second reads a label; one that plans on neither is invalid, which the door's
+    own call answers. Measured on pylance 13.0.0, quoting, backticks, non-ASCII names and a quote inside an identifier are
+    each resolved as Lance resolves them when it runs the expression, which a reading of the SQL got wrong.
+
+    Raises:
+        OSError: The ref's schema could not be read.
+    """
+    labelled = {path.split(".", 1)[0] for path in classified_columns(dataset)}
+    if not labelled or not expressions:
+        return []
+    schema = dataset.schema
+    with tempfile.TemporaryDirectory() as scratch:
+        # Two empty probe tables in a scratch directory the call removes: no table of the estate is written.
+        full = lance.write_dataset(schema.empty_table(), f"{scratch}/full")  # noqa: TID251
+        unlabelled = pa.schema([field for field in schema if field.name not in labelled])
+        kept = lance.write_dataset(unlabelled.empty_table(), f"{scratch}/kept")  # noqa: TID251
+        return [expression for expression in expressions if _plans(full, expression) and not _plans(kept, expression)]
+
+
+def _refuse_a_lost_label(before: lance.LanceDataset, after: lance.LanceDataset) -> None:
+    """Refuse a commit that loses or changes any field's ``rask.*`` metadata, by Lance field id ([[LH-207]]).
+
+    Raises:
+        InvalidInputError: A labelled field is gone, or its ``rask.*`` keys differ.
+    """
+    kept = labelled_fields(after)
+    lost = sorted(path for field_id, (path, governed) in labelled_fields(before).items() if kept.get(field_id, ("", {}))[1] != governed)
+    if lost:
+        raise InvalidInputError(
+            f"this would remove the label on {', '.join(lost)}: a label leaves a field only through update_field_metadata, which a classifier does"
+        )
 
 
 class _StagedCapture(Exception):
@@ -2541,7 +2602,9 @@ def alter_columns(
         handle.alter_columns(*cast(list[Iterable[AlterColumn]], alterations))
 
     with _column_op("alter_columns", schema.names):
-        version, _ = commit_stamped(table, so, transaction_properties, captured(table, so, alter, branch=req.branch), branch=req.branch, opened=dataset)
+        version, _ = commit_stamped(
+            table, so, transaction_properties, captured(table, so, alter, branch=req.branch), branch=req.branch, opened=dataset, keeps_labels=True
+        )
     return AlterTableAlterColumnsResponse(version=version)
 
 
@@ -2560,6 +2623,7 @@ def drop_columns(
             captured(table, so, lambda handle: handle.drop_columns(columns), branch=req.branch),
             branch=req.branch,
             opened=dataset,
+            keeps_labels=True,
         )
     return AlterTableDropColumnsResponse(version=version)
 

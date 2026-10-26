@@ -30,7 +30,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
-from functools import lru_cache
+from functools import lru_cache, partial
 from typing import Annotated, Any, Final, Literal
 
 from fastapi import Query, Request
@@ -57,7 +57,7 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, tier_policy
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
-from catalog.services import native, object_uuids, table_claims, warehouses
+from catalog.services import dataplane, native, object_uuids, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
@@ -2272,6 +2272,67 @@ async def require_relation(
     if not (settings.fga_enabled and client is not None and token is not None):
         return
     await _require(client, user=token.subject, relation=relation, obj=obj, label=label)
+
+
+async def require_classifier_to_copy_a_label(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: Caller | None,
+    *,
+    table: table_claims.DoorTable,
+    so: dict[str, str],
+    branch: str | None,
+    expressions: Sequence[str],
+) -> None:
+    """Refuse an ``add_columns`` or ``update`` expression that reads a classified column unless the caller holds
+    ``can_classify`` on the table ([[LH-207]], owner 2026-10-26).
+
+    Such an expression copies the values into a column with no label (measured on pylance 13.0.0:
+    ``add_columns({"leak": "secret"})`` copies them unlabelled), which a writer could then vend raw. This narrows the
+    copy rather than closing it: a writer reads the column too, so a copy made outside the catalog is LH-288's.
+    No-op when FGA is off / unwired / unauthenticated, like every gate here.
+    """
+    if not (settings.fga_enabled and client is not None and token is not None):
+        return
+    dataset = await run_in_threadpool(partial(table.open, so, branch=branch))
+    try:
+        read = await run_in_threadpool(dataplane.expressions_reading_a_label, dataset, list(expressions))
+    except OSError:
+        # Labels that cannot be read are not "no labels": the copy is judged as reading one.
+        log.warning("copy_labels_unreadable", extra={"sub": token.subject}, exc_info=True)
+        read = ["<labels unreadable>"]
+    if read:
+        log.info("copy_of_a_label_asks_can_classify", extra={"sub": token.subject, "expressions": read})
+        await _require(
+            client,
+            user=token.subject,
+            relation="can_classify",
+            obj=fga.table_object(table.resolved.require_uuid()),
+            label=fga.canonical_object_id(table.segments),
+        )
+
+
+async def require_classifier_to_set_labels(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: Caller | None,
+    *,
+    obj: str,
+    label: str,
+    labels: Mapping[str, Mapping[str, str]],
+) -> None:
+    """Refuse fields arriving with ``rask.*`` metadata unless the caller holds ``can_classify`` on ``obj`` and ``can_apply``
+    on each value, as a label set later through ``update_field_metadata`` is asked ([[LH-207]]).
+
+    A label decides how a table's bytes leave the store, so a create may not set one its caller could not set after.
+    ``obj`` is the table, or for a table not made yet its namespace, whose ``classifier`` its tables inherit. No-op when
+    there are no labels or FGA is off / unwired / unauthenticated, like every gate here.
+    """
+    if not labels or not (settings.fga_enabled and client is not None and token is not None):
+        return
+    await _require(client, user=token.subject, relation="can_classify", obj=obj, label=label)
+    for value in sorted({value for keys in labels.values() for value in keys.values()}):
+        await _require(client, user=token.subject, relation="can_apply", obj=f"classification:{value}")
 
 
 async def require_tier_authority(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str | None) -> None:

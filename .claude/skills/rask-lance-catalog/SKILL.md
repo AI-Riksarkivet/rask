@@ -603,6 +603,21 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`fga.user_object`); a bare name in it is refused when the catalog's settings are read ([[LH-063]]). An owner is a
   maintainer and keeps the maintainer doors, and is
   not vended the tier.
+- **A classified column is never vended raw** ([[LH-058]], [[LH-207]]). A label is field metadata `rask.classification`,
+  set and cleared only through `update_field_metadata` under `can_classify` (plus `can_apply` on each value). Both vend
+  doors (`/management/v1/table/{id}/credentials`, `DescribeTable(vend_credentials=true)`) answer server-mediated when
+  `vending.classified_in_any_ref` finds a label on any field, nested ones included, on main or on any branch: a
+  credential for any ref reads every ref's files (a stock client opens a branch with the table's credential; a branch
+  reads its parent's fragments through a base, `lance_docs/lancemultibasebranchingblobv2.md`). A label never leaves a
+  field another way: `alter_columns` and `drop_columns` commit with `keeps_labels` (`dataplane.commit_stamped`), which
+  refuses 400 a commit losing or changing a field's `rask.*` keys by Lance field id (a same-type re-type re-mints the id
+  with no metadata, measured on pylance 13.0.0), as `version/create` already refuses for a stock commit; an
+  `add_columns` or `update` expression that reads a classified column asks `can_classify`, Lance itself telling which
+  columns it reads (`dataplane.expressions_reading_a_label` plans it with and without the labelled columns); and a
+  create, through the door (on the parent namespace's `can_classify`) or a first `version/create` (on the table's),
+  that carries a label asks what labelling asks. Pinned by
+  `services/catalog/tests/test_a_classified_column_is_never_vended_raw.py`. A copy made outside the catalog by a
+  writer who reads the column is LH-288's.
 - **Stock clients commit through `version/create`** ([[LH-471]], ADR 0157). `DescribeTable` and `DeclareTable`
   answer `managed_versioning=true`, so pylance stages `_versions/<n>.manifest-<uuid>` (its `manifest_path` is the
   object-store path: the key, no scheme, no bucket) and asks `POST /v1/table/{id}/version/create`.

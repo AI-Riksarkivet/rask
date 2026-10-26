@@ -301,7 +301,16 @@ tests:
       - user: user:dpo
         relation: classifier
         object: warehouse:acme_bucket
+      - { user: user:wren, relation: writer, object: namespace:acme_gold }
     check:
+      # A table not made yet is labelled on its namespace's `can_classify`, which the same `classifier` reaches
+      # ([[LH-207]]): a create carrying a label asks it, and a namespace writer does not hold it.
+      - user: user:dpo
+        object: namespace:acme_gold
+        assertions: { can_classify: true }
+      - user: user:wren
+        object: namespace:acme_gold
+        assertions: { writer: true, can_classify: false }
       # BOTH DIRECTIONS, and each is half the separation. A classifier who could also write would make
       # the rung decorative; a writer who could classify is the hole itself.
       - user: user:dpo
