@@ -4,10 +4,11 @@ Source: owner decision, 2026-10-10 grilling session (LH-300 #311, first answer).
 
 ## Context
 
-`/train` validates with `TOKEN_PATTERN` (one segment, no dots: `services/medallion/src/medallion/services/train.py:58`,
-`services/medallion/src/medallion/api/train.py:104`). The cascade doors use `SAFE_TOKEN_PATTERN` (`services/medallion/src/medallion/services/trigger_guards.py:38`, `dependencies.py:23`,
-`rerun.py:101`), which admits `.`, `.x` and `a.`. A training token is a path segment (`<artifact_base>/<token>/`,
-`scripts/ray_train_job.py:9,339`), so `.` would write into the artifact base itself.
+At the decision `/train` validated with `TOKEN_PATTERN` (one segment, no dots), and the medallion service's cascade
+doors used `SAFE_TOKEN_PATTERN`, which admits `.`, `.x` and `a.`. A training token was a path segment
+(`<artifact_base>/<token>/`), so `.` would have written into the artifact base itself. Those doors and the training job
+left with `services/medallion` (273a17a43, LH-464), so no token pattern remains; the decision binds the next door that
+takes a token as a path segment.
 
 ## Decision
 

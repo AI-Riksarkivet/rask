@@ -156,8 +156,9 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "rename": "can_drop",
         "restore": "can_restore",
         "branches/create": "can_create_branch",
-        # DESTROYING a branch destroys its data AND its own version sequence — irreversible, and the
-        # heavier of the two deletions this table offers. Absent from this map it fell through to the
+        # DELETING a branch ends its own version sequence and makes the files only it references reclaimable: history
+        # reclaim, which protection does not guard (ADR 0150), so this rung is the door's whole gate. Absent from this
+        # map it fell through to the
         # writer default, so measured on the deployed catalog 2026-09-11 a non-owner cleared
         # `branches/delete` (422, past the gate) while the same caller was refused `tags/delete` and
         # `deregister` (403): the estate permitted the greater destruction and refused the lesser,
