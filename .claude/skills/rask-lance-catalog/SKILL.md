@@ -943,6 +943,16 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   forked from one; every reclaim (the sweep's `nested_branch` gate,
   `maintenance/run`, `version/delete`) refuses a branch with another inside it; and the sweep lists
   branches from `_refs/branches`, never by walking `tree/`.
+- **A tag names a version within ONE branch's history, so no reader takes its version alone** ([[LH-284]]). A tag
+  file records `branch` beside `version` (`lance_docs/lance/format/table/branch_tag.md` § Tag File Format), branch
+  histories are numbered independently, and pylance's `tags.get_version` answers the version alone (measured on pylance
+  13.0.0: a tag on `("work", 3)` answers 3). Every catalog reader resolves a tag through `dataplane.tag_reference`,
+  which reads both. DescribeTable refuses a tag on a branch with the code `branch` gets (406, code 0), since
+  DescribeTableResponse has no field to name the branch. The tags the catalog keeps on main (`published`,
+  `publishing`, `rask.held`, a registry model's `blessed`) are read through `dataplane.main_version_of_tag`, which
+  refuses one found on a branch 409 code 19; the model listing leaves such a `blessed` out as null and logs it at ERROR.
+  Pinned by `tests/integration/test_moto_s3.py::test_describe_at_tag_resolves_via_the_catalog`,
+  `tests/integration/test_model_endpoints.py` and `tests/unit/test_publication.py`.
 - **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**
   `packages/service-kit/src/service_kit/lakehouse/features.py` reads
   `reader_feature_flags`/`writer_feature_flags` as varints at

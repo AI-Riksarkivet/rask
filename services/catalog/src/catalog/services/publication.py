@@ -46,7 +46,6 @@ from typing import TYPE_CHECKING, Any, Literal
 from lance_namespace import (
     CreateTableTagRequest,
     DeleteTableTagRequest,
-    GetTableTagVersionRequest,
     InvalidInputError,
     InvalidTableStateError,
     TableTagAlreadyExistsError,
@@ -363,23 +362,24 @@ class PublicationResult(BaseModel):
         return self.published and self.to_version != self.from_version
 
 
-def _tag_version(table: DoorTable, so: dict[str, str], tag: str) -> int | None:
-    """The version a tag points at, or None when unset.
+def _main_version_of_tag(table: DoorTable, so: dict[str, str], tag: str) -> int | None:
+    """The main version a tag points at, or None when unset.
 
-    Goes through the catalog's own `GetTableTagVersion` rather than reading `ds.tags` directly, so
-    there is ONE resolution path and it is the one the spec defines. The dataplane already converts
-    pylance's raise-on-unset (`Ref not found` — it does NOT return None) into the spec's
-    `TableTagNotFound`; this turns that into the absence it represents.
+    Resolved where `GetTableTagVersion` resolves a tag (`dataplane.tag_reference`), so there is ONE resolution path,
+    and read with its branch: these tags move on main alone, so one on a branch is refused rather than read as main's
+    version of the same number.
+
+    Raises:
+        InvalidTableStateError: The tag names a version of a branch.
     """
-    try:
-        return int(dataplane.get_tag_version(table, so, GetTableTagVersionRequest(id=table.segments, tag=tag)).version)
-    except TableTagNotFoundError:
-        return None
+    return dataplane.main_version_of_tag(
+        table.open_unchecked(so), tag, remedy="every tag door refuses it, so it was written at the store, and is put back on main there"
+    )
 
 
 def published_version(table: DoorTable, so: dict[str, str]) -> int | None:
     """The version `published` points at, or None when nothing has been published yet."""
-    return _tag_version(table, so, PUBLISHED_TAG)
+    return _main_version_of_tag(table, so, PUBLISHED_TAG)
 
 
 def set_tag(table: DoorTable, so: dict[str, str], tag: str, version: int) -> None:
@@ -401,7 +401,7 @@ def set_tag(table: DoorTable, so: dict[str, str], tag: str, version: int) -> Non
     same shape `records.create_json` uses for the registry, where a 409 means someone else won rather
     than that this failed.
     """
-    if _tag_version(table, so, tag) is None:
+    if _main_version_of_tag(table, so, tag) is None:
         try:
             dataplane.create_tag(table, so, CreateTableTagRequest(id=table.segments, tag=tag, version=version))
             return
@@ -417,7 +417,7 @@ def advance(table: DoorTable, so: dict[str, str], version: int, *, tag: str = PU
     over. The read and the move are two operations, because a Lance tag has no conditional update, so two
     publications inside that gap can still race.
     """
-    current = _tag_version(table, so, tag)
+    current = _main_version_of_tag(table, so, tag)
     if current is not None and current >= version:
         return False, current
     set_tag(table, so, tag, version)
@@ -537,7 +537,7 @@ def publish(
     if version > latest:
         raise TableVersionNotFoundError(f"version {version} not found (latest is {latest})")
 
-    previous = _tag_version(table, storage_options, tag)
+    previous = _main_version_of_tag(table, storage_options, tag)
     if previous is not None and version < previous:
         # Publishing backwards is a rollback, and a rollback arriving by accident — a late retry of an
         # older run — silently un-publishes newer good data. Checked BEFORE the gate: there is no point

@@ -27,7 +27,7 @@ from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 
 
-def _publish(uri: str, metrics: dict[str, Any], token: str, *, first: bool) -> int:
+def _publish(uri: str | lance.LanceDataset, metrics: dict[str, Any], token: str, *, first: bool) -> int:
     meta = {"config": {}, "features": ["silver$features"], "metrics": metrics, "token": token}
     table = pa.table(
         {
@@ -162,6 +162,27 @@ def test_describe_checks_reader_and_reports_candidate_plus_blessed(models_client
     assert {"user": "dex~alice", "relation": "can_get_metadata", "obj": "table:models$demo"} in captured
 
 
+def _bless_on_a_branch(registry: str) -> None:
+    """Tag `blessed` on work@2, another publish than main@2 (branch histories are numbered independently).
+
+    Promote moves the tag on main alone, so only a writer holding the registry's store credential can do this.
+    """
+    _publish(lance.dataset(registry).create_branch("work", 1), {"rows_seen": 99, "features": 7}, "tok-work", first=False)
+    lance.dataset(registry).tags.create("blessed", ("work", 2))
+
+
+def test_describe_refuses_a_blessed_tag_on_a_branch(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    client, registry = models_client
+    _fake_check([], allow=True, monkeypatch=monkeypatch)
+    _bless_on_a_branch(registry)
+
+    resp = client.get("/management/v1/model/demo", headers={"Authorization": "Bearer t"})
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["code"] == 19
+    assert "tag 'blessed' names version 2 of branch 'work'" in resp.json()["detail"]
+
+
 def test_promote_unknown_model_is_404(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
     client, _ = models_client
     _fake_check([], allow=True, monkeypatch=monkeypatch)
@@ -224,18 +245,23 @@ def test_list_models_is_empty_for_a_caller_with_no_grants(models_client: tuple[T
     assert resp.json() == {"models": [], "page_token": None}
 
 
-def test_list_models_serializes_null_versions_for_an_unreadable_registry(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_models_serializes_null_versions_for_what_it_cannot_read(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
     # CONTRACT: an interrupted first publish (a registry dir that is not a readable dataset) is surfaced
     # with explicit nulls on the wire — the list route must NOT exclude_none them away (audit 2026-07-15;
     # the OpenAPI marks both version fields required-nullable, so a spec client relies on their presence).
+    # A `blessed` tag on a branch blesses no main version: the listing leaves it out rather than failing for
+    # every caller, and the model's describe refuses it.
     import pathlib
 
     client, registry = models_client
     pathlib.Path(registry).parent.joinpath("halfborn").mkdir()
+    _bless_on_a_branch(registry)
     _fake_batch_check(["table:models$demo", "table:models$halfborn"], monkeypatch)
 
     resp = client.get("/management/v1/model", headers={"Authorization": "Bearer t"})
 
     assert resp.status_code == 200, resp.text
-    rows = {m["model"]: m for m in resp.json()["models"]}
-    assert rows["halfborn"] == {"model": "halfborn", "latest_version": None, "blessed_version": None}
+    assert resp.json()["models"] == [
+        {"model": "demo", "latest_version": 2, "blessed_version": None},
+        {"model": "halfborn", "latest_version": None, "blessed_version": None},
+    ]

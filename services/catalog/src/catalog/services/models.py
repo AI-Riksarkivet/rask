@@ -18,6 +18,7 @@ so the catalog's exception handler maps them to RFC 9457 problem+json (404 missi
 from __future__ import annotations
 
 import json
+import logging
 import math
 from typing import Any
 
@@ -32,8 +33,11 @@ from lance_namespace import (
 )
 
 from catalog.core.config import shared_lance_session
+from catalog.services import dataplane
 from service_kit.lakehouse.objectfs import fs_and_base
 
+
+log = logging.getLogger(__name__)
 
 #: The reserved tag that names the promoted ("blessed") model version. A move of this tag IS the promotion.
 BLESSED_TAG = "blessed"
@@ -114,26 +118,25 @@ def _apply_gate(metrics: dict[str, Any], min_metrics: dict[str, float] | None, *
             raise InvalidTableStateError(f"model version {version} cannot be promoted: {name}={actual} below required {threshold}")
 
 
-def _tag_version(ds: lance.LanceDataset, tag: str) -> int | None:
-    """The version ``tag`` points at, or ``None`` when unset (pylance 8 raises "Ref not found" for an unset
-    tag — it does NOT return None)."""
-    try:
-        version = ds.tags.get_version(tag)
-    except ValueError:
-        return None
-    return int(version) if version is not None else None
+def _main_version_of_tag(ds: lance.LanceDataset, tag: str) -> int | None:
+    """The main version ``tag`` points at, or ``None`` when unset.
+
+    Promotion moves the tag on main alone, so one a writer holding the registry's store credential put on a branch is
+    refused (409) rather than read as main's version of the same number.
+    """
+    return dataplane.main_version_of_tag(ds, tag, remedy="promote a version to move it there")
 
 
 def blessed_version(model_uri: str, storage_options: dict[str, str], *, tag: str = BLESSED_TAG) -> int | None:
     """The version the ``blessed`` tag points at, or ``None`` if no version is blessed yet."""
-    return _tag_version(_open(model_uri, storage_options), tag)
+    return _main_version_of_tag(_open(model_uri, storage_options), tag)
 
 
 def describe(model_uri: str, storage_options: dict[str, str], *, tag: str = BLESSED_TAG) -> dict[str, Any]:
     """Registry summary: the latest (candidate) version, the blessed version (or None), and both metrics."""
     ds = _open(model_uri, storage_options)  # proves the registry exists (404 otherwise)
     latest = int(ds.version)
-    blessed = _tag_version(ds, tag)
+    blessed = _main_version_of_tag(ds, tag)
     return {
         "latest_version": latest,
         "blessed_version": blessed,
@@ -147,9 +150,18 @@ def summarize(model_uri: str, storage_options: dict[str, str], *, tag: str = BLE
 
     Deliberately lighter than :func:`describe`: metrics live in each version's ``meta`` rows, so reading
     them costs two extra versioned dataset opens per model — fine for one model, not for a listing.
+
+    A ``tag`` on a branch blesses no main version: the listing leaves it out rather than failing for every caller, and
+    the model's describe refuses it. Logged at ERROR, as the catalog's listings log an object they leave out
+    (`fga_deps._listed_object`): only a writer past the promote door puts it there, and a promote moves it back.
     """
     ds = _open(model_uri, storage_options)
-    return {"latest_version": int(ds.version), "blessed_version": _tag_version(ds, tag)}
+    try:
+        blessed = _main_version_of_tag(ds, tag)
+    except InvalidTableStateError as refused:
+        log.error("model_listing_left_out_a_tag_on_a_branch", extra={"model_uri": model_uri, "tag": tag, "error": str(refused)})
+        blessed = None
+    return {"latest_version": int(ds.version), "blessed_version": blessed}
 
 
 def list_models(models_root: str, storage_options: dict[str, str]) -> list[str]:

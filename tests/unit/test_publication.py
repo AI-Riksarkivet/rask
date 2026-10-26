@@ -222,6 +222,22 @@ def test_publishing_BACKWARDS_is_refused(ns, table: DoorTable) -> None:  # noqa:
     assert published_version(table, {}) == second
 
 
+def test_a_published_tag_on_a_branch_is_refused_rather_than_read_as_main(ns, table: DoorTable) -> None:  # noqa: ANN001
+    """Every tag door refuses `published`, so only a writer at the store can put it on a branch, where its number names
+    that branch's snapshot (`lance_docs/lance/guide/tags_and_branches.md` § Branches). A publish ranging and gating
+    from main's version of the same number would announce a delta from a version nobody published."""
+    _write(ns, [1, 2])
+    lance.write_dataset(_table([9]), lance.dataset(_uri(ns)).create_branch("work", 1), mode="append")
+    lance.dataset(_uri(ns)).tags.create(PUBLISHED_TAG, ("work", 2))
+    latest = _write(ns, [3, 4], mode="append")
+
+    with pytest.raises(InvalidTableStateError, match="tag 'published' names version 2 of branch 'work'"):
+        _publish(table, latest)
+
+    published = lance.dataset(_uri(ns)).tags.list()[PUBLISHED_TAG]
+    assert (published["branch"], published["version"]) == ("work", 2)
+
+
 def test_a_version_that_does_not_exist_is_refused(ns, table: DoorTable) -> None:  # noqa: ANN001
     """Fail before reading anything, and name the latest so the caller sees how far off it was."""
     version = _write(ns, [1])

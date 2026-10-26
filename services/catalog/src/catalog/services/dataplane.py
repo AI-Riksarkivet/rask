@@ -3366,19 +3366,64 @@ def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTab
     return CreateTableTagResponse()
 
 
-def get_tag_version(table: table_claims.DoorTable, so: StorageOptions, req: GetTableTagVersionRequest) -> GetTableTagVersionResponse:
-    """Return the table version a tag points to (404 on an unknown tag)."""
-    _require_a_tag_a_key_segment_can_hold(req.tag)
-    tags = table.open_unchecked(so).tags
+class TagReference(BaseModel):
+    """What a tag names: a version within ONE branch's history.
+
+    A tag file records ``branch`` beside ``version`` (`lance_docs/lance/format/table/branch_tag.md` § Tag File Format), and
+    branch histories are numbered independently (`lance_docs/lance/guide/tags_and_branches.md` § Branches), so the version
+    alone names another snapshot on main.
+    """
+
+    model_config = {"frozen": True}
+
+    tag: str
+    #: The branch the version lives on, ``None`` for main.
+    branch: str | None
+    version: int
+
+    def __str__(self) -> str:
+        return f"tag {self.tag!r} names version {self.version} of " + (f"branch {self.branch!r}" if self.branch is not None else "main")
+
+
+def tag_reference(dataset: lance.LanceDataset, tag: str) -> TagReference:
+    """The ref ``tag`` names on ``dataset``'s table, read with its branch: the one place a tag is resolved.
+
+    pylance's ``tags.get_version`` answers the version alone (measured on pylance 13.0.0: a tag on ``("work", 3)``
+    answers 3), so the ref is read off ``tags.list()``, whose entry carries both in one read. Tags live at the table's
+    root whatever branch they name (`branch_tag.md` § Tag Storage), so a handle on any ref lists them all.
+
+    Raises:
+        TableTagNotFoundError: No tag has the name, or none can: its ref file would be longer than a key segment.
+    """
+    _require_a_tag_a_key_segment_can_hold(tag)
+    entry = dataset.tags.list().get(tag)
+    if entry is None:
+        raise TableTagNotFoundError(f"tag {tag!r} not found")
+    return TagReference(tag=tag, branch=recorded_branch(entry.get("branch")), version=entry["version"])
+
+
+def main_version_of_tag(dataset: lance.LanceDataset, tag: str, *, remedy: str) -> int | None:
+    """The main version ``tag`` names, or ``None`` when no tag has the name, for a tag only main may hold.
+
+    The catalog moves ``published``, ``publishing`` and ``rask.held`` on main alone, and so does a model's promotion, so
+    one of them on a branch was written past those doors, and its number names the branch's snapshot.
+
+    Raises:
+        InvalidTableStateError: The tag names a version of a branch; ``remedy`` says how it is put back on main.
+    """
     try:
-        version = tags.get_version(req.tag)
-    except ValueError as exc:  # pylance 8 raises ("Ref not found"), it does NOT return None
-        raise TableTagNotFoundError(f"tag {req.tag!r} not found") from exc
-    if version is None:  # kept for a future pylance that returns None instead
-        raise TableTagNotFoundError(f"tag {req.tag!r} not found")
-    # Echo the branch the tag lives on (None for main) so a non-main tag isn't reported as main.
-    entry = tags.list().get(req.tag) or {}
-    return GetTableTagVersionResponse(version=version, branch=entry.get("branch"))
+        ref = tag_reference(dataset, tag)
+    except TableTagNotFoundError:
+        return None
+    if ref.branch is not None:
+        raise InvalidTableStateError(f"{ref}, and only main may hold it: {remedy}")
+    return ref.version
+
+
+def get_tag_version(table: table_claims.DoorTable, so: StorageOptions, req: GetTableTagVersionRequest) -> GetTableTagVersionResponse:
+    """Return the ref a tag names: its version and, for a tag on a branch, that branch (404 on an unknown tag)."""
+    ref = tag_reference(table.open_unchecked(so), req.tag)
+    return GetTableTagVersionResponse(version=ref.version, branch=ref.branch)
 
 
 def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTableTagRequest) -> UpdateTableTagResponse:

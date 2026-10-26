@@ -22,7 +22,6 @@ from lance_namespace import (
     DropTableResponse,
     GetTableStatsRequest,
     GetTableStatsResponse,
-    GetTableTagVersionRequest,
     InternalError,
     InvalidInputError,
     InvalidTableStateError,
@@ -459,7 +458,7 @@ async def declare_table(
     return response
 
 
-def _refuse_a_branch_describe_cannot_honour(branch: str | None) -> None:
+def _refuse_a_branch_describe_cannot_honour(branch: str | None, *, named_by: str | None = None) -> None:
     """Refuse a branch this door cannot describe — with the code its fifteen siblings use.
 
     THIS DOOR DESCRIBES MAIN. `describe_table` answers off the namespace manifest, which has no branch
@@ -475,17 +474,18 @@ def _refuse_a_branch_describe_cannot_honour(branch: str | None) -> None:
     (`:2412`). A well-formed branch name this backend does not serve is the second. Clients dispatch on
     those codes, so two answers for one condition is a contract defect, not a wording one.
 
-    ONE FUNCTION FOR BOTH CHANNELS. `branch` reaches this door through the body AND the query string,
+    ONE FUNCTION FOR EVERY CHANNEL. `branch` reaches this door through the body AND the query string,
     and the query channel was added later precisely because a refusal covering one of two is why this
-    door read as settled while `?branch=work` still answered 200 for main (measured 2026-08-31).
+    door read as settled while `?branch=work` still answered 200 for main (measured 2026-08-31). A `tag`
+    names a branch too, the one its version lives on, and ``named_by`` says so: the response has no field
+    to name a branch, so a branch tag described at its number reads as main's version to its caller.
 
     `main` is permitted: naming the branch you are already on is not a request this door cannot honour.
     """
     if dataplane.recorded_branch(branch) is None:
         return
-    dataplane.refuse_a_branch_this_door_cannot_honour(
-        branch, door="describe", remedy=f"Use the branch operations under /v1/table/{{id}}/branches, or read the branch through `count_rows`. (got {branch!r})"
-    )
+    remedy = f"Use the branch operations under /v1/table/{{id}}/branches, or read the branch through `count_rows`. (got {branch!r})"
+    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="describe", remedy=f"{named_by}. {remedy}" if named_by else remedy)
 
 
 @router.post("/{id}/describe", response_model_exclude_none=True)
@@ -524,9 +524,10 @@ async def describe_table(
     ``tag`` is resolved to its version HERE via the dataplane's tag store, from either door: the native
     backend at pylance 8.0.0 silently IGNORES a describe-request ``tag`` (probed 2026-07-10 — a nonexistent
     tag described the LATEST version with no error), so forwarding it would lie; the catalog resolves
-    (404 on an unknown tag, like ``/tags/version``) and describes at the resolved version instead.
+    (404 on an unknown tag, like ``/tags/version``) and describes at the resolved version instead. A tag
+    on a branch is refused as ``branch`` is: its version lives in that branch's history.
 
-    ``branch`` (body-only) is REFUSED unless it names main — see the site below. ``identity`` and ``context``
+    ``branch``, in the body or the query, is REFUSED unless it names main — see the site below. ``identity`` and ``context``
     are ignored: the caller is the verified bearer token, not a field of the request body.
 
     CREDENTIALS COME WITH THE ANSWER unless the caller sets ``vend_credentials`` false: unset, the spec lets
@@ -626,7 +627,9 @@ def _describe(
     segments = table.segments
     try:
         if tag is not None:
-            version = dataplane.get_tag_version(table, so, GetTableTagVersionRequest(id=segments, tag=tag)).version
+            ref = dataplane.tag_reference(table.open_unchecked(so), tag)
+            _refuse_a_branch_describe_cannot_honour(ref.branch, named_by=str(ref))
+            version = ref.version
         # A VERSION THAT DOES NOT EXIST MUST NOT DESCRIBE THE ONE THAT DOES. `describe_table` answers off
         # the namespace manifest and does not resolve the pin, so `?version=9999` on a two-version table
         # returned 200 with byte-identical metadata (verified live 2026-08-31) — a caller probing whether

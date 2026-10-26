@@ -2946,9 +2946,10 @@ export interface paths {
          *     ``tag`` is resolved to its version HERE via the dataplane's tag store, from either door: the native
          *     backend at pylance 8.0.0 silently IGNORES a describe-request ``tag`` (probed 2026-07-10 — a nonexistent
          *     tag described the LATEST version with no error), so forwarding it would lie; the catalog resolves
-         *     (404 on an unknown tag, like ``/tags/version``) and describes at the resolved version instead.
+         *     (404 on an unknown tag, like ``/tags/version``) and describes at the resolved version instead. A tag
+         *     on a branch is refused as ``branch`` is: its version lives in that branch's history.
          *
-         *     ``branch`` (body-only) is REFUSED unless it names main — see the site below. ``identity`` and ``context``
+         *     ``branch``, in the body or the query, is REFUSED unless it names main — see the site below. ``identity`` and ``context``
          *     are ignored: the caller is the verified bearer token, not a field of the request body.
          *
          *     CREDENTIALS COME WITH THE ANSWER unless the caller sets ``vend_credentials`` false: unset, the spec lets
@@ -7578,7 +7579,8 @@ export interface components {
         /**
          * ModelSummary
          * @description One registry entry in the list view. Versions are ``None`` only for a registry directory that is
-         *     not (yet) a readable Lance dataset — surfaced, not hidden, so an interrupted first publish is visible.
+         *     not (yet) a readable Lance dataset — surfaced, not hidden, so an interrupted first publish is visible —
+         *     and ``blessed_version`` also when the blessed tag names a branch, which blesses no main version.
          */
         ModelSummary: {
             /** Blessed Version */

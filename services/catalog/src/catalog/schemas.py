@@ -649,7 +649,8 @@ class ModelDescribeResponse(BaseModel):
 
 class ModelSummary(BaseModel):
     """One registry entry in the list view. Versions are ``None`` only for a registry directory that is
-    not (yet) a readable Lance dataset — surfaced, not hidden, so an interrupted first publish is visible."""
+    not (yet) a readable Lance dataset — surfaced, not hidden, so an interrupted first publish is visible —
+    and ``blessed_version`` also when the blessed tag names a branch, which blesses no main version."""
 
     model_config = ConfigDict(protected_namespaces=())
     model: str

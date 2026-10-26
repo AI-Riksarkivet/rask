@@ -383,8 +383,9 @@ def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: Test
 def test_describe_at_tag_resolves_via_the_catalog(moto_client: TestClient) -> None:
     """The native dir backend at pylance 8.0.0 IGNORES a describe `tag` (probed: a nonexistent tag
     described the LATEST version, no error) — so the catalog must resolve tag→version itself. Pins:
-    tag describes the TAGGED version, unknown tag 404s (never silently the latest), tag+version 400s
-    (spec: mutually exclusive)."""
+    tag describes the TAGGED version, a tag naming a branch's version is refused with the code a `branch`
+    gets rather than described as main at that number, unknown tag 404s (never silently the latest),
+    tag+version 400s (spec: mutually exclusive)."""
     rows = pa.table({"id": pa.array([1], pa.int64())})
     assert _create(moto_client, "dtag$t", rows).status_code == 200
     assert (
@@ -396,12 +397,24 @@ def test_describe_at_tag_resolves_via_the_catalog(moto_client: TestClient) -> No
         == 200
     )  # → v2 on disk; v1 is history
     assert moto_client.post("/v1/table/dtag$t/tags/create", json={"tag": "stable", "version": 1}).status_code == 200
+    # work@2 holds [1, 3] where main@2 holds [1, 2]: branch histories are numbered independently
+    # (`lance_docs/lance/guide/tags_and_branches.md` § Branches), so `keep`'s number alone names main's snapshot.
+    assert moto_client.post("/v1/table/dtag$t/branches/create", json={"name": "work", "from_version": 1}).status_code == 200
+    on_work = _ipc(pa.table({"id": pa.array([3], pa.int64())}))
+    assert moto_client.post("/v1/table/dtag$t/insert?branch=work", content=on_work, headers=ARROW).status_code == 200
+    assert moto_client.post("/v1/table/dtag$t/tags/create", json={"tag": "keep", "version": 2, "branch": "work"}).status_code == 200
 
     tagged = moto_client.post("/v1/table/dtag$t/describe?tag=stable&load_detailed_metadata=true", json={})
     assert tagged.status_code == 200, tagged.text
     assert tagged.json()["version"] == 1  # the TAGGED version, not the latest
     latest = moto_client.post("/v1/table/dtag$t/describe?load_detailed_metadata=true", json={})
     assert latest.json()["version"] == 2  # untagged describe unchanged
+
+    # The response has no field to name a branch, so a described work@2 would read as main@2 to its caller.
+    on_branch = moto_client.post("/v1/table/dtag$t/describe?tag=keep&load_detailed_metadata=true", json={})
+    assert on_branch.status_code == 406, on_branch.text
+    assert on_branch.json()["code"] == 0
+    assert "tag 'keep' names version 2 of branch 'work'" in on_branch.json()["detail"]
 
     missing = moto_client.post("/v1/table/dtag$t/describe?tag=nope", json={})
     assert missing.status_code == 404, missing.text  # unknown tag is an ERROR, never silently latest

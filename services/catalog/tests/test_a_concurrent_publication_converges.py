@@ -39,7 +39,7 @@ def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch)
 
     calls: list[str] = []
 
-    def _tag_version(*_a: object, **_kw: object) -> int | None:
+    def _main_version_of_tag(*_a: object, **_kw: object) -> int | None:
         return None  # both racers see an absent tag
 
     def _create(*_a: object, **_kw: object) -> None:
@@ -49,7 +49,7 @@ def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch)
     def _update(*_a: object, **_kw: object) -> None:
         calls.append("update")
 
-    monkeypatch.setattr(publication, "_tag_version", _tag_version)
+    monkeypatch.setattr(publication, "_main_version_of_tag", _main_version_of_tag)
     monkeypatch.setattr(publication.dataplane, "create_tag", _create)
     monkeypatch.setattr(publication.dataplane, "update_tag", _update)
 
