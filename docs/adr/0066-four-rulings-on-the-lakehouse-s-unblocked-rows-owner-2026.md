@@ -78,11 +78,23 @@ previewed, never the default.
 ### Lance general compression is OPT-IN PER TABLE, and off by default ([[LH-034]])
 
 **Decision.** The catalog's create path sets no `lance-encoding:compression` scheme. It instead honours
-any `lance-encoding:*` key supplied as a create **property**, stamping it onto the schema's
-variable-width fields (`catalog.services.dataplane._apply_encoding`), so a workload that knows its own
-value sizes opts in per table. Fixed-width fields are deliberately left alone: `lance-encoding:bss`
-engages byte-stream-split on floats only where general compression is also applied, so a blanket stamp
-would change float encoding as a side effect of asking for string compression.
+the `lance-encoding:*` knobs `lance_docs/file_format.md` § Compression Configuration defines, supplied as
+create **properties**, so a workload that knows its own value sizes opts in per table
+(`catalog.core.encoding`).
+
+**Amended 2026-10-26 ([[LH-246]]).** This ruling first stamped every knob on the schema's top-level
+variable-width fields, on the premise that a fixed-width stamp would switch byte-stream-split on as a side
+effect of asking for string compression. Measured on pylance 13.0.0 that scoping left `rle-threshold`, `bss`
+and `packed` on no field they act on, and no value was judged: `compression=bogus` on an empty create
+committed and failed every later append, and `dict-size-ratio=7` panicked. The create door now refuses 400
+a knob Lance cannot honour, in the properties or on the payload's own field metadata at any depth: an
+unknown scheme or knob, a value out of range, a level beside any scheme but zstd, and `structural-encoding`
+outright. It stamps each knob on the fields it acts on, as measured on pylance 13.0.0 where the doc's type
+lists are narrower (general compression on every leaf, RLE and dictionary on every non-boolean leaf, BSS on
+32- and 64-bit numeric and temporal leaves, packing on structs, nested leaves included). `packed` takes
+`true`, `1`, `yes`, `on` or their negatives: the doc says any string, but Lance ignores every other value. A
+general scheme stamped on a float with `bss` unset leaves BSS to Lance's default, `auto`, which decides it by
+entropy and only under a general scheme (`file_format.md` § Byte Stream Split), as for any compressed column.
 
 **Rationale.** "Compression on = smaller" is false at this estate's value sizes, measured rather than
 assumed. Lance already applies FSST to variable-width data, bitpacking to ints and RLE to
@@ -115,4 +127,4 @@ by `rask-observability`. Writing that real corpus under each scheme made it **+1
 declare the payload's shape — so there is no value size the catalog is entitled to assume. A modality
 that lands 4 KiB JSON documents wants zstd; one that lands 8 B tokens is made worse by it. Pinning a
 single scheme in the create path would be the catalog deciding a workload's physical layout on evidence
-it does not have. Pinned by `services/catalog/tests/test_compression_is_opt_in_per_table.py`.
+it does not have. Pinned by `tests/integration/test_an_encoding_property_is_judged_and_lands_on_the_leaves_it_acts_on.py`.

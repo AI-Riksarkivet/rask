@@ -47,7 +47,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase, RaskFlag
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import provenance_guard
+from catalog.core import encoding, provenance_guard
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
@@ -169,6 +169,8 @@ async def create_table(
     # The payload's schema metadata becomes the table's, so a reserved key in it is a forged claim
     # whether or not the lineage stamp would later overwrite it ([[LH-208]]).
     provenance_guard.refuse_reserved_keys((table.schema.metadata or {}).keys(), door="create payload")
+    # The table keeps the payload's field metadata, so its encoding knobs meet the properties' rule ([[LH-246]]).
+    encoding.require_valid_field_encoding(table.schema)
     namespace = parse_identifier(id)[:-1]
     if (labels := provenance_guard.field_labels(table.schema)) and (parent := await resolver.object("namespace", namespace)) is not None:
         await fga_deps.require_classifier_to_set_labels(client, settings, token, obj=parent, label=fga.canonical_object_id(namespace), labels=labels)

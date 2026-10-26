@@ -64,7 +64,7 @@ from pydantic import BaseModel
 from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver
 from catalog.api.security import Caller
-from catalog.core import provenance_guard, run_context
+from catalog.core import encoding, provenance_guard, run_context
 from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
@@ -162,6 +162,9 @@ def parse_create_shape(
     # Create properties are stamped onto the Lance file's schema metadata, so they meet the same
     # reserved-namespace rule as every other metadata write door ([[LH-208]]).
     provenance_guard.refuse_reserved_keys(parsed_properties or {}, door="create properties")
+    # Every later write encodes under the knobs a create stamps, so a value Lance cannot honour is refused
+    # before the claim ([[LH-246]]).
+    encoding.require_valid_encoding(parsed_properties)
     return CreateShape(properties=parsed_properties, external_blob_base=external_blob_base)
 
 
