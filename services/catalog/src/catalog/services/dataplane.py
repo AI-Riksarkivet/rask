@@ -293,6 +293,21 @@ def branch_identifier(location: str, so: StorageOptions, table_id: list[str], br
 BRANCH_IDENTIFIER_KEY: Final = "branch_identifier"
 
 
+def tag_event_ref(location: str, so: StorageOptions, table_id: list[str], branch: str | None) -> dict[str, str]:
+    """The ref a tag pins on the table at ``location``, for a tag event's ``extra``: nothing for main, else the branch and
+    its identifier.
+
+    A tag names a version WITHIN its branch's history, and branch histories are numbered independently, so ``version``
+    alone names a different snapshot on main. The identifier says which incarnation of the branch: a recreated branch
+    restarts its numbering. Absent for main, as the lineage event's ``ref`` is.
+    """
+    ref = recorded_branch(branch)
+    if ref is None:
+        return {}
+    identifier = branch_identifier(location, so, table_id, ref)
+    return {"branch": ref, **({BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})}
+
+
 def identifier_of(entry: object) -> str | None:
     """The last uuid of a listed branch's ``branch_identifier`` chain: the one that names this incarnation."""
     chain = entry.get("branch_identifier") if isinstance(entry, dict) else None

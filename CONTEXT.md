@@ -121,6 +121,13 @@ _Avoid_: pending promotion, review
 
 **Erasure obligation**:
 A data subject's erasure the catalog has accepted for one table, open until the catalog has itself read that the
-subject is gone from everything the table's owner can rewrite. The owner's own job does the rewriting; the catalog
-never does it, never retries it, and shows the obligation overdue once its deadline passes.
+subject is gone from everything the table's owner can rewrite, and every table derived from that table holds an
+erasure obligation following it. The owner's own job does the rewriting; the catalog never does it, never retries it,
+and shows the obligation overdue once its deadline passes.
 _Avoid_: erasure job, erasure task, GDPR request
+
+**Derived table**:
+A table lineage's edge list records a run writing from another table, or from a table derived from it. An erasure
+obligation on the first is held until each derived table holds one of its own that follows it, recorded with a
+predicate of that table's own, since the first table's predicate cannot judge another table's columns.
+_Avoid_: downstream tier, child table

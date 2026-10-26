@@ -19,6 +19,7 @@ import logging
 from pydantic import BaseModel, ConfigDict
 
 from service_kit.lakehouse import location_claims
+from service_kit.lakehouse.base_refs import key_uri
 from service_kit.lakehouse.base_registry import BaseRecord, BaseRegistry, BaseRole, RecordedBase, forget_base_record, read_base_record
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.stored_objects import delete_objects, list_under
@@ -45,7 +46,7 @@ def recorded_directories(record: BaseRecord | None) -> list[RecordedBase]:
 
 def directory_uri(directory: RecordedBase) -> str:
     """Where ``directory`` is listed: its path in the store the record names."""
-    return f"/{directory.path}" if directory.store == "file" else f"{directory.store}://{directory.path}"
+    return key_uri(directory.store, directory.path)
 
 
 def claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, table: str) -> bool:

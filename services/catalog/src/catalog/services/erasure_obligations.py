@@ -10,6 +10,12 @@ the obligation, and nothing acts on it.
 changed only through an ETag-guarded replace (`service_kit.lakehouse.records.mutate_json`), so two verifications of one
 obligation cannot lose each other's write, and a released obligation never goes back to open.
 
+**AN OBLIGATION ON A DERIVED TABLE NAMES THE ONE IT FOLLOWS** ([[LH-332]], ADR 0178). A verification holds its obligation
+open until every table the edge list records as derived from its table holds an obligation following it, open or
+released, directly or through a chain (:func:`followed_tables`). The link is the obligation's own ``follows``, never an
+obligation recorded on the derived table later, because one recorded there for another subject would release this one with
+its subject forgotten in that table.
+
 **THE PREDICATE IS NEVER STORED, ONLY ITS DIGEST, AND THE DIGEST GOES AT RELEASE.** The predicate names the subject
 ([[LH-281]]). The record keeps the SHA-256 of its exact text so that a verification is held to the predicate the
 requester asked to erase: a job presenting a weaker one, say one nothing matches, would otherwise verify clean and
@@ -24,14 +30,14 @@ import hashlib
 import hmac
 import logging
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Sequence
 from datetime import datetime
 from typing import Any, Final, Literal
 
 from lance_namespace import InvalidInputError, InvalidTableStateError
 from pydantic import BaseModel, ConfigDict, Field
 
-from catalog.services.erasure import OPEN_OUTCOMES, ErasureReport, PinRelease, SurfaceResult
+from catalog.services.erasure import OPEN_OUTCOMES, ErasureReport, PinRelease, SurfaceResult, shown
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import list_records
 from service_kit.lakehouse.records import RecordMissingError, create_json, mutate_json, read_json
@@ -63,11 +69,20 @@ class ErasureObligationView(BaseModel):
     requested_by: str | None = Field(description="Who asked for the erasure: `user:` and the principal key their token proved.")
     requested_at: datetime = Field(description="When the obligation was recorded.")
     deadline: datetime = Field(description="When the erasure is due. Nothing extends it, and nothing acts on it when it passes.")
+    follows: str | None = Field(
+        description=(
+            "The erasure obligation, on a table this one was derived from, that this one follows: that obligation stays open until "
+            "every table derived from its table holds one following it, directly or through a chain."
+        )
+    )
     overdue: bool = Field(description="True while the obligation is open past its deadline.")
     state: ObligationState = Field(description="`open` until a verification settles it, then `released`.")
     verified_at: datetime | None = Field(description="When the last verification ran; null before the first.")
     open_surfaces: list[SurfaceResult] = Field(
-        description="Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites."
+        description=(
+            "Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites, "
+            "a derived table no obligation follows this one on. Derived tables the reader may not see are counted, never named."
+        )
     )
     released_at: datetime | None = Field(description="When a verification released it; null while open.")
     release: PinRelease | None = Field(description="The release of the refs that pinned a residual, scheduled when the obligation was released.")
@@ -95,14 +110,17 @@ class ErasureObligation(BaseModel):
     requested_by: str | None
     requested_at: datetime
     deadline: datetime
+    #: The obligation this one follows, on a table this one was derived from ([[LH-332]]).
+    follows: str | None = None
     state: ObligationState = "open"
     verified_at: datetime | None = None
     open_surfaces: list[SurfaceResult] = Field(default_factory=list)
     released_at: datetime | None = None
     release: PinRelease | None = None
 
-    def view(self, now: datetime, *, table: str) -> ErasureObligationView:
-        """The record as the doors show it at ``now``, naming its table ``table``."""
+    def view(self, now: datetime, *, table: str, hidden: Collection[str]) -> ErasureObligationView:
+        """The record as the doors show it at ``now``, naming its table ``table``, to a reader who may not see the derived
+        tables ``hidden`` keys (:func:`catalog.services.erasure.shown`)."""
         return ErasureObligationView(
             obligation_id=self.obligation_id,
             table=table,
@@ -112,10 +130,11 @@ class ErasureObligation(BaseModel):
             requested_by=self.requested_by,
             requested_at=self.requested_at,
             deadline=self.deadline,
+            follows=self.follows,
             overdue=self.state == "open" and now > self.deadline,
             state=self.state,
             verified_at=self.verified_at,
-            open_surfaces=self.open_surfaces,
+            open_surfaces=shown(self.open_surfaces, hidden=hidden),
             released_at=self.released_at,
             release=self.release,
         )
@@ -173,6 +192,42 @@ def list_obligations(control_root: str, storage_options: StorageOptions) -> list
         except ValueError as exc:
             log.error("erasure_obligation_unreadable", extra={"obligation": str(raw.get("obligation_id", ""))[:64], "error": str(exc)})
     return obligations
+
+
+def require_followable(control_root: str, storage_options: StorageOptions, obligation_id: str) -> None:
+    """Refuse an obligation following ``obligation_id`` unless that names an obligation the catalog recorded.
+
+    Raises:
+        InvalidInputError: ``obligation_id`` is not an obligation id, or no such obligation is recorded.
+    """
+    try:
+        read(control_root, storage_options, obligation_id)
+    except InvalidTableStateError as exc:
+        raise InvalidInputError(f"follows names no erasure obligation: {exc}") from exc
+
+
+def followed_tables(obligations: Sequence[ErasureObligation], source: str) -> set[str]:
+    """The uuids of the tables an obligation following ``source`` is recorded on, open or released: one naming it in
+    ``follows``, or naming an obligation that follows it, at any depth.
+
+    A chain counts because a table derived from ``source``'s through another is that other table's derived table too, and
+    its obligation names the one it was derived from directly. One whose chain reaches an obligation that is not listed
+    follows nothing this can confirm.
+    """
+    by_id = {obligation.obligation_id: obligation for obligation in obligations}
+    return {obligation.table_uuid for obligation in obligations if _reaches(obligation, source, by_id)}
+
+
+def _reaches(obligation: ErasureObligation, source: str, by_id: dict[str, ErasureObligation]) -> bool:
+    seen: set[str] = set()
+    step = obligation.follows
+    while step is not None and step not in seen:
+        if step == source:
+            return True
+        seen.add(step)
+        followed = by_id.get(step)
+        step = followed.follows if followed is not None else None
+    return False
 
 
 def require_verifiable(obligation: ErasureObligation, *, table_uuid: str, location: str, predicate: str) -> None:

@@ -97,7 +97,7 @@ async def create_table_tag(
         object_id=fga.table_object(table.resolved.require_uuid()),
         object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
-        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(_ref_of, table.location, so, segments, body.branch)},
+        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, body.branch)},
     )
     return response
 
@@ -136,7 +136,7 @@ async def update_table_tag(
         object_id=fga.table_object(table.resolved.require_uuid()),
         object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
-        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(_ref_of, table.location, so, segments, body.branch)},
+        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, body.branch)},
     )
     return response
 
@@ -174,20 +174,9 @@ async def delete_table_tag(
         object_id=fga.table_object(table.resolved.require_uuid()),
         object_name=fga.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
-        extra={"tag": body.tag, **await run_in_threadpool(_ref_of, table.location, so, segments, pinned.branch if pinned is not None else None)},
+        extra={
+            "tag": body.tag,
+            **await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, pinned.branch if pinned is not None else None),
+        },
     )
     return response
-
-
-def _ref_of(location: str, so: dict[str, str], segments: list[str], branch: str | None) -> dict[str, str]:
-    """The ref a tag pins on the table at ``location``, for a tag event's ``extra``: nothing for main, else the branch and its identifier.
-
-    A tag names a version WITHIN its branch's history, and branch histories are numbered independently,
-    so ``version`` alone names a different snapshot on main. The identifier says which incarnation of the
-    branch: a recreated branch restarts its numbering. Absent for main, as the lineage event's ``ref`` is.
-    """
-    ref = dataplane.recorded_branch(branch)
-    if ref is None:
-        return {}
-    identifier = dataplane.branch_identifier(location, so, segments, ref)
-    return {"branch": ref, **({dataplane.BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})}

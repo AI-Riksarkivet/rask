@@ -190,3 +190,4 @@ before they had a record here; each names its source document and the date of th
 | [0175](0175-a-data-base-is-its-tables-storage.md) | LH-286 | A data base is its tables' storage: reached under the catalog's own identity, and reclaimed by maintenance (2026-10-24) |
 | [0176](0176-a-tables-history-is-fenced-between-reclaims-and-ref-writes.md) | LH-308 | A table's history is fenced between reclaims and ref writes (2026-10-24) |
 | [0177](0177-the-commit-is-the-outbox.md) | LH-497 | The commit is the outbox: every version names its author, and a lost announcement is made from the version log (2026-10-25) |
+| [0178](0178-an-erasure-is-held-until-every-table-derived-from-it-has-an-obligation.md) | LH-332 | An erasure is held until every table derived from its table has an obligation of its own (2026-10-26) |

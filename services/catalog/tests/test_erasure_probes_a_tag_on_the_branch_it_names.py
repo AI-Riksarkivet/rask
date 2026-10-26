@@ -64,6 +64,7 @@ def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
             retention=retention,
             trusted=recorded,
             history=None,
+            derived=list,
         )
 
     return _erase

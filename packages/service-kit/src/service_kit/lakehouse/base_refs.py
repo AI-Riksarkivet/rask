@@ -400,6 +400,12 @@ def store_of(uri: str) -> str:
     return scheme.lower() if separator else "file"
 
 
+def key_uri(store: str, key: str) -> str:
+    """Where the store key ``key`` is listed in the store ``store`` names (:func:`store_of`): an absolute path in ``file``,
+    else under the store's scheme. A key is the decoded form a location claim and a base record keep (:func:`decoded_path`)."""
+    return f"/{key}" if store == "file" else f"{store}://{key}"
+
+
 def location_in_store(outer: str, inner: str) -> bool:
     """:func:`location_within`, and only when both spellings name the same store (:func:`store_of`)."""
     return store_of(outer) == store_of(inner) and location_within(outer, inner)

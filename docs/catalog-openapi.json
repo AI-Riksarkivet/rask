@@ -6315,6 +6315,34 @@
         "title": "DropTableResponse",
         "type": "object"
       },
+      "DroppedTag": {
+        "description": "A tag the verification deleted because the version it pinned held the subject, or could not be read.",
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The branch whose version it named; null for main, or when its record could not be read.",
+            "title": "Branch"
+          },
+          "tag": {
+            "description": "The tag's name.",
+            "title": "Tag",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tag",
+          "branch"
+        ],
+        "title": "DroppedTag",
+        "type": "object"
+      },
       "DueTable": {
         "description": "One table a compaction or an index optimize is due on, as the maintenance sweep measured it (ADR 0162).",
         "properties": {
@@ -6387,13 +6415,25 @@
             "title": "Deadline",
             "type": "string"
           },
+          "follows": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The erasure obligation, on a table this one was derived from, that this one follows: that obligation stays open until every table derived from its table holds one following it, directly or through a chain.",
+            "title": "Follows"
+          },
           "obligation_id": {
             "description": "The obligation's id, which the verification door names.",
             "title": "Obligation Id",
             "type": "string"
           },
           "open_surfaces": {
-            "description": "Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites.",
+            "description": "Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites, a derived table no obligation follows this one on. Derived tables the reader may not see are counted, never named.",
             "items": {
               "$ref": "#/components/schemas/SurfaceResult"
             },
@@ -6497,6 +6537,7 @@
           "requested_by",
           "requested_at",
           "deadline",
+          "follows",
           "overdue",
           "state",
           "verified_at",
@@ -6610,6 +6651,14 @@
             "title": "Table",
             "type": "string"
           },
+          "untagged": {
+            "description": "Every tag this verification deleted, with the branch whose version it pinned: each is announced as a `table_tag_deleted` control event.",
+            "items": {
+              "$ref": "#/components/schemas/DroppedTag"
+            },
+            "title": "Untagged",
+            "type": "array"
+          },
           "versions_reclaimed": {
             "default": 0,
             "description": "Versions reclaimed across every ref's cleanup. Zero is not a failure: history inside the retention window stays.",
@@ -6627,6 +6676,17 @@
       "ErasureRequest": {
         "description": "What to erase, and how much history the caller means to take with it ([[LH-073]], [[LH-493]]).",
         "properties": {
+          "follows": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follows"
+          },
           "predicate": {
             "title": "Predicate",
             "type": "string"
@@ -10997,12 +11057,12 @@
             "type": "string"
           },
           "outcome": {
-            "description": "What the verification found or did there: `clean`, `untagged`, `retained`, `reclaimed`, `failed` \u2014 a head surface the job still owes, or a step that did not go through \u2014 `skipped` \u2014 not attempted because it would destroy history while the subject stays \u2014 `held` \u2014 the subject's bytes stay in files nothing here rewrites or deletes, named in the detail \u2014 or `dangling` \u2014 a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.",
+            "description": "What the verification found or did there: `clean`, `untagged`, `retained`, `reclaimed`, `failed` \u2014 a head surface the job still owes, a step that did not go through, or a derived table no erasure obligation follows this one on \u2014 `skipped` \u2014 not attempted because it would destroy history while the subject stays \u2014 `held` \u2014 the subject's bytes stay in files nothing here rewrites or deletes, named in the detail, a deregistered derived table's among them \u2014 `dangling` \u2014 a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go \u2014 `followed` \u2014 an erasure obligation recorded on that derived table follows this one, directly or through a chain \u2014 or `gone` \u2014 no obligation can be recorded on that derived table and nothing of it stands: it was dropped with its bytes, or another table took its location.",
             "title": "Outcome",
             "type": "string"
           },
           "surface": {
-            "description": "A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, or the scheduling of what pins a residual: `release` (its record) and `notice` (who is told).",
+            "description": "A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, the scheduling of what pins a residual: `release` (its record) and `notice` (who is told), or a table the edge list records as derived from this one: `derived:<uuid>`, and `derived` for derived tables named nowhere here (the edge list could not be read, or the reader may not see them).",
             "title": "Surface",
             "type": "string"
           }
@@ -13190,7 +13250,7 @@
     },
     "/management/v1/erasures": {
       "get": {
-        "description": "The erasure obligations, open and released, listed to a caller holding ``can_maintain`` on each one's table, the\nearliest deadline first: what each still owes, whether it is overdue, and the release it scheduled. Each names its\ntable as the table is named now, which a rename since the request changed; one whose table is gone, its bytes with\nit, is listed to nobody.",
+        "description": "The erasure obligations, open and released, listed to a caller holding ``can_maintain`` on each one's table, the\nearliest deadline first: what each still owes, whether it is overdue, and the release it scheduled. Each names its\ntable as the table is named now, which a rename since the request changed; one whose table is gone, its bytes with\nit, is listed to nobody. A derived table the caller may not see is counted, never named, as the verification shows it.",
         "operationId": "list_erasure_obligations_management_v1_erasures_get",
         "parameters": [
           {
@@ -16742,7 +16802,7 @@
     },
     "/management/v1/table/{id}/erasure": {
       "post": {
-        "description": "Record an erasure obligation for every row matching the predicate on every ref; 202 with the obligation.\n\nOwner-gated (``can_drop``): the erasure it starts destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\nIt commits no data. The predicate is planned on main first, so one Lance refuses answers 400 and one the store\ncannot plan answers 503, with nothing recorded. Every ref is disarmed ([[LH-245]]): `version/create` refuses a\ncommit whose manifest config arms Lance's auto-cleanup, so the job's commits on an armed ref would all be refused.\nThe obligation keeps the predicate's digest, never the predicate, and is due the chart's\n`erasure.deadlineDays` from now; it is listed on `GET /management/v1/erasures` and released by\n`POST /management/v1/table/{id}/erasure/{obligation_id}/verify`.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire. Refusing would\nsuggest a per-ref erasure exists; honouring it would let a caller believe they had erased a subject when they had\nnarrowed the obligation to one ref.",
+        "description": "Record an erasure obligation for every row matching the predicate on every ref; 202 with the obligation.\n\nOwner-gated (``can_drop``): the erasure it starts destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\nIt commits no data. The predicate is planned on main first, so one Lance refuses answers 400 and one the store\ncannot plan answers 503, with nothing recorded. Every ref is disarmed ([[LH-245]]): `version/create` refuses a\ncommit whose manifest config arms Lance's auto-cleanup, so the job's commits on an armed ref would all be refused.\nThe obligation keeps the predicate's digest, never the predicate, and is due the chart's\n`erasure.deadlineDays` from now; it is listed on `GET /management/v1/erasures` and released by\n`POST /management/v1/table/{id}/erasure/{obligation_id}/verify`.\n\n``follows`` names the obligation, on a table this one was derived from, that this one follows ([[LH-332]]), which its\nverification holds open until every table derived from its table holds one; one naming no recorded obligation answers\n400 with nothing recorded.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire. Refusing would\nsuggest a per-ref erasure exists; honouring it would let a caller believe they had erased a subject when they had\nnarrowed the obligation to one ref.",
         "operationId": "erase_subject_management_v1_table__id__erasure_post",
         "parameters": [
           {
@@ -16836,7 +16896,7 @@
     },
     "/management/v1/table/{id}/erasure/{obligation_id}/verify": {
       "post": {
-        "description": "Verify what the bring-your-own job left, and release the obligation when nothing but a scheduled release remains.\n\nMaintainer-gated (``can_maintain``): the job that rewrites holds it, and so does the table's owner. The caller\nsupplies nothing the verification trusts but the predicate, and only once its digest matches the obligation's:\na predicate nothing matches would verify clean, so one other than the requester's is refused 400. An obligation\nof another table, or one already released, answers 409.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `report.settled` is True only when every ref's head\nis clean on bytes (no row that answers, none behind a deletion vector, no index segment the catalog cannot prove:\none committed since the obligation was recorded never proves itself, so the job drops its indexes and rebuilds\nthem after the release) and every residual left is held by the refs `report.pinned_by` names and nothing else. The obligation\nis then released and, when anything pins a residual, the release of it is scheduled (ADR 0138): the requester and\neach table owner receive a targeted `erasure_release_scheduled` event. Otherwise the obligation stays open and\n`obligation.open_surfaces` names every surface the job still owes or the catalog could not settle.\n\n`report.complete` is evidence about every retained version of every ref, and about nothing else: a data file no\nversion references that is younger than 7 days, an aborted write's residue, is neither reclaimed nor probed,\nbecause Lance keeps it as possibly an in-flight write's (`lance_docs/lance/guide/read_and_write.md` cleanup_old_versions\n`delete_unverified`).",
+        "description": "Verify what the bring-your-own job left, and release the obligation when nothing but a scheduled release remains.\n\nMaintainer-gated (``can_maintain``): the job that rewrites holds it, and so does the table's owner. The caller\nsupplies nothing the verification trusts but the predicate, and only once its digest matches the obligation's:\na predicate nothing matches would verify clean, so one other than the requester's is refused 400. An obligation\nof another table, or one already released, answers 409.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `report.settled` is True only when every ref's head\nis clean on bytes (no row that answers, none behind a deletion vector, no index segment the catalog cannot prove:\none committed since the obligation was recorded never proves itself, so the job drops its indexes and rebuilds\nthem after the release) and every residual left is held by the refs `report.pinned_by` names and nothing else. The obligation\nis then released and, when anything pins a residual, the release of it is scheduled (ADR 0138): the requester and\neach table owner receive a targeted `erasure_release_scheduled` event. Otherwise the obligation stays open and\n`obligation.open_surfaces` names every surface the job still owes or the catalog could not settle.\n\nEach tag it drops is announced as the tag door announces a deletion, a `table_tag_deleted` control event naming the\ntag, the ref it pinned and this obligation, and `report.untagged` lists them.\n\nEvery table lineage's edge list records as derived from this one is a `derived:<uuid>` surface, open until an\nobligation recorded on it follows this one ([[LH-332]]): this predicate cannot judge another table's columns. A derived\ntable the caller may not see (``can_get_metadata``) is left out of both the report and the obligation they are shown,\nand those of them holding it open are counted in one `derived` surface.\n\n`report.complete` is evidence about every retained version of every ref, and about nothing else: a data file no\nversion references that is younger than 7 days, an aborted write's residue, is neither reclaimed nor probed,\nbecause Lance keeps it as possibly an in-flight write's (`lance_docs/lance/guide/read_and_write.md` cleanup_old_versions\n`delete_unverified`).",
         "operationId": "verify_erasure_management_v1_table__id__erasure__obligation_id__verify_post",
         "parameters": [
           {

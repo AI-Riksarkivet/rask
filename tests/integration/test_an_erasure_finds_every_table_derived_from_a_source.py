@@ -15,6 +15,10 @@ the catalog minted for it, ``table:<uuid>`` ([[LH-524]]).
 
 A rename does not split what a table fed ([[LH-522]]): a governed table is recorded by the uuid the catalog minted for
 it, which the rename keeps, so the walk from its new name and the feed scoped to it reach what it fed under the old one.
+
+The catalog's erasure verification walks the same edge list ([[LH-332]], ADR 0178): it names every table derived from
+the erased one by uuid and holds the obligation open until each has an obligation of its own following it, since the
+source's predicate cannot judge another table's columns.
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 import httpx
@@ -34,6 +39,10 @@ from tests.integration.lineage_app import SUBJECT_HEADER, free_port, governed_li
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+
+#: A subject no table holds a row of (`_rows` writes ids 0 to 2), as the erasure job leaves every table it rewrote: the
+#: claims below are about what the derived tables hold the obligation to, not about any table's bytes.
+_GONE = "id = 99"
 
 
 def _rows() -> bytes:
@@ -108,6 +117,82 @@ def test_a_walk_from_a_source_reaches_every_table_built_from_it_and_nothing_an_o
         ],
         "complete": True,
     }
+
+
+def _obligation(catalog: httpx.Client, table: str, *, follows: str | None = None) -> str:
+    """Record an erasure obligation on ``table`` for the subject :data:`_GONE` names, following ``follows``; answer its id."""
+    recorded = catalog.post(f"/management/v1/table/{table}/erasure", json={"predicate": _GONE, **({"follows": follows} if follows else {})})
+    assert recorded.status_code == 202, recorded.text
+    return str(recorded.json()["obligation_id"])
+
+
+type _Gold = Callable[[httpx.Client, dict[str, str]], None]
+
+
+def _gold_holds_none(catalog: httpx.Client, obligations: dict[str, str]) -> None:
+    """Nobody has recorded an obligation on gold."""
+
+
+def _gold_follows_silvers(catalog: httpx.Client, obligations: dict[str, str]) -> None:
+    """Gold's obligation follows silver's, which follows bronze's: gold was derived from bronze through silver."""
+    _obligation(catalog, "acme-gold$catalog", follows=obligations["acme-silver$pages"])
+
+
+def _gold_is_dropped(catalog: httpx.Client, obligations: dict[str, str]) -> None:
+    """Gold is dropped with its bytes, so nothing of it is left to hold the subject or an obligation."""
+    dropped = catalog.post("/v1/table/acme-gold$catalog/drop", json={})
+    assert dropped.status_code == 200, dropped.text
+
+
+def _gold_is_deregistered(catalog: httpx.Client, obligations: dict[str, str]) -> None:
+    """Gold is deregistered: no obligation can be recorded on it any more, and its bytes stay where they were."""
+    deregistered = catalog.post("/v1/table/acme-gold$catalog/deregister", json={})
+    assert deregistered.status_code == 200, deregistered.text
+
+
+@pytest.mark.parametrize(
+    ("arrange", "gold", "state"),
+    [
+        pytest.param(_gold_holds_none, "failed", "open", id="a-derived-table-no-obligation-follows"),
+        pytest.param(_gold_follows_silvers, "followed", "released", id="an-obligation-following-through-a-chain"),
+        pytest.param(_gold_is_dropped, "gone", "released", id="a-derived-table-dropped-with-its-bytes"),
+        pytest.param(_gold_is_deregistered, "held", "open", id="a-derived-table-deregistered-with-its-bytes"),
+    ],
+)
+def test_an_erasure_is_held_until_every_table_derived_from_its_source_has_an_obligation_following_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arrange: _Gold, gold: str, state: str
+) -> None:
+    port = free_port()
+    announced = {"LANCE_LINEAGE_EMIT_ENABLED": "true", "LANCE_LINEAGE_TRANSPORT": "http", "LANCE_LINEAGE_URL": f"http://127.0.0.1:{port}/api/v1/lineage"}
+    with (
+        live_catalog(tmp_path / "catalog", monkeypatch, **announced) as catalog_url,
+        live_lineage(catalog_url, monkeypatch, port=port),
+        httpx.Client(base_url=catalog_url, timeout=60) as catalog,
+    ):
+        for namespace in ("acme-bronze", "acme-silver", "acme-gold"):
+            assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+        for table, headers in (
+            ("acme-bronze$events", _ARROW),
+            ("acme-silver$pages", _run("silver-1", "acme-bronze$events")),
+            ("acme-gold$catalog", _run("gold-1", "acme-silver$pages")),
+        ):
+            created = catalog.post(f"/v1/table/{table}/create", content=_rows(), headers=headers)
+            assert created.status_code == 200, created.text
+        uuid_of = {
+            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"] for name in ("acme-silver$pages", "acme-gold$catalog")
+        }
+        source = _obligation(catalog, "acme-bronze$events")
+        obligations = {"acme-silver$pages": _obligation(catalog, "acme-silver$pages", follows=source)}
+        arrange(catalog, obligations)
+
+        verified = catalog.post(f"/management/v1/table/acme-bronze$events/erasure/{source}/verify", json={"predicate": _GONE})
+
+    assert verified.status_code == 200, verified.text
+    report, obligation = verified.json()["report"], verified.json()["obligation"]
+    derived = [(surface["surface"], surface["outcome"]) for surface in report["surfaces"] if surface["surface"].startswith("derived")]
+    assert derived == [(f"derived:{uuid_of['acme-silver$pages']}", "followed"), (f"derived:{uuid_of['acme-gold$catalog']}", gold)]
+    still_open = [f"derived:{uuid_of['acme-gold$catalog']}"] if state == "open" else []
+    assert ([surface["surface"] for surface in obligation["open_surfaces"]], obligation["state"]) == (still_open, state)
 
 
 def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -725,6 +725,24 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `GET /management/v1/erasures` lists them to `can_maintain` holders with `overdue`; nothing acts on a missed deadline.
   The job rewrites a branch head through branch commits (ADR 0164) exactly as it rewrites main. Pinned by `services/catalog/tests/test_an_erasure_is_an_obligation_the_catalog_verifies.py` and the
   stock job in `test_a_stock_client_commits_every_operation_through_version_create.py`.
+- **An erasure is held until every table derived from its table holds an obligation following it** ([[LH-332]],
+  ADR 0178). The verification's step 5 (`catalog.services.erasure_derived`) locates `provenance$edges` through
+  DescribeTable on the provenance namespace, reads it in-process, and walks it to its last table with lineage's own walk
+  (`service_kit.lakehouse.derived_tables`, which `GET /tables/{name}/derived` shares). Each derived table is a
+  `derived:<uuid>` surface: `followed` while an obligation recorded on it names this one in `follows`, directly or through
+  a chain (`erasure_obligations.followed_tables`); `failed` while a claim is held for it (live or in the trash) and none
+  does, which keeps the obligation open, as an unreadable edge list or claim does; `held` once deregistered with a dataset
+  still at its released claim's location (`objectfs.is_lance_dataset_root`, at `base_refs.key_uri`), open until those
+  bytes are deleted; `gone` once dropped with its bytes, or named by no claim at all (`location_claims.every_claim`, read
+  whole). The source's predicate never judges a derived table. A reader is shown a derived table (its uuid, and its edge
+  name in the detail) only while holding `can_get_metadata` on it; the rest are counted in one `derived` surface, in the
+  report and the obligation views alike (`erasure.shown`). Each tag the verification drops is announced as an untargeted
+  `table_tag_deleted` control event naming the tag, the ref it pinned (`dataplane.tag_event_ref`, the tag door's own) and
+  the obligation, and listed in `report.untagged`. A `follows` naming no recorded obligation is refused 400. A catalog
+  keeping no provenance namespace names no derived table. Pinned by
+  `tests/integration/test_an_erasure_finds_every_table_derived_from_a_source.py` (live catalog and lineage) and
+  `services/catalog/tests/test_an_erasure_is_an_obligation_the_catalog_verifies.py` (the refusal, and the governed
+  reader matrix).
 - **An erasure's pins are released on a schedule, not on request** ([[LH-178]], ADR 0138). When a verification
   settles an obligation and `ErasureReport.pinned_by` is non-empty, the verification door writes a release record
   under the obligation's id (`catalog.services.erasure_release`, `_erasure_releases/<id>.json` on the control root)

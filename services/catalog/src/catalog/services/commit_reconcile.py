@@ -38,6 +38,7 @@ from catalog.services import dataplane, managed_versions, provenance_namespace
 from service_kit.governed import fga
 from service_kit.lakehouse import commit_records
 from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.lancekit.filters import sql_literal
 from service_kit.openlineage import LANCE_FACET, dataset_uuids
 
 
@@ -96,7 +97,7 @@ def announced_commits(feed_location: str, so: StorageOptions, table_uuid: str, *
     feed = lance.dataset(feed_location, storage_options=dict(so) if so else None)
     rows = feed.to_table(
         columns=["event"],
-        filter=f"array_has(table_uuids, {_literal(table_uuid)}) AND received_at >= TIMESTAMP {_literal(since.strftime('%Y-%m-%d %H:%M:%S'))}",
+        filter=f"array_has(table_uuids, {sql_literal(table_uuid)}) AND received_at >= TIMESTAMP {sql_literal(since.strftime('%Y-%m-%d %H:%M:%S'))}",
     )
     found: set[tuple[str, int]] = set()
     for text in rows.column("event").to_pylist():
@@ -134,10 +135,6 @@ def _commits_named(event: dict[str, Any], table_uuid: str) -> Iterator[tuple[str
         ref = named.get("ref") if isinstance(named.get("ref"), str) else None
         identifier = named.get("branchIdentifier") if isinstance(named.get("branchIdentifier"), str) else None
         yield commit_records.ref_key(ref, identifier), version
-
-
-def _literal(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
 
 
 def refs_of(location: str, so: StorageOptions, segments: list[str]) -> list[tuple[str | None, str | None]]:

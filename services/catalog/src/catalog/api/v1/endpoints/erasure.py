@@ -8,6 +8,12 @@ compute, each commit judged at `version/create` (ADR 0162). The verification doo
 releases the obligation only when every head is clean and nothing but a scheduled pin release keeps a residual
 (ADR 0138). The release waits on the catalog's own reading of storage, never on the job's word.
 
+**AND ON EVERY TABLE DERIVED FROM IT** ([[LH-332]], ADR 0178). The verification names each table lineage's edge list records
+as derived from the erased one, by uuid, and holds the obligation open until each holds an obligation following it,
+recorded on that table's own erasure door with ``follows`` and a predicate of its own
+(:mod:`catalog.services.erasure_derived`). A reader is shown the uuid only of a derived table they may see, as lineage's
+derived door shows them one; the rest are counted.
+
 **THE DOORS MOUNT UNDER `/management/v1`, not `/v1`** ([[LH-021]], ADR 0156): an erasure is rask's operation, not a Lance
 namespace one, and `tests/integration/test_spec_conformance.py` fails on a rask route on a spec prefix.
 
@@ -20,7 +26,7 @@ two differ in what they must REPORT: a delete answers with a version, an erasure
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta
 from functools import partial
 from typing import Annotated
@@ -29,21 +35,23 @@ from uuid import uuid4
 import lance
 from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
+from openfga_sdk import OpenFgaClient
 
-from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate
-from catalog.api.security import CurrentToken
+from catalog.api.security import Caller, CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings, fresh_lance_session
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import disarm_every_ref
 from catalog.schemas import ErasureRequest, ErasureVerifyRequest
-from catalog.services import erasure, erasure_obligations, erasure_release, table_claims
+from catalog.services import dataplane, erasure, erasure_derived, erasure_obligations, erasure_release, table_claims
 from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
 from catalog.services.erasure_obligations import ErasureObligation, ErasureObligations, ErasureObligationView, ErasureVerification
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
+from service_kit.lakehouse import derived_tables
 from service_kit.lakehouse.history_fences import TableHistory
 from service_kit.lakehouse.records import RecordExistsError
 
@@ -101,6 +109,10 @@ async def erase_subject(
     `erasure.deadlineDays` from now; it is listed on `GET /management/v1/erasures` and released by
     `POST /management/v1/table/{id}/erasure/{obligation_id}/verify`.
 
+    ``follows`` names the obligation, on a table this one was derived from, that this one follows ([[LH-332]]), which its
+    verification holds open until every table derived from its table holds one; one naming no recorded obligation answers
+    400 with nothing recorded.
+
     ``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire. Refusing would
     suggest a per-ref erasure exists; honouring it would let a caller believe they had erased a subject when they had
     narrowed the obligation to one ref.
@@ -108,6 +120,8 @@ async def erase_subject(
     segments = parse_identifier(id)
     canonical = fga.canonical_object_id(segments)
     table_uuid = table.resolved.require_uuid()
+    if body.follows is not None:
+        await run_in_threadpool(erasure_obligations.require_followable, settings.registry_root, settings.storage_options(), body.follows)
     dataset = await run_in_threadpool(table.open, so)
     await run_in_threadpool(erasure.plan, dataset, body.predicate)
     dataset = await run_in_threadpool(disarm_every_ref, dataset, segments)
@@ -124,6 +138,7 @@ async def erase_subject(
         requested_by=f"user:{token.subject}" if token is not None else None,
         requested_at=now,
         deadline=now + timedelta(days=settings.erasure_deadline_days),
+        follows=body.follows,
     )
     await run_in_threadpool(erasure_obligations.record, settings.registry_root, settings.storage_options(), obligation)
     audit(
@@ -134,7 +149,7 @@ async def erase_subject(
         obligation=obligation.obligation_id,
         deadline=obligation.deadline.isoformat(),
     )
-    return obligation.view(now, table=canonical)
+    return obligation.view(now, table=canonical, hidden=())
 
 
 @table_router.post("/{id}/erasure/{obligation_id}/verify")
@@ -147,6 +162,8 @@ async def verify_erasure(
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     owners: TableOwnersDep,
+    provenance: ProvenanceNamespaceDep,
+    client: FgaClientDep,
     clock: ClockDep,
     token: CurrentToken = None,
 ) -> ErasureVerification:
@@ -164,6 +181,14 @@ async def verify_erasure(
     is then released and, when anything pins a residual, the release of it is scheduled (ADR 0138): the requester and
     each table owner receive a targeted `erasure_release_scheduled` event. Otherwise the obligation stays open and
     `obligation.open_surfaces` names every surface the job still owes or the catalog could not settle.
+
+    Each tag it drops is announced as the tag door announces a deletion, a `table_tag_deleted` control event naming the
+    tag, the ref it pinned and this obligation, and `report.untagged` lists them.
+
+    Every table lineage's edge list records as derived from this one is a `derived:<uuid>` surface, open until an
+    obligation recorded on it follows this one ([[LH-332]]): this predicate cannot judge another table's columns. A derived
+    table the caller may not see (``can_get_metadata``) is left out of both the report and the obligation they are shown,
+    and those of them holding it open are counted in one `derived` surface.
 
     `report.complete` is evidence about every retained version of every ref, and about nothing else: a data file no
     version references that is younger than 7 days, an aborted write's residue, is neither reclaimed nor probed,
@@ -194,7 +219,22 @@ async def verify_erasure(
         retention=timedelta(days=obligation.retain_days),
         trusted=obligation.refs,
         history=TableHistory(control_root=control_root, storage_options=control_options, table_uuid=table_uuid),
+        derived=partial(erasure_derived.judge, settings, provenance, so, obligation=obligation, table=canonical),
     )
+    # Each tag the verification dropped is announced as the tag door announces a deletion ([[LH-332]]): untargeted, naming
+    # the tag and the ref it pinned, beside the obligation whose verification dropped it. AFTER the drops, so a tag still
+    # standing is never announced gone.
+    for dropped in report.untagged:
+        pinned = await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, dropped.branch)
+        await emit_control(
+            control,
+            action="table_tag_deleted",
+            object_type="table",
+            object_id=fga.table_object(table_uuid),
+            object_name=canonical,
+            actor=f"user:{token.subject}" if token is not None else None,
+            extra={"tag": dropped.tag, **pinned, "obligation_id": obligation_id},
+        )
     if report.settled and report.pinned_by:
         # The events name the table as it is named now, which a rename since the request changed; its owners are found on
         # its uuid, which no rename changes.
@@ -210,7 +250,9 @@ async def verify_erasure(
         state=standing.state,
         open_surfaces=[surface.surface for surface in standing.open_surfaces],
     )
-    return ErasureVerification(obligation=standing.view(clock(), table=canonical), report=report)
+    hidden = await _hidden_derived([*report.surfaces, *standing.open_surfaces], settings=settings, client=client, token=token)
+    shown = report.model_copy(update={"surfaces": erasure.shown(report.surfaces, hidden=hidden)})
+    return ErasureVerification(obligation=standing.view(clock(), table=canonical, hidden=hidden), report=shown)
 
 
 @obligations_router.get("")
@@ -225,7 +267,7 @@ async def list_erasure_obligations(
     """The erasure obligations, open and released, listed to a caller holding ``can_maintain`` on each one's table, the
     earliest deadline first: what each still owes, whether it is overdue, and the release it scheduled. Each names its
     table as the table is named now, which a rename since the request changed; one whose table is gone, its bytes with
-    it, is listed to nobody."""
+    it, is listed to nobody. A derived table the caller may not see is counted, never named, as the verification shows it."""
     obligations = await run_in_threadpool(erasure_obligations.list_obligations, settings.registry_root, settings.storage_options())
     entries = [table_claims.TableRecord(location=o.location, uuid=o.table_uuid) for o in obligations]
     names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
@@ -239,7 +281,20 @@ async def list_erasure_obligations(
     page, next_token = paginate(sorted(by_key), page_token, limit)
     now = clock()
     listed = [by_key[key] for key in page]
-    return ErasureObligations(obligations=[obligation.view(now, table=name) for name, obligation in listed], page_token=next_token)
+    hidden = await _hidden_derived([surface for _, obligation in listed for surface in obligation.open_surfaces], settings=settings, client=client, token=token)
+    return ErasureObligations(obligations=[obligation.view(now, table=name, hidden=hidden) for name, obligation in listed], page_token=next_token)
+
+
+async def _hidden_derived(surfaces: Sequence[SurfaceResult], *, settings: Settings, client: OpenFgaClient | None, token: Caller | None) -> frozenset[str]:
+    """The derived tables ``surfaces`` name that the caller may not see: none with authorization off, else every one the
+    caller holds no ``can_get_metadata`` on, the rung lineage's derived door asks to show one, and every one keyed by a name,
+    which no grant can reach."""
+    keys = {key for surface in surfaces if (key := erasure.derived_key(surface.surface)) is not None}
+    if not keys or not settings.fga_enabled or token is None or client is None:
+        return frozenset()
+    objects = sorted(fga.table_object(key) for key in keys if derived_tables.is_table_uuid(key))
+    allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=objects) if objects else {}
+    return frozenset(key for key in keys if not (derived_tables.is_table_uuid(key) and allowed.get(fga.table_object(key))))
 
 
 async def _schedule_release(

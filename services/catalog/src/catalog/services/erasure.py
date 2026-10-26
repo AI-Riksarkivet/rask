@@ -47,9 +47,18 @@ reclaim here has been checked against is not cleaned.
     1. every head         — judged on bytes (:func:`_judge_head`): rows that still answer, rows behind a deletion
        vector, index segments nothing proves free of the subject; each is a surface the job still owes
     2. every tag pinning the SUBJECT — remove it once every head is clean, or the version it holds can never be
-       reclaimed; a tag over a version the subject never appeared in is a reproducibility pointer and is KEPT
+       reclaimed; a tag over a version the subject never appeared in is a reproducibility pointer and is KEPT. Each one
+       removed is listed in `untagged`, which the door announces on the control lane ([[LH-332]])
     3. reclaim every clean ref — now that nothing the erasure controls pins it
     4. verify every ref   — the evidence `complete` and `settled` are computed from
+    5. every table derived from this one — named by the edge list, each holding the obligation until an obligation
+       of its own follows this one (:mod:`catalog.services.erasure_derived`, [[LH-332]])
+
+**A DERIVED TABLE IS NAMED, NEVER JUDGED** (owner, 2026-10-20, ADR 0178). A run that read this table wrote its rows into
+another, under columns of that table's own, or only as the `source_rowid` of this one's stable row ids
+(`lance_docs/lance/format/table/row_id_lineage.md` "Stable Row ID"), so this predicate proves nothing about it. Each table
+the edge list records as derived from this one is a `derived:<uuid>` surface, open until whoever may erase that table
+records an obligation following this one with a predicate of its own.
 
 **THE VERIFICATION READS BYTES, NOT VISIBILITY.** Two surfaces hold the subject while a filter reads every
 version clean (both measured on pylance 12.0.0). A data file holding a row behind a deletion vector: every
@@ -123,6 +132,14 @@ log = logging.getLogger(__name__)
 #: rewrites. An obligation names every surface with one of them.
 OPEN_OUTCOMES: Final = frozenset({"failed", "skipped", "held"})
 
+#: The surface of the tables derived from this one that a report does not name one by one: the edge list could not be
+#: read, or the reader may not see them (:func:`shown`).
+DERIVED: Final = "derived"
+
+#: The prefix of one derived table's surface, ``derived:<key>``, its key the edge list's: a governed table's uuid, or the
+#: name an outside producer's event keyed it by.
+_DERIVED_PREFIX: Final = f"{DERIVED}:"
+
 
 class SurfaceResult(BaseModel):
     """What happened on one surface. NAMED, never counted — an erasure that half-succeeded has to say
@@ -133,16 +150,20 @@ class SurfaceResult(BaseModel):
             "A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a "
             "deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, "
             "`dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, "
-            "`external_base:<name>`, `mem_wal`, `bases:<ref>`, or the scheduling of what pins a residual: `release` (its record) and "
-            "`notice` (who is told)."
+            "`external_base:<name>`, `mem_wal`, `bases:<ref>`, the scheduling of what pins a residual: `release` (its record) and "
+            "`notice` (who is told), or a table the edge list records as derived from this one: `derived:<uuid>`, and `derived` for "
+            "derived tables named nowhere here (the edge list could not be read, or the reader may not see them)."
         )
     )
     outcome: str = Field(
         description=(
             "What the verification found or did there: `clean`, `untagged`, `retained`, `reclaimed`, `failed` — a head surface the job "
-            "still owes, or a step that did not go through — `skipped` — not attempted because it would destroy history while the subject "
-            "stays — `held` — the subject's bytes stay in files nothing here rewrites or deletes, named in the detail — or `dangling` — a "
-            "listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go."
+            "still owes, a step that did not go through, or a derived table no erasure obligation follows this one on — `skipped` — not "
+            "attempted because it would destroy history while the subject stays — `held` — the subject's bytes stay in files nothing here "
+            "rewrites or deletes, named in the detail, a deregistered derived table's among them — `dangling` — a listed version that fails "
+            "to read and is proved not to hold the subject; it stays listed until what its detail names lets go — `followed` — an erasure "
+            "obligation recorded on that derived table follows this one, directly or through a chain — or `gone` — no obligation can be "
+            "recorded on that derived table and nothing of it stands: it was dropped with its bytes, or another table took its location."
         )
     )
     detail: str = Field(default="", description="Why, in words: the error, what the job still owes, what a residual needs.")
@@ -160,6 +181,13 @@ class Pin(BaseModel):
             "keeps one that is through a branch version still on its files, or must go first because Lance refuses to delete a later entry."
         )
     )
+
+
+class DroppedTag(BaseModel):
+    """A tag the verification deleted because the version it pinned held the subject, or could not be read."""
+
+    tag: str = Field(description="The tag's name.")
+    branch: str | None = Field(description="The branch whose version it named; null for main, or when its record could not be read.")
 
 
 class PinRelease(BaseModel):
@@ -187,6 +215,10 @@ class ErasureReport(BaseModel):
         default=0, description="Versions reclaimed across every ref's cleanup. Zero is not a failure: history inside the retention window stays."
     )
     bytes_reclaimed: int = Field(default=0, description="Bytes freed across every ref's cleanup.")
+    untagged: list[DroppedTag] = Field(
+        default_factory=list,
+        description="Every tag this verification deleted, with the branch whose version it pinned: each is announced as a `table_tag_deleted` control event.",
+    )
     #: Unambiguous: Lance reserves `main` and admits no `@` in a branch name (`lance_docs/lance/format/table/branch_tag.md`
     #: "Branch Name").
     residual_versions: list[str] = Field(
@@ -287,6 +319,37 @@ def ref_heads(dataset: _Dataset) -> dict[str, int]:
     return heads
 
 
+def derived_surface(key: str) -> str:
+    """The surface of the derived table the edge list keys ``key``."""
+    return f"{_DERIVED_PREFIX}{key}"
+
+
+def derived_key(surface: str) -> str | None:
+    """The edge-list key ``surface`` names a derived table by, or ``None`` when it names none."""
+    return surface.removeprefix(_DERIVED_PREFIX) if surface.startswith(_DERIVED_PREFIX) else None
+
+
+def shown(surfaces: Sequence[SurfaceResult], *, hidden: Collection[str]) -> list[SurfaceResult]:
+    """``surfaces`` as a reader sees them who may not see the derived tables ``hidden`` keys ([[LH-332]]).
+
+    Each such table's surface is left out, its uuid with it, and those holding the obligation open are counted in one
+    ``derived`` surface where the first stood: as lineage's derived door answers a table its caller may not see, the reader
+    learns that tables they may not see keep the obligation open and nothing about which tables they are.
+    """
+    owed = sum(1 for surface in surfaces if derived_key(surface.surface) in hidden and surface.outcome in OPEN_OUTCOMES)
+    detail = f"tables derived from this one that you may not see, and that no erasure obligation follows this one on: {owed}"
+    kept: list[SurfaceResult] = []
+    counted = False
+    for surface in surfaces:
+        key = derived_key(surface.surface)
+        if key is None or key not in hidden:
+            kept.append(surface)
+        elif surface.outcome in OPEN_OUTCOMES and not counted:
+            kept.append(SurfaceResult(surface=DERIVED, outcome="failed", detail=detail))
+            counted = True
+    return kept
+
+
 def verify(
     dataset: _Dataset,
     *,
@@ -298,9 +361,10 @@ def verify(
     retention: timedelta,
     trusted: Mapping[str, int],
     history: TableHistory | None,
+    derived: Callable[[], Sequence[SurfaceResult]],
 ) -> ErasureReport:
-    """Judge every ref's head on bytes, drop the tags pinning the subject, reclaim each clean ref, and verify every
-    retained version of every ref.
+    """Judge every ref's head on bytes, drop the tags pinning the subject, reclaim each clean ref, verify every retained
+    version of every ref, and name every table derived from this one.
 
     ``dataset`` is a handle on main; every branch is reached through it. ``storage_options`` binds the `_mem_wal/`
     listing to the store the table lives in, which is why it has no default. ``protected`` is the #114 pre-pass's map
@@ -315,6 +379,8 @@ def verify(
     whose `CreateIndex` commits are read as provenance, the heads :func:`ref_heads` read when the obligation was
     recorded; a ref it does not name, a branch cut since, offers none. It has no default for the same reason. ``history``
     is where the table's history fence is kept, which the reclaim holds ([[LH-308]]); ``None`` holds none, and it has no
+    default for the same reason. ``derived`` judges the tables derived from this one, a surface each
+    (:func:`catalog.services.erasure_derived.judge`); one that raises is a failed ``derived`` surface, and it has no
     default for the same reason.
 
     EVERY SURFACE IS ATTEMPTED even when one fails, short of what would destroy history for nothing (the module's
@@ -371,6 +437,15 @@ def verify(
     else:
         pins_alone = _verify(report, _History(cold, cutoffs, trusted, rebuilt=frozenset(proved)), first_listing=listed, predicate=predicate)
 
+    # 5. EVERY TABLE DERIVED FROM IT, each holding the obligation until an obligation of its own follows this one, since
+    #    this predicate cannot judge another table's columns. A judgement that raised keeps the obligation open: a derived
+    #    table nobody could name is not known to be followed.
+    try:
+        report.surfaces.extend(derived())
+    except Exception as exc:  # noqa: BLE001 — every surface above keeps its report
+        log.warning("erasure_derived_unjudged", extra={"table": table, "error": str(exc)})
+        report.surfaces.append(SurfaceResult(surface=DERIVED, outcome="failed", detail=f"the tables derived from it could not be judged: {exc}"))
+
     report.complete = not [surface for surface in report.surfaces if surface.outcome in OPEN_OUTCOMES]
     report.settled = pins_alone and not [surface for surface in report.surfaces if surface.outcome in OPEN_OUTCOMES and surface.surface != "verify"]
     return report
@@ -420,6 +495,7 @@ def _drop_subject_tags(report: ErasureReport, dataset: _Dataset, *, every_head_c
         try:
             dataset.tags.delete(name)
             report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="untagged"))
+            report.untagged.append(DroppedTag(tag=name, branch=reference[0] if reference is not None else None))
         except Exception as exc:  # noqa: BLE001
             log.warning("erasure_tag_failed", extra={"table": report.table, "tag": name, "error": str(exc)})
             report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="failed", detail=str(exc)))

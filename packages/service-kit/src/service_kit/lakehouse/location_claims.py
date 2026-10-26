@@ -171,6 +171,20 @@ def held_claims(store: ClaimStore) -> list[LocationClaim]:
     return held
 
 
+def every_claim(store: ClaimStore) -> list[LocationClaim]:
+    """Every claim record on the control root, held and released, read whole.
+
+    For a caller deciding from the listing that a table is gone: a record it could not read may be that table's claim,
+    so one that cannot be read, or is no claim, raises rather than being left out as :func:`held_claims` leaves it.
+
+    Raises:
+        OSError: A record could not be read.
+        ValueError: A record is not a JSON object, or not a claim.
+    """
+    records = record_store.list_records(store.control_root, store.storage_options, _PREFIX, event="location_claim", strict=True)
+    return [LocationClaim.model_validate(record) for record in records]
+
+
 def read(store: ClaimStore, location: str) -> ClaimRead | None:
     """The record on ``location`` with its ETag, released or held, or ``None`` when no record exists.
 

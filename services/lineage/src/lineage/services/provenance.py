@@ -41,7 +41,6 @@ import hashlib
 import json
 import logging
 import threading
-import uuid
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future
@@ -57,9 +56,12 @@ from lineage.core.config import LineageSettings
 from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload
 from lineage.schemas import DerivedTable, EventRecord
 from service_kit.governed.machine_identity import read_identity_token
+from service_kit.lakehouse import derived_tables
+from service_kit.lakehouse.derived_tables import EDGES
 from service_kit.lakehouse.naming import CATALOG_DELIMITER, is_external_source_namespace
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from service_kit.lancekit.catalog_client import catalog_api_client, request_headers
+from service_kit.lancekit.filters import in_lists, sql_literal
 from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from service_kit.lancekit.writer import RestCatalogWriteTransport
 from service_kit.openlineage import dataset_uuids
@@ -79,7 +81,6 @@ _PRIMARY_KEY: Final = {"lance-schema:unenforced-primary-key": "true"}
 TERMINAL_STATES: Final = frozenset({"COMPLETE", "FAIL", "ABORT"})
 
 FEED: Final = "events"
-EDGES: Final = "edges"
 REFUSALS: Final = "refusals"
 
 FEED_SCHEMA: Final = pa.schema(
@@ -169,8 +170,6 @@ _TABLES: Final = ((FEED, FEED_SCHEMA), (EDGES, EDGE_SCHEMA), (REFUSALS, REFUSAL_
 #: How many derivation hops `derived` follows. A medallion is three tiers, so a longer chain is a cycle the walk's
 #: visited set already stops or an estate whose answer says it stopped short (`complete`).
 MAX_DERIVED_DEPTH: Final = 20
-#: Input names per edge query, so a wide frontier is read in bounded filters.
-_IN_LIST: Final = 500
 #: The most bytes of rows one group commit takes, a sixteenth of the catalog's default body cap (`LANCE_MAX_BODY_BYTES`,
 #: 256 MiB), and always at least one event. A catalog configured below it refuses a larger write, which then lands in
 #: parts (`ProvenanceStore._land`).
@@ -319,11 +318,6 @@ def feed_row(event: RunEvent | DatasetEvent, *, received_at: datetime) -> dict[s
         "event": event.model_dump_json(by_alias=True),
         "received_at": received_at,
     }
-
-
-def sql_literal(value: str) -> str:
-    """``value`` as a SQL string literal for a Lance filter: quoted, with every quote doubled."""
-    return "'" + value.replace("'", "''") + "'"
 
 
 class _Recording(BaseModel):
@@ -609,11 +603,9 @@ class ProvenanceStore:
     def _authors_of(self, runs: set[str]) -> dict[str, str | None]:
         """The author the table binds each of ``runs`` to, for those of them it binds."""
         reader = self._reader(RUNS)
-        listed_runs = sorted(runs)
         authors: dict[str, str | None] = {}
-        for start in range(0, len(listed_runs), _IN_LIST):
-            listed = ", ".join(sql_literal(run) for run in listed_runs[start : start + _IN_LIST])
-            bound = reader.to_table(columns=["run_id", "author"], filter=f"run_id IN ({listed})")
+        for where in in_lists("run_id", runs):
+            bound = reader.to_table(columns=["run_id", "author"], filter=where)
             authors.update(zip(bound.column("run_id").to_pylist(), bound.column("author").to_pylist(), strict=True))
         return authors
 
@@ -715,21 +707,14 @@ class ProvenanceStore:
     def _derived(self, sources: set[str], max_depth: int) -> tuple[list[DerivedTable], bool]:
         reader = self._reader(EDGES)
         version = reader.table_version()
-        reached: dict[str, int] = {}
-        names: dict[str, tuple[datetime, str]] = {}
-        frontier = set(sources)
-        for depth in range(1, max_depth + 1):
-            frontier = _outputs_of(reader, frontier, version, names) - reached.keys() - sources
-            if not frontier:
-                break
-            reached.update(dict.fromkeys(frontier, depth))
-        else:
-            frontier = _outputs_of(reader, frontier, version, names) - reached.keys() - sources
+        walked = derived_tables.walk(
+            lambda where: reader.to_table(columns=list(derived_tables.COLUMNS), filter=where, version=version).to_pylist(), sources, max_depth=max_depth
+        )
         found = [
-            DerivedTable(table=names[key][1] if key in names else key, uuid=key if is_minted_uuid(key) else None, depth=depth)
-            for key, depth in sorted(reached.items(), key=lambda item: (item[1], names[item[0]][1] if item[0] in names else item[0]))
+            DerivedTable(table=walked.names.get(key, key), uuid=key if derived_tables.is_table_uuid(key) else None, depth=depth)
+            for key, depth in sorted(walked.depths.items(), key=lambda item: (item[1], walked.names.get(item[0], item[0])))
         ]
-        return found, not frontier
+        return found, walked.complete
 
     async def cursor(self, follower: str) -> int:
         """The seq of the last feed row ``follower`` handled; 0 before its first."""
@@ -756,32 +741,6 @@ class ProvenanceStore:
 
 def _cursor_row(follower: str, seq: int) -> pa.Table:
     return pa.Table.from_pylist([{"follower": follower, "seq": seq, "updated_at": datetime.now(UTC)}], schema=CURSOR_SCHEMA)
-
-
-def _outputs_of(reader: CatalogTableReader, inputs: set[str], version: int, names: dict[str, tuple[datetime, str]]) -> set[str]:
-    """The keys of the tables the edge list records a run writing from any of ``inputs``, at ``version`` of it.
-
-    Records in ``names`` the newest name each was written under.
-    """
-    keys = sorted(inputs)
-    found: set[str] = set()
-    for start in range(0, len(keys), _IN_LIST):
-        listed = ", ".join(sql_literal(key) for key in keys[start : start + _IN_LIST])
-        rows = reader.to_table(columns=["out_table", "out_name", "received_at"], filter=f"in_table IN ({listed})", version=version).to_pylist()
-        for row in rows:
-            found.add(row["out_table"])
-            named = (row["received_at"], row["out_name"] or row["out_table"])
-            if row["out_table"] not in names or named[0] >= names[row["out_table"]][0]:
-                names[row["out_table"]] = named
-    return found
-
-
-def is_minted_uuid(key: str) -> bool:
-    """Whether an edge key is a governed table's uuid rather than a name (:func:`edge_identity`)."""
-    try:
-        return str(uuid.UUID(key)) == key.lower()
-    except ValueError:
-        return False
 
 
 def _row_ids(table: pa.Table) -> list[int]:

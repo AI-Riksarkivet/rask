@@ -390,7 +390,7 @@ export interface paths {
          * @description The erasure obligations, open and released, listed to a caller holding ``can_maintain`` on each one's table, the
          *     earliest deadline first: what each still owes, whether it is overdue, and the release it scheduled. Each names its
          *     table as the table is named now, which a rename since the request changed; one whose table is gone, its bytes with
-         *     it, is listed to nobody.
+         *     it, is listed to nobody. A derived table the caller may not see is counted, never named, as the verification shows it.
          */
         get: operations["list_erasure_obligations_management_v1_erasures_get"];
         put?: never;
@@ -1479,6 +1479,10 @@ export interface paths {
          *     `erasure.deadlineDays` from now; it is listed on `GET /management/v1/erasures` and released by
          *     `POST /management/v1/table/{id}/erasure/{obligation_id}/verify`.
          *
+         *     ``follows`` names the obligation, on a table this one was derived from, that this one follows ([[LH-332]]), which its
+         *     verification holds open until every table derived from its table holds one; one naming no recorded obligation answers
+         *     400 with nothing recorded.
+         *
          *     ``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire. Refusing would
          *     suggest a per-ref erasure exists; honouring it would let a caller believe they had erased a subject when they had
          *     narrowed the obligation to one ref.
@@ -1515,6 +1519,14 @@ export interface paths {
          *     is then released and, when anything pins a residual, the release of it is scheduled (ADR 0138): the requester and
          *     each table owner receive a targeted `erasure_release_scheduled` event. Otherwise the obligation stays open and
          *     `obligation.open_surfaces` names every surface the job still owes or the catalog could not settle.
+         *
+         *     Each tag it drops is announced as the tag door announces a deletion, a `table_tag_deleted` control event naming the
+         *     tag, the ref it pinned and this obligation, and `report.untagged` lists them.
+         *
+         *     Every table lineage's edge list records as derived from this one is a `derived:<uuid>` surface, open until an
+         *     obligation recorded on it follows this one ([[LH-332]]): this predicate cannot judge another table's columns. A derived
+         *     table the caller may not see (``can_get_metadata``) is left out of both the report and the obligation they are shown,
+         *     and those of them holding it open are counted in one `derived` surface.
          *
          *     `report.complete` is evidence about every retained version of every ref, and about nothing else: a data file no
          *     version references that is younger than 7 days, an aborted write's residue, is neither reclaimed nor probed,
@@ -6419,6 +6431,22 @@ export interface components {
             transaction_id?: string | null;
         };
         /**
+         * DroppedTag
+         * @description A tag the verification deleted because the version it pinned held the subject, or could not be read.
+         */
+        DroppedTag: {
+            /**
+             * Branch
+             * @description The branch whose version it named; null for main, or when its record could not be read.
+             */
+            branch: string | null;
+            /**
+             * Tag
+             * @description The tag's name.
+             */
+            tag: string;
+        };
+        /**
          * DueTable
          * @description One table a compaction or an index optimize is due on, as the maintenance sweep measured it (ADR 0162).
          */
@@ -6457,13 +6485,18 @@ export interface components {
              */
             deadline: string;
             /**
+             * Follows
+             * @description The erasure obligation, on a table this one was derived from, that this one follows: that obligation stays open until every table derived from its table holds one following it, directly or through a chain.
+             */
+            follows: string | null;
+            /**
              * Obligation Id
              * @description The obligation's id, which the verification door names.
              */
             obligation_id: string;
             /**
              * Open Surfaces
-             * @description Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites.
+             * @description Every surface the last verification left open: what the job still owes, a step that did not go through, bytes nothing rewrites, a derived table no obligation follows this one on. Derived tables the reader may not see are counted, never named.
              */
             open_surfaces: components["schemas"]["SurfaceResult"][];
             /**
@@ -6588,6 +6621,11 @@ export interface components {
              */
             table: string;
             /**
+             * Untagged
+             * @description Every tag this verification deleted, with the branch whose version it pinned: each is announced as a `table_tag_deleted` control event.
+             */
+            untagged?: components["schemas"]["DroppedTag"][];
+            /**
              * Versions Reclaimed
              * @description Versions reclaimed across every ref's cleanup. Zero is not a failure: history inside the retention window stays.
              * @default 0
@@ -6599,6 +6637,8 @@ export interface components {
          * @description What to erase, and how much history the caller means to take with it ([[LH-073]], [[LH-493]]).
          */
         ErasureRequest: {
+            /** Follows */
+            follows?: string | null;
             /** Predicate */
             predicate: string;
             /**
@@ -8527,12 +8567,12 @@ export interface components {
             detail?: string;
             /**
              * Outcome
-             * @description What the verification found or did there: `clean`, `untagged`, `retained`, `reclaimed`, `failed` — a head surface the job still owes, or a step that did not go through — `skipped` — not attempted because it would destroy history while the subject stays — `held` — the subject's bytes stay in files nothing here rewrites or deletes, named in the detail — or `dangling` — a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.
+             * @description What the verification found or did there: `clean`, `untagged`, `retained`, `reclaimed`, `failed` — a head surface the job still owes, a step that did not go through, or a derived table no erasure obligation follows this one on — `skipped` — not attempted because it would destroy history while the subject stays — `held` — the subject's bytes stay in files nothing here rewrites or deletes, named in the detail, a deregistered derived table's among them — `dangling` — a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go — `followed` — an erasure obligation recorded on that derived table follows this one, directly or through a chain — or `gone` — no obligation can be recorded on that derived table and nothing of it stands: it was dropped with its bytes, or another table took its location.
              */
             outcome: string;
             /**
              * Surface
-             * @description A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, or the scheduling of what pins a residual: `release` (its record) and `notice` (who is told).
+             * @description A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, the scheduling of what pins a residual: `release` (its record) and `notice` (who is told), or a table the edge list records as derived from this one: `derived:<uuid>`, and `derived` for derived tables named nowhere here (the edge list could not be read, or the reader may not see them).
              */
             surface: string;
         };

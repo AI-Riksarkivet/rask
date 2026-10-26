@@ -100,6 +100,7 @@ def _verify(
         retention=retention,
         trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
         history=None,
+        derived=list,
     )
 
 

@@ -65,6 +65,7 @@ def test_a_table_mixing_file_versions_is_not_reclaimed_on_any_ref(tmp_path: Path
         retention=timedelta(0),
         trusted=recorded,
         history=None,
+        derived=list,
     )
 
     history = {s.surface: (s.outcome, s.detail) for s in report.surfaces if s.surface.startswith("history:")}
@@ -100,6 +101,7 @@ def test_no_ref_is_reclaimed_while_a_ref_write_holds_the_tables_history(tmp_path
         retention=timedelta(0),
         trusted=recorded,
         history=history,
+        derived=list,
     )
 
     outcomes = {s.surface: s.outcome for s in report.surfaces if s.surface.startswith("history:")}

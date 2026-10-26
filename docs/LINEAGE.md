@@ -100,8 +100,10 @@ announced goes through the catalog's data-plane doors, whose emitter announces i
 edge list transitively from that uuid, and from the name for an outside producer's event that carried none (a table
 derived from any version of it, under any name it has had, counts), at most `depth` hops (default and cap 20). It is gated on `can_get_metadata` on the source;
 a derived table the caller cannot see is dropped from the answer while the walk still passes through it, and
-`complete` is `false` when the walk stopped at the depth cap with tables left to follow. This is how an erasure finds
-every table built from a subject's source.
+`complete` is `false` when the walk stopped at the depth cap with tables left to follow. This is how an erasure's
+requester finds every table built from a subject's source. The catalog's erasure verification walks the same edge list
+in-process with the same walk (`service_kit.lakehouse.derived_tables`), to its last table, and holds the obligation open
+until each derived table holds an obligation following it (ADR 0178).
 
 **Authz.** Two layers, the same the catalog applies to `describe table`: OIDC (a valid bearer verified against Dex,
 else 401) and OpenFGA (`can_get_metadata` on `table:<uuid>`, else 403; feed rows naming a dataset the caller cannot see

@@ -267,6 +267,18 @@ async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str
 NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]
 
 
+async def get_provenance_namespace(request: Request, settings: SettingsDep) -> LanceNamespace | None:
+    """The connection holding the catalog's provenance namespace, lineage's feed and edge list (ADR 0158): the estate's own,
+    where the catalog creates the namespace at boot whatever warehouse the request's table is bound to. ``None`` when the
+    catalog keeps none, the code default."""
+    if not settings.provenance_namespace:
+        return None
+    return await estate_namespace(request, settings)
+
+
+ProvenanceNamespaceDep = Annotated[LanceNamespace | None, Depends(get_provenance_namespace)]
+
+
 class Resolver:
     """The objects a request's names are governed as, each name resolved once per request (ADR 0173 §7, [[LH-524]]).
 

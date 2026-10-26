@@ -447,6 +447,10 @@ class ErasureRequest(BaseModel):
     #: erasure that leaves the subject readable at an old version has not erased them, so a caller preserving
     #: unrelated history opts INTO it rather than having to remember to opt out.
     retain_days: Annotated[int, Field(ge=0, le=36500)] = 0
+    #: The erasure obligation, on a table this one was derived from, that this one follows ([[LH-332]]): that obligation is
+    #: held open until every table derived from its table holds one following it, directly or through a chain. It must
+    #: name an obligation the catalog recorded.
+    follows: str | None = None
 
 
 class ErasureVerifyRequest(BaseModel):
