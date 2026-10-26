@@ -91,9 +91,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   recommendation and the next command, not a menu. `/implement`, `/to-spec`, `/to-tickets`, `/grill-with-docs` and
   `/wayfinder` are started by the owner only.
 - **Delegation** (owner, 2026-10-05): implementer, reviewer and workflow agents run Opus at medium effort
-  (`subagent_type: opus-medium`); read-only sweeps may use Sonnet. A review round fixes HIGH and MEDIUM findings only,
-  LOWs are parked, and one round is the default. A worktree agent starts from `origin/main`, so pin its base with
-  `git switch -c <branch> <sha>` when local `main` is ahead.
+  (`subagent_type: opus-medium`); read-only sweeps may use Sonnet. A review round fixes every finding in code the row
+  added or changed, LOWs included (owner, 2026-10-26: a LOW parked in a row's own code costs a row later), and parks
+  only findings about code the row did not touch; one round is the default. A worktree agent starts from `origin/main`,
+  so pin its base with `git switch -c <branch> <sha>` when local `main` is ahead.
 - **Live estate** (owner, 2026-10-02/2026-09-26). An unplanned write to a shared live object (patch, delete, scale) is
   asked first through the multi-question tool, naming the object, the change and the effect, even under a standing
   kubectl permission. Squash a row's review rounds into one commit before building its images (tags name a sha), and
@@ -400,7 +401,7 @@ facts in § Engineering principles, GitOps first (GitOps, cloud native, Lance-na
 2. `/to-spec` writes the spec as an issue; `/to-tickets` splits it into rows with native blocking edges.
 3. `/implement <#row>` builds one row: `/tdd` red-green slices at the seams, the type checker and single test
    files as it goes, the full suite once, then `/code-review` (Standards and Spec reviewers in parallel; one
-   round, HIGH and MEDIUM fixed), then a commit. `/clear` between rows.
+   round, every finding in the row's own code fixed), then a commit. `/clear` between rows.
 4. `/triage` admits rows nobody on the team wrote; `/diagnosing-bugs` takes a hard bug to a red test first.
 
 **Every row, whoever works it, follows the collaboration rules in `docs/agents/issue-tracker.md`:**
