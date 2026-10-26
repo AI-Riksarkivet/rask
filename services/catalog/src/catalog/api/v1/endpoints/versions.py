@@ -41,7 +41,6 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
 )
 from catalog.api.pagination import ListLimit, paginate_versions
-from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
@@ -324,7 +323,6 @@ async def batch_delete_table_versions(
     table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
-    force: RaskFlag = False,
 ) -> BatchDeleteTableVersionsResponse:
     """Delete old versions of this table — never the current one, and never one a tag or a branch pins.
 
@@ -335,12 +333,12 @@ async def batch_delete_table_versions(
     child branch pins is refused (409), naming the pin. Every range is judged before anything is
     deleted, and ``branch`` scopes the delete to that ref's own history.
 
-    Owner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``
-    turns the protection lock only.
+    Owner tier (``can_drop``, the rung ``maintenance/run`` clears), and authorization alone governs it: this
+    reclaims history, as ``maintenance/run`` does, and deletion protection guards dropping the table, not its
+    history (ADR 0150). A version that must survive is tagged.
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    await fga_deps.require_table_unprotected(settings, table.resolved, force=force)
     return await run_in_threadpool(_delete_versions, table, so, settings, body)
 
 

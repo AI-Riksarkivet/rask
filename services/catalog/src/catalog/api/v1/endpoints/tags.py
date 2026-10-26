@@ -18,10 +18,8 @@ from lance_namespace import (
     UpdateTableTagResponse,
 )
 
-from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, StorageOptionsDep
 from catalog.api.pagination import ListLimit
-from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, publication
@@ -146,22 +144,19 @@ async def delete_table_tag(
     id: str,
     body: DeleteTableTagRequest,
     table: DoorTableDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
-    force: RaskFlag = False,
     token: CurrentToken = None,
 ) -> DeleteTableTagResponse:
     """Delete a tag from the table — wraps lance_namespace DeleteTableTag.
 
-    PROTECTION-GATED ([[LH-056]]). A tag pins the version it names against cleanup, so a protected table
-    refuses this on the same record its drop consults, and ``force`` turns that lock only. The catalog's own
-    tags, ``published`` among them, are refused here whatever the table's protection says.
+    Authorization alone governs it (``can_drop``): a tag pins the version it names against cleanup, so deleting
+    one makes that version reclaimable, which is history reclaim, and deletion protection guards dropping the
+    table, not its history (ADR 0150). The catalog's own tags, ``published`` among them, are refused here.
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
-    await fga_deps.require_table_unprotected(settings, table.resolved, force=force)
     # The ref the tag pinned, read while the tag still exists: after the delete nothing records it.
     listed = await run_in_threadpool(dataplane.list_tags, table, so, ListTableTagsRequest(id=segments))
     pinned = (listed.tags or {}).get(body.tag)

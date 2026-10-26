@@ -2704,10 +2704,9 @@ export interface paths {
          *     The disappearance is the half worth announcing: a console holding a branch list has no other way
          *     to learn the branch is gone, and a reader that polls discovers it by a failing read.
          *
-         *     PROTECTION-GATED ([[LH-056]]). This is the heavier of the two deletions the table offers — it
-         *     destroys the branch's data and its own version sequence — so a protected table refuses it on the
-         *     same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this
-         *     handler and runs identically either way.
+         *     Authorization alone governs it (``can_drop``): a branch holds the files it references against cleanup, so
+         *     deleting one makes them reclaimable, which is history reclaim, and deletion protection guards dropping the
+         *     table, not its history (ADR 0150).
          */
         post: operations["delete_table_branch_v1_table__id__branches_delete_post"];
         delete?: never;
@@ -3413,9 +3412,9 @@ export interface paths {
          * Delete Table Tag
          * @description Delete a tag from the table — wraps lance_namespace DeleteTableTag.
          *
-         *     PROTECTION-GATED ([[LH-056]]). A tag pins the version it names against cleanup, so a protected table
-         *     refuses this on the same record its drop consults, and ``force`` turns that lock only. The catalog's own
-         *     tags, ``published`` among them, are refused here whatever the table's protection says.
+         *     Authorization alone governs it (``can_drop``): a tag pins the version it names against cleanup, so deleting
+         *     one makes that version reclaimable, which is history reclaim, and deletion protection guards dropping the
+         *     table, not its history (ADR 0150). The catalog's own tags, ``published`` among them, are refused here.
          */
         post: operations["delete_table_tag_v1_table__id__tags_delete_post"];
         delete?: never;
@@ -3584,8 +3583,9 @@ export interface paths {
          *     child branch pins is refused (409), naming the pin. Every range is judged before anything is
          *     deleted, and ``branch`` scopes the delete to that ref's own history.
          *
-         *     Owner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``
-         *     turns the protection lock only.
+         *     Owner tier (``can_drop``, the rung ``maintenance/run`` clears), and authorization alone governs it: this
+         *     reclaims history, as ``maintenance/run`` does, and deletion protection guards dropping the table, not its
+         *     history (ADR 0150). A version that must survive is tagged.
          */
         post: operations["batch_delete_table_versions_v1_table__id__version_delete_post"];
         delete?: never;

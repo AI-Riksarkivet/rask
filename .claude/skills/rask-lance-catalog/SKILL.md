@@ -416,7 +416,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   their registry records; tables/namespaces carry it as a **control-root `_protection/` record**
   (`service_kit.lakehouse.protection`) gating drop/deregister/rename and both Overwrite modes,
   `create?mode=Overwrite` over an existing table and `insert?mode=overwrite` on any branch ([[LH-242]]),
-  (table) and drop (namespace) —
+  (table) and drop (namespace). It guards no history reclaim (ADR 0150, [[LH-300]]): `version/delete`, `tags/delete`,
+  `branches/delete` and `maintenance/run` are governed by authorization alone, since deleting a tag or a branch is what
+  makes its versions reclaimable, and a version that must survive is tagged
+  (`tests/integration/test_protection_guards_deletion_not_history_reclaim.py`). The record is
   deliberately NOT schema metadata, so unprotect is never reachable through the properties door,
   toggling never creates a table version, and the guard answers even for a corrupted dataset. Set
   via `POST /management/v1/table/{id}/protection` / `/management/v1/namespace/{id}/protection`,

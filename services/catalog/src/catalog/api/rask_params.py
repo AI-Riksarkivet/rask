@@ -10,8 +10,8 @@ available: it changes what is advertised and nothing about what is accepted, so 
 keeps working. A caller that sends one builds the request by hand rather than from the generated client,
 which is why hiding them costs nothing at the call sites.
 
-These aliases exist so the reasoning is written once instead of at nine parameter declarations, and so
-a tenth extension is spelled the same way by construction. Pinned by
+These aliases exist so the reasoning is written once instead of at every parameter declaration, and so
+the next extension is spelled the same way by construction. Pinned by
 `tests/integration/test_the_spec_surface_carries_only_spec_parameters.py`, which derives the spec's
 own vocabulary from the pinned client rather than listing parameter names.
 """

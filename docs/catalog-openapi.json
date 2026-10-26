@@ -20545,7 +20545,7 @@
     },
     "/v1/table/{id}/branches/delete": {
       "post": {
-        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.\n\nThe disappearance is the half worth announcing: a console holding a branch list has no other way\nto learn the branch is gone, and a reader that polls discovers it by a failing read.\n\nPROTECTION-GATED ([[LH-056]]). This is the heavier of the two deletions the table offers \u2014 it\ndestroys the branch's data and its own version sequence \u2014 so a protected table refuses it on the\nsame record its drop consults. ``force`` turns that lock only; the FGA gate ran before this\nhandler and runs identically either way.",
+        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.\n\nThe disappearance is the half worth announcing: a console holding a branch list has no other way\nto learn the branch is gone, and a reader that polls discovers it by a failing read.\n\nAuthorization alone governs it (``can_drop``): a branch holds the files it references against cleanup, so\ndeleting one makes them reclaimable, which is history reclaim, and deletion protection guards dropping the\ntable, not its history (ADR 0150).",
         "operationId": "delete_table_branch_v1_table__id__branches_delete_post",
         "parameters": [
           {
@@ -23659,7 +23659,7 @@
     },
     "/v1/table/{id}/tags/delete": {
       "post": {
-        "description": "Delete a tag from the table \u2014 wraps lance_namespace DeleteTableTag.\n\nPROTECTION-GATED ([[LH-056]]). A tag pins the version it names against cleanup, so a protected table\nrefuses this on the same record its drop consults, and ``force`` turns that lock only. The catalog's own\ntags, ``published`` among them, are refused here whatever the table's protection says.",
+        "description": "Delete a tag from the table \u2014 wraps lance_namespace DeleteTableTag.\n\nAuthorization alone governs it (``can_drop``): a tag pins the version it names against cleanup, so deleting\none makes that version reclaimable, which is history reclaim, and deletion protection guards dropping the\ntable, not its history (ADR 0150). The catalog's own tags, ``published`` among them, are refused here.",
         "operationId": "delete_table_tag_v1_table__id__tags_delete_post",
         "parameters": [
           {
@@ -24409,7 +24409,7 @@
     },
     "/v1/table/{id}/version/delete": {
       "post": {
-        "description": "Delete old versions of this table \u2014 never the current one, and never one a tag or a branch pins.\n\n``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for \"through the\nlatest\". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:\nLance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again\nby the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a\nchild branch pins is refused (409), naming the pin. Every range is judged before anything is\ndeleted, and ``branch`` scopes the delete to that ref's own history.\n\nOwner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``\nturns the protection lock only.",
+        "description": "Delete old versions of this table \u2014 never the current one, and never one a tag or a branch pins.\n\n``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for \"through the\nlatest\". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:\nLance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again\nby the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a\nchild branch pins is refused (409), naming the pin. Every range is judged before anything is\ndeleted, and ``branch`` scopes the delete to that ref's own history.\n\nOwner tier (``can_drop``, the rung ``maintenance/run`` clears), and authorization alone governs it: this\nreclaims history, as ``maintenance/run`` does, and deletion protection guards dropping the table, not its\nhistory (ADR 0150). A version that must survive is tagged.",
         "operationId": "batch_delete_table_versions_v1_table__id__version_delete_post",
         "parameters": [
           {

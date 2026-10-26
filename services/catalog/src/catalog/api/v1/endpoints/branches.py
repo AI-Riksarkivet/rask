@@ -21,10 +21,8 @@ from lance_namespace import (
     ListTableBranchesResponse,
 )
 
-from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, StorageOptionsDep
 from catalog.api.pagination import ListLimit
-from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
@@ -128,10 +126,8 @@ async def delete_table_branch(
     id: str,
     body: DeleteTableBranchRequest,
     table: DoorTableDep,
-    settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
-    force: RaskFlag = False,
     token: CurrentToken = None,
 ) -> DeleteTableBranchResponse:
     """Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op.
@@ -139,14 +135,12 @@ async def delete_table_branch(
     The disappearance is the half worth announcing: a console holding a branch list has no other way
     to learn the branch is gone, and a reader that polls discovers it by a failing read.
 
-    PROTECTION-GATED ([[LH-056]]). This is the heavier of the two deletions the table offers — it
-    destroys the branch's data and its own version sequence — so a protected table refuses it on the
-    same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this
-    handler and runs identically either way.
+    Authorization alone governs it (``can_drop``): a branch holds the files it references against cleanup, so
+    deleting one makes them reclaimable, which is history reclaim, and deletion protection guards dropping the
+    table, not its history (ADR 0150).
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    await fga_deps.require_table_unprotected(settings, table.resolved, force=force)
     # The incarnation being deleted, read while it still exists: the name alone also names whatever branch
     # is created under it next.
     identifier = await run_in_threadpool(dataplane.branch_identifier, table.location, so, segments, body.name)
