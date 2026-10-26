@@ -10,7 +10,7 @@ THE TWO PINS THE PREVIEW HAS TO READ, as Lance records and honours them (measure
 2026-09-25, against ``cleanup_old_versions`` itself):
 
 * A TAG PINS A VERSION OF ITS OWN BRANCH. Tags are stored once at the dataset root
-  (``lance_docs/file_format.md`` "Tag Storage"), so ``tags.list()`` answers every branch's tags from any
+  (``lance_docs/lance/format/table/branch_tag.md`` "Tag Storage"), so ``tags.list()`` answers every branch's tags from any
   handle, each carrying the ``branch`` it names (``null`` for main — ``("main", 2)`` is stored as
   ``null`` too). A tag on ``work`` v3 does not protect MAIN's v3, and a main tag on v4 does not protect
   the BRANCH's v4: cleanup on either ref deletes the same-numbered version the other ref's tag names.

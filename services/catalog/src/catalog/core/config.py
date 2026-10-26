@@ -105,7 +105,7 @@ class CatalogStorageSettings(BaseSettings):
     #: straight to object storage with the catalog out of the path, so whatever the estate intends must
     #: travel in the storage options or it does not happen.
     #:
-    #: Key names and their contract are verified against `lance_docs/guide.md:2667-2669`, and
+    #: Key names and their contract are verified against `lance_docs/lance/guide/object_store.md:134-136`, and
     #: `lance_storage_options` REFUSES an invalid pairing rather than passing it on: object_store drops
     #: an option it does not recognise, so a wrong value here would land plaintext under a config that
     #: claims encryption — the one failure with no later signal.
@@ -176,8 +176,8 @@ class CatalogReadBounds(BaseSettings):
     #: Lance's process scan defaults, applied at boot by `catalog.main.bound_lance_scans` to every scan
     #: this process builds: the native backend's (`/query`, `analyze_plan`), which take no scanner
     #: option from Python, and the change feed's. Lance's own are a 2 GB IO buffer
-    #: (`lance_docs/guide.md:3446-3448`) and 8,192-row batches whatever their width, which is 32 MiB of
-    #: 1024-dim float32 vectors per batch (`guide.md:3453-3461`, which suggests 1,024 rows for those).
+    #: (`lance_docs/lance/guide/performance.md:176-178`) and 8,192-row batches whatever their width, which is 32 MiB of
+    #: 1024-dim float32 vectors per batch (`lance_docs/lance/guide/performance.md:186-191`, which suggests 1,024 rows for those).
     scan_io_buffer_mb: int = Field(default=32, ge=1, alias="LANCE_SCAN_IO_BUFFER_MB")
     scan_batch_rows: int = Field(default=1024, ge=1, alias="LANCE_SCAN_BATCH_ROWS")
     #: The most bytes one `/query` answer may carry. The native backend materialises the whole answer

@@ -10,7 +10,7 @@ it became a 202.
 the request could describe a relocation. What makes that servable here is the V2 storage layout: a
 table's directory is `<hash>_<object_id>` while the authoritative name→location mapping lives in the
 `__manifest` table, and the spec says the `object_id` suffix "ensures uniqueness and aids debugging"
-(`lance_docs/namespace.md` § *Manifest Table Directory*). It is a label, not a resolution path. The
+(`lance_docs/ns_catalog/catalog/dir/index.md` § *Manifest Table Directory*). It is a label, not a resolution path. The
 hash prefix exists for object-store throughput and for create/delete/recreate conflict prevention,
 not for addressing.
 

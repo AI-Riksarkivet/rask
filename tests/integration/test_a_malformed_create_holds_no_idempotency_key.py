@@ -4,7 +4,7 @@ The create door's claim is an object-store record with a 300 s lease. A refusal 
 leaves it in flight, and the caller who fixes the request and retries under the same key is answered
 409 `ConcurrentModification` for an attempt that never ran. So every refusal that needs nothing but the
 request runs ahead of the claim: the mode, an off-allowlist `data_base`, `properties`
-that are not a JSON map of strings (spec.yaml:3761-3767), a non-Lance format, a malformed run in the
+that are not a JSON map of strings (spec.yaml:3769-3775), a non-Lance format, a malformed run in the
 request's Context, and a body that is not a valid Arrow IPC stream, in its framing or in its buffers.
 
 Driven over HTTP against a real `dir` backend, each as a keyed typo followed by the fixed request under

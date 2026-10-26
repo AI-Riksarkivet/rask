@@ -14,7 +14,7 @@ then served its bytes) or a missing one; the same file in two fragments; and a f
 
 So the JSON is a claim and the data file is the authority. Its footer carries the row count, the column
 count and the format version the writer actually wrote, and its schema names the columns
-(lance_docs/file_format.md, "Offsets & Footer" and "Reading Strategy": one or two reads from the end of
+(lance_docs/lance/format/file/index.md, "Offsets & Footer" and "Reading Strategy": one or two reads from the end of
 the file). The gates ``catalog.services.managed_versions`` runs on each data file a version adds:
 
 * :func:`refuse_a_malformed_data_file`: a bare name under ``data/``, each field id once, sizes and versions that are integers.
@@ -297,8 +297,8 @@ class _LanceField(Protocol):
 
 
 def _is_packed(declared: pa.Field, *, every_field: bool) -> bool:
-    """A struct Lance packs is one column: "Only leaf fields and packed structs have column indices" (`file_format.md` §
-    Field IDs). Measured on pylance 13.0.0, a 2.0 file packs a struct carrying any ``packed`` value and a 2.1 or 2.2
+    """A struct Lance packs is one column: "Only leaf fields and packed structs have column indices" (`lance_docs/lance/format/table/index.md`
+    § Data Files). Measured on pylance 13.0.0, a 2.0 file packs a struct carrying any ``packed`` value and a 2.1 or 2.2
     file only one whose value Lance reads as true."""
     return encoding.packs_at_2_0(declared) if every_field else encoding.packs(declared)
 

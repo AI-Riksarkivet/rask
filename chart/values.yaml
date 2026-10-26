@@ -676,7 +676,7 @@ vending:
   # reaches it.
   #
   # EMPTY BY DEFAULT = whatever the bucket does, which is every deployment's behaviour today. The names
-  # and their contract come from `lance_docs/guide.md:2667-2669`: algorithm must be AES256, aws:kms or
+  # and their contract come from `lance_docs/lance/guide/object_store.md:134-136`: algorithm must be AES256, aws:kms or
   # aws:kms:dsse, and a kmsKeyId REQUIRES one of the two kms values. The catalog refuses an invalid
   # pairing at boot rather than passing it on — object_store ignores an option it does not recognise,
   # so a wrong value would write plaintext while the config claimed encryption.
@@ -744,7 +744,7 @@ catalog:
   #
   # A DATA BASE IS ITS TABLES' STORAGE, ON THE ESTATE'S OWN STORE ([[LH-286]], owner 2026-10-24). Each table keeps
   # its own directory beneath a base, reached under the catalog's own identity as its root is: Lance opens every
-  # base under the dataset's own options (`lance_docs/guide.md` § Per-Base Configuration), so no base holds a
+  # base under the dataset's own options (`lance_docs/lance/guide/object_store.md` § Per-Base Configuration), so no base holds a
   # credential of its own. Maintenance reclaims what no version references there and the purge deletes a dropped
   # table's directory, so the store must grant the catalog's and maintenance's identities on these buckets as on
   # the estate's. On the development store the scoped-users hook creates each bucket; a platform store's operator

@@ -12,7 +12,7 @@ Lance's cleanup is REF-SCOPED: measured on a branch that overwrote every parent 
 case, where every one of the parent's files is garbage from the branch's point of view —
 `cleanup_old_versions` removed one data file and it was the branch's own under `tree/<branch>/data`,
 while the parent's `data/` stayed byte-identical and still time-travelled to v1. A branch keeps its own
-`_versions/`/`_transactions/`/`data/` under `tree/{branch}/` (`lance_docs/file_format.md:3673-3688`),
+`_versions/`/`_transactions/`/`data/` under `tree/{branch}/` (`lance_docs/lance/format/table/branch_tag.md:54-68`),
 and that layout is what contains the reclaim.
 
 THE ASSERTION IS ON WHAT WAS DESTROYED, not on the call, and the last leg is the one that matters: a

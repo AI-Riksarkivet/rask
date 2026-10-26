@@ -1,8 +1,8 @@
 """Whether compacting a dataset is refused: the one gate maintenance's due list and the catalog's ``version/create``
 judge both ask, so a table listed as due is one whose compaction the judge admits (ADR 0162).
 
-A branch is a shallow clone that lives inside its table (``lance_docs/file_format.md`` § Branch Dataset Layout,
-``lance_docs/lancemultibasebranchingblobv2.md`` § Building block 3): it reads its parent's fragments through a
+A branch is a shallow clone that lives inside its table (``lance_docs/lance/format/table/branch_tag.md`` § Branch Dataset Layout,
+``lance_docs/lance/format/table/layout.md`` § Shallow Clone): it reads its parent's fragments through a
 dataset-root base on the table's root, and a branch of a branch through its parent's ``tree/<name>`` too, so every
 branch sets flag 16. Those bases are the table's own history, and a branch's compaction copies what it inherited into
 its own ``tree/<name>/data/`` on purpose (measured on pylance 13.0.0: a stock compaction on a branch rewrote the

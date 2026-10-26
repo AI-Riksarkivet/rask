@@ -235,7 +235,7 @@ def disarm_every_ref(dataset: lance.LanceDataset, table_id: list[str]) -> lance.
 def open_location(location: str, storage_options: dict[str, str], *, version: int | None = None, branch: str | None = None) -> lance.LanceDataset:
     """Open the dataset at ``location`` on the ref named, on the shared session.
 
-    Every base a manifest declares opens under the same options as its root, Lance's default (``lance_docs/guide.md``
+    Every base a manifest declares opens under the same options as its root, Lance's default (``lance_docs/lance/guide/object_store.md``
     § Per-Base Configuration: "every base inherits the unscoped options"): a data base on the estate's store is part of
     its table's storage, reached under the catalog's own identity as the root is ([[LH-286]]).
 

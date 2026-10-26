@@ -1,6 +1,6 @@
 """The change-data-feed predicates — what a consumer needs to follow a table (§ J4).
 
-Lance tracks per-row versions, and `lance_docs/file_format.md:6214-6244` gives the queries verbatim.
+Lance tracks per-row versions, and `lance_docs/lance/format/table/row_id_lineage.md:426-454` gives the queries verbatim.
 This module is the ONE place they are written, because the two windows are easy to get subtly wrong and
 a wrong window does not fail — it answers rows, just the wrong ones, and the consumer cannot tell.
 
@@ -10,11 +10,11 @@ a wrong window does not fail — it answers rows, just the wrong ones, and the c
                AND _row_last_updated_at_version <= end
 
 THE `updated` FILTER'S FIRST CLAUSE IS THE SUBTLE ONE, and the guide states its purpose
-(`file_format.md:6238`): "excludes newly inserted rows by requiring `_row_created_at_version <=
+(`lance_docs/lance/format/table/row_id_lineage.md:454`): "excludes newly inserted rows by requiring `_row_created_at_version <=
 begin_version`". Drop it and every insert is reported twice — once as inserted, once as updated — so a
 consumer applying both streams double-counts.
 
-PRECONDITION, `file_format.md:5878-5889`: the version columns mean something only where stable row ids
+PRECONDITION, `lance_docs/lance/format/table/row_id_lineage.md:73-83`: the version columns mean something only where stable row ids
 are on, and otherwise the feed is SILENTLY EMPTY rather than an error. Measured on pylance 12.0.0: a
 table created without `enable_stable_row_ids` still answers both columns, both read 1 for every row
 after an append and an update, and the `inserted` window (1, 3] answers []. A consumer reads that as
@@ -34,7 +34,7 @@ THE CONSUMER RULE, stated once for every published range (`table_published`'s an
 sees an in-place correction or a deletion.
 
 THE WINDOW IS ONE SNAPSHOT. Lance's feed is three queries against the table AT `end_version`
-(`file_format.md:6214-6242`): a row updated inside the window and again after it carries the later
+(`lance_docs/lance/format/table/row_id_lineage.md:426-454`): a row updated inside the window and again after it carries the later
 version, so a scan of the latest snapshot drops it from a closed window. The door opens the dataset at
 `end_version` (at the head it read, for an open window) and answers all three kinds from that handle.
 
@@ -42,7 +42,7 @@ AND ONLY A WINDOW THE VERSION COLUMNS DESCRIBE. Three transactions change rows w
 columns the way the predicates assume, so the door reads the window's transactions and refuses a
 window spanning one (`unfollowable`): a Restore and an Overwrite replace the table wholesale, and an
 Update whose `fields_modified` is non-empty rewrote a column in place (`fragment.update_columns` plus
-`LanceOperation.Update`, `lance_docs/guide.md:1790-1850`; measured on pylance 12.0.0 it leaves
+`LanceOperation.Update`, `lance_docs/lance/guide/distributed_write.md:187-247`; measured on pylance 12.0.0 it leaves
 `_row_last_updated_at_version` where it was, so the `updated` stream never shows the change).
 `dataset.update` and `merge_insert` commit an Update with `fields_modified == []` and new fragments,
 which the columns describe, and a compaction (a ReserveFragments BaseOperation then a Rewrite) moves
@@ -83,7 +83,7 @@ ChangeKind = Literal["inserted", "updated", "deleted"]
 _CREATED = "_row_created_at_version"
 _UPDATED = "_row_last_updated_at_version"
 
-#: What the feed adds to every projection. `file_format.md:6229` states the documented result "includes
+#: What the feed adds to every projection. `lance_docs/lance/format/table/row_id_lineage.md:441` states the documented result returns rows "including
 #: the version metadata columns" — Lance does NOT project pseudo-columns unless they are named, so the
 #: door names them. `_rowid` rides along because it is what identifies the row an update applies TO: the
 #: primary key is the transform's business, and the cascade's tiers do not all carry one.

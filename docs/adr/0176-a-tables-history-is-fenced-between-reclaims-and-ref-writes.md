@@ -7,7 +7,7 @@ reclaim path take".
 ## Context
 
 A tag pins a version against Lance's cleanup, and a branch keeps the files of the version it was cut from
-(`lance_docs/guide.md` § Tags and Branches). Lance reads both lists once, when `cleanup_old_versions` starts, and deletes
+(`lance_docs/lance/guide/tags_and_branches.md:63-64` and `:131-133`). Lance reads both lists once, when `cleanup_old_versions` starts, and deletes
 against that listing (`rust/lance/src/dataset/cleanup.rs:472-511` at v13.0.0). Nothing in Lance orders a ref written
 while a cleanup runs with that cleanup, and no Lance primitive offers a guard.
 

@@ -1338,7 +1338,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         # cleanup failure would raise a false alarm about the store that just passed.
         scope_refused = _step(SCOPE_CHECK, lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"), expect_refusal=True)
         # PUT-IF-NOT-EXISTS, the primitive Lance's commit protocol rests on
-        # (`lance_docs/file_format.md` § "Commit Protocol" -> "Storage Primitives"). Two conditional
+        # (`lance_docs/lance/format/table/transaction.md` § "Commit Protocol" -> "Storage Primitives"). Two conditional
         # puts at one key: the first must be ACCEPTED and the second REFUSED. A store that accepts
         # both has no "exactly one writer succeeds" guarantee, so two concurrent Lance writers would
         # each believe they committed the same manifest version — with a 200 on both and no error

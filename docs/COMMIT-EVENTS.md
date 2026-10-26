@@ -28,7 +28,7 @@ Authorization: Bearer <token>
   your filters or your grants hid, so the next poll never re-reads or skips one.
 - **`next_cursor` equal to the `since` you sent, with no events, means you are caught up.** Poll again later.
 - **`seq` is the only ordering promise.** A row's seq is its Lance stable row id plus one, which Lance assigns
-  in commit order (`lance_docs/file_format.md`, "Row ID Assignment"): no event appears with a smaller seq
+  in commit order (`lance_docs/lance/format/table/row_id_lineage.md`, "Row ID Assignment"): no event appears with a smaller seq
   than one you have already read. Seq numbers can have holes; a hole is not a lost event.
 - **Where to start.** To read everything the feed still holds, start at `since = oldest_seq - 1`; to read
   only what arrives from now on, start at the highest `seq` of a newest-first read (`GET /events?limit=1`).

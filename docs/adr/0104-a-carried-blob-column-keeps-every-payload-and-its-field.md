@@ -11,7 +11,7 @@ the whole column once any managed row exists was the other option, and it was re
 pointer into a copy of the corpus.
 
 Both carry paths take the upstream's blob field as the downstream field instead of a fresh `blob_field(name)`,
-because thresholds and `rask.classification` are that field's metadata (`lance_docs/guide.md`, blob v2
+because thresholds and `rask.classification` are that field's metadata (`lance_docs/lance/guide/blob.md`, blob v2
 thresholds). That decides a tier's first write only: the full-sync `merge_insert` and the by-id widening `merge`
 keep the target's schema whatever the source field says (measured: a bare target stays bare, a rich target stays rich). The usual order is
 ingest, cascade, then classify, so every stage write then copies the upstream's `rask.*` field labels onto

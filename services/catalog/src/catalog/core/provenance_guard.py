@@ -17,7 +17,7 @@ THE PROVENANCE COLUMN. A governed row needs no column (ADR 0156 C9): its run and
 (`service_kit.lakehouse.stage_stamp`), an opt-in that traces a row to the source row it descends from, and every
 reader resolves it by that name, so it is protected by name wherever it appears. The row identity is protected by Lance's own declaration instead: any
 field carrying `lance-schema:unenforced-primary-key`, and each of its ancestors, in any table
-(`lance_docs/file_format.md` § Unenforced Primary Key). Measured on pylance 12.0.0:
+(`lance_docs/lance/format/table/index.md` § Unenforced Primary Key). Measured on pylance 12.0.0:
 
 * `drop_columns(["id"])` is accepted and leaves a table with no key;
 * `alter_columns` with a `data_type`, even int64 -> int64, is accepted, strips the key metadata and
@@ -50,7 +50,7 @@ RESERVED_METADATA_PREFIXES: Final = ("lineage.", "rask.")
 #: Lance's field-metadata key declaring a field part of the unenforced primary key.
 PRIMARY_KEY_METADATA: Final = b"lance-schema:unenforced-primary-key"
 
-#: The values Lance reads as "this field is in the key" (`file_format.md`: `true`, `1` or `yes`, case-insensitive).
+#: The values Lance reads as "this field is in the key" (`lance_docs/lance/format/table/index.md`: `true`, `1` or `yes`, case-insensitive).
 _PRIMARY_KEY_TRUE: Final = frozenset({b"true", b"1", b"yes"})
 
 #: The platform's provenance column, by the name `stage_stamp` writes and every reader resolves.

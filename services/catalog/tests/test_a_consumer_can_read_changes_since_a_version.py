@@ -1,7 +1,7 @@
 """`changes since version N` — the feed a BYO consumer needs to follow a table (§ J4).
 
 A lakehouse buyer expects to subscribe to a table without re-reading it. Lance supports exactly that,
-and `lance_docs/file_format.md:6214-6244` gives the predicates verbatim:
+and `lance_docs/lance/format/table/row_id_lineage.md:426-454` gives the predicates verbatim:
 
     inserted   _row_created_at_version > begin AND _row_created_at_version <= end
     updated    _row_created_at_version <= begin
@@ -13,7 +13,7 @@ cascade off `_row_last_updated_at_version`, so the mechanism is proven on this d
 express is the two kinds SEPARATELY, which is what a consumer outside the cascade needs and what this
 door serves.
 
-`file_format.md:5889` is the precondition: the version columns exist only when row-level version
+`lance_docs/lance/format/table/row_id_lineage.md:83` is the precondition: the version columns exist only when row-level version
 tracking is on. This estate requires it already (`enable_stable_row_ids`, gate A14, which the catalog
 refuses a governed dataset without), so the feed is available wherever the catalog governs.
 
@@ -31,13 +31,13 @@ from catalog.services import changes
 
 
 def test_the_INSERTED_predicate_is_the_documented_one() -> None:
-    """Verbatim from `file_format.md:6225`. A bound that is off by one either replays a version or skips
+    """Verbatim from `lance_docs/lance/format/table/row_id_lineage.md:437`. A bound that is off by one either replays a version or skips
     one, and a consumer cannot tell which from the rows it receives."""
     assert changes.change_filter(begin_version=7, end_version=9, kind="inserted") == ("_row_created_at_version > 7 AND _row_created_at_version <= 9")
 
 
 def test_the_UPDATED_predicate_excludes_rows_that_were_INSERTED_in_the_window() -> None:
-    """`file_format.md:6238`, and its reason: "This query excludes newly inserted rows by requiring
+    """`lance_docs/lance/format/table/row_id_lineage.md:449`, and its reason (`:454`): "This query excludes newly inserted rows by requiring
     `_row_created_at_version <= begin_version`". Without that clause an insert is reported twice — once
     as inserted and once as updated — and a consumer applying both double-counts it."""
     got = changes.change_filter(begin_version=7, end_version=9, kind="updated")
@@ -73,7 +73,7 @@ def test_a_NEGATIVE_begin_is_refused_AS_A_CLIENT_ERROR() -> None:
 
 
 def test_the_feed_PROJECTS_the_version_columns_so_a_consumer_can_CHECKPOINT() -> None:
-    """`file_format.md:6229`: the query returns the changed rows "including the version metadata columns
+    """`lance_docs/lance/format/table/row_id_lineage.md:441`: the query returns the changed rows "including the version metadata columns
     `_row_created_at_version`, `_row_last_updated_at_version`, and `_rowid`".
 
     THIS IS THE WHOLE FEED, not a nicety. A consumer polls "what changed since N" and must learn the N

@@ -78,9 +78,9 @@ def test_a_BRANCH_is_refused_as_a_REFERRER_rather_than_as_a_referenced_root(tmp_
     the reason is exactly right) and **129 `<root>/tree/<name>` branches**, which is 100% of the
     "lies under a protected root" class.
 
-    A branch is not a subdirectory of the referent — it is the REFERRER. `file_format.md:3671`:
+    A branch is not a subdirectory of the referent — it is the REFERRER. `lance_docs/lance/format/table/branch_tag.md:51`:
     *"Each branch dataset is technically a shallow clone of the source dataset"*, and the layout at
-    `:2746-2761` gives `tree/{branch}/` its own `_versions/`, `_transactions/`, `_deletions/` and
+    `:54-68` gives `tree/{branch}/` its own `_versions/`, `_transactions/`, `_deletions/` and
     `_indices/` and **no `data/`** — so a branch resolves its data through the parent's files, which is
     precisely what makes the PARENT protected.
 

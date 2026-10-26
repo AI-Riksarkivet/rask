@@ -14,7 +14,7 @@ Ray through the engine door; the producer planned training runs the same way. Wo
 that are governance: the writer's permission per tier (`can_create_table`, `can_promote`), provenance, the promotion
 gate (a row-count breach held for a person) and the commit announcement.
 
-Lance treats compaction and distributed indexing as engine work (`lance_docs/ray.md`, Lance-Ray `compact_files`), and
+Lance treats compaction and distributed indexing as engine work (lance-ray `docs/src/compaction.md`, Lance-Ray `compact_files`), and
 the namespace specification defines no compaction operation. Lakekeeper runs none of this: its background work is
 expiration, purge and log cleanup, change approval is a trait inside the catalog, and its own medallion example writes
 every tier from an external job.

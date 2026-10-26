@@ -1,7 +1,7 @@
 """[[LH-286]] A table's data base is part of its storage: every door reaches it under the catalog's own identity, as the root.
 
 Lance opens every base a manifest declares under the dataset's own options unless a base is given options of its own
-(``lance_docs/guide.md`` § Per-Base Configuration: "every base inherits the unscoped options"), and a data base on the
+(``lance_docs/lance/guide/object_store.md`` § Per-Base Configuration: "every base inherits the unscoped options"), and a data base on the
 estate's store is its tables' storage, so the catalog holds no credential for one (owner, 2026-10-24). The pylance doors,
 the native doors and the vend each serve a table whose fragments sit on a data base as they serve any other: rows, a
 count and a direct credential, never a refusal and never a second identity.

@@ -1,6 +1,6 @@
 """A create's ``lance-encoding:*`` knobs are judged at the door and stamped on the fields each acts on ([[LH-246]]).
 
-Lance reads each knob from a field's own metadata (`lance_docs/file_format.md` § Compression Configuration), and the
+Lance reads each knob from a field's own metadata (`lance_docs/lance/format/file/encoding.md` § Compression Configuration), and the
 table keeps that metadata, so every later write encodes under it. Measured on pylance 13.0.0: an empty create
 holding `compression=bogus` commits and every later append fails `OSError: Unknown compression scheme`, and
 `dict-size-ratio=7` raises pyo3's `PanicException` on the first low-cardinality page. A value Lance cannot honour,

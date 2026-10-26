@@ -3,7 +3,7 @@
 ``maintenance/preview`` and ``maintenance/run`` are owner-gated by the router (``can_drop`` in ``fga_deps``: reclaiming
 version history is the drop rung, like the retention policy that schedules it). The preview never mutates; the run
 reclaims old versions with the sweep's tag exemption. Both honour ``branch``: a branch keeps its own ``_versions``,
-``_transactions`` and ``data`` under ``tree/{branch}/`` (``lance_docs/file_format.md``), so a reclaim through a branch
+``_transactions`` and ``data`` under ``tree/{branch}/`` (``lance_docs/lance/format/table/branch_tag.md``), so a reclaim through a branch
 handle deletes only the branch's own files (measured on pylance 11.0.0: the parent's ``data/`` stayed byte-identical
 and still time-travelled), and an answer about one ref is never reported as another's.
 

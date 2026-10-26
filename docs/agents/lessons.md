@@ -22,7 +22,7 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **pkill matches its own command.** pkill/pgrep -f kill the shell; use the [b]racket trick.
 - **One row, one commit, one deploy.** measured: 33 of 61 docs commits were register bookkeeping; tests/unit is 82% of suite cost; one image serves 10 deployments.
 - **A gate is not a gate until it has failed.** mutation-check every new gate; twice in one day one could not fail.
-- **Cite spec.yaml, not the prose.** namespace.md's REST paths contradict the OpenAPI in its own bundle.
+- **Cite spec.yaml, not the prose.** `lance_docs/ns_catalog/namespace/supported-catalogs/lance-rest.md` gives REST paths the OpenAPI beside it contradicts (`.../index/create`, `.../count`, `.../merge-insert`).
 - **A pipe eats the exit code.** a shell reports its LAST command's status; a pipe's filter or a trailing cleanup silently replaces it.
 - **My own residue looks like a defect.** establish provenance before filing a live finding; four false diagnoses in one day.
 - **Green tests cannot tell you it's allowed.** check the pod's permissions/policy before designing around an operation; an aborted pass reports zero too.

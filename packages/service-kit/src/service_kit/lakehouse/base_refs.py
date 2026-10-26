@@ -154,7 +154,7 @@ class BaseRefs(BaseModel):
         """The root whose referrer a delete of ``location`` would break, else ``None`` — the DELETE answer.
 
         :meth:`is_protected`, less the referrers the delete takes with it. A table's branch lives at
-        ``<table>/tree/<branch>`` and declares the table's root as its base (``file_format.md`` § Branch Dataset Layout),
+        ``<table>/tree/<branch>`` and declares the table's root as its base (``lance_docs/lance/format/table/branch_tag.md`` § Branch Dataset Layout),
         so deleting the table deletes the branch too, and the branch protects nothing from that delete. ``along_with`` is
         another location the same delete removes: a table's data directory goes with its root ([[LH-286]]), so the table
         and its branches, whose manifests read through the directory, protect nothing from it either. A referrer anywhere
@@ -191,7 +191,7 @@ def _overlaps(target: str, root: str) -> bool:
     return target == root or target.startswith(f"{root}/") or root.startswith(f"{target}/")
 
 
-#: The directory a named branch's own files live under — `file_format.md:3690`, "Named branches store
+#: The directory a named branch's own files live under — `lance_docs/lance/format/table/branch_tag.md:70`, "Named branches store
 #: their version-specific files under `tree/{branch_name}/`".
 _BRANCH_SEGMENT = "/tree/"
 
@@ -201,7 +201,7 @@ def containment_of(location: str, root: str) -> str:
 
     IT DECIDES GC BEHAVIOUR, and one of the four is PERMITTED. `maintenance.services.optimize` reclaims
     a location whose relation to the protected root is ``branch`` and refuses the other three, because a
-    branch is Lance's own business inside one root while an external clone is not — `file_format.md:5016`
+    branch is Lance's own business inside one root while an external clone is not — `lance_docs/lance/format/table/layout.md:176`
     disclaims exactly that case ("Source dataset remains immutable and can be garbage collected
     independently"). Observed on the deployed estate 2026-09-18 when the permit landed: `relation='branch'`
     refusals went 105 -> 0 and 61 branch datasets reclaimed 97 versions in one tick, with the parent's
@@ -213,8 +213,8 @@ def containment_of(location: str, root: str) -> str:
     "another dataset resolves its files through <root>", which is the PARENT's situation stated about
     the child.
 
-    A branch is the REFERRER, not part of the referent. `file_format.md:3671` — "Each branch dataset is
-    technically a shallow clone of the source dataset" — and the layout at `:2746-2761` gives
+    A branch is the REFERRER, not part of the referent. `lance_docs/lance/format/table/branch_tag.md:51` — "Each branch dataset is
+    technically a shallow clone of the source dataset" — and the layout at `:54-68` gives
     ``tree/{branch}/`` its own ``_versions/``/``_transactions/``/``_deletions/``/``_indices/`` and no
     ``data/``, so it resolves its data through the parent. That is what makes the parent protected, and
     it is why naming the branch as a referenced root inverts the fact an operator needs.

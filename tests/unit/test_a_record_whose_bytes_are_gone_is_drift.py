@@ -12,7 +12,7 @@ FGA grant keys off a table whose data is not there — while the drift report ra
 
 THE CHECK COSTS NOTHING NEW, which is why it belongs on the walk that already exists rather than in a
 probe of its own. `_orphan_category` already holds both sides: `discover_datasets` gives it every
-dataset URI in every scannable bucket, and `lance_docs/namespace.md:968-976` records `location` as a
+dataset URI in every scannable bucket, and `lance_docs/ns_catalog/catalog/dir/index.md:103-111` records `location` as a
 column of `__manifest` that the reconciler's own read simply does not select.
 
 DECLARED-ONLY TABLES ARE EXCLUDED BY THE SCHEMA, not by an allowlist. The spec makes `location`
@@ -48,7 +48,7 @@ ROOT = "s3://lance-catalog"
         ),
         # The control: without it the case above passes on a detector that reports everything.
         pytest.param({"bronze$pages": (ROOT, "s3://lance-catalog/bronze/pages")}, {"s3://lance-catalog/bronze/pages"}, set(), [], id="bytes-present"),
-        # `lance_docs/namespace.md:974` — "Relative path to the table directory within the root". Found under
+        # `lance_docs/ns_catalog/catalog/dir/index.md:109` — "Relative path to the table directory within the root". Found under
         # its root it is present, and missing it is reported RESOLVED, or nobody can go and look.
         pytest.param({"ns$t": (ROOT, "a1b2c3d4_ns$t")}, {f"{ROOT}/a1b2c3d4_ns$t"}, set(), [], id="relative-location-present"),
         pytest.param({"ns$t": (ROOT, "a1b2c3d4_ns$t")}, set(), set(), [("ns$t", f"{ROOT}/a1b2c3d4_ns$t")], id="relative-location-absent"),

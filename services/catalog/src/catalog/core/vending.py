@@ -83,8 +83,8 @@ class EncryptionAtRest(BaseModel):
 
     THE POINT IS THE DIRECT WRITE. A client vended credentials writes to object storage without the
     catalog in the path, so any encryption the warehouse intends has to travel IN the storage options
-    or it does not happen. Key names and their contract are verified against `lance_docs/guide.md`
-    (2417-2419), not guessed — `lance_storage_options` refuses a combination the store would ignore.
+    or it does not happen. Key names and their contract are verified against `lance_docs/lance/guide/object_store.md`
+    (134-136), not guessed — `lance_storage_options` refuses a combination the store would ignore.
 
     Empty is the default and means "whatever the bucket does", which is what every deployment had
     before this existed: unset here changes nothing.
@@ -202,7 +202,7 @@ def _reject_a_base_that_is_not_a_location(base: str, base_prefix: str) -> None:
     other half of the same distrust.
 
     REFUSING A BUCKET ROOT CANNOT NARROW A REAL TABLE: the spec's base path points at a dataset root or
-    a file directory (``file_format.md``, Base Path System), never at a bucket. A base in its OWN bucket
+    a file directory (``lance_docs/lance/format/table/layout.md``, Base Path System), never at a bucket. A base in its OWN bucket
     stays legitimate — containment here is about DEPTH, not about the bucket matching the table's.
 
     ``..`` is refused on the reasoning ``uri_within`` already records: no location the catalog vends
@@ -385,7 +385,7 @@ def classified_in_any_ref(dataset: Any, *, branch: str = "") -> tuple[str, ...]:
 
     A credential for any ref reads every ref's files: a stock client opens a branch with the table's own credential
     (``checkout_version((branch, None))``), and a branch reads its parent's fragments through a base on the table root
-    (`lance_docs/lancemultibasebranchingblobv2.md` § Building block 3), so a label on one ref holds every vend back
+    (`lance_docs/lance/format/table/layout.md` § Shallow Clone), so a label on one ref holds every vend back
     ([[LH-207]]). A ref whose schema cannot be read is named as unreadable rather than left out, and refs that cannot be
     listed hold the vend back too.
     """
@@ -567,7 +567,8 @@ def build_session_policy(
 
     Every tier lists and reads ``<prefix>/*`` (``s3:ListBucket`` gated by an ``s3:prefix`` condition,
     ``s3:GetObject`` on the objects). What else it grants is an allow-list from the layout
-    `lance_docs/file_format.md` fixes, one rung per FGA relation ([[LH-202]]):
+    `lance_docs/lance/format/table/layout.md` fixes, one rung per FGA relation ([[LH-202]]); its ``_blobs/`` and ``_bt/`` are
+    written only under feature flags ``version/create`` refuses a commit turning on, so no tier puts there:
 
     * ``read``: nothing else.
     * ``write`` (``can_write_data``): put and abort-upload on what a managed-versioning writer stages under
@@ -591,7 +592,7 @@ def build_session_policy(
 
     WHAT A SESSION POLICY CANNOT REFUSE: a ``PutObject`` over an existing key. A writer's ``data/*`` grant
     can therefore overwrite a committed data file's bytes in place; Lance's own commit is put-if-not-exists
-    (``file_format.md``), but no policy condition makes a data-file put one. As an STS *session* policy
+    (``lance_docs/lance/format/table/transaction.md``), but no policy condition makes a data-file put one. As an STS *session* policy
     this can only RESTRICT the catalog's role (intersection-only), never widen it.
 
     ``bases`` are the base paths the table's manifest declares, granted READ and never write, at either
@@ -615,7 +616,7 @@ def build_session_policy(
     every file it stranded there ([[LH-286]]). A branch-maintain credential gets no delete: a branch's files
     there are its table's to reclaim.
 
-    One grant shape serves both base layouts, and the spec is why (``file_format.md`` § Base Path
+    One grant shape serves both base layouts, and the spec is why (``lance_docs/lance/format/table/layout.md`` § Base Path
     System): for ``is_dataset_root`` the files sit under the base's ``data/``/``_deletions/``/
     ``_indices/``, and for a plain base "the base path points directly to the file directory" — both
     UNDER the base path, so ``<base>/*`` covers each without the policy having to read the flag. It also
@@ -629,7 +630,7 @@ def build_session_policy(
     """
     _reject_iam_policy_syntax("prefix", prefix)
     prefix = prefix.rstrip("/")
-    # A BRANCH IS A PREFIX, and the format says which one ([[LH-055]]). `file_format.md` puts a branch's
+    # A BRANCH IS A PREFIX, and the format says which one ([[LH-055]]). `lance_docs/lance/format/table/branch_tag.md` puts a branch's
     # files at `{dataset_root}/tree/{branch_name}/` and states the name is used "as is to form the path,
     # which means `/` would create a logical subdirectory (e.g. `bugfix/issue-123`)" — so the branch name
     # is joined verbatim and a `/` inside it is intended, not an attack.
@@ -652,8 +653,8 @@ def build_session_policy(
             raise InvalidInputError(f"branch {branch!r} holds IAM policy syntax {held}, which a vended policy cannot name")
         if ".." in branch.split("/"):
             raise InvalidInputError(f"branch {branch!r} may not traverse out of the table's prefix")
-    # READ-ONLY ON MAIN, WRITE-ONLY ON THE BRANCH — `lance_docs/lancemultibasebranchingblobv2.md` § "Building
-    # block 3" names this as the governance isolation the `tree/` layout exists to give. Main stays
+    # READ-ONLY ON MAIN, WRITE-ONLY ON THE BRANCH — the LanceDB blog's branching post
+    # (https://www.lancedb.com/blog/branching-and-shallow-clone) names this as the governance isolation the `tree/` layout exists to give. Main stays
     # READABLE because a branch manifest references its parent's fragments through a base pointing at
     # the dataset root; a credential that could not read them would be scoped to less than the branch is.
     #

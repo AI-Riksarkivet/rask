@@ -13,7 +13,9 @@ hooks = [
   { id = "check-toml" },
   # Lockfiles are legitimately large and MUST be committed — the root uv.lock is already
   # 501 KB and only slips past because this hook checks newly-added files by default.
-  { id = "check-added-large-files", exclude = "(^|/)(uv\\.lock|bun\\.lock)$" },
+  # lance_docs/ is two upstream docs trees vendored whole (lance_docs/PROVENANCE.md), images included, and six of
+  # lance's diagrams are over the hook's 500 KB default.
+  { id = "check-added-large-files", exclude = "(^|/)(uv\\.lock|bun\\.lock)$|^lance_docs/" },
   { id = "check-merge-conflict" },
 ]
 

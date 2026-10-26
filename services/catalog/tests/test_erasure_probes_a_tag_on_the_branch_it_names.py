@@ -1,10 +1,10 @@
 """An erasure decides a tag's fate by the version the tag ACTUALLY pins — on the branch it names.
 
 Tags are stored once at the dataset root and ``tags.list()`` answers every branch's from any handle,
-each carrying the ``branch`` it names (``lance_docs/file_format.md`` "Tag Storage" / "Tag File Format";
+each carrying the ``branch`` it names (``lance_docs/lance/format/table/branch_tag.md`` "Tag Storage" / "Tag File Format";
 ``null`` is main). Branch versions are numbered in the branch's own history, so ``work`` v3 and main v3
 are different snapshots. Reading a tag as ``checkout_version(<bare int>)`` resolves the number against
-the HANDLE's branch (``lance_docs/guide.md`` Tags: "An integer: version number in the current branch"),
+the HANDLE's branch (pylance 13.0.0's ``LanceDataset.checkout_version`` docstring: "An integer specifies a version number in the current branch"),
 and the erasure runs on a main handle — so probing a branch tag by its bare number judges it by main's
 same-numbered version.
 
@@ -133,7 +133,7 @@ def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path
     """The child stands on the parent's v3, not main v3; main v2 and v3 survive by the retention window alone.
 
     A fork point is a ``(parent branch, version)`` reference (``parent_branch`` in ``branches.list()``,
-    ``parentBranch`` in ``lance_docs/file_format.md`` "Branch Metadata File Format"), so a branch cut from
+    ``parentBranch`` in ``lance_docs/lance/format/table/branch_tag.md`` "Branch Metadata File Format"), so a branch cut from
     another branch pins that branch's history whatever its number. Naming the child would send an
     operator with a deadline to delete a branch that frees nothing on main.
     """

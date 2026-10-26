@@ -78,7 +78,7 @@ def requested_external_blob_base(
     the table's schema metadata is the catalog's to write ([[LH-208]]). A create that names no base
     registers none, so its blob columns hold managed bytes and a ``Blob.from_uri`` pointer
     in its rows is refused by Lance at the write ("outside registered external bases",
-    ``lance_docs/guide.md`` § blob v2: "external blob URIs must map to a registered non-dataset-root base
+    ``lance_docs/lance/guide/blob.md`` § blob v2: "external blob URIs must map to a registered non-dataset-root base
     path"). Registering every ``LANCE_EXTERNAL_BLOB_BASES`` entry on every create would let every table
     point at every object under them, and the default entry is the model-artifact tree of every project.
 
@@ -401,7 +401,7 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
         raise InvalidInputError(
             f"the dataset at {location!r} was created without stable row ids: its `_rowid` is a physical address that compaction "
             "rewrites, Lance tracks no row versions for it, and its change feed would answer empty windows. Stable row ids are "
-            "create-time-only through pylance (lance_docs/file_format.md:5878-5889; the format's migration is Rust-only); "
+            "create-time-only through pylance (lance_docs/lance/format/table/row_id_lineage.md:73-83; the format's migration is Rust-only); "
             "recreate it with enable_stable_row_ids=True, then register that."
         )
     entries = entries_for_registration(

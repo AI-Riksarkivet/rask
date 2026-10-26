@@ -69,7 +69,7 @@ class UnstableRowIdsError(ValueError):
     """An upstream without stable row ids was asked to mint root provenance.
 
     Without stable row ids `_rowid` is a physical address, not an identifier: compaction rewrites it and
-    row versions are not tracked (`lance_docs/file_format.md:5878-5889`). A `source_rowid` minted from
+    row versions are not tracked (`lance_docs/lance/format/table/row_id_lineage.md:73-83`). A `source_rowid` minted from
     one names a row only until the next maintenance pass, and every join on it afterwards answers
     rows, just the wrong ones. Stable row ids are create-time-only, so no retry repairs this.
     """

@@ -9,8 +9,8 @@ with `add_bases`. The three red checks on moto with pylance 12.0.0 measured the 
 
 Now (`catalog.services.table_bases.requested_external_blob_base`): a create registers one external base only when the
 request names it in the door's `external_blob_base` query parameter, on a table with a blob-v2 column, inside an approved entry and overlapping no governed root (catalog, control, model registry, model artifacts)
-and in no reserved or warehouse-claimed bucket. Lance resolves every external pointer relative to its base
-(`blob_id` > 0, `lance_docs/guide.md` § blob v2), so confining the base confines every object a pointer can name; no
+and in no reserved or warehouse-claimed bucket. A writer's external pointer must map to a registered non-dataset-root base unless it sets
+`allow_external_blob_outside_bases=True` (`lance_docs/lance/guide/blob.md:285-287`), which the catalog's writes never set, and a pointer is then resolved relative to its base (`blob_id` > 0, `lance_docs/lance/format/table/blob.md` § External Resolution), so confining the base confines every object a pointer can name; no
 per-pointer FGA check is needed, and an approved prefix is the operator's statement that it holds external sources,
 not tenant bytes. `/commit` reads the table's base record and accepts a kind-3 descriptor only through a base recorded
 as `external_blob` (path and store). The vend doors drop every pointer base (judged CONFIGURED or recorded

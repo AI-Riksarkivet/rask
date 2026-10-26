@@ -3,7 +3,7 @@
 The in-process stage skipped its write whenever the target's columns were a subset of the run's output and the
 `source_rowid` lists matched element for element. Values were never compared, and a row corrected in place keeps
 its stable `_rowid` and its position (it moves only its `_row_last_updated_at_version`,
-`lance_docs/file_format.md:6214-6242`), so the corrected bronze payload never reached silver and silver kept the
+`lance_docs/lance/format/table/row_id_lineage.md:426-454`), so the corrected bronze payload never reached silver and silver kept the
 first run's lineage. Its add-columns branch aligned by position through a second handle opened after the check, so
 a commit landing between the two misfiled every derived value; and when the lists did not match, the full-sync
 fallback could not widen at all (`merge_insert` refuses a source column the target lacks, "Append with different

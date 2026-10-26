@@ -9,7 +9,7 @@ the values unlabelled, and ``drop_columns`` leaves every earlier version readabl
 
 A credential for any ref reads every ref's files: a stock client opens a branch with the table's credential
 (``checkout_version((branch, None))``), and a branch reads its parent's fragments through a base on the table root
-(`lance_docs/lancemultibasebranchingblobv2.md` § Building block 3). So a label on any ref holds the table back.
+(`lance_docs/lance/format/table/layout.md` § Shallow Clone). So a label on any ref holds the table back.
 
 Every decision is the real model's, on a store of this test's own: alice owns ``db`` and ``db$t`` and may apply the
 label ``pii``; bob is a writer on ``db``. The vendor records every call, since a credential minted and then discarded is

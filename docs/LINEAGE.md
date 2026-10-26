@@ -66,7 +66,7 @@ delivered together were each authorized before any of them bound its run. A batc
 together and an event the sidecar is retrying holds no other back.
 
 **The feed's sequence is Lance's own.** The tables use stable row ids, which Lance assigns in commit order
-(`lance_docs/file_format.md`, "Row ID Assignment"), and `seq` is `_rowid + 1`. A follower reading `seq > since`
+(`lance_docs/lance/format/table/row_id_lineage.md`, "Row ID Assignment"), and `seq` is `_rowid + 1`. A follower reading `seq > since`
 therefore never misses a row that commits after it read. The contract is [`COMMIT-EVENTS.md`](COMMIT-EVENTS.md).
 
 **What an edge asserts.** Only a successful run (`COMPLETE`) asserts edges: every input to every output it wrote, at

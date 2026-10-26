@@ -291,7 +291,7 @@ async def merge_insert_into_table(
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     # `on` STAYS A SINGLE KEY until the lance-namespace bump (A9 is blocked on A10). 0.12.0 makes it an
     # array of field paths — a composite merge key, sent as a repeated query parameter — but the
-    # INSTALLED 0.11.0 model types it `str` with MinLen(1), so accepting a list here fails validation
+    # INSTALLED 0.11.1 model types it `str` with MinLen(1), so accepting a list here fails validation
     # inside `MergeInsertIntoTableRequest` rather than at the door. Widening the door without the
     # model would 422 a 0.12.0 client one layer deeper and read as a rask bug.
     on: str | None = None,
@@ -620,7 +620,7 @@ def query_table(
 def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
 
-    Answers the change data feed `lance_docs/file_format.md:6214-6242` documents, from one snapshot at
+    Answers the change data feed `lance_docs/lance/format/table/row_id_lineage.md:426-454` documents, from one snapshot at
     the window's end, and refuses a window the version columns cannot describe; the rules and the
     consumer contract live in `catalog.services.changes`, the read in `dataplane.read_changes`.
 

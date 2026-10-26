@@ -1,10 +1,10 @@
 """A branch-scoped write credential may write the BRANCH, and only read main ([[LH-055]]).
 
 THE FORMAT SAYS SO, and this is the mechanism it names rather than one chosen here.
-`lance_docs/lancemultibasebranchingblobv2.md` § "Building block 3" gives branch isolation as a property of the
-LAYOUT: branch data lives physically under `tree/<branch>/`, which yields "strong governance isolation
-(branch data physically under `tree/<branch>/`, so storage ACLs can be **read-only on main and
-write-only on the branch**)". `lance_docs/file_format.md` fixes the path: branch files sit at
+the LanceDB blog's branching post (https://www.lancedb.com/blog/branching-and-shallow-clone) gives branch
+isolation as a property of the LAYOUT: branch data lives physically under `tree/<branch>/`, where "Storage-level
+access controls can enforce **read-only on the main dataset and write-only on the branch directory**".
+`lance_docs/lance/format/table/branch_tag.md` fixes the path: branch files sit at
 `{dataset_root}/tree/{branch_name}/`, and the branch name is "use[d] as is to form the path, which
 means `/` would create a logical subdirectory (e.g. `bugfix/issue-123`)".
 

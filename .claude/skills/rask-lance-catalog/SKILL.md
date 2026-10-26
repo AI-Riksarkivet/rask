@@ -175,8 +175,8 @@ Two contracts stack here, and confusing them is how bugs happen:
 - **Identity headers:** `api_key` → `x-api-key`, `auth_token` → `Authorization: Bearer`; arbitrary
   context maps BOTH WAYS through a `header.<name>` context KEY — `{"header.x-trace-id": "abc"}` is
   sent as `x-trace-id: abc` (prefix stripped) and every response header returns as `header.<name>`
-  (`spec.yaml:2471`). The old `x-lance-ctx-<key>` form is superseded and survives only in the
-  generated per-model docs. Headers beat body fields.
+  (`spec.yaml:2482-2489`; `ns_catalog/catalog/rest/index.md` § Context Header Mapping). Identity given both in the body
+  and in a header is taken from the header (`catalog/rest/index.md:64`).
 
 ## The error contract — NEVER invent a status
 
@@ -620,7 +620,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   doors (`/management/v1/table/{id}/credentials`, `DescribeTable(vend_credentials=true)`) answer server-mediated when
   `vending.classified_in_any_ref` finds a label on any field, nested ones included, on main or on any branch: a
   credential for any ref reads every ref's files (a stock client opens a branch with the table's credential; a branch
-  reads its parent's fragments through a base, `lance_docs/lancemultibasebranchingblobv2.md`). A label never leaves a
+  reads its parent's fragments through a base, `lance_docs/lance/format/table/layout.md` § Shallow Clone). A label never leaves a
   field another way: `alter_columns` and `drop_columns` commit with `keeps_labels` (`dataplane.commit_stamped`), which
   refuses 400 a commit losing or changing a field's `rask.*` keys by Lance field id (a same-type re-type re-mints the id
   with no metadata, measured on pylance 13.0.0), as `version/create` already refuses for a stock commit; an
@@ -777,14 +777,14 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   itself** ([[LH-286]], `maintenance.services.base_reclaim`). `cleanup_old_versions` is ROOT-SCOPED: measured
   on pylance 13.0.0, after an overwrite of a table whose fragments sit on a data base, `cleanup_old_versions(older_than=0,
   delete_unverified=True)` removed every superseded version and none of the base's files (against
-  `lance_docs/guide.md:4349`). The same root-scoping is what makes cleanup SAFE on a shallow clone (see
+  `lance_docs/lance/guide/read_and_write.md:534`). The same root-scoping is what makes cleanup SAFE on a shallow clone (see
   `SUPPORTED_FOR_GC`). A data base is its tables' storage on the estate's store, reached under the catalog's own
   identity like a root (owner, 2026-10-24: Lance's default, "every base inherits the unscoped options",
-  `guide.md` § Per-Base Configuration); no base holds a credential of its own, so the native doors read it and the
+  `lance_docs/lance/guide/object_store.md` § Per-Base Configuration); no base holds a credential of its own, so the native doors read it and the
   vend is direct. The expiry pass, after `cleanup_old_versions`, lists each directory the table's base record names
   as a `data` entry (a plain base, never a dataset root), subtracts every file any retained version of main or any
   branch references (a branch inherits the base under the same id and appends into the same directory, measured), and
-  deletes what is left once it is older than Lance's unverified-file age, 7 days (`lance_sdk.md:931`). It signs with the
+  deletes what is left once it is older than Lance's unverified-file age, 7 days (`lance_docs/lance/guide/read_and_write.md:564-571`). It signs with the
   maintain-tier vend, which gets delete on the table's own data directories (`vending.VendableBases`), and the probe
   asks for that vend when a stranded file is past the age, so a table overwritten once still reclaims. A deleted row's
   bytes stay in its base fragment behind a deletion vector; the pass reports such fragments

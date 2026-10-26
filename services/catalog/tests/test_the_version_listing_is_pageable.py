@@ -8,7 +8,7 @@ with seven versions:
     limit=2, page_token="3" -> [1, 2]      page_token None
 
 So the backend truncates at `limit` and hands back NO continuation, and the token it is given changes
-nothing. The catalog's own surface is spec-correct — `lance_docs/namespace.md` § ListTableVersions puts
+nothing. The catalog's own surface is spec-correct — `lance_docs/ns_catalog/catalog/rest/index.md` § ListTableVersions puts
 `page_token` and `limit` on the query string and `ListTableVersionsResponse` carries `page_token` — and
 the handler forwarded both faithfully. The lie was one layer down, and forwarding it made the door
 repeat it.

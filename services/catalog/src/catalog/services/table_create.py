@@ -109,7 +109,7 @@ def table_exists(ns: LanceNamespace, segments: list[str]) -> bool:
 class CreateShape(BaseModel):
     """What the create door decoded from the request itself, before its idempotency claim."""
 
-    #: spec.yaml:3761-3767 types it as an object whose values are strings.
+    #: spec.yaml:3769-3775 types it as an object whose values are strings.
     properties: dict[str, str] | None = None
     #: The external blob base the create asks to register ([[LH-209]]), judged with settings before the write.
     external_blob_base: str | None = None

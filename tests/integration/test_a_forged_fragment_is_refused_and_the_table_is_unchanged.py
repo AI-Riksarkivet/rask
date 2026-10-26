@@ -397,7 +397,7 @@ def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate
 
 
 def test_a_writers_own_fragment_of_a_packed_struct_commits(estate: _Estate) -> None:
-    """A struct Lance packs is one column of the file (`lance_docs/file_format.md` § Field IDs: "Only leaf fields and
+    """A struct Lance packs is one column of the file (`lance_docs/lance/format/table/index.md:188`: "Only leaf fields and
     packed structs have column indices"), at the top level and inside a struct Lance does not pack ([[LH-246]])."""
     inner = pa.struct([pa.field("a", pa.int64()), pa.field("b", pa.string())])
     packed = {"lance-encoding:packed": "true"}

@@ -253,7 +253,7 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
 
     A DATASET A TRASH RECORD COVERS IS REFUSED FIRST, before the cap and before any open, vend or commit
     ([[LH-449]]). A recoverable drop freezes its bytes until undrop or purge, and a Lance commit is a
-    put-if-not-exists on the store (`lance_docs/file_format.md` § Commit Protocol), so the freeze holds only where
+    put-if-not-exists on the store (`lance_docs/lance/format/table/transaction.md` § Commit Protocol), so the freeze holds only where
     each writer reads the trash record itself, whatever signs its commit. The orphan scan reads every discovered
     dataset, trashed ones included, because the drift report and the purge gate need them. Before the cap, because a
     refusal repeated every tick would spend a slot every tick. The index is read once per call, as the sweep reads

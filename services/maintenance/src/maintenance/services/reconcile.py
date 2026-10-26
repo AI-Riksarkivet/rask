@@ -470,7 +470,7 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions) -> list[st
 
 def _tables(root: str, storage_options: StorageOptions) -> list[tuple[str, str | None]]:
     """Every ``(table id, location)`` recorded on ``root``, sorted — the same manifest the namespace scan
-    reads. `location` per `lance_docs/namespace.md:968-976`: nullable, relative to the root, tables only.
+    reads. `location` per `lance_docs/ns_catalog/catalog/dir/index.md:103-111`: nullable, relative to the root, tables only.
 
     The FULL object id is kept, not just a leading segment: a table is recorded as
     ``<namespace><delimiter><table>`` (and nests further), and that whole string is the catalog id an
@@ -672,7 +672,7 @@ def _manifest_names(registered: dict[str, tuple[str, str | None]]) -> TableIds:
 
 
 def _resolved(root: str, location: str) -> str:
-    """A row's location made absolute: a relative one is under the root that recorded it (`lance_docs/namespace.md:968-976`)."""
+    """A row's location made absolute: a relative one is under the root that recorded it (`lance_docs/ns_catalog/catalog/dir/index.md:103-111`)."""
     return location if "://" in location else f"{root.rstrip('/')}/{location.lstrip('/')}"
 
 
@@ -684,7 +684,7 @@ def _absent_datasets(*, registered: dict[str, tuple[str, str | None]], discovere
 
     IT COSTS NO NEW I/O, which is why it rides `_orphan_category`'s walk. `discovered` is the URI set
     that pass already built for its own comparison, and the location comes from a column of `__manifest`
-    the reconciler was simply not selecting (`lance_docs/namespace.md:968-976`).
+    the reconciler was simply not selecting (`lance_docs/ns_catalog/catalog/dir/index.md:103-111`).
 
     A NULL LOCATION IS NOT A FINDING, and the schema is what says so: the spec makes `location`
     nullable and present "only for tables", and a declared-only table is "reserved, no storage yet".

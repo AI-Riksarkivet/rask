@@ -9,7 +9,7 @@ registered at ``db-outside/held`` it probes a key that does not exist and answer
 with none of its metadata, writes into it on a create and deregisters it on the rollback, and answers a rename 404.
 
 A table holds a version when a committed manifest, ``{version}.manifest`` or ``{u64::MAX - version:020}.manifest``
-(`lance_docs/file_format.md` § Manifest Naming Schemes), lies under the location DescribeTable answers. A staged
+(`lance_docs/lance/format/table/transaction.md` § Manifest Naming Schemes), lies under the location DescribeTable answers. A staged
 ``{version}.manifest-{uuid}`` (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:292`), which a refused
 stock commit leaves behind, is no version.
 

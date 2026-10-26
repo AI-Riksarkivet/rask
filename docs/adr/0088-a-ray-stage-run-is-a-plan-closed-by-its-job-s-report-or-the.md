@@ -55,7 +55,7 @@ before it, so a found marker implies every write of the run landed. Measured on 
 `conflict_retries`, so a marked merge answered `CommitConflictError(retryable=True)` (a concurrent merge or
 `compact_files`) is planned again against the newer version, up to that knob's default of 10, and an incompatible
 conflict (a concurrent overwrite) is raised; `delete` and `update_schema_metadata` commit with none; `read_transaction` returns them as written
-(the transaction record of `lance_docs/file_format.md:6746-6747`). The Ray job therefore ends every lane on a markable
+(the transaction record of `lance_docs/lance/format/table/transaction.md:60-61`). The Ray job therefore ends every lane on a markable
 commit: the head and distributed lanes' landing create or merge; the delta lane's merge, after its retraction deletes and
 its schema-metadata stamp; and the media lane's LAST batch merge, which also carries its retraction as a conditional
 `when_not_matched_by_source_delete` (rows naming another run), measured to delete exactly those. What it cannot cover: an

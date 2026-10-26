@@ -1,6 +1,6 @@
 """``POST /v1/table/{id}/describe`` must accept the spec's request BODY.
 
-The Lance Namespace spec (``lance_docs/ns_catalog/spec.yaml``, ``lance_docs/namespace.md`` §DescribeTable)
+The Lance Namespace spec (``lance_docs/ns_catalog/spec.yaml``, ``lance_docs/ns_catalog/catalog/rest/index.md`` §DescribeTable)
 puts only ``with_table_uri`` / ``load_detailed_metadata`` / ``check_declared`` in the query; ``version``,
 ``tag`` and ``vend_credentials`` travel in a ``DescribeTableRequest`` BODY, and the generated client
 (``lance_namespace_urllib3_client.api.table_api._describe_table_serialize``) sends them that way. The route

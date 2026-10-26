@@ -78,7 +78,7 @@ previewed, never the default.
 ### Lance general compression is OPT-IN PER TABLE, and off by default ([[LH-034]])
 
 **Decision.** The catalog's create path sets no `lance-encoding:compression` scheme. It instead honours
-the `lance-encoding:*` knobs `lance_docs/file_format.md` § Compression Configuration defines, supplied as
+the `lance-encoding:*` knobs `lance_docs/lance/format/file/encoding.md` § Compression Configuration defines, supplied as
 create **properties**, so a workload that knows its own value sizes opts in per table
 (`catalog.core.encoding`).
 
@@ -95,7 +95,7 @@ lists are narrower (general compression on every leaf, RLE and dictionary on eve
 `true`, `1`, `yes`, `on` or their negatives: the doc says any string, but Lance ignores every other value, and
 `version/create`'s fragment judge holds a struct Lance packs as one column, as the file does. A
 general scheme stamped on a float with `bss` unset leaves BSS to Lance's default, `auto`, which decides it by
-entropy and only under a general scheme (`file_format.md` § Byte Stream Split), as for any compressed column.
+entropy and only under a general scheme (`lance_docs/lance/format/file/encoding.md` § Byte Stream Split), as for any compressed column.
 
 **Rationale.** "Compression on = smaller" is false at this estate's value sizes, measured rather than
 assumed. Lance already applies FSST to variable-width data, bitpacking to ints and RLE to
@@ -114,7 +114,7 @@ tier shape (`{id, payload, stage}`, 8 MiB of payload held constant while value s
 
 The crossover is ~1 KiB, the worst regression is +78% at 256 B, and above 32 KiB the setting is inert
 because Lance already applies general compression automatically in a full-zip context at that size
-(`lance_docs/file_format.md` — Compression Configuration; measured as a +0.0% delta at 256 KiB values,
+(`lance_docs/lance/format/file/encoding.md:883-884` § General; measured as a +0.0% delta at 256 KiB values,
 which is what confirms the harness was reading real behaviour rather than a no-op).
 
 **The corpus this was taken at.** The five governed tier datasets measured live on 2026-09-19 hold

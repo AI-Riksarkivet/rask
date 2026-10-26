@@ -168,7 +168,7 @@ def test_an_upstream_correction_and_deletion_reach_silver_through_the_consumer_r
     """The published window resolved by the change-feed consumer rule: merge by key, then retract.
 
     An in-place `update` keeps the row's `_row_created_at_version` and moves only its
-    `_row_last_updated_at_version` (lance_docs/file_format.md:6214-6242), so a consumer keyed on the
+    `_row_last_updated_at_version` (lance_docs/lance/format/table/row_id_lineage.md:426-454), so a consumer keyed on the
     INSERTED predicate never sees it; a delete leaves no row for any predicate to name.
     """
     uri, silver = _bronze(tmp_path, [1, 2, 3]), str(tmp_path / "silver.lance")

@@ -244,7 +244,7 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
 
 
 def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_create(served_on_s3: Served, caplog: pytest.LogCaptureFixture) -> None:
-    """Lance's own distributed protocol (``lance_docs/file_format.md`` § Rewrite): reserve the new fragment ids, then
+    """Lance's own distributed protocol (``lance_docs/lance/format/table/transaction.md`` § Rewrite): reserve the new fragment ids, then
     commit the rewrite. Both are commits a stock client stages, so both are judged here, and the job that stages them
     holds no writer rung: a maintainer rewrites how a table is stored and never what it says (``model.fga``)."""
     stock = _created(served_on_s3)
@@ -353,7 +353,7 @@ def _commits(caplog: pytest.LogCaptureFixture) -> list[tuple[str | None, int, st
 def test_a_stock_client_commits_on_a_branch_through_version_create_and_main_is_unchanged(served_on_s3: Served, caplog: pytest.LogCaptureFixture) -> None:
     """[[LH-490]]: the spec's ``CreateTableBranch`` creates the branch, and every commit a stock client then makes on it is
     staged under ``tree/<branch>/`` and judged at ``version/create`` with ``branch`` (``lance_docs/ns_catalog/spec.yaml``
-    § CreateTableVersion; the branch layout is ``lance_docs/file_format.md`` § Branch Dataset Layout).
+    § CreateTableVersion; the branch layout is ``lance_docs/lance/format/table/branch_tag.md`` § Branch Dataset Layout).
 
     A branch reads its parent's fragments through a dataset-root base on the table's own root, so the compaction copies
     them into the branch, and that base is the table's own history, not a clone's source."""
@@ -733,7 +733,7 @@ def test_what_lands_is_what_was_judged_whatever_the_writer_puts_over_its_staged_
 def test_a_commit_whose_answer_is_lost_lands_once_and_the_client_gets_its_version_back(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:
     """[[LH-491]]: after a failed commit attempt Lance reads the target version back and keeps the commit as its own
     when the transaction there, the manifest's inline one, equals the one it staged (``verify_commit_outcome`` in
-    ``rust/lance/src/io/commit.rs`` at v13.0.0; ``lance_docs/file_format.md`` § Commit Algorithm covers only the rebase
+    ``rust/lance/src/io/commit.rs`` at v13.0.0; ``lance_docs/lance/format/table/transaction.md`` § Commit Algorithm covers only the rebase
     and retry). That holds only while the catalog finalizes the writer's transaction unchanged: measured on pylance 13.0.0
     with a finalize that changed its uuid, Lance read the landed version as another writer's, rebased and re-staged the
     same fragment as the next version, and reported the commit's outcome unknown."""

@@ -5,7 +5,7 @@ it lies outside the retain-last-N window, and it is older than the age cutoff. T
 maintenance's expiry threshold ask the same question, so they read the same answer here.
 
 The rule mirrors what ``cleanup_old_versions(older_than, retain_versions, error_if_tagged_old_versions=False)``
-deletes, on the evidence of ``lance_docs/guide.md`` (Branches: "Lance ensures that cleanup does not delete files still
+deletes, on the evidence of ``lance_docs/lance/guide/tags_and_branches.md`` (Branches: "Lance ensures that cleanup does not delete files still
 referenced by any branch"; tags exempt a version from cleanup).
 """
 
@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 
 #: The default ref. Lance records main as null — a tag's ``branch`` and a branch's ``parentBranch``
-#: (``lance_docs/file_format.md`` "Tag File Format" / "Branch Metadata File Format"). It is not in ``branches.list()`` on
+#: (``lance_docs/lance/format/table/branch_tag.md`` "Tag File Format" / "Branch Metadata File Format"). It is not in ``branches.list()`` on
 #: any dataset, so a branch create's collision pre-check cannot see it, and pylance answers a request to create it with
 #: its own bug-report text (measured on 11.0.0, 2026-09-15).
 MAIN_BRANCH: Final = "main"
@@ -63,7 +63,7 @@ def recorded_branch(branch: object) -> str | None:
 def tag_versions(ds: VersionedDataset, branch: str | None) -> dict[str, int]:
     """``{tag: version}`` for the tags pinning a version OF ``branch`` — the only tags its cleanup honours.
 
-    Branch histories are numbered independently (``lance_docs/guide.md`` Branches), and measured on pylance 12.0.0 a tag
+    Branch histories are numbered independently (``lance_docs/lance/guide/tags_and_branches.md`` Branches), and measured on pylance 12.0.0 a tag
     on ``work`` v3 leaves main's v3 to ``cleanup_old_versions``.
     """
     ref = recorded_branch(branch)

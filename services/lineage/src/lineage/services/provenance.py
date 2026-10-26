@@ -8,7 +8,7 @@ write is authorized, judged and audited like any other writer's.
 
 THE FEED'S SEQUENCE IS LANCE'S OWN. Its tables are created with stable row ids, and Lance assigns a row's id
 from the manifest's ``next_row_id`` when its commit lands, re-assigning it when a racing commit wins first
-(`lance_docs/file_format.md`, "Row ID Assignment"). So ``_rowid`` order is commit order: measured on pylance
+(`lance_docs/lance/format/table/row_id_lineage.md`, "Row ID Assignment"). So ``_rowid`` order is commit order: measured on pylance
 13.0.0, four writers racing 40 keyed appends left the row-id order equal to the created-at-version order.
 A follower reading ``seq > since`` therefore never misses a row that commits after it read. ``seq`` is
 ``_rowid + 1``, so the first row is 1 and ``since=0`` reads from the start.
@@ -71,7 +71,7 @@ tracer = trace.get_tracer(__name__)
 
 _T = TypeVar("_T")
 
-#: The field metadata Lance reads a table's unenforced primary key from (`lance_docs/file_format.md`, "Unenforced Primary Key").
+#: The field metadata Lance reads a table's unenforced primary key from (`lance_docs/lance/format/table/index.md`, "Unenforced Primary Key").
 _PRIMARY_KEY: Final = {"lance-schema:unenforced-primary-key": "true"}
 
 #: The states a run ends in. The feed keeps the FIRST row of each, whatever its event time, so a terminal event a

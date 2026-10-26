@@ -1,6 +1,6 @@
 """Where a branch's files live, and which branch names would land inside another branch's files ([[LH-203]]).
 
-The format joins a branch name verbatim onto ``tree/``: `lance_docs/file_format.md` § "Branch Dataset
+The format joins a branch name verbatim onto ``tree/``: `lance_docs/lance/format/table/branch_tag.md` § "Branch Dataset
 Layout" puts a branch's files at ``{dataset_root}/tree/{branch_name}/`` and says the name is used "as is
 to form the path, which means `/` would create a logical subdirectory". It also allows `_` in a segment
 (§ "Branch Name", rule 5). Nothing in the format stops branch ``a/_versions`` from laying its files under
@@ -26,7 +26,7 @@ from typing import Final
 from urllib.parse import unquote
 
 
-#: The directories a branch writes its own files into under ``tree/<branch>/``. `file_format.md` § "Branch
+#: The directories a branch writes its own files into under ``tree/<branch>/``. `lance_docs/lance/format/table/branch_tag.md` § "Branch
 #: Dataset Layout" lists the first four; ``data`` holds the files a branch writes itself (measured on
 #: pylance 12.0.0: an append to a branch lands its fragment under ``tree/<branch>/data/``). A
 #: branch-scoped maintain credential grants exactly these and nothing else under the branch ([[LH-202]]).
@@ -37,7 +37,7 @@ BRANCH_FILE_DIRS: Final = ("_versions", "_transactions", "_deletions", "_indices
 #: puts the branch's files where Lance looks for another ref's.
 RESERVED_SEGMENTS: Final = frozenset({*BRANCH_FILE_DIRS, "_refs", "_mem_wal", "tree"})
 
-#: Where Lance keeps one JSON file per branch, `file_format.md` § "Branch Metadata Path". A ``/`` in a
+#: Where Lance keeps one JSON file per branch, `lance_docs/lance/format/table/branch_tag.md` § "Branch Metadata Path". A ``/`` in a
 #: branch name is written ``%2F`` in the file name.
 BRANCH_REFS_DIR: Final = "_refs/branches"
 

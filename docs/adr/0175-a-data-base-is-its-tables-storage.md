@@ -7,7 +7,7 @@ static key for a base either).
 ## Context
 
 A table may spread its fragments across approved data bases (`catalog.multibase.dataBases`, the Uber pattern of
-`lance_docs/lancemultibasebranchingblobv2.md` § 1), each table in its own directory beneath a base ([[LH-252]]). Three
+Jack Ye, "Rethinking Table File Paths with Uber: Lance's Multi-Base Layout", <https://www.lancedb.com/blog/rethinking-table-file-paths-lance-multi-base-layout>), each table in its own directory beneath a base ([[LH-252]]). Three
 gaps stood:
 
 - Each base could carry its own credential reference, a static key pair the catalog fetched from the secret store
@@ -17,13 +17,13 @@ gaps stood:
   no per-base parameters, and the vend answered `server_mediated`.
 - Nothing reclaimed a base. Measured on pylance 13.0.0: after an overwrite of a table whose fragments sit on a data base,
   `cleanup_old_versions(older_than=0, delete_unverified=True)` removed every superseded version and none of the base's
-  files, against `lance_docs/guide.md:4349`. A deleted row's bytes stay in its base fragment behind a root
+  files, against `lance_docs/lance/guide/read_and_write.md:534`. A deleted row's bytes stay in its base fragment behind a root
   `_deletions/` vector, and every path that ended a table (the purge, a destructive drop, a namespace or warehouse
   cascade) deleted its root and left its data directory.
 
 What the references say:
 
-- `lance_docs/guide.md` § Per-Base Configuration: a base "may live in a different bucket, account, or storage provider";
+- `lance_docs/lance/guide/object_store.md` § Per-Base Configuration: a base "may live in a different bucket, account, or storage provider";
   "every base inherits the unscoped options", and a `base_<id>.<key>` entry (or `base_store_params`) overrides them for
   one base. Measured on pylance 13.0.0: Lance honours those keys on reads and appends, and the `dir` backend's native
   query carries a connection's `storage.base_<id>.*` keys into its own open.
@@ -46,7 +46,7 @@ What the references say:
   directory the table's base record names as a `data` entry (a plain base, never a dataset root), subtracts every file
   any retained version of main or of any branch references (a branch inherits the base under the same id and appends
   into the same directory, measured), and deletes what is left once it is older than Lance's unverified-file age, 7 days
-  (`lance_docs/lance_sdk.md:931`). It signs with the maintain-tier vend; the probe that decides whether to vend asks
+  (`lance_docs/lance/guide/read_and_write.md:564-571`). It signs with the maintain-tier vend; the probe that decides whether to vend asks
   for one when a stranded file is past the age. A reclaim is material work: it is audited and announced on lineage.
 - **A deleted row's bytes on a base are reported, not rewritten.** The pass counts the fragments that keep them
   (`compaction.base_fragments.holding_deleted_rows`), and the compaction gate keeps refusing such a table, because

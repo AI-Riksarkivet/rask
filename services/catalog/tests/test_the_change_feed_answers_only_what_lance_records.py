@@ -1,8 +1,8 @@
 """`POST /management/v1/table/{id}/changes` answers only what Lance's own row-version record supports.
 
 Lance's change data feed is predicates over `_row_created_at_version` / `_row_last_updated_at_version`
-plus the deleted-row record (`lance_docs/file_format.md:6214-6242`), and all three exist only where
-the table has stable row ids (`file_format.md:5878-5889`). Measured on pylance 12.0.0: a table created
+plus the deleted-row record (`lance_docs/lance/format/table/row_id_lineage.md:426-454`), and all three exist only where
+the table has stable row ids (`lance_docs/lance/format/table/row_id_lineage.md:73-83`). Measured on pylance 12.0.0: a table created
 without them still answers both version columns, both read 1 for every row, and an `inserted` window
 over a real append answers [] with a 200, the one answer a consumer cannot tell from "nothing changed".
 
@@ -121,7 +121,7 @@ def _overwrite(uri: str) -> None:
 
 
 def _update_columns(uri: str) -> None:
-    """Rewrite `v` in place for one row: `fragment.update_columns` plus `LanceOperation.Update` (lance_docs/guide.md:1790-1850)."""
+    """Rewrite `v` in place for one row: `fragment.update_columns` plus `LanceOperation.Update` (lance_docs/lance/guide/distributed_write.md:187-247)."""
     dataset = lance.dataset(uri)
     updated, fields_modified = dataset.get_fragments()[0].update_columns(pa.table({"_rowid": pa.array([0], pa.uint64()), "v": pa.array([99], pa.int64())}))
     lance.LanceDataset.commit(uri, lance.LanceOperation.Update(updated_fragments=[updated], fields_modified=fields_modified), read_version=dataset.version)

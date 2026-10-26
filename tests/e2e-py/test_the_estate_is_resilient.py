@@ -29,7 +29,7 @@ The drills, and what each outage must look like while it lasts:
    and then refuses every write it would announce, ServiceUnavailable, before committing it: a write it cannot announce
    never lands. The store's contents survive the seal, so nothing is minted again.
 7. The catalog itself, its process killed with SIGKILL while pipelines commit concurrently through `version/create`.
-   Lance's put-if-not-exists of each `_versions/` manifest (`lance_docs/file_format.md` § Commit Protocol) keeps one
+   Lance's put-if-not-exists of each `_versions/` manifest (`lance_docs/lance/format/table/transaction.md` § Commit Protocol) keeps one
    history: every acknowledged commit landed once, a commit whose answer the kill lost landed at most once, and no run
    landed twice.
 
@@ -93,7 +93,7 @@ BUS_OUTAGE_SECONDS = chaos.RECONNECT_WINDOW_SECONDS + 30.0
 COMMIT_RESULT_UNKNOWN = "the commit may or may not have been applied"
 NO_DOOR = "Failed to execute request"
 #: What a stock client says of a commit Lance gave up on after rebasing it over its concurrent writers' commits, which
-#: committed nothing (`lance_docs/file_format.md` § Commit Algorithm). The kill drill's writers resume together once the
+#: committed nothing (`lance_docs/lance/format/table/transaction.md` § Commit Algorithm). The kill drill's writers resume together once the
 #: catalog is back, and on the e2e-stack lane's runner one exhausted its retries (run 39063208675: "Too many concurrent
 #: writers. Attempted 5 times, but failed on retry_timeout of 30.000 seconds.").
 CONTENDED = "Too many concurrent writers"

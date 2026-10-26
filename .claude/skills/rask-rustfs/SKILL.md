@@ -244,7 +244,7 @@ removing a bound policy (`rustfs@1.0.3:rustfs/src/admin/handlers/policies.rs:216
 `rustfs@1.0.3:crates/iam/src/manager.rs:555-557`).
 
 The CAS check rests on Lance's own requirement: a commit needs put-if-not-exists (or rename-if-not-exists) so exactly
-one writer wins a manifest version (`lance_docs/file_format.md` § Commit Protocol, "Storage Primitives"). The catalog
+one writer wins a manifest version (`lance_docs/lance/format/table/transaction.md` § Commit Protocol, "Storage Primitives"). The catalog
 proves the same primitive, plus prefix scope, against any warehouse's store through a vended credential:
 `POST /management/v1/warehouses/{warehouse_id}/validate` writes inside the prefix, is refused outside it, and sends two
 `If-None-Match: *` PUTs at one key expecting the second refused

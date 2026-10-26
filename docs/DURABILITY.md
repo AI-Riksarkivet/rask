@@ -29,7 +29,7 @@ no-op for data.
 
 Lance's correctness under concurrent writers rests entirely on the object store honoring **put-if-not-exists**
 (`If-None-Match: *`): every commit publishes `_versions/N.manifest` conditionally, and the format requires the
-store to guarantee **exactly one writer wins** that race (`lance_docs/file_format.md` — conflict resolution). A
+store to guarantee **exactly one writer wins** that race (`lance_docs/lance/format/table/transaction.md:15-22` § Storage Primitives). A
 store that silently *ignores* the header accepts both PUTs and silently loses a commit — a real failure mode
 (GCS S3-interop) that a single-writer smoke test never catches, so a store has to be proven, not assumed.
 

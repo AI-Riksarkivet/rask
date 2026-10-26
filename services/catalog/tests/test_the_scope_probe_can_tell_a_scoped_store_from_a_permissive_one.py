@@ -218,7 +218,7 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
 class TestConditionalPut:
     """A store that ignores put-if-not-exists loses a commit silently, and nothing asked it.
 
-    [[LH-040]]. `lance_docs/file_format.md` § "Commit Protocol" → "Storage Primitives" is the authority:
+    [[LH-040]]. `lance_docs/lance/format/table/transaction.md` § "Commit Protocol" → "Storage Primitives" is the authority:
     Lance commits rely on the object store's **put-if-not-exists**, which guarantees "that exactly one
     writer succeeds when multiple writers attempt to create the same manifest file concurrently". Take
     the primitive away and two writers both "succeed" writing the same manifest, and the loser's commit

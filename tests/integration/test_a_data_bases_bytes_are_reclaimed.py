@@ -2,7 +2,7 @@
 
 LANCE'S OWN CLEANUP IS ROOT-SCOPED. Measured on pylance 13.0.0: after an overwrite of a table whose fragments sit on a
 non-root data base, ``cleanup_old_versions(older_than=0, delete_unverified=True)`` removed every superseded version and
-none of the base's files, which ``lance_docs/guide.md:4349`` says it would delete. A branch of such a table inherits
+none of the base's files, which ``lance_docs/lance/guide/read_and_write.md:534`` says it would delete. A branch of such a table inherits
 the base under the same id and appends into the same directory, and a delete leaves the base fragment referenced
 behind a root ``_deletions/`` vector. Each table holds its own directory beneath an approved base ([[LH-252]]), and its
 base record names it, so maintenance reclaims that directory itself.
@@ -11,7 +11,7 @@ One estate on moto: the catalog with one approved data base on a second bucket, 
 and dropped through its doors, so its base record and its directory claim are the catalog's own. Each claim:
 
 - the expiry pass deletes a base file no version of main or of any branch references once it is older than Lance's
-  unverified-file age (7 days, ``lance_docs/lance_sdk.md:931``), keeps one a branch still references and every file
+  unverified-file age (7 days, ``lance_docs/lance/guide/read_and_write.md:564-571``), keeps one a branch still references and every file
   younger than that age, and reports the base fragment a deleted row keeps alive, which only a compaction could rewrite;
 - the purge of an expired trashed table deletes its data directory with its root, then forgets its base record and
   releases the directory's claim, also where an earlier tick released it ([[LH-535]]); a directory no claim names the

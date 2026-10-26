@@ -1,7 +1,7 @@
 """Lance's commit-path auto-cleanup: the keys that arm it, and the one way the estate disarms a table ([[LH-245]]).
 
 Lance runs version cleanup INSIDE a commit, every N commits, when the manifest that commit PRODUCES carries
-``lance.auto_cleanup.*`` config keys (`lance_docs/guide.md:4412-4476`). Measured on pylance 12.0.0
+``lance.auto_cleanup.*`` config keys (`lance_docs/lance/guide/read_and_write.md:610-671`). Measured on pylance 12.0.0
 (2026-10-05, a real dataset on a local root):
 
 * the hook reads the committed manifest's config, not the one committed over: an ``update_config`` that

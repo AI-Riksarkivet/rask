@@ -5,10 +5,10 @@ Source: owner decision, 2026-10-10 grilling session (LH-228's expiry half; rever
 ## Context
 
 The namespace spec has no undrop. It has two ways to remove a table: DeregisterTable, after which "the table content
-remains available in the storage" (`lance_docs/ns_catalog/spec.yaml:4079-4081`) and which the directory catalog keeps
-"for potential re-registration" (`lance_docs/ns_catalog/catalog/dir/index.md:66-70`); and DropTable, "Drop table `id`
+remains available in the storage" (`lance_docs/ns_catalog/spec.yaml:4087-4089`) and which the directory catalog keeps
+"for potential re-registration" (`lance_docs/ns_catalog/catalog/dir/index.md:66-69`); and DropTable, "Drop table `id`
 and delete its data" (`spec.yaml:498`), which may return a transaction id to "track deletion progress" when the data
-cannot be deleted at once (`spec.yaml:4041-4043`). RestoreTable restores a version, not a dropped table.
+cannot be deleted at once (`spec.yaml:4049-4051`). RestoreTable restores a version, not a dropped table.
 
 rask's recoverable drop is a deregister plus a trash record: the record is written at
 `services/catalog/src/catalog/api/v1/endpoints/tables.py:555-561`, the name's claim is kept (`:564`) and the table is
@@ -33,8 +33,8 @@ grants and name lock last indefinitely.
 - A drop past its grace period is not recoverable, even while its bytes still exist.
 - A re-create of the freed name gets a fresh directory under the V2 directory layout, which names a table directory
   `<hash>_<object_id>` so that a table "created, deleted, and recreated with the same name" does not collide
-  (`lance_docs/namespace.md:1001-1012`). A root-namespace table in compatibility mode is named `<table_name>.lance`,
-  which is deterministic (`namespace.md:1012`).
+  (`lance_docs/ns_catalog/catalog/dir/index.md:136-146`). A root-namespace table in compatibility mode is named `<table_name>.lance`,
+  which is deterministic (`dir/index.md:148`).
 - Unconfirmed: whether any rask table sits at a compatibility-mode root, and whether `table_claims.py:33-85`, which
   appears to hold the location separately, lets a re-create resolve to the expired table's location; LH-228 traces both.
 

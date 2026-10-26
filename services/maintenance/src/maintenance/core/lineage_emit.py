@@ -78,7 +78,7 @@ def classify_retryable(error: str) -> bool | None:
 
     pylance 8.0.0 raises no typed conflict exception (``lance.commit.CommitConflictError`` exists but is
     never raised), and Rebasable conflicts are auto-retried inside the commit layer so they never reach
-    Python. Per the three-way taxonomy (``lance_docs/file_format.md`` ~5253) the string heuristic maps
+    Python. Per the three-way taxonomy (``lance_docs/lance/format/table/transaction.md`` ~613) the string heuristic maps
     Retryable (a re-run may succeed) vs Incompatible (it won't); ``None`` when the text says neither.
     NEGATED forms are checked FIRST — real object_store/Lance messages say things like "not retryable"
     or "retry limit exceeded", and a bare substring match would stamp exactly those terminal errors

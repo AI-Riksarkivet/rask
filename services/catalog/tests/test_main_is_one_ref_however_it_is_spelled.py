@@ -1,7 +1,7 @@
 """Main is ONE ref whether it is spelled ``None`` or ``"main"``, and a ref is a str or nothing.
 
 Lance records main as null — a tag's ``branch`` and a branch's ``parentBranch``
-(``lance_docs/file_format.md`` "Tag File Format" / "Branch Metadata File Format") — while a request may
+(``lance_docs/lance/format/table/branch_tag.md`` "Tag File Format" / "Branch Metadata File Format") — while a request may
 name it ``"main"``. ``dataplane.recorded_branch`` folds both spellings into Lance's, and the catalog
 compares refs through it, so a second spelling of main can never read as a second branch. A value that
 is neither a str nor None is the caller's type error, not a ref.

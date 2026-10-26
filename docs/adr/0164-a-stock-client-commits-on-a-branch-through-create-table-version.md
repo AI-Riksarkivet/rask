@@ -11,8 +11,8 @@ table's credential reached main only).
 own `insert` / `merge_insert?branch=`, and a bring-your-own job could not fulfil an erasure obligation on a branch
 head (ADR 0163 §5). `lance_docs` gives the shape: the spec puts `branch` on `CreateTableVersion`, `ListTableVersions`
 and `DescribeTable` and defines `CreateTableBranch` (`ns_catalog/spec.yaml`); a branch is a shallow clone inside its
-table, keeping its own version history and files under `tree/<name>/` (`file_format.md` § Branch Dataset Layout,
-`lancemultibasebranchingblobv2.md` § Building block 3).
+table, keeping its own version history and files under `tree/<name>/` (`lance_docs/lance/format/table/branch_tag.md` § Branch Dataset Layout,
+`lance_docs/lance/format/table/layout.md` § Shallow Clone).
 
 Measured on pylance 13.0.0 against the catalog under uvicorn:
 
@@ -37,8 +37,8 @@ Measured on pylance 13.0.0 against the catalog under uvicorn:
 ## Decision
 
 1. **`CreateTableBranch` creates a branch.** The spec door (`POST /v1/table/{id}/branches/create`, `can_create_branch`,
-   the owner rung) writes the branch's first version and its ref, the five steps `lancemultibasebranchingblobv2.md`
-   § Building block 3 lists. A stock client's own `create_branch` reaches `version/create` for a branch the table does
+   the owner rung) writes the branch's first version and its ref, the five steps the LanceDB blog's branching post
+   (<https://www.lancedb.com/blog/branching-and-shallow-clone>) lists. A stock client's own `create_branch` reaches `version/create` for a branch the table does
    not list and is refused 404 (`TableBranchNotFound`, code 22) naming `CreateTableBranch`, with nothing committed.
 2. **Every later commit on a branch goes through `CreateTableVersion` with `branch`, judged like main's.** The judge
    opens the staged version at the branch's own location (`tree/<branch>`) against the branch version it follows,
@@ -64,8 +64,8 @@ Measured on pylance 13.0.0 against the catalog under uvicorn:
 - **Add the branch grant only for tables that have a branch**: keeps a branchless table's headroom, but a credential
   vended before a branch existed cannot stage on it until it refreshes.
 - **Keep the table's credential on main**: a stock client with a vended credential could not stage on a branch at all;
-  only the documented per-branch isolation (`lancemultibasebranchingblobv2.md`: "read-only on main and write-only on
-  the branch") would be kept, and the FGA model grants a writer every branch anyway.
+  only the documented per-branch isolation (the LanceDB blog's branching post, <https://www.lancedb.com/blog/branching-and-shallow-clone>: "read-only on the main dataset and
+  write-only on the branch directory") would be kept, and the FGA model grants a writer every branch anyway.
 - **Vend per branch through `DescribeTable.branch`**: the spec field exists, but pylance 13.0.0 never sends it
   (`dataset.rs` `write_into_namespace_impl` describes with the table's id alone), and the describe door refuses a
   branch it cannot describe. Not built until a client sends it.

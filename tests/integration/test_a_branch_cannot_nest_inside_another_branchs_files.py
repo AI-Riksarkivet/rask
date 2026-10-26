@@ -1,6 +1,6 @@
 """A branch's directory holds only that branch's files ([[LH-203]]).
 
-`lance_docs/file_format.md` § "Branch Dataset Layout" joins a branch name verbatim onto ``tree/``, and
+`lance_docs/lance/format/table/branch_tag.md` § "Branch Dataset Layout" joins a branch name verbatim onto ``tree/``, and
 § "Branch Name" allows ``/`` and ``_``. So ``a/b`` lives inside ``tree/a/``, and ``a/_versions`` lives
 inside ``tree/a/_versions/``, which is ``a``'s own version directory. Lance reads whatever lies under a
 branch's directory as that branch's, which the catalog's create, reclaim and delete doors and the sweep

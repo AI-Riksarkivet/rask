@@ -225,13 +225,11 @@ nav = [
   { "Lance Reference" = [
     { "Overview" = "lance/index.md" },
     { "File Format" = "lance/file-format.md" },
-    { "Format Guide" = "lance/guide.md" },
-    { "LanceDB Python API" = "lance/sdk.md" },
+    { "Guide" = "lance/guide.md" },
     { "Namespace OpenAPI Spec" = "lance/spec.md" },
     { "Namespace & Catalog (prose)" = "lance/namespace.md" },
     { "Provenance" = "lance/provenance.md" },
     { "Partitioning Spec" = "lance/partitioning-spec.md" },
-    { "Ray Integration" = "lance/ray.md" },
   ]},
   { "Reference" = [
     { "Storage" = "reference/storage.md" },

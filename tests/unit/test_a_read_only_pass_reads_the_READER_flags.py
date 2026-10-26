@@ -1,7 +1,7 @@
 """A read-only pass must consult `reader_feature_flags`, not the OR of both fields.
 
 the lakehouse register, row C9 (drained 2026-09-10; in git history). The Lance format spec is explicit that the two fields are asked
-separately, and that they do not carry the same bits (`lance_docs/file_format.md`, "Format
+separately, and that they do not carry the same bits (`lance_docs/lance/format/table/versioning.md`, "Format
 Versioning" -> "Current Feature Flags"):
 
     Readers should check the `reader_feature_flags` to see if there are any flag it is not aware of.

@@ -3302,10 +3302,18 @@ components:
           type: number
           format: float
           description: Lower bound for search
+        maximum_nprobes:
+          type: integer
+          minimum: 1
+          description: Maximum number of IVF partitions to search. When omitted, all partitions may be searched if needed.
+        minimum_nprobes:
+          type: integer
+          minimum: 1
+          description: Minimum number of IVF partitions to search before adaptive expansion.
         nprobes:
           type: integer
           minimum: 0
-          description: Number of probes for IVF index
+          description: Legacy exact number of IVF partitions to search. Ignored when minimum_nprobes or maximum_nprobes is provided.
         offset:
           type: integer
           minimum: 0
@@ -5213,10 +5221,18 @@ components:
           type: number
           format: float
           description: Lower bound for search
+        maximum_nprobes:
+          type: integer
+          minimum: 1
+          description: Maximum number of IVF partitions to search. When omitted, all partitions may be searched if needed.
+        minimum_nprobes:
+          type: integer
+          minimum: 1
+          description: Minimum number of IVF partitions to search before adaptive expansion.
         nprobes:
           type: integer
           minimum: 0
-          description: Number of probes for IVF index
+          description: Legacy exact number of IVF partitions to search. Ignored when minimum_nprobes or maximum_nprobes is provided.
         offset:
           type: integer
           minimum: 0

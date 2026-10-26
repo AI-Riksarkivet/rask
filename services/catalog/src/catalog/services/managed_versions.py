@@ -54,7 +54,7 @@ class CommitRef(BaseModel):
     """The ref a stock client's staged commit continues: main, or a branch of the table rooted at ``table_location``.
 
     A branch keeps its own version history, data, transaction, deletion and index files under ``tree/<name>/``
-    (``lance_docs/file_format.md`` § Branch Dataset Layout; measured on pylance 13.0.0, a stock client stages a branch
+    (``lance_docs/lance/format/table/branch_tag.md`` § Branch Dataset Layout; measured on pylance 13.0.0, a stock client stages a branch
     commit there and names the branch in ``CreateTableVersion``), and reads its parent's files through bases on the
     table's root.
     """
@@ -221,7 +221,7 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
 def _unmodelled_operation(manifest: bytes) -> str | None:
     """The operation of ``manifest``'s inline transaction, read off its protobuf, when pylance models no class for it.
 
-    A stock compaction commits a ``ReserveFragments`` before its ``Rewrite`` (``lance_docs/file_format.md`` § Rewrite),
+    A stock compaction commits a ``ReserveFragments`` before its ``Rewrite`` (``lance_docs/lance/format/table/transaction.md`` § Rewrite),
     and pylance reads it back as ``BaseOperation``. ``None`` when the manifest carries no inline transaction or names
     another operation, which then stays unnamed and is refused.
     """
@@ -469,7 +469,7 @@ def _committed_field(location: str, so: StorageOptions, version: int, field: int
     """A varint field of the table's committed manifest at ``version``, 0 when the manifest leaves it unset.
 
     pylance exposes neither ``next_row_id`` nor ``max_fragment_id``. A V2-named manifest is
-    ``_versions/<u64::MAX - version>.manifest`` and a V1-named one ``_versions/<version>.manifest`` (``lance_docs/file_format.md``).
+    ``_versions/<u64::MAX - version>.manifest`` and a V1-named one ``_versions/<version>.manifest`` (``lance_docs/lance/format/table/transaction.md``).
     """
     fs, base = dataplane.dataset_fs(location, so)
     for name in (f"{(1 << 64) - 1 - version}.manifest", f"{version}.manifest"):
@@ -575,7 +575,7 @@ def _refuse_a_reservation_beyond_the_table(version: _Judged) -> None:
 
     Every fragment a rewrite writes holds at least one row it rewrites, so the table's physical rows bound how many ids
     one may need; ``max_fragment_id`` at ``2^32 - 1`` exhausts the id space and leaves the table unwritable
-    (``lance_docs/file_format.md`` § ReserveFragments).
+    (``lance_docs/lance/format/table/transaction.md`` § ReserveFragments).
     """
     _refuse_changed_data(version)
     if _index_uuids(version.proposed) != _index_uuids(version.followed):

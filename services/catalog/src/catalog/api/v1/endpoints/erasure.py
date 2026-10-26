@@ -167,7 +167,7 @@ async def verify_erasure(
 
     `report.complete` is evidence about every retained version of every ref, and about nothing else: a data file no
     version references that is younger than 7 days, an aborted write's residue, is neither reclaimed nor probed,
-    because Lance keeps it as possibly an in-flight write's (`lance_docs/lance_sdk.md` cleanup_old_versions
+    because Lance keeps it as possibly an in-flight write's (`lance_docs/lance/guide/read_and_write.md` cleanup_old_versions
     `delete_unverified`).
     """
     segments = parse_identifier(id)

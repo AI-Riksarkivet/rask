@@ -151,8 +151,9 @@ def test_a_missing_tag_mints_TAG_NOT_FOUND(table: DoorTable, door: str, call: _C
     ],
 )
 def test_a_missing_version_mints_VERSION_NOT_FOUND(table: DoorTable, door: str, call: _Call) -> None:
-    """Spec code 11. `from_version` is the spec's own snake_case wire spelling (`spec.yaml:4449`);
-    `namespace.md`'s `fromVersion` is the Java generator's client-side naming, not the wire contract."""
+    """Spec code 11. `from_version` is the spec's own snake_case wire spelling (`spec.yaml:4521`);
+    `lance_docs/ns_catalog/namespace/operations/models/CreateTableBranchRequest.md`'s `fromVersion` is the Java
+    generator's client-side naming, not the wire contract."""
     with pytest.raises(TableVersionNotFoundError) as caught:
         call(table)
     assert caught.value.code == 11, f"{door} minted code {caught.value.code} for a missing version, not 11"

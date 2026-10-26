@@ -8,12 +8,12 @@ measured on pylance 12.0.0 with stable row ids and file version 2.2, by the scri
 ## Context
 
 In Lance a branch lives inside the table: it is a shallow clone under the dataset root plus a ref recording its fork
-point (`lance_docs/lancemultibasebranchingblobv2.md:357-363`). Keeping branches in-table is what lets cleanup be driven
-by branch and tag expiry, with no forgotten copy to break an erasure (`lancemultibasebranchingblobv2.md:302-304`). The
+point (`lance_docs/lance/format/table/branch_tag.md:37-52`). Keeping branches in-table is what lets cleanup be driven
+by branch and tag expiry, with no forgotten copy to break an erasure (Jack Ye, "Branching and Shallow Cloning in Lance", <https://www.lancedb.com/blog/branching-and-shallow-clone>). The
 fork point holds the parent's files: "Lance ensures that cleanup does not delete files still referenced by any branch.
-Delete unused branches to allow their referenced files to be cleaned up" (`lance_docs/guide.md:4608-4610`). A tag holds
+Delete unused branches to allow their referenced files to be cleaned up" (`lance_docs/lance/guide/tags_and_branches.md:131-133`). A tag holds
 a version the same way: "Tagged versions are exempted from the `LanceDataset.cleanup_old_versions()` process", and a
-tagged version is released only by deleting the tag (`guide.md:4544-4547`).
+tagged version is released only by deleting the tag (`lance_docs/lance/guide/tags_and_branches.md:63-66`).
 
 So when a subject is erased from main, a branch whose parent version, or a tag whose version, still holds the subject
 keeps it readable: `checkout_version(N)` serves the erased rows, the erasure report says `complete=False`, and nobody is
@@ -36,7 +36,7 @@ Idea taken from: Lakekeeper's two-step expiry (mark first, reclaim later).
   owners have the same grace period to copy work out (owner, 2026-10-10). A branch has no update operation, so delete-and-recreate is its only
   release (`lance_docs/ns_catalog/namespace/operations/index.md:85-92`; CreateTableBranch takes `fromBranch` /
   `fromVersion`, `ns_catalog/namespace/operations/models/CreateTableBranchRequest.md:13-15`). The `reference=` keyword
-  of `create_branch` is the installed pylance 12.0.0 signature; `guide.md:4588-4589` shows the call positionally. A tag
+  of `create_branch` is the installed pylance 12.0.0 signature; `lance_docs/lance/guide/tags_and_branches.md:107-108` shows the call positionally. A tag
   could instead be moved to the clean head (UpdateTableTag, `ns_catalog/namespace/operations/models/UpdateTableTagRequest.md:13-14`),
   which keeps its name; the owner chose deletion. The owner may copy work out before the deadline; a branch loses its
   fork point and a tag its name.
@@ -53,32 +53,32 @@ Idea taken from: Lakekeeper's two-step expiry (mark first, reclaim later).
   grace period:
   - the grace period ends and every pin (branch subtree, tag) is released;
   - compaction rewrites the fragments holding the subject, since a delete is a deletion file over an unchanged data
-    file until "deletions can be materialized by rewriting data files" (`lance_docs/file_format.md:4786`). Compaction
+    file until "deletions can be materialized by rewriting data files" (`lance_docs/lance/format/table/index.md:218`). Compaction
     also rewrites managed blob-v2 sidecars (inline, packed and dedicated), so their old `.blob` files go at the next
     cleanup (`prototypes/lance-erasure-and-commit-door/a4_blob_v2.py`, `a4b_blob_dedicated.py`);
   - every index over an erased column is rebuilt (`create_*_index(..., replace=True)`) or dropped, because compaction
     does not rewrite index files on a stable-row-id table: after compaction and cleanup the BTree and FTS files keep the
     subject, and `optimize_indices()` commits nothing (`prototypes/lance-erasure-and-commit-door/a2_index_files.py`). Index files are immutable
-    (`file_format.md:1269-1271`) and only an index built after the delete leaves the row out (`1281-1284`,
-    `2984-2985`). A rebuild works without compaction, and cleanup alone removes a dropped index's files. A fragment reuse
+    (`lance_docs/lance/format/index/index.md:42-44`) and only an index built after the delete leaves the row out (`:54-57`,
+    `:264-265`). A rebuild works without compaction, and cleanup alone removes a dropped index's files. A fragment reuse
     index never arises here: `compact_files(defer_index_remap=True)` is refused under stable row ids;
   - a later version exists and cleanup's `older_than` window passes. The delete predicate, which names the subject, is
     written to the delete version's `.txn` and to its manifest, so it leaves only when that version is superseded and
-    cleaned (`file_format.md:6727-6733`; the manifest copy is measured, `prototypes/lance-erasure-and-commit-door/a3_txn_files.py`). rask's window is
+    cleaned (`lance_docs/lance/format/table/transaction.md:33-47`; the manifest copy is measured, `prototypes/lance-erasure-and-commit-door/a3_txn_files.py`). rask's window is
     `maintenance.olderThanDays` (`chart/values.yaml:1800`, default 7), which a table's policy overrides with
     `retention_days` (`services/maintenance/src/maintenance/services/sweep.py:554-555`); pylance's own default is 14 days
-    (`lance_sdk.md:925-931`). Cleanup on main never touches a branch's own `tree/<branch>/` history (LH-263).
+    (pylance 13.0.0 `LanceDataset.cleanup_old_versions`: `older_than = timedelta(days=14)`). Cleanup on main never touches a branch's own `tree/<branch>/` history (LH-263).
 - Until cleanup runs, restoring a retained pre-erasure version brings the rows back, even after compaction
-  (`file_format.md:7366-7381`; `prototypes/lance-erasure-and-commit-door/a5_restore.py`), so restore stays a high-privilege door.
+  (`lance_docs/lance/format/table/transaction.md:715-730`; `prototypes/lance-erasure-and-commit-door/a5_restore.py`), so restore stays a high-privilege door.
 - A tag can sit on a non-main branch (its ref at the dataset root carries `branch`), so the pin census reads the tag's
-  branch as well as its version (`file_format.md:3721-3749`; `prototypes/lance-erasure-and-commit-door/a6_tag_on_branch.py`). Cleanup on that branch raises
+  branch as well as its version (`lance_docs/lance/format/table/branch_tag.md:101-127`; `prototypes/lance-erasure-and-commit-door/a6_tag_on_branch.py`). Cleanup on that branch raises
   when `error_if_tagged_old_versions=True`: the sweep passes False (`services/catalog/src/catalog/services/maintenance.py:394`)
   and the targeted path passes True (`:454`), so the erasure's own cleanup must pass False or release the tag first.
 - Holders outside the branch and tag model: external-URI blobs are never reclaimed, inside a registered base or outside
-  one, which contradicts the digest's claim that cleanup collects them (`lancemultibasebranchingblobv2.md:794-805`;
+  one, which contradicts the Blob V2 blog's claim that cleanup collects them (Xuanwo and Jack Ye, "Lance Blob V2", <https://www.lancedb.com/blog/lance-blob-v2>;
   `prototypes/lance-erasure-and-commit-door/a4_blob_v2.py`), so an erasure over an external blob column must delete the referenced object itself or report it
   as a residual; and a shallow clone shares its source's files and becomes unreadable once the source cleans up
-  (`lance_sdk.md:3680-3689`; `prototypes/lance-erasure-and-commit-door/a7_shallow_clone.py`), so the erasure must account for every clone of the table.
+  (`lance_docs/lance/format/table/layout.md:141-176`; `prototypes/lance-erasure-and-commit-door/a7_shallow_clone.py`), so the erasure must account for every clone of the table.
 - `pinned_by` must stop over-reporting a branch whose own head is already a residual head, because the notice now
   goes to a person rather than only into a report.
 - The pending release must survive a restart, so it is durable state with a due time, not an in-memory timer.

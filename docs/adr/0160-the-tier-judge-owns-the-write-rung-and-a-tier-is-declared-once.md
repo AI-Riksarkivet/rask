@@ -10,7 +10,7 @@ is, how a tier changes, which namespace governs a nested one, or which routes ar
 Namespace spec nor pylance 13's `DirectoryNamespace` has an operation that alters a namespace's properties (measured
 2026-10-13). The `dir` backend refuses every create mode on an existing namespace, so the only mutation is the catalog's
 own `CreateNamespace` with `mode=Overwrite`, which drops an empty namespace and creates it again with the new properties.
-The `dir` backend keeps those properties as JSON in the `__manifest` row's `metadata` column (`lance_docs/namespace.md`),
+The `dir` backend keeps those properties as JSON in the `__manifest` row's `metadata` column (`lance_docs/ns_catalog/catalog/dir/index.md`),
 which no table-scoped vend reaches. Lakekeeper was read as the reference: it has one authorizer trait asked inside each
 handler, a contract verifier that never sees the caller, no hold outcome, and no test that every write route is
 authorized.

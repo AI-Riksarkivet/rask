@@ -5,8 +5,8 @@ delete_unverified=True)`` after an overwrite of a table whose fragments sit on a
 superseded version and none of the base's files. A data base is still the table's own storage: each table registers its
 own directory beneath an approved base ([[LH-252]]), its base record names that directory, and the directory's claim
 keeps every other table out of it. So the pass reclaims that directory as Lance reclaims ``data/``: a file no retained
-version references, once it is older than Lance's unverified-file age (``lance_docs/lance_sdk.md:931``: files "newer
-than 7 days old are not deleted by default"), since a younger one may belong to a commit still in flight.
+version references, once it is older than Lance's unverified-file age (``lance_docs/lance/guide/read_and_write.md:564-571``: "by default
+Lance removes an unverifiable file only if it is at least **7 days** old"), since a younger one may belong to a commit still in flight.
 
 WHAT A VERSION REFERENCES IS READ OFF EVERY RETAINED MANIFEST, branches included. A branch inherits the data base under
 the same id and appends into the same directory, and ``versions()`` on a branch handle lists the branch's own versions,

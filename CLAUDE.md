@@ -33,9 +33,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   deprecation windows or "keep the old key working": change the thing and move every consumer in the
   same commit. Current state is test data.
 - **Lance-idiomatic, answered from `lance_docs/`, never guessed.** A question about Lance or
-  lance-namespace behaviour is settled by citing `lance_docs/` (`ns_catalog/spec.yaml` is authoritative;
-  `namespace.md` is an older bundle that contradicts it in places) or by measuring on the installed
-  pylance — never from memory.
+  lance-namespace behaviour is settled by citing `lance_docs/` (upstream `docs/src` of lance in `lance/` and of
+  lance-namespace in `ns_catalog/`, pinned in `lance_docs/PROVENANCE.md`; `ns_catalog/spec.yaml` is authoritative over
+  the namespace prose, and the docs run ahead of the installed pylance, so a claim rask relies on holds on it) or by
+  measuring on the installed pylance — never from memory.
 - **Lakekeeper is the reference, not the stack.** For how zero trust, authn/authz, governance,
   provenance, events and secrets are solved well, read Lakekeeper (`github.com/lakekeeper/lakekeeper`
   and `lakekeeper-charts`). rask translates those answers onto ITS stack — Lance + lance-namespace, Dapr,

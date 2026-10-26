@@ -7,7 +7,7 @@ fixes: the next table is bigger.
 **lance-ns already answers this.** V2 stores a table at
 `<hash>_<object_id>` with the mapping in `__manifest` — the hash is there for object-store throughput
 and create/delete/recreate conflict prevention, and the spec says the `object_id` suffix "ensures
-uniqueness and aids debugging" (`lance_docs/namespace.md`, *Manifest Table Directory*). It is not the
+uniqueness and aids debugging" (`lance_docs/ns_catalog/catalog/dir/index.md`, *Manifest Table Directory*). It is not the
 resolution path. So the pointer is the manifest row, and moving it is the whole rename.
 
 MEASURED on the `dir` backend the chart runs (`LANCE_REST_IMPL=dir`, pylance 10.0.0, 2026-09-04):

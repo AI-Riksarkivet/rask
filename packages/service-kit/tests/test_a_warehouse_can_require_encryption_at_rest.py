@@ -5,7 +5,7 @@ code nor chart: `lance_storage_options` emitted credentials, endpoint and region
 client writing DIRECTLY to object storage — the whole point of the vending path — wrote unencrypted no
 matter what the warehouse intended.
 
-THE KEY NAMES ARE VERIFIED, NOT GUESSED. `lance_docs/guide.md:2667-2669` lists them and their contract:
+THE KEY NAMES ARE VERIFIED, NOT GUESSED. `lance_docs/lance/guide/object_store.md:134-136` lists them and their contract:
 
     aws_server_side_encryption   one of "AES256", "aws:kms", "aws:kms:dsse"
     aws_sse_kms_key_id           "If set, aws_server_side_encryption must be aws:kms or aws:kms:dsse"
@@ -39,8 +39,8 @@ def _opts(**kw: object) -> dict[str, str]:
 
 
 def test_a_KMS_key_WITHOUT_a_kms_algorithm_is_REFUSED() -> None:
-    """`lance_docs/guide.md:2668`, verbatim: "If set, `aws_server_side_encryption` must be `aws:kms` or
-    `aws:kms:dsse`." The store will not reject the pair; it will ignore the key id and encrypt with
+    """`lance_docs/lance/guide/object_store.md:135`, verbatim: "If set, `aws_server_side_encryption` must be `"aws:kms"` or
+    `"aws:kms:dsse"`." The store will not reject the pair; it will ignore the key id and encrypt with
     AES256, so the operator believes their KMS key is in use and it never was."""
     with pytest.raises(ValueError, match="aws:kms"):
         _opts(server_side_encryption="AES256", sse_kms_key_id="arn:aws:kms:eu-north-1:1:key/abc")

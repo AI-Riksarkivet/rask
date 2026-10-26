@@ -102,10 +102,10 @@ def _branch_refs(fs: pafs.FileSystem, root: str) -> list[str]:
     """The branches ``root``'s ``_refs/branches`` names, sorted ([[LH-203]]).
 
     THE REFS, NOT THE ``tree/`` DIRECTORY. A branch name may contain ``/`` and the format lays ``a/b`` at
-    ``tree/a/b/`` (`file_format.md` § "Branch Dataset Layout"), so a walk of ``tree/``'s children finds
+    ``tree/a/b/`` (`lance_docs/lance/format/table/branch_tag.md` § "Branch Dataset Layout"), so a walk of ``tree/``'s children finds
     ``tree/a`` and never ``a/b`` inside it, and finds ``tree/a`` again after ``a`` is deleted, from
     the files Lance leaves behind while ``a/b`` exists. The refs are the format's own list of branches
-    (`file_format.md` § "Branch Metadata Path", one ``<name>.json`` per branch with ``/`` written
+    (`lance_docs/lance/format/table/branch_tag.md` § "Branch Metadata Path", one ``<name>.json`` per branch with ``/`` written
     ``%2F``), read with one listing, which is what the ``tree/`` probe cost.
 
     A listing that fails raises rather than answering "no branches": both callers catch per bucket and

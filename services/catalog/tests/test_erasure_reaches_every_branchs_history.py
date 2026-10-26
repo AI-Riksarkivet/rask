@@ -3,8 +3,8 @@
 The bring-your-own job rewrites every ref (the conftest's ``ErasureJob``, [[LH-493]]); the claims here are the
 catalog's: what it judges, what it reclaims, and what the report says keeps the rest.
 
-A branch keeps its own history under ``tree/<name>/`` (``lance_docs/file_format.md`` "Branch Dataset
-Layout"), numbered in its own line (``lance_docs/guide.md`` Branches: "version numbers may overlap across
+A branch keeps its own history under ``tree/<name>/`` (``lance_docs/lance/format/table/branch_tag.md`` "Branch Dataset
+Layout"), numbered in its own line (``lance_docs/lance/guide/tags_and_branches.md`` Branches: "version numbers may overlap across
 branches"). So a subject written ON a branch lives in versions that main's cleanup never lists and main's
 verification never probes: after the erasure, ``checkout_version(("work", 3))`` still returns it.
 
@@ -129,10 +129,10 @@ def test_the_report_names_exactly_what_survives_on_every_ref(tmp_path: Path, ret
 def test_a_write_staged_while_the_erasure_runs_still_commits_readable(tmp_path: Path, ref: str | None, erase: _Erase) -> None:
     """Every ref's reclaim leaves another writer's uncommitted files alone.
 
-    Lance keeps an unreferenced file younger than 7 days "because they may be part of an in-progress
-    transaction" (``lance_docs/lance_sdk.md`` cleanup_old_versions), and calls ``delete_unverified=True``
-    with ``older_than=timedelta(0)`` "extremely dangerous ... its data files may be deleted, leading to
-    dataset corruption" (``lance_docs/guide.md`` Cleanup). Measured on pylance 12.0.0 with the flag: the
+    Lance keeps an unreferenced file younger than 7 days because such files "are indistinguishable from files being
+    written by an in-progress operation" (``lance_docs/lance/guide/read_and_write.md`` cleanup_old_versions), and says
+    of ``delete_unverified=True``: "Any concurrent write may have its files deleted out from under it, leaving the
+    dataset corrupted" (``lance_docs/lance/guide/read_and_write.md`` Cleanup). Measured on pylance 12.0.0 with the flag: the
     staged file is deleted, the writer's commit still succeeds, and the ref's head no longer reads.
     """
     uri = _subject_on_a_branch(tmp_path)

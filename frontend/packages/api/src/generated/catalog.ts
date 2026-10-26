@@ -1397,7 +1397,7 @@ export interface paths {
          * Table Changes
          * @description Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
          *
-         *     Answers the change data feed `lance_docs/file_format.md:6214-6242` documents, from one snapshot at
+         *     Answers the change data feed `lance_docs/lance/format/table/row_id_lineage.md:426-454` documents, from one snapshot at
          *     the window's end, and refuses a window the version columns cannot describe; the rules and the
          *     consumer contract live in `catalog.services.changes`, the read in `dataplane.read_changes`.
          *
@@ -1518,7 +1518,7 @@ export interface paths {
          *
          *     `report.complete` is evidence about every retained version of every ref, and about nothing else: a data file no
          *     version references that is younger than 7 days, an aborted write's residue, is neither reclaimed nor probed,
-         *     because Lance keeps it as possibly an in-flight write's (`lance_docs/lance_sdk.md` cleanup_old_versions
+         *     because Lance keeps it as possibly an in-flight write's (`lance_docs/lance/guide/read_and_write.md` cleanup_old_versions
          *     `delete_unverified`).
          */
         post: operations["verify_erasure_management_v1_table__id__erasure__obligation_id__verify_post"];
@@ -2854,7 +2854,7 @@ export interface paths {
          *     DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
          *
          *     The catalog chooses a declared table's location, which the spec leaves to the implementation
-         *     (`lance_docs/ns_catalog/spec.yaml:3823-3827`), so a request naming one is refused. The declaration keeps no
+         *     (`lance_docs/ns_catalog/spec.yaml:3831-3835`), so a request naming one is refused. The declaration keeps no
          *     ``properties``: it is recorded through RegisterTable, which keeps none (`spec.yaml:2719-2724`).
          *
          *     The response carries the credential the declarer writes the table with, the highest tier FGA grants
@@ -2933,7 +2933,7 @@ export interface paths {
          *
          *     TWO DOORS, ONE MEANING. The Lance Namespace spec puts ``with_table_uri`` / ``load_detailed_metadata`` /
          *     ``check_declared`` in the QUERY and ``version`` / ``tag`` / ``vend_credentials`` in a
-         *     ``DescribeTableRequest`` BODY (``lance_docs/namespace.md`` §DescribeTable; the generated client's
+         *     ``DescribeTableRequest`` BODY (``lance_docs/ns_catalog/catalog/rest/index.md`` §DescribeTable; the generated client's
          *     ``_describe_table_serialize`` sends exactly that split). This route once bound all six as bare scalars,
          *     so FastAPI made them all query params and the body was dropped unread — a spec-conformant client
          *     (``lance_ray.utils``, which calls ``describe_table(DescribeTableRequest(id=...))`` and merges

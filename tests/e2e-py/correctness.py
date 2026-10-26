@@ -10,7 +10,7 @@ hold, given the first.
 WHAT A DRIVE CAUSED. `feed_of` reads every row lineage's feed holds about the scenario's two tables and `announced` the
 commit each names; `told` reads what each person the scenario names was told of the drive.
 
-A branch is its own version history (`lance_docs/file_format.md` § Branch and Tag Specification): its manifests and
+A branch is its own version history (`lance_docs/lance/format/table/branch_tag.md` § Branch and Tag Specification): its manifests and
 transactions live under `tree/<branch>/`, and its history starts after the parent version `_refs/branches/<branch>.json`
 records, which the branch lists as the clone it was cut from. So the walk takes the branches Lance lists from `_refs`,
 never by listing `tree/`, and reads each one's versions past that parent version.

@@ -65,22 +65,37 @@ When identity information is provided in both the request body and headers, the 
 
 ## Context Header Mapping
 
-All request schemas include an optional `context` field for passing arbitrary key-value pairs.
-This allows clients to send implementation-specific context that can be used by the server
-or forwarded to downstream services.
+All request and response schemas include an optional `context` field for passing arbitrary
+key-value pairs. This allows clients to send implementation-specific context to the server,
+and the server to return implementation-specific context back to the client.
 
-For REST Catalog, context entries are mapped to HTTP headers using the naming convention:
+For REST Catalog, context entries are mapped to and from HTTP headers using the `header.`
+prefix:
 
-| Context Entry              | REST Form                     | Location |
-|----------------------------|-------------------------------|----------|
-| `{"<key>": "<value>"}`     | `x-lance-ctx-<key>`           | Header   |
+| Direction | Context Entry                  | REST Form                          |
+|-----------|--------------------------------|------------------------------------|
+| Request   | `{"header.<name>": "<value>"}` | request header `<name>: <value>`   |
+| Response  | `{"header.<name>": "<value>"}` | response header `<name>: <value>`  |
 
-For example, a context entry `{"trace_id": "abc123", "user_region": "us-west"}` would be sent as:
+On a request, any context entry whose key starts with `header.` is sent as an HTTP request
+header with the prefix stripped. For example, a context entry
+`{"header.x-trace-id": "abc123", "header.x-user-region": "us-west"}` would be sent as:
 
 ```
-x-lance-ctx-trace_id: abc123
-x-lance-ctx-user_region: us-west
+x-trace-id: abc123
+x-user-region: us-west
 ```
+
+On a response, every HTTP response header is returned as a context entry whose key is the
+header name prefixed with `header.`. For example, the response headers:
+
+```
+x-trace-id: abc123
+x-user-region: us-west
+```
+
+would be returned as the context entry
+`{"header.x-trace-id": "abc123", "header.x-user-region": "us-west"}`.
 
 How to use the context is custom to the specific implementation.
 Common use cases include:
@@ -88,8 +103,6 @@ Common use cases include:
 - Passing trace IDs for distributed tracing
 - Forwarding user context to downstream services
 - Providing hints to the implementation for optimization
-
-When context is provided in both the request body and headers, the header values take precedence.
 
 ## Non-Standard Operations
 
@@ -184,20 +197,21 @@ The request body contains Arrow IPC stream data with records to insert.
 **Content-Type:** `application/vnd.apache.arrow.stream`
 
 The request body contains Arrow IPC stream data. Performs a merge insert (upsert) operation
-that updates existing rows based on a matching column and inserts new rows that don't match.
+that updates existing rows based on one or more matching columns and inserts new rows that
+don't match.
 
-| Request Field                            | REST Form                                | Location                                             |
-|------------------------------------------|------------------------------------------|------------------------------------------------------|
-| `id`                                     | `{id}`                                   | Path parameter                                       |
-| `on`                                     | `on`                                     | Query parameter (required)                           |
-| `when_matched_update_all`                | `when_matched_update_all`                | Query parameter (boolean)                            |
-| `when_matched_update_all_filt`           | `when_matched_update_all_filt`           | Query parameter (SQL expression)                     |
-| `when_not_matched_insert_all`            | `when_not_matched_insert_all`            | Query parameter (boolean)                            |
-| `when_not_matched_by_source_delete`      | `when_not_matched_by_source_delete`      | Query parameter (boolean)                            |
-| `when_not_matched_by_source_delete_filt` | `when_not_matched_by_source_delete_filt` | Query parameter (SQL expression)                     |
-| `timeout`                                | `timeout`                                | Query parameter (duration string, e.g., "30s", "5m") |
-| `use_index`                              | `use_index`                              | Query parameter (boolean)                            |
-| `data`                                   | Request body                             | Body (Arrow IPC stream)                              |
+| Request Field                            | REST Form                                | Location                                                 |
+|------------------------------------------|------------------------------------------|----------------------------------------------------------|
+| `id`                                     | `{id}`                                   | Path parameter                                           |
+| `on`                                     | `on`                                     | Query parameter (required, repeated once per field path) |
+| `when_matched_update_all`                | `when_matched_update_all`                | Query parameter (boolean)                                |
+| `when_matched_update_all_filt`           | `when_matched_update_all_filt`           | Query parameter (SQL expression)                         |
+| `when_not_matched_insert_all`            | `when_not_matched_insert_all`            | Query parameter (boolean)                                |
+| `when_not_matched_by_source_delete`      | `when_not_matched_by_source_delete`      | Query parameter (boolean)                                |
+| `when_not_matched_by_source_delete_filt` | `when_not_matched_by_source_delete_filt` | Query parameter (SQL expression)                         |
+| `timeout`                                | `timeout`                                | Query parameter (duration string, e.g., "30s", "5m")     |
+| `use_index`                              | `use_index`                              | Query parameter (boolean)                                |
+| `data`                                   | Request body                             | Body (Arrow IPC stream)                                  |
 
 ### QueryTable
 
@@ -205,21 +219,49 @@ that updates existing rows based on a matching column and inserts new rows that 
 
 **Response Content-Type:** `application/vnd.apache.arrow.file`
 
-The response body contains Arrow IPC file data instead of JSON.
+The response body contains Arrow IPC file data instead of JSON. It maps to the
+`QueryTableResponse` model as follows:
 
-| Response Field | REST Form     | Notes                             |
-|----------------|---------------|-----------------------------------|
-| (results)      | Response body | Arrow IPC file (binary, not JSON) |
+| Response Field | REST Form                     | Notes                                                   |
+|----------------|-------------------------------|---------------------------------------------------------|
+| `data`         | Response body                 | Arrow IPC file (binary, not JSON)                       |
+| `context`      | Response headers (`header.*`) | Each response header maps to a `header.`-prefixed entry |
 
 ### CountTableRows
 
 **Route:** `POST /v1/table/{id}/count_rows`
 
-The response is returned as a plain integer instead of a JSON object.
+The response is returned as a plain integer instead of a JSON object. It maps to the
+`CountTableRowsResponse` model as follows:
 
-| Response Field | REST Form     | Notes                            |
-|----------------|---------------|----------------------------------|
-| (count)        | Response body | Plain integer (not JSON wrapped) |
+| Response Field | REST Form                     | Notes                                                   |
+|----------------|-------------------------------|---------------------------------------------------------|
+| `count`        | Response body                 | Plain integer (not JSON wrapped)                        |
+| `context`      | Response headers (`header.*`) | Each response header maps to a `header.`-prefixed entry |
+
+### NamespaceExists
+
+**Route:** `POST /v1/namespace/{id}/exists`
+
+Existence is conveyed through the HTTP status code with no response body. The response maps
+to the `NamespaceExistsResponse` model as follows:
+
+| Response Field | REST Form                     | Notes                                                   |
+|----------------|-------------------------------|---------------------------------------------------------|
+| (existence)    | HTTP status code              | `200` if the namespace exists, `404` otherwise          |
+| `context`      | Response headers (`header.*`) | Each response header maps to a `header.`-prefixed entry |
+
+### TableExists
+
+**Route:** `POST /v1/table/{id}/exists`
+
+Existence is conveyed through the HTTP status code with no response body. The response maps
+to the `TableExistsResponse` model as follows:
+
+| Response Field | REST Form                     | Notes                                                   |
+|----------------|-------------------------------|---------------------------------------------------------|
+| (existence)    | HTTP status code              | `200` if the table exists, `404` otherwise              |
+| `context`      | Response headers (`header.*`) | Each response header maps to a `header.`-prefixed entry |
 
 ### DropTable
 

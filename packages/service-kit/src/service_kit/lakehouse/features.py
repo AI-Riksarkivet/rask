@@ -1,6 +1,6 @@
 """Lance manifest feature flags — the refusal gate for datasets this pass cannot correctly maintain.
 
-The spec settles the rule (``lance_docs/file_format.md`` "Feature Flags"): a reader checks
+The spec settles the rule (``lance_docs/lance/format/table/versioning.md`` "Feature Flags"): a reader checks
 ``reader_feature_flags``, a writer checks ``writer_feature_flags``, and "if either sees a flag they
 don't know, they should return an 'unsupported' error on any read or write operation". Compaction and
 GC are **writers** — one commits, the other deletes manifests — so they check both fields. The ORPHAN
@@ -104,7 +104,7 @@ class FragmentCarrier(ManifestCarrier, Protocol):
 type DatasetRootProbe = Callable[[str], bool]
 
 
-#: The documented flags (``lance_docs/file_format.md``, "Current Feature Flags"). Named rather than
+#: The documented flags (``lance_docs/lance/format/table/versioning.md``, "Current Feature Flags"). Named rather than
 #: inlined so a refusal message and this module's whitelist cannot drift apart.
 FLAG_DELETION_FILES = 1
 FLAG_STABLE_ROW_IDS = 2
@@ -112,8 +112,9 @@ FLAG_USE_V2_FORMAT_DEPRECATED = 4
 FLAG_TABLE_CONFIG = 8
 FLAG_BASE_PATHS = 16
 #: THE BITS ABOVE 16. Upstream's `rust/lance-table/src/feature_flags.rs` at v13.0.0 allocates FOURTEEN
-#: flags and puts its `FLAG_UNKNOWN` sentinel at `1 << 14`; the vendored `lance_docs/file_format.md`
-#: table (re-vendored at v13.0.0) names all fourteen. Named here so a refusal says WHICH feature it
+#: flags and puts its `FLAG_UNKNOWN` sentinel at `1 << 14`. The vendored `lance_docs/lance/format/table/versioning.md`
+#: § Current Feature Flags names eighteen (2^0 to 2^17, bits 16 and 17 reserved), of which pylance 13.0.0 allocates
+#: the fourteen named here; see `lance_docs/PROVENANCE.md` § "These docs run ahead of the installed pylance". Named here so a refusal says WHICH feature it
 #: declined instead of "32 (unknown)": an operator can act on "disable_transaction_file", not on a bare
 #: bit. **Naming is not supporting** — none of them enters :data:`SUPPORTED`, so all of them still
 #: refuse.
@@ -377,7 +378,7 @@ def describe_read_unsupported_flags(reader: int) -> str | None:
     """The refusal reason for a READ-ONLY pass, or ``None`` when every reader bit is understood.
 
     **THE TWO FIELDS ARE ASKED SEPARATELY, AND THEY DO NOT CARRY THE SAME BITS.** The format spec is
-    explicit (``lance_docs/file_format.md``, "Format Versioning"): *"Readers should check the
+    explicit (``lance_docs/lance/format/table/versioning.md``, "Format Versioning"): *"Readers should check the
     ``reader_feature_flags`` to see if there are any flag it is not aware of. Writers should check
     ``writer_feature_flags``."* Its table gives a per-bit answer, and one row is already asymmetric —
     ``FLAG_TABLE_CONFIG`` (8) is **Reader Required: No, Writer Required: Yes**. Measured on pylance
@@ -451,14 +452,17 @@ def describe_foreign_data_file_versions(table_version: str, data_files: Iterable
     named = ", ".join(f"{a}.{b}" for a, b in foreign)
     unknown = [v for v in foreign if v not in _LANCE_V2_FILE_VERSIONS]
     if unknown:
-        return f"data files at {', '.join(f'{a}.{b}' for a, b in unknown)}, which is not a Lance file format version (lance_docs/file_format.md, Versioning)"
+        return (
+            f"data files at {', '.join(f'{a}.{b}' for a, b in unknown)}, which is not a Lance file format version "
+            "(lance_docs/lance/format/file/versioning.md, Versioning)"
+        )
     return (
         f"data files at {named} under a table whose data_storage_version is {table_version}: committing them would set "
         f"reader flag {FLAG_MIXED_DATA_FILE_VERSIONS} (mixed data file versions), which no operation removes"
     )
 
 
-#: The V2 file format versions Lance defines (lance_docs/file_format.md, Versioning; 2.3 is unstable).
+#: The V2 file format versions Lance defines (lance_docs/lance/format/file/versioning.md, Versioning; 2.3 is unstable).
 _LANCE_V2_FILE_VERSIONS: Final = frozenset({(2, 0), (2, 1), (2, 2), (2, 3)})
 
 

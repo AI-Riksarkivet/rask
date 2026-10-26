@@ -2,7 +2,7 @@
 
 LANCE READS A TABLE'S REFS ONCE PER RECLAIM. ``cleanup_old_versions`` lists the referenced branches and the tags when it
 starts and deletes against that listing (``rust/lance/src/dataset/cleanup.rs:472-511`` at v13.0.0), and
-``lance_docs/guide.md`` § Tags and Branches promises only that a tagged version is exempt and that cleanup keeps a
+``lance_docs/lance/guide/tags_and_branches.md:63-64`` and ``:131-133`` promise only that a tagged version is exempt and that cleanup keeps a
 branch's files. Nothing in Lance orders a ref written meanwhile with the reclaim. Measured on pylance 13.0.0 with a tag
 or branch created on version 2 a few milliseconds into ``cleanup_old_versions(older_than=0)`` on a local store: the tag
 named a deleted version in 20 of 60 races, and the branch could not be read in 9 of 60.

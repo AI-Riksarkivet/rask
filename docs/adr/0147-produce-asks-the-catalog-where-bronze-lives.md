@@ -7,14 +7,14 @@ DeclareTable shape follows from the lance_docs check the same day.
 
 In the namespace spec the implementation, not the writer, decides where a table lives. On CreateTable "the table
 location and any credential vending behavior are determined by the implementation and returned in the response"
-(`lance_docs/ns_catalog/spec.yaml:3739-3742`); on DeclareTable the location is optional and, if absent, "the namespace
-implementation should determine the table location" (`spec.yaml:3823-3827`). The namespace guide recommends DeclareTable
+(`lance_docs/ns_catalog/spec.yaml:3747-3750`); on DeclareTable the location is optional and, if absent, "the namespace
+implementation should determine the table location" (`spec.yaml:3831-3835`). The namespace guide recommends DeclareTable
 followed by a Lance SDK write over CreateTable, because CreateTable is a data operation rather than pure metadata
 (`lance_docs/ns_catalog/namespace/operations/index.md:133-159`). A declared table with no data yet is reported as
 `is_only_declared` (`spec.yaml:2926-2936`), but only when the caller sends the `check_declared` flag
 (`spec.yaml:2828-2836`); otherwise the field is null. ListTables includes declared-only tables by default
 (`include_declared`, `spec.yaml:2758`), and DeclareTableResponse carries `managed_versioning`, which the writer must
-honour (`spec.yaml:3871`).
+honour (`spec.yaml:3879`).
 
 `/produce` builds its location from `settings.bronze_uri` or `{root}/medallion/{ns}`
 (`services/medallion/src/medallion/services/produce.py:147,158`), registers it (`:193-219`) and unwinds the record on failure

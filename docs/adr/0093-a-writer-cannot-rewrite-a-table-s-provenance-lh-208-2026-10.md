@@ -23,7 +23,7 @@ Two readers stopped trusting what a writer could forge. A maintenance pass names
 resolves to, and by the producer's `lineage.dataset_id` only where the path names nothing (every `medallion/<tier>`
 path), in its RunEvents, its audit records and the doors it asks (`DatasetResult.table_id`). An external blob base is
 read from the manifest alone (`blobs.external_base_of`), because bases are manifest state
-(`lance_docs/file_format.md` § Base Path System); `rask.blob.external_base` and `blobs.stamp_external_base` are
+(`lance_docs/lance/format/table/layout.md` § Base Path System); `rask.blob.external_base` and `blobs.stamp_external_base` are
 gone, and ingest's catalog-path create relies on the catalog registering every approved base.
 
 Not covered: `register` and the undrop re-registers attach a dataset whose schema metadata the catalog did not

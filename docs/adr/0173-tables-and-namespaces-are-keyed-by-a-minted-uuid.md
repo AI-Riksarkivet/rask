@@ -28,24 +28,24 @@ and periods", measured 2026-10-21), and the owner chose to keep names free and t
 What `lance_docs/` settles, read in full for this decision:
 
 - The namespace spec identifies an object by its names, unique within the parent (`ns_catalog/namespace/object-relationship.md:40-68`),
-  and leaves a created table's location to the implementation: CreateTable takes none (`ns_catalog/spec.yaml:3740-3742`),
+  and leaves a created table's location to the implementation: CreateTable takes none (`lance_docs/ns_catalog/spec.yaml:3748-3750`),
   and DeclareTable's is optional, "the namespace implementation should determine the table location"
-  (`spec.yaml:3823-3827`). Create is meant as a declaration plus the Lance SDK writing the data
+  (`spec.yaml:3831-3835`). Create is meant as a declaration plus the Lance SDK writing the data
   (`ns_catalog/namespace/operations/index.md:133-159`).
 - A table's own business properties are "stored and managed by the namespace implementation outside Lance context"
-  (`spec.yaml:3761-3765`); DescribeTable keeps them apart from the metadata that "requires loading the table"
+  (`spec.yaml:3769-3773`); DescribeTable keeps them apart from the metadata that "requires loading the table"
   (`spec.yaml:2902-2912`). The docs disagree on where the `dir` catalog keeps them: in Lance table metadata
   (`supported-catalogs/lance-dir.md:47`), in `__manifest.metadata` for namespaces only (`catalog/dir/index.md:110`);
   pylance 13 writes them to `__manifest.metadata` and drops them on RegisterTable, which the spec allows ("if supported
   by the implementation", `spec.yaml:2719-2724`).
 - A Lance table carries no identity of its own. It is anchored at its dataset root, "the location where the dataset was
-  initially created" (`file_format.md:4864-4868`): the external manifest store keys commits by `base_uri`
-  (`file_format.md:7403`), and shallow clones and branches reference other roots by path (`file_format.md:4981-5016`,
-  `:3669-3705`). A rename that moved bytes would break those references.
+  initially created" (`lance_docs/lance/format/table/layout.md:14-18`): the external manifest store keys commits by `base_uri`
+  (`lance_docs/lance/format/table/transaction.md:752`), and shallow clones and branches reference other roots by path (`lance_docs/lance/format/table/layout.md:141-176`,
+  `branch_tag.md:49-85`). A rename that moved bytes would break those references.
 - Lance keeps special characters out of its own paths: partition namespaces take random names "to avoid issues with
   special characters" and keep the real values in `__manifest` columns (`ns_catalog/partitioning-spec.md:171-184`,
-  `:203-226`); branch and tag names are ASCII-safe (`file_format.md:3630-3640`, `:3709-3719`); data files take uuid names
-  for store throughput (`file_format.md:5035-5039`).
+  `:203-226`); branch and tag names are ASCII-safe (`lance_docs/lance/format/table/branch_tag.md:10-20`, `:89-99`); data files take uuid names
+  for store throughput (`lance_docs/lance/format/table/layout.md:195-199`).
 
 Measured on pylance 13.0.0 (`dir` backend, compatibility mode, as the catalog runs it), 2026-10-21:
 
@@ -72,7 +72,7 @@ Measured on pylance 13.0.0 (`dir` backend, compatibility mode, as the catalog ru
 3. **Scope.** Tables and namespaces only. Projects and warehouses keep their ids under the control-id rule
    (`CONTROL_ID_PATTERN`); branch and tag names keep Lance's own rules.
 4. **Names.** Two names are the same only when they are equal exactly, case included (as Lance's own branch names are,
-   `file_format.md:3642`); a name not in Unicode NFC is refused 400, never rewritten. A segment is NFC text of 1 to 255
+   `lance_docs/lance/format/table/branch_tag.md:22`); a name not in Unicode NFC is refused 400, never rewritten. A segment is NFC text of 1 to 255
    characters holding no `$` (the delimiter), `+`, `/`, control character, or leading or trailing whitespace; `*` and `?`
    are allowed again, since no name reaches a credential's policy. The catalog reads a `+` in the `{id}` path as a space,
    as pylance's Rust client sends one, and no name can hold a literal `+`. A top-level namespace name keeps the

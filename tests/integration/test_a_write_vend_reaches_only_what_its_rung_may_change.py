@@ -1,9 +1,10 @@
 """[[LH-202]], [[LH-229]] A vended credential reaches only the files its rung may change, and a writer still lands rows.
 
-THE LAYOUT THE FORMAT FIXES DECIDES THE GRANT. `lance_docs/file_format.md` places a table's files in
+THE LAYOUT THE FORMAT FIXES DECIDES THE GRANT. `lance_docs/lance/format/table/layout.md` places a table's files in
 named directories: `data/` (data files, and blob sidecars under `data/<stem>/`), `_versions/` (the
 manifests, so every commit), `_transactions/`, `_deletions/`, `_indices/`, `_refs/` (branch and tag
-pointers), `tree/<branch>/` (each branch's own directories) and `_mem_wal/`.
+pointers), `tree/<branch>/` (each branch's own directories) and `_mem_wal/`. Its `_blobs/` and `_bt/` are written only
+under feature flags `version/create` refuses a commit turning on, so no tier grants a put there.
 
 A `can_write_data` holder is a managed-versioning writer (ADR 0157): it puts data files, transaction files,
 deletion files, index files and a STAGED manifest `_versions/<n>.manifest-<uuid>`, and the catalog finalizes

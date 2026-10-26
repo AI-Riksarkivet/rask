@@ -20,7 +20,7 @@ nothing pins any more, and reports what survives and what keeps it. The catalog'
 writes a data file.
 
 **EVERY REF HAS ITS OWN HISTORY.** A branch keeps its own `_versions/` under `tree/<name>/`
-(`lance_docs/file_format.md` "Branch Dataset Layout"), numbered in its own line, and writes the data it
+(`lance_docs/lance/format/table/branch_tag.md` "Branch Dataset Layout"), numbered in its own line, and writes the data it
 adds under `tree/<name>/data/` (measured on pylance 12.0.0: `tracked_files()` places a branch's own
 data files there, and `test_the_subjects_bytes_leave_the_branchs_own_data_files` finds the subject's
 bytes in one). So a subject written ON a branch lives in versions main's cleanup never lists, and
@@ -91,7 +91,7 @@ written above that instant are invisible to it ([[LH-094]]); `data/` is listed p
 pylance 13.0.0 (lance #8944). This reports what it reclaimed rather than asserting the bytes are gone,
 and a caller who needs that guarantee needs the floor raised first. Nor does it reclaim a file no
 version references that is younger than 7 days — an aborted write's residue — because Lance cannot
-tell it from an in-flight write's (`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).
+tell it from an in-flight write's (`lance_docs/lance/guide/read_and_write.md` cleanup_old_versions `delete_unverified`).
 And the external payloads it names are those a version retained when the erasure starts points at; one
 only an already-reclaimed version pointed at is beyond what the table still records.
 """
@@ -187,7 +187,7 @@ class ErasureReport(BaseModel):
         default=0, description="Versions reclaimed across every ref's cleanup. Zero is not a failure: history inside the retention window stays."
     )
     bytes_reclaimed: int = Field(default=0, description="Bytes freed across every ref's cleanup.")
-    #: Unambiguous: Lance reserves `main` and admits no `@` in a branch name (`lance_docs/file_format.md`
+    #: Unambiguous: Lance reserves `main` and admits no `@` in a branch name (`lance_docs/lance/format/table/branch_tag.md`
     #: "Branch Name").
     residual_versions: list[str] = Field(
         default_factory=list,
@@ -517,7 +517,8 @@ def _reclaim_refs(
             #
             # NO `delete_unverified`: at retention 0 it deletes another writer's staged, uncommitted files on this ref,
             # and that writer's commit then lands a head that cannot be read (measured on pylance 12.0.0;
-            # `lance_docs/guide.md` Cleanup calls the pair "extremely dangerous").
+            # `lance_docs/lance/guide/read_and_write.md` Cleanup: "Any concurrent write may have its files deleted out from
+            # under it, leaving the dataset corrupted").
             handle = _head(dataset, ref)
             if (refused := describe_gc_unsupported_flags(*manifest_feature_flags(handle))) is not None:
                 log.warning("erasure_cleanup_refused", extra={"table": report.table, "ref": _label(ref), "reason": refused})
@@ -738,7 +739,7 @@ def _unproved_segments(handle: _Dataset, history: _History, listing: _StorageLis
     """The user index segments of ``handle``'s version that may still hold the subject's keys.
 
     A segment is immutable and keeps keys of rows a later deletion or rewrite removed (`lance_docs/
-    file_format.md` "Handling deleted and invalidated rows"), so a clean data probe alone proves nothing about
+    lance/format/index/index.md` "Handling deleted and invalidated rows"), so a clean data probe alone proves nothing about
     it. Measured on pylance 12.0.0: a materialising compaction remaps a BTREE or BITMAP segment's fragment
     bitmap onto the new fragment and keeps the deleted row's key, and an `optimize_indices` merge of a BITMAP
     segment carries that key into the new one. So a segment is proved by PROVENANCE, two ways:
@@ -1101,7 +1102,7 @@ def _depth(name: str, forks: Mapping[str, _Reference | None]) -> int:
 
 #: Lance's global version identifier, ``(branch, version)`` with ``None`` naming main as
 #: :func:`recorded_branch` normalises it — the form ``checkout_version`` takes ("Use
-#: `(branch_name, version_number)` tuples as global identifiers", ``lance_docs/guide.md`` Branches),
+#: `(branch_name, version_number)` tuples as global identifiers", ``lance_docs/lance/guide/tags_and_branches.md`` Branches),
 #: because a bare version number means "on the handle's branch".
 type _Reference = tuple[str | None, int]
 
@@ -1177,7 +1178,7 @@ def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | 
     * `mem_wal` — any object under `_mem_wal/`. Measured on pylance 12.0.0, a row put through a MemWAL shard
       writer sits in the shard's WAL entry and its flushed generation while the base table answers zero for
       it, and the next merge carries it into the base. A WAL entry is not rewritten here: writer fencing
-      depends on its put-if-not-exists collisions (`lance_docs/file_format.md` MemWAL).
+      depends on its put-if-not-exists collisions (`lance_docs/lance/format/table/mem_wal.md` Writer Fencing).
 
     A ref with a version whose payloads cannot be read is a failed `bases:<ref>` surface: unread is not evidence
     that the subject's bytes stay inside the table.
@@ -1287,7 +1288,7 @@ def _branches(dataset: _Dataset) -> dict[str, _Reference | None] | None:
 
     `branches.list()` answers a mapping of name -> metadata carrying the `parent_branch` and
     `parent_version` Lance records at the fork point (measured on pylance 12.0.0; ``parentBranch`` /
-    ``parentVersion`` in ``lance_docs/file_format.md`` "Branch Metadata File Format"). That reference is
+    ``parentVersion`` in ``lance_docs/lance/format/table/branch_tag.md`` "Branch Metadata File Format"). That reference is
     what makes the erasure report actionable: a branch pins its parent's history there, so it is the
     reason a pre-delete version survives cleanup.
 
@@ -1309,7 +1310,7 @@ def _tags(dataset: _Dataset) -> dict[str, _Reference | None]:
     """Every tag on this table mapped to the version it pins, ON THE BRANCH IT NAMES.
 
     `tags.list()` is root-scoped: from any handle it answers every branch's tags, each carrying the
-    `branch` it names (`null` for main — ``lance_docs/file_format.md`` "Tag File Format"). `None` marks
+    `branch` it names (`null` for main — ``lance_docs/lance/format/table/branch_tag.md`` "Tag File Format"). `None` marks
     one this cannot read, which the caller resolves against the tag rather than in its favour.
     """
     try:

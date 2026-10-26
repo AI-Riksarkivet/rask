@@ -401,7 +401,7 @@ def _report_gap(stored: LineageCursor, progress: _Progress) -> None:
 
     Every seq below lineage's `oldest_seq` was a row: a seq is one more than a stable Lance row id, and Lance advances
     its `next_row_id` by exactly the rows a commit adds, reassigning them when a conflict rebases the
-    commit (`lance_docs/file_format.md`, "Row ID Assignment"), so the feed issues no seq it never filled.
+    commit (`lance_docs/lance/format/table/row_id_lineage.md`, "Row ID Assignment"), so the feed issues no seq it never filled.
     """
     if progress.gapped:
         log.error("lineage_feed_pruned_below_cursor", extra={"cursor": stored.seq, "scanned": progress.scanned})

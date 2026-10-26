@@ -118,7 +118,7 @@ def parse_identifier(id_str: str) -> list[str]:
 
 def rename_destination(source: Sequence[str], new_namespace_id: Sequence[str] | None, new_table_name: str) -> list[str]:
     """The identifier a rename of table ``source`` lands at: ``new_namespace_id``, or the source's own namespace when the
-    request names none ("if not specified the table stays in the same namespace", ``lance_docs/ns_catalog/spec.yaml:4641-4645``),
+    request names none ("if not specified the table stays in the same namespace", ``lance_docs/ns_catalog/spec.yaml:4649-4653``),
     then ``new_table_name``. The one rule every reader of a rename asks, from its raw body to the backend call."""
     return [*(new_namespace_id or source[:-1]), new_table_name]
 

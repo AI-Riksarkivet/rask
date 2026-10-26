@@ -375,7 +375,7 @@ async def declare_table(
     DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
 
     The catalog chooses a declared table's location, which the spec leaves to the implementation
-    (`lance_docs/ns_catalog/spec.yaml:3823-3827`), so a request naming one is refused. The declaration keeps no
+    (`lance_docs/ns_catalog/spec.yaml:3831-3835`), so a request naming one is refused. The declaration keeps no
     ``properties``: it is recorded through RegisterTable, which keeps none (`spec.yaml:2719-2724`).
 
     The response carries the credential the declarer writes the table with, the highest tier FGA grants
@@ -511,7 +511,7 @@ async def describe_table(
 
     TWO DOORS, ONE MEANING. The Lance Namespace spec puts ``with_table_uri`` / ``load_detailed_metadata`` /
     ``check_declared`` in the QUERY and ``version`` / ``tag`` / ``vend_credentials`` in a
-    ``DescribeTableRequest`` BODY (``lance_docs/namespace.md`` §DescribeTable; the generated client's
+    ``DescribeTableRequest`` BODY (``lance_docs/ns_catalog/catalog/rest/index.md`` §DescribeTable; the generated client's
     ``_describe_table_serialize`` sends exactly that split). This route once bound all six as bare scalars,
     so FastAPI made them all query params and the body was dropped unread — a spec-conformant client
     (``lance_ray.utils``, which calls ``describe_table(DescribeTableRequest(id=...))`` and merges

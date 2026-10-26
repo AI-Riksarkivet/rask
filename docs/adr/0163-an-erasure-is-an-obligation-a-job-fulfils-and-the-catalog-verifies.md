@@ -57,8 +57,8 @@ on bytes.
    catalog never does or retries the job's work.
 5. **A branch is erased in place, through branch commits, once the spec doors serve them.** `lance_docs` settles the
    shape: the spec puts `branch` on `CreateTableVersion` and `DescribeTable` (`ns_catalog/spec.yaml`), and a branch is a
-   shallow clone inside the table keeping its own version history (`lancemultibasebranchingblobv2.md` § Building
-   block 3). Today the catalog refuses both with a branch, so an obligation stays open, naming each branch whose head
+   shallow clone inside the table keeping its own version history (`lance_docs/lance/format/table/branch_tag.md` §
+   Branch Dataset Layout). Today the catalog refuses both with a branch, so an obligation stays open, naming each branch whose head
    holds the subject, until LH-490 (#632) serves branch commits (owner, 2026-10-15: split, branch commits next).
 
 ## Considered options
@@ -75,7 +75,7 @@ on bytes.
   credential shape is LH-490's own measured problem, taken next.
 - **Store the predicate for a catalog cron to verify with**: rejected; the identifier would sit on the control root
   ([[LH-281]]). The digest binds the job to the requester's predicate without storing it.
-- **Prove a job's index segment by reading its keys**: `lance_docs/file_format.md` documents the BTree
+- **Prove a job's index segment by reading its keys**: `lance_docs/lance/format/index/scalar/{btree,bitmap}.md` documents the BTree
   (`page_data.lance`: `values`, `ids`) and Bitmap (`bitmap_page_lookup.lance`: `keys`) files, and
   `lance.file.LanceFileReader` reads them (measured on pylance 13.0.0), so the catalog could prove each key is a value
   the version still serves and keep scalar indexes serving through the erasure. Not chosen: a reader per index type,

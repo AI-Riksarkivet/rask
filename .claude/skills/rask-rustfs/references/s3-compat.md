@@ -6,7 +6,7 @@ not run), **open** (neither).
 
 | Operation | Who uses it in rask | Status | Evidence |
 |---|---|---|---|
-| PutObject `If-None-Match: *` → 412, one winner under contention | Lance commit (put-if-not-exists, `lance_docs/file_format.md` § Commit Protocol), registry create (`packages/service-kit/src/service_kit/lakehouse/records.py:95-111`), the catalog's warehouse validate probe (`services/catalog/src/catalog/api/v1/endpoints/warehouses.py:1289-1291`) | measured (16×20 race) + gated | `implemented_tests.txt:355-363`; lock re-check `rustfs@1.0.3:crates/ecstore/src/set_disk/ops/object.rs:4715-4728` |
+| PutObject `If-None-Match: *` → 412, one winner under contention | Lance commit (put-if-not-exists, `lance_docs/lance/format/table/transaction.md` § Commit Protocol), registry create (`packages/service-kit/src/service_kit/lakehouse/records.py:95-111`), the catalog's warehouse validate probe (`services/catalog/src/catalog/api/v1/endpoints/warehouses.py:1289-1291`) | measured (16×20 race) + gated | `implemented_tests.txt:355-363`; lock re-check `rustfs@1.0.3:crates/ecstore/src/set_disk/ops/object.rs:4715-4728` |
 | PutObject `If-Match: <etag>` | registry read-modify-write (`records.py:235-256`) | measured + gated | `rustfs@1.0.3:crates/ecstore/src/set_disk/core/io_primitives.rs:6425-6431` |
 | CompleteMultipartUpload conditional | Lance large commit | gated + source | `implemented_tests.txt:470-472`; `rustfs@1.0.3:crates/ecstore/src/set_disk/ops/multipart.rs:2702-2742` |
 | Multipart from pyarrow 25 (`STREAMING-UNSIGNED-PAYLOAD-TRAILER`) | record store, on a service's own scoped pair (`packages/service-kit/src/service_kit/lakehouse/record_store.py:54-61`) | measured on 1.0.1 and 1.0.3; refused by alpha.60 | `.dagger/storage.go`; audit § Measured |

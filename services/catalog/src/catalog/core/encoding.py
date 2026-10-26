@@ -1,6 +1,6 @@
 """A create's ``lance-encoding:*`` knobs: judged against what Lance honours, stamped on the fields each acts on ([[LH-246]]).
 
-Lance reads every encoding knob from a field's own metadata (`lance_docs/file_format.md` § Compression
+Lance reads every encoding knob from a field's own metadata (`lance_docs/lance/format/file/encoding.md` § Compression
 Configuration), and the table keeps that metadata, so every later write to the table encodes under it. A value
 Lance cannot honour is therefore refused 400 at the create, whether it rides the ``properties`` or the payload's
 own field metadata, before anything is written. Measured on pylance 13.0.0: an empty create holding
@@ -13,7 +13,7 @@ NOTHING IS SET BY DEFAULT (ADR 0066, [[LH-034]]): general compression runs after
 values under ~1 KiB it costs more than it saves, so a workload that knows its own value sizes opts in per table.
 
 WHICH FIELDS EACH KNOB ACTS ON, measured on pylance 13.0.0 by the encoded size with the knob at either end, or by
-whether a bad value reaches the encoder. Where `file_format.md` names the types, the measurement is wider, and the
+whether a bad value reaches the encoder. Where `lance_docs/lance/format/file/encoding.md` names the types, the measurement is wider, and the
 stamp follows the measurement:
 
 * ``compression``, ``compression-level`` and ``general``: every leaf, boolean included.
@@ -30,7 +30,7 @@ under no knob, on the list or on its item, so nothing is stamped there; a map, a
 descended, unmeasured.
 
 ``structural-encoding`` is refused: a forced layout overrides Lance's own per-page choice on every later write,
-and ``sparse`` is an input error before file format 2.3 (`file_format.md` § Writer Selection) where the catalog
+and ``sparse`` is an input error before file format 2.3 (`lance_docs/lance/format/file/encoding.md` § Compression Configuration) where the catalog
 writes 2.2. A ``lance-encoding:*`` property the table above does not name is refused rather than stamped, since Lance
 reads a misspelt knob as absent. A blob-v2 column's two placement thresholds are judged on its own field, as Lance
 judges them; any other key on a field is Lance's own.
@@ -58,7 +58,7 @@ if TYPE_CHECKING:
 
 PREFIX = "lance-encoding:"
 _STRUCTURAL = PREFIX + "structural-encoding"
-#: A level is honoured by zstd alone (`file_format.md` § Compression Level: lz4's mode is not exposed).
+#: A level is honoured by zstd alone (`lance_docs/lance/format/file/encoding.md` § Compression Level: lz4's mode is not exposed).
 _ZSTD_LEVELS = range(23)
 #: The integer and decimal forms Rust's ``str::parse`` reads; ``1_0``, ``inf`` and a padded value are refused.
 _INTEGER = re.compile(r"[+-]?[0-9]+")
@@ -67,7 +67,7 @@ PACKED = PREFIX + "packed"
 #: The ``packed`` values Lance 2.1 and later pack on, in any case; any other value leaves the struct's leaves as columns.
 _PACKING = frozenset({"true", "1", "yes", "on"})
 _PACKED_VALUES = _PACKING | {"false", "0", "no", "off"}
-#: A blob-v2 column's placement thresholds (`guide.md` § Blob: ``blob_field(..., inline_size_threshold=...,
+#: A blob-v2 column's placement thresholds (`lance_docs/lance/guide/blob.md:288-289`: ``blob_field(..., inline_size_threshold=...,
 #: dedicated_size_threshold=...)``). Lance takes each as "a non-negative integer that fits in usize" and refuses any
 #: other on write (pylance 13.0.0, ``blob.rs:108``), as an ``OSError`` a door would answer 500.
 _BLOB_THRESHOLDS = frozenset({PREFIX + "blob-inline-size-threshold", PREFIX + "blob-dedicated-size-threshold"})
@@ -127,7 +127,7 @@ def _is_ratio_above_zero(value: str) -> bool:
     return ratio is not None and 0.0 < ratio <= 1.0
 
 
-#: Each knob `file_format.md` § Compression Configuration defines, but ``structural-encoding``. The schemes are the
+#: Each knob `lance_docs/lance/format/file/encoding.md` § Compression Configuration defines, but ``structural-encoding``. The schemes are the
 #: ones Lance's encoder resolves (measured: ``ZSTD``, ``gzip``, ``brotli`` and ``snappy`` are each "Unknown
 #: compression scheme"; a dictionary's values take lz4, zstd or none).
 _KNOBS: dict[str, Knob] = {
@@ -205,9 +205,10 @@ def _fields_within(fields: Iterable[pa.Field]) -> Iterator[pa.Field]:
 def require_valid_field_encoding(schema: pa.Schema) -> None:
     """Refuse 400 a payload field, at any depth, holding a knob or a blob threshold Lance cannot honour.
 
-    Any other ``lance-encoding:`` key stays Lance's (`file_format.md` § Encoding Metadata calls the prefix its whole
-    field configuration). The blob-v1 marker ``lance-encoding:blob`` is one: `guide.md` § Blob says a 2.2 write rejects
-    it, and pylance 13.0.0 writes the column as blob v2 instead (measured), so it poisons nothing.
+    Any other ``lance-encoding:`` key stays Lance's (`lance_docs/lance/format/table/schema.md` § Encoding Metadata calls the prefix its whole
+    field configuration). The blob-v1 marker ``lance-encoding:blob`` is one: `lance_docs/lance/guide/data_types.md:43` says a 2.2 write
+    rejects it, `lance_docs/lance/guide/blob.md:65` that it is "Accepted as input; written as Blob v2", and pylance 13.0.0 does the
+    second (measured), so it poisons nothing.
     """
     for field in _fields_within(schema):
         encoding = _judged_keys(field)

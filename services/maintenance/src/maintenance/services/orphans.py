@@ -166,7 +166,7 @@ class DatasetOrphanScan(BaseModel):
     #: second may block reclamation (`purge.report_is_clean`). Two kinds are excluded:
     #:
     #: * a layout the orphan method does not APPLY to. The spec is what makes these permanent rather
-    #:   than merely sticky. `file_format.md` § Feature Flags: a reader seeing a flag it does not know
+    #:   than merely sticky. `lance_docs/lance/format/table/versioning.md` § Feature Flags: a reader seeing a flag it does not know
     #:   "should return an 'unsupported' error on any read or write operation", and flag 16
     #:   `FLAG_BASE_PATHS` (shallow clones / multi-base) is Reader Required. The flag lives in the
     #:   MANIFEST, so the refusal clears when this code learns base_paths and never on a later tick.

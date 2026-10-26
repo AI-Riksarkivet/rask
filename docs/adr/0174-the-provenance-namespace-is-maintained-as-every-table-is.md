@@ -25,7 +25,7 @@ window. Measured offline on pylance 13.0.0 against RustFS 1.0.3, and read back o
   once more for the credential it vended, which lineage's version reads never use.
 
 Lance's own guide answers this shape: "many small appends will lead to a large number of small fragments", met by
-`compact_files` and `cleanup_old_versions` run "as a periodic background task" (`lance_docs/guide.md` § Table
+`compact_files` and `cleanup_old_versions` run "as a periodic background task" (`lance_docs/lance/guide/read_and_write.md` § Table
 Maintenance).
 
 ## Decision

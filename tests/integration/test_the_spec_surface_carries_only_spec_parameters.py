@@ -7,7 +7,7 @@ a parameter no spec client has vocabulary for.
 
 THE SPEC SIDE IS DERIVED, NOT LISTED. It is the union of every request model's fields in the pinned
 `lance_namespace_urllib3_client`, plus `delimiter` — the one documented query parameter that is
-transport rather than a model field (`lance_docs/namespace.md:1221-1224`, which also documents
+transport rather than a model field (`lance_docs/ns_catalog/catalog/rest/index.md:144-147`, which also documents
 `page_token` and `limit`; those two ARE model fields and arrive by the union). Deriving from the
 client rather than naming parameters means a spec version bump moves this gate with it, and it is
 why the row's own headline example turned out to be wrong: `branch` is a field on the upstream

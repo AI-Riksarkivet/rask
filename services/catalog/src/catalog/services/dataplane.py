@@ -344,7 +344,7 @@ def table_data_bases(approved: Sequence[str], directory: str) -> list[DataBase]:
     ``<base>/*`` — every sibling's fragments. Under ``<base>/<directory>/`` a table's files are a prefix
     no other table writes, so the session policy can grant exactly that prefix. Measured on pylance
     12.0.0: ``DatasetBasePath(<base>/<dir>, is_dataset_root=False)`` writes its fragments under
-    ``<dir>/`` and reads them back (``file_format.md`` § Base Path System: a non-root base "points
+    ``<dir>/`` and reads them back (``lance_docs/lance/format/table/layout.md`` § Base Path System: a non-root base "points
     directly to the file directory").
     """
     approved = list(dict.fromkeys(approved))
@@ -389,7 +389,7 @@ def _write_blob(
 
     ``allow_external`` opts into ``Blob.from_uri`` columns ANYWHERE outside the dataset root (blanket bypass);
     ``external_blob_bases`` registers approved base URIs so external pointers UNDER a registered base are
-    accepted with the bypass left off — the safer allowlist posture (lance_docs/guide.md). ``data_bases``
+    accepted with the bypass left off — the safer allowlist posture (lance_docs/lance/guide/blob.md). ``data_bases``
     (#3-B) are the table's own directories under approved DATA-distribution bases, which the fragments
     round-robin across (the Uber pattern): :func:`table_data_bases` on a create,
     :func:`registered_data_bases` on an overwrite, which reuses the bases the table registered at create."""
@@ -410,7 +410,7 @@ def _write_blob(
     # /insert append route which has no data_base param) concentrates its NEW fragments in the primary root —
     # create-time distribution is the firm guarantee; per-write distribution needs the bases re-supplied.
     target_bases = [base.name for base in data_bases] or None
-    # Every base writes under the root's own options, Lance's default (`lance_docs/guide.md` § Per-Base
+    # Every base writes under the root's own options, Lance's default (`lance_docs/lance/guide/object_store.md` § Per-Base
     # Configuration: "every base inherits the unscoped options"): a data base on the estate's store is the table's own
     # storage, reached under the catalog's identity as the root is ([[LH-286]]).
     try:
@@ -496,7 +496,7 @@ def declare_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], *
     """Declare ``segments`` at ``<root>/<table uuid>``, where a table the catalog makes lives, and answer that location ([[LH-520]]).
 
     The `dir` catalog's own DeclareTable steps (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:132-149`)
-    with the catalog choosing the location, as the spec leaves it to (`lance_docs/ns_catalog/spec.yaml:3823-3827`). The
+    with the catalog choosing the location, as the spec leaves it to (`lance_docs/ns_catalog/spec.yaml:3831-3835`). The
     backend's DeclareTable puts the name in the path (`<hash>_<object_id>`) and refuses any other location (measured on
     pylance 13.0.0), so ADR 0173 §5 takes the steps here, in this order:
 
@@ -625,7 +625,7 @@ def create_table(
     dataset, so every mode simply lands the first data version into its already-declared location; this keeps
     the multi-step create idempotent and crash-safe, and never opens a table that isn't there (which 500'd).
     A brand-new table is declared at ``<root>/<table uuid>`` (:func:`declare_table`, ADR 0173 §5), the namespace
-    connection's ``root``, then written at ``data_storage_version="2.2"`` (lance_docs/guide.md — Version
+    connection's ``root``, then written at ``data_storage_version="2.2"`` (lance_docs/lance/guide/blob.md — Version
     Compatibility). Any failed fresh write is rolled back with ``drop_table`` so the name stays retryable rather than
     stuck describable-but-unreadable.
 
@@ -664,7 +664,7 @@ def create_table(
             # Disarmed first ([[LH-245]]): an overwrite carries the table's config forward, keys included.
             opened = overwriting.open_unchecked(so) if overwriting is not None else lance.dataset(existing, storage_options=so, session=shared_lance_session())
             current = disarm_commit_path_cleanup(opened, segments)
-            # The table's key, not the payload's: a key is fixed once set (`lance_docs/file_format.md:4684`).
+            # The table's key, not the payload's: a key is fixed once set (`lance_docs/lance/format/table/index.md:87`).
             primary_keys.refuse_repeats_within(table, primary_keys.key_columns(current.lance_schema), door="create")
             dataset = _write_blob(
                 provenance_guard.keep_provenance(current.schema, table),
@@ -873,7 +873,7 @@ def rename_table(
     carries identifiers and no location. lance-ns V2 stores a table at ``<hash>_<object_id>`` with the
     mapping in the ``__manifest`` table; the hash is there for object-store throughput and for
     create/delete/recreate conflict prevention, and the spec says the ``object_id`` suffix "ensures
-    uniqueness and aids debugging" (`lance_docs/namespace.md`, *Manifest Table Directory*). It is a
+    uniqueness and aids debugging" (`lance_docs/ns_catalog/catalog/dir/index.md`, *Manifest Table Directory*). It is a
     label, not the resolution path. So the whole rename is: take the location's claim for the
     destination, deregister the source, and register the destination id at the source's location.
 
@@ -1049,7 +1049,7 @@ def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
 
 
 #: A committed manifest's name under either naming scheme: ``{version}.manifest`` (V1) or
-#: ``{u64::MAX - version:020}.manifest`` (V2) (`lance_docs/file_format.md` § Manifest Naming Schemes). A staged
+#: ``{u64::MAX - version:020}.manifest`` (V2) (`lance_docs/lance/format/table/transaction.md` § Manifest Naming Schemes). A staged
 #: ``{version}.manifest-{uuid}`` (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:292`) and a detached
 #: ``d<id>.manifest`` name no version a reader resolves.
 _COMMITTED_MANIFEST: Final = re.compile(r"[0-9]+\.manifest")
@@ -2470,7 +2470,7 @@ def count_rows(table: table_claims.DoorTable, so: StorageOptions, req: CountTabl
     mishandled.
 
     Spec-mandated on both counts. `CountTableRowsRequest.branch` is "Branch to target. When not
-    specified, the main branch is used" (namespace.md), and the SDK states the general rule for a
+    specified, the main branch is used" (lance_docs/ns_catalog/namespace/operations/models/CountTableRowsRequest.md), and the SDK states the general rule for a
     branch-scoped handle: "Reads and writes operate in the branch's context." An absent ref is error
     code 22 `TableBranchNotFound`, which the door's open already raises — so routing through it buys the
     404 as well as the correct answer.
@@ -2500,7 +2500,7 @@ def add_columns(
     """Add columns computed from per-column SQL expressions, committed with ``transaction_properties`` ([[LH-497]])."""
     columns = req.new_columns or []
     # The spec also allows a `virtual_column` (UDF/Docker-backed) instead of a SQL `expression`. That needs
-    # a UDF execution backend we don't run, so reject it as a spec-correct 501 — not a 400 (it's a valid
+    # a UDF execution backend we don't run, so reject it as the spec's 406 (Unsupported) — not a 400 (it's a valid
     # request for an unsupported feature, not invalid input).
     if any(getattr(c, "virtual_column", None) is not None and not c.expression for c in columns):
         raise UnsupportedOperationError("virtual_column add_columns is not supported by this backend")
@@ -2513,7 +2513,7 @@ def add_columns(
     # Without this arm a spec-VALID 0.11.0 request (`{"name": "x", "computed": "a + b"}`) fell past the
     # virtual_column guard, produced an empty `transforms`, and hit the InvalidInput below — a 400 saying
     # the caller had sent no SQL expression when they had sent one the server simply does not support.
-    # 501 is the spec's answer for a valid request naming an unsupported feature.
+    # 406 is the spec's answer for a valid request naming an unsupported feature.
     #
     # `getattr` so this file works against 0.9.0 and 0.11.0 alike, exactly as the virtual_column guard
     # above already does — the field does not exist on the older model.
@@ -2680,7 +2680,7 @@ def read_changes(
 
     `inserted` and `updated` are scans with the predicate `services/changes.py` composes, which owns the
     two documented windows; this function does not know what a change is and must not learn — a second
-    place that composes either is a second place it can drift from `file_format.md`. Its own scan rather
+    place that composes either is a second place it can drift from `lance_docs/lance/format/table/row_id_lineage.md`. Its own scan rather
     than the query door's, because `QueryTableRequest` is a VECTOR model (`k` and `vector` required).
 
     `deleted` is not a predicate: the rows are gone from the scan, so Lance answers from the transaction
@@ -2707,7 +2707,7 @@ def read_changes(
     YIELDING BOUNDS WHAT THIS FUNCTION HOLDS, NOT WHAT LANCE HOLDS. The scan itself runs under the
     process scan defaults the catalog sets at boot (`catalog.main.bound_lance_scans`, [[LH-247]]):
     Lance's own size a batch in ROWS (8,192, whatever their width) and buffer up to 2 GB of IO ahead of
-    the consumer (`lance_docs/guide.md:3441-3462`), and on a 164 MB table of 1024-dim float32 vectors
+    the consumer (`lance_docs/lance/guide/performance.md:170-191`), and on a 164 MB table of 1024-dim float32 vectors
     this feed peaked the catalog at 597,224 kB against its 524,288 kB limit (pylance 12.0.0, measured
     from outside a one-CPU catalog over a moto store). No scanner option is passed here, so the feed
     and the native backend's scans share one bound an operator can move in one place.
@@ -3415,7 +3415,7 @@ def create_branch(table: table_claims.DoorTable, so: StorageOptions, req: Create
     # `branches.list()` (the default ref is implicit), so the collision check below cannot see it.
     refuse_a_branch_name_the_backend_cannot_use(req.name)
     refuse_a_branch_name_that_shadows_the_layout(req.name)
-    # `main` is a ref every table has and no branch list names (`lance_docs/file_format.md` "Branch Metadata"),
+    # `main` is a ref every table has and no branch list names (`lance_docs/lance/format/table/branch_tag.md` "Branch Name"),
     # so a source spelled `main` is main itself.
     req.from_branch = recorded_branch(req.from_branch)
     dataset = table.open(so)

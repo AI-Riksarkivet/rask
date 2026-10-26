@@ -2,8 +2,8 @@
 Lance commit safety.
 
 Every Lance commit publishes ``_versions/N.manifest`` with put-if-not-exists (``If-None-Match: *``); the
-format REQUIRES the store to guarantee exactly ONE writer wins that race (``lance_docs/file_format.md`` —
-Conflict resolution). A store that silently IGNORES the header accepts both PUTs and silently loses a
+format REQUIRES the store to guarantee exactly ONE writer wins that race (``lance_docs/lance/format/table/transaction.md:15-22`` §
+Storage Primitives). A store that silently IGNORES the header accepts both PUTs and silently loses a
 commit — a failure mode seen in the wild (GCS S3-interop), invisible to a single-writer smoke test. This
 suite is the contended-writer harness that actually catches it, run against the DEPLOYED store (RustFS).
 
@@ -58,7 +58,7 @@ def _s3():
 def _storage_options() -> dict[str, str]:
     # Same keys the app passes to lance (the catalog and maintenance config.storage_options), plus a very high AIMD
     # ceiling so Lance's client-side rate limiter can't throttle (and thereby serialize) the concurrent
-    # writers — that would mask a store silently dropping the conditional-put header (guide.md § Throttling).
+    # writers — that would mask a store silently dropping the conditional-put header (lance_docs/lance/guide/performance.md § Cloud Store Throttling).
     return {
         "endpoint": ENDPOINT,
         "access_key_id": ACCESS_KEY,
@@ -87,7 +87,7 @@ def s3():
 
 def test_concurrent_lance_appends_all_land(s3) -> None:
     """8 processes each append 100 rows to one dataset. Append⊥Append never LOGICALLY conflicts
-    (file_format.md — conflict matrix), but every commit still contends on the manifest CAS; each loser
+    (lance_docs/lance/format/table/transaction.md — conflict matrix), but every commit still contends on the manifest CAS; each loser
     rebases and retries. On a CAS-honoring store all 8 land → 800 rows. On a store that drops the header,
     two commits take the same version → an append is silently lost → < 800 rows (or a corrupt manifest)."""
     run = f"{PREFIX}/appendtest-{uuid.uuid4().hex}"  # per-run isolation so overlapping runs never collide

@@ -1,7 +1,7 @@
 """An erasure's verification does not reclaim a table another dataset resolves its files through (#114).
 
 A shallow clone's manifest names the source in ``base_paths`` and its data files resolve through the
-source's (``lance_docs/file_format.md`` "Shallow Clone"), so the source's files are the clone's only
+source's (``lance_docs/lance/format/table/layout.md`` "Shallow Clone"), so the source's files are the clone's only
 copy. The GC door refuses to reclaim such a source (``require_reclaimable`` runs
 ``refuse_a_referring_datasets_source``) because reclaiming it after a rewrite breaks the clone, and
 ``version/create`` refuses the job's compaction of it on the sweep's clone list (ADR 0162). The verification

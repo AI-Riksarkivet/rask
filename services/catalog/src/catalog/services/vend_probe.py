@@ -30,7 +30,7 @@ Outcome = Literal["pass", "fail", "skip"]
 SCOPE_CHECK: Final = "write_outside_refused"
 
 #: The check whose result IS the COMMIT-SAFETY claim, and the only one that may set `commit_safe`.
-#: `lance_docs/file_format.md` § "Commit Protocol" -> "Storage Primitives": Lance commits rely on
+#: `lance_docs/lance/format/table/transaction.md` § "Commit Protocol" -> "Storage Primitives": Lance commits rely on
 #: put-if-not-exists, and those primitives are what "guarantee that exactly one writer succeeds when
 #: multiple writers attempt to create the same manifest file concurrently". A store that ACCEPTS a
 #: second conditional put has no such guarantee, and the loss is silent — both writers see success.

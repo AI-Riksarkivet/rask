@@ -39,7 +39,7 @@ def _table(n: int = 20) -> pa.Table:
 
 def test_feature_flags_read_the_documented_values(tmp_path: pathlib.Path) -> None:
     """The four flag states a healthy estate actually produces, against the spec's own table
-    (`lance_docs/file_format.md`: deletion files = 1, stable row ids = 2).
+    (`lance_docs/lance/format/table/versioning.md`: deletion files = 1, stable row ids = 2).
 
     Both fields are asserted, not just the reader's: the maintenance pass is a WRITER, and the spec
     says a writer checks `writer_feature_flags`. Reading only field 9 would look identical on every
@@ -73,8 +73,9 @@ def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Pat
 
     Measured against the source 2026-09-14 (`lance-format/lance`, `rust/lance-table/src/feature_flags.rs`):
     upstream reserves `FLAG_MIXED_DATA_FILE_VERSIONS = 1 << 8` and puts `FLAG_UNKNOWN` at the same bit,
-    so the unknown boundary is 256. The vendored `file_format.md` still says "flags with bit values 32
-    and above are unknown" — a doc four bits behind the code it describes.
+    so the unknown boundary is 256. The vendored `lance_docs/lance/format/table/versioning.md` says "Bits at
+    positions 18 and above are unknown", ahead of pylance 13.0.0 (`lance_docs/PROVENANCE.md` § "These docs run ahead
+    of the installed pylance").
 
     NAMING IS NOT SUPPORTING, which is why this asserts both halves: 256 must be named AND must still
     refuse. A dataset mixing exact V2 file versions is one whose layout a rewrite has not been checked
@@ -91,9 +92,10 @@ def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Pat
 
 
 #: Bit -> upstream symbol, read from `lance-format/lance` `rust/lance-table/src/feature_flags.rs`
-#: (measured 2026-09-19) rather than from the vendored docs bundle: `lance_docs/file_format.md` names only
-#: five of these, and `lance_docs/PROVENANCE.md` says a load-bearing citation from those bundles must be
-#: spot-checked against the live source.
+#: (measured 2026-09-19) rather than from the vendored docs: `lance_docs/lance/format/table/versioning.md` § Current
+#: Feature Flags names eighteen flags (2^0 to 2^17, bits 16 and 17 reserved), of which pylance 13.0.0 allocates the
+#: fourteen `service_kit.lakehouse.features` names (`FLAG_UNKNOWN = 1 << 14` at v13.0.0); see `lance_docs/PROVENANCE.md`
+#: § "These docs run ahead of the installed pylance".
 _UPSTREAM: dict[int, str] = {
     1 << 0: "FLAG_DELETION_FILES",
     1 << 1: "FLAG_STABLE_ROW_IDS",

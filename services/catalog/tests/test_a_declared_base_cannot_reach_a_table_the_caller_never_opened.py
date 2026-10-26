@@ -85,7 +85,7 @@ def test_a_base_at_a_bucket_root_is_refused(base: str) -> None:
 
     With no prefix the READ resource collapses to `arn:aws:s3:::<bucket>/*`; measured 2026-09-11, base
     `s3://lakehouse` rendered `BaseObjects0 arn:aws:s3:::lakehouse/*`. No legitimate base is a bucket root
-    (the spec's base path points at a dataset root or a file directory, `file_format.md`, Base Path
+    (the spec's base path points at a dataset root or a file directory, `lance_docs/lance/format/table/layout.md`, Base Path
     System), so raising cannot narrow a real table, and a malformed base is worth an operator's attention.
     """
     with pytest.raises(ValueError):

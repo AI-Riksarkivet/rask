@@ -5,7 +5,7 @@ default of `True` that no caller overrides hands `allow_http=true` beside an `ht
 every credential the catalog VENDS and to every service opening Lance through this builder (lineage,
 medallion, maintenance, ingest, the Ray jobs).
 
-A permit held against a TLS store is invisible until it matters: `lance_docs/guide.md:2565` defines
+A permit held against a TLS store is invisible until it matters: `lance_docs/lance/guide/object_store.md:32` defines
 `allow_http` as "Allow non-TLS, i.e. non-HTTPS connections", and object_store consults it only when a
 request would otherwise be refused. Measured on pylance 12.0.0 against a closed port: `http://` with
 `allow_http=false` dies at client construction (`builder error`), while `https://` with
