@@ -2,16 +2,16 @@
 
 A warehouse's ``delete_profile`` decides what a drop under it does (ADR 0146): ``hard`` destroys the table at once,
 ``soft`` keeps it recoverable for the profile's ``grace_days``, and a warehouse naming none, or naming ``estate``, takes
-the estate's ``LANCE_TRASH_GRACE_DAYS``. The deadline is stamped on the trash record at the drop. Past it, the drop is DropTable's,
-its data deleted asynchronously: the maintenance reconcile tick revokes the trashed object's grants, announcing a
-``grant_revoked`` per principal, and marks the record expired, on every tick and whether or not the purge is on. The
-bytes stay for the purge, which the default chart ships off.
+the estate's ``LANCE_TRASH_GRACE_DAYS``. The deadline is stamped on the trash record at the drop. Past it, the drop is
+DropTable's, its data deleted asynchronously: the maintenance reconcile tick revokes the trashed object's grants,
+announcing a ``grant_revoked`` per principal, and stamps the record released, on every tick and whether or not the purge
+is on. The bytes stay for the purge, which the default chart ships off.
 
-ONE ESTATE ON MOTO, TWO SERVICES, as in ``test_drift_repair_keeps_the_grants_of_a_table_in_the_trash.py``: the real
-catalog app drops through its door and files the record, and the real maintenance app runs its reconcile tick over the
-same control root. One in-memory ``TupleStore`` stands behind both through the real ``service_kit.governed.fga``
-functions, since the claim is which tuples remain. A table still in its window and a live table whose undrop crashed
-before clearing its record are the controls: the tick must keep both tables' grants.
+ONE ESTATE ON MOTO, TWO SERVICES (``catalog_and_maintenance``): the real catalog app drops through its door and files the
+record, and the real maintenance app runs its reconcile tick over the same control root. One in-memory ``TupleStore``
+stands behind both through the real ``service_kit.governed.fga`` functions, since the claim is which tuples remain. A
+table still in its window and a live table whose undrop crashed before clearing its record are the controls: the tick
+must keep both tables' grants.
 """
 
 from __future__ import annotations
@@ -20,23 +20,17 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from unittest.mock import MagicMock
 
-import boto3
-import httpx
 import pyarrow as pa
 import pytest
-from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings as catalog_settings
-from catalog.core.lineage_emit import HttpLineageEmitter
-from maintenance.core.config import get_settings as maintenance_settings
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed.fga import user_object
 from service_kit.lakehouse import trash
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from storage import S3Client
-from tests.integration.openfga_grants import TupleStore, act_as, principal_key
+from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance
+from tests.integration.openfga_grants import principal_key
 
 
 PROJECT = "acme"
@@ -56,11 +50,11 @@ class _Captured:
 class _Estate:
     """Project ``acme``, driven by its admin through the catalog, and the maintenance service beside it."""
 
-    def __init__(self, catalog: TestClient, maintenance: TestClient, store: TupleStore, s3: S3Client, control: _Captured) -> None:
-        self.catalog = catalog
-        self.maintenance = maintenance
-        self.store = store
-        self.s3 = s3
+    def __init__(self, both: TwoServices, control: _Captured) -> None:
+        self.catalog = both.catalog
+        self.maintenance = both.maintenance
+        self.store = both.store
+        self.s3 = both.s3
         self.control = control
 
     def post(self, path: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -82,13 +76,19 @@ class _Estate:
     def location(self, table: str) -> str:
         return str(self.post(f"/v1/table/{table}/describe")["location"])
 
-    def record(self, table_uuid: str) -> dict[str, Any] | None:
+    def record(self, object_uuid: str, *, kind: str = "table") -> dict[str, Any] | None:
         settings = catalog_settings()
-        return trash.get(settings.registry_root, settings.storage_options(), table_uuid)
+        return trash.get(settings.registry_root, settings.storage_options(), object_uuid, kind=kind)
 
     def put_record(self, record: dict[str, Any]) -> None:
         settings = catalog_settings()
         trash.put(settings.registry_root, settings.storage_options(), record)
+
+    def age(self, object_uuid: str, *, kind: str = "table") -> None:
+        """Move the deadline of the record ``object_uuid`` keeps a day into the past: a drop whose window has ended."""
+        record = self.record(object_uuid, kind=kind)
+        assert record is not None, f"no {kind} record for {object_uuid}"
+        self.put_record({**record, "expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()})
 
     def objects_at(self, location: str) -> list[str]:
         bucket, _, prefix = location.removeprefix("s3://").partition("/")
@@ -98,67 +98,14 @@ class _Estate:
 
 @pytest.fixture
 def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
-    """The catalog with the estate's seven-day grace period, OIDC and FGA on once its lifespan has run, as alice, and
-    maintenance reading the same control root with FGA on and the purge off, as the default chart ships it; both ask one
-    store."""
-    control = f"lh228-{uuid.uuid4().hex[:10]}"
-    s3: S3Client = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
-    s3.create_bucket(Bucket=control)
-    for key, value in {
-        "LANCE_REST_IMPL": "dir",
-        "LANCE_REST_ROOT": f"s3://{control}",
-        "LANCE_CONTROL_ROOT": f"s3://{control}",
-        "LANCE_S3_ENDPOINT": moto_url,
-        "LANCE_S3_ACCESS_KEY_ID": "test",
-        "LANCE_S3_SECRET_ACCESS_KEY": "test",
-        "LANCE_CONTROL_EMIT_ENABLED": "false",
-        "LANCE_WAREHOUSES_ENABLED": "true",
-        "LANCE_TRASH_GRACE_DAYS": "7",
-        "MAINTENANCE_S3_ENDPOINT": moto_url,
-        "MAINTENANCE_S3_ACCESS_KEY_ID": "test",
-        "MAINTENANCE_S3_SECRET_ACCESS_KEY": "test",
-        "MAINTENANCE_S3_BUCKET": control,
-        "MAINTENANCE_CONTROL_ROOT": f"s3://{control}",
-        "MAINTENANCE_WAREHOUSES_ENABLED": "true",
-        "MAINTENANCE_TRASH_PURGE_ENABLED": "false",
-    }.items():
-        monkeypatch.setenv(key, value)
-    catalog_settings.cache_clear()
-    maintenance_settings.cache_clear()
-    from catalog.main import app as catalog_app
-    from maintenance.service import app as maintenance_app
-
-    store = TupleStore()
+    """The catalog with the estate's seven-day grace period, as alice, and maintenance reading the same control root with
+    FGA on and the purge off, as the default chart ships it; both ask one store."""
     captured = _Captured()
-    lineage = HttpLineageEmitter(
-        httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200))), "http://lineage/api/v1/lineage", job_namespace="lance-catalog"
-    )
-    with TestClient(catalog_app, headers={"Authorization": "Bearer t"}) as catalog, TestClient(maintenance_app) as maintenance:
-        governed = catalog_settings().model_copy(
-            update={
-                "oidc_enabled": True,
-                "oidc_connectors": {"local": "dex"},
-                "oidc_issuer": "https://idp.example",
-                "oidc_audience": "lance",
-                "fga_enabled": True,
-            }
-        )
-        catalog_app.dependency_overrides[catalog_settings] = lambda: governed
-        monkeypatch.setattr(catalog_app.state, "oidc", MagicMock())
-        act_as(catalog, "alice")
-        monkeypatch.setattr(catalog_app.state, "fga", store)
-        monkeypatch.setattr(catalog_app.state, "lineage_emitter", lineage, raising=False)
-        monkeypatch.setattr(maintenance_app.state, "fga_client", store)
-        maintained = maintenance_settings().model_copy(update={"fga_enabled": True})
-        maintenance_app.dependency_overrides[maintenance_settings] = lambda: maintained
-        monkeypatch.setattr(maintenance_app.state, "control_emitter", captured, raising=False)
-        answer = catalog.post("/management/v1/projects", json={"id": PROJECT})
+    env = {"LANCE_TRASH_GRACE_DAYS": "7", "MAINTENANCE_TRASH_PURGE_ENABLED": "false"}
+    with catalog_and_maintenance(moto_url, monkeypatch, env=env, maintenance_fga=True, control=captured) as both:
+        answer = both.catalog.post("/management/v1/projects", json={"id": PROJECT})
         assert answer.status_code == 200, answer.text
-        yield _Estate(catalog, maintenance, store, s3, captured)
-    catalog_app.dependency_overrides.clear()
-    maintenance_app.dependency_overrides.clear()
-    catalog_settings.cache_clear()
-    maintenance_settings.cache_clear()
+        yield _Estate(both, captured)
 
 
 def test_a_drop_under_a_warehouse_is_kept_as_its_delete_profile_says(estate: _Estate) -> None:
@@ -186,30 +133,38 @@ def test_a_drop_under_a_warehouse_is_kept_as_its_delete_profile_says(estate: _Es
 def test_a_reconcile_tick_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_bytes(estate: _Estate) -> None:
     estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
     expired, waiting, live = (estate.create_table(f"bronze${name}") for name in ("expired", "waiting", "live"))
+    estate.post("/v1/namespace/bronze$gone/create")
+    nested = estate.create_table("bronze$gone$t")
+    namespace = str(estate.post("/v1/namespace/bronze$gone/describe")["properties"]["rask.uuid"])
     location = estate.location("bronze$expired")
     estate.post("/v1/table/bronze$expired/drop")
     estate.post("/v1/table/bronze$waiting/drop")
+    estate.post("/v1/namespace/bronze$gone/drop", {"behavior": "Cascade"})
+    estate.age(expired)
+    estate.age(nested)
+    estate.age(namespace, kind="namespace")
     past = datetime.now(UTC) - timedelta(days=1)
-    aged = estate.record(expired)
-    assert aged is not None
-    estate.put_record({**aged, "expires_at": past.isoformat()})
     estate.put_record(trash.make_record("bronze$live", uuid=live, location=estate.location("bronze$live"), dropped_by=None, grace_days=0, now=past))
-    objects = {name: f"table:{table_uuid}" for name, table_uuid in (("expired", expired), ("waiting", waiting), ("live", live))}
-    held = estate.store.naming(list(objects.values()))
-    assert all(held.get(obj) for obj in objects.values()), f"a drop kept no grant, so releasing them would pass vacuously: {held}"
+    released = {f"table:{expired}", f"table:{nested}", f"namespace:{namespace}"}
+    kept = {f"table:{waiting}", f"table:{live}"}
+    held = estate.store.naming(sorted(released | kept))
+    assert all(held.get(obj) for obj in released | kept), f"a drop kept no grant, so releasing them would pass vacuously: {held}"
 
     answer = estate.maintenance.post("/maintenance-reconcile-cron")
 
     assert answer.status_code == 200, answer.text
-    assert [entry["uuid"] for entry in answer.json()["trash_release"]["released"]] == [expired], answer.json()["trash_release"]
-    remaining = estate.store.naming(list(objects.values()))
-    assert not remaining.get(objects["expired"]), f"the expired drop kept its grants: {remaining}"
-    assert remaining.get(objects["waiting"]) == held[objects["waiting"]], "a drop still in its window lost a grant"
-    assert remaining.get(objects["live"]) == held[objects["live"]], "a live table lost a grant to the record its undrop left"
-    revoked = [(event.object_id, (event.extra or {}).get("subject")) for event in estate.control.events if event.action == "grant_revoked"]
-    assert (objects["expired"], user_object(principal_key("alice"))) in revoked, f"no grant_revoked told alice: {revoked}"
-    record = estate.record(expired)
-    assert record is not None and trash.is_released(record), f"the record was not marked expired: {record}"
+    report = answer.json()["trash_release"]
+    assert {f"{entry['kind']}:{entry['uuid']}" for entry in report["released"]} == released, report
+    remaining = estate.store.naming(sorted(released | kept))
+    assert not any(remaining.get(obj) for obj in released), f"an expired drop kept its grants: {remaining}"
+    assert all(remaining.get(obj) == held[obj] for obj in kept), "a drop still in its window, or a live table, lost a grant"
+    revoked = {(event.object_id, (event.extra or {}).get("subject")) for event in estate.control.events if event.action == "grant_revoked"}
+    alice = user_object(principal_key("alice"))
+    assert {(obj, alice) for obj in released} <= revoked, f"no grant_revoked told alice of each release: {revoked}"
+    for obj in released:
+        kind, object_uuid = obj.split(":")
+        record = estate.record(object_uuid, kind=kind)
+        assert record is not None and trash.is_released(record), f"the record of {obj} was not stamped released: {record}"
     assert estate.objects_at(location), "the tick deleted the bytes the purge owns"
     refused = estate.catalog.post("/management/v1/table/bronze$expired/undrop", json={})
-    assert refused.status_code in {403, 404, 409}, f"an expired drop undropped: {refused.text}"
+    assert (refused.status_code, "grace period ended" in refused.text) == (409, True), f"an expired drop undropped: {refused.text}"

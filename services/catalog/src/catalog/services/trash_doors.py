@@ -1,5 +1,6 @@
-"""What the undrop doors share: which trashed object an undrop restores. Where it re-attaches a table is
-``dataplane.relative_location``, the rule every re-registration shares.
+"""What the trash doors share: how long a drop stays recoverable, which trashed object an undrop restores, and which
+record no undrop restores. Where it re-attaches a table is ``dataplane.relative_location``, the rule every
+re-registration shares.
 
 A trash door stays addressed by name (ADR 0173 §9, [[LH-525]]). A name is free again the moment its object is
 dropped, so several trashed objects may have held one, each its own uuid with its own grants and records: an undrop
@@ -8,11 +9,33 @@ restores exactly the one its caller names, and asks which when the name leads to
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
+from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidTableStateError
 
+from catalog.core.config import Settings
+from catalog.services import warehouses
 from service_kit.lakehouse import trash
+
+
+async def drop_grace_days(settings: Settings, segments: list[str]) -> float:
+    """The days a recoverable drop of the object ``segments`` names stays recoverable, 0 for a destroying drop.
+
+    Its warehouse's delete profile, else the estate's grace period (ADR 0146), read at the drop: the trash record stamps
+    the deadline, so a profile changed later shortens no window already open.
+    """
+    return await run_in_threadpool(
+        partial(
+            warehouses.grace_days_under,
+            settings.registry_root,
+            settings.storage_options(),
+            segments,
+            estate=settings.trash_grace_days,
+            warehouses_enabled=settings.warehouses_enabled,
+        )
+    )
 
 
 def the_one_to_restore(records: list[dict[str, Any]], *, kind: str, name: str) -> dict[str, Any]:

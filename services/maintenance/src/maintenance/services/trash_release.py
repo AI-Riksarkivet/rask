@@ -30,7 +30,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import ACTOR, Liveness, liveness_across, still_registered
@@ -47,6 +47,7 @@ log = logging.getLogger(__name__)
 #: window an undrop admitted at the deadline needs to finish. The location claim's lease is the same order.
 SETTLE = timedelta(minutes=15)
 
+# Worded for grants, unlike the purge's refusals of the same states, which speak of the bytes they keep.
 _FGA_UNWIRED = "FGA is enabled but no client is wired into this process, so no grant can be released"
 _STILL_REGISTERED = "still registered: recovered or re-registered since the drop, so its grants are a live object's"
 _MANIFEST_UNREADABLE = "a manifest could not be read, so whether the object stands again cannot be told"
@@ -60,6 +61,9 @@ class ReleasedRecord(BaseModel):
     uuid: str
     expires_at: str
     tuples_revoked: int = 0
+    #: Whether the record was stamped released. False when it was gone by then (the purge reclaimed it meanwhile) or
+    #: the stamp failed: the grants are revoked either way, and a record left unstamped finds none to revoke next tick.
+    marked: bool = True
 
 
 class HeldRecord(BaseModel):
@@ -80,19 +84,29 @@ class TrashReleaseReport(BaseModel):
     held: list[HeldRecord] = Field(default_factory=list)
 
 
-def roots_read(settings: MaintenanceSettings, storage_options: StorageOptions) -> set[str]:
+class _Tick(BaseModel):
+    """What every record of one tick is judged and released against."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    fga_enabled: bool
+    storage_options: StorageOptions
+    control_root: str
+    roots: set[str]
+    live: Liveness | None
+    fga_client: Any
+    control: Any
+    now: datetime
+
+
+def roots_read(settings: MaintenanceSettings, storage_options: StorageOptions, control_root: str) -> set[str]:
     """Every root whose manifest tells whether a trashed object stands again: the swept buckets and every warehouse's.
 
     Raises if the registry cannot be read: a root left out would read every live table under it as gone.
     """
-    records = warehouse_records.list_warehouse_records(settings.resolved_control_root, storage_options)
+    records = warehouse_records.list_warehouse_records(control_root, storage_options)
     buckets = {*settings.sweep_buckets, *(str(record["bucket"]) for record in records if record.get("bucket"))}
     return {f"s3://{bucket}" for bucket in buckets if bucket}
-
-
-def _is_principal(user: str) -> bool:
-    """Whether a revoked tuple's user names someone an inbox can be addressed to: a person or a group of them."""
-    return user.startswith("user:") or "#" in user
 
 
 def _why_held(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> str | None:
@@ -108,40 +122,26 @@ def _why_held(record: dict[str, Any], *, roots: set[str], live: Liveness | None)
     return None
 
 
-async def _release_one(
-    record: dict[str, Any],
-    out: TrashReleaseReport,
-    *,
-    settings: MaintenanceSettings,
-    storage_options: StorageOptions,
-    control_root: str,
-    roots: set[str],
-    live: Liveness | None,
-    fga_client: Any,  # noqa: ANN401 — OpenFgaClient | None
-    control: ControlEmitter,
-    now: datetime,
-) -> None:
+async def _release_one(record: dict[str, Any], tick: _Tick) -> ReleasedRecord | HeldRecord:
     """Revoke, announce, then mark one record released. Never raises; a failure keeps the record for the next tick."""
     kind = str(record.get("kind") or "table")
     obj_id = str(record.get("id") or "")
-    if (reason := _why_held(record, roots=roots, live=live)) is not None:
-        out.held.append(HeldRecord(kind=kind, id=obj_id, uuid=trash.object_uuid(record), reason=reason))
-        log.warning("trash_release_held", extra={"kind": kind, "id": obj_id, "reason": reason})
-        return
+    if (reason := _why_held(record, roots=tick.roots, live=tick.live)) is not None:
+        # INFO: the route names every held record at WARNING once per tick.
+        log.info("trash_release_held", extra={"kind": kind, "id": obj_id, "reason": reason})
+        return HeldRecord(kind=kind, id=obj_id, uuid=trash.object_uuid(record), reason=reason)
     uuid = str(trash.object_uuid(record))
     obj = fga.object_of(kind, uuid)
     try:
-        removed = await fga.revoke_object_tuples(fga_client, obj, actor=ACTOR, origin="trash_expired") if settings.fga_enabled else []  # noqa: TID251
+        removed = await fga.revoke_object_tuples(tick.fga_client, obj, actor=ACTOR, origin="trash_expired") if tick.fga_enabled else []  # noqa: TID251
     except Exception as exc:  # noqa: BLE001 — a revoke that failed keeps the record unmarked, for the next tick to finish
-        reason = f"the FGA revoke failed ({type(exc).__name__}: {exc}); the next tick retries"
-        out.held.append(HeldRecord(kind=kind, id=obj_id, uuid=uuid, reason=reason))
         log.error("trash_release_revoke_failed", extra={"kind": kind, "id": obj_id, "error": str(exc)})
-        return
+        return HeldRecord(kind=kind, id=obj_id, uuid=uuid, reason=f"the FGA revoke failed ({type(exc).__name__}: {exc}); the next tick retries")
     # Each person who lost the object is told: none of them can see it any more, so no visibility-gated feed would.
     for tup in removed:
-        if _is_principal(str(tup.user)):
+        if fga.names_someone(str(tup.user)):
             await emit_control(
-                control,
+                tick.control,
                 action="grant_revoked",
                 object_type="grant",
                 object_id=obj,
@@ -150,11 +150,12 @@ async def _release_one(
                 extra={"relation": tup.relation, "subject": tup.user, "reason": "trash_expired"},
             )
     try:
-        await run_in_threadpool(lambda: trash.mark_released(control_root, storage_options, uuid, kind=kind, now=now))
+        marked = await run_in_threadpool(lambda: trash.mark_released(tick.control_root, tick.storage_options, uuid, kind=kind, now=tick.now))
     except Exception as exc:  # noqa: BLE001 — the grants ARE gone; the next tick finds none to revoke and marks it
         log.error("trash_release_not_marked", extra={"kind": kind, "id": obj_id, "error": str(exc)})
-    out.released.append(ReleasedRecord(kind=kind, id=obj_id, uuid=uuid, expires_at=str(record.get("expires_at") or ""), tuples_revoked=len(removed)))
-    log.warning("trash_released", extra={"kind": kind, "id": obj_id, "uuid": uuid, "tuples_revoked": len(removed)})
+        marked = False
+    log.warning("trash_released", extra={"kind": kind, "id": obj_id, "uuid": uuid, "tuples_revoked": len(removed), "marked": marked})
+    return ReleasedRecord(kind=kind, id=obj_id, uuid=uuid, expires_at=str(record.get("expires_at") or ""), tuples_revoked=len(removed), marked=marked)
 
 
 async def release_expired_trash(
@@ -166,7 +167,6 @@ async def release_expired_trash(
     now: datetime | None = None,
 ) -> TrashReleaseReport:
     """Release every drop :data:`SETTLE` past its deadline whose grants this tick may revoke. Never raises."""
-    control = control or NoopControlEmitter()
     at = now or datetime.now(UTC)
     out = TrashReleaseReport()
     if settings.fga_enabled and fga_client is None:
@@ -177,7 +177,7 @@ async def release_expired_trash(
     resolved_control_root = control_root or settings.resolved_control_root
     try:
         records = await run_in_threadpool(trash.list_all, resolved_control_root, storage_options)
-        roots = await run_in_threadpool(roots_read, settings, storage_options)
+        roots = await run_in_threadpool(roots_read, settings, storage_options, resolved_control_root)
     except Exception as exc:  # noqa: BLE001 — an unreadable registry stops the step, it does not fail the tick
         out.reason = f"the trash or the warehouse registry could not be read ({type(exc).__name__}: {exc})"
         log.error("trash_release_blocked", extra={"reason": out.reason})
@@ -186,18 +186,20 @@ async def release_expired_trash(
     due = [record for record in trash.expired(records, now=at - SETTLE) if not trash.is_released(record)]
     if not due:
         return out
-    live = await run_in_threadpool(liveness_across, roots, storage_options)
+    tick = _Tick(
+        fga_enabled=settings.fga_enabled,
+        storage_options=storage_options,
+        control_root=resolved_control_root,
+        roots=roots,
+        live=await run_in_threadpool(liveness_across, roots, storage_options),
+        fga_client=fga_client,
+        control=control or NoopControlEmitter(),
+        now=at,
+    )
     for record in due:
-        await _release_one(
-            record,
-            out,
-            settings=settings,
-            storage_options=storage_options,
-            control_root=resolved_control_root,
-            roots=roots,
-            live=live,
-            fga_client=fga_client,
-            control=control,
-            now=at,
-        )
+        match await _release_one(record, tick):
+            case ReleasedRecord() as released:
+                out.released.append(released)
+            case HeldRecord() as held:
+                out.held.append(held)
     return out

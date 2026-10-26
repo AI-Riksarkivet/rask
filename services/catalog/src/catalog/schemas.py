@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
 from catalog.services.changes import ChangeKind
-from catalog.services.warehouses import DeleteMode
+from catalog.services.control_records import DeleteMode
 from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 from service_kit.lakehouse.maintenance_due import CompactionDue, IndexDue
 

@@ -18,13 +18,21 @@ from __future__ import annotations
 
 import json
 import logging
-from enum import StrEnum
 from typing import Any
 
 import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
-from catalog.services.control_records import BindingRecord, BucketClaimRecord, WarehouseRecord, read_json, validated, validated_or_refuse, write_json
+from catalog.services.control_records import (
+    BindingRecord,
+    BucketClaimRecord,
+    DeleteMode,
+    WarehouseRecord,
+    read_json,
+    validated,
+    validated_or_refuse,
+    write_json,
+)
 from service_kit.lakehouse import trash
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
@@ -38,18 +46,6 @@ _BINDINGS_PREFIX = "_warehouses/bindings"
 #: Where a bucket's owning project is recorded, write-once. Beside the bindings because it is the same
 #: kind of fact — an immutable routing claim the store arbitrates rather than a mutable record.
 _BUCKET_CLAIMS_PREFIX = "_warehouses/bucket-claims"
-
-
-class DeleteMode(StrEnum):
-    """What a drop under a warehouse does (ADR 0146), as its record's ``delete_mode`` keeps it."""
-
-    #: The table and its data are deleted at once.
-    HARD = "hard"
-    #: The table is deregistered and kept recoverable for the record's ``trash_grace_days``.
-    SOFT = "soft"
-    #: The warehouse names no profile of its own and takes the estate's grace period; a request naming it clears one,
-    #: so a declaration dropping its profile converges back to the estate's.
-    ESTATE = "estate"
 
 
 #: The record fields holding a warehouse's delete profile, as strings like every record field.

@@ -905,20 +905,7 @@ async def drop_namespace(
     # #96: with a grace period, a cascade DETACHES the subtree (trash record per child) instead of
     # destroying it inside the one native call — see _trash_subtree for why the native cascade and a
     # trash record cannot coexist. `purge=true` is the explicit destroy-now, as at the table door.
-    grace = (
-        0.0
-        if purge or not cascade
-        else await run_in_threadpool(
-            partial(
-                warehouses.grace_days_under,
-                settings.registry_root,
-                settings.storage_options(),
-                segments,
-                estate=settings.trash_grace_days,
-                warehouses_enabled=settings.warehouses_enabled,
-            )
-        )
-    )
+    grace = 0.0 if purge or not cascade else await trash_doors.drop_grace_days(settings, segments)
     recoverable = grace > 0
     if recoverable:
         # The cascade's records are keyed by the uuid the door identified the namespace by, not the best-effort read its

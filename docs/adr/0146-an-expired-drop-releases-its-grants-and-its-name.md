@@ -37,3 +37,15 @@ grants and name lock last indefinitely.
   which is deterministic (`namespace.md:1012`).
 - Unconfirmed: whether any rask table sits at a compatibility-mode root, and whether `table_claims.py:33-85`, which
   appears to hold the location separately, lets a re-create resolve to the expired table's location; LH-228 traces both.
+
+## Implementation (LH-228, 2026-10-26)
+
+- Recovery ends at `expires_at` exactly: both undrops refuse a record past it (409).
+- The grants go later, by design: the reconcile tick releases a record 15 minutes after its deadline
+  (`maintenance.services.trash_release.SETTLE`), on the first tick after that, so up to about 20 minutes at the chart's
+  300 s cadence. The settle covers an undrop admitted just before the deadline, which registers the table before it
+  clears the record; a revoke landing between the two would leave the restored table ownerless. Measured live on helm
+  rev 37: a drop due at 08:20:23 UTC was released at the 08:39:25 UTC tick.
+- The name was already free at the drop (LH-525, ADR 0173 §9), so expiry frees nothing further.
+- With the purge on, as the dev estate runs it, the purge takes a record at its deadline, before the settle, and its
+  revoke ends the grants itself (measured on helm rev 36, 4 minutes past the deadline).

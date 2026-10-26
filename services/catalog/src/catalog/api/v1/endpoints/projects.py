@@ -295,16 +295,6 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     return ProjectResponse(project=project_id, warehouses=entries, admins=await _admins_for(client, settings, project_id))
 
 
-def _is_principal(user: str) -> bool:
-    """True for a subject an inbox can be addressed to — a person or a group of them.
-
-    `user:<principal>` is a person; `role:x#assignee` / `team:y#member` are usersets the notifications lane
-    expands into people. Everything else revoked alongside them is an object-to-object edge (`team`,
-    `parent`, `child`) and names no one.
-    """
-    return user.startswith("user:") or "#" in user
-
-
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
@@ -418,7 +408,7 @@ async def delete_project(
     # is another OBJECT, and announcing one would address an inbox named `team:writers`. A principal is
     # `user:<principal>` or a userset (`role:x#assignee`, which the lane expands); anything else is plumbing.
     for tup in removed:
-        if _is_principal(tup.user):
+        if fga.names_someone(tup.user):
             await emit_control(
                 control,
                 action="grant_revoked",

@@ -768,20 +768,7 @@ async def drop_table(
     # because `restore_table` rewinds a LIVE table and a real drop leaves no version to rewind to.
     # `purge=true` is the explicit opt-out — a caller who means "destroy the bytes now" says so. The grace period is the
     # table's warehouse's delete profile, else the estate's (ADR 0146).
-    grace = (
-        0.0
-        if purge
-        else await run_in_threadpool(
-            partial(
-                warehouses.grace_days_under,
-                settings.registry_root,
-                settings.storage_options(),
-                segments,
-                estate=settings.trash_grace_days,
-                warehouses_enabled=settings.warehouses_enabled,
-            )
-        )
-    )
+    grace = 0.0 if purge else await trash_doors.drop_grace_days(settings, segments)
     trashed = grace > 0
     try:
         if trashed:

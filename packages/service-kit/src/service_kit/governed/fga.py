@@ -2211,6 +2211,16 @@ async def commit_unless_changed(
     return True
 
 
+def names_someone(user: str) -> bool:
+    """Whether a tuple's ``user`` names someone an inbox can be addressed to: a person or a group of them.
+
+    ``user:<principal>`` is a person; ``role:x#assignee`` and ``team:y#member`` are usersets the notifications lane
+    expands into people. Every other user a revoke removes is an object-to-object edge (``team``, ``parent``,
+    ``child``), which names no one, so a ``grant_revoked`` for it would address an inbox named after an object.
+    """
+    return user.startswith("user:") or "#" in user
+
+
 async def revoke_object_tuples(
     client: OpenFgaClient,
     obj: str,

@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import json
 import logging
+from enum import StrEnum
+from typing import Self
 
 from lance_namespace import ServiceUnavailableError
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
@@ -69,6 +71,18 @@ def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> dict[
 # --------------------------------------------------------------------------- #
 
 
+class DeleteMode(StrEnum):
+    """What a drop under a warehouse does (ADR 0146), as its record's ``delete_mode`` keeps it."""
+
+    #: The table and its data are deleted at once.
+    HARD = "hard"
+    #: The table is deregistered and kept recoverable for the record's ``trash_grace_days``.
+    SOFT = "soft"
+    #: The warehouse names no profile of its own and takes the estate's grace period; a request naming it clears one,
+    #: so a declaration dropping its profile converges back to the estate's.
+    ESTATE = "estate"
+
+
 class _Record(BaseModel):
     """Base for the registry record shapes: identity is validated, everything else rides along."""
 
@@ -81,6 +95,19 @@ class WarehouseRecord(_Record):
     id: str = Field(min_length=1)
     bucket: str = Field(min_length=1)
     project: str = Field(min_length=1)
+    #: The warehouse's delete profile (ADR 0146); absent where it takes the estate's grace period. Declared because a
+    #: drop under the warehouse acts on it, so a record whose profile cannot be read is refused at the read rather than
+    #: read as some other profile.
+    delete_mode: DeleteMode | None = None
+    trash_grace_days: str | None = None
+
+    @model_validator(mode="after")
+    def _profile_is_whole(self) -> Self:
+        if (self.delete_mode is DeleteMode.SOFT) != (self.trash_grace_days is not None):
+            raise ValueError("a soft delete profile keeps its trash_grace_days, and no other profile keeps any")
+        if self.trash_grace_days is not None and not 0 < float(self.trash_grace_days) <= 365:
+            raise ValueError(f"trash_grace_days {self.trash_grace_days!r} is not between 0 and 365 days")
+        return self
 
 
 class BindingRecord(_Record):
@@ -130,7 +157,7 @@ def validated_or_refuse(record: object, model: type[_Record], *, event: str, pat
     unreadable record answers the same way whichever door reached it.
     """
     try:
-        return model.model_validate(record).model_dump()
+        return model.model_validate(record).model_dump(mode="json", exclude_unset=True)
     except ValidationError as exc:
         log.warning(event, extra={"path": path, "error": exc.errors(include_url=False)})
         raise ServiceUnavailableError(f"control record {path!r} could not be read as {model.__name__} — refusing rather than treating it as absent") from exc
@@ -149,7 +176,7 @@ def validated(record: object, model: type[_Record], *, event: str, path: str) ->
     being the declared types.
     """
     try:
-        return model.model_validate(record).model_dump()
+        return model.model_validate(record).model_dump(mode="json", exclude_unset=True)
     except ValidationError as exc:
         log.warning(event, extra={"path": path, "error": exc.errors(include_url=False)})
         return None
