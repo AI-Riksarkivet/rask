@@ -13,7 +13,9 @@ Two bindings, not one route doing both:
 
 The purge rides the reconcile binding rather than the sweep's precisely because its permission comes
 from the report: it consumes the report object the same tick produced, never a stored one. It is off by
-default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so the shipped configuration is still report-only.
+default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so the shipped configuration deletes no trashed byte. The
+reconcile pass also releases every drop past its deadline (ADR 0146): it revokes the object's grants on
+every tick, gated on neither the report nor the purge's opt-in, since it deletes nothing.
 """
 
 import asyncio
@@ -40,6 +42,8 @@ from maintenance.services.reconcile import Sources as ReconcileSources
 from maintenance.services.repair import repair_drift
 from maintenance.services.sweep import emit_sweep_lineage, run_sweep, summarize
 from maintenance.services.tombstones import Tombstone, sweep_tombstones
+from maintenance.services.trash_release import release_expired_trash
+from service_kit.control_emit import ControlEmitter
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.governed.signing_key import retry_until_signed
 from service_kit.lakehouse import trash
@@ -99,7 +103,8 @@ _reconcile_lock = asyncio.Lock()
 
 
 async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control: ControlEmitterDep) -> dict[str, Any]:
-    """One cross-store drift REPORT, then — gated on it — the #79 expired-trash purge.
+    """One cross-store drift REPORT, then the release of every drop past its deadline (ADR 0146), then — gated on the
+    report — the #79 expired-trash purge.
 
     Separate binding from the sweep because the cadences differ by an order of magnitude: the sweep
     rewrites data files, this only reads three stores.
@@ -236,6 +241,9 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
                     "error": swept.error,
                 },
             )
+        # ADR 0146: a drop past its deadline loses its grants on every tick, ungated by the report and by the purge's
+        # opt-in, since it deletes no byte. Before the purge, which then finds nothing left to revoke.
+        payload["trash_release"] = await _release_expired_trash(settings, client=client, control=control)
         names = await run_in_threadpool(_swept_table_ids, settings)
         floors = await run_in_threadpool(
             partial(raise_listing_floors, settings, orphans=report.orphan_files, names=names, storage_options=settings.storage_options())
@@ -285,6 +293,22 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
                 },
             )
         return payload
+
+
+async def _release_expired_trash(settings: MaintenanceSettings, *, client: Any, control: ControlEmitter) -> dict[str, Any]:  # noqa: ANN401 — OpenFgaClient | None
+    """One tick's release of the drops past their deadline, logged NAMED at WARNING when it did or held anything: each
+    entry removed every grant on an object, and a count names no one to check."""
+    released = await release_expired_trash(settings, fga_client=client, control=control, control_root=settings.resolved_control_root)
+    if released.released or released.held or released.reason:
+        log.warning(
+            "trash_release_result",
+            extra={
+                "released": [f"{r.kind}:{r.uuid} ({r.tuples_revoked} tuples) <- {r.id}" for r in released.released],
+                "held": [{"id": f"{h.kind}:{h.id}", "reason": h.reason} for h in released.held],
+                "reason": released.reason,
+            },
+        )
+    return released.model_dump(mode="json")
 
 
 async def ack_reconcile_binding() -> dict[str, str]:

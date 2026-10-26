@@ -525,7 +525,14 @@ def describe_namespace(id: str, ns: NamespaceDep, body: DescribeNamespaceRequest
 
 
 async def _trash_subtree(
-    ns: LanceNamespace, settings: Settings, token: Caller | None, segments: list[str], descendants: list[fga_deps.GovernedObject], *, own: ControlUuids
+    ns: LanceNamespace,
+    settings: Settings,
+    token: Caller | None,
+    segments: list[str],
+    descendants: list[fga_deps.GovernedObject],
+    *,
+    own: ControlUuids,
+    grace_days: float,
 ) -> None:
     """DETACH the subtree instead of destroying it — the recoverable half of a cascade (#96).
 
@@ -545,7 +552,7 @@ async def _trash_subtree(
     Each record is filed under its object's uuid, names its parent namespace's uuid, and carries the uuid of the
     namespace the cascade dropped (``cascade``), so the namespace undrop restores exactly this cascade's records, never
     another object dropped under one of their names ([[LH-525]]). ``descendants`` and ``own`` are what the door read
-    while the subtree stood.
+    while the subtree stood, and ``grace_days`` the window its warehouse's delete profile gives (ADR 0146).
 
     Raises:
         InternalError: The dropped namespace keeps no uuid, which no door leaves.
@@ -577,7 +584,7 @@ async def _trash_subtree(
             uuid=uuid_at[tuple(child)],
             location=described.location or "",
             dropped_by=dropped_by,
-            grace_days=settings.trash_grace_days,
+            grace_days=grace_days,
             namespace_uuid=parent_of(child),
             cascade=cascade,
         )
@@ -616,7 +623,7 @@ async def _trash_subtree(
             uuid=uuid_at[tuple(child)],
             location="",
             dropped_by=dropped_by,
-            grace_days=settings.trash_grace_days,
+            grace_days=grace_days,
             kind="namespace",
             namespace_uuid=parent_of(child),
             cascade=cascade,
@@ -898,12 +905,31 @@ async def drop_namespace(
     # #96: with a grace period, a cascade DETACHES the subtree (trash record per child) instead of
     # destroying it inside the one native call — see _trash_subtree for why the native cascade and a
     # trash record cannot coexist. `purge=true` is the explicit destroy-now, as at the table door.
-    recoverable = cascade and settings.trash_grace_days > 0 and not purge
+    grace = (
+        0.0
+        if purge or not cascade
+        else await run_in_threadpool(
+            partial(
+                warehouses.grace_days_under,
+                settings.registry_root,
+                settings.storage_options(),
+                segments,
+                estate=settings.trash_grace_days,
+                warehouses_enabled=settings.warehouses_enabled,
+            )
+        )
+    )
+    recoverable = grace > 0
     if recoverable:
         # The cascade's records are keyed by the uuid the door identified the namespace by, not the best-effort read its
         # announcements name it by, which answers ``None`` on a failed describe.
-        await _trash_subtree(ns, settings, token, segments, descendants, own=ControlUuids(object_uuid=dropped.uuid, namespace_uuid=own.namespace_uuid))
-        response = DropNamespaceResponse()
+        await _trash_subtree(
+            ns, settings, token, segments, descendants, own=ControlUuids(object_uuid=dropped.uuid, namespace_uuid=own.namespace_uuid), grace_days=grace
+        )
+        # Long running, as the spec reads a `transaction_id`: the subtree's bytes are deleted later, by the purge, and
+        # each table's deletion is tracked through DescribeTransaction as `<table id>$<its uuid>`, as at the table door.
+        detached = [fga.canonical_object_id([*item.segments, item.uuid]) for item in descendants if item.kind == "table"]
+        response = DropNamespaceResponse(transaction_id=detached or None)
     elif cascade:
         # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves, announcing each table as
         # it goes ([[LH-495]]): the retry after a failure part-way lists only what still stands.
@@ -1047,6 +1073,7 @@ async def undrop_namespace(
     if not trashed:
         raise NamespaceNotFoundError(f"no recoverable drop for namespace: {canonical}. The grace period may have expired, or the drop purged its subtree.")
     record = trash_doors.the_one_to_restore(trashed, kind="namespace", name=canonical)
+    trash_doors.require_restorable(record, name=canonical)
     root_uuid = trash.object_uuid(record)
     if root_uuid is None:
         raise InternalError(f"the trash record of namespace {canonical!r} keeps no uuid, so its grants cannot be found")

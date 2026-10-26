@@ -370,7 +370,19 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   opt-out — a caller who means "destroy the bytes now" says so. A recoverable drop **does not revoke
   the table's FGA tuples**: the owner is the one person who needs to undrop it, and revoking made
   undrop unreachable for exactly that caller (found by driving the deployed catalog — the unit tests
-  run FGA off); the grants die with the bytes, at purge or expiry. `undrop` re-registers with a
+  run FGA off). **The deadline ends the recovery** ([[LH-228]], ADR 0146): past `expires_at` both undrops refuse
+  409, and every maintenance reconcile tick (`maintenance.services.trash_release`, ungated by the drift report and by
+  `trashPurge`) revokes the object's tuples, announces a `grant_revoked` per principal (origin `trash_expired`) and
+  stamps the record `released_at`, 15 minutes after the deadline so an undrop admitted at it can finish; a record whose
+  object stands again (`purge.still_registered`) or whose location lies under no warehouse bucket keeps its grants. The
+  bytes wait for the purge. A recoverable drop answers `DropTableResponse.transaction_id` as `<table id>$<its uuid>`, and a
+  recoverable cascade `DropNamespaceResponse.transaction_id` with one such id per table it detached; DescribeTransaction
+  answers one from the trash record (`Queued` inside the window, `Running` past it), asked on the trashed table's own
+  grants (`Resolver.trashed_as_transaction`). **The grace period is per warehouse**: `POST /management/v1/warehouses`'
+  `delete_profile` (`{"mode": "hard"}`, `{"mode": "soft", "grace_days": n}`, or `{"mode": "estate"}` to clear it; kept
+  as `delete_mode`/`trash_grace_days` on the record, carried forward by a re-POST naming none) decides a drop under any namespace bound to it, else
+  `LANCE_TRASH_GRACE_DAYS` (`warehouses.grace_days_under`, read at the drop and stamped on the record). Pinned by
+  `tests/integration/test_a_drop_is_kept_as_its_warehouse_says_until_its_deadline_releases_it.py`. `undrop` re-registers with a
   **RELATIVE** location: `register_table` refuses the absolute URI `describe_table` had just reported and keeps a
   relative one as the literal key it is given, so the undrop passes the key the recorded URL decodes to under the
   connection's root (`catalog.services.trash_doors.relative_location`, [[LH-517]]), where a registered `räksmörgås`'s

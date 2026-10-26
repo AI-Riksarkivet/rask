@@ -118,11 +118,10 @@ management_router = APIRouter(prefix="/management/v1/table", tags=["table-manage
 
 
 def _is_expired(expires_at: str) -> bool:
-    """Has the purge-eligibility deadline passed? Unparseable or absent → NOT expired.
+    """Has the grace period ended? Unparseable or absent → NOT expired.
 
-    Failing to "not expired" is the safe direction: this flag only ever adds urgency to a warning,
-    and a malformed timestamp must not make a still-recoverable table read as beyond saving. It
-    gates no behaviour — undrop checks whether the RECORD exists, never this (diff2 F10 item 5).
+    What `/tasks` reports beside each deadline. The undrop door refuses by ``trash.past_deadline``, the rule the
+    maintenance tick releases a record's grants by (ADR 0146).
     """
     if not expires_at:
         return False
@@ -767,8 +766,23 @@ async def drop_table(
     # pointer; the bytes stay exactly where they are) and files a trash record naming the location and
     # the deadline. This is what makes a fat-fingered drop survivable: time-travel cannot help here,
     # because `restore_table` rewinds a LIVE table and a real drop leaves no version to rewind to.
-    # `purge=true` is the explicit opt-out — a caller who means "destroy the bytes now" says so.
-    trashed = settings.trash_grace_days > 0 and not purge
+    # `purge=true` is the explicit opt-out — a caller who means "destroy the bytes now" says so. The grace period is the
+    # table's warehouse's delete profile, else the estate's (ADR 0146).
+    grace = (
+        0.0
+        if purge
+        else await run_in_threadpool(
+            partial(
+                warehouses.grace_days_under,
+                settings.registry_root,
+                settings.storage_options(),
+                segments,
+                estate=settings.trash_grace_days,
+                warehouses_enabled=settings.warehouses_enabled,
+            )
+        )
+    )
+    trashed = grace > 0
     try:
         if trashed:
             # RECORD FIRST, DETACH SECOND (diff2 F6 leg a). This was deregister-then-record, and a
@@ -797,12 +811,14 @@ async def drop_table(
                 uuid=table_uuid,
                 location=location,
                 dropped_by=f"user:{token.subject}" if token is not None else None,
-                grace_days=settings.trash_grace_days,
+                grace_days=grace,
                 namespace_uuid=known.namespace_uuid,
             )
             await run_in_threadpool(trash.put, settings.registry_root, settings.storage_options(), record)
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
-            response = DropTableResponse()
+            # The bytes are deleted later, by the purge, so the spec's answer is a transaction id to track the deletion
+            # by (`spec.yaml` DropTableRequest): `<table id>$<its uuid>`, which DescribeTransaction answers from the record.
+            response = DropTableResponse(transaction_id=fga.canonical_object_id([*segments, table_uuid]))
         else:
             # [[LH-532]] The bytes go at the location this door resolved, at the key Lance opens, never where the
             # backend's own drop looks: the backend removes only the row. RECORD FIRST here too: a residue record is filed
@@ -1309,10 +1325,8 @@ async def table_tasks(
     is not a safety feature — the estate's task surfaces are otherwise all estate-global, so "what is
     scheduled against my table" was unanswerable. Reader-gated by the router alongside describe.
 
-    `expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item
-    5). Undrop does not check the clock — it checks whether the record is still there — so a passed
-    deadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as
-    finality would push an owner to give up on data that is still on storage and still recoverable.
+    `expires_at` is when recovery ends (ADR 0146): past it the undrop is refused, maintenance's reconcile tick revokes
+    the table's grants, and the bytes wait for the purge. `expired` says which side of it the drop is on.
 
     One entry per dropped table that held the name and that the caller may see, each with its uuid, which an undrop
     names when there are several ([[LH-525]]).
@@ -1344,19 +1358,9 @@ async def undrop_table(
     the namespace is the same authority as removing it).
 
     404 when there is no trash record — a never-trashed or already-PURGED drop is genuinely
-    unrecoverable, and saying so plainly beats a 200 that recovers nothing.
-
-    THE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has
-    passed but which the purge has not yet collected still undrops, because the bytes are still on
-    storage and refusing would destroy recoverable data on a timestamp alone. The estate already
-    reasons this way one service over — maintenance's own config says "a record that survives is a
-    recovery that still works; a purged one is not" — and this door simply never said so out loud.
-    What was wrong was the DESCRIPTION: the previous docstring called an expired drop "genuinely
-    unrecoverable" alongside a never-trashed one, and `/tasks` reported the deadline as finality.
-    Both now say purge-eligible, which is what it is.
-
-    An expired undrop IS logged: it means the purge is behind, or somebody recovered at the very
-    edge of the window, and an operator should be able to see either.
+    unrecoverable, and saying so plainly beats a 200 that recovers nothing. 409 past the record's
+    `expires_at`: the drop is then DropTable's, its data deleted asynchronously, even while its bytes
+    stand (ADR 0146).
 
     THE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 §9), so the door restores exactly the trashed table
     its caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each
@@ -1377,8 +1381,6 @@ async def undrop_table(
     record_uuid = trash.object_uuid(record)
     if record_uuid is None:
         raise InternalError(f"the trash record of {canonical} keeps no uuid, so its grants cannot be found")
-    if _is_expired(str(record.get("expires_at", ""))):
-        log.warning("undrop_past_expiry", extra={"table": canonical, "uuid": record_uuid, "expires_at": record.get("expires_at")})
     standing = await resolver.table(segments, ns=ns)
     if standing.location is not None and standing.uuid != record_uuid:
         raise TableAlreadyExistsError(f"cannot undrop {canonical}: another table holds the name now; rename or drop it first")

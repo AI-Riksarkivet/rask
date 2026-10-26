@@ -90,6 +90,7 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
         storage_options=lambda: {},
         trash_grace_days=0,
         fga_enabled=False,
+        warehouses_enabled=False,
     )
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns

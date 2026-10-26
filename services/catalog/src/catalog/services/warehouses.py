@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+from enum import StrEnum
 from typing import Any
 
 import pyarrow.fs as pafs
@@ -37,6 +38,51 @@ _BINDINGS_PREFIX = "_warehouses/bindings"
 #: Where a bucket's owning project is recorded, write-once. Beside the bindings because it is the same
 #: kind of fact — an immutable routing claim the store arbitrates rather than a mutable record.
 _BUCKET_CLAIMS_PREFIX = "_warehouses/bucket-claims"
+
+
+class DeleteMode(StrEnum):
+    """What a drop under a warehouse does (ADR 0146), as its record's ``delete_mode`` keeps it."""
+
+    #: The table and its data are deleted at once.
+    HARD = "hard"
+    #: The table is deregistered and kept recoverable for the record's ``trash_grace_days``.
+    SOFT = "soft"
+    #: The warehouse names no profile of its own and takes the estate's grace period; a request naming it clears one,
+    #: so a declaration dropping its profile converges back to the estate's.
+    ESTATE = "estate"
+
+
+#: The record fields holding a warehouse's delete profile, as strings like every record field.
+DELETE_MODE = "delete_mode"
+TRASH_GRACE_DAYS = "trash_grace_days"
+
+
+def grace_days(record: dict[str, str] | None, *, estate: float) -> float:
+    """The days a drop under the warehouse ``record`` stays recoverable, 0 for a destroying drop.
+
+    A warehouse that names no profile, and a namespace bound to none, takes the estate's grace period.
+    """
+    mode = (record or {}).get(DELETE_MODE)
+    if mode is None or mode == DeleteMode.ESTATE:
+        return estate
+    if mode == DeleteMode.HARD:
+        return 0.0
+    return float((record or {})[TRASH_GRACE_DAYS])
+
+
+def grace_days_under(control_root: str, storage_options: StorageOptions, segments: list[str], *, estate: float, warehouses_enabled: bool) -> float:
+    """The days a drop of the object ``segments`` names stays recoverable: its warehouse's profile, read now.
+
+    The warehouse is the one its top-level namespace is bound to; an estate with no warehouses, and an object bound to
+    none, takes ``estate``. Read at the drop and stamped on the trash record, so a profile changed later shortens no
+    window already open.
+    """
+    if not warehouses_enabled or not segments:
+        return estate
+    binding = binding_for_namespace(control_root, storage_options, segments[0])
+    if binding is None:
+        return estate
+    return grace_days(get_warehouse(control_root, storage_options, str(binding["warehouse_id"])), estate=estate)
 
 
 def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto3 client has no public stub
@@ -125,7 +171,10 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
 #: ([[LH-205]], ``catalog.core.store_endpoint``). **No credential field belongs beside it** — material never travels in a record;
 #: the estate resolves its S3 secret from the Dapr secret store, and a second store's key belongs
 #: behind that same door with the record naming a reference.
-_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint", "credential_ref"})
+#:
+#: ``delete_mode`` and ``trash_grace_days`` are the warehouse's delete profile (ADR 0146), which its
+#: project's admin declares; a request naming one replaces both, so a hard profile keeps no grace.
+_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint", "credential_ref", DELETE_MODE, TRASH_GRACE_DAYS})
 
 
 class WarehouseProjectConflict(Exception):
@@ -177,7 +226,11 @@ def upsert_warehouse(
     def merge(live: dict[str, str]) -> dict[str, str]:
         if live.get("project") != project:
             raise WarehouseProjectConflict(f"warehouse {record['id']!r} is registered to another project")
+        if DELETE_MODE in record:
+            live = {k: v for k, v in live.items() if k != TRASH_GRACE_DAYS}
         merged = {**live, **{k: v for k, v in record.items() if k in _CALLER_OWNED}}
+        if merged.get(DELETE_MODE) == DeleteMode.ESTATE:
+            del merged[DELETE_MODE]
         # A record written before the lifecycle feature has no status, and absent means live.
         merged.setdefault("status", "active")
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")

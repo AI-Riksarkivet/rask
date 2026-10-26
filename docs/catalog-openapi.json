@@ -4345,6 +4345,16 @@
             ],
             "title": "Bucket"
           },
+          "delete_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeleteProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "endpoint": {
             "anyOf": [
               {
@@ -4858,6 +4868,42 @@
           }
         },
         "title": "DeleteFromTableResponse",
+        "type": "object"
+      },
+      "DeleteMode": {
+        "description": "What a drop under a warehouse does (ADR 0146), as its record's ``delete_mode`` keeps it.",
+        "enum": [
+          "hard",
+          "soft",
+          "estate"
+        ],
+        "title": "DeleteMode",
+        "type": "string"
+      },
+      "DeleteProfile": {
+        "description": "What a drop under a warehouse does (ADR 0146): ``hard`` destroys the table at once; ``soft`` keeps it\nrecoverable for ``grace_days``, after which its grants are revoked and its bytes wait for the purge; ``estate``\nclears the warehouse's own profile, so it takes the estate's ``LANCE_TRASH_GRACE_DAYS``.",
+        "properties": {
+          "grace_days": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 365.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grace Days"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DeleteMode"
+          }
+        },
+        "required": [
+          "mode"
+        ],
+        "title": "DeleteProfile",
         "type": "object"
       },
       "DeleteProjectResponse": {
@@ -11912,6 +11958,16 @@
             ],
             "title": "Credential Ref"
           },
+          "delete_profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DeleteProfile"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "endpoint": {
             "anyOf": [
               {
@@ -17805,7 +17861,7 @@
     },
     "/management/v1/table/{id}/tasks": {
       "get": {
-        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.\n\n`expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item\n5). Undrop does not check the clock \u2014 it checks whether the record is still there \u2014 so a passed\ndeadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as\nfinality would push an owner to give up on data that is still on storage and still recoverable.\n\nOne entry per dropped table that held the name and that the caller may see, each with its uuid, which an undrop\nnames when there are several ([[LH-525]]).",
+        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.\n\n`expires_at` is when recovery ends (ADR 0146): past it the undrop is refused, maintenance's reconcile tick revokes\nthe table's grants, and the bytes wait for the purge. `expired` says which side of it the drop is on.\n\nOne entry per dropped table that held the name and that the caller may see, each with its uuid, which an undrop\nnames when there are several ([[LH-525]]).",
         "operationId": "table_tasks_management_v1_table__id__tasks_get",
         "parameters": [
           {
@@ -17893,7 +17949,7 @@
     },
     "/management/v1/table/{id}/undrop": {
       "post": {
-        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record \u2014 a never-trashed or already-PURGED drop is genuinely\nunrecoverable, and saying so plainly beats a 200 that recovers nothing.\n\nTHE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has\npassed but which the purge has not yet collected still undrops, because the bytes are still on\nstorage and refusing would destroy recoverable data on a timestamp alone. The estate already\nreasons this way one service over \u2014 maintenance's own config says \"a record that survives is a\nrecovery that still works; a purged one is not\" \u2014 and this door simply never said so out loud.\nWhat was wrong was the DESCRIPTION: the previous docstring called an expired drop \"genuinely\nunrecoverable\" alongside a never-trashed one, and `/tasks` reported the deadline as finality.\nBoth now say purge-eligible, which is what it is.\n\nAn expired undrop IS logged: it means the purge is behind, or somebody recovered at the very\nedge of the window, and an operator should be able to see either.\n\nTHE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 \u00a79), so the door restores exactly the trashed table\nits caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each\none's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another\ntable holds the name the undrop answers 409: two tables cannot share it.",
+        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record \u2014 a never-trashed or already-PURGED drop is genuinely\nunrecoverable, and saying so plainly beats a 200 that recovers nothing. 409 past the record's\n`expires_at`: the drop is then DropTable's, its data deleted asynchronously, even while its bytes\nstand (ADR 0146).\n\nTHE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 \u00a79), so the door restores exactly the trashed table\nits caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each\none's uuid and deadline otherwise). It restores that table's uuid, and so its grants and records. While another\ntable holds the name the undrop answers 409: two tables cannot share it.",
         "operationId": "undrop_table_management_v1_table__id__undrop_post",
         "parameters": [
           {
@@ -24678,7 +24734,7 @@
     },
     "/v1/transaction/{id}/describe": {
       "post": {
-        "description": "Report the status of transaction ``id`` of the table it names, read by the backend's ``describe_transaction`` on that table.",
+        "description": "Report the status of transaction ``id`` of the table it names, read by the backend's ``describe_transaction`` on that table.\n\nA recoverable drop's transaction (``<table id>$<the dropped table's uuid>``, ADR 0146) is answered from its trash\nrecord: ``Queued`` while the drop can be undone, ``Running`` past its deadline, when its grants are released and its\nbytes wait for the purge. Once the purge or an undrop clears the record, the id names nothing.",
         "operationId": "describe_transaction_v1_transaction__id__describe_post",
         "parameters": [
           {

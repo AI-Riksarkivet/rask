@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
 from catalog.services.changes import ChangeKind
+from catalog.services.warehouses import DeleteMode
 from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 from service_kit.lakehouse.maintenance_due import CompactionDue, IndexDue
 
@@ -669,6 +670,22 @@ class ModelsListResponse(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
+class DeleteProfile(BaseModel):
+    """What a drop under a warehouse does (ADR 0146): ``hard`` destroys the table at once; ``soft`` keeps it
+    recoverable for ``grace_days``, after which its grants are revoked and its bytes wait for the purge; ``estate``
+    clears the warehouse's own profile, so it takes the estate's ``LANCE_TRASH_GRACE_DAYS``."""
+
+    mode: DeleteMode
+    #: Days a soft drop stays recoverable, a fraction allowed; set for ``soft`` and only for it.
+    grace_days: float | None = Field(default=None, gt=0, le=365)
+
+    @model_validator(mode="after")
+    def _grace_matches_mode(self) -> Self:
+        if (self.mode is DeleteMode.SOFT) != (self.grace_days is not None):
+            raise ValueError("a soft delete profile names its grace_days, and a hard one names none")
+        return self
+
+
 class CreateWarehouseRequest(BaseModel):
     id: str
     project: str
@@ -702,6 +719,10 @@ class CreateWarehouseRequest(BaseModel):
     # record; the estate resolves its S3 secret from the Dapr secret store, and a second store's key
     # belongs behind that same door with the record naming a reference.
     endpoint: str | None = None
+    #: What a drop under this warehouse does. Absent means unchanged on a re-POST, and the estate's
+    #: `LANCE_TRASH_GRACE_DAYS` on a warehouse that never named one; `{"mode": "estate"}` returns a
+    #: warehouse to the estate's, so a declaration that drops its profile converges by naming that.
+    delete_profile: DeleteProfile | None = None
 
 
 class WarehouseResponse(BaseModel):
@@ -729,6 +750,17 @@ class WarehouseResponse(BaseModel):
     # it ([[LH-205]]), which is why a record naming another store is refused rather than served.
     credential_ref: str | None = None
     created_at: str | None = None
+    #: The warehouse's own delete profile; None where it takes the estate's.
+    delete_profile: DeleteProfile | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _profile_from_record(cls, data: Any) -> Any:  # noqa: ANN401 — the record or a model, as pydantic hands it
+        """A record keeps its profile as the strings ``delete_mode`` and ``trash_grace_days``."""
+        if isinstance(data, dict) and data.get("delete_mode") not in (None, DeleteMode.ESTATE) and "delete_profile" not in data:
+            grace = data.get("trash_grace_days")
+            return {**data, "delete_profile": {"mode": data["delete_mode"], "grace_days": float(grace) if grace else None}}
+        return data
 
 
 class CreateWarehouseNamespaceRequest(BaseModel):
@@ -928,16 +960,10 @@ class TrashEntry(BaseModel):
     location: str
     dropped_by: str
     dropped_at: str
-    #: When this becomes PURGE-ELIGIBLE — not when recovery stops working (diff2 F10 item 5). The
-    #: purge is what destroys; the clock only makes the object eligible for it. The estate already
-    #: reasons this way in the maintenance plane ("a record that survives is a recovery that still
-    #: works; a purged one is not") — this surface simply never said so, and a deadline read as
-    #: "gone after" when it means "collectable after" is the kind of overstatement that makes an
-    #: owner give up on data that is still there.
+    #: When recovery ends (ADR 0146): past it the undrop is refused, the object's grants are revoked, and its
+    #: bytes wait for the purge.
     expires_at: str
-    #: True once `expires_at` has passed and the purge has not yet collected it. Undrop still works
-    #: in this state — the bytes are present — but it is living on borrowed time: the next clean
-    #: purge tick may take it. Surfaced so an owner can tell "you have a week" from "go now".
+    #: True once `expires_at` has passed: the drop is final, though its bytes may stand until the purge.
     expired: bool = False
 
 

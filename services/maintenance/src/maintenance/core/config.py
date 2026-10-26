@@ -204,12 +204,13 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     # spends that permission: from here the tick DELETES the bytes a `_trash/` record names and REVOKES
     # that object's FGA tuples. What it costs to turn on, stated plainly:
     #
-    #   * a `drop_table` past `LANCE_TRASH_GRACE_DAYS` becomes UNRECOVERABLE — `undrop` does not check
-    #     expiry today, so a record that survives is a recovery that still works; a purged one is not;
+    #   * the bytes of a `drop_table` past its deadline are DELETED. The drop was final at the deadline
+    #     (ADR 0146: undrop refuses it, and the reconcile tick has already revoked its grants), so what
+    #     this spends is the bytes an operator could still re-register by hand;
     #   * the purge only runs on a tick whose drift report is CLEAN (`purge.report_is_clean`), so a
     #     permanently-drifting or permanently-unavailable estate never reclaims anything — that is the
     #     designed failure direction, not a bug to route around;
-    #   * a false positive costs a table someone was inside their window to undrop, which is why the
+    #   * a false positive costs a live table's bytes, which is why the
     #     purge re-checks liveness against `__manifest` and refuses anything outside the maintained
     #     estate rather than trusting the record's `location` field.
     trash_purge_enabled: bool = Field(default=False, alias="MAINTENANCE_TRASH_PURGE_ENABLED")

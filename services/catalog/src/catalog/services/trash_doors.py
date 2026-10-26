@@ -24,9 +24,7 @@ def the_one_to_restore(records: list[dict[str, Any]], *, kind: str, name: str) -
     """
     if len(records) == 1:
         return records[0]
-    listed = "; ".join(
-        f"{trash.object_uuid(record)} (dropped {record.get('dropped_at')}, purge-eligible after {record.get('expires_at')})" for record in records
-    )
+    listed = "; ".join(f"{trash.object_uuid(record)} (dropped {record.get('dropped_at')}, recoverable until {record.get('expires_at')})" for record in records)
     raise InvalidTableStateError(f"{len(records)} dropped {kind}s held the name {name!r}: {listed}. Name the one to undrop with ?uuid=<uuid>.")
 
 
@@ -46,15 +44,21 @@ def require_its_own_parent(record: dict[str, Any], *, standing: str | None, name
 
 
 def require_restorable(record: dict[str, Any], *, name: str) -> None:
-    """Refuse restoring a residue record: the bytes it names were left by a destructive drop that failed part-way.
+    """Refuse restoring a record whose drop is final: a residue record, or one past its deadline.
 
-    Its table was destroyed, not trashed: its row is gone and some of its objects may be too, so nothing an undrop
-    re-attaches there is the table that was dropped ([[LH-532]]).
+    A residue record names bytes a destructive drop that failed part-way left: its table was destroyed, not trashed,
+    its row is gone and some of its objects may be too, so nothing an undrop re-attaches there is the table that was
+    dropped ([[LH-532]]). Past ``expires_at`` the drop is DropTable's, its data deleted asynchronously by the purge, so
+    no undrop restores it even while its bytes stand (ADR 0146).
 
     Raises:
-        InvalidTableStateError: ``record`` is a residue record.
+        InvalidTableStateError: ``record`` is a residue record, or its grace period has ended.
     """
     if trash.is_residue(record):
         raise InvalidTableStateError(
             f"cannot undrop {name!r}: its bytes were left by a destructive drop that failed part-way, not kept for an undrop; the trash purge reclaims them"
+        )
+    if trash.past_deadline(record) or trash.is_released(record):
+        raise InvalidTableStateError(
+            f"cannot undrop {name!r}: its grace period ended at {record.get('expires_at')}, so the drop is final and the trash purge reclaims its bytes"
         )

@@ -325,7 +325,7 @@
                     }
                 },
                 "trashGraceDays": {
-                    "description": "Days, a fraction allowed, a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.",
+                    "description": "Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.",
                     "type": "number",
                     "maximum": 365,
                     "minimum": 0

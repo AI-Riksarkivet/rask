@@ -1819,10 +1819,8 @@ export interface paths {
          *     is not a safety feature — the estate's task surfaces are otherwise all estate-global, so "what is
          *     scheduled against my table" was unanswerable. Reader-gated by the router alongside describe.
          *
-         *     `expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item
-         *     5). Undrop does not check the clock — it checks whether the record is still there — so a passed
-         *     deadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as
-         *     finality would push an owner to give up on data that is still on storage and still recoverable.
+         *     `expires_at` is when recovery ends (ADR 0146): past it the undrop is refused, maintenance's reconcile tick revokes
+         *     the table's grants, and the bytes wait for the purge. `expired` says which side of it the drop is on.
          *
          *     One entry per dropped table that held the name and that the caller may see, each with its uuid, which an undrop
          *     names when there are several ([[LH-525]]).
@@ -1852,19 +1850,9 @@ export interface paths {
          *     the namespace is the same authority as removing it).
          *
          *     404 when there is no trash record — a never-trashed or already-PURGED drop is genuinely
-         *     unrecoverable, and saying so plainly beats a 200 that recovers nothing.
-         *
-         *     THE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has
-         *     passed but which the purge has not yet collected still undrops, because the bytes are still on
-         *     storage and refusing would destroy recoverable data on a timestamp alone. The estate already
-         *     reasons this way one service over — maintenance's own config says "a record that survives is a
-         *     recovery that still works; a purged one is not" — and this door simply never said so out loud.
-         *     What was wrong was the DESCRIPTION: the previous docstring called an expired drop "genuinely
-         *     unrecoverable" alongside a never-trashed one, and `/tasks` reported the deadline as finality.
-         *     Both now say purge-eligible, which is what it is.
-         *
-         *     An expired undrop IS logged: it means the purge is behind, or somebody recovered at the very
-         *     edge of the window, and an operator should be able to see either.
+         *     unrecoverable, and saying so plainly beats a 200 that recovers nothing. 409 past the record's
+         *     `expires_at`: the drop is then DropTable's, its data deleted asynchronously, even while its bytes
+         *     stand (ADR 0146).
          *
          *     THE NAME IS FREE ONCE ITS TABLE IS DROPPED ([[LH-525]], ADR 0173 §9), so the door restores exactly the trashed table
          *     its caller names: the one dropped under the name, or, when several were, the one ``?uuid=`` names (409 listing each
@@ -3688,6 +3676,10 @@ export interface paths {
         /**
          * Describe Transaction
          * @description Report the status of transaction ``id`` of the table it names, read by the backend's ``describe_transaction`` on that table.
+         *
+         *     A recoverable drop's transaction (``<table id>$<the dropped table's uuid>``, ADR 0146) is answered from its trash
+         *     record: ``Queued`` while the drop can be undone, ``Running`` past its deadline, when its grants are released and its
+         *     bytes wait for the purge. Once the purge or an undrop clears the record, the id names nothing.
          */
         post: operations["describe_transaction_v1_transaction__id__describe_post"];
         delete?: never;
@@ -5585,6 +5577,7 @@ export interface components {
         CreateWarehouseRequest: {
             /** Bucket */
             bucket?: string | null;
+            delete_profile?: components["schemas"]["DeleteProfile"] | null;
             /** Endpoint */
             endpoint?: string | null;
             /** Id */
@@ -5810,6 +5803,23 @@ export interface components {
              * @description The commit version associated with the operation
              */
             version?: number | null;
+        };
+        /**
+         * DeleteMode
+         * @description What a drop under a warehouse does (ADR 0146), as its record's ``delete_mode`` keeps it.
+         * @enum {string}
+         */
+        DeleteMode: "hard" | "soft" | "estate";
+        /**
+         * DeleteProfile
+         * @description What a drop under a warehouse does (ADR 0146): ``hard`` destroys the table at once; ``soft`` keeps it
+         *     recoverable for ``grace_days``, after which its grants are revoked and its bytes wait for the purge; ``estate``
+         *     clears the warehouse's own profile, so it takes the estate's ``LANCE_TRASH_GRACE_DAYS``.
+         */
+        DeleteProfile: {
+            /** Grace Days */
+            grace_days?: number | null;
+            mode: components["schemas"]["DeleteMode"];
         };
         /**
          * DeleteProjectResponse
@@ -8977,6 +8987,7 @@ export interface components {
             created_at?: string | null;
             /** Credential Ref */
             credential_ref?: string | null;
+            delete_profile?: components["schemas"]["DeleteProfile"] | null;
             /** Endpoint */
             endpoint?: string | null;
             /** Id */

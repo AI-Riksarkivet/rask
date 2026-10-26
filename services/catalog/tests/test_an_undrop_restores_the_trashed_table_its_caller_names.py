@@ -49,13 +49,16 @@ def estate(recoverable: None, governed_catalog: Any) -> Any:  # noqa: ANN401 —
 def test_an_undrop_of_a_name_two_dropped_tables_held_asks_which_and_restores_the_one_named(estate: Any) -> None:  # noqa: ANN401
     first = _create(estate, rows=2)
     _ok(estate, "/management/v1/table/db$t/access/grant", json={"user": "dex~bob", "relation": "reader"})
-    _ok(estate, "/v1/table/db$t/drop", json={})
+    dropped = _ok(estate, "/v1/table/db$t/drop", json={})
     second = _create(estate, rows=3)
+    tracked = _ok(estate, f"/v1/transaction/db$t${first}/describe", json={}).json()
     _ok(estate, "/v1/table/db$t/drop", json={})
 
     asked = estate.client.post("/management/v1/table/db$t/undrop", headers=estate.bearer("alice"))
     restored = _ok(estate, f"/management/v1/table/db$t/undrop?uuid={first}")
 
+    assert dropped.json().get("transaction_id") == f"db$t${first}", f"the drop did not name the deletion it queued: {dropped.text}"
+    assert tracked["status"] == "Queued", f"the queued deletion did not describe as queued while another table held the name: {tracked}"
     assert (asked.status_code, first in asked.text, second in asked.text) == (409, True, True), asked.text
     assert restored.status_code == 200
     assert _ok(estate, "/v1/table/db$t/describe", json={}).json()["properties"]["rask.uuid"] == first
@@ -65,12 +68,13 @@ def test_an_undrop_of_a_name_two_dropped_tables_held_asks_which_and_restores_the
 
 @pytest.mark.parametrize("held", ["the-table's-name", "its-namespace's-name"])
 def test_an_undrop_while_another_object_holds_its_name_or_its_namespaces_is_refused(estate: Any, held: str) -> None:  # noqa: ANN401
-    _create(estate, rows=2)
+    table = _create(estate, rows=2)
     if held == "the-table's-name":
         _ok(estate, "/v1/table/db$t/drop", json={})
         _create(estate, rows=3)
     else:
-        _ok(estate, "/v1/namespace/db/drop", json={"behavior": "Cascade"})
+        cascaded = _ok(estate, "/v1/namespace/db/drop", json={"behavior": "Cascade"})
+        assert cascaded.json().get("transaction_id") == [f"db$t${table}"], f"the cascade did not name the deletion it queued: {cascaded.text}"
         _ok(estate, "/v1/namespace/db/create", json={})
     standing = estate.store.tuples()
 

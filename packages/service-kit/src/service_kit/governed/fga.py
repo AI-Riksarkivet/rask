@@ -1942,6 +1942,9 @@ TupleOrigin = Literal[
     # nobody granted it: the table's grants stay on its uuid, and the rename's control event (`table_renamed`, `from`
     # and `to`) names the move.
     "rename",
+    # Revoking a recoverable drop's grants at its deadline (ADR 0146). Its own value because no person revoked them and
+    # nothing was destroyed: the grace period ended, and the bytes wait for the purge (`lifecycle_delete`).
+    "trash_expired",
     "lifecycle_delete",
     "train",
 ]

@@ -336,6 +336,16 @@ class Resolver:
             self._trashed[key] = [r for r in records if (uuid := trash.object_uuid(r)) is not None and wanted in (None, uuid)]
         return self._trashed[key]
 
+    async def trashed_as_transaction(self, segments: list[str]) -> list[dict[str, Any]]:
+        """The trash record a transaction id ``<table id>$<uuid>`` names: a recoverable drop's (ADR 0146), or none.
+
+        A drop that keeps its bytes for the purge answers its record's uuid as the spec's transaction id, so its deletion
+        is tracked through DescribeTransaction on the dropped table's name.
+        """
+        if len(segments) < 2:
+            return []
+        return [record for record in await self.trashed("table", segments[:-1]) if trash.object_uuid(record) == segments[-1]]
+
     def admit_trashed(self, kind: str, segments: list[str], records: list[dict[str, Any]]) -> None:
         """Record which of :meth:`trashed` the request's authorization let its caller act on."""
         self._admitted[(kind, tuple(segments))] = records

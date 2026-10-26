@@ -719,14 +719,16 @@ catalog:
   # the catalog memory tier — values-prod.yaml states the sizing formula. 0 disables shedding.
   # -- Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. 0 disables shedding.
   maxConcurrentWrites: 16
-  # #75/#96 RECOVERABLE DROPS — days a dropped table/namespace stays undroppable before the purge may
-  # reclaim it. The CODE default is 0 (off: a grace period changes what `drop_table` means for every
+  # #75/#96 RECOVERABLE DROPS — days a dropped table/namespace stays undroppable. Past it the drop is
+  # final: undrop refuses it, the maintenance reconcile tick revokes its grants, and its bytes wait for
+  # `maintenance.trashPurge` (ADR 0146). A warehouse's own `delete_profile` overrides it for every drop
+  # under that warehouse. The CODE default is 0 (off: a grace period changes what `drop_table` means for every
   # caller, so the library never assumes it) — but the CHART defaults it ON, because the chart also
   # ships `maintenance.trashPurge` and an undrop UI, and until 2026-08-05 it rendered this env var
   # NOWHERE: ~500 lines of shipped, tested recovery code (undrop, /tasks, the recoverable cascade,
   # the purge's whole input) were inert in every chart deployment while two chart comments discussed
   # the knob as if it worked. 0 restores the old destroy-immediately behaviour.
-  # -- (float) Days, a fraction allowed, a dropped table or namespace stays undroppable before the trash purge may reclaim it (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.
+  # -- (float) Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.
   trashGraceDays: 7 # @schema type: number; minimum: 0; maximum: 365
   # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /management/v1/warehouses provisions a
   # physically separate bucket per warehouse (Lakekeeper parity) and binds top-level namespaces to it, so a
@@ -991,8 +993,8 @@ maintenance:
   # (no findings, no unavailable category, no incomplete scan).
   #
   # OFF by default, and it should stay off until the drift report has run clean on THIS estate for a
-  # while: turning it on makes a `drop_table` past LANCE_TRASH_GRACE_DAYS permanently unrecoverable
-  # (`undrop` does not check expiry today — a record that survives is a recovery that still works). It
+  # while: turning it on deletes the bytes of every drop past its deadline, which the reconcile tick
+  # has already made final by revoking its grants whether or not this is on (ADR 0146). It
   # is also the only irreversible thing this service does; compaction and version GC are bounded by
   # policy, this destroys a whole dataset.
   # -- Delete the bytes of trash records past their grace deadline and revoke their grants, only when that tick's drift report is clean. Irreversible; off by default.

@@ -641,6 +641,9 @@ async def _authorize_transaction(client: OpenFgaClient, resolver: Resolver, segm
     (``can_write_data``), asked on the object the table's name resolves to, as every table door asks. A describe naming
     an absent table answers the spec's not-found to a reader of its namespace, as every read door does.
 
+    A recoverable drop's transaction is ``<table id>$<the trashed table's uuid>`` (ADR 0146): its describe is asked on
+    that trashed table's own grants, which another table holding the name since does not share.
+
     Raises:
         InvalidInputError: The id names no table.
         PermissionDeniedError: The caller does not hold the door's rung on the table.
@@ -648,6 +651,10 @@ async def _authorize_transaction(client: OpenFgaClient, resolver: Resolver, segm
     """
     table = transaction_table(segments)
     relation = "can_get_metadata" if suffix == "describe" else "can_write_data"
+    if suffix == "describe" and (dropped := await resolver.trashed_as_transaction(segments)):
+        named = tier_policy.Named(kind="table", segments=tuple(table), in_trash=True)
+        await _require_trashed(client, resolver, user=token.subject, relation=relation, named=named, label=fga.canonical_object_id(segments), trashed=dropped)
+        return
     try:
         await _require_rung(
             client, resolver, user=token.subject, rung=tier_policy.Rung(relation=relation, on=tier_policy.Named(kind="table", segments=tuple(table)))

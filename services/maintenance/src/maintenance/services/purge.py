@@ -102,7 +102,7 @@ _LOCATION_LIVE = "a registered table's location contains or sits inside these by
 _MANIFEST_UNREADABLE = "the object manifest could not be read, so liveness cannot be re-checked — refusing to delete blind"
 _PURGE_OFF = (
     "MAINTENANCE_TRASH_PURGE_ENABLED is off — reclamation is opt-in and report-only is the shipped default "
-    "(turning it on makes an expired drop unrecoverable); set MAINTENANCE_TRASH_PURGE_DRY_RUN to see what it would reclaim first"
+    "(an expired drop's grants are already released; turning it on deletes its bytes); set MAINTENANCE_TRASH_PURGE_DRY_RUN to see what it would reclaim first"
 )
 _FGA_UNWIRED = "FGA is enabled but no client is wired into this process — grants cannot die with the bytes, so nothing is purged"
 
@@ -427,6 +427,22 @@ def _root_of(location: str, roots: set[str]) -> str | None:
     return None
 
 
+def still_registered(record: dict[str, Any], live: Liveness) -> bool:
+    """Whether the object ``record`` keeps stands again: an undrop or a register re-attached it since its drop.
+
+    A table stands when a live table resolves to its location; a namespace when a live namespace of its name keeps its
+    uuid, or keeps none; a table recorded with no location when a live object holds its name, since nothing else tells
+    it from another.
+    """
+    obj_id = str(record.get("id") or "")
+    location = str(record.get("location") or "").rstrip("/")
+    if str(record.get("kind") or "table") == "namespace":
+        return obj_id in live.ids and live.namespace_uuids.get(obj_id) in (trash.object_uuid(record), None)
+    if not location:
+        return obj_id in live.ids
+    return any(decoded_path(held) == decoded_path(location) for held in live.locations)
+
+
 def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> str | None:
     """The refusal ladder — ``None`` to purge this record, else the reason not to. Order matters.
 
@@ -451,18 +467,13 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
         return "the record keeps no uuid, so the object it names cannot be told from another of its name"
     if live is None:
         return _MANIFEST_UNREADABLE
+    if still_registered(record, live):
+        return _STILL_REGISTERED
     kind = str(record.get("kind") or "table")
     location = str(record.get("location") or "").rstrip("/")
-    if kind == "namespace":
-        # A namespace is a manifest ROW: nothing to delete, so nothing to path-check. Revoke + clear still apply.
-        if obj_id in live.ids and live.namespace_uuids.get(obj_id) in (uuid, None):
-            return _STILL_REGISTERED
+    if kind == "namespace" or not location:
+        # A namespace is a manifest ROW and a declared-only table never had bytes: nothing to path-check.
         return None
-    if not location:
-        # A declared-only table never had bytes: nothing to path-check.
-        return _STILL_REGISTERED if obj_id in live.ids else None
-    if any(decoded_path(held) == decoded_path(location) for held in live.locations):
-        return _STILL_REGISTERED
     if not names_a_location(location):
         return f"location {location!r} names no single place once decoded — refusing to delete what its spelling cannot locate"
     root = _root_of(location, roots)

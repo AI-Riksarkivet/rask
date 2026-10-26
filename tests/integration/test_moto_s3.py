@@ -614,19 +614,16 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
 
 
 # --------------------------------------------------------------------------- #
-# diff2 F10 item 5 — the deadline is PURGE-ELIGIBILITY, not the end of recovery
+# ADR 0146 — the deadline ends the recovery
 #
-# `undrop` never compared `expires_at` to the clock; it checks whether the RECORD is still there.
-# That behaviour is right and stays: the bytes are on storage until the purge collects them, so
-# refusing would destroy recoverable data on a timestamp alone — and the maintenance plane already
-# reasons exactly this way ("a record that survives is a recovery that still works; a purged one is
-# not"). What was wrong was the DESCRIPTION: `/tasks` reported the deadline as finality and undrop's
-# 404 called an expired drop "genuinely unrecoverable" alongside a never-trashed one.
+# A recoverable drop is a DeregisterTable whose bytes stay for re-registration until `expires_at`; past it the table is
+# in DropTable's state, its data deleted asynchronously by the purge. So an undrop past the deadline is refused even
+# while the bytes are still on storage, and `/tasks` reports the deadline as the end of the window.
 # --------------------------------------------------------------------------- #
 
 
 def _expire_trash_record(moto_endpoint: str, table_uuid: str) -> None:
-    """Rewrite the trash deadline of the table ``table_uuid`` names into the past — the state a LATE PURGE leaves behind.
+    """Rewrite the trash deadline of the table ``table_uuid`` names into the past: a drop whose bytes await the purge.
 
     Reaches into the object store rather than a local path: the control root here is the moto bucket.
     The key comes from `record_store.record_key`, the estate's OWN deriver, rather than from listing
@@ -652,9 +649,9 @@ def _expire_trash_record(moto_endpoint: str, table_uuid: str) -> None:
     s3.put_object(Bucket=BUCKET, Key=key, Body=json.dumps(record).encode())
 
 
-def test_an_expired_but_unpurged_drop_still_undrops(moto_client_recoverable: TestClient, moto_endpoint: str) -> None:
-    """The behaviour that must NOT change. Past the deadline, before the purge: the bytes are there,
-    so recovery works. Refusing here would be destroying data by clock."""
+def test_an_expired_drop_does_not_undrop_while_its_bytes_await_the_purge(moto_client_recoverable: TestClient, moto_endpoint: str) -> None:
+    """Past the deadline, before the purge, the bytes are there and the undrop is refused 409 naming the deadline, and
+    the table stays dropped."""
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
     assert moto_client_recoverable.post("/v1/namespace/exp/create", json={}).status_code == 200
     assert _create(moto_client_recoverable, "exp$t", rows).status_code == 200
@@ -663,14 +660,12 @@ def test_an_expired_but_unpurged_drop_still_undrops(moto_client_recoverable: Tes
 
     _expire_trash_record(moto_endpoint, dropped)
 
-    # /tasks now SAYS it is expired rather than implying it is gone…
     tasks = moto_client_recoverable.get("/management/v1/table/exp$t/tasks").json()
     assert tasks and tasks[0]["expired"] is True
-
-    # …and the undrop still works, with the rows intact.
     undropped = moto_client_recoverable.post("/management/v1/table/exp$t/undrop", json={})
-    assert undropped.status_code == 200, undropped.text
-    assert int(moto_client_recoverable.post("/v1/table/exp$t/count_rows", json={}).text) == 2
+    assert undropped.status_code == 409, undropped.text
+    assert "grace period ended" in undropped.json()["detail"], undropped.text
+    assert moto_client_recoverable.post("/v1/table/exp$t/describe", json={}).status_code == 404
 
 
 def test_a_live_deadline_is_not_reported_as_expired(moto_client_recoverable: TestClient) -> None:

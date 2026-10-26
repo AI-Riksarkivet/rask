@@ -81,6 +81,7 @@ from catalog.core.vending import CredentialVendor, role_session_name
 from catalog.schemas import (
     CreateWarehouseNamespaceRequest,
     CreateWarehouseRequest,
+    DeleteProfile,
     DeleteWarehouseResponse,
     EstateBindingsResponse,
     UnbindWarehouseNamespaceResponse,
@@ -128,6 +129,16 @@ def _validate_id(value: str, *, what: str) -> str:
     if not _ID_RE.match(value):
         raise InvalidInputError(f"invalid {what} {value!r}: must match {_ID_RE.pattern}")
     return value
+
+
+def _delete_profile_fields(profile: DeleteProfile | None) -> dict[str, str]:
+    """The record fields a request's delete profile writes, none when it names none. The ``estate`` mode is written
+    as a mode the merge removes from an existing record and a drop reads as the estate's grace period."""
+    if profile is None:
+        return {}
+    if profile.grace_days is None:
+        return {warehouses.DELETE_MODE: profile.mode.value}
+    return {warehouses.DELETE_MODE: profile.mode.value, warehouses.TRASH_GRACE_DAYS: str(profile.grace_days)}
 
 
 def _namespace_exists_in_default(ns: LanceNamespace, segments: list[str]) -> bool:
@@ -281,6 +292,9 @@ async def create_warehouse(
         # empty string, which `_resolve_warehouse_root` reads as None. Omitted from the request means
         # "unchanged": the key is absent, so `_CALLER_OWNED`'s merge carries the live value forward.
         **({"endpoint": body.endpoint} if body.endpoint is not None else {}),
+        # What a drop under this warehouse does (ADR 0146), CALLER-OWNED like the endpoint: named, it replaces the
+        # live profile; omitted, the merge carries the live one forward.
+        **_delete_profile_fields(body.delete_profile),
     }
     # Serving carries FORWARD on an idempotent re-create (same rationale as status above): a GitOps
     # reconcile re-POSTing the gold warehouse WITHOUT the serving field must not silently demote it to a
@@ -357,7 +371,7 @@ async def create_warehouse(
         actor=actor,
         extra={"bucket": bucket, "project": project},
     )
-    return WarehouseResponse(**record)
+    return WarehouseResponse.model_validate(record)
 
 
 @router.get("", response_model_exclude_none=True)
@@ -371,7 +385,7 @@ async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: Fg
         # which OpenFGA stops counting at its ceiling.
         allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[f"warehouse:{r['id']}" for r in records])
         records = [r for r in records if allowed.get(f"warehouse:{r['id']}")]
-    return [WarehouseResponse(**r) for r in records]
+    return [WarehouseResponse.model_validate(r) for r in records]
 
 
 @router.get("/{warehouse_id}", response_model_exclude_none=True)
@@ -382,7 +396,7 @@ async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: Current
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    return WarehouseResponse(**record)
+    return WarehouseResponse.model_validate(record)
 
 
 @router.get("/-/bindings", response_model_exclude_none=True)
@@ -498,7 +512,7 @@ async def _set_warehouse_status(
     if updated is None:  # raced away between the read and the write — treat as gone
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     log.info("warehouse_status_changed", extra={"warehouse": warehouse_id, "status": status})
-    return WarehouseResponse(**updated)
+    return WarehouseResponse.model_validate(updated)
 
 
 @router.post("/{warehouse_id}/deactivate", response_model_exclude_none=True)

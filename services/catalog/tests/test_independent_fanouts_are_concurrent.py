@@ -116,7 +116,7 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
     descendants = [GovernedObject(kind="table", segments=["bronze", f"t{i}"], uuid=str(uuid4())) for i in range(8)]
     own = ControlUuids(object_uuid=str(uuid4()))
 
-    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), _settings(tmp_path), None, ["bronze"], descendants, own=own))
+    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), _settings(tmp_path), None, ["bronze"], descendants, own=own, grace_days=7))
 
     assert tracker.total == 8, f"only {tracker.total} describes for 8 descendant tables"
     assert tracker.peak > 1, "the recoverable cascade describes its descendants one at a time"

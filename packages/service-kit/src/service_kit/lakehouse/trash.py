@@ -6,8 +6,10 @@
 to rewind to. Time-travel covers bad-WRITE recovery, never bad-DROP recovery.
 
 The durable fix: a drop DEREGISTERS the table (detach, bytes untouched) and writes a trash record
-carrying where the bytes are and when the grace period ends. Undrop re-registers from that record.
-The maintenance sweep is what eventually expires it.
+carrying where the bytes are and when the grace period ends. Undrop re-registers from that record until
+then. Past the deadline the drop is DropTable's, its data deleted asynchronously (ADR 0146): maintenance's
+reconcile tick revokes the object's grants and marks the record released (:func:`mark_released`), and the
+purge, a separate opt-in, deletes the bytes and the record.
 
 Two disciplines this module exists to keep:
 
@@ -42,6 +44,9 @@ _TRASH_PREFIX = "_trash"
 
 #: The field marking a record a destructive drop filed for bytes it was deleting (:func:`make_record`'s ``residue``).
 RESIDUE = "residue"
+
+#: The field stamping when a record's grants were released past its deadline (:func:`mark_released`).
+RELEASED_AT = "released_at"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "trash_record"
@@ -127,6 +132,34 @@ def make_record(
 def is_residue(record: dict[str, Any]) -> bool:
     """Whether ``record`` keeps the bytes a failed destructive drop left, which no undrop restores ([[LH-532]])."""
     return record.get(RESIDUE) is True
+
+
+def is_released(record: dict[str, Any]) -> bool:
+    """Whether maintenance has released ``record``'s grants past its deadline (ADR 0146)."""
+    return isinstance(record.get(RELEASED_AT), str)
+
+
+def past_deadline(record: dict[str, Any], *, now: datetime | None = None) -> bool:
+    """Whether ``record``'s grace period has ended: no undrop restores it from then on (ADR 0146).
+
+    The rule :func:`expired` selects by, so the door that refuses an undrop and the tick that releases the grants read
+    one deadline.
+    """
+    return bool(expired([record], now=now))
+
+
+def mark_released(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: str = "table", now: datetime | None = None) -> bool:
+    """Stamp the record of the ``kind`` object ``uuid`` names as released, once its grants are revoked.
+
+    Conditional (:func:`records.mutate_json`), so a concurrent :func:`note_refusal` survives and ``expires_at`` never
+    moves. ``False`` when the record is gone, a purge or an undrop having cleared it since it was read.
+    """
+    at = (now or datetime.now(UTC)).isoformat()
+    try:
+        mutate_json(control_root, storage_options, record_key(_TRASH_PREFIX, kind, uuid), lambda record: {**record, RELEASED_AT: record.get(RELEASED_AT) or at})
+    except RecordMissingError:
+        return False
+    return True
 
 
 def put(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
