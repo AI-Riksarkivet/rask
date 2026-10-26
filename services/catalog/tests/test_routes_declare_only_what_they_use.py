@@ -14,14 +14,28 @@ door.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from catalog.api.v1.router import api_router
+from catalog.core.config import get_settings
+
+
+@pytest.fixture
+def catalog_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The store pair the catalog's Settings require with no projected token: the router resolves them before `authorize`."""
+    monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "test")
+    monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "test")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.mark.parametrize("path", ["/management/v1/table/db1$t/tasks"])
+@pytest.mark.usefixtures("catalog_env")
 def test_the_task_routes_are_still_authenticated(path: str) -> None:
     """The removal must not be the thing that opens the door: with the router's gate refusing, the
     route must never run its body. A stand-in `authorize` proves the ROUTER dependency is what
