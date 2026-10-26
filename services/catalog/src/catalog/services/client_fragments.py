@@ -35,6 +35,7 @@ from lance.file import LanceFileReader
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
+from catalog.core import encoding
 from service_kit.lakehouse import base_registry, blobs
 from service_kit.lakehouse.base_refs import normalise, store_of
 from service_kit.lakehouse.features import describe_foreign_data_file_versions
@@ -285,7 +286,7 @@ def _fields_the_footer_names(index: int, path: str, schema: pa.Schema, table: la
             continue
         if not column.type.equals(declared.type):
             raise _refuse(index, path, f"its column {column.name!r} is {column.type} and the table's is {declared.type}")
-        expected.extend(_column_ids(field, every_field=every_field))
+        expected.extend(_column_ids(field, declared, every_field=every_field))
     return expected
 
 
@@ -295,11 +296,19 @@ class _LanceField(Protocol):
     def children(self) -> Sequence[_LanceField]: ...
 
 
-def _column_ids(field: _LanceField, *, every_field: bool) -> list[int]:
+def _is_packed(declared: pa.Field, *, every_field: bool) -> bool:
+    """A struct Lance packs is one column: "Only leaf fields and packed structs have column indices" (`file_format.md` §
+    Field IDs). Measured on pylance 13.0.0, a 2.0 file packs a struct carrying any ``packed`` value and a 2.1 or 2.2
+    file only one whose value Lance reads as true."""
+    return encoding.packs_at_2_0(declared) if every_field else encoding.packs(declared)
+
+
+def _column_ids(field: _LanceField, declared: pa.Field, *, every_field: bool) -> list[int]:
     children = field.children()
-    if not children:
+    if not children or _is_packed(declared, every_field=every_field):
         return [field.id()]
-    nested = [column for child in children for column in _column_ids(child, every_field=every_field)]
+    declared_children = (declared.type.field(i) for i in range(declared.type.num_fields))
+    nested = [column for child, arrow in zip(children, declared_children, strict=True) for column in _column_ids(child, arrow, every_field=every_field)]
     return [field.id(), *nested] if every_field else nested
 
 

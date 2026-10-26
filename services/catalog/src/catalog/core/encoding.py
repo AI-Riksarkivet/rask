@@ -53,7 +53,10 @@ _ZSTD_LEVELS = range(23)
 #: The integer and decimal forms Rust's ``str::parse`` reads; ``1_0``, ``inf`` and a padded value are refused.
 _INTEGER = re.compile(r"[+-]?[0-9]+")
 _DECIMAL = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
-_PACKED_VALUES = frozenset({"true", "1", "yes", "on", "false", "0", "no", "off"})
+PACKED = PREFIX + "packed"
+#: The ``packed`` values Lance 2.1 and later pack on, in any case; any other value leaves the struct's leaves as columns.
+_PACKING = frozenset({"true", "1", "yes", "on"})
+_PACKED_VALUES = _PACKING | {"false", "0", "no", "off"}
 
 
 class Knob(BaseModel):
@@ -123,6 +126,16 @@ _KNOBS: dict[str, Knob] = {
     "bss": _choice(("off", "on", "auto"), _is_split_leaf),
     "packed": Knob(accepts=lambda value: value.lower() in _PACKED_VALUES, expected=f"one of {sorted(_PACKED_VALUES)} in any case", acts_on=pa.types.is_struct),
 }
+
+
+def packs(field: pa.Field) -> bool:
+    """Whether a 2.1 or 2.2 file holds ``field`` as one packed column: its ``packed`` value is one Lance reads as true."""
+    return (field.metadata or {}).get(PACKED.encode(), b"").decode(errors="replace").lower() in _PACKING
+
+
+def packs_at_2_0(field: pa.Field) -> bool:
+    """Whether a 2.0 file holds ``field`` as one packed column: it carries any ``packed`` value, ``false`` included."""
+    return PACKED.encode() in (field.metadata or {})
 
 
 def require_valid_encoding(properties: Mapping[str, str] | None) -> dict[str, str]:

@@ -394,3 +394,29 @@ def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate
     assert landed.count_rows() == len(_PAYLOADS) + 1
     assert [payload for _, payload in landed.read_blobs("payload", indices=list(range(len(_PAYLOADS) + 1)))] == [*_PAYLOADS, b"external-page"]
     assert estate.version_residue(location) == []
+
+
+def test_a_writers_own_fragment_of_a_packed_struct_commits(estate: _Estate) -> None:
+    """A struct Lance packs is one column of the file (`lance_docs/file_format.md` § Field IDs: "Only leaf fields and
+    packed structs have column indices"), at the top level and inside a struct Lance does not pack ([[LH-246]])."""
+    inner = pa.struct([pa.field("a", pa.int64()), pa.field("b", pa.string())])
+    packed = {"lance-encoding:packed": "true"}
+    schema = pa.schema(
+        [
+            pa.field("id", pa.int64()),
+            pa.field("p", pa.struct([pa.field("x", pa.float32()), pa.field("label", pa.string())]), metadata=packed),
+            pa.field("q", pa.struct([pa.field("y", pa.float32()), pa.field("inner", inner, metadata=packed)])),
+        ]
+    )
+    table = f"db$p{uuid.uuid4().hex[:8]}"
+    location = estate.create(table, schema.empty_table())
+    rows = pa.Table.from_pylist(
+        [{"id": i, "p": {"x": float(i), "label": f"l{i}"}, "q": {"y": float(i), "inner": {"a": i, "b": f"b{i}"}}} for i in (1, 2)], schema=schema
+    )
+    staged = _write(location, rows, estate.key)
+    before = estate.open(location).version
+
+    refused = _commit(_Staged(estate, table, location, staged[0]), staged, before)
+
+    assert refused is None, refused.text
+    assert estate.ids(location) == [1, 2]

@@ -92,7 +92,8 @@ unknown scheme or knob, a value out of range, a level beside any scheme but zstd
 outright. It stamps each knob on the fields it acts on, as measured on pylance 13.0.0 where the doc's type
 lists are narrower (general compression on every leaf, RLE and dictionary on every non-boolean leaf, BSS on
 32- and 64-bit numeric and temporal leaves, packing on structs, nested leaves included). `packed` takes
-`true`, `1`, `yes`, `on` or their negatives: the doc says any string, but Lance ignores every other value. A
+`true`, `1`, `yes`, `on` or their negatives: the doc says any string, but Lance ignores every other value, and
+`version/create`'s fragment judge holds a struct Lance packs as one column, as the file does. A
 general scheme stamped on a float with `bss` unset leaves BSS to Lance's default, `auto`, which decides it by
 entropy and only under a general scheme (`file_format.md` § Byte Stream Split), as for any compressed column.
 
