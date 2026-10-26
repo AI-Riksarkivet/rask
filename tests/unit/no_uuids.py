@@ -21,6 +21,9 @@ class _NoObjectUuids:
     async def table(self, segments: list[str], *, location: str | None = None, uuid: str | None = None) -> DatasetUuids:
         return DatasetUuids(table_uuid=uuid)
 
+    async def branch_identifier(self, segments: list[str], branch: str) -> str | None:
+        return None
+
     async def namespace(self, segments: list[str]) -> ControlUuids:
         return ControlUuids()
 

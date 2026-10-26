@@ -39,7 +39,7 @@ from service_kit.governed import fga
 from service_kit.lakehouse import commit_records
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.filters import sql_literal
-from service_kit.openlineage import LANCE_FACET, dataset_uuids
+from service_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, dataset_uuids
 
 
 log = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ def _commits_named(event: dict[str, Any], table_uuid: str) -> Iterator[tuple[str
         except ValueError:
             continue
         ref = named.get("ref") if isinstance(named.get("ref"), str) else None
-        identifier = named.get("branchIdentifier") if isinstance(named.get("branchIdentifier"), str) else None
+        identifier = named.get(BRANCH_IDENTIFIER) if isinstance(named.get(BRANCH_IDENTIFIER), str) else None
         yield commit_records.ref_key(ref, identifier), version
 
 

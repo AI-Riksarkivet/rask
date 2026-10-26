@@ -219,9 +219,10 @@ def _release(
 ) -> list[RefChange]:
     dataset = open_location(record.location)
     # [[LH-308]] Held before the release is claimed, so a tick a reclaim holds off leaves it as it was: a branch is
-    # recreated at the version the release recorded, which a reclaim reading the refs before it would delete.
+    # recreated at the version the release recorded, which a reclaim reading the refs before it would delete. Held as a
+    # branch create ([[LH-413]]), so no create through the door lands a name nesting with one this recreates.
     history = TableHistory(control_root=control_root, storage_options=storage_options, table_uuid=record.table_uuid)
-    with history.held(HistoryWork.REFS):
+    with history.held(HistoryWork.BRANCH):
         tags, plan = _plan(dataset, record) if record.phase != "recreating" else (record.tags, record.plan)
         claimed = _mutate(control_root, storage_options, record.release_id, lambda current: _claim(current, now=now, tags=tags, plan=plan))
         changes: list[RefChange] = []

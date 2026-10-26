@@ -40,10 +40,13 @@ import hashlib
 import json
 import logging
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import pyarrow.fs as pafs
+from pydantic import BaseModel, ConfigDict
 
 from service_kit.lakehouse.objectfs import StorageOptions
 
@@ -155,8 +158,38 @@ def _s3_parts(root_uri: str, key: str) -> tuple[str, str]:
     return bucket, (f"{prefix}/{key}" if prefix else key)
 
 
-def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> tuple[dict[str, Any], str] | None:
-    """The record at ``key`` and its ETag, or ``None`` when absent.
+class Stored(BaseModel):
+    """A record as the store holds it: its body, and the ETag a write acting on it must still match."""
+
+    model_config = ConfigDict(frozen=True)
+
+    record: dict[str, Any]
+    etag: str
+
+
+class StoreRead(BaseModel):
+    """What one read found at a key (the stored record, or none) and the store's own clock at that read."""
+
+    model_config = ConfigDict(frozen=True)
+
+    stored: Stored | None
+    #: The store's clock when it answered: an S3 response's ``Date`` (RFC 9110 §6.6.1 has every origin server with a
+    #: clock send one, on a 404 too), the local clock on a local root. A lease is stamped and judged on this clock alone,
+    #: so no two pods' clocks are ever compared.
+    at: datetime
+
+
+def _store_clock(response: Mapping[str, Any]) -> datetime:
+    """The ``Date`` an S3 response carries; the local clock, logged, for a store that sends none."""
+    header = response.get("ResponseMetadata", {}).get("HTTPHeaders", {}).get("date")
+    if header:
+        return parsedate_to_datetime(header).astimezone(UTC)
+    log.warning("store_answered_no_date", extra={"reason": "a lease is timed on this pod's clock while the store sends no Date"})
+    return datetime.now(UTC)
+
+
+def read_json_at(root_uri: str, storage_options: StorageOptions, key: str) -> StoreRead:
+    """The record at ``key`` with its ETag, or none, and the store's clock at the read: what a lease is timed by.
 
     The ETag is the concurrency token :func:`mutate_json` writes back under. On S3 it is the store's
     own; on a local root it is a content hash, which has the same meaning ("the bytes I read") and
@@ -170,9 +203,10 @@ def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> tuple
             got = _s3_client(storage_options).get_object(Bucket=bucket, Key=full_key)
         except ClientError as exc:
             if str(exc.response.get("Error", {}).get("Code", "")) in {"NoSuchKey", "404"}:
-                return None
+                return StoreRead(stored=None, at=_store_clock(exc.response))
             raise
-        return json.loads(got["Body"].read().decode("utf-8")), str(got["ETag"]).strip('"')
+        body = json.loads(got["Body"].read().decode("utf-8"))
+        return StoreRead(stored=Stored(record=body, etag=str(got["ETag"]).strip('"')), at=_store_clock(got))
 
     fs, path = pafs.FileSystem.from_uri(root_uri)
     if not isinstance(fs, pafs.LocalFileSystem):
@@ -187,8 +221,14 @@ def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> tuple
             finally:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
     except FileNotFoundError:
-        return None
-    return json.loads(raw.decode("utf-8")), hashlib.sha256(raw).hexdigest()
+        return StoreRead(stored=None, at=datetime.now(UTC))
+    return StoreRead(stored=Stored(record=json.loads(raw.decode("utf-8")), etag=hashlib.sha256(raw).hexdigest()), at=datetime.now(UTC))
+
+
+def read_json(root_uri: str, storage_options: StorageOptions, key: str) -> tuple[dict[str, Any], str] | None:
+    """The record at ``key`` and its ETag, or ``None`` when absent (:func:`read_json_at`, for a reader that needs no clock)."""
+    stored = read_json_at(root_uri, storage_options, key).stored
+    return None if stored is None else (stored.record, stored.etag)
 
 
 def mutate_json(

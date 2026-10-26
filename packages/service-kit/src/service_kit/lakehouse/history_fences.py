@@ -15,8 +15,17 @@ reclaim for the next tick. The store picks the
 winner: a take is a create-if-absent or a replace under the ETag it read (:mod:`service_kit.lakehouse.records`), as a
 location claim's is.
 
+A BRANCH CREATE HOLDS IT ALONE ([[LH-413]]). Lance joins a branch name onto ``tree/`` verbatim and keeps each ref in its own
+file (``lance_docs/lance/format/table/branch_tag.md`` § Branch Dataset Layout, § Branch Metadata Path), so ``a`` and
+``a/b`` are two keys no conditional write on a ref can make collide, while ``a/b``'s files would lie inside ``a``'s. The
+catalog refuses such a pair at create, judging the table's branch listing; :attr:`HistoryWork.BRANCH` is the one kind
+that excludes its own, so two creates on one table take turns and each judges a listing no other create changes
+before it commits.
+
 A HOLD LAPSES AFTER :data:`HOLD`, so a holder that crashed fences the table for at most that long. A reclaim still
-running past its hold is no longer fenced, and its release logs ``history_fence_outlived`` at ERROR.
+running past its hold is no longer fenced, and its release logs ``history_fence_outlived`` at ERROR. Every hold is
+stamped and judged on the store's own clock (:attr:`service_kit.lakehouse.records.StoreRead.at`, the ``Date`` of the
+read before each write), never a pod's, so a holder's lapse does not depend on two pods' clocks agreeing.
 
 Every method is BLOCKING IO; callers threadpool it.
 """
@@ -27,7 +36,7 @@ import logging
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Final
 
@@ -55,8 +64,17 @@ class HistoryWork(StrEnum):
 
     #: Deletes versions: ``cleanup_old_versions`` in any of its callers.
     RECLAIM = "reclaim"
-    #: Writes a tag or a branch, each of which pins a version against a reclaim.
+    #: Writes a tag or moves a branch's ref, each of which pins a version against a reclaim.
     REFS = "refs"
+    #: Creates a branch: ref work no other branch create may share, since each judges the branch names the table holds.
+    BRANCH = "branch"
+
+
+def _excludes(held: HistoryWork, work: HistoryWork) -> bool:
+    """Whether a holder doing ``held`` refuses a take for ``work``: work of the other kind, or a second branch create."""
+    if held is work:
+        return work is HistoryWork.BRANCH
+    return HistoryWork.RECLAIM in (held, work)
 
 
 class Holder(BaseModel):
@@ -69,14 +87,14 @@ class Holder(BaseModel):
 
 
 class HistoryFence(BaseModel):
-    """The fence of the table ``uuid``: its live holders, all of one kind."""
+    """The fence of the table ``uuid``: its live holders, none of which excludes another."""
 
     uuid: str
     holders: list[Holder] = Field(default_factory=list)
 
 
 class HistoryFencedError(Exception):
-    """The table's history is held by work of the other kind, or by too many writers at once to join."""
+    """The table's history is held by work that excludes this take's, or by too many writers at once to join."""
 
 
 def _live(record: dict[str, object] | None, now: datetime) -> list[Holder]:
@@ -103,24 +121,24 @@ class TableHistory(BaseModel):
         """Hold the table's history for ``work``; the token :meth:`release` ends the hold with.
 
         Raises:
-            HistoryFencedError: Work of the other kind holds it, or the take lost every round to writers of its own kind.
+            HistoryFencedError: Work that excludes ``work`` holds it, or the take lost every round to writers it shares with.
             botocore.exceptions.ClientError: The store refused a read or a write.
         """
         for _ in range(_ATTEMPTS):
-            now = datetime.now(UTC)
-            read = records.read_json(self.control_root, self.storage_options, self.key)
-            holders = _live(read[0] if read else None, now)
-            if other := next((holder for holder in holders if holder.work is not work), None):
+            read = records.read_json_at(self.control_root, self.storage_options, self.key)
+            now = read.at
+            holders = _live(read.stored.record if read.stored else None, now)
+            if other := next((holder for holder in holders if _excludes(holder.work, work)), None):
                 raise HistoryFencedError(
                     f"a {other.work} holds this table's history until {other.expires_at.isoformat()}, so no {work} may start; retry once it ends"
                 )
             mine = Holder(token=uuid.uuid4().hex, work=work, taken_at=now, expires_at=now + HOLD)
             fence = HistoryFence(uuid=self.table_uuid, holders=[*holders, mine]).model_dump(mode="json")
             try:
-                if read is None:
+                if read.stored is None:
                     records.create_json(self.control_root, self.storage_options, self.key, fence)
                 else:
-                    records.replace_json(self.control_root, self.storage_options, self.key, fence, etag=read[1])
+                    records.replace_json(self.control_root, self.storage_options, self.key, fence, etag=read.stored.etag)
             except (records.RecordExistsError, records.RecordChangedError):
                 continue
             return mine.token
@@ -130,11 +148,11 @@ class TableHistory(BaseModel):
         """End the hold ``token`` names. Never raises: a hold this cannot end lapses after :data:`HOLD`."""
         try:
             for _ in range(_ATTEMPTS):
-                now = datetime.now(UTC)
-                read = records.read_json(self.control_root, self.storage_options, self.key)
-                if read is None:
+                read = records.read_json_at(self.control_root, self.storage_options, self.key)
+                now = read.at
+                if read.stored is None:
                     return
-                fence = HistoryFence.model_validate(read[0])
+                fence = HistoryFence.model_validate(read.stored.record)
                 mine = next((holder for holder in fence.holders if holder.token == token), None)
                 if mine is None:
                     log.warning("history_fence_hold_gone", extra={"table_uuid": self.table_uuid})
@@ -143,7 +161,7 @@ class TableHistory(BaseModel):
                     log.error("history_fence_outlived", extra={"table_uuid": self.table_uuid, "work": mine.work, "held_since": mine.taken_at.isoformat()})
                 kept = fence.model_copy(update={"holders": [holder for holder in fence.holders if holder.token != token and holder.expires_at > now]})
                 try:
-                    records.replace_json(self.control_root, self.storage_options, self.key, kept.model_dump(mode="json"), etag=read[1])
+                    records.replace_json(self.control_root, self.storage_options, self.key, kept.model_dump(mode="json"), etag=read.stored.etag)
                 except records.RecordChangedError:
                     continue
                 return
@@ -156,7 +174,7 @@ class TableHistory(BaseModel):
         """The table's history held for ``work`` while the block runs.
 
         Raises:
-            HistoryFencedError: Work of the other kind holds it; the block did not run.
+            HistoryFencedError: Work that excludes ``work`` holds it; the block did not run.
             botocore.exceptions.ClientError: The store refused the take.
         """
         token = self.take(work)

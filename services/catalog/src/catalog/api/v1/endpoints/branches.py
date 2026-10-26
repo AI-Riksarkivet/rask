@@ -23,11 +23,11 @@ from lance_namespace import (
 
 from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, StorageOptionsDep
 from catalog.api.pagination import ListLimit
-from catalog.api.security import CurrentToken
+from catalog.api.security import Caller, CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable
-from service_kit.control_emit import emit_control
+from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 
 
@@ -68,7 +68,7 @@ async def create_table_branch(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = dataplane.create_branch(table, so, body)
+    response = await run_in_threadpool(dataplane.create_branch, table, so, body)
     # AFTER the data-plane call, never before — the rule `namespaces.py` states: a change that did not
     # happen is never announced, so a refused create emits nothing.
     await emit_control(
@@ -133,7 +133,9 @@ async def delete_table_branch(
     """Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op.
 
     The disappearance is the half worth announcing: a console holding a branch list has no other way
-    to learn the branch is gone, and a reader that polls discovers it by a failing read.
+    to learn the branch is gone, and a reader that polls discovers it by a failing read. So EVERY branch the
+    delete removes is announced, each with the incarnation it was ([[LH-413]]): the branches nested inside the
+    named one go with it, and a delete that stops part-way still announces those it removed before stopping.
 
     Authorization alone governs it (``can_drop``): a branch holds the files it references against cleanup, so
     deleting one makes them reclaimable, which is history reclaim, and deletion protection guards dropping the
@@ -141,17 +143,27 @@ async def delete_table_branch(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    # The incarnation being deleted, read while it still exists: the name alone also names whatever branch
-    # is created under it next.
-    identifier = await run_in_threadpool(dataplane.branch_identifier, table.location, so, segments, body.name)
-    response = dataplane.delete_branch(table, so, body)
-    await emit_control(
-        control,
-        action="table_branch_deleted",
-        object_type="table",
-        object_id=fga.table_object(table.resolved.require_uuid()),
-        object_name=fga.canonical_object_id(segments),
-        actor=f"user:{token.subject}" if token is not None else None,
-        extra={"branch": body.name, **({dataplane.BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})},
-    )
-    return response
+    try:
+        removed = await run_in_threadpool(dataplane.delete_branch, table, so, body)
+    except dataplane.BranchDeleteStoppedError as stopped:
+        await _announce_removed(control, table, segments, token, stopped.removed)
+        raise
+    await _announce_removed(control, table, segments, token, removed)
+    return DeleteTableBranchResponse()
+
+
+async def _announce_removed(
+    control: ControlEmitter, table: DoorTable, segments: list[str], token: Caller | None, removed: list[dataplane.RemovedBranch]
+) -> None:
+    """One ``table_branch_deleted`` per branch removed, AFTER its delete: each names the incarnation it was, which the
+    name alone does not, since it also names whatever branch is created under it next."""
+    for branch in removed:
+        await emit_control(
+            control,
+            action="table_branch_deleted",
+            object_type="table",
+            object_id=fga.table_object(table.resolved.require_uuid()),
+            object_name=fga.canonical_object_id(segments),
+            actor=f"user:{token.subject}" if token is not None else None,
+            extra={"branch": branch.name, **({dataplane.BRANCH_IDENTIFIER_KEY: branch.identifier} if branch.identifier is not None else {})},
+        )

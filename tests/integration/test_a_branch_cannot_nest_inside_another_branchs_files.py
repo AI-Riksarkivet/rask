@@ -98,7 +98,16 @@ def _gc_door(client: TestClient, location: str) -> None:
     assert response.status_code in {200, 409}, response.text
 
 
-@pytest.mark.parametrize("reclaim", [pytest.param(_sweep, id="sweep"), pytest.param(_gc_door, id="maintenance-run")])
+def _version_delete(client: TestClient, location: str) -> None:
+    del location
+    response = client.post(f"/v1/table/{TABLE}/version/delete", json={"branch": "a", "ranges": [{"start_version": 1, "end_version": 2}]})
+    # Refused before anything is deleted: a reclaim of `a` would take `a/_versions`' manifests as its own history.
+    assert (response.status_code, response.json().get("code")) == (409, 19), response.text
+
+
+@pytest.mark.parametrize(
+    "reclaim", [pytest.param(_sweep, id="sweep"), pytest.param(_gc_door, id="maintenance-run"), pytest.param(_version_delete, id="version-delete")]
+)
 def test_a_reclaim_of_a_branch_leaves_the_branch_inside_it_readable(legacy: tuple[TestClient, str], reclaim) -> None:  # noqa: ANN001
     client, location = legacy
 
@@ -131,3 +140,34 @@ def test_deleting_a_branch_leaves_nothing_under_its_directory(
     # The described location is a `file://` URI; the directory is its path.
     tree_a = Path(urlsplit(location).path) / "tree" / "a"
     assert tree_a.exists() is fork, sorted(str(p) for p in tree_a.rglob("*"))
+
+
+def test_two_creates_of_nesting_names_on_one_table_never_both_land(legacy: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:
+    """[[LH-413]] ``n`` and ``n/m`` are two ref files no conditional write on a ref makes collide
+    (`lance_docs/lance/format/table/branch_tag.md` § Branch Metadata Path), so each create judging a listing the other has
+    not changed yet would land both. A rival create of ``n/m`` is sent while ``n``'s create is inside pylance."""
+    client, location = legacy
+    create_branch = lance.LanceDataset.create_branch
+    rival: list[tuple[int, int | None]] = []
+    # Set before the rival is sent, so a rival that reaches pylance itself sends no rival of its own.
+    raced: list[bool] = []
+
+    def _create_then_race(
+        self: lance.LanceDataset,
+        branch: str,
+        reference: int | str | tuple[str | None, int | None] | None = None,
+        storage_options: dict[str, str] | None = None,
+    ) -> lance.LanceDataset:
+        if not raced:
+            raced.append(True)
+            answered = client.post(f"/v1/table/{TABLE}/branches/create", json={"name": "n/m"})
+            rival.append((answered.status_code, answered.json().get("code")))
+        return create_branch(self, branch, reference, storage_options)
+
+    monkeypatch.setattr(lance.LanceDataset, "create_branch", _create_then_race)
+
+    answer = client.post(f"/v1/table/{TABLE}/branches/create", json={"name": "n"})
+
+    assert answer.status_code == 200, answer.text
+    assert rival == [(409, 14)], f"a create of a name nesting with one being created was not refused: {rival}"
+    assert sorted(name for name in lance.dataset(location).branches.list() if name.startswith("n")) == ["n"]

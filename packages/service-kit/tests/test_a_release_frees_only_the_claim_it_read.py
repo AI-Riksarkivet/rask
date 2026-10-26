@@ -19,7 +19,6 @@ has ended, since the door's backend call found the name free.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -41,17 +40,17 @@ def _resolves(_claim: LocationClaim) -> bool:
 def test_a_release_leaves_the_claim_a_hand_over_wrote_after_its_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = ClaimStore(control_root=str(tmp_path))
     location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves)
-    read = records.read_json
+    read = records.read_json_at
     handed_over: list[str] = []
 
-    def _read_then_hand_over(root_uri: str, storage_options: StorageOptions, key: str) -> tuple[dict[str, Any], str] | None:
+    def _read_then_hand_over(root_uri: str, storage_options: StorageOptions, key: str) -> records.StoreRead:
         found = read(root_uri, storage_options, key)
         if not handed_over:
             handed_over.append(key)
             location_claims.take(store, LOCATION, "ns$y", ["ns", "y"], previous="ns$x", is_gone=_resolves)
         return found
 
-    monkeypatch.setattr(records, "read_json", _read_then_hand_over)
+    monkeypatch.setattr(records, "read_json_at", _read_then_hand_over)
 
     released = location_claims.release(store, LOCATION, "ns$x")
 

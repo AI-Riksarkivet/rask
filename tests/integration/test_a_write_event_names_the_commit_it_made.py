@@ -19,8 +19,10 @@ Driven through the real catalog app on real pylance, and the event is captured o
 from __future__ import annotations
 
 import io
+import json
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,10 +32,13 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
+from lance.dataset import Branches
 from lance_namespace import connect
 
 from catalog.core.lineage_emit import HttpLineageEmitter
 from catalog.services import dataplane
+from lineage.models import parse_event
+from lineage.services.provenance import edges_of
 from service_kit.control_emit import CatalogControlEvent
 
 
@@ -60,8 +65,6 @@ def events(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> list[
     lock = threading.Lock()
 
     def _receive(request: httpx.Request) -> httpx.Response:
-        import json
-
         with lock:
             posted.append(json.loads(request.content))
         return httpx.Response(200)
@@ -325,3 +328,68 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
         ("table_dropped", table_uuid, namespace_uuid),
     ], control.named
     assert stamped == table_uuid.encode(), stamped
+
+
+def _incarnations(location: str) -> dict[str, str]:
+    """Each branch's incarnation as pylance records it: the last uuid of its ``branch_identifier`` chain."""
+    return {name: str(entry["branch_identifier"][-1][1]) for name, entry in lance.dataset(location).branches.list().items()}
+
+
+@pytest.mark.parametrize(
+    ("pinned_meanwhile", "status", "removed"),
+    [
+        pytest.param(False, 200, ["a/b", "a"], id="nested-ones-first"),
+        # A tag on `a` landing after the door's check and after `a/b` went: the delete stops at `a`, and `a/b` is gone.
+        pytest.param(True, 409, ["a/b"], id="a-pin-since-the-check-stops-it-part-way"),
+    ],
+)
+def test_a_branch_delete_announces_every_branch_it_removes_as_the_incarnation_it_was(
+    real_ns_client: TestClient, location: str, monkeypatch: pytest.MonkeyPatch, pinned_meanwhile: bool, status: int, removed: list[str]
+) -> None:
+    """[[LH-413]] Deleting ``a`` removes ``a/b`` with it ([[LH-203]]), so a console holding the branch list hears both, and
+    hears what went even when a pin made since the check stops the delete part-way."""
+    client = real_ns_client
+    control = _Control()
+    monkeypatch.setattr(client.app.state, "control_emitter", control, raising=False)
+    # Planted through pylance: the create door refuses a name nesting with another, so only a table made before that
+    # refusal carries the pair.
+    lance.dataset(location).create_branch("a")
+    lance.dataset(location).create_branch("a/b")
+    incarnations = _incarnations(location)
+    if pinned_meanwhile:
+        delete = Branches.delete
+
+        def _delete_then_pin(self: Branches, branch: str) -> None:
+            delete(self, branch)
+            if branch == "a/b":
+                lance.dataset(location).tags.create("pin", ("a", None))
+
+        monkeypatch.setattr(Branches, "delete", _delete_then_pin)
+
+    answer = client.post(f"/v1/table/{TABLE}/branches/delete", json={"name": "a"})
+
+    assert answer.status_code == status, answer.text
+    assert [(action, extra["branch"], extra.get("branch_identifier")) for action, extra in control.events] == [
+        ("table_branch_deleted", name, incarnations[name]) for name in removed
+    ], control.events
+
+
+def test_an_edge_names_the_incarnation_of_each_branch_it_joins(real_ns_client: TestClient, location: str, events: list[dict[str, Any]]) -> None:
+    """[[LH-413]] An edge reads ``src@feed`` into ``t@dev``; each ref is named with its incarnation, since a branch deleted
+    and created again under the name restarts its numbering. The event the catalog emits is the one lineage records."""
+    client = real_ns_client
+    created = client.post("/v1/table/lh214$src/create?mode=create", content=_ipc(_rows(7)), headers=ARROW)
+    assert created.status_code == 200, created.text
+    for table, branch in (("lh214$src", "feed"), (TABLE, BRANCH)):
+        assert client.post(f"/v1/table/{table}/branches/create", json={"name": branch}).status_code == 200
+    run = {"x-rask-run-id": "run-413", "x-rask-inputs": json.dumps([{"table": ["lh214", "src"], "version": 1, "branch": "feed"}])}
+    before = len(events)
+
+    answer = client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(9)), headers={**ARROW, **run})
+
+    assert answer.status_code == 200, answer.text
+    (written,) = events[before:]
+    edges = edges_of(parse_event(written), received_at=datetime.now(UTC))
+    identifiers = [(edge["in_branch"], edge["in_branch_identifier"], edge["out_branch"], edge["out_branch_identifier"]) for edge in edges]
+    source, target = _incarnations(str(created.json()["location"])), _incarnations(location)
+    assert identifiers == [("feed", source["feed"], BRANCH, target[BRANCH])], identifiers

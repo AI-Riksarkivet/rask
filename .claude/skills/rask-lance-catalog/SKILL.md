@@ -62,7 +62,9 @@ Two contracts stack here, and confusing them is how bugs happen:
   the claim it read with the same claim stamped `released_at`, under that claim's ETag, and never deletes the
   record ([[LH-458]], ADR 0172): a hand-over landing between its read and its write survives, and `holder` and
   `take` read a released claim as a free location. A holder that no
-  longer resolves to its location is taken over only after `LEASE` (15 min). Pinned by
+  longer resolves to its location is taken over only after `LEASE` (15 min), timed on the object store's clock: every
+  stamp and every lease is judged by the `Date` of the store's answer (`records.StoreRead.at`, ADR 0179), never a pod's
+  (`tests/integration/test_a_lease_is_timed_on_the_stores_clock.py`). Pinned by
   `tests/integration/test_concurrent_renames_leave_one_id_per_location.py` (with a drop, a recoverable drop and a
   deregister racing a rename, the rival landed after the door read its claim and as it acts) and
   `packages/service-kit/tests/test_a_release_frees_only_the_claim_it_read.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
@@ -704,7 +706,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
   `tags/update`, `branches/create`, publication's tag move, the erasure release's branch re-creation) holds the fence,
   one record per table uuid under `_history_fences/`; holders of one kind share it, the other kind is refused 409 code
-  14 (`DoorTable.history_held`), and a fenced sweep pass is `skipped="history_fenced"`. A hold lapses after 15 minutes.
+  14 (`DoorTable.history_held`), and a fenced sweep pass is `skipped="history_fenced"`. A branch create (the create door,
+  the erasure release's re-creation) holds the kind `branch`, which also excludes another branch create, so two creates
+  of nesting names on one table take turns and each judges a listing no other create changes (ADR 0179, [[LH-413]]). A
+  hold lapses after 15 minutes on the store's clock.
   Pinned by `services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py` and
   `tests/integration/test_no_reclaim_deletes_a_version_while_a_ref_is_written.py`.
 - **An erasure is an obligation a bring-your-own job fulfils and the catalog verifies** ([[LH-493]], ADR 0163).
@@ -960,7 +965,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   door refuses a layout segment (400) and a name that nests with an existing branch (409, code 19); a
   branch-maintain vend grants only `tree/<b>/{_versions,_transactions,_deletions,_indices,data}/*`
   and a branch-write vend only what a commit stages under `tree/<b>/` (`table_layout.WRITER_PUT_GLOBS`);
-  delete goes through nested branches deepest first, refused whole (409) when a branch outside them is
+  delete goes through nested branches deepest first, announcing each it removes as `table_branch_deleted` with its
+  incarnation ([[LH-413]]), refused whole (409) when a branch outside them is
   forked from one; every reclaim (the sweep's `nested_branch` gate,
   `maintenance/run`, `version/delete`) refuses a branch with another inside it; and the sweep lists
   branches from `_refs/branches`, never by walking `tree/`.

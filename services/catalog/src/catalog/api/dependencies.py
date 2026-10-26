@@ -26,7 +26,7 @@ from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBou
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor, ModeBVendor
-from catalog.services import object_uuids, table_claims, warehouses
+from catalog.services import dataplane, object_uuids, table_claims, warehouses
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
 from service_kit.control_events import CatalogControlEvent, ControlUuids
@@ -554,6 +554,21 @@ class ObjectUuids:
             return DatasetUuids(table_uuid=uuid)
         claims = table_claims.claim_store(self._settings)
         return await run_in_threadpool(partial(object_uuids.of_table, ns, claims, segments, location=location, uuid=uuid))
+
+    async def branch_identifier(self, segments: list[str], branch: str) -> str | None:
+        """The incarnation of the table's ``branch`` now, read off the location its name resolves to; ``None`` when unread."""
+        ns = await self._connection(segments) if segments else None
+        if ns is None:
+            return None
+        try:
+            resolved = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(self._settings), segments)
+        except Exception as exc:  # noqa: BLE001 — an unresolved input is an incarnation the event goes without
+            log.info("event_branch_identifier_unresolved", extra={"segments": segments, "error": str(exc)[:300]})
+            return None
+        if resolved.location is None:
+            return None
+        # `dataplane.branch_identifier` reads best-effort and answers None on any failure, so this raises nothing.
+        return await run_in_threadpool(dataplane.branch_identifier, resolved.location, self._settings.storage_options(plane="data"), segments, branch)
 
     async def namespace(self, segments: list[str]) -> ControlUuids:
         """A namespace's uuid and its parent namespace's."""

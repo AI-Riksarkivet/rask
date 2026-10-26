@@ -272,6 +272,9 @@ def catalog_facet(producer: str, *, impl: str, name: str, warehouse_uri: str = "
 #: rask's own dataset facet: the ref an input was read on, and the uuids the catalog minted for the dataset's table and
 #: its namespace. Custom, so it points at ``BaseFacet`` (:func:`custom_facet`).
 LANCE_FACET: Final = "lance"
+#: The ``lance`` facet's key for the incarnation of the ref it names: the last uuid of pylance's ``branch_identifier`` chain,
+#: on a run's facet for the ref it wrote and on an input's for the ref it was read on ([[LH-413]]).
+BRANCH_IDENTIFIER: Final = "branchIdentifier"
 _TABLE_UUID: Final = "tableUuid"
 _NAMESPACE_UUID: Final = "namespaceUuid"
 

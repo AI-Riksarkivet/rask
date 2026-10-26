@@ -55,6 +55,7 @@ from service_kit.lakehouse.schema import SchemaFields
 from service_kit.lakehouse.subjects import is_person_subject
 from service_kit.lakehouse.warehouse_registry import is_safe_project
 from service_kit.openlineage import (
+    BRANCH_IDENTIFIER,
     DATASET_EVENT_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
     LANCE_FACET,
@@ -168,6 +169,10 @@ class UuidReader(Protocol):
 
     async def table(self, segments: list[str], *, location: str | None = None, uuid: str | None = None) -> DatasetUuids: ...
 
+    async def branch_identifier(self, segments: list[str], branch: str) -> str | None:
+        """The incarnation of the table's ``branch`` now (``dataplane.branch_identifier``), or ``None``. Never raises."""
+        ...
+
 
 class InputPin(BaseModel):
     """A source dataset an emitted write derives from, with the EXACT version it consumed (or ``None``).
@@ -195,6 +200,9 @@ class InputRef(NamedTuple):
     version: int | None
     branch: str | None = None
     uuids: DatasetUuids = DatasetUuids()
+    #: The incarnation of ``branch`` when the event was built ([[LH-413]]): a branch deleted and created again under the
+    #: name restarts its numbering, so ``(table, branch, version)`` names two commits without it.
+    branch_identifier: str | None = None
 
 
 async def input_refs(pins: list[InputPin] | None, *, uuids: UuidReader) -> list[InputRef] | None:
@@ -206,6 +214,7 @@ async def input_refs(pins: list[InputPin] | None, *, uuids: UuidReader) -> list[
             pin.version,
             pin.branch,
             await uuids.table(pin.segments, uuid=pin.uuid),
+            await uuids.branch_identifier(pin.segments, pin.branch) if pin.branch is not None else None,
         )
         for pin in pins or []
     ]
@@ -232,7 +241,8 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
             }
         }
     if ref.branch is not None:
-        dataset.setdefault("facets", {})["lance"] = custom_facet(_PRODUCER, ref=ref.branch)
+        identifier = {BRANCH_IDENTIFIER: ref.branch_identifier} if ref.branch_identifier is not None else {}
+        dataset.setdefault("facets", {})["lance"] = custom_facet(_PRODUCER, ref=ref.branch, **identifier)
     return with_dataset_uuids(dataset, ref.uuids, producer=_PRODUCER)
 
 
@@ -365,7 +375,7 @@ def build_write_event(
         # UUID for each create, and it differs across a delete-and-recreate in the same second while
         # `parentVersion` and `createAt` are identical (measured on 12.0.0). Main has no identifier.
         if branch_identifier:
-            lance_fields["branchIdentifier"] = branch_identifier
+            lance_fields[BRANCH_IDENTIFIER] = branch_identifier
     # THE TENANT, and it is WATCH targeting's only key. `notifications` reads
     # `run.facets.lance.project` (`api/lineage_events.py::project_id`) and its fan-out skips the
     # watcher loop ENTIRELY when it is absent — so while this facet carried only operation/version,

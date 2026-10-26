@@ -256,7 +256,8 @@ class DoorTable:
         is written, and no ref is written while a reclaim runs ([[LH-308]], :mod:`service_kit.lakehouse.history_fences`).
 
         Raises:
-            ConcurrentModificationError: Work of the other kind holds the history; the block did not run.
+            ConcurrentModificationError: Work that excludes ``work`` holds the history (another kind, or another branch
+                create); the block did not run.
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
         history = history_fences.TableHistory(

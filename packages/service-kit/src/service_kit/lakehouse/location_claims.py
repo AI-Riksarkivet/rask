@@ -44,6 +44,11 @@ another name, so a rename landing between the door's read and its act cannot mak
 The door lifts its fence once it has acted (:func:`lift_fence`); a fence its request never lifted lapses after
 :data:`LEASE`.
 
+A LEASE IS TIMED ON THE STORE'S CLOCK ([[LH-413]]). ``claimed_at``, a fence's ``at`` and ``released_at`` are stamped
+with the clock of the read each write follows (:attr:`service_kit.lakehouse.records.StoreRead.at`, the store's
+``Date``), and a lease is judged against the clock of the read that finds the claim, so a claim one pod wrote is aged by
+the same clock on every pod that reads it.
+
 A CLAIM WHOSE HOLDER IS GONE (a crash between a take and the attach, or a cascade drop, which destroys
 its tables inside one native call) would wedge its location forever, so a taker may replace it once the
 caller's ``is_gone`` predicate says the holder no longer resolves to the location. The predicate is the
@@ -57,7 +62,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from pydantic import BaseModel, Field
 
@@ -73,10 +78,9 @@ _PREFIX = "_locations"
 #: never overtaken, and short enough that a crashed one frees its location the same day.
 LEASE = timedelta(minutes=15)
 
-#: Rounds :func:`take` spends when the record disappears between its create and its read. No function here
-#: deletes one, so only a delete from outside them does that; each step is arbitrated by the store, and the
-#: bound turns a livelock into an error rather than a hang.
-_TAKE_ATTEMPTS = 3
+#: Read-and-write rounds :func:`take` and :func:`release` spend against other writers of one claim (eight renames of one
+#: source racing, [[LH-204]]); each round is arbitrated by the store, and the bound turns a livelock into an error.
+_TAKE_ATTEMPTS = 8
 
 
 class ClaimStore(BaseModel):
@@ -191,8 +195,16 @@ def read(store: ClaimStore, location: str) -> ClaimRead | None:
     Raises:
         ValueError: The stored record is not a claim (pydantic's ``ValidationError`` is one).
     """
-    found = records.read_json(store.control_root, store.storage_options, claim_key(location))
-    return None if found is None else ClaimRead(claim=LocationClaim.model_validate(found[0]), etag=found[1])
+    found = records.read_json_at(store.control_root, store.storage_options, claim_key(location))
+    if found.stored is None:
+        return None
+    return ClaimRead(claim=LocationClaim.model_validate(found.stored.record), etag=found.stored.etag)
+
+
+def _store_now(store: ClaimStore, location: str) -> datetime:
+    """The store's clock now, read off the location's key: what a write acting on an earlier read stamps and judges by,
+    since that read can be as old as the request that made it."""
+    return records.read_json_at(store.control_root, store.storage_options, claim_key(location)).at
 
 
 def _taken(
@@ -206,13 +218,14 @@ def _taken(
     token: str | None,
     uuid: str | None,
     is_kept: Callable[[LocationClaim], bool],
+    now: datetime,
 ) -> LocationClaim:
-    """The claim ``table`` holds once it takes ``location`` from ``current``; :func:`take` says when a take succeeds.
+    """The claim ``table`` holds once it takes ``location`` from ``current``, judged at the store's clock ``now``; :func:`take`
+    says when a take succeeds.
 
     Raises:
         LocationHeldError: Another table holds the location, or another request is acting on its holder.
     """
-    now = datetime.now(UTC)
 
     def _claim(carried: str | None) -> LocationClaim:
         return LocationClaim(location=decoded_path(location), table=table, segments=list(segments), uuid=carried, claimed_at=now, token=token)
@@ -272,29 +285,26 @@ def take(
         records.RecordChangedError: The claim kept changing under the hand-over.
     """
     key = claim_key(location)
-
-    def _hand_over(raw: dict[str, object]) -> dict[str, object]:
-        # Re-judged on every round: `mutate_json` re-applies this to a claim another taker just wrote.
-        current = LocationClaim.model_validate(raw)
-        held = _taken(current, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=uuid, is_kept=is_kept)
-        return raw if held is current else held.model_dump(mode="json")
-
+    # Read first, so even a create is stamped on the store's clock; each round re-judges the claim another taker wrote.
     for _ in range(_TAKE_ATTEMPTS):
-        fresh = LocationClaim(
-            location=decoded_path(location), table=table, segments=list(segments), uuid=uuid, claimed_at=datetime.now(UTC), token=token
-        ).model_dump(mode="json")
+        found = records.read_json_at(store.control_root, store.storage_options, key)
+        if found.stored is None:
+            fresh = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), uuid=uuid, claimed_at=found.at, token=token)
+            try:
+                records.create_json(store.control_root, store.storage_options, key, fresh.model_dump(mode="json"))
+            except records.RecordExistsError:
+                continue
+            return fresh
+        current = LocationClaim.model_validate(found.stored.record)
+        held = _taken(current, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=uuid, is_kept=is_kept, now=found.at)
+        if held is current:
+            return current
         try:
-            records.create_json(store.control_root, store.storage_options, key, fresh)
-        except records.RecordExistsError:
-            pass
-        else:
-            return LocationClaim.model_validate(fresh)
-        try:
-            held = records.mutate_json(store.control_root, store.storage_options, key, _hand_over)
-        except records.RecordMissingError:
-            continue  # removed between the create and the read; create again
-        return LocationClaim.model_validate(held)
-    raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept appearing and disappearing across {_TAKE_ATTEMPTS} attempts")
+            records.replace_json(store.control_root, store.storage_options, key, held.model_dump(mode="json"), etag=found.stored.etag)
+        except records.RecordChangedError:
+            continue
+        return held
+    raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
 
 
 def _write_over(store: ClaimStore, location: str, read_as: ClaimRead | None, claim: LocationClaim) -> None:
@@ -333,10 +343,13 @@ def hand_over(
         LocationHeldError: Another table holds the location, or another request is acting on its holder.
         ClaimChangedError: The claim changed since ``read_as``.
     """
+    now = _store_now(store, location)
     if read_as is None:
-        held = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), claimed_at=datetime.now(UTC), token=token)
+        held = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), claimed_at=now, token=token)
     else:
-        held = _taken(read_as.claim, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=None, is_kept=lambda _claim: False)
+        held = _taken(
+            read_as.claim, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=None, is_kept=lambda _claim: False, now=now
+        )
     _write_over(store, location, read_as, held)
     return held
 
@@ -355,7 +368,7 @@ def fence(
         LocationHeldError: Another table holds the location.
         ClaimChangedError: The claim changed since ``read_as``, or another request is acting on ``table``.
     """
-    now = datetime.now(UTC)
+    now = _store_now(store, location)
     mark = ClaimFence(token=token, at=now)
     current = read_as.claim if read_as is not None else None
     if current is not None and current.fenced_against(token, now):
@@ -392,7 +405,7 @@ def lift_fence(store: ClaimStore, location: str, token: str) -> None:
 
 
 class _NotHeld(Exception):
-    """The claim a release read is not its table's to release."""
+    """The claim a lift read carries no fence of its request's."""
 
 
 def release(store: ClaimStore, location: str, table: str) -> bool:
@@ -407,15 +420,19 @@ def release(store: ClaimStore, location: str, table: str) -> bool:
         records.RecordChangedError: The claim kept changing under the release.
     """
 
-    def _released(raw: dict[str, object]) -> dict[str, object]:
-        # Re-judged on every round, as the hand-over is: `mutate_json` re-applies this to a claim written since the read.
-        current = LocationClaim.model_validate(raw)
+    key = claim_key(location)
+    # Re-judged on every round, as a take is: a claim written since the read is judged afresh.
+    for _ in range(_TAKE_ATTEMPTS):
+        found = records.read_json_at(store.control_root, store.storage_options, key)
+        if found.stored is None:
+            return False
+        current = LocationClaim.model_validate(found.stored.record)
         if current.released_at is not None or current.table != table:
-            raise _NotHeld
-        return current.model_copy(update={"released_at": datetime.now(UTC)}).model_dump(mode="json")
-
-    try:
-        records.mutate_json(store.control_root, store.storage_options, claim_key(location), _released)
-    except (records.RecordMissingError, _NotHeld):
-        return False
-    return True
+            return False
+        released = current.model_copy(update={"released_at": found.at}).model_dump(mode="json")
+        try:
+            records.replace_json(store.control_root, store.storage_options, key, released, etag=found.stored.etag)
+        except records.RecordChangedError:
+            continue
+        return True
+    raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept changing across {_TAKE_ATTEMPTS} attempts")

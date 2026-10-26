@@ -20545,7 +20545,7 @@
     },
     "/v1/table/{id}/branches/delete": {
       "post": {
-        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.\n\nThe disappearance is the half worth announcing: a console holding a branch list has no other way\nto learn the branch is gone, and a reader that polls discovers it by a failing read.\n\nAuthorization alone governs it (``can_drop``): a branch holds the files it references against cleanup, so\ndeleting one makes them reclaimable, which is history reclaim, and deletion protection guards dropping the\ntable, not its history (ADR 0150).",
+        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.\n\nThe disappearance is the half worth announcing: a console holding a branch list has no other way\nto learn the branch is gone, and a reader that polls discovers it by a failing read. So EVERY branch the\ndelete removes is announced, each with the incarnation it was ([[LH-413]]): the branches nested inside the\nnamed one go with it, and a delete that stops part-way still announces those it removed before stopping.\n\nAuthorization alone governs it (``can_drop``): a branch holds the files it references against cleanup, so\ndeleting one makes them reclaimable, which is history reclaim, and deletion protection guards dropping the\ntable, not its history (ADR 0150).",
         "operationId": "delete_table_branch_v1_table__id__branches_delete_post",
         "parameters": [
           {

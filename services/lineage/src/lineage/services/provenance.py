@@ -64,7 +64,7 @@ from service_kit.lancekit.catalog_client import catalog_api_client, request_head
 from service_kit.lancekit.filters import in_lists, sql_literal
 from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from service_kit.lancekit.writer import RestCatalogWriteTransport
-from service_kit.openlineage import dataset_uuids
+from service_kit.openlineage import BRANCH_IDENTIFIER, dataset_uuids
 
 
 log = logging.getLogger(__name__)
@@ -110,7 +110,9 @@ FEED_SCHEMA: Final = pa.schema(
 #: One row per (run, input, output) a successful run asserts. `in_table` and `out_table` are the dataset's key under
 #: :func:`edge_identity`: a governed table's uuid, so a rename keeps its edges ([[LH-522]]); an external source's
 #: namespace-qualified name, so an external input can never name a governed table's edges ([[LIN-3]]). `in_name` and
-#: `out_name` are the names the event used.
+#: `out_name` are the names the event used. A branch is named by its ref and by the incarnation of that ref
+#: (`in_branch_identifier`, `out_branch_identifier`, the last uuid of pylance's `branch_identifier`), since a branch
+#: deleted and created again under one name restarts its numbering ([[LH-413]]); both are null on main.
 EDGE_SCHEMA: Final = pa.schema(
     [
         pa.field("edge_key", pa.string(), nullable=False, metadata=_PRIMARY_KEY),
@@ -121,10 +123,12 @@ EDGE_SCHEMA: Final = pa.schema(
         pa.field("in_name", pa.string()),
         pa.field("in_version", pa.int64()),
         pa.field("in_branch", pa.string()),
+        pa.field("in_branch_identifier", pa.string()),
         pa.field("out_table", pa.string(), nullable=False),
         pa.field("out_name", pa.string()),
         pa.field("out_version", pa.int64()),
         pa.field("out_branch", pa.string()),
+        pa.field("out_branch_identifier", pa.string()),
         pa.field("event_time", pa.string()),
         pa.field("received_at", pa.timestamp("us", tz="UTC"), nullable=False),
     ]
@@ -209,6 +213,13 @@ def _branch_of(dataset: Dataset) -> str | None:
     return ref if isinstance(ref, str) and ref else None
 
 
+def _branch_identifier_of(dataset: Dataset) -> str | None:
+    """The incarnation of the ref an input was read on, from the catalog's ``lance`` dataset facet; ``None`` on main."""
+    facet = dataset.facet("lance")
+    identifier = facet.get(BRANCH_IDENTIFIER) if facet else None
+    return identifier if isinstance(identifier, str) and identifier else None
+
+
 def _edge_key(*parts: object) -> str:
     return hashlib.sha256(json.dumps(parts, separators=(",", ":")).encode()).hexdigest()
 
@@ -277,10 +288,12 @@ def edges_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> list[d
                     "in_name": source.lineage_name,
                     "in_version": in_version,
                     "in_branch": in_branch,
+                    "in_branch_identifier": _branch_identifier_of(source) if in_branch is not None else None,
                     "out_table": out_table,
                     "out_name": output.lineage_name,
                     "out_version": out_version,
                     "out_branch": event.write_ref,
+                    "out_branch_identifier": event.write_ref_identifier,
                     "event_time": event.event_time,
                     "received_at": received_at,
                 }

@@ -53,7 +53,6 @@ from lance_namespace import (
     DeleteFromTableRequest,
     DeleteFromTableResponse,
     DeleteTableBranchRequest,
-    DeleteTableBranchResponse,
     DeleteTableTagRequest,
     DeleteTableTagResponse,
     DeregisterTableRequest,
@@ -106,7 +105,7 @@ from lance_namespace import (
     UpdateTableTagRequest,
     UpdateTableTagResponse,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from catalog.api.pagination import paginate
 from catalog.core import encoding, manifest_bytes, provenance_guard
@@ -3512,8 +3511,7 @@ def create_branch(table: table_claims.DoorTable, so: StorageOptions, req: Create
     — ``OSError("Encountered internal error. Please file a bug report ... Clone operation should not
     enter build_manifest.")`` — which is neither a stable discriminator nor an honest thing to pattern
     match: the day upstream fixes that panic, a matcher keyed on it silently reports Internal again.
-    So the door reads the branch list, and confirms by RE-READING when the create still fails, which
-    also answers the create/create race the pre-check alone would lose.
+    So the door reads the branch list, and confirms by RE-READING when the create still fails.
     """
     # Names the backend cannot use are refused BEFORE the listing read: `main` is absent from
     # `branches.list()` (the default ref is implicit), so the collision check below cannot see it.
@@ -3522,33 +3520,56 @@ def create_branch(table: table_claims.DoorTable, so: StorageOptions, req: Create
     # `main` is a ref every table has and no branch list names (`lance_docs/lance/format/table/branch_tag.md` "Branch Name"),
     # so a source spelled `main` is main itself.
     req.from_branch = recorded_branch(req.from_branch)
-    dataset = table.open(so)
-    branches = dataset.branches.list()
-    if req.name in branches:
-        raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists")
-    refuse_a_branch_name_that_nests_with_another(req.name, branches)
-    # THE SOURCE IS ESTABLISHED BY READING TOO, and here the message leaves no choice: pylance renders
-    # a missing source BRANCH and a missing source VERSION with the same object-store text, so a
-    # classifier reading it alone answers 11 for a branch that does not exist — the wrong code, and a
-    # caller sent hunting a version when the branch is what is absent. With no `from_version` at all it
-    # renders differently again and matches nothing, falling through as Internal 18.
-    if req.from_branch is not None and req.from_branch not in branches:
-        raise TableBranchNotFoundError(f"source branch {req.from_branch!r} not found")
     # The residual version failure belongs to the SOURCE, so name that — not the branch being created,
     # which exists nowhere yet and tells the caller nothing about what was missing.
     source = req.from_branch if req.from_branch is not None else MAIN_BRANCH
-    try:
-        with table.history_held(HistoryWork.REFS), _ref_errors("branch", source, invalid_name=req.name):
-            dataset.create_branch(req.name, _branch_reference(req))
-    except OSError:
-        if req.name in table.open(so).branches.list():
-            raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists") from None
-        raise
+    # JUDGED INSIDE THE TABLE'S BRANCH-CREATE HOLD ([[LH-413]]): `a` and `a/b` are two ref files no write on a ref makes
+    # collide, so two creates of nesting names each passed a listing the other had not yet changed. The hold excludes
+    # every other branch create on the table, so the listing judged here is the one this create commits against.
+    with table.history_held(HistoryWork.BRANCH):
+        dataset = table.open(so)
+        branches = dataset.branches.list()
+        if req.name in branches:
+            raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists")
+        refuse_a_branch_name_that_nests_with_another(req.name, branches)
+        # THE SOURCE IS ESTABLISHED BY READING TOO, and here the message leaves no choice: pylance renders
+        # a missing source BRANCH and a missing source VERSION with the same object-store text, so a
+        # classifier reading it alone answers 11 for a branch that does not exist — the wrong code, and a
+        # caller sent hunting a version when the branch is what is absent. With no `from_version` at all it
+        # renders differently again and matches nothing, falling through as Internal 18.
+        if req.from_branch is not None and req.from_branch not in branches:
+            raise TableBranchNotFoundError(f"source branch {req.from_branch!r} not found")
+        try:
+            with _ref_errors("branch", source, invalid_name=req.name):
+                dataset.create_branch(req.name, _branch_reference(req))
+        except OSError:
+            if req.name in table.open(so).branches.list():
+                raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists") from None
+            raise
     return CreateTableBranchResponse()
 
 
-def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableBranchRequest) -> DeleteTableBranchResponse:
-    """Delete a branch from the table, and every branch whose directory lies inside its own ([[LH-203]]).
+class RemovedBranch(BaseModel):
+    """One branch a delete removed: its name, and the incarnation it was, read before anything was deleted."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    identifier: str | None
+
+
+class BranchDeleteStoppedError(InvalidTableStateError):
+    """A branch delete stopped part-way: a pin made since its check refused one of the branches it was removing."""
+
+    def __init__(self, message: str, removed: Sequence[RemovedBranch]) -> None:
+        super().__init__(message)
+        #: What it removed before it stopped, which is gone whatever the request answers.
+        self.removed = list(removed)
+
+
+def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableBranchRequest) -> list[RemovedBranch]:
+    """Delete a branch from the table, and every branch whose directory lies inside its own ([[LH-203]]); every branch
+    it removed, the nested ones first, each with its identifier (so the door announces each, [[LH-413]]).
 
     THROUGH THE NESTED BRANCHES FIRST. Lance keeps a directory another branch lives in, so deleting
     ``a`` while ``a/b`` exists removed only ``a``'s ref and left ``tree/a``'s manifests, transactions and
@@ -3587,19 +3608,20 @@ def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: Delete
             f"branch {req.name!r} cannot be deleted: tag {', '.join(repr(t) for t in pins)} names a version on it or on a branch inside it, and a "
             "tag pins its branch. Delete or move the tag first. Nothing was deleted"
         )
-    deleted: list[str] = []
+    removed: list[RemovedBranch] = []
     for name in doomed:
         try:
             with _ref_errors("branch", name):
                 dataset.branches.delete(name)
         except TableBranchAlreadyExistsError as exc:
             # The ref-conflict marker here is a pin made after the read above, not a name collision.
-            raise InvalidTableStateError(
+            raise BranchDeleteStoppedError(
                 f"deleting branch {req.name!r} stopped at {name!r}: a branch forked from it or a tag naming it since the check pins it. "
-                f"Deleted before stopping: {deleted}"
+                f"Deleted before stopping: {[branch.name for branch in removed]}",
+                removed,
             ) from exc
-        deleted.append(name)
-    return DeleteTableBranchResponse()
+        removed.append(RemovedBranch(name=name, identifier=identifier_of(listed[name])))
+    return removed
 
 
 def _forked_from(name: str, forks: Sequence[str]) -> InvalidTableStateError:

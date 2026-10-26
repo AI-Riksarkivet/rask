@@ -12,7 +12,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lineage_kit.signing import SIGNATURE_FACET, RefusalReason
-from service_kit.openlineage import static_event_id
+from service_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, static_event_id
 
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
@@ -541,6 +541,22 @@ class RunEvent(BaseModel):
         recorded before the ref existed carries none, and a literal would make them all read as some other
         ref.
         """
-        lance = (self.run.facets or {}).get("lance")
-        ref = lance.get("ref") if isinstance(lance, dict) else None
+        ref = self._run_lance_facet().get("ref")
         return str(ref) if ref else None
+
+    @property
+    def write_ref_identifier(self) -> str | None:
+        """The incarnation of :attr:`write_ref`, from the ``lance`` run facet (``branchIdentifier``); ``None`` on main.
+
+        A branch deleted and created again under one name restarts its numbering, so ``(table, ref, N)`` names two
+        commits until the incarnation is named beside it ([[LH-413]]).
+        """
+        if self.write_ref is None:
+            return None
+        identifier = self._run_lance_facet().get(BRANCH_IDENTIFIER)
+        return str(identifier) if identifier else None
+
+    def _run_lance_facet(self) -> dict[str, Any]:
+        """The run's ``lance`` facet, or an empty one when it carries none."""
+        lance = (self.run.facets or {}).get(LANCE_FACET)
+        return lance if isinstance(lance, dict) else {}

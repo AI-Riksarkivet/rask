@@ -2702,7 +2702,9 @@ export interface paths {
          * @description Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op.
          *
          *     The disappearance is the half worth announcing: a console holding a branch list has no other way
-         *     to learn the branch is gone, and a reader that polls discovers it by a failing read.
+         *     to learn the branch is gone, and a reader that polls discovers it by a failing read. So EVERY branch the
+         *     delete removes is announced, each with the incarnation it was ([[LH-413]]): the branches nested inside the
+         *     named one go with it, and a delete that stops part-way still announces those it removed before stopping.
          *
          *     Authorization alone governs it (``can_drop``): a branch holds the files it references against cleanup, so
          *     deleting one makes them reclaimable, which is history reclaim, and deletion protection guards dropping the
