@@ -220,11 +220,11 @@ export interface paths {
          * Read Access Tuples
          * @description One page of the raw tuple store, estate-admin gated.
          *
-         *     Filter combos follow OpenFGA Read's contract — the object side must carry at least a TYPE whenever any
-         *     filter is sent: ``object_type`` alone (whole-type scan), ``object`` alone (one object's tuples),
-         *     ``user`` combined with either (that subject's tuples there). A user-only filter is a 400 — OpenFGA's
-         *     Read API cannot answer it (add ``object_type`` or ``object``; per-subject enumeration across all types
-         *     is a ListObjects question, not a Read). No filter reads the whole store, paginated.
+         *     Each filter is one OpenFGA's Read answers: ``object`` alone (one object's tuples), ``user`` with ``object`` or
+         *     ``object_type`` (that subject's tuples on the object, or on the objects of the type), or no filter (the whole store,
+         *     paginated). Read refuses a filter naming no object type, and one naming a type with neither an object id nor a user
+         *     (OpenFGA v1.18.3), and OpenFGA's refusal would reach the caller as a 503, so ``user`` alone and ``object_type`` alone
+         *     are a 400 here, naming the half to add.
          */
         get: operations["read_access_tuples_management_v1_access_tuples_get"];
         put?: never;
@@ -9311,7 +9311,7 @@ export interface operations {
     read_access_tuples_management_v1_access_tuples_get: {
         parameters: {
             query?: {
-                /** @description scan one whole type (e.g. 'table') */
+                /** @description with user=, that subject's tuples on the objects of this type (e.g. 'table') */
                 object_type?: string | null;
                 /** @description filter by subject (bare id = user:<id>) */
                 user?: string | null;

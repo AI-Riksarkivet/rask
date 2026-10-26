@@ -223,7 +223,7 @@ router = APIRouter(prefix="/management/v1/access", tags=["access"], dependencies
 async def read_access_tuples(
     client: EstateFgaClient,
     token: CurrentToken,
-    object_type: Annotated[str | None, Query(description="scan one whole type (e.g. 'table')")] = None,
+    object_type: Annotated[str | None, Query(description="with user=, that subject's tuples on the objects of this type (e.g. 'table')")] = None,
     user: Annotated[str | None, Query(description="filter by subject (bare id = user:<id>)")] = None,
     object: Annotated[str | None, Query(description="filter by one full object ('table:<uuid>', as OpenFGA holds a table)")] = None,
     page_size: Annotated[int | None, Query(ge=1, le=_MAX_PAGE_SIZE)] = None,
@@ -231,22 +231,27 @@ async def read_access_tuples(
 ) -> AccessTuplesPage:
     """One page of the raw tuple store, estate-admin gated.
 
-    Filter combos follow OpenFGA Read's contract — the object side must carry at least a TYPE whenever any
-    filter is sent: ``object_type`` alone (whole-type scan), ``object`` alone (one object's tuples),
-    ``user`` combined with either (that subject's tuples there). A user-only filter is a 400 — OpenFGA's
-    Read API cannot answer it (add ``object_type`` or ``object``; per-subject enumeration across all types
-    is a ListObjects question, not a Read). No filter reads the whole store, paginated.
+    Each filter is one OpenFGA's Read answers: ``object`` alone (one object's tuples), ``user`` with ``object`` or
+    ``object_type`` (that subject's tuples on the object, or on the objects of the type), or no filter (the whole store,
+    paginated). Read refuses a filter naming no object type, and one naming a type with neither an object id nor a user
+    (OpenFGA v1.18.3), and OpenFGA's refusal would reach the caller as a 503, so ``user`` alone and ``object_type`` alone
+    are a 400 here, naming the half to add.
     """
     if object is not None:
         obj_filter: str | None = _validated_object(object)
     elif object_type is not None:
         if object_type not in _model_types():
             raise InvalidInputError(f"{object_type!r} is not a type the authorization model defines")
+        if user is None:
+            raise InvalidInputError(
+                "a type-only filter is not supported: OpenFGA's Read API needs an object id or a user beside an "
+                "object type — add user= (that subject's tuples of this type) or object= (one object's tuples)"
+            )
         obj_filter = f"{object_type}:"
     elif user is not None:
         raise InvalidInputError(
             "a user-only filter is not supported: OpenFGA's Read API requires an object type whenever a "
-            "tuple filter is sent — add object_type= (whole-type scan) or object= (one object)"
+            "tuple filter is sent — add object_type= (that subject's tuples of one type) or object= (one object's tuples)"
         )
     else:
         obj_filter = None  # no filter at all → the whole store, paginated

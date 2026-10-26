@@ -2,12 +2,12 @@
 
 Drives the handlers directly (no TestClient) with fake settings + monkeypatched ``fga`` wrappers,
 mirroring ``test_events_endpoint.py``. Pins the frozen contract: the ``/management/v1/events``-style estate gate
-(``can_observe_events`` on the fixed root object), the OpenFGA Read filter combos (object type REQUIRED
-whenever any tuple filter is sent — a user-only filter is a clean 400), pagination pass-through, the
+(``can_observe_events`` on the fixed root object), pagination pass-through, the
 model-true write validation (only directly-assignable relations; a derived ``can_*`` write must never
 reach OpenFGA where its 400 would be swallowed as idempotent success), and the write/delete audit on top
 of the gate's allow. Relation/type validation runs against the REAL compiled model.json (never a fake),
-the ``test_fga_model_contract`` posture.
+the ``test_fga_model_contract`` posture. The read door's filters are pinned against a real OpenFGA, by
+``services/catalog/tests/test_the_tuple_browser_answers_only_a_filter_openfga_reads.py``.
 """
 
 from __future__ import annotations
@@ -160,52 +160,11 @@ def test_every_access_route_is_covered_by_that_gate() -> None:
     assert not ungated, f"these access routes do not clear the estate gate: {ungated}"
 
 
-# ── read filters (OpenFGA Read: object type required whenever a tuple filter is sent) ─────────────────
-
-
-def test_object_type_only_scans_the_whole_type(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen, response = _read(monkeypatch, object_type="table")
-    assert seen["obj"] == "table:" and seen["user"] is None
-    assert [t.user for t in response.tuples] == ["user:dex~alice"]
-    assert response.continuation == "tok-next"
-
-
-def test_full_object_filter_passes_verbatim(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen, _ = _read(monkeypatch, object="table:db1$t")
-    assert seen["obj"] == "table:db1$t" and seen["user"] is None
-
-
-def test_user_plus_object_type_qualifies_the_bare_subject(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen, _ = _read(monkeypatch, user="dex~alice", object_type="namespace")
-    assert seen["user"] == "user:dex~alice" and seen["obj"] == "namespace:"
-
-
-def test_qualified_userset_filter_passes_verbatim(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    # An already-qualified subject/userset must NOT be double-prefixed (user:team:… would never match).
-    seen, _ = _read(monkeypatch, user="team:acme#member", object_type="table")
-    assert seen["user"] == "team:acme#member"
-
-
-def test_user_only_filter_is_a_400_explaining_why(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
-    with pytest.raises(InvalidInputError, match="object type"):
-        asyncio.run(ep.read_access_tuples(client=_fga_client(), token=None, user="dex~alice"))
-
-
-def test_no_filter_reads_the_whole_store(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen, _ = _read(monkeypatch)
-    assert seen["obj"] is None and seen["user"] is None
-
-
-def test_unknown_object_type_is_a_400(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
-    with pytest.raises(InvalidInputError, match="gizmo"):
-        asyncio.run(ep.read_access_tuples(client=_fga_client(), token=None, object_type="gizmo"))
-
-
 # ── pagination ────────────────────────────────────────────────────────────────────────────────────────
 
 
 def test_pagination_params_pass_through_and_token_returns(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen, response = _read(monkeypatch, object_type="table", page_size=25, continuation="tok-prev")
+    seen, response = _read(monkeypatch, page_size=25, continuation="tok-prev")
     assert seen["page_size"] == 25 and seen["continuation_token"] == "tok-prev"
     assert response.continuation == "tok-next"
 

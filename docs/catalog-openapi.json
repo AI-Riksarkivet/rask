@@ -12619,11 +12619,11 @@
         ]
       },
       "get": {
-        "description": "One page of the raw tuple store, estate-admin gated.\n\nFilter combos follow OpenFGA Read's contract \u2014 the object side must carry at least a TYPE whenever any\nfilter is sent: ``object_type`` alone (whole-type scan), ``object`` alone (one object's tuples),\n``user`` combined with either (that subject's tuples there). A user-only filter is a 400 \u2014 OpenFGA's\nRead API cannot answer it (add ``object_type`` or ``object``; per-subject enumeration across all types\nis a ListObjects question, not a Read). No filter reads the whole store, paginated.",
+        "description": "One page of the raw tuple store, estate-admin gated.\n\nEach filter is one OpenFGA's Read answers: ``object`` alone (one object's tuples), ``user`` with ``object`` or\n``object_type`` (that subject's tuples on the object, or on the objects of the type), or no filter (the whole store,\npaginated). Read refuses a filter naming no object type, and one naming a type with neither an object id nor a user\n(OpenFGA v1.18.3), and OpenFGA's refusal would reach the caller as a 503, so ``user`` alone and ``object_type`` alone\nare a 400 here, naming the half to add.",
         "operationId": "read_access_tuples_management_v1_access_tuples_get",
         "parameters": [
           {
-            "description": "scan one whole type (e.g. 'table')",
+            "description": "with user=, that subject's tuples on the objects of this type (e.g. 'table')",
             "in": "query",
             "name": "object_type",
             "required": false,
@@ -12636,7 +12636,7 @@
                   "type": "null"
                 }
               ],
-              "description": "scan one whole type (e.g. 'table')",
+              "description": "with user=, that subject's tuples on the objects of this type (e.g. 'table')",
               "title": "Object Type"
             }
           },

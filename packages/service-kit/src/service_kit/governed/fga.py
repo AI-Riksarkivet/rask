@@ -1854,10 +1854,12 @@ async def read_tuples(
     """One page of the OpenFGA Read API — the DIRECT tuples matching the filter, plus the next-page token.
 
     Unlike :func:`list_users`, Read never expands the model: the answer is the raw stored tuples (the
-    estate-admin tuple browser's primitive), paginated by the server. ``obj`` is either a full object
-    (``table:db1$t``) or a bare-type scan (``table:``); OpenFGA REQUIRES at least the object type whenever
-    a tuple filter is sent, so a user-only filter is rejected server-side — callers enforce that
-    precondition up front (the admin API maps it to a 400). No filter at all reads the whole store.
+    estate-admin tuple browser's primitive), paginated by the server. ``obj`` is a full object
+    (``table:<uuid>``), with or without ``user``, or a bare type (``table:``) beside a ``user``; no filter at
+    all reads the whole store. OpenFGA refuses every other filter, a ``user`` with no object type and a bare
+    type with no ``user`` ("the object type field is required and both the object id and user cannot be
+    empty", v1.18.3), and this wrapper reports that refusal as an outage like any other, so callers enforce
+    the precondition up front (the admin API maps each to a 400).
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as :func:`check`
     (outage → ``ServiceUnavailableError`` → 503, never an empty page that reads as "no grants").
     """
