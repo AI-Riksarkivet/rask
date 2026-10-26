@@ -87,8 +87,9 @@ bytes came from. Comparing the copy with upstream is a network check, and no sch
 declares `lance-namespace>=0.11.1,<0.12` (its PyPI `requires_dist`, read 2026-10-12). This copy carries `v0.12.0`'s
 `merge_insert` `on` as a repeatable array (`eb1de88e`, `feat(spec)!: allow multiple columns for the merge insert on
 key`) and `v0.13.0`'s optional `minimum_nprobes` / `maximum_nprobes` query fields. The catalog's `merge_insert` door
-still takes `on` as a single key (`catalog/api/v1/endpoints/data.py`): the installed 0.11.1 model types it `str`, so a
-list would fail inside `MergeInsertIntoTableRequest` rather than at the door. Both close with the SDK bump.
+reads `on` as that array and carries the key list into the merge beside the request, whose installed 0.11.1 model types
+`on` as one string (LH-537, `catalog/api/v1/endpoints/data.py`); with the SDK bump the list moves into the request. The
+nprobes fields close with the bump.
 
 **The namespace prose is not the route authority; `spec.yaml` is.** `ns_catalog/namespace/supported-catalogs/lance-rest.md`
 gives operations at paths the OpenAPI contradicts (read 2026-10-26 on this copy, lines 707-933); measured 2026-09-20,

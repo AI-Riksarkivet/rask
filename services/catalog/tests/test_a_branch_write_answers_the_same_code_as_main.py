@@ -81,9 +81,9 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 
 def _code(table: DoorTable, *, branch: str | None, on: str, payload: pa.Table) -> int | None:
     """Drive merge_insert and return the spec code it answered, or None if it did not fail."""
-    request = MergeInsertIntoTableRequest(id=TABLE_ID, on=on, when_matched_update_all=True, branch=branch)
+    request = MergeInsertIntoTableRequest(id=TABLE_ID, when_matched_update_all=True, branch=branch)
     try:
-        merge_insert_into_table(table, {}, request, _ipc(payload), max_bytes=_BODY_LIMIT, transaction_properties={})
+        merge_insert_into_table(table, {}, request, _ipc(payload), on=[on], max_bytes=_BODY_LIMIT, transaction_properties={})
     except Exception as exc:  # noqa: BLE001 — the CODE is the subject; the class is only how it carries one
         return getattr(exc, "code", None)
     return None

@@ -13734,8 +13734,9 @@ export interface operations {
     };
     merge_insert_into_table_v1_table__id__merge_insert_post: {
         parameters: {
-            query?: {
-                on?: string | null;
+            query: {
+                /** @description Lance field paths to match rows on. Repeat the parameter once per field to match on a composite key; a row matches only when every listed field is equal. */
+                on: string[];
                 when_matched_update_all?: boolean | null;
                 when_matched_update_all_filt?: string | null;
                 when_not_matched_insert_all?: boolean | null;

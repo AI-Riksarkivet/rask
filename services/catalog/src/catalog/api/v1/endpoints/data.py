@@ -28,6 +28,7 @@ from lance_namespace import (
     UpdateTableRequest,
     UpdateTableResponse,
 )
+from pydantic import StringConstraints
 
 from catalog.api import fga_deps, lineage_deps
 from catalog.api import idempotency as idem
@@ -278,6 +279,19 @@ async def insert_into_table(
     return response
 
 
+#: ``spec.yaml`` MergeInsertIntoTable ``on``: required, a Lance field path per repetition, together one composite key.
+MergeKeyQuery = Annotated[
+    list[Annotated[str, StringConstraints(min_length=1)]],
+    Query(
+        min_length=1,
+        description=(
+            "Lance field paths to match rows on. Repeat the parameter once per field to match on a composite key; "
+            "a row matches only when every listed field is equal."
+        ),
+    ),
+]
+
+
 @router.post("/{id}/merge_insert", response_model_exclude_none=True)
 async def merge_insert_into_table(
     id: str,
@@ -289,12 +303,7 @@ async def merge_insert_into_table(
     uuids: ObjectUuidsDep,
     run: RunDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
-    # `on` STAYS A SINGLE KEY until the lance-namespace bump (A9 is blocked on A10). 0.12.0 makes it an
-    # array of field paths — a composite merge key, sent as a repeated query parameter — but the
-    # INSTALLED 0.11.1 model types it `str` with MinLen(1), so accepting a list here fails validation
-    # inside `MergeInsertIntoTableRequest` rather than at the door. Widening the door without the
-    # model would 422 a 0.12.0 client one layer deeper and read as a rask bug.
-    on: str | None = None,
+    on: MergeKeyQuery,
     when_matched_update_all: bool | None = None,
     when_matched_update_all_filt: str | None = None,
     when_not_matched_insert_all: bool | None = None,
@@ -314,9 +323,10 @@ async def merge_insert_into_table(
     The merge builds no index: a writer builds one on the ``on`` key with its own pylance, committed through
     ``version/create``, and the maintenance sweep lists a table whose index no longer covers its rows (ADR 0162)."""
     segments = parse_identifier(id)
+    # `on` travels beside the request ([[LH-537]]): the installed lance-namespace 0.11.1 model types it as one string,
+    # where `spec.yaml` makes it the composite key.
     req = MergeInsertIntoTableRequest(
         id=segments,
-        on=on,
         when_matched_update_all=when_matched_update_all,
         when_matched_update_all_filt=when_matched_update_all_filt,
         when_not_matched_insert_all=when_not_matched_insert_all,
@@ -333,6 +343,7 @@ async def merge_insert_into_table(
             so,
             req,
             data,
+            on=on,
             max_bytes=settings.max_body_bytes,
             transaction_properties=lineage_deps.door_stamp(token, MERGE_INSERT, run),
         )

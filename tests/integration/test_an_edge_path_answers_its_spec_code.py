@@ -6,6 +6,10 @@ Each case below is one path that did one of those (measured 2026-10-25 against m
 TableExists answered for the latest version, a namespace listing served `limit=0`, a `virtual_column` alter, a typo in a
 query's filter and a list_view column each answered 500, a detailed describe left out `stats`, and a branch Overwrite's
 row count is the one a client reads to confirm the replace. A query refusal's detail names no storage location.
+An add_columns entry is added as it declares or the request is refused ([[LH-537]]): an entry declaring `computed` or
+`virtual_column` beside an `expression` asks for a column the backend cannot make (406), and an entry declaring nothing
+or a column named twice is malformed (400), since filling the first from its expression or dropping the others answers
+success for a request the door did not serve. An empty merge key is the caller's mistake (400).
 
 The races and the panic are driven where they happen: a competing ExistOk create lands between the door's probe and its
 declaration, and Lance panics inside the first write.
@@ -54,6 +58,14 @@ def client(real_ns_client: TestClient) -> TestClient:
 
 _LIST_VIEW = _ipc(pa.table({"x": pa.array([[1], [2]], pa.list_view(pa.int64()))}))
 _VIRTUAL = {"udf": "x", "udf_name": "f", "udf_version": "1", "input_columns": ["id"], "output_type": "int"}
+_ADD_COLUMNS_VIRTUAL = {
+    "input_columns": ["id"],
+    "outputs": [{"column": "o", "struct_field": "o", "data_type": {"type": "int64"}, "nullable": True}],
+    "image": "udf",
+    "udf": "eA==",
+    "udf_name": "f",
+    "udf_version": "1",
+}
 
 
 @pytest.mark.parametrize(
@@ -76,6 +88,33 @@ _VIRTUAL = {"udf": "x", "udf_name": "f", "udf_version": "1", "input_columns": ["
             lambda c: c.post(f"{T}/analyze_plan", json={"k": 1, "filter": "id = 'x' + 1", "vector": _VECTOR}), 400, 13, id="analyze-a-mistyped-literal"
         ),
         pytest.param(lambda c: c.post("/v1/table/g$lv/create", content=_LIST_VIEW, headers=ARROW), 400, 13, id="create-a-type-lance-does-not-store"),
+        pytest.param(
+            lambda c: c.post(f"{T}/add_columns", json={"new_columns": [{"name": "x", "expression": "id + 1", "computed": "id + 2"}]}),
+            406,
+            0,
+            id="add-a-column-an-expression-and-computed-both-declare",
+        ),
+        pytest.param(
+            lambda c: c.post(f"{T}/add_columns", json={"new_columns": [{"name": "x", "expression": "id + 1", "virtual_column": _ADD_COLUMNS_VIRTUAL}]}),
+            406,
+            0,
+            id="add-a-column-an-expression-and-a-virtual-column-both-declare",
+        ),
+        pytest.param(
+            lambda c: c.post(f"{T}/add_columns", json={"new_columns": [{"name": "x", "expression": "id + 1"}, {"name": "y"}]}),
+            400,
+            13,
+            id="add-a-column-beside-one-nothing-declares",
+        ),
+        pytest.param(
+            lambda c: c.post(f"{T}/add_columns", json={"new_columns": [{"name": "x", "expression": "id + 1"}, {"name": "x", "expression": "id + 2"}]}),
+            400,
+            13,
+            id="add-one-column-twice",
+        ),
+        pytest.param(
+            lambda c: c.post(f"{T}/merge_insert?on=&when_matched_update_all=true", content=_rows(), headers=ARROW), 400, 13, id="merge-on-an-empty-key"
+        ),
     ],
 )
 def test_an_edge_path_answers_the_spec_code(client: TestClient, send: Callable[[TestClient], Any], status: int, code: int) -> None:

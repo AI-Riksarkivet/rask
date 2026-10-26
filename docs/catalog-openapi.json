@@ -22619,19 +22619,19 @@
             }
           },
           {
+            "description": "Lance field paths to match rows on. Repeat the parameter once per field to match on a composite key; a row matches only when every listed field is equal.",
             "in": "query",
             "name": "on",
-            "required": false,
+            "required": true,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "On"
+              "description": "Lance field paths to match rows on. Repeat the parameter once per field to match on a composite key; a row matches only when every listed field is equal.",
+              "items": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "minItems": 1,
+              "title": "On",
+              "type": "array"
             }
           },
           {

@@ -162,26 +162,43 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
 
 
 def test_merge_insert_reads_its_query_params_as_the_spec_states_them(real_ns_client: TestClient) -> None:
-    """A ``*_filt`` is its clause's own condition, and ``when_not_matched_insert_all`` defaults to false (``spec.yaml``).
+    """A repeated ``on`` is one composite key, a ``*_filt`` is its clause's own condition, and ``when_not_matched_insert_all``
+    defaults to false (``spec.yaml``).
 
-    Main and a branch merge through one builder on the handle opened at the door's location ([[LH-530]]), so the filter
-    alone updates only the rows it holds true for, and a source row matching nothing is not inserted unless asked.
+    Main and a branch merge through one builder on the handle opened at the door's location ([[LH-530]]). A source row
+    matches only a row equal on every key field ([[LH-537]]), so ``(9, 3)`` and ``(3, 9)`` match nothing although each
+    field alone matches ``(3, 3)``, whose filter holds; the filter alone updates only the rows it holds true for, and a
+    source row matching nothing is not inserted unless asked.
     """
     _ensure_namespace(real_ns_client, "db")
-    target = _arrow_ipc(pa.table({"id": pa.array([1, 2], pa.int64()), "score": pa.array([0.9, 0.1]), "label": ["a", "b"]}))
+    target = _arrow_ipc(
+        pa.table({"id": pa.array([1, 2, 3], pa.int64()), "rev": pa.array([1, 2, 3], pa.int64()), "score": pa.array([0.9, 0.1, 0.9]), "label": ["a", "b", "c"]})
+    )
     assert real_ns_client.post("/v1/table/db$t/create", content=target, headers=ARROW_STREAM).status_code == 200
-    source = _arrow_ipc(pa.table({"id": pa.array([1, 2, 3], pa.int64()), "score": pa.array([0.9, 0.1, 0.5]), "label": ["A", "B", "C"]}))
+    source = _arrow_ipc(
+        pa.table(
+            {
+                "id": pa.array([1, 2, 9, 3], pa.int64()),
+                "rev": pa.array([1, 2, 3, 9], pa.int64()),
+                "score": pa.array([0.9, 0.1, 0.5, 0.5]),
+                "label": ["A", "B", "C", "D"],
+            }
+        )
+    )
 
     resp = real_ns_client.post(
-        "/v1/table/db$t/merge_insert?on=id&when_matched_update_all_filt=target.score > 0.5&timeout=30s&use_index=true", content=source, headers=ARROW_STREAM
+        "/v1/table/db$t/merge_insert?on=id&on=rev&when_matched_update_all_filt=target.score > 0.5&timeout=30s&use_index=true",
+        content=source,
+        headers=ARROW_STREAM,
     )
 
     assert resp.status_code == 200, resp.text
     assert (resp.json()["num_updated_rows"], resp.json()["num_inserted_rows"]) == (1, 0)
     location = real_ns_client.post("/v1/table/db$t/describe", json={}).json()["location"]
-    assert sorted(lance.dataset(location).to_table(columns=["id", "label"]).to_pylist(), key=lambda row: row["id"]) == [
-        {"id": 1, "label": "A"},
-        {"id": 2, "label": "b"},
+    assert sorted(lance.dataset(location).to_table(columns=["id", "rev", "label"]).to_pylist(), key=lambda row: (row["id"], row["rev"])) == [
+        {"id": 1, "rev": 1, "label": "A"},
+        {"id": 2, "rev": 2, "label": "b"},
+        {"id": 3, "rev": 3, "label": "c"},
     ]
 
 

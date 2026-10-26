@@ -22,6 +22,7 @@ import logging
 import re
 import tempfile
 import uuid
+from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import replace
@@ -2266,10 +2267,14 @@ def merge_insert_into_table(
     req: MergeInsertIntoTableRequest,
     data: bytes,
     *,
+    on: Sequence[str],
     max_bytes: int,
     transaction_properties: dict[str, str],
 ) -> MergeInsertIntoTableResponse:
     """Run the spec's merge-insert against the ref the request NAMES, on the handle opened at the door's location.
+
+    ``on`` is the merge key, every field path the request names, and a row matches only when every field is equal
+    ([[LH-537]]). It is not read off ``req``, whose ``on`` the installed lance-namespace 0.11.1 model types as one string.
 
     In-process on every ref, main included: the native merge names the table and would resolve it again ([[LH-530]]),
     and it runs the same ``MergeInsertBuilder`` on the dataset it loads (lance-namespace-impls 13.0.0, ``dir.rs``),
@@ -2301,9 +2306,9 @@ def merge_insert_into_table(
     # `merge_insert(on)` is where Lance rejects a key column that does not exist, and it sat outside
     # `caller_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
     # for naming it wrongly — while the branchless path answered 13.
-    with _write_schema_errors(), caller_sql("invalid merge_insert filter"):
+    with _write_schema_errors(), caller_sql("invalid merge_insert key or filter"):
         version, stats = commit_stamped(
-            table, so, transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows), branch=req.branch
+            table, so, transaction_properties, lambda latest: _merge_builder(latest, req, on).execute_uncommitted(rows), branch=req.branch
         )
     counts = stats if isinstance(stats, dict) else {}
     return MergeInsertIntoTableResponse(
@@ -2314,15 +2319,15 @@ def merge_insert_into_table(
     )
 
 
-def _merge_builder(dataset: lance.LanceDataset, req: MergeInsertIntoTableRequest) -> lance.MergeInsertBuilder:
-    """The merge ``req`` asks for, on ``dataset``; every spec parameter has a builder method of the same name.
+def _merge_builder(dataset: lance.LanceDataset, req: MergeInsertIntoTableRequest, on: Sequence[str]) -> lance.MergeInsertBuilder:
+    """The merge ``req`` asks for on the key ``on``, on ``dataset``; every spec parameter has a builder method of the same name.
 
     Read as ``spec.yaml`` states them: each ``*_filt`` is its clause's own condition, so a filter applies whether or not
     its flag is set, and ``when_not_matched_insert_all`` defaults to false. The ``dir`` backend's native merge reads an
     absent ``when_not_matched_insert_all`` as an insert (lance-namespace-impls 13.0.0, ``dir.rs``), which the spec's
     default is not.
     """
-    builder = dataset.merge_insert(req.on)
+    builder = dataset.merge_insert(on)
     if req.when_matched_update_all or req.when_matched_update_all_filt is not None:
         builder.when_matched_update_all(req.when_matched_update_all_filt)
     if req.when_not_matched_insert_all:
@@ -2497,33 +2502,31 @@ def count_rows(table: table_claims.DoorTable, so: StorageOptions, req: CountTabl
 def add_columns(
     table: table_claims.DoorTable, so: StorageOptions, req: AlterTableAddColumnsRequest, *, transaction_properties: dict[str, str]
 ) -> AlterTableAddColumnsResponse:
-    """Add columns computed from per-column SQL expressions, committed with ``transaction_properties`` ([[LH-497]])."""
+    """Add columns computed from per-column SQL expressions, committed with ``transaction_properties`` ([[LH-497]]).
+
+    Every entry is added as it declares, or the request is refused ([[LH-537]]). ``spec.yaml`` AddColumnsEntry declares a
+    column three ways: an ``expression`` evaluated once over the existing rows, a ``virtual_column`` a UDF computes, and a
+    ``computed`` column added all-null with its expression kept as the binding a backfill fills. The ``dir`` backend has
+    no UDF runtime, no binding and no backfill, so an entry declaring either of the last two is refused as the spec's 406
+    whatever else it declares, rather than added from its expression as a column it did not ask for.
+
+    Raises:
+        UnsupportedOperationError: An entry declares a ``virtual_column`` or a ``computed`` column.
+        InvalidInputError: There is no entry, an entry declares no expression, or two entries name one column.
+    """
     columns = req.new_columns or []
-    # The spec also allows a `virtual_column` (UDF/Docker-backed) instead of a SQL `expression`. That needs
-    # a UDF execution backend we don't run, so reject it as the spec's 406 (Unsupported) — not a 400 (it's a valid
-    # request for an unsupported feature, not invalid input).
-    if any(getattr(c, "virtual_column", None) is not None and not c.expression for c in columns):
+    if any(column.virtual_column is not None for column in columns):
         raise UnsupportedOperationError("virtual_column add_columns is not supported by this backend")
-    # `computed` arrived with lance-namespace 0.11.0 (PR #360) as a THIRD way to declare a column: the
-    # column is added all-null with the SQL expression persisted as a binding in field metadata, and rows
-    # are filled later by `alter_table_backfill_columns` — never at declaration. That is a different
-    # operation from the immediate `expression` transform below, and the `dir` backend implements neither
-    # the binding nor the backfill.
-    #
-    # Without this arm a spec-VALID 0.11.0 request (`{"name": "x", "computed": "a + b"}`) fell past the
-    # virtual_column guard, produced an empty `transforms`, and hit the InvalidInput below — a 400 saying
-    # the caller had sent no SQL expression when they had sent one the server simply does not support.
-    # 406 is the spec's answer for a valid request naming an unsupported feature.
-    #
-    # `getattr` so this file works against 0.9.0 and 0.11.0 alike, exactly as the virtual_column guard
-    # above already does — the field does not exist on the older model.
-    if any(getattr(c, "computed", None) is not None and not c.expression for c in columns):
+    if any(column.computed is not None for column in columns):
         raise UnsupportedOperationError(
             "computed add_columns is not supported by this backend — the expression binding and its backfill are both unimplemented for the dir backend"
         )
-    transforms = {c.name: c.expression for c in columns if c.expression}
-    if not transforms:
-        raise InvalidInputError("add_columns requires a name and SQL expression per column")
+    if not columns or any(not column.expression for column in columns):
+        raise InvalidInputError("add_columns requires a SQL expression for each new column")
+    named = Counter(column.name for column in columns)
+    if twice := sorted(name for name, count in named.items() if count > 1):
+        raise InvalidInputError(f"add_columns names each new column once, but names {twice} more than once")
+    transforms = {column.name: column.expression for column in columns if column.expression}
     dataset = table.open(so, branch=req.branch)
     with _column_op("add_columns", dataset.schema.names):
         version, _ = commit_stamped(
