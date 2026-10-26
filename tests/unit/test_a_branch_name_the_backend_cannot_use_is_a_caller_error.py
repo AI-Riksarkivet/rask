@@ -1,36 +1,20 @@
-"""A branch name Lance refuses is the caller's mistake, never `Internal 18`.
+"""The two refusals the branch guard answers for itself, at their edges ([[LH-046]], [[LH-283]]).
 
-[[LH-046]]. The spec's own vocabulary decides this: code **13 InvalidInput** is "malformed request or
-invalid parameters" and code **18 Internal** is an "unexpected server/implementation error"
-(`lance_docs/ns_catalog/spec.yaml`, error-code list). A name the caller typed is the first, and a
-generated client dispatches on the code — so answering 18 tells it the server broke, which is
-unretryable, unactionable, and indistinguishable from a real fault in an alerting pipeline.
+Creating ``main`` is the spec's 23, "a table branch with this name already exists" (`lance_docs/ns_catalog/spec.yaml`,
+error-code list), and every table has main. pylance refuses the name itself (`lance_docs/lance/format/table/branch_tag.md`
+§ "Branch Name", rule 7: ``Ref is invalid: "main" is reserved for the default branch``, measured on 13.0.0), which would
+answer 13; the door answers first, so the caller hears that main exists.
 
-`_classify_ref_error` already reads Lance's OWN validation (`Ref is invalid: …`), which covers most bad
-names: spaces, `~ ^ : ? * [ ] @`, a trailing `/`, a `.lock` suffix and a literal backslash all arrive
-with that prefix and map to InvalidInput. Measured against pylance 11.0.0 on 2026-09-15.
-
-THREE NAMES DO NOT, AND THEY ARE THE ORDINARY ONES. Measured the same way:
-
-* ``"main"`` — `branches.list()` does NOT contain `main` on any dataset (the default ref is implicit),
-  so the door's collision pre-check misses it, pylance is called, and it answers
-  ``OSError("Encountered internal error. Please file a bug report …")``.
-* ``""`` — the spec marks `name` required but sets no `minLength`, so an empty string passes model
-  validation and reaches pylance, which answers the same bug-report text.
-* ``"../escape"`` — refused by the object-store PATH parser before Lance's ref validation runs, so the
-  message is `LanceError(IO): Error parsing Path …` and carries no `Ref is invalid:` marker.
-
-None of the three contains the marker, so all three fall through as Internal 18 today. They are
-refused AT THE DOOR rather than by matching those messages, because the message for the first two is
-pylance's bug-report text — not a stable discriminator, and the day upstream fixes that panic a matcher
-keyed on it silently reports Internal again. That is the same reasoning `create_branch` already gives
-for establishing a collision by READING rather than by matching.
+A ref file longer than one key segment is refused through the route, by
+`tests/integration/test_a_malformed_branch_name_is_refused_and_leaves_nothing_behind.py`, with every other malformed
+name. The bound's own side cannot be created there, since a local filesystem root stages the file as ``<file>#<n>`` and
+refuses it, so it is held here.
 """
 
 from __future__ import annotations
 
 import pytest
-from lance_namespace import InvalidInputError, TableBranchAlreadyExistsError
+from lance_namespace import TableBranchAlreadyExistsError
 
 from catalog.services.dataplane import refuse_a_branch_name_the_backend_cannot_use
 
@@ -41,23 +25,14 @@ def test_the_reserved_main_ref_cannot_be_created() -> None:
         refuse_a_branch_name_the_backend_cannot_use("main")
 
 
-def test_an_empty_name_is_refused_as_invalid_input() -> None:
-    """The spec marks `name` required but sets no minLength, so `""` reaches the backend unvalidated."""
-    with pytest.raises(InvalidInputError):
-        refuse_a_branch_name_the_backend_cannot_use("")
-
-
-@pytest.mark.parametrize("name", ["../escape"])
-def test_a_traversal_segment_is_refused_as_invalid_input(name: str) -> None:
-    """Refused before the object-store path parser sees it, which is where the message stops being readable."""
-    with pytest.raises(InvalidInputError):
-        refuse_a_branch_name_the_backend_cannot_use(name)
-
-
-@pytest.mark.parametrize("name", ["work"])
-def test_a_name_the_backend_accepts_is_left_alone(name: str) -> None:
-    """The guard must not become a second, stricter grammar than Lance's own.
-
-    Lance owns the grammar; this door only covers the three cases its errors are unreadable for.
-    """
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param("a" * 250, id="ascii"),
+        # Each ä is two UTF-8 bytes, so six once percent-encoded: 4 + 41 * 6 + 5 = 255.
+        pytest.param("aaaa" + "ä" * 41, id="non-ascii"),
+    ],
+)
+def test_a_name_whose_ref_file_fills_a_key_segment_is_left_to_pylance(name: str) -> None:
+    """A ref file of exactly 255 bytes, ``<name>.json`` with the name URL-encoded, fits the key segment that holds it."""
     refuse_a_branch_name_the_backend_cannot_use(name)

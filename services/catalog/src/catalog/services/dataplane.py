@@ -3168,37 +3168,72 @@ _REF_FAILURE_RE = re.compile(r"ref (?P<failure>not found|conflict) error:\s*(?P<
 _REF_INVALID_MARKER = "ref is invalid:"
 
 
+#: The longest object-store key segment, in bytes, a store is held to: measured on RustFS 1.0.3 (the development store),
+#: a 255-byte segment is written and a 256-byte one refused.
+_KEY_SEGMENT_BYTES: Final = 255
+
+
 def refuse_a_branch_name_the_backend_cannot_use(name: str) -> None:
-    """Refuse the three branch names whose backend failure is not readable, with the spec's own codes.
+    """Refuse the branch names pylance does not refuse as the caller's mistake before it writes, with the spec's codes.
 
-    [[LH-046]] LANCE OWNS THE GRAMMAR AND THIS IS NOT A SECOND COPY OF IT. Most bad names — a space,
-    `~ ^ : ? * [ ]`, `@`, a trailing `/`, a `.lock` suffix, a literal backslash — arrive as
-    ``Ref is invalid: …`` and `_classify_ref_error` already maps that marker to InvalidInput. Widening
-    this guard to duplicate that rule would create two grammars that drift, and the copy here is the one
-    nobody re-tests against a new pylance. Driven on 11.0.0: `work`, `feature/x`, `dot.name`, `UPPER`
-    and `-lead` are all ACCEPTED, so a hand-written pattern would have refused names that work.
+    [[LH-046]] LANCE OWNS THE GRAMMAR AND THIS IS NOT A SECOND COPY OF IT. `lance_docs/lance/format/table/branch_tag.md`
+    § "Branch Name" is the grammar, and pylance validates a name against it before it writes anything: measured on 13.0.0
+    over a `dir` table and a moto S3 one, an empty name, a leading, trailing or doubled ``/``, a ``..`` or ``\\`` anywhere,
+    a character outside a segment's alphanumerics and ``.-_``, and a ``.lock`` suffix each answer ``Ref is invalid: …``
+    with no object written, and `_classify_ref_error` maps that marker to InvalidInput. A copy of those rules here would be
+    a second grammar, the one nobody re-tests against a new pylance.
 
-    THREE CASES CARRY NO READABLE MARKER, and they are the ordinary ones:
+    THREE KINDS OF NAME ARE NOT REFUSED THAT WAY ([[LH-283]]):
 
-    * ``main`` — absent from `branches.list()`, so the collision pre-check misses it and pylance answers
-      ``Encountered internal error. Please file a bug report``. Answered as the spec's 23 rather than 13,
-      because main does always exist; "already exists" is the true statement.
-    * ``""`` — the spec marks `name` required but sets no `minLength`, so an empty string passes model
-      validation and reaches pylance, which answers the same bug-report text.
-    * a traversal segment — refused by the object-store PATH parser before Lance's ref validation runs,
-      so the message is ``LanceError(IO): Error parsing Path …`` with no marker.
-
-    Refused HERE rather than by matching those messages: the first two are pylance's bug-report text,
-    which is not a stable discriminator, and the day upstream fixes that panic a matcher keyed on it
-    would silently report Internal again. That is the same reasoning `create_branch` already gives for
-    establishing a collision by reading the branch list instead of matching a message.
+    * ``main`` — rule 7 reserves it for the default branch, and pylance answers it ``Ref is invalid``. The door answers
+      the spec's 23 instead: every table has main, so "already exists" is the true statement.
+    * a ``.`` segment — a path step, which the object store's path parser refuses and the grammar admits (rule 5 allows
+      ``.`` in a segment; rule 4 forbids ``..``, which pylance refuses itself). pylance hands ``a/./b`` to the store and
+      answers ``LanceError(IO): Error parsing Path … illegal character sequence "."``, which carries no code and would
+      answer Internal 18.
+    * a name whose ref file no key segment holds (`_refuse_a_ref_name_no_key_segment_holds`) — pylance writes the
+      branch's ``tree/<name>/`` before its ref file, so the store's refusal comes after that write (measured on RustFS
+      1.0.3 with pylance 13.0.0): the branch's manifest stays with no ref naming it, no door deletes it, and every later
+      create of the name answers pylance's bug-report text.
     """
     if name == MAIN_BRANCH:
         raise TableBranchAlreadyExistsError(f"branch {name!r} always exists and cannot be created")
-    if not name.strip():
-        raise InvalidInputError("branch name must not be empty")
-    if ".." in name.split("/"):
-        raise InvalidInputError(f"invalid branch name {name!r}: a path-traversal segment is not a branch name")
+    if "." in name.split("/"):
+        raise InvalidInputError(f"invalid branch name {name!r}: a '.' segment is a path step, not a name the store can hold")
+    _refuse_a_ref_name_no_key_segment_holds("branch", name)
+
+
+def _ref_file_bytes_past_a_key_segment(name: str) -> int | None:
+    """The bytes the ref file of a branch or tag named ``name`` takes, when that is more than a key segment holds."""
+    size = len(branch_layout.ref_file_name(name).encode())
+    return size if size > _KEY_SEGMENT_BYTES else None
+
+
+def _refuse_a_ref_name_no_key_segment_holds(kind: str, name: str) -> None:
+    """Refuse, as the caller's mistake (code 13), a branch or tag name whose ref file no object-store key segment holds.
+
+    A ref's file is its name URL-encoded plus ``.json`` under ``_refs/branches`` or ``_refs/tags``
+    (`branch_layout.ref_file_name`; `lance_docs/lance/format/table/branch_tag.md` § "Branch Metadata Path" and
+    § "Tag Storage"), so ``/`` and every non-ASCII byte cost three bytes. Measured on RustFS 1.0.3 with pylance 13.0.0,
+    the store refuses a file past 255 bytes with ``Generic S3 error``, which carries no code and would answer Internal
+    18. A local filesystem root stages the file as ``<file>#<n>``, so there a name a few bytes under the bound still
+    fails; such a root is a test fixture.
+    """
+    if (size := _ref_file_bytes_past_a_key_segment(name)) is not None:
+        raise InvalidInputError(
+            f"invalid {kind} name {name!r}: its ref file, the name URL-encoded plus '.json', would be {size} bytes, longer than the "
+            f"{_KEY_SEGMENT_BYTES} an object-store key segment holds"
+        )
+
+
+def _require_a_tag_a_key_segment_can_hold(tag: str) -> None:
+    """A tag whose ref file no key segment holds cannot exist, so a lookup of one is TableTagNotFound (8) ([[LH-283]]).
+
+    pylance looks a tag up by reading its file, and the store refuses that key with an error that carries no code
+    (measured on RustFS 1.0.3 with pylance 13.0.0: a HEAD of a 256-byte segment), which would answer Internal 18.
+    """
+    if _ref_file_bytes_past_a_key_segment(tag) is not None:
+        raise TableTagNotFoundError(f"tag {tag!r} not found: no tag's ref file can be longer than {_KEY_SEGMENT_BYTES} bytes")
 
 
 def refuse_a_branch_name_that_shadows_the_layout(name: str) -> None:
@@ -3321,8 +3356,10 @@ def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTab
     """Tag the given table version with a name (honoring the request's optional ``branch``), never while a reclaim runs.
 
     Raises:
+        InvalidInputError: The tag's ref file would be longer than an object-store key segment ([[LH-283]]).
         ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]); no tag was written.
     """
+    _refuse_a_ref_name_no_key_segment_holds("tag", req.tag)
     dataset = _open_with_branch(table, so, req.branch)
     with table.history_held(HistoryWork.REFS), _ref_errors("tag", req.tag):
         dataset.tags.create(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
@@ -3331,6 +3368,7 @@ def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTab
 
 def get_tag_version(table: table_claims.DoorTable, so: StorageOptions, req: GetTableTagVersionRequest) -> GetTableTagVersionResponse:
     """Return the table version a tag points to (404 on an unknown tag)."""
+    _require_a_tag_a_key_segment_can_hold(req.tag)
     tags = table.open_unchecked(so).tags
     try:
         version = tags.get_version(req.tag)
@@ -3347,8 +3385,10 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
     """Move an existing tag to a new table version (honoring the request's optional ``branch``), never while a reclaim runs.
 
     Raises:
+        TableTagNotFoundError: No tag can have the name: its ref file would be longer than a key segment ([[LH-283]]).
         ConcurrentModificationError: A reclaim holds the table's history ([[LH-308]]); the tag was not moved.
     """
+    _require_a_tag_a_key_segment_can_hold(req.tag)
     dataset = _open_with_branch(table, so, req.branch)
     with table.history_held(HistoryWork.REFS), _ref_errors("tag", req.tag):
         dataset.tags.update(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
@@ -3357,6 +3397,7 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
 
 def delete_tag(table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableTagRequest) -> DeleteTableTagResponse:
     """Delete a tag from the table."""
+    _require_a_tag_a_key_segment_can_hold(req.tag)
     with _ref_errors("tag", req.tag):
         table.open_unchecked(so).tags.delete(req.tag)
     return DeleteTableTagResponse()

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from typing import Final
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 
 #: The directories a branch writes its own files into under ``tree/<branch>/``. `lance_docs/lance/format/table/branch_tag.md` § "Branch
@@ -73,6 +73,17 @@ def lies_in_files_of(name: str, parent: str) -> bool:
     if not name.startswith(f"{parent}/"):
         return False
     return name[len(parent) + 1 :].split("/", 1)[0] in BRANCH_FILE_DIRS
+
+
+def ref_file_name(name: str) -> str:
+    """The file a branch or tag named ``name`` lives in, under ``_refs/branches`` or ``_refs/tags``: the name URL-encoded plus ``.json``.
+
+    `lance_docs/lance/format/table/branch_tag.md` § "Branch Metadata Path" writes ``/`` as ``%2F``, and pylance
+    percent-encodes every non-ASCII byte as well: measured on 13.0.0 over every character class the grammar admits
+    (branch ``räksmörgås`` is ``r%C3%A4ksm%C3%B6rg%C3%A5s.json``, and a tag of 41 ``ä`` a 251-byte file), the file is
+    `quote` with nothing kept safe.
+    """
+    return f"{quote(name, safe='')}.json"
 
 
 def branch_name_from_ref_file(file_name: str) -> str | None:

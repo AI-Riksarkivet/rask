@@ -1,22 +1,26 @@
-"""A malformed TAG name already answers the spec's 13, so the tag door needs no name guard.
+"""A malformed TAG name answers the spec's 13: the grammar's through pylance, the store's bound through the door.
 
 [[LH-096]] asks for tag names to be "refused at the door like branch names". Measured on pylance
-11.0.0, they must not be: every case `refuse_a_branch_name_the_backend_cannot_use` exists for is
-BRANCH-specific, and the tag door is already correct without it.
+13.0.0, the grammar needs no door: two of the three refusals `refuse_a_branch_name_the_backend_cannot_use`
+makes are BRANCH-specific.
 
-* ``main`` is the default BRANCH, so a branch create cannot see it in `branches.list()` and pylance
-  answers with bug-report text. It is an ordinary tag name and creating it succeeds.
-* An empty ref answers ``Ref is invalid: Ref cannot be empty`` for a tag, where a branch reaches
-  pylance's bug-report text instead.
-* A traversal segment cannot reach the object-store path parser, because a tag rejects ``/`` outright
-  (``feature/x`` is a legal BRANCH and an illegal tag) — so it is refused as an invalid character.
+* ``main`` is the default BRANCH. It is an ordinary tag name and creating it succeeds.
+* A ``.`` segment never reaches the object-store path parser through a tag: a tag is one file,
+  ``_refs/tags/<name>.json`` (`lance_docs/lance/format/table/branch_tag.md` § "Tag Storage"), and its
+  grammar rejects ``/`` outright (``feature/x`` is a legal BRANCH and an illegal tag) and a leading
+  dot (``.`` and ``..`` answer ``Ref is invalid: Ref cannot begin with a dot``).
 
-All three therefore carry `_classify_ref_error`'s ``Ref is invalid:`` marker and map to InvalidInput
-without help. Adding a guard would do what that function's own docstring warns against: keep a second
-copy of a grammar Lance owns, in the place nobody re-tests against a new pylance.
+An empty tag answers ``Ref is invalid: Ref cannot be empty``, so every tag the grammar refuses carries
+`_classify_ref_error`'s ``Ref is invalid:`` marker and maps to InvalidInput without help. A grammar
+guard here would do what the branch guard's own docstring warns against: keep a second copy of a grammar
+Lance owns, in the place nobody re-tests against a new pylance. Those cases are a tripwire, not a
+tidy-up: a pylance that stops mapping one reds HERE, which is the day a door-side grammar guard becomes
+the right answer.
 
-THIS IS A TRIPWIRE, NOT A TIDY-UP. It holds the measurement the decision rests on, so a pylance that
-stops mapping one of these reds HERE — which is the day a door-side guard becomes the right answer.
+The third refusal is the store's, not the grammar's, and it reaches a tag as it reaches a branch
+([[LH-283]]): the tag's file is its name URL-encoded plus ``.json``, and measured on RustFS 1.0.3 a file
+past one 255-byte key segment is refused with an error that carries no code, so the door refuses such a
+name itself.
 """
 
 from __future__ import annotations
@@ -83,10 +87,11 @@ def _create(table: DoorTable, tag: str) -> int | None:
     [
         ("empty", ""),
         ("a separator, which a branch allows and a tag does not", "feature/x"),
+        pytest.param("a 256-byte ref file, past one key segment", "a" * 251, id="ref-file-past-a-key-segment"),
     ],
 )
 def test_a_malformed_tag_name_answers_invalid_input(table: DoorTable, shape: str, tag: str) -> None:  # noqa: ANN001
-    assert _create(table, tag) == 13, f"{shape}: answered something other than InvalidInput, so the door now needs its own guard"
+    assert _create(table, tag) == 13, f"{shape}: answered something other than InvalidInput"
 
 
 @pytest.mark.parametrize("tag", ["main"])

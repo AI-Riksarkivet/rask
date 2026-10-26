@@ -47,7 +47,6 @@ from lance_namespace import (
     DeleteTableBranchRequest,
     DeleteTableTagRequest,
     GetTableTagVersionRequest,
-    InvalidInputError,
     InvalidTableStateError,
     ListTableTagsRequest,
     TableBranchAlreadyExistsError,
@@ -93,6 +92,8 @@ MISSING_VERSION = 999_999
 LIVE_TAG = "published"
 LIVE_BRANCH = "staging"
 ABSENT = "no-such-ref"
+#: A tag no ref file can name: ``<name>.json`` would be 256 bytes, past one object-store key segment ([[LH-283]]).
+TOO_LONG_FOR_A_KEY_SEGMENT = "a" * 251
 
 _Call = Callable[[object], object]
 
@@ -123,18 +124,20 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     return table_claims.door_table(ns, claims, TABLE_ID)
 
 
+@pytest.mark.parametrize("tag", [pytest.param(ABSENT, id="absent"), pytest.param(TOO_LONG_FOR_A_KEY_SEGMENT, id="no-ref-file-can-name-it")])
 @pytest.mark.parametrize(
     ("door", "call"),
     [
-        ("tags/update", lambda table: update_tag(table, {}, UpdateTableTagRequest(id=TABLE_ID, tag=ABSENT, version=1))),
-        ("tags/delete", lambda table: delete_tag(table, {}, DeleteTableTagRequest(id=TABLE_ID, tag=ABSENT))),
-        ("tags/version", lambda table: get_tag_version(table, {}, GetTableTagVersionRequest(id=TABLE_ID, tag=ABSENT))),
+        ("tags/update", lambda table, tag: update_tag(table, {}, UpdateTableTagRequest(id=TABLE_ID, tag=tag, version=1))),
+        ("tags/delete", lambda table, tag: delete_tag(table, {}, DeleteTableTagRequest(id=TABLE_ID, tag=tag))),
+        ("tags/version", lambda table, tag: get_tag_version(table, {}, GetTableTagVersionRequest(id=TABLE_ID, tag=tag))),
     ],
 )
-def test_a_missing_tag_mints_TAG_NOT_FOUND(table: DoorTable, door: str, call: _Call) -> None:
-    """Spec code 8. `tags/version` rides along as the regression guard — it answered 8 before A5."""
+def test_a_missing_tag_mints_TAG_NOT_FOUND(table: DoorTable, door: str, call: Callable[[DoorTable, str], object], tag: str) -> None:
+    """Spec code 8, for an absent tag and for one no ref file can name: the store refuses the key a lookup of it reads
+    with an error that carries no code. `tags/version` rides along as the regression guard — it answered 8 before A5."""
     with pytest.raises(TableTagNotFoundError) as caught:
-        call(table)
+        call(table, tag)
     assert caught.value.code == 8, f"{door} minted code {caught.value.code} for a missing tag, not 8"
 
 
@@ -157,31 +160,6 @@ def test_a_missing_version_mints_VERSION_NOT_FOUND(table: DoorTable, door: str, 
     with pytest.raises(TableVersionNotFoundError) as caught:
         call(table)
     assert caught.value.code == 11, f"{door} minted code {caught.value.code} for a missing version, not 11"
-
-
-@pytest.mark.parametrize(
-    ("door", "call"),
-    [
-        # pylance validates the ref NAME before it looks anything up, and enforces five distinct rules.
-        # One representative per rule, across both refs, because the wording differs per ref ("Branch
-        # segment ... contains invalid characters" vs "Ref characters must be either alphanumeric") and
-        # only the shared `Ref is invalid:` prefix is matched.
-        # BACKEND-DEPENDENT, and the estate takes the other path — measured 2026-09-07. On this `dir`
-        # dataset the ref-name validator runs first and says `Ref is invalid:`. On the DEPLOYED
-        # S3-backed catalog the identical call reaches Lance's clone path first and dies with the
-        # internal-error panic instead, which is the same text a collision produces, so a malformed
-        # BRANCH name still answers 18 there. The tag cases below are correct on both backends. Kept
-        # green here because the mapping is right and does fire wherever the validator runs; the
-        # residual is upstream (an invalid name must not panic) and is recorded in §A5.
-        ("branch, invalid character", lambda table: create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="a b"))),
-        ("tag, .lock suffix", lambda table: create_tag(table, {}, CreateTableTagRequest(id=TABLE_ID, tag="x.lock", version=1))),
-    ],
-)
-def test_a_malformed_ref_name_mints_INVALID_INPUT(table: DoorTable, door: str, call: _Call) -> None:
-    """Spec code 13 — a malformed parameter is the caller's to fix (400), never a server fault (500)."""
-    with pytest.raises(InvalidInputError) as caught:
-        call(table)
-    assert caught.value.code == 13, f"{door} minted code {caught.value.code} for a malformed name, not 13"
 
 
 def test_creating_a_tag_that_already_exists_mints_TAG_ALREADY_EXISTS(table: DoorTable) -> None:
