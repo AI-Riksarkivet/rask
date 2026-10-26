@@ -420,3 +420,26 @@ def test_a_writers_own_fragment_of_a_packed_struct_commits(estate: _Estate) -> N
 
     assert refused is None, refused.text
     assert estate.ids(location) == [1, 2]
+
+
+def test_a_writers_own_fragment_of_a_struct_a_2_0_file_packs_commits(estate: _Estate) -> None:
+    """A 2.0 file packs a struct carrying any ``packed`` value, ``false`` included (measured on pylance 13.0.0), so its
+    one column is the struct's id; a registered 2.0 table takes the writer's fragment ([[LH-246]])."""
+    point = pa.struct([pa.field("x", pa.float32()), pa.field("y", pa.int32())])
+    schema = pa.schema([pa.field("id", pa.int64()), pa.field("p", point, metadata={"lance-encoding:packed": "false"})])
+    rows = pa.Table.from_pylist([{"id": i, "p": {"x": float(i), "y": i}} for i in (1, 2)], schema=schema)
+    location = f"s3://{estate.bucket}/legacy20"
+    lance.write_dataset(rows.slice(0, 1), location, data_storage_version="2.0", enable_stable_row_ids=True, storage_options=estate.key)
+    table = "db$legacy20"
+    registered = estate.client.post(f"/v1/table/{quote(table, safe='$')}/register", json={"location": "legacy20"})
+    assert registered.status_code == 200, registered.text
+    staged = [
+        json.loads(json.dumps(fragment.to_json()))
+        for fragment in lance.fragment.write_fragments(rows.slice(1, 1), location, storage_options=estate.key, data_storage_version="2.0")
+    ]
+    before = estate.open(location).version
+
+    refused = _commit(_Staged(estate, table, location, staged[0]), staged, before)
+
+    assert refused is None, refused.text
+    assert estate.ids(location) == [1, 2]

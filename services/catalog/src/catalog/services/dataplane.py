@@ -1210,6 +1210,7 @@ def commit_stamped[T](
         ConcurrentModificationError: Every attempt lost its race.
         TableChangedError: The table changed since the door's resolution.
         InvalidInputError: ``keeps_labels`` and the commit loses or changes a field's ``rask.*`` metadata.
+        InvalidInputError: The commit adds or changes a field's encoding knob to one Lance cannot honour ([[LH-246]]).
     """
     table_id = table.segments
     ref = recorded_branch(branch)
@@ -1230,6 +1231,7 @@ def commit_stamped[T](
         try:
             if keeps_labels:
                 _refuse_a_lost_label(dataset, detached)
+            encoding.require_no_new_invalid_encoding(dataset, detached)
             fs, base = dataset_fs(location, so)
             versions = f"{base.rstrip('/')}/_versions"
             with fs.open_input_stream(f"{versions}/d{detached.version}.manifest") as source:

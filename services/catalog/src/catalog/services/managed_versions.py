@@ -38,7 +38,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, InstanceOf
 
-from catalog.core import lineage_emit, manifest_bytes, provenance_guard
+from catalog.core import encoding, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.services import client_fragments, dataplane, maintenance, primary_keys, table_claims
 from service_kit.lakehouse import base_refs, base_registry, features, maintenance_due
@@ -786,6 +786,7 @@ def judge(
     current = None if staged.creates else lance.dataset(staged.location, version=staged.version - 1, storage_options=dict(so) if so else None)
     _refuse_changed_invariants(proposed, current)
     _refuse_changed_schema_governance(proposed, current)
+    encoding.require_no_new_invalid_encoding(current, proposed)
     _refuse_config(proposed, current)
     version = _Judged(staged=staged, so=so, proposed=proposed, current=current, split=_split(proposed, current), clone_evidence=clone_evidence)
     _refuse_bases(version, base_judge)

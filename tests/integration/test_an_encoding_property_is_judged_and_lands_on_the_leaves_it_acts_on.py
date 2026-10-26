@@ -21,10 +21,11 @@ import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
+from lance import blob_field
 
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
 
     import httpx
     from fastapi.testclient import TestClient
@@ -74,6 +75,14 @@ def _encoding_on_each_field(client: TestClient) -> dict[str, dict[str, str]]:
         for path, meta in _fields(lance.dataset(described.json()["table_uri"]).schema)
     }
     return {path: knobs for path, knobs in stamped.items() if knobs}
+
+
+def _with_blob_threshold(value: str) -> pa.Schema:
+    """A blob-v2 column whose inline threshold is ``value``: Lance refuses one that is no non-negative integer on write."""
+    payload = blob_field("payload")
+    return pa.schema(
+        [pa.field("id", pa.int64()), payload.with_metadata({**(payload.metadata or {}), b"lance-encoding:blob-inline-size-threshold": value.encode()})]
+    )
 
 
 def _with_item_metadata(metadata: dict[str, str]) -> pa.Schema:
@@ -148,6 +157,12 @@ def client(real_ns_client: TestClient) -> TestClient:
             "lance-encoding:dict-size-ratio='7' is not accepted: Lance takes a decimal above 0 and at most 1",
             id="a-bad-value-on-a-payload-fields-own-metadata",
         ),
+        pytest.param(
+            {},
+            _with_blob_threshold("abc"),
+            "lance-encoding:blob-inline-size-threshold='abc' is not accepted: Lance takes a non-negative integer",
+            id="a-blob-threshold-that-is-no-integer",
+        ),
     ],
 )
 def test_an_encoding_value_lance_cannot_honour_is_refused_at_create(client: TestClient, properties: dict[str, str], schema: pa.Schema, detail: str) -> None:
@@ -173,3 +188,46 @@ def test_each_encoding_knob_lands_on_the_fields_it_acts_on(client: TestClient, p
     assert created.status_code == 200, created.text
 
     assert _encoding_on_each_field(client) == dict.fromkeys(lands_on, properties)
+
+
+def _table_uri(client: TestClient) -> str:
+    return str(client.post(f"{TABLE}/describe", json={}).json()["table_uri"])
+
+
+def _knob_set_outside_the_catalog(client: TestClient) -> None:
+    """A knob Lance honours and the create door refuses, already on a field: as a table an earlier writer left."""
+    lance.dataset(_table_uri(client)).update_field_metadata({"name": {"lance-encoding:structural-encoding": "miniblock"}})
+
+
+@pytest.mark.parametrize(
+    ("arrange", "door", "body", "status", "after"),
+    [
+        pytest.param(
+            None,
+            "update_field_metadata",
+            {"updates": [{"path": "name", "metadata": {"lance-encoding:compression": "bogus"}}]},
+            400,
+            {},
+            id="update-field-metadata-refuses-a-scheme-lance-does-not-know",
+        ),
+        pytest.param(
+            _knob_set_outside_the_catalog,
+            "alter_columns",
+            {"alterations": [{"path": "name", "rename": "label"}]},
+            200,
+            {"label": {"lance-encoding:structural-encoding": "miniblock"}},
+            id="a-rename-keeps-a-knob-the-field-already-held",
+        ),
+    ],
+)
+def test_a_door_that_changes_field_metadata_judges_only_the_knobs_it_adds(
+    client: TestClient, arrange: Callable[[TestClient], None] | None, door: str, body: dict[str, object], status: int, after: dict[str, dict[str, str]]
+) -> None:
+    assert _create(client, {}).status_code == 200
+    if arrange is not None:
+        arrange(client)
+
+    answer = client.post(f"{TABLE}/{door}", json=body)
+
+    assert answer.status_code == status, answer.text
+    assert _encoding_on_each_field(client) == after

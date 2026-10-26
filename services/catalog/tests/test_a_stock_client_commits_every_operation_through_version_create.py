@@ -462,6 +462,10 @@ def _arm_auto_cleanup(stock: lance_namespace.LanceNamespace) -> None:
     _opened(stock).update_config({"lance.auto_cleanup.interval": "1", "lance.auto_cleanup.older_than": "0ms"})
 
 
+def _stamp_a_scheme_lance_does_not_know(stock: lance_namespace.LanceNamespace) -> None:
+    _opened(stock).update_field_metadata({"v": {"lance-encoding:compression": "bogus"}})
+
+
 def _restore_version_1(stock: lance_namespace.LanceNamespace) -> None:
     _opened(stock).checkout_version(1).restore()
 
@@ -597,6 +601,7 @@ def _data_staged_under_an_index_label(stock: lance_namespace.LanceNamespace) -> 
         pytest.param(_reuse_live_row_ids_as_an_update, set(), False, 400, 13, ("db$t", 4), id="live-row-ids-are-not-reused-whatever-the-label"),
         pytest.param(_append_at_file_version_2_1, set(), False, 400, 13, ("db$t", 3), id="a-version-that-does-not-follow-the-latest-is-refused"),
         pytest.param(_arm_auto_cleanup, set(), False, 400, 13, ("db$t", 4), id="auto-cleanup-is-not-armed-by-a-commit"),
+        pytest.param(_stamp_a_scheme_lance_does_not_know, set(), False, 400, 13, ("db$t", 4), id="an-encoding-knob-lance-cannot-honour-is-not-stamped"),
         pytest.param(_restore_version_1, {"can_restore"}, False, 403, 15, ("db$t", 4), id="a-writer-cannot-stage-a-restore"),
         pytest.param(_overwrite, set(), True, 409, 19, ("db$t", 4), id="an-overwrite-of-a-protected-table-is-refused"),
         pytest.param(_compact, {"can_maintain"}, False, 403, 15, ("db$t", 4), id="a-writer-cannot-stage-a-compaction"),
