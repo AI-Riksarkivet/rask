@@ -24,6 +24,9 @@ dependencies = [
     # FastAPI integration that mounts the sidecar's /dapr/* callback routes — and the DaprApp that
     # declares the subscriptions — is its own distribution, which is what `annotator` shipped without.
     "dapr-ext-fastapi>=1.18.1",
+    # The transport the Dapr SDK speaks to the sidecar over: a sidecar that refuses or drops the connection raises its
+    # `ClientConnectionError`, which `notifications.proxies` names to answer it as a 503, so it is declared here.
+    "aiohttp>=3.9",
 ]
 # Deliberately NOT `dapr-ext-workflow`: nothing in this plane mints an id mid-saga, so there is no
 # command sequence to replay and the engine is not earned (the reopen

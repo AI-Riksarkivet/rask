@@ -15,7 +15,6 @@ from typing import Any
 
 import pytest
 
-from notifications.errors import InboxUnreadable
 from notifications.inbox_actor import InboxActorInterface
 from notifications.proxies import TypedActorProxy, inbox_actor_id
 from notifications.subjects import decode_subject
@@ -24,9 +23,8 @@ from notifications.subjects import decode_subject
 class _WireOnlyProxy:
     """Behaves like the real `ActorProxy`: ONLY wire names resolve."""
 
-    def __init__(self, wire_names: set[str], raises: Exception | None = None) -> None:
+    def __init__(self, wire_names: set[str]) -> None:
         self._wire = wire_names
-        self._raises = raises
         self.calls: list[str] = []
 
     def __getattr__(self, name: str) -> Any:
@@ -35,8 +33,6 @@ class _WireOnlyProxy:
 
         async def _call(*args: Any) -> dict[str, Any]:
             self.calls.append(name)
-            if self._raises is not None:
-                raise self._raises
             return {}
 
         return _call
@@ -64,27 +60,6 @@ def test_an_undeclared_method_fails_loudly() -> None:
     proxy = TypedActorProxy(_WireOnlyProxy(set()), InboxActorInterface)
     with pytest.raises(AttributeError, match="declares no method"):
         _ = proxy.not_a_method
-
-
-@pytest.mark.asyncio
-async def test_an_unreadable_inbox_survives_the_sidecar_hop_as_itself() -> None:
-    """Dapr serialises an actor's exception into a 500 body, so without the translation every
-    `except InboxUnreadable` in the routes stops matching the moment the check runs inside an actor —
-    and a record this service deliberately refuses reaches the browser as a bare 500."""
-    raw = _WireOnlyProxy(_wire_names(InboxActorInterface), raises=RuntimeError("... InboxUnreadable: inbox-rows ..."))
-    proxy = TypedActorProxy(raw, InboxActorInterface)
-
-    with pytest.raises(InboxUnreadable):
-        await proxy.unread()
-
-
-@pytest.mark.asyncio
-async def test_any_other_actor_failure_is_re_raised_untouched() -> None:
-    raw = _WireOnlyProxy(_wire_names(InboxActorInterface), raises=RuntimeError("connection refused"))
-    proxy = TypedActorProxy(raw, InboxActorInterface)
-
-    with pytest.raises(RuntimeError, match="connection refused"):
-        await proxy.unread()
 
 
 #: Subject shapes an identity provider really emits, each carrying a character the id has to survive:

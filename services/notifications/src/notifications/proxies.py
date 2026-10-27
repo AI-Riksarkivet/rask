@@ -19,7 +19,10 @@ from datetime import datetime
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from notifications.errors import InboxUnreadable
+import aiohttp
+from dapr.clients.exceptions import DaprHttpError
+
+from notifications.errors import ActorPlaneUnavailable, InboxUnreadable
 from notifications.inbox_actor import INBOX_ACTOR_TYPE, InboxActorInterface
 from notifications.subjects import DAPR_APP_ID_SEPARATOR, encode_subject
 from notifications.watch_actor import WATCH_ACTOR_TYPE, WatchIndexActorInterface
@@ -83,8 +86,31 @@ class TypedActorProxy:
         return _translating(getattr(self._proxy, wire))
 
 
+#: What the Python actor host stamps on an exception the actor's own code raised (`dapr.ext.fastapi.actor` answers it 500
+#: with `ERROR_CODE_UNKNOWN`), carried inside daprd's `ERR_ACTOR_INVOKE_METHOD` envelope. Measured on the live sidecar
+#: 2026-10-27: a `SetPrefs` that raised ValueError and an unknown method both answered with it, compact as written here.
+_RAISED_BY_ACTOR_CODE = '"errorCode":"UNKNOWN"'
+
+
+def _actor_plane_fault(exc: Exception) -> bool:
+    """Whether ``exc`` says the sidecar or the actor plane behind it could not answer, which passes with time.
+
+    Measured on dapr 1.18.3: an unreachable sidecar raises aiohttp's `ClientConnectionError` (`ClientConnectorError` when
+    it is gone between the handshake and the call) or `TimeoutError` (the call outlasting `DAPR_HTTP_TIMEOUT_SECONDS`),
+    and daprd answers a placement or state fault with a 5xx `DaprHttpError`; a Dapr error the actor's own state calls
+    raised keeps its daprd code through the actor host, so it is the sidecar's too. Not a fault that passes: a 4xx
+    (this service's own request) and a 5xx carrying `_RAISED_BY_ACTOR_CODE` (this service's own actor code failing),
+    each of which stays a 500. A TLS or endpoint misconfiguration fails the SDK's handshake before any call is made, so
+    it reads as an unreachable sidecar.
+    """
+    if isinstance(exc, aiohttp.ClientConnectionError | TimeoutError):
+        return True
+    return isinstance(exc, DaprHttpError) and (exc.status_code or 0) >= 500 and _RAISED_BY_ACTOR_CODE not in str(exc)
+
+
 def _translating(call: ActorCall) -> ActorCall:
-    """Re-raise an actor-side `InboxUnreadable` as itself on THIS side of the sidecar.
+    """Re-raise an actor-side `InboxUnreadable` as itself on THIS side of the sidecar, and a fault of the actor plane as
+    `ActorPlaneUnavailable` (CTL-023), a 503 with `Retry-After`, never the catch-all 500.
 
     Dapr serialises an actor's exception into an HTTP 500 body and the SDK raises `DaprHttpError`, so
     without this every `except InboxUnreadable` in the routes stops matching the moment the check runs
@@ -107,10 +133,13 @@ def _translating(call: ActorCall) -> ActorCall:
         try:
             return await call(*args, **kwargs)
         except Exception as exc:
-            if InboxUnreadable.__name__ not in str(exc):
-                raise
-            logger.error("inbox_actor_refusal", extra={"envelope": str(exc)})
-            raise InboxUnreadable("actor", "the actor refused to serve this inbox record") from exc
+            if InboxUnreadable.__name__ in str(exc):
+                logger.error("inbox_actor_refusal", extra={"envelope": str(exc)})
+                raise InboxUnreadable("actor", "the actor refused to serve this inbox record") from exc
+            if _actor_plane_fault(exc):
+                logger.warning("actor_plane_unavailable", extra={"envelope": str(exc)})
+                raise ActorPlaneUnavailable from exc
+            raise
 
     return invoke
 
@@ -123,7 +152,13 @@ def typed_proxy(actor_type: str, actor_id: str, interface: type) -> TypedActorPr
 
     # `cast`, not a signature change: callers hand the concrete interface class, and narrowing the
     # parameter to `type[ActorInterface]` would force every unit-test fake to inherit dapr's base.
-    return TypedActorProxy(ActorProxy.create(actor_type, ActorId(actor_id), cast("type[ActorInterface]", interface)), interface)
+    try:
+        proxy = ActorProxy.create(actor_type, ActorId(actor_id), cast("type[ActorInterface]", interface))
+    except TimeoutError as exc:
+        # The SDK's handshake raises it when the sidecar never answers its health check (`DAPR_HEALTH_TIMEOUT`).
+        logger.warning("actor_plane_unavailable", extra={"envelope": str(exc)})
+        raise ActorPlaneUnavailable from exc
+    return TypedActorProxy(proxy, interface)
 
 
 def inbox_for(subject: str) -> TypedActorProxy:

@@ -291,8 +291,8 @@ async def reconcile(
             )
     except TimeoutError as exc:
         if not budget.expired():
-            # Somebody else's TimeoutError — the Dapr SDK's blocking sidecar health check is the one
-            # that actually occurs. It is not a statement about the feed, so it propagates as itself.
+            # Somebody else's TimeoutError, raised inside the walk before the budget ran out. It is not a
+            # statement about the feed, so it propagates as itself.
             raise
         if stored is not None and progress.mark > stored.seq:
             # A gap found before the timer fired is reported now: the saved mark is past it, so no later

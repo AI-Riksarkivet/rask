@@ -15,14 +15,20 @@ name and first line:
   one actor id. Those tests deliberately break the serialisation and show what is lost — which is the
   only way a suite with no sidecar in it can state what the sidecar is holding up.
 
-Nothing here needs a sidecar, a placement service or a database, and that is also this suite's limit:
-it can prove what happens when the lock is absent and cannot prove that the lock is there.
+Nothing here needs a real sidecar, a placement service or a database (the transport faults are driven against a loopback
+stand-in), and that is also this suite's limit: it can prove what happens when the lock is absent and cannot prove that
+the lock is there.
 """
 
 import asyncio
 import json
 import logging
+import socket
+import threading
+import time
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, cast
 
 import pytest
@@ -31,7 +37,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from notifications.api import inbox as inbox_module
+from notifications.api import prefs as prefs_module
 from notifications.api import security as security_module
+from notifications.api import watches as watches_module
 from notifications.api.ingest import DAPR_DROP, ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.visibility import Visibility
@@ -245,38 +253,118 @@ async def test_a_terminal_state_re_emitted_with_a_new_instant_never_moves_the_ro
 # ── failure injection on the read plane ─────────────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "body"),
-    [
-        ("GET", "/notifications/inbox", None),
-    ],
-)
-def test_a_state_store_outage_reaches_the_browser_as_a_bare_500(monkeypatch: pytest.MonkeyPatch, method: str, path: str, body: dict[str, Any] | None) -> None:
-    """HALF-CLOSED, and the remaining half is still pinned.
+#: daprd's envelope for an actor method that raised, as the live sidecar answered it on 2026-10-27 (`SetPrefs` refusing an
+#: email destination): the actor host's own body, carrying `UNKNOWN`, inside `ERR_ACTOR_INVOKE_METHOD`.
+_ACTOR_RAISED = {
+    "errorCode": "ERR_ACTOR_INVOKE_METHOD",
+    "message": 'error invoke actor method: error from actor service: (500) {"message":"ValueError(\'the email destination must be '
+    'exactly one bare address\')","errorCode":"UNKNOWN"}',
+}
 
-    `InboxUnreadable` exists so that "there is something here I refuse to serve" is a 503 problem+json
-    rather than an empty 200 — the estate's own hard-won rule. The ORDINARY outage does not travel that
-    path: an unreachable sidecar or state store raises whatever the SDK raises, and `_translating`
-    re-raises anything that is not an `InboxUnreadable` untouched. With no catch-all, that reached the
-    browser as a bare 500 with no problem+json body at all.
 
-    The ENVELOPE half is fixed (open_fastapi-audit, the missing-catch-all finding): `register_handlers`
-    now installs an `Exception` handler, so every refusal on this plane is problem+json and the SDK's
-    message goes to the log rather than the wire.
+class _Sidecar(BaseHTTPRequestHandler):
+    """A stand-in daprd on loopback: answers the SDK's handshake, and each actor call as the server's `fault` says."""
 
-    WHAT IS STILL WRONG: the STATUS. A dependency being down is a 503, and this answers 500, so a client
-    still cannot tell a broken state store from a broken service — the distinction `InboxUnreadable` was
-    built to make, absent exactly when a dependency is down.
+    def do_GET(self) -> None:
+        self.send_response(204)
+        self.end_headers()
 
-    Rewrite again when the door maps a transport failure to 503-with-a-reason.
+    def do_POST(self) -> None:
+        fault = cast(Any, self.server).fault
+        if fault == "slow":
+            time.sleep(2)
+            return
+        if fault == "drops":
+            self.close_connection = True
+            self.connection.shutdown(socket.SHUT_RDWR)
+            return
+        body = json.dumps(
+            {
+                # The placement fault is modelled on daprd's own wording, not measured: no live sidecar was made to lose placement.
+                "placement": {"errorCode": "ERR_ACTOR_INVOKE_METHOD", "message": "error invoke actor method: did not find address for actor"},
+                "unreadable": {"errorCode": "ERR_ACTOR_INVOKE_METHOD", "message": "error from actor service: (500) InboxUnreadable: inbox-rows"},
+                "actor-raised": _ACTOR_RAISED,
+                "refuses": {"errorCode": "ERR_MALFORMED_REQUEST", "message": "failed deserializing the request"},
+            }[fault]
+        ).encode()
+        self.send_response(400 if fault == "refuses" else 500)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        return None
+
+
+@pytest.fixture
+def sidecar(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """daprd as the case names it, at the endpoint the real SDK reads.
+
+    `down` holds a port bound and never listening, so a connection is refused and no other worker can take the port;
+    `slow` installs the SDK's own factory with a one-second call timeout, since its 60 s default is bound at import.
     """
-    faulty = _Inbox(fault=RuntimeError("dapr: could not reach state store lance-statestore"))
-    with TestClient(_door(faulty, monkeypatch), raise_server_exceptions=False) as door:
-        response = door.request(method, path, json=body)
+    from dapr.actor import ActorProxy, ActorProxyFactory
+    from dapr.conf import settings as dapr_settings
 
-    # The envelope is now guaranteed; the STATUS is the half still open.
+    held = socket.socket()
+    held.bind(("127.0.0.1", 0))
+    server = None
+    if request.param == "down":
+        port = held.getsockname()[1]
+    else:
+        held.close()
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _Sidecar)
+        cast(Any, server).fault = request.param
+        port = server.server_address[1]
+        threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
+    monkeypatch.setattr(dapr_settings, "DAPR_HTTP_ENDPOINT", f"http://127.0.0.1:{port}")
+    if request.param == "slow":
+        monkeypatch.setattr(ActorProxy, "_default_proxy_factory", ActorProxyFactory(http_timeout_seconds=1))
+    yield
+    held.close()
+    if server is not None:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("sidecar", "path", "status", "retry_after"),
+    [
+        pytest.param("down", "/notifications/inbox", 503, "5", id="no-sidecar-inbox"),
+        pytest.param("down", "/notifications/watches", 503, "5", id="no-sidecar-watches"),
+        pytest.param("down", "/notifications/prefs", 503, "5", id="no-sidecar-prefs"),
+        pytest.param("drops", "/notifications/inbox", 503, "5", id="the-sidecar-drops-the-call"),
+        pytest.param("slow", "/notifications/inbox", 503, "5", id="the-sidecar-does-not-answer-in-time"),
+        pytest.param("placement", "/notifications/inbox", 503, "5", id="the-actor-plane-cannot-place-the-call"),
+        pytest.param("unreadable", "/notifications/inbox", 503, None, id="an-unreadable-record-is-no-reason-to-wait"),
+        pytest.param("actor-raised", "/notifications/inbox", 500, None, id="the-actors-own-code-failing-is-no-reason-to-wait"),
+        pytest.param("refuses", "/notifications/inbox", 500, None, id="a-request-the-sidecar-refuses-is-no-reason-to-wait"),
+    ],
+    indirect=["sidecar"],
+)
+def test_a_sidecar_that_cannot_answer_is_a_503_to_retry_and_only_that(sidecar: None, path: str, status: int, retry_after: str | None) -> None:
+    """CTL-023, a guarantee: an inbox, watch or prefs route whose sidecar is gone, drops the call or cannot place the actor
+    answers 503 problem+json with `Retry-After`, criterion 5's "wait and retry" (`lance_docs/ns_catalog/spec.yaml`,
+    `ServiceUnavailableErrorResponse`). The real routes, the real `inbox_for`
+    and the real SDK run against the stand-in. An unreadable record keeps its own 503 with no `Retry-After`, since
+    waiting does not change it, and the actor's own code failing or a request the sidecar refuses stays a 500, since no
+    retry mends it.
+    """
+    app = FastAPI()
+    register_handlers(app)
+    for router in (inbox_module.router, watches_module.router, prefs_module.router):
+        app.include_router(router)
+    app.state.notifications_settings = get_notifications_settings()
+    app.state.actors_registered = True
+    app.state.decider = None
+    app.dependency_overrides[security_module._deps.current_subject] = lambda: SUBJECT
+
+    with TestClient(app, raise_server_exceptions=False) as door:
+        response = door.get(path)
+
+    assert (response.status_code, response.headers.get("retry-after")) == (status, retry_after)
     assert response.headers["content-type"].startswith("application/problem+json")
-    assert response.status_code == 500
 
 
 def test_the_refusal_body_carries_a_fixed_reason_while_the_envelope_goes_to_the_log(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

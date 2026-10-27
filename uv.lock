@@ -2118,6 +2118,7 @@ name = "notifications"
 version = "0.1.0"
 source = { editable = "services/notifications" }
 dependencies = [
+    { name = "aiohttp" },
     { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
     { name = "lineage-kit" },
@@ -2128,6 +2129,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9" },
     { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "lineage-kit", editable = "packages/lineage-kit" },
