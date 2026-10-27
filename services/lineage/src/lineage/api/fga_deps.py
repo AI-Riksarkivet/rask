@@ -431,7 +431,14 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
         # A stamp that names no principal is no author: nothing could be authorized as it ([[LH-063]]).
         if not is_principal(subject):
             raise UnauthoredRunError(f"a bus-delivered run's author {subject[:128]!r} is not a principal (<idp-id>~<subject>)")
-        await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation))
+        await enforce_output_authz(
+            event,
+            request,
+            settings,
+            _StampedAuthor(subject),
+            relations=relations_for_operation(event.operation),
+            signed_by=verified,
+        )
     except PermissionDeniedError:
         if not await _is_replay(event, payload, request):
             raise
@@ -455,12 +462,12 @@ def _is_a_delegators_drop(event: RunEvent | DatasetEvent, verified: VerifiedSign
     attestation: only the catalog's own sidecar may read its private key, at the Dapr scope and at the store, where the
     catalog's login is the only one whose policy grants it (ADR 0169).
     """
-    return (
-        isinstance(event, DatasetEvent)
-        and verified is not None
-        and verified.identity in settings.signing.delegators
-        and lifecycle_state(event.operation or "") == "DROP"
-    )
+    return isinstance(event, DatasetEvent) and _signed_by_a_delegator(verified, settings) and lifecycle_state(event.operation or "") == "DROP"
+
+
+def _signed_by_a_delegator(verified: VerifiedSignature | None, settings: LineageSettings) -> bool:
+    """Whether this call verified the event's signature as one of the chart's delegators (the catalog)."""
+    return verified is not None and verified.identity in settings.signing.delegators
 
 
 async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], request: Request) -> bool:
@@ -497,6 +504,7 @@ async def enforce_output_authz(
     token: Caller | None,
     *,
     relations: tuple[str, ...] = _WRITE_RELATIONS,
+    signed_by: VerifiedSignature | None = None,
 ) -> None:
     """Output-scoped ingest authz: require the producer may WRITE every output dataset it claims.
 
@@ -513,6 +521,12 @@ async def enforce_output_authz(
     the catalog stamps it on every event it signs, and the HTTP door stamps what the caller's name resolves to. A
     rename keeps the uuid, so a rename's register names its source by the uuid the destination holds, and its grants
     with it. A governed dataset carrying no uuid names no table the producer may see, so it is refused.
+
+    ``signed_by`` is the signature the bus door verified (`verify_arrived_event`), never a caller's claim. A write signed
+    by one of the chart's delegators whose every denied output carries zero tuples is admitted ([[LH-502]], owner ruling
+    2026-10-20): the catalog revokes a table's tuples when it drops or deregisters it, so its own create or write
+    announcement, delivered after that revoke, names an object nobody may write, and the catalog authorized the write
+    before it committed it. A governed output the author may not write keeps the refusal, and so does every input.
     """
     if not settings.fga_enabled:
         return
@@ -552,9 +566,11 @@ async def enforce_output_authz(
         if denied:
             log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": denied})
             reason = f"{' or '.join(relations)} required on outputs: {', '.join(_names_of(event.outputs, denied))}"
-            if await _none_are_governed(decider, objects=denied):
+            if not await _none_are_governed(decider, objects=denied):
+                raise PermissionDeniedError(reason)
+            if not _signed_by_a_delegator(signed_by, settings):
                 raise UngovernedOutputError(reason)
-            raise PermissionDeniedError(reason)
+            log.info("lineage_catalog_write_admitted", extra={"run": event.run_id, "outputs": denied, "operation": event.operation})
     # Inputs: you may only RECORD reading a dataset you can SEE — else an authenticated reader (e.g. the
     # service-web read identity) could forge provenance like "service-web read gold$catalog" into the
     # feed and the edge list. `writer ⊇ reader` in model.fga, so writers and readers
