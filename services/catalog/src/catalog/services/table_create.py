@@ -18,7 +18,7 @@ The steps, and the order, are exactly what the door ran, because the ORDER is th
    judge refused a missing run and an unreadable input before the door ran);
 6. seed-with-compensation, which grants owner only on a table this request brought into being;
 7. the schema read-back, the lineage emit (``overwrite_table`` for an Overwrite of an existing table)
-   and the control emit.
+   and, for a table this request brought into being, the control emit.
 
 **An Overwrite of an existing table is a new version of the same table** ([[LH-242]]). The spec's
 words are "the existing table is dropped and a new table with this name is created" (spec.yaml
@@ -409,12 +409,12 @@ async def create_governed_table(
             uuids=table_uuids,
             event_time=readback.committed_at,
         )
-    # Only a real creation emits — an ExistOk request that KEPT a pre-existing table wrote nothing and
-    # created nothing (same guard that skips ownership seeding above), so a `table_created` here would be a
-    # spurious event announcing a creation-by-caller that never happened. A fresh create emits, and so does
-    # an Overwrite of an existing table: it changed the table, and `extra.mode` is what tells the two apart
-    # in a vocabulary that has no overwrite verb.
-    if not existok_kept_existing:
+    # Only a table this request brought into being is announced on the control lane. An ExistOk request that
+    # KEPT a pre-existing table created nothing, and an Overwrite of an existing table kept its uuid, grants and
+    # protection: it committed a new version of the same dataset (lance_docs transaction.md § Overwrite), so its
+    # announcement is the `overwrite_table` lineage event above, as `insert?mode=overwrite` and a staged Overwrite
+    # at `version/create` announce theirs (ADR 0099, [[LH-415]]).
+    if not existok_kept_existing and not overwrote_existing:
         await emit_control(
             control,
             action="table_created",

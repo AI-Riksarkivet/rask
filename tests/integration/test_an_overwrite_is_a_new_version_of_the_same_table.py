@@ -9,6 +9,8 @@ standard `OVERWRITE` lifecycle state.
 The table's earlier versions stay readable by time travel either way, so the catalog serves the
 Overwrite as a new version of the same table: its protection holds unless `force=true`, its record
 says the table was overwritten, not created, and it keeps the uuid the catalog minted for it ([[LH-519]]).
+No table came into being, so neither door announces one on the control lane: the lineage `OVERWRITE` event is
+the overwrite's announcement, as Lance records it as one more version of the same dataset ([[LH-415]], ADR 0099).
 
 Driven through the real catalog app on a real `dir` namespace, with the lineage event captured on the
 wire: the real `HttpLineageEmitter` builds and posts it to an `httpx.MockTransport`.
@@ -29,6 +31,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_emit import HttpLineageEmitter
+from service_kit.control_events import CatalogControlEvent
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -62,6 +65,16 @@ def events(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> list[
     emitter = HttpLineageEmitter(httpx.AsyncClient(transport=httpx.MockTransport(_receive)), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
     monkeypatch.setattr(real_ns_client.app.state, "lineage_emitter", emitter, raising=False)
     return posted
+
+
+class _Control:
+    """Records the action of every control event the catalog announces."""
+
+    def __init__(self) -> None:
+        self.actions: list[str] = []
+
+    async def emit(self, event: CatalogControlEvent) -> None:
+        self.actions.append(event.action)
 
 
 @pytest.fixture
@@ -100,9 +113,11 @@ def _uuid(client: TestClient) -> str:
 
 @pytest.mark.parametrize("door", list(DOORS))
 def test_a_forced_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
-    real_ns_client: TestClient, protected: str, events: list[dict[str, Any]], door: str
+    real_ns_client: TestClient, protected: str, events: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, door: str
 ) -> None:
     minted = _uuid(real_ns_client)
+    control = _Control()
+    monkeypatch.setattr(real_ns_client.app.state, "control_emitter", control, raising=False)
 
     answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}&force=true", content=_ipc(_rows(9)), headers=ARROW)
 
@@ -118,3 +133,15 @@ def test_a_forced_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
     assert event["outputs"][0]["name"] == TABLE
     assert facets.get("lifecycleStateChange", {}).get("lifecycleStateChange") == "OVERWRITE", facets.get("lifecycleStateChange")
     assert facets["version"]["datasetVersion"] == str(version), "the WROTE edge does not name the version the overwrite made"
+    assert control.actions == [], f"{door}: an overwrite of an existing table was announced on the control lane: {control.actions}"
+
+
+def test_an_overwrite_create_of_an_absent_table_is_announced_as_a_created_table(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    assert real_ns_client.post("/v1/namespace/lh242/create", json={}).status_code == 200
+    control = _Control()
+    monkeypatch.setattr(real_ns_client.app.state, "control_emitter", control, raising=False)
+
+    answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS['create']}", content=_ipc(_rows(1)), headers=ARROW)
+
+    assert answer.status_code == 200, answer.text
+    assert control.actions == ["table_created"], control.actions

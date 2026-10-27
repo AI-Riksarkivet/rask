@@ -523,7 +523,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `create?mode=Overwrite` over an existing table, which must keep each provenance column and key field at
   its type and is written with the table's own fields and reserved metadata
   (`provenance_guard.keep_provenance`, [[LH-242]]: the Overwrite is a new version of the same table, its
-  grants and history intact, recorded as `overwrite_table` with lifecycle state `OVERWRITE`); the
+  grants and history intact, recorded as `overwrite_table` with lifecycle state `OVERWRITE` and announced on no
+  control action, since no table came into being; `insert?mode=overwrite` keeps the schema and so stays at the writer
+  rung, ADR 0099, [[LH-415]]); the
   platform writes them with pylance directly, and a client creating from an upstream's schema strips its
   schema metadata first. `description` is the one user-facing reserved key (the
   lakehouse renders it under the table name); everything else in that map is opaque user data.
