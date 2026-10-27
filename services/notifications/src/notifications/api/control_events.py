@@ -23,6 +23,7 @@ time the set held six — the drift was harmless here only because the constant,
 the gate reads.)
 """
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -186,6 +187,44 @@ def as_delivery(event: CatalogControlEvent) -> NotificationDelivery:
     )
 
 
+#: How many members' inboxes are written at once, and how long the whole set may take. The deadline sits under the
+#: tighter of the control component's two windows: 30 s of ackWait with resiliency off, and with it on 720 s less the
+#: sidecar's four 120 s backoffs, shared by five attempts (48 s each; `chart/templates/dapr-component.yaml`,
+#: `dapr-resiliency.yaml`). The handler's own time counts against the window, and one that outlasts it is redelivered
+#: underneath itself.
+_CONCURRENT_DELIVERIES = 8
+_DELIVERY_DEADLINE_SECONDS = 20.0
+
+
+async def _deliver_to_all(subjects: tuple[str, ...], payload: dict[str, object], *, open_inbox: InboxOpener, action: str) -> bool:
+    """Write ``payload`` into every subject's inbox, at most `_CONCURRENT_DELIVERIES` at once; whether every one landed.
+
+    Each member is attempted whatever another's inbox does, so one that fails or hangs neither stops nor delays the
+    rest past the deadline; the deadline cancels what is still in flight and answers that not all landed.
+    """
+    gate = asyncio.Semaphore(_CONCURRENT_DELIVERIES)
+    failed: list[str] = []
+
+    async def deliver(subject: str) -> None:
+        async with gate:
+            try:
+                await open_inbox(subject).deliver(payload)
+            except Exception:
+                # The sidecar owns the backoff. Unlike the watcher lookup, redelivery genuinely helps here: the failure
+                # is the inbox actor being momentarily unreachable, not a missing audience.
+                log.exception("control_notification_failed", extra={"action": action, "subject": subject})
+                failed.append(subject)
+
+    try:
+        async with asyncio.timeout(_DELIVERY_DEADLINE_SECONDS), asyncio.TaskGroup() as group:
+            for subject in subjects:
+                group.create_task(deliver(subject))
+    except TimeoutError:
+        log.warning("control_notification_deadline", extra={"action": action, "members": len(subjects)})
+        return False
+    return not failed
+
+
 async def ingest_control_event(
     raw: object, *, open_inbox: InboxOpener, open_watch_index: WatchIndexOpener, expand: UsersetExpander | None = None
 ) -> dict[str, str]:
@@ -218,19 +257,11 @@ async def ingest_control_event(
         record_ingress(Lane.BUS, Outcome.IGNORED)
         return {"status": "SUCCESS"}
 
-    # ONE ROW PER PERSON, and a partial failure retries the whole set. Safe because delivery is
-    # idempotent on `notification_id` (`<event_id>@<ACTION>`, stable across redelivery), so a member
-    # who already has the row is a no-op on the retry — the same property the run lane's fan-out rests
-    # on. A group grant must not be able to half-deliver and then stop.
-    payload = as_delivery(event).model_dump(mode="json")
-    try:
-        for subject in subjects:
-            await open_inbox(subject).deliver(payload)
-    except Exception:
-        # RETRY, and the sidecar owns the backoff. Unlike the watcher lookup, redelivery genuinely
-        # helps here: the failure is the inbox actor being momentarily unreachable, not a missing
-        # audience, and the delivery is idempotent on the notification id.
-        log.exception("control_notification_failed", extra={"action": event.action})
+    # ONE ROW PER PERSON, EVERY PERSON ATTEMPTED, and any failure retries the whole set (CTL-027): a loop that stopped at
+    # the first failure would be redelivered in the same order and never reach the members after a member whose inbox
+    # fails for good. Retrying the set is safe because delivery is idempotent on `notification_id` (`<event_id>@<ACTION>`,
+    # stable across redelivery), so a member who already has the row takes it as a duplicate.
+    if not await _deliver_to_all(subjects, as_delivery(event).model_dump(mode="json"), open_inbox=open_inbox, action=event.action):
         record_ingress(Lane.BUS, Outcome.RETRIED)
         return {"status": "RETRY"}
 

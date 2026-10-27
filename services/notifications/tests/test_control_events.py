@@ -5,12 +5,15 @@ check. Being named IS the targeting, and after a `grant_revoked` the subject can
 object — so a delivery-time visibility check would drop precisely the event they most need.
 """
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
 
+from notifications.api import control_events as control_events_module
 from notifications.api.control_events import as_delivery, ingest_control_event, named_subjects
+from notifications.errors import InboxUnreadable
 from service_kit.control_events import CatalogControlEvent
 
 
@@ -46,16 +49,21 @@ class _Inbox:
         self._subject = subject
 
     async def deliver(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self._subject in self._plane.hangs:
+            await asyncio.Event().wait()
         if self._subject in self._plane.broken:
-            raise RuntimeError("the sidecar is unreachable")
+            raise self._plane.broken[self._subject]
         self._plane.boxes.setdefault(self._subject, []).append(payload)
         return {"delivered": True}
 
 
 class _Plane:
-    def __init__(self, broken: set[str] | None = None) -> None:
+    def __init__(self, broken: dict[str, Exception] | None = None, hangs: frozenset[str] = frozenset()) -> None:
         self.boxes: dict[str, list[dict[str, Any]]] = {}
-        self.broken = broken or set()
+        #: Each subject whose inbox raises, and what it raises.
+        self.broken = broken or {}
+        #: Each subject whose inbox never answers.
+        self.hangs = hangs
 
     def open(self, subject: str) -> Any:
         return _Inbox(self, subject)
@@ -162,7 +170,7 @@ class TestIngest:
     async def test_an_unreachable_inbox_retries(self) -> None:
         """Unlike the watcher lookup, redelivery genuinely helps: the actor is momentarily
         unreachable, and the delivery is idempotent on the notification id."""
-        plane = _Plane(broken={"dex~alice"})
+        plane = _Plane(broken={"dex~alice": RuntimeError("the sidecar is unreachable")})
 
         assert await ingest_control_event(_event().model_dump(mode="json"), open_inbox=plane.open, open_watch_index=_no_index) == {"status": "RETRY"}
 
@@ -209,6 +217,30 @@ class TestUsersetGrants:
         assert result == {"status": "SUCCESS"}
         assert sorted(plane.boxes) == ["dex~bob", "dex~carol"]
         assert "role:reviewers#assignee" not in plane.boxes, "the group itself must never get an inbox"
+
+    @pytest.mark.parametrize(
+        "plane",
+        [
+            pytest.param(_Plane(broken={"dex~carol": InboxUnreadable("inbox-rows", "the stored record no longer fits its schema")}), id="refuses"),
+            pytest.param(_Plane(hangs=frozenset({"dex~carol"})), id="never-answers"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_a_member_whose_inbox_fails_does_not_stop_the_members_after_it(self, plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> None:
+        """CTL-027: every member is attempted before the event is retried, so a member whose inbox fails for good (a
+        record it refuses to read) or never answers cannot keep the members after it from being told; one that never
+        answers is cut off at the deadline. The redelivery the RETRY asks for re-offers the row to all three, and the
+        two who have it already take it as a duplicate."""
+        monkeypatch.setattr(control_events_module, "_DELIVERY_DEADLINE_SECONDS", 0.2)
+
+        async def expand(userset: str) -> tuple[str, ...]:
+            return ("dex~bob", "dex~carol", "dex~dave")
+
+        result = await ingest_control_event(
+            self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open, open_watch_index=_no_index, expand=expand
+        )
+
+        assert (result, sorted(plane.boxes)) == ({"status": "RETRY"}, ["dex~bob", "dex~dave"])
 
     @pytest.mark.asyncio
     async def test_a_plain_user_needs_no_expansion(self) -> None:
