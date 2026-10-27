@@ -63,10 +63,11 @@ from service_kit.openlineage import (
     RUN_EVENT_SCHEMA_URL,
     VERSION_FACET_SCHEMA_URL,
     DatasetUuids,
+    author_facet,
     catalog_facet,
-    custom_facet,
     dataset_type_facet,
     event_identity,
+    lance_facet,
     lifecycle_facet,
     lifecycle_state,
     processing_engine_facet,
@@ -243,7 +244,7 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
         }
     if ref.branch is not None:
         identifier = {BRANCH_IDENTIFIER: ref.branch_identifier} if ref.branch_identifier is not None else {}
-        dataset.setdefault("facets", {})[LANCE_FACET] = custom_facet(_PRODUCER, ref=ref.branch, **identifier)
+        dataset.setdefault("facets", {})[LANCE_FACET] = lance_facet(_PRODUCER, ref=ref.branch, **identifier)
     return with_dataset_uuids(dataset, ref.uuids, producer=_PRODUCER)
 
 
@@ -395,7 +396,7 @@ def build_write_event(
     # write can only name its human here. Targeting only — it authorizes nothing.
     if is_person_subject(originator):
         lance_fields["originator"] = originator
-    run_facets: dict[str, Any] = {LANCE_FACET: custom_facet(_PRODUCER, **lance_fields)}
+    run_facets: dict[str, Any] = {LANCE_FACET: lance_facet(_PRODUCER, **lance_fields)}
     # WHICH ENGINE WROTE THIS, in the field a non-rask consumer reads. The catalog commits through
     # pylance in-process while the medallion's stage lanes write through Ray, so "what produced this
     # table" has two answers and, without this facet, no way for a forwarded graph backend to tell them apart. Stamped
@@ -403,7 +404,7 @@ def build_write_event(
     # anyone else, and the engine is exactly the part that is not rask-specific.
     run_facets["processing_engine"] = processing_engine_facet(_PRODUCER, name="lance", version=lance.__version__)
     if author is not None:
-        run_facets[AUTHOR_FACET] = custom_facet(_PRODUCER, name=author, sub=author)
+        run_facets[AUTHOR_FACET] = author_facet(_PRODUCER, author)
     output: dict[str, Any] = {"namespace": namespace, "name": table_id}
     facets: dict[str, Any] = {}
     if version is not None:

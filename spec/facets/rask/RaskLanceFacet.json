@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask/RaskLanceFacet.json",
+  "title": "RaskLanceFacet",
+  "description": "What a rask lakehouse event says about a Lance table and the write that touched it. On a RunEvent it rides the run (the operation and the ref and version it committed) and each input and output dataset (the uuids the catalog minted for the table and its namespace, and an input's ref); on a DatasetEvent it rides the dataset and carries both. Every member is optional, since each producer and each position carries only what it knows.",
+  "$defs": {
+    "RaskLanceFacet": {
+      "allOf": [
+        {
+          "$ref": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/BaseFacet"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "description": "The catalog or maintenance operation that made the event, such as insert, merge_insert, create_table, drop_table or expire_versions.",
+              "type": "string",
+              "minLength": 1
+            },
+            "version": {
+              "description": "The table version the write committed, on the ref it names.",
+              "type": "integer",
+              "minimum": 0
+            },
+            "ref": {
+              "description": "The branch a run's write landed on, absent for a write to main, or the ref an input was read on.",
+              "type": "string",
+              "minLength": 1
+            },
+            "branchIdentifier": {
+              "description": "The incarnation of that branch: the last uuid of Lance's branch_identifier chain, so a branch deleted and created again under one name is told apart.",
+              "type": "string",
+              "minLength": 1
+            },
+            "tableUuid": {
+              "description": "The uuid the catalog minted for the dataset's table, which a rename keeps.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "namespaceUuid": {
+              "description": "The uuid the catalog minted for the table's namespace.",
+              "type": "string",
+              "format": "uuid"
+            },
+            "runId": {
+              "description": "The producer's own run id, for the run a write belongs to.",
+              "type": "string",
+              "minLength": 1
+            },
+            "job": {
+              "description": "The producer's own job name for that run.",
+              "type": "string",
+              "minLength": 1
+            },
+            "project": {
+              "description": "The tenant the write belongs to, which a project watch is keyed on.",
+              "type": "string",
+              "minLength": 1
+            },
+            "originator": {
+              "description": "The person a service-authored run was done for, as a principal key.",
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      ],
+      "type": "object"
+    }
+  },
+  "type": "object",
+  "properties": {
+    "rask_lance": {
+      "$ref": "#/$defs/RaskLanceFacet"
+    }
+  }
+}

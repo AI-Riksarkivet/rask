@@ -4,8 +4,10 @@ Delivery durability is proven elsewhere (the outbox and chaos drills); that an e
 whether what arrived is right. This module captures every event the scenario causes, as the bus stored it and as
 lineage's feed serves it, and holds them to six claims:
 
-1. each is the shape its contract writes: an OpenLineage event validates against the 2-0-2 schema and its
-   `rask_signature` facet against `spec/facets/rask/RaskSignatureRunFacet.json`; a control event parses strictly as
+1. each is the shape its contract writes: an OpenLineage event validates against the 2-0-2 schema, its
+   `rask_signature` facet against `spec/facets/rask/RaskSignatureRunFacet.json`, and each `rask_lance` and `rask_author`
+   facet, in any facet bag, against `RaskLanceFacet.json` and `RaskAuthorFacet.json` and the `_schemaURL` naming it
+   ([[LH-500]]); a control event parses strictly as
    the control envelope (`service_kit.control_events.CatalogControlEvent`);
 2. lineage recorded each as the person who called the catalog's door: the author is that person's principal, the
    project is the tenant, and the catalog signed it on their behalf;
@@ -17,8 +19,7 @@ lineage's feed serves it, and holds them to six claims:
 6. nothing the scenario caused, nor the redelivery and forgeries above, parked on the DLQ stream or stayed staged in
    the outbox.
 
-WHAT IS NOT CLAIMED, and why. The `rask_lance` and `rask_author` facets point at BaseFacet and have no versioned schema of their
-own, so (1) holds them only to OpenLineage's facet shape (LH-500, #649, parked). The edge list's one door,
+WHAT IS NOT CLAIMED, and why. The edge list's one door,
 `/tables/{t}/derived`, answers a set of tables, so a duplicated edge row is invisible there and (4) reads the feed,
 which shows every row. Refusing a publish from a client the bus does not admit is the bus's own work (operator mode,
 proven by `test_nats_admits_each_client_only_to_its_own_subjects.py`), and both targets run the bus with it off
@@ -60,6 +61,7 @@ from referencing.jsonschema import DRAFT202012
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed.fga import user_object
 from service_kit.openlineage import event_identity
+from tests.unit.rask_facets import rask_facet_errors
 
 
 RELEASE = os.environ.get("LANCE_E2E_RELEASE", "rask")
@@ -264,7 +266,11 @@ def forgeries(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> F
 def test_every_event_is_the_shape_its_contract_writes(captured: Captured) -> None:
     published = [(f"bus {message.stream} #{message.seq}", message.event) for message in captured.lineage]
     served = [(f"feed #{row['seq']}", row["event"]) for row in captured.feed]
-    errors = [f"{where}: {error}" for where, event in published + served for error in _openlineage_errors(event) + _signature_facet_errors(event)]
+    errors = [
+        f"{where}: {error}"
+        for where, event in published + served
+        for error in _openlineage_errors(event) + _signature_facet_errors(event) + rask_facet_errors(event)
+    ]
     for message in captured.control:
         try:
             CatalogControlEvent.model_validate_json(json.dumps(message.event), strict=True)

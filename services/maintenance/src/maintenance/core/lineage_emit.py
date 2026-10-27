@@ -47,7 +47,8 @@ from service_kit.openlineage import (
     LANCE_FACET,
     RUN_EVENT_SCHEMA_URL,
     DatasetUuids,
-    custom_facet,
+    author_facet,
+    lance_facet,
     run_id_for,
     with_dataset_uuids,
 )
@@ -175,9 +176,9 @@ def build_maintenance_event(
     ``uuids`` name the output's table and namespace in its ``rask_lance`` facet (ADR 0173 §10): a rename keeps a table's
     uuid and changes its name, so the feed keys the pass on the table it reclaimed, not on whatever holds the name later.
     """
-    facets: dict[str, Any] = {LANCE_FACET: custom_facet(_PRODUCER, operation=EXPIRE_VERSIONS)}
+    facets: dict[str, Any] = {LANCE_FACET: lance_facet(_PRODUCER, operation=EXPIRE_VERSIONS)}
     if author:
-        facets[AUTHOR_FACET] = custom_facet(_PRODUCER, name=author, sub=author)
+        facets[AUTHOR_FACET] = author_facet(_PRODUCER, author)
     return {
         "eventType": "COMPLETE",
         "eventTime": event_time,

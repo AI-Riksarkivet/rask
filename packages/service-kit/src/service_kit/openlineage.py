@@ -30,11 +30,14 @@ log = logging.getLogger(__name__)
 #: The top-level ``schemaURL`` every OpenLineage ``RunEvent`` must carry (spec: ``RunEvent.schemaURL``).
 RUN_EVENT_SCHEMA_URL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
 
-#: The ``BaseFacet`` schema — the spec-legal ``_schemaURL`` for our CUSTOM run facets (``lance``,
-#: ``author``) that have no dedicated published schema. Every facet, standard or custom, MUST carry
-#: ``_producer`` + ``_schemaURL``; a custom facet points at ``BaseFacet``, which lives in the CORE spec
-#: (not a standalone facet file) — verified against the installed ``openlineage-python``.
-BASE_FACET_SCHEMA_URL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/BaseFacet"
+#: Where rask publishes its custom facets' schemas (`spec/facets/rask/`): under a git tag, since OpenLineage asks a
+#: facet's ``_schemaURL`` to be "an immutable pointer to the version of the facet schema", a tag or a sha, never a
+#: branch. A changed schema is a new tag. ``lineage_kit.signing.SIGNATURE_FACET_SCHEMA_URL`` names the same tag.
+RASK_FACET_SCHEMAS: Final = "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask"
+#: The ``_schemaURL`` of :data:`LANCE_FACET`, a JSON pointer to its definition (`RaskLanceFacet.json`).
+LANCE_FACET_SCHEMA_URL: Final = f"{RASK_FACET_SCHEMAS}/RaskLanceFacet.json#/$defs/RaskLanceFacet"
+#: The ``_schemaURL`` of :data:`AUTHOR_FACET` (`RaskAuthorFacet.json`).
+AUTHOR_FACET_SCHEMA_URL: Final = f"{RASK_FACET_SCHEMAS}/RaskAuthorFacet.json#/$defs/RaskAuthorFacet"
 
 #: Standard ``SchemaDatasetFacet`` schema URL — the produced dataset's columns (name + a concise,
 #: blob/vector-aware type via ``service_kit.lakehouse.schema.facet_fields``). Shared here so every emitter (catalog,
@@ -69,14 +72,14 @@ def run_id_for(seed: str) -> str:
     return str(uuid.uuid5(_RUN_ID_NAMESPACE, seed))
 
 
-def custom_facet(producer: str, **fields: object) -> dict[str, object]:
-    """Wrap a custom run-facet payload with the required ``_producer`` + ``_schemaURL`` (``BaseFacet``).
+def lance_facet(producer: str, **fields: object) -> dict[str, object]:
+    """A :data:`LANCE_FACET` payload carrying ``fields``, with the ``_producer`` and the ``_schemaURL`` every facet needs."""
+    return {"_producer": producer, "_schemaURL": LANCE_FACET_SCHEMA_URL, **fields}
 
-    Standard facets (version, dataSource, outputStatistics, …) carry their own published schema URL;
-    our custom facets (:data:`LANCE_FACET`, :data:`AUTHOR_FACET`) have none, so they point at ``BaseFacet`` — which is what
-    keeps them spec-legal for a strict consumer.
-    """
-    return {"_producer": producer, "_schemaURL": BASE_FACET_SCHEMA_URL, **fields}
+
+def author_facet(producer: str, subject: str) -> dict[str, object]:
+    """The :data:`AUTHOR_FACET` naming ``subject``, a principal key, as both its ``sub`` and its ``name``."""
+    return {"_producer": producer, "_schemaURL": AUTHOR_FACET_SCHEMA_URL, "name": subject, "sub": subject}
 
 
 #: Metadata-bloat cap on the schema facet (§9 P2, 2026-07-11): a thousands-of-columns table makes
@@ -271,10 +274,10 @@ def catalog_facet(producer: str, *, impl: str, name: str, warehouse_uri: str = "
 
 #: rask's own dataset and run facet: the ref an input was read on or a run wrote, and the uuids the catalog minted for the
 #: dataset's table and its namespace. Custom, so its key is ``{prefix}_{name}`` (OpenLineage spec, "Custom Facet Naming")
-#: and it points at ``BaseFacet`` (:func:`custom_facet`).
+#: and its schema is rask's own (:data:`LANCE_FACET_SCHEMA_URL`, :func:`lance_facet`).
 LANCE_FACET: Final = "rask_lance"
 #: rask's run facet (a DatasetEvent's dataset facet) naming the verified subject a run was authored by, ``{"name", "sub"}``.
-#: Custom, named and schema'd as :data:`LANCE_FACET` is.
+#: Custom, named as :data:`LANCE_FACET` is, with its own schema (:data:`AUTHOR_FACET_SCHEMA_URL`, :func:`author_facet`).
 AUTHOR_FACET: Final = "rask_author"
 #: The :data:`LANCE_FACET` key for the incarnation of the ref it names: the last uuid of pylance's ``branch_identifier`` chain,
 #: on a run's facet for the ref it wrote and on an input's for the ref it was read on ([[LH-413]]).
@@ -317,8 +320,10 @@ def with_dataset_uuids(dataset: dict[str, Any], uuids: DatasetUuids, *, producer
     """``dataset`` with its ``rask_lance`` facet naming exactly ``uuids``: a uuid set where it has one, and removed where it has none.
 
     Removed rather than kept, so a stamp is the whole answer: a dataset carrying a uuid the stamping service did not
-    resolve would keep a claim nobody checked. The ``rask_lance`` facet's other fields (an input's ``ref``) stay. The facet is
-    left out when it would hold nothing but its ``_producer`` and ``_schemaURL``. ``dataset`` itself is not changed.
+    resolve would keep a claim nobody checked. The ``rask_lance`` facet's other fields (an input's ``ref``) stay, and its
+    ``_producer`` and ``_schemaURL`` become ``producer``'s and rask's schema, since the stamped facet is rask's to describe
+    whatever a client's said ([[LH-500]]). The facet is left out when it would hold nothing but those two. ``dataset`` itself
+    is not changed.
     """
     facets = dict(dataset.get("facets") or {})
     lance = dict(facets.get(LANCE_FACET) or {})
@@ -328,7 +333,7 @@ def with_dataset_uuids(dataset: dict[str, Any], uuids: DatasetUuids, *, producer
         else:
             lance.pop(key, None)
     if set(lance) - {"_producer", "_schemaURL"}:
-        facets[LANCE_FACET] = {"_producer": lance.get("_producer", producer), "_schemaURL": lance.get("_schemaURL", BASE_FACET_SCHEMA_URL), **lance}
+        facets[LANCE_FACET] = {**lance, "_producer": producer, "_schemaURL": LANCE_FACET_SCHEMA_URL}
     else:
         facets.pop(LANCE_FACET, None)
     stamped = {**dataset, "facets": facets}

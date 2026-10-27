@@ -747,7 +747,7 @@ export interface operations {
                      * @description An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.
                      *
                      *     ``facets`` carries the standard OpenLineage dataset facets; lineage reads ``version`` (which Lance
-                     *     version a run produced or read), the catalog's ``lance`` facet (the ref an input was read on) and
+                     *     version a run produced or read), the catalog's ``rask_lance`` facet (the ref an input was read on) and
                      *     ``columnLineage`` (whose upstreams the ingest authorizer checks).
                      *
                      *     The spec splits dataset metadata across THREE slots, by the facet's base type: plain

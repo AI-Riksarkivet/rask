@@ -64,6 +64,8 @@ returned, with any filter; the cursor still moves past them, and a seq number di
 The `rask_lance` facet below is rask's own: `run.facets.rask_lance` on a run, `dataset.facets.rask_lance` on a dataset
 change. Its `version` is the **Lance version the write committed**, an integer, and is the value to act on:
 open the table at that version, never "latest". It is absent when the catalog could not identify the commit.
+The `rask_lance` and `rask_author` facets have published schemas, `spec/facets/rask/RaskLanceFacet.json` and
+`RaskAuthorFacet.json`, served under the git tag `facets-1.0.0` that each facet's `_schemaURL` names.
 
 Every governed dataset an event names carries `tableUuid` and `namespaceUuid` in its own `rask_lance` facet
 (`outputs[].facets.rask_lance`, `inputs[].facets.rask_lance`, `dataset.facets.rask_lance`): the uuids the catalog minted for the table

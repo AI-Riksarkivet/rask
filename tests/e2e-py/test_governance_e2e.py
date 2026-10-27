@@ -36,7 +36,7 @@ from service_kit.governed import fga
 from service_kit.governed.auth.write_model import STORE_NAME, fga_headers
 from service_kit.governed.fga import newest_store
 from service_kit.governed.principal import is_principal
-from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
+from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, author_facet, run_id_for
 
 
 #: OpenLineage ``producer`` URI for the promote event this suite emits — the spec requires one, and a
@@ -182,7 +182,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
         "schemaURL": RUN_EVENT_SCHEMA_URL,
         "run": {
             "runId": run_id_for(f"promote-{ns}-{os.getpid()}"),
-            "facets": {"rask_author": custom_facet(_PRODUCER, name=alice_sub, sub=alice_sub)},
+            "facets": {"rask_author": author_facet(_PRODUCER, alice_sub)},
         },
         "job": {"namespace": "e2e-pipeline", "name": "promote_bronze_to_silver"},
         "inputs": [{"namespace": ns, "name": bronze}],

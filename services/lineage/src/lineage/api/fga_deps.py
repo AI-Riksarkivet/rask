@@ -55,10 +55,13 @@ from lineage_kit.signing import VerifiedSignature
 from service_kit.governed import fga
 from service_kit.governed.decider import AccessDecider
 from service_kit.governed.principal import is_principal
-from service_kit.openlineage import AUTHOR_FACET, dataset_uuids, lifecycle_state
+from service_kit.openlineage import AUTHOR_FACET, author_facet, dataset_uuids, lifecycle_state
 
 
 log = logging.getLogger(__name__)
+
+#: The producer this door names on the author facet it stamps, the module that stamps it.
+_PRODUCER: Final = "https://github.com/AI-Riksarkivet/rask/tree/main/services/lineage/src/lineage/api/fga_deps.py"
 
 
 #: Operations that are MAINTENANCE rather than data writes. `model.fga` separates the two rungs in
@@ -304,7 +307,7 @@ def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None
     """
     if token is None:
         return
-    stamp = {"name": token.subject, "sub": token.subject}
+    stamp = author_facet(_PRODUCER, token.subject)
     if isinstance(event, DatasetEvent):
         event.dataset.facets[AUTHOR_FACET] = stamp
     else:

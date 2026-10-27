@@ -33,6 +33,7 @@ from catalog.core.run_context import RunContext
 from lineage.models import RunEvent
 from maintenance.core import lineage_emit as compaction_emit
 from service_kit import openlineage as ol
+from tests.unit.rask_facets import rask_facet_errors
 
 
 _SPEC_PATH = Path(__file__).resolve().parents[1] / "data" / "openlineage-2-0-2.json"
@@ -64,7 +65,7 @@ def _assert_conforms(event: dict[str, Any]) -> None:
     softer test, it is a stricter one: the schema itself refuses the members the phantom was made of.
     """
     definition = "DatasetEvent" if "dataset" in event else "RunEvent"
-    errors = _errors_against(definition, event)
+    errors = _errors_against(definition, event) + rask_facet_errors(event)
     assert not errors, f"as {definition}:\n" + "\n".join(errors)
 
 
@@ -158,7 +159,7 @@ def test_typed_slots_survive_the_feed_round_trip() -> None:
                 "outputFacets": {
                     "outputStatistics": {
                         "_producer": "https://example.com/p",
-                        "_schemaURL": ol.BASE_FACET_SCHEMA_URL,
+                        "_schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/BaseFacet",
                         "rowCount": 9,
                     }
                 },
@@ -170,3 +171,18 @@ def test_typed_slots_survive_the_feed_round_trip() -> None:
     assert "outputFacets" not in dumped["inputs"][0]
     assert dumped["schemaURL"] == ol.RUN_EVENT_SCHEMA_URL
     _assert_conforms(dumped)
+
+
+def test_a_client_facet_the_door_stamps_uuids_into_carries_rask_s_schema() -> None:
+    # Lineage's HTTP door stamps the resolved uuids into a client's own `rask_lance` facet, so the facet it records is
+    # rask's to describe, whatever schema and producer the client named ([[LH-500]]).
+    sent = {
+        "namespace": "acme",
+        "name": "acme$bronze$t",
+        "facets": {ol.LANCE_FACET: {"_producer": "https://client.example/p", "_schemaURL": _SPEC["$id"] + "#/$defs/BaseFacet", "ref": "b"}},
+    }
+    uuids = ol.DatasetUuids(table_uuid="3f2504e0-4f89-11d3-9a0c-0305e82c3302", namespace_uuid="3f2504e0-4f89-11d3-9a0c-0305e82c3303")
+
+    stamped = ol.with_dataset_uuids(sent, uuids, producer="https://github.com/AI-Riksarkivet/rask")
+
+    assert rask_facet_errors({"outputs": [stamped]}) == []

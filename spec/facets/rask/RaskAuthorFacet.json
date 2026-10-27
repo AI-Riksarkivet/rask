@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask/RaskAuthorFacet.json",
+  "title": "RaskAuthorFacet",
+  "description": "The subject a rask lakehouse event was authored by, as a principal key (<idp-id>~<subject>). It rides the run of a RunEvent and the dataset of a DatasetEvent. A producer stamps the subject it authenticated, and lineage's HTTP door overwrites it with the subject of the caller's verified token.",
+  "$defs": {
+    "RaskAuthorFacet": {
+      "allOf": [
+        {
+          "$ref": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/BaseFacet"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "sub": {
+              "description": "The author's principal key.",
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "description": "A display name for the author; rask's producers write the principal key here too.",
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": ["sub"]
+        }
+      ],
+      "type": "object"
+    }
+  },
+  "type": "object",
+  "properties": {
+    "rask_author": {
+      "$ref": "#/$defs/RaskAuthorFacet"
+    }
+  }
+}

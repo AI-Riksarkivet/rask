@@ -36,7 +36,7 @@ from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.openlineage import DatasetUuids
+from service_kit.openlineage import AUTHOR_FACET_SCHEMA_URL, DatasetUuids
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
@@ -404,7 +404,8 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
     # (1) attributed — the run's author is the service's verified subject
     fga_deps.enforce_author(event, principal)
     trainer = "kubernetes~system:serviceaccount:default:rask-sa-ray"
-    assert event.run.facets["rask_author"] == {"name": trainer, "sub": trainer}
+    stamp = event.run.facets["rask_author"]
+    assert (stamp["name"], stamp["sub"], stamp["_schemaURL"]) == (trainer, trainer, AUTHOR_FACET_SCHEMA_URL)
 
     # (2) authorized — the FGA check runs as the SERVICE subject, and a denial is a 403
     checked: dict[str, Any] = {}
