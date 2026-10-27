@@ -1172,7 +1172,21 @@ def object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]
         infos = s3_filesystem(so).get_file_info([uri.removeprefix("s3://") for uri in uris])
     else:
         infos = [fs.get_file_info(path) for fs, path in (dataset_fs(uri, so) for uri in uris)]
+    return _file_sizes(infos)
+
+
+def _file_sizes(infos: Sequence[pafs.FileInfo]) -> list[int | None]:
     return [None if info.type != pafs.FileType.File else int(info.size) for info in infos]
+
+
+def data_object_sizes(location: str, relative: Sequence[str], *, so: StorageOptions) -> list[int | None]:
+    """Each object's size under ``<location>/data/``, ``None`` for one that is absent, in one batched lookup.
+
+    ``location`` is the ref's own directory, resolved as :func:`verify_fragment_data_files` resolves it.
+    """
+    fs, base = dataset_fs(location, so)
+    prefix = base.rstrip("/") + "/data/"
+    return _file_sizes(fs.get_file_info([prefix + path for path in relative]))
 
 
 def object_store_path(location: str) -> str:

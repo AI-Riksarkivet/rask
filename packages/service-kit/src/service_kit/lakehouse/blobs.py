@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from service_kit.lancekit.blobs import BLOB_V2_EXTENSION_NAME, blob_field_names, is_blob_field, schema_has_blob
+from service_kit.lancekit.blobs import BLOB_V2_EXTENSION_NAME, blob_descriptors, blob_field_names, holds_blob, is_blob_field, nested_fields, schema_has_blob
 
 
 #: Re-exported deliberately: callers import these FROM here and the names are part of this module's
@@ -28,10 +28,13 @@ __all__ = [
     "BLOB_V2_EXTENSION_NAME",
     "EXTERNAL_KIND",
     "blob_column_resolves",
+    "blob_descriptors",
     "blob_field_names",
     "carry_external_descriptor",
     "dangling_blob_columns",
+    "holds_blob",
     "is_blob_field",
+    "nested_fields",
     "read_aligned_table",
     "schema_has_blob",
 ]

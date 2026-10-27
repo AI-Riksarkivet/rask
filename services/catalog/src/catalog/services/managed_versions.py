@@ -423,8 +423,14 @@ def _refuse_unverified_blobs(version: _Judged, external_bases: Sequence[base_reg
     columns = client_fragments.blob_columns(version.proposed)
     if not columns or not version.split.new:
         return
-    sizes = partial(dataplane.object_sizes, so=version.so)
-    client_fragments.verify_blob_sidecars(version.proposed, version.split.new, columns, external_bases=external_bases, object_sizes=sizes)
+    client_fragments.verify_blob_sidecars(
+        version.proposed,
+        version.split.new,
+        columns,
+        external_bases=external_bases,
+        object_sizes=partial(dataplane.object_sizes, so=version.so),
+        sidecar_sizes=partial(dataplane.data_object_sizes, version.staged.location, so=version.so),
+    )
 
 
 def _refuse_held_keys(proposed: lance.LanceDataset, split: _Fragments) -> None:

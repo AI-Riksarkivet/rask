@@ -58,17 +58,43 @@ _BLOB_SCHEMA = pa.schema(
 )
 #: Those thresholds put these inline, in one packed sidecar, and in a dedicated sidecar.
 _PAYLOADS = (b"i" * 1024, b"p" * (100 * 1024), b"d" * (5 * 1024 * 1024))
+#: The same payloads as blob-v2 fields beneath a Struct and a List, which a blob field may appear under
+#: (`lance_docs/lance/format/table/blob.md` § Table Schema): each column's descriptors share the data file's sidecars.
+_NESTED_IMG = blob_field("img", inline_size_threshold=64 * 1024, dedicated_size_threshold=4 * 1024 * 1024)
+_NESTED_BLOB_SCHEMA = pa.schema(
+    [
+        _BLOB_SCHEMA.field("id"),
+        _BLOB_SCHEMA.field("source_uri"),
+        pa.field("page", pa.struct([_NESTED_IMG])),
+        pa.field("pages", pa.list_(blob_field("item", inline_size_threshold=64 * 1024, dedicated_size_threshold=4 * 1024 * 1024))),
+    ]
+)
 
 
-def _blob_rows(units: list[tuple[str, bytes]], external_base: str | None = None) -> pa.Table:
-    """Bronze rows for ``(source uri, bytes)`` units: an EXTERNAL descriptor of the uri when the table has a base, else the bytes."""
-    return pa.table(
-        {
-            "id": pa.array([int(hashlib.sha256(uri.encode()).hexdigest()[:15], 16) for uri, _ in units], pa.int64()),
-            "source_uri": pa.array([uri for uri, _ in units], pa.string()),
-            "payload": blob_array([Blob.from_uri(uri) for uri, _ in units] if external_base else [payload for _, payload in units]),
-        }
+def _blob_rows(units: list[tuple[str, bytes]], external_base: str | None = None, *, nested: bool = False) -> pa.Table:
+    """Bronze rows for ``(source uri, bytes)`` units: an EXTERNAL descriptor of the uri when the table has a base, else the bytes.
+
+    ``nested`` puts each payload in ``page.img`` and as the one element of ``pages``."""
+    ids = pa.array([int(hashlib.sha256(uri.encode()).hexdigest()[:15], 16) for uri, _ in units], pa.int64())
+    sources = pa.array([uri for uri, _ in units], pa.string())
+    values = [Blob.from_uri(uri) for uri, _ in units] if external_base else [payload for _, payload in units]
+    if not nested:
+        return pa.table({"id": ids, "source_uri": sources, "payload": blob_array(values)})
+    pages = _NESTED_BLOB_SCHEMA.field("pages").type
+    return pa.Table.from_arrays(
+        [
+            ids,
+            sources,
+            pa.StructArray.from_arrays([blob_array(values)], fields=[_NESTED_IMG]),
+            pa.ListArray.from_arrays(pa.array(range(len(units) + 1), pa.int32()), blob_array(values), type=pages),
+        ],
+        schema=_NESTED_BLOB_SCHEMA,
     )
+
+
+def _no_rows(*, nested: bool) -> pa.Table:
+    """A bronze create's empty table; pyarrow builds no empty array of an extension type beneath a container."""
+    return _blob_rows([], nested=True) if nested else _BLOB_SCHEMA.empty_table()
 
 
 def _write(location: str, rows: pa.Table, key: dict[str, str]) -> list[dict[str, Any]]:
@@ -190,16 +216,17 @@ def _plain(estate: _Estate, **write: Any) -> _Staged:  # noqa: ANN401 — write_
     return _Staged(estate, table, location, json.loads(json.dumps(written[0].to_json())))
 
 
-def _bronze(estate: _Estate, *, external_base: str | None = None) -> _Staged:
+def _bronze(estate: _Estate, *, external_base: str | None = None, nested: bool = False) -> _Staged:
     """A bronze table created with the external base, when one is named, and one managed-blob fragment staged under it."""
     table = f"db$b{uuid.uuid4().hex[:8]}"
-    location = estate.create(table, _BLOB_SCHEMA.empty_table(), external_base)
-    written = _write(location, _blob_rows([(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]), estate.key)
+    location = estate.create(table, _no_rows(nested=nested), external_base)
+    units = [(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]
+    written = _write(location, _blob_rows(units, nested=nested), estate.key)
     return _Staged(estate, table, location, written[0])
 
 
-def _bronze_with_a_base(estate: _Estate) -> _Staged:
-    return _bronze(estate, external_base=estate.external_base)
+def _bronze_with_a_base(estate: _Estate, *, nested: bool = False) -> _Staged:
+    return _bronze(estate, external_base=estate.external_base, nested=nested)
 
 
 def _bronze_with_a_planted_base(estate: _Estate) -> _Staged:
@@ -252,14 +279,20 @@ def _commit(staged: _Staged, fragments: list[dict[str, Any]], read_version: int)
     return None
 
 
-def _external(uri: str) -> Callable[[_Staged], list[dict[str, Any]]]:
-    """A bronze fragment whose payload names ``uri`` as an external blob, written with Lance's outside-bases bypass."""
+def _external(uri: str, *, nested: bool = False) -> Callable[[_Staged], list[dict[str, Any]]]:
+    """A bronze fragment whose payload names ``uri`` as an external blob, written with Lance's outside-bases bypass.
+
+    ``nested`` names it only as the element of ``pages``, its ``page`` struct null."""
 
     def forge(staged: _Staged) -> list[dict[str, Any]]:
         target = uri.format(bucket=staged.estate.bucket, base=staged.estate.external_base)
         if "secret" in target:
             staged.estate.put_uri(target, b"SECRET")
-        batch = _blob_rows([(target, b"")], external_base=staged.estate.external_base)
+        batch = _blob_rows([(target, b"")], external_base=staged.estate.external_base, nested=nested)
+        if nested:
+            page = batch.column("page").combine_chunks()
+            null_page = pa.StructArray.from_arrays(page.flatten(), fields=list(page.type), mask=pa.array([True]))
+            batch = batch.set_column(batch.schema.get_field_index("page"), _NESTED_BLOB_SCHEMA.field("page"), null_page)
         written = lance.fragment.write_fragments(batch, staged.location, storage_options=staged.estate.key, allow_external_blob_outside_bases=True)
         return [json.loads(json.dumps(written[0].to_json()))]
 
@@ -316,12 +349,18 @@ def _declared_2_2(staged: _Staged) -> list[dict[str, Any]]:
     return _with_file(file_major_version=2, file_minor_version=2)(staged)
 
 
-def _missing_sidecar(staged: _Staged) -> list[dict[str, Any]]:
-    stem = staged.file["path"].removesuffix(".lance")
-    sidecars = staged.estate.keys(f"{staged.estate.prefix(staged.location)}/data/{stem}/")
-    assert len(sidecars) == 2, f"precondition: one packed and one dedicated sidecar, got {sidecars}"
-    staged.estate.s3.delete_object(Bucket=staged.estate.bucket, Key=sidecars[0])
-    return [staged.copy()]
+def _missing_sidecar(sidecar_id: int) -> Callable[[_Staged], list[dict[str, Any]]]:
+    """The staged fragment with one sidecar deleted, named as `lance_docs/lance/format/table/blob.md` § Sidecar Resolution
+    encodes its id: 32 binary digits, least significant first."""
+
+    def forge(staged: _Staged) -> list[dict[str, Any]]:
+        stem = staged.file["path"].removesuffix(".lance")
+        sidecar = f"{staged.estate.prefix(staged.location)}/data/{stem}/{format(sidecar_id, '032b')[::-1]}.blob"
+        assert sidecar in staged.estate.keys(f"{staged.estate.prefix(staged.location)}/data/{stem}/"), f"precondition: {sidecar} was written"
+        staged.estate.s3.delete_object(Bucket=staged.estate.bucket, Key=sidecar)
+        return [staged.copy()]
+
+    return forge
 
 
 @pytest.mark.parametrize(
@@ -341,9 +380,15 @@ def _missing_sidecar(staged: _Staged) -> list[dict[str, Any]]:
         pytest.param(_plain, _outside_data, "is not a bare file name", id="path-outside-data"),
         pytest.param(lambda estate: _plain(estate, data_storage_version="2.1"), _declared_2_2, "its footer is file format 2.1", id="footer-2.1-declared-2.2"),
         pytest.param(lambda estate: _plain(estate, data_storage_version="2.3"), _declared_2_2, "its footer is file format 2.3", id="footer-2.3-declared-2.2"),
-        pytest.param(_bronze, _missing_sidecar, "points into a blob sidecar that is missing", id="missing-blob-sidecar"),
+        pytest.param(_bronze, _missing_sidecar(1), "points into a blob sidecar that is missing", id="missing-blob-sidecar"),
         pytest.param(
             _bronze_with_a_base, _external("s3://{bucket}/elsewhere/secret.bin"), "an external blob is a path relative to", id="external-blob-absolute-uri"
+        ),
+        pytest.param(
+            lambda estate: _bronze_with_a_base(estate, nested=True),
+            _external("s3://{bucket}/elsewhere/secret.bin", nested=True),
+            "of blob column 'pages[0]' points at 's3://",
+            id="nested-external-blob-absolute-uri",
         ),
         pytest.param(_bronze_with_a_base, _external("{base}absent.bin"), "which does not exist", id="external-blob-missing-target"),
         pytest.param(
@@ -377,13 +422,15 @@ def test_a_forged_fragment_is_refused_and_the_table_is_unchanged(
 def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate) -> None:
     """The honest writer passes: a bronze table created through the door with its approved external base, then managed blobs
     (inline, packed, dedicated) and an external blob under that base, each written under ``data/`` and committed through the
-    same door the forgeries are refused at."""
+    same door the forgeries are refused at, its blob fields beneath a Struct and a List ([[LH-539]]). A blob column at the
+    top level takes the same checks, and the top-level forgeries above reach each of them before their refusal."""
     table = f"db$b{uuid.uuid4().hex[:8]}"
-    location = estate.create(table, _BLOB_SCHEMA.empty_table(), estate.external_base)
+    location = estate.create(table, _no_rows(nested=True), estate.external_base)
     source = f"{estate.external_base}page-external.tif"
     estate.put_uri(source, b"external-page")
-    managed = _write(location, _blob_rows([(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]), estate.key)
-    external = _write(location, _blob_rows([(source, b"external-page")], external_base=estate.external_base), estate.key)
+    units = [(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]
+    managed = _write(location, _blob_rows(units, nested=True), estate.key)
+    external = _write(location, _blob_rows([(source, b"external-page")], external_base=estate.external_base, nested=True), estate.key)
     before = estate.open(location).version
 
     refused = _commit(_Staged(estate, table, location, managed[0]), [*managed, *external], before)
@@ -392,7 +439,10 @@ def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate
     landed = estate.open(location)
     assert landed.version == before + 1
     assert landed.count_rows() == len(_PAYLOADS) + 1
-    assert [payload for _, payload in landed.read_blobs("payload", indices=list(range(len(_PAYLOADS) + 1)))] == [*_PAYLOADS, b"external-page"]
+    payloads = landed.scanner(blob_handling="all_binary").to_table().to_pylist()
+    expected = [*_PAYLOADS, b"external-page"]
+    assert [row["page"]["img"] for row in payloads] == expected
+    assert [row["pages"] for row in payloads] == [[payload] for payload in expected]
     assert estate.version_residue(location) == []
 
 

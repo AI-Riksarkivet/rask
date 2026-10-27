@@ -658,7 +658,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   sanctioned, and no added file through a base; a new fragment naming a held file, no file, or (on an Append) an
   overlay, a deletion file or row ids below the table's `next_row_id`; each added file well formed, present at its
   declared size and agreeing with its footer, at the table's file version ([[LH-211]], `client_fragments`); blob
-  sidecars against the table's recorded external bases; the primary key across new rows and carried rows; a
+  sidecars against the table's recorded external bases, every descriptor wherever its blob field lies beneath a Struct, List or LargeList ([[LH-539]]); the primary key across new rows and carried rows; a
   rewrite's `require_compactable`. The finalize is announced with `emit_measured_write`. A lost answer is Lance's own
   to recover ([[LH-491]], `verify_commit_outcome` in Lance's `rust/lance/src/io/commit.rs` at v13.0.0): it reads the
   version back and keeps the commit only when the inline transaction there is the one it staged, so the finalize must

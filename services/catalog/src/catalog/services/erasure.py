@@ -111,7 +111,7 @@ import logging
 from collections.abc import Callable, Collection, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, cast
 
 import pyarrow.fs as pafs
 from lance_namespace import InvalidInputError, ServiceUnavailableError, UnsupportedOperationError
@@ -120,7 +120,7 @@ from pydantic import BaseModel, Field
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
 from catalog.services.maintenance import refuse_a_referring_datasets_source
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
-from service_kit.lakehouse.blobs import EXTERNAL_KIND, blob_field_names
+from service_kit.lakehouse.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
 from service_kit.lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
 from service_kit.lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
@@ -1298,16 +1298,22 @@ def _held_outside(handle: _Dataset, predicate: str) -> dict[str, set[str]]:
         if foreign and _held(fragment, predicate):
             for base, path in foreign:
                 held.setdefault(f"data_base:{_base_label(base)}", set()).add(f"{str(base.path).rstrip('/')}/{path}")
-    if blobs := blob_field_names(handle.schema):
-        rows = handle.scanner(columns=blobs, filter=predicate, include_deleted_rows=True, with_row_id=True, use_scalar_index=False).to_table()
-        for column in blobs:
+    if columns := [field.name for field in handle.schema if holds_blob(field)]:
+        # A descriptor beneath a List is refused under late materialization with deleted rows included ("with_deleted_rows
+        # ... not supported when taking rows from an input plan", measured on pylance 13.0.0); descriptors are small.
+        rows = handle.scanner(
+            columns=columns, filter=predicate, include_deleted_rows=True, with_row_id=True, use_scalar_index=False, late_materialization=False
+        ).to_table()
+        for column in columns:
+            declared = handle.schema.field(column)
             for value in rows.column(column).to_pylist():
-                if not isinstance(value, Mapping) or value.get("kind") != EXTERNAL_KIND or not value.get("blob_uri"):
-                    continue
-                if base := bases.get(int(value.get("blob_id") or 0)):
-                    held.setdefault(f"external_base:{_base_label(base)}", set()).add(f"{str(base.path).rstrip('/')}/{value['blob_uri']}")
-                else:
-                    held.setdefault("external_base:absolute", set()).add(str(value["blob_uri"]))
+                for _, _, descriptor in blob_descriptors(value, declared):
+                    if descriptor.get("kind") != EXTERNAL_KIND or not descriptor.get("blob_uri"):
+                        continue
+                    if base := bases.get(int(cast(int, descriptor.get("blob_id")) or 0)):
+                        held.setdefault(f"external_base:{_base_label(base)}", set()).add(f"{str(base.path).rstrip('/')}/{descriptor['blob_uri']}")
+                    else:
+                        held.setdefault("external_base:absolute", set()).add(str(descriptor["blob_uri"]))
     return held
 
 

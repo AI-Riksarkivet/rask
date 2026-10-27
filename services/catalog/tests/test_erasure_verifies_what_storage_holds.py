@@ -718,6 +718,17 @@ def _external_payloads(root: Path) -> LanceNamespace:
     return _created(root, _payloads, external=True)
 
 
+def _external_payloads_in_a_list(root: Path) -> LanceNamespace:
+    """Each row's payload is the one element of a List of blob-v2 values ([[LH-539]])."""
+
+    def table(base: Path) -> pa.Table:
+        flat = _payloads(base)
+        scans = pa.ListArray.from_arrays(pa.array(range(flat.num_rows + 1), pa.int32()), flat.column("scan").combine_chunks())
+        return pa.table({"pii": flat.column("pii"), "scans": scans})
+
+    return _created(root, table, external=True)
+
+
 def _data_base(root: Path) -> LanceNamespace:
     """The table's data files land under an approved data base."""
     return _created(root, lambda _: _UNDER_THE_THRESHOLD, external=False)
@@ -804,6 +815,7 @@ def _tagged_after_a_plain_delete(root: Path) -> LanceNamespace:
         pytest.param(_tagged_after_a_plain_delete, True, (False, False, ["pinned_by"], ["verify"]), id="a-tag-over-an-earlier-plain-delete"),
         pytest.param(_tagged_over_a_stale_index_segment, True, (False, False, ["pinned_by"], ["verify"]), id="a-tag-over-a-stale-index-segment"),
         pytest.param(_external_payloads, True, (False, False, ["external_base"], []), id="an-external-payload"),
+        pytest.param(_external_payloads_in_a_list, True, (False, False, ["external_base"], []), id="an-external-payload-beneath-a-list"),
         pytest.param(_external_payloads_deleted_first(False), True, (False, False, ["external_base"], []), id="an-external-payload-deleted-first"),
         pytest.param(_external_payloads_deleted_first(True), True, (False, False, ["external_base"], []), id="an-external-payload-deleted-and-compacted-first"),
         pytest.param(
