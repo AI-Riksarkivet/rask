@@ -36,7 +36,7 @@ def record_deletion(control_root: str, storage_options: StorageOptions, principa
     """Record ``principal`` deleted by ``deleted_by`` now, or answer the record an earlier deletion wrote."""
     record = PrincipalRecord(
         principal=principal,
-        kind="service" if Principal.parse(principal).is_service else "person",
+        kind="service" if Principal.parse(principal).is_machine else "person",
         deleted_at=datetime.now(UTC),
         deleted_by=deleted_by,
     )

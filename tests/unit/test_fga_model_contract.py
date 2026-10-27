@@ -33,8 +33,8 @@ from catalog.api import fga_deps
 from catalog.core import tier_policy
 from catalog.core.config import Settings
 from service_kit.governed import fga as fga_module
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from tests.unit.named_resolver import NamedResolver
 

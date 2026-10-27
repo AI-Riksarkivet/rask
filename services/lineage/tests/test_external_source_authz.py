@@ -92,7 +92,7 @@ def _event(*, inputs: list[Dataset] | None = None, outputs: list[Dataset] | None
 
 
 #: The pipeline's own account, the caller every authorization question below is asked as.
-_PIPELINE = ServicePrincipal(service_account="system:serviceaccount:etl:service-pipeline")
+_PIPELINE = ServicePrincipal.for_account("system:serviceaccount:etl:service-pipeline")
 
 
 class _FakeFGA:

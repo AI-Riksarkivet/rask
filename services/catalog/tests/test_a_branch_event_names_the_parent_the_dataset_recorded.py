@@ -42,8 +42,8 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import branches as branch_door
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.ns_errors import install_problem_handlers

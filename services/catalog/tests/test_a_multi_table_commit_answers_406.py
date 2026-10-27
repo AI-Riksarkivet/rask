@@ -26,8 +26,8 @@ from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import versions as version_door
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 

@@ -22,8 +22,8 @@ from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed.audit import AUDIT_LOGGER, AuditOutcome, configure_audit
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import status_for
 from tests.unit.named_resolver import NamedResolver, uuid_of

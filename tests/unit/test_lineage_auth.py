@@ -33,8 +33,8 @@ from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.openlineage import DatasetUuids
 from tests.unit.no_uuids import NO_CATALOG_NAMES
@@ -389,7 +389,7 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
     (`writer` on `namespace:models`) actually permits, and is *stricter* than the Dapr subscription route
     it mirrors (which trusts the producer-stamped author outright).
     """
-    principal = security.ServicePrincipal(service_account="system:serviceaccount:default:rask-sa-ray")
+    principal = security.ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-ray")
     event = RunEvent.model_validate(
         {
             "eventType": "COMPLETE",

@@ -28,8 +28,8 @@ from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
 from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import AUDIT_LOGGER
+from service_kit.governed.idp_identity import IdpVerifier
 from service_kit.governed.oidc import OIDCVerifier
-from service_kit.governed.person_identity import PersonVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -45,7 +45,7 @@ def unreachable_issuer() -> Iterator[str]:
         yield f"http://127.0.0.1:{held.getsockname()[1]}"
 
 
-def _client(verifier: PersonVerifier | None, issuer: str) -> TestClient:
+def _client(verifier: IdpVerifier | None, issuer: str) -> TestClient:
     """The catalog's door behind the handler pair `build_lance_service_app` installs, in its order."""
     settings = Settings.model_validate(
         {
@@ -87,7 +87,7 @@ def _audited_reasons(caplog: pytest.LogCaptureFixture) -> list[object]:
 
 
 def test_an_unreachable_issuer_and_no_verifier_at_all_answer_one_body(unreachable_issuer: str) -> None:
-    verifier = PersonVerifier(OIDCVerifier(unreachable_issuer, AUDIENCE, cache_ttl=300, allow_insecure=True), CONNECTORS)
+    verifier = IdpVerifier(OIDCVerifier(unreachable_issuer, AUDIENCE, cache_ttl=300, allow_insecure=True), CONNECTORS)
 
     outage = _client(verifier, unreachable_issuer).get("/gated", headers=_bearer(unreachable_issuer))
     unwired = _client(None, unreachable_issuer).get("/gated", headers=_bearer(unreachable_issuer))
@@ -98,7 +98,7 @@ def test_an_unreachable_issuer_and_no_verifier_at_all_answer_one_body(unreachabl
 def test_a_token_from_an_issuer_the_catalog_does_not_trust_is_still_the_callers(unreachable_issuer: str, audit_trail: pytest.LogCaptureFixture) -> None:
     """The control: the split must not turn a refused token into an outage. Two issuers, because with one
     `_provider_for` resolves without reading the token and this branch cannot be reached."""
-    verifier = PersonVerifier(OIDCVerifier([unreachable_issuer, f"{unreachable_issuer}/second"], AUDIENCE, cache_ttl=300, allow_insecure=True), CONNECTORS)
+    verifier = IdpVerifier(OIDCVerifier([unreachable_issuer, f"{unreachable_issuer}/second"], AUDIENCE, cache_ttl=300, allow_insecure=True), CONNECTORS)
 
     response = _client(verifier, unreachable_issuer).get("/gated", headers=_bearer("https://elsewhere.example.test"))
 

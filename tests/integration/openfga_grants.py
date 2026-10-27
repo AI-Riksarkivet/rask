@@ -19,8 +19,8 @@ from openfga_sdk.models.error_code import ErrorCode
 from openfga_sdk.models.validation_error_message_response import ValidationErrorMessageResponse
 
 from service_kit.governed.fga import user_object
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal, is_principal
 
 

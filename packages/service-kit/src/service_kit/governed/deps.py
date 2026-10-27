@@ -56,8 +56,9 @@ from lance_namespace import UnauthenticatedError
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.decider import AccessDecider
+from service_kit.governed.idp_identity import IdpVerifier, PersonPrincipal
+from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import ProviderUnavailableError
-from service_kit.governed.person_identity import PersonPrincipal, PersonVerifier
 
 
 #: The subject used when OIDC is disabled. Named rather than inlined so a grep for who can act
@@ -85,7 +86,7 @@ class FgaChecker(Protocol):
 #: business — each closure declares whatever `Request` / settings / credentials it needs injected, and
 #: pinning those here would make the annotation a lie the moment one grows a parameter. What a caller
 #: actually depends on is the RESULT type, and that is what these name.
-type _Authenticate = Callable[..., PersonPrincipal | None]
+type _Authenticate = Callable[..., PersonPrincipal | ServicePrincipal | None]
 type _NamesSubject = Callable[..., str]
 type _ResolvesChecker = Callable[..., FgaChecker]
 type _ResolvesDecider = Callable[..., AccessDecider | None]
@@ -134,11 +135,11 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
     translated.
     """
 
-    def authenticate(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> PersonPrincipal | None:
-        """Verify the bearer, returning the person it proves (or `None` when OIDC is off)."""
+    def authenticate(request: Request, settings: settings_dep, credentials: _CredentialsDep) -> PersonPrincipal | ServicePrincipal | None:
+        """Verify the bearer, returning the person or the Dex client it proves (or `None` when OIDC is off)."""
         if not settings.oidc_enabled:
             return None
-        verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
+        verifier: IdpVerifier | None = getattr(request.app.state, "oidc", None)
         if verifier is None:
             audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
             raise ServiceUnavailableError("Authentication is enabled but unavailable")
@@ -163,7 +164,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=token.subject)
         return token
 
-    def current_subject(request: Request, token: Annotated[PersonPrincipal | None, Depends(authenticate)]) -> str:
+    def current_subject(request: Request, token: Annotated[PersonPrincipal | ServicePrincipal | None, Depends(authenticate)]) -> str:
         """The verified principal as the FGA subject id (no `user:` prefix — `fga.check` qualifies it).
 
         With OIDC off this is `anon`, which keeps a dev stack working. With OIDC on it is the principal key the
@@ -195,7 +196,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
         """
         if not settings.oidc_enabled:
             return ANONYMOUS_SUBJECT
-        verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
+        verifier: IdpVerifier | None = getattr(request.app.state, "oidc", None)
         if verifier is None:
             audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
             raise ServiceUnavailableError("Authentication is enabled but unavailable")

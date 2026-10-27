@@ -65,8 +65,8 @@ from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims
 from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga as fga_module
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.naming import UUID_PROPERTY
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream

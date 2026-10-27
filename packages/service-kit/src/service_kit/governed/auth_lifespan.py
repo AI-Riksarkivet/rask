@@ -235,11 +235,11 @@ async def attach_auth(
     app.state.decider = None
     if settings.oidc_enabled and settings.oidc_issuer and settings.oidc_audience:
         try:
-            from service_kit.governed import oidc, person_identity
+            from service_kit.governed import idp_identity, oidc
 
             # A person is the principal their Dex connector maps to ([[LH-063]]), so the IdP's verifier is wrapped with
             # the deployment's connector map rather than handed to the doors on its own.
-            app.state.oidc = person_identity.PersonVerifier(
+            app.state.oidc = idp_identity.IdpVerifier(
                 oidc.OIDCVerifier(
                     settings.oidc_issuer,
                     settings.oidc_audience,

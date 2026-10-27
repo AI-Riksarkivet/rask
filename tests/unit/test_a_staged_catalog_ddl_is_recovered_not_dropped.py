@@ -38,8 +38,8 @@ from lineage.models import DatasetEvent, UnverifiedEventError
 from lineage_kit.signing import signature_of
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse import outbox, outbox_metrics
 from service_kit.openlineage import DatasetUuids, event_identity, run_id_for

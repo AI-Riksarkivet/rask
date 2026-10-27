@@ -91,7 +91,7 @@ def governed(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
 
 #: The maintenance service's own principal, the caller every test here vends as.
-_MAINTENANCE = ServicePrincipal(service_account="system:serviceaccount:rask:maintenance")
+_MAINTENANCE = ServicePrincipal.for_account("system:serviceaccount:rask:maintenance")
 
 
 #: The ROUTER's own rung, enforced by `fga_deps` before this door is reached. Always granted here and

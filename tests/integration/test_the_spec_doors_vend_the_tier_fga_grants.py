@@ -31,8 +31,8 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.vending import VendedCredentials
 from catalog.services import table_claims
 from service_kit.governed import fga as fga_module
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from tests.unit.named_resolver import NamedResolver
 

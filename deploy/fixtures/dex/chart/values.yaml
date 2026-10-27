@@ -2,7 +2,8 @@
 
 # -- The Service and Deployment name: what rask's `lance.dexHost` dials for release `rask`.
 name: rask-dex
-image: ghcr.io/dexidp/dex:v2.42.0
+# v2.46.0 is the first release serving the client-credentials grant a machine client signs in with (ADR 0181).
+image: ghcr.io/dexidp/dex:v2.46.1
 port: 5556
 # The issuer Dex serves, rask's `auth.oidc.issuer`; `make k3s-fixtures` passes DEV_ISSUER, as it does to rask.
 issuer: http://rask-dex:5556/dex
@@ -18,6 +19,10 @@ clientSecret: lance-catalog-secret
 # client with no secret, and a public one would let anyone sign in as the audience and skip the trust.
 audience: rask-lakehouse
 audienceSecret: rask-lakehouse-held-by-no-client
+# Pipelines outside Kubernetes, each a confidential client signing in for itself with the client-credentials grant: the
+# machine `dex-client~<id>` (ADR 0181). The audience client trusts each, so its token is issued for the lakehouse.
+machineClients:
+  - { id: rask-pipeline, secret: rask-pipeline-dev-secret }
 # Demo identities with one password. The hash is bcrypt of "password". alice and bob make the governed demo's allow and
 # deny: alice creates a table and is granted it, bob is refused reading it. carol, dave and erin are the writer, the
 # reader and the outsider of criterion 2's principal matrix (tests/e2e-py/test_the_catalog_is_correct.py), so each rung

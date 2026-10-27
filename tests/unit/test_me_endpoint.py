@@ -18,8 +18,8 @@ import pytest
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.v1.endpoints import me as ep
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 
 

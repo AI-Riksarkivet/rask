@@ -36,8 +36,8 @@ from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.openlineage import DatasetUuids

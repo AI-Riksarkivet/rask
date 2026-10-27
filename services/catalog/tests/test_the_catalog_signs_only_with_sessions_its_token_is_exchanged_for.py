@@ -192,7 +192,7 @@ def test_a_vend_is_a_session_of_its_own_named_for_the_caller(sessions: _Rig) -> 
     assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
     from catalog.api.security import authenticate
 
-    sessions.catalog.app.dependency_overrides[authenticate] = lambda: ServicePrincipal(service_account="system:serviceaccount:rask:rask-sa-maintenance")
+    sessions.catalog.app.dependency_overrides[authenticate] = lambda: ServicePrincipal.for_account("system:serviceaccount:rask:rask-sa-maintenance")
 
     vended = sessions.catalog.post(f"/management/v1/table/{table}/credentials")
 

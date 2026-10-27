@@ -86,7 +86,7 @@ _TABLE_UUID = uuid_of("table", ["acme-silver", "features"])
 @pytest.mark.asyncio
 async def test_a_SERVICE_creating_a_table_is_not_granted_owner(monkeypatch: pytest.MonkeyPatch) -> None:
     """The withdrawal itself: a stage runner registering its output does not become its owner."""
-    written = await _tuples_written(ServicePrincipal(service_account="system:serviceaccount:default:rask-sa-silver-to-gold"), monkeypatch)
+    written = await _tuples_written(ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-silver-to-gold"), monkeypatch)
     assert not [t for t in written if t[1] == "owner"], f"the registering service was granted ownership of its output: {written}"
     # The hierarchy edge is still written, and that is what keeps this a withdrawal rather than an
     # orphaning: ownership descends to the table from the project's admin through this link.

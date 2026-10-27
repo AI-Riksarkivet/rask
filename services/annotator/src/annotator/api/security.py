@@ -21,7 +21,7 @@ from annotator.api.authorization import ALLOW_ALL, AnnotatorChecker, CatalogAnsw
 from annotator.core.config import AnnotatorSettings, get_annotator_settings
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.deps import ANONYMOUS_SUBJECT, FgaChecker, RawBearerToken, make_auth_deps
-from service_kit.governed.person_identity import PersonPrincipal
+from service_kit.governed.idp_identity import PersonPrincipal
 
 
 __all__ = [

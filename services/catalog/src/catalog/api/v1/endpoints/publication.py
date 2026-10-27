@@ -95,8 +95,9 @@ def publication_originator(claimed: str, token: Caller | None) -> str:
     THE CATALOG IS THE ONLY COMPONENT THAT CAN ANSWER THIS, which is why the decision lives here
     rather than at the consumer. `table_published` is what wakes the next cascade hop, and the hop
     needs to know whether the caller was a person or a service — a question only the door that
-    authenticated them can answer: `catalog/api/security.py` answers a `ServicePrincipal` for a caller
-    the cluster vouched for, and an IdP token for a person.
+    authenticated them can answer: `catalog/api/security.py` answers a `ServicePrincipal` for a machine,
+    a service account the cluster vouched for or a Dex client signed in for itself (ADR 0181), and a
+    `PersonPrincipal` for a person.
 
     Precedence, and both halves are load-bearing:
 
@@ -119,8 +120,8 @@ def publication_originator(claimed: str, token: Caller | None) -> str:
     if token is None:
         # OIDC off: nobody was authenticated, so the only identity in the request is the claim.
         return _addressable(claimed)
-    # The principal's TYPE decides, never a claim: only the service-account verifier builds a
-    # `ServicePrincipal`, so a person's IdP token cannot pass for a service by carrying an extra field.
+    # The principal's TYPE decides, never a claim: a `ServicePrincipal` is built only for a machine a verifier
+    # proved, and a person's token cannot pass for one by carrying an extra field (`idp_identity`, ADR 0181).
     if isinstance(token, ServicePrincipal):
         return _addressable(claimed)
     return _addressable(token.subject)

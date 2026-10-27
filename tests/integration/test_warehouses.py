@@ -23,8 +23,8 @@ from catalog.core.vending import VendedCredentials
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from service_kit.governed import fga as fga_module
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.naming import UUID_PROPERTY
 

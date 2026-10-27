@@ -20,10 +20,17 @@ from service_kit.lakehouse.subjects import is_person_subject
 
 # NO WORKLOAD NAME is asserted here, deliberately: the platform is forbidden to know about one, so a
 # denylist entry for a modality would be the defect rather than the fix. These are a generic stage author,
-# a bare name no identity provider vouches for, a machine's principal, and the shapes that address everyone
-# or name an FGA object instead of a subject ([[LH-063]]: a person is a principal some IdP other than the
-# cluster's issuer vouched for).
-_NOT_ADDRESSES = ["data_eng", "alice", "kubernetes~system:serviceaccount:default:rask-sa-catalog", "team:eng#member", "user:dex~alice"]
+# a bare name no identity provider vouches for, a service account's and a Dex client's principals, and the shapes that
+# address everyone or name an FGA object instead of a subject ([[LH-063]], ADR 0181: a person is a principal no machine
+# identity vouched for).
+_NOT_ADDRESSES = [
+    "data_eng",
+    "alice",
+    "kubernetes~system:serviceaccount:default:rask-sa-catalog",
+    "dex-client~rask-pipeline",
+    "team:eng#member",
+    "user:dex~alice",
+]
 _ADDRESSES = ["dex~alice"]
 
 

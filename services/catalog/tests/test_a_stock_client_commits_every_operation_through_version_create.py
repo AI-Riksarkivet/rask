@@ -45,8 +45,8 @@ from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
 from service_kit.governed import fga as fga_module
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse import base_refs, maintenance_due
 

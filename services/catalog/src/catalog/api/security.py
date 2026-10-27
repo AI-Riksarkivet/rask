@@ -1,4 +1,4 @@
-"""Authentication at the catalog door: an OIDC bearer for a person, a projected service-account token for a service.
+"""Authentication at the catalog door: an OIDC bearer for a person or a Dex client, a projected service-account token for a service.
 
 When OIDC is disabled (the default) this is a no-op and all routes stay open.
 When enabled, it requires a valid bearer token on every route it guards and maps
@@ -13,7 +13,8 @@ A service is the Kubernetes service account its projected token names ([[LH-220]
 unverified ``iss`` routes it: the cluster's service-account issuer goes to ``app.state.sa_oidc``, which
 verifies it offline and answers the principal ``kubernetes~system:serviceaccount:<ns>:<sa>``, from any namespace;
 every other issuer goes to the IdP, which refuses a token it did not sign (401), and answers a person as the
-principal their Dex connector maps to, ``<idp-id>~<user id>`` ([[LH-063]]). A service-account token never falls
+principal their Dex connector maps to, ``<idp-id>~<user id>`` ([[LH-063]]), and a Dex client signed in for itself as
+the machine ``dex-client~<client id>`` (ADR 0181). A service-account token never falls
 through to the IdP, no header names the caller, and OpenFGA alone decides what the principal may do.
 """
 
@@ -29,17 +30,18 @@ from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from catalog.api.dependencies import SettingsDep
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
+from service_kit.governed.idp_identity import IdpVerifier, PersonPrincipal
 from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from service_kit.governed.oidc import ProviderUnavailableError
-from service_kit.governed.person_identity import PersonPrincipal, PersonVerifier
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s are problem+json.
 _bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")
 _CredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
 
-#: A verified caller: a person the IdP vouched for, or a service the cluster vouched for. Authorization reads the
-#: principal key off either as `.subject`; `isinstance(token, ServicePrincipal)` is the estate's one machine test.
+#: A verified caller: a person the IdP vouched for, or a machine, a service the cluster vouched for or a Dex client the
+#: IdP vouched for. Authorization reads the principal key off either as `.subject`; `isinstance(token, ServicePrincipal)`
+#: is the estate's one machine test.
 type Caller = PersonPrincipal | ServicePrincipal
 
 
@@ -93,7 +95,7 @@ def authenticate(
     if bearer and (sa_verifier.issued(bearer) if sa_verifier is not None else _claims_issuer(bearer, settings.sa_issuer)):
         return _service_principal(sa_verifier, bearer)
 
-    verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
+    verifier: IdpVerifier | None = getattr(request.app.state, "oidc", None)
     if verifier is None:
         # OIDC is enabled but no verifier is available: fail closed, never open.
         audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")

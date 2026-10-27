@@ -23,8 +23,8 @@ from catalog.core.vending import ModeBVendor
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses
 from service_kit.governed import fga as fga_module
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 
 
@@ -347,7 +347,7 @@ def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing
     store = _FakeStore(estate_admins=(provisioner,))
     store.install(monkeypatch)
     settings = _governed_settings(tmp_path)
-    machine = ServicePrincipal(service_account="system:serviceaccount:ops:provisioner")
+    machine = ServicePrincipal.for_account("system:serviceaccount:ops:provisioner")
 
     def create(admin: str | None) -> Any:
         body = proj_ep.CreateProjectRequest(id="acme", admin=admin)

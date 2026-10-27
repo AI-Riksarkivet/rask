@@ -42,8 +42,8 @@ from catalog.services import erasure_release, table_claims
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import Pin
 from service_kit.control_events import CatalogControlEvent
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.history_fences import HistoryWork, TableHistory

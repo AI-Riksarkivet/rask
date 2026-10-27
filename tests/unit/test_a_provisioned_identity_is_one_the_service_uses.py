@@ -153,7 +153,8 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     token whose `aud` is `[<audience>, <client>]`, and only when the audience client lists it in `trustedPeers`; any
     other client is refused 400 for the scope. A public audience client would let anyone sign in as it (200, `aud` the
     audience alone) and skip the trust. So the doors' audience is the dev Dex's audience client, distinct from its
-    sign-in client, confidential and trusting exactly that client.
+    sign-in client, confidential and trusting exactly the clients the fixture declares: the sign-in client and each machine
+    client, which signs in for itself with the client-credentials grant (ADR 0181).
     """
     chart = render("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
     [config] = [yaml.safe_load(doc["data"]["config.yaml"]) for doc in render_fixture("dex") if doc.get("kind") == "ConfigMap"]
@@ -166,6 +167,6 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     }
 
     [audience] = set(doors.values())
-    [client] = set(clients) - {audience}
+    others = sorted(set(clients) - {audience})
     assert sorted(doors) == sorted(_LAKEHOUSE_DOORS)
-    assert (clients[audience].get("public", False), clients[audience].get("trustedPeers")) == (False, [client])
+    assert (clients[audience].get("public", False), sorted(clients[audience].get("trustedPeers", []))) == (False, others)

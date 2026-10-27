@@ -22,8 +22,8 @@ from fastapi.testclient import TestClient
 from catalog.api.dependencies import get_settings
 from catalog.core.config import Settings
 from service_kit.governed import fga as fga_module
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 
 

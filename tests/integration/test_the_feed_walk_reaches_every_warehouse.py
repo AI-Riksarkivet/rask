@@ -54,7 +54,7 @@ from tests.integration.lineage_app import live_catalog, live_lineage
 
 #: The reconciler's service account, whose subject (`kubernetes~system:serviceaccount:rask:rask-sa-notifications`,
 #: the chart's `lance.saSubject`) is the one the bootstrap hook grants.
-RECONCILER = ServicePrincipal(service_account="system:serviceaccount:rask:rask-sa-notifications")
+RECONCILER = ServicePrincipal.for_account("system:serviceaccount:rask:rask-sa-notifications")
 
 #: Every relation OpenFGA answers true for, as `(user, relation, object)`: what the bootstrap hook's
 #: `event_reader` tuple on the estate root derives for the reconciler, and nothing else.
@@ -227,7 +227,7 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
 
     # The rung IS the gate: an unfiltered feed of every warehouse's runs answers a verified caller that holds
     # nothing on the estate root with 403, so a refactor that drops the check fails here rather than shipping.
-    lineage.dependency_overrides[authenticate] = lambda: ServicePrincipal(service_account="system:serviceaccount:rask:rask-sa-pipeline")
+    lineage.dependency_overrides[authenticate] = lambda: ServicePrincipal.for_account("system:serviceaccount:rask:rask-sa-pipeline")
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=lineage)) as http:
         stranger = LineageFeedClient(client=http, base_url="http://lineage.test", token_file=str(token), timeout_seconds=5.0, page_limit=500)
         with pytest.raises(httpx.HTTPStatusError) as refused:

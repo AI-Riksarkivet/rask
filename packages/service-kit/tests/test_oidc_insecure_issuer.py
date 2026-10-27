@@ -70,7 +70,8 @@ def test_the_check_is_skipped_when_oidc_is_off() -> None:
     [
         pytest.param({"RASK_OIDC_ISSUER": "http://issuer.test"}, "HTTPS", id="an-http-issuer"),
         pytest.param({"RASK_OIDC_CONNECTORS": {}}, "RASK_OIDC_CONNECTORS is required", id="no-connector-names-anyone"),
-        pytest.param({"RASK_OIDC_CONNECTORS": {"local": "kubernetes"}}, "service-account issuer's idp id", id="a-connector-claims-the-clusters-idp-id"),
+        pytest.param({"RASK_OIDC_CONNECTORS": {"local": "kubernetes"}}, "a machine identity's idp id", id="a-connector-claims-the-clusters-idp-id"),
+        pytest.param({"RASK_OIDC_CONNECTORS": {"local": "dex-client"}}, "a machine identity's idp id", id="a-connector-claims-the-dex-clients-idp-id"),
         pytest.param({"RASK_OIDC_CONNECTORS": {"local": "Corp~1"}}, "no principal can carry", id="an-idp-id-outside-the-grammar"),
         pytest.param(
             {"RASK_SA_ISSUER": "https://issuer.test/", "RASK_SA_AUDIENCE": "rask-catalog"}, "name one issuer", id="the-cluster-and-the-idp-named-as-one-issuer"

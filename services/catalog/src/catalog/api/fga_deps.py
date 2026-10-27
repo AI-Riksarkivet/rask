@@ -1880,9 +1880,10 @@ async def seed_ownership(
     # an orphaning, and is why the parent edge below is still written unconditionally. Pinned against
     # the real evaluator in `model.fga.yaml`, not argued from the model text.
     #
-    # THE PRINCIPAL'S TYPE IS THE DISCRIMINATOR, never a name pattern: only the service-account
-    # verifier builds a `ServicePrincipal`, so the question is answered by how the caller was proved,
-    # not by what its subject is called — a name test drifts the moment a service is renamed.
+    # THE PRINCIPAL'S TYPE IS THE DISCRIMINATOR, never a name pattern: a verifier builds a `ServicePrincipal`
+    # only for a machine it proved, a service account or a Dex client signed in for itself (ADR 0181), so the
+    # question is answered by how the caller was proved, not by what its subject is called — a name test
+    # drifts the moment a service is renamed.
     await fga.grant_on_create(  # noqa: TID251
         client,
         grant_owner=may_grant_owner and not isinstance(token, ServicePrincipal),

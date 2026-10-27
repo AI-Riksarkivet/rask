@@ -30,9 +30,9 @@ from openfga_sdk import OpenFgaClient
 
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.fga import user_object
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from tests.integration.openfga_grants import Grants
@@ -143,7 +143,7 @@ def graph_backend() -> Generator[tuple[GraphBackend, str]]:
 
 def service(name: str) -> ServicePrincipal:
     """A pipeline's service principal, `etl` namespace."""
-    return ServicePrincipal(service_account=f"system:serviceaccount:etl:{name}")
+    return ServicePrincipal.for_account(f"system:serviceaccount:etl:{name}")
 
 
 @contextmanager
@@ -174,8 +174,8 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
 
     def caller(subject: str = Header(alias=SUBJECT_HEADER)) -> PersonPrincipal | ServicePrincipal:
         principal = Principal.parse(subject)
-        if principal.is_service:
-            return ServicePrincipal(service_account=principal.subject)
+        if principal.is_machine:
+            return ServicePrincipal(principal=principal)
         claims = IDToken(iss="https://idp.invalid/dex", sub=principal.subject, aud="rask", exp=4102444800, iat=0)
         return PersonPrincipal(principal=principal, claims=claims)
 

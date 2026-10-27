@@ -7,8 +7,9 @@ verified bearer, and the bearer's unverified issuer decides which verifier answe
   cluster's key set; whatever its namespace it is the subject `kubernetes~system:serviceaccount:<ns>:<sa>`
   (`service_kit.governed.machine_identity`, [[LH-220]], ADR 0156 C5). It comes back a `ServicePrincipal` and never
   falls through to the IdP;
-- anything else: the IdP's verifier (`PersonVerifier`, the same one the catalog uses), which answers a person as the
-  principal their Dex connector maps to, `<idp-id>~<user id>` ([[LH-063]]).
+- anything else: the IdP's verifier (`IdpVerifier`, the same one the catalog uses), which answers a person as the
+  principal their Dex connector maps to, `<idp-id>~<user id>` ([[LH-063]]), and a Dex client signed in for itself as
+  the `ServicePrincipal` `dex-client~<client id>` (ADR 0181).
 
 Either way the caller is authorized by FGA as its principal key, `.subject`. Nothing a caller asserts in a header names it:
 `dapr-api-token` proves only that a sidecar delivered a request (`require_dapr_token`, on the subscription routes),
@@ -32,9 +33,9 @@ from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from lineage.api.dependencies import SettingsDep
 from lineage.core.config import LineageSettings
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
+from service_kit.governed.idp_identity import IdpVerifier, PersonPrincipal
 from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from service_kit.governed.oidc import ProviderUnavailableError
-from service_kit.governed.person_identity import PersonPrincipal, PersonVerifier
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s render as problem+json.
@@ -84,7 +85,7 @@ def _service_account(token: str, verifier: ServiceAccountVerifier | None) -> Ser
     except UnauthenticatedError:
         audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="invalid_token")
         raise
-    audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=principal.subject, service_account=principal.service_account)
+    audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=principal.subject)
     return principal
 
 
@@ -103,7 +104,7 @@ def authenticate(
     sa_verifier: ServiceAccountVerifier | None = getattr(request.app.state, "sa_oidc", None)
     if bearer is not None and _service_account_issued(bearer, settings, sa_verifier):
         return _service_account(bearer, sa_verifier)
-    verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
+    verifier: IdpVerifier | None = getattr(request.app.state, "oidc", None)
     if verifier is None:
         # Enabled but no verifier wired (startup/discovery skew): fail closed, never open.
         raise ServiceUnavailableError("Authentication is enabled but unavailable")

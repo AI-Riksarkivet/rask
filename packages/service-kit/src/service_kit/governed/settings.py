@@ -35,7 +35,7 @@ from dotenv import dotenv_values
 from pydantic import Field, model_validator
 
 from service_kit.control_events import ControlSigner
-from service_kit.governed.principal import SERVICE_ACCOUNT_IDP, require_idp_id
+from service_kit.governed.principal import MACHINE_IDPS, require_idp_id
 
 
 #: The names the 2026-08-30 hard rename deleted. Kept as a REFUSAL list, never as an alias list: an
@@ -186,7 +186,7 @@ class OidcSettings:
     oidc_leeway: int = Field(default=60, alias="RASK_OIDC_LEEWAY")
     oidc_allow_insecure: bool = Field(default=False, alias="RASK_OIDC_ALLOW_INSECURE")
     #: The idp id each Dex connector's users are principals of, keyed by the connector id Dex reports in
-    #: `federated_claims` ([[LH-063]], `service_kit.governed.person_identity`): `{"local": "dex"}` makes the user id
+    #: `federated_claims` ([[LH-063]], `service_kit.governed.idp_identity`): `{"local": "dex"}` makes the user id
     #: `u` of connector `local` the principal `dex~u`. Renaming a connector adds its new id under the same idp id, so
     #: no grant is re-keyed. A connector absent here authenticates nobody.
     oidc_connectors: dict[str, str] = Field(default_factory=dict, alias="RASK_OIDC_CONNECTORS")
@@ -221,14 +221,14 @@ class OidcSettings:
 
     @model_validator(mode="after")
     def _validate_connectors(self) -> Self:
-        """A connector maps to an idp id a principal can carry, never the service-account issuer's."""
+        """A connector maps to an idp id a principal can carry, never a machine identity's (`kubernetes`, `dex-client`)."""
         if self.oidc_enabled and not self.oidc_connectors:
             raise ValueError("RASK_OIDC_CONNECTORS is required when OIDC is enabled: a person is the principal their Dex connector maps to")
         for connector, idp_id in self.oidc_connectors.items():
             if not connector:
                 raise ValueError("RASK_OIDC_CONNECTORS names an empty connector id")
-            if idp_id == SERVICE_ACCOUNT_IDP:
-                raise ValueError(f"RASK_OIDC_CONNECTORS maps {connector!r} to {SERVICE_ACCOUNT_IDP!r}, the service-account issuer's idp id")
+            if idp_id in MACHINE_IDPS:
+                raise ValueError(f"RASK_OIDC_CONNECTORS maps {connector!r} to {idp_id!r}, a machine identity's idp id")
             try:
                 require_idp_id(idp_id)
             except ValueError as exc:

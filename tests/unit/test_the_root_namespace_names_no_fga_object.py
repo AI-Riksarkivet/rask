@@ -48,8 +48,8 @@ from fastapi.testclient import TestClient
 from lance_namespace import InvalidInputError, PermissionDeniedError
 
 from catalog.api import fga_deps
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from tests.unit.named_resolver import NamedResolver, uuid_of
 

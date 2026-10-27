@@ -110,8 +110,8 @@ def test_the_estate_read_is_FILTERED_to_what_the_caller_may_see(monkeypatch: pyt
     untested until the audit — the three tests above all had FGA off."""
     from catalog.api.v1.endpoints import warehouses as wh_ep
     from service_kit.governed import fga as fga_module
+    from service_kit.governed.idp_identity import PersonPrincipal
     from service_kit.governed.oidc import IDToken
-    from service_kit.governed.person_identity import PersonPrincipal
     from service_kit.governed.principal import Principal
 
     settings = _settings(tmp_path, fga_enabled=True)

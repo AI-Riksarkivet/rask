@@ -32,8 +32,8 @@ from lance_namespace import (
 
 from catalog.api.v1.endpoints import projects as ep
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 
 

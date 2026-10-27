@@ -17,8 +17,8 @@ import pyarrow as pa
 import pytest
 
 from service_kit.control_emit import NoopControlEmitter
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from tests.unit.named_resolver import NamedResolver

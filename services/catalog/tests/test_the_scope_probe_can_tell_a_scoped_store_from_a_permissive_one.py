@@ -358,8 +358,8 @@ class TestTheDoorGatesBeforeItWrites:
 
 def _token() -> Any:
     """A verified person, the shape `CurrentToken` resolves to."""
+    from service_kit.governed.idp_identity import PersonPrincipal
     from service_kit.governed.oidc import IDToken
-    from service_kit.governed.person_identity import PersonPrincipal
     from service_kit.governed.principal import Principal
 
     claims = IDToken(iss="https://dex.test/dex", sub="user-1", aud="lance-catalog", iat=0, exp=1 << 31)

@@ -21,6 +21,14 @@ data:
     oauth2:
       skipApprovalScreen: true
       passwordConnector: local
+      # The grants Dex serves by default, and the client-credentials grant, which it serves only when listed.
+      grantTypes:
+        - authorization_code
+        - refresh_token
+        - password
+        - urn:ietf:params:oauth:grant-type:device_code
+        - urn:ietf:params:oauth:grant-type:token-exchange
+        - client_credentials
     enablePasswordDB: true
     staticPasswords:
       {{- range .Values.users }}
@@ -46,7 +54,12 @@ data:
       - id: {{ required "audience names the lakehouse's audience client" .Values.audience }}
         name: Lakehouse
         secret: {{ required "audienceSecret is the audience client's secret, which no client is given" .Values.audienceSecret }}
-        trustedPeers: [{{ .Values.clientId }}]
+        trustedPeers: [{{ .Values.clientId }}{{ range .Values.machineClients }}, {{ .id }}{{ end }}]
+      {{- range .Values.machineClients }}
+      - id: {{ .id }}
+        name: {{ .id }}
+        secret: {{ .secret }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

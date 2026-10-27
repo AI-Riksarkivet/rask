@@ -41,8 +41,8 @@ from catalog.core.vending import ModeBVendor
 from catalog.services import warehouses
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga as fga_module
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.naming import UUID_PROPERTY
 from tests.unit.no_uuids import NO_OBJECT_UUIDS

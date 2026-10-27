@@ -17,8 +17,8 @@ import pytest
 from catalog.api import fga_deps
 from catalog.core.config import Settings
 from service_kit.governed import fga
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 
 

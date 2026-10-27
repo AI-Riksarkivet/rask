@@ -32,8 +32,8 @@ from catalog.core.lineage_emit import NoopEmitter
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from catalog.services.publication import published_version
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.location_claims import ClaimStore

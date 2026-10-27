@@ -48,9 +48,9 @@ from lance_namespace import (
 
 from lineage_kit import SIGNATURE_FACET, RefusalReason, SignatureError, verify_control_signature, verify_signature
 from service_kit.control_events import CONTROL_TOPIC
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.governed.signing_key import signing_key_name
 from service_kit.lakehouse import outbox
@@ -196,7 +196,7 @@ def _write_a_table_and_a_row(client: TestClient) -> None:
     ("caller", "on_behalf_of"),
     [
         pytest.param(_person(PERSON), PERSON, id="a-person-the-catalog-authenticated"),
-        pytest.param(ServicePrincipal(service_account=CATALOG_ACCOUNT), None, id="the-catalog-itself"),
+        pytest.param(ServicePrincipal.for_account(CATALOG_ACCOUNT), None, id="the-catalog-itself"),
     ],
 )
 def test_every_event_a_write_causes_is_signed_as_the_catalog_for_the_subject_it_authenticated(

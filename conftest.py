@@ -434,7 +434,8 @@ def dex_subject(user_id: str, connector: str) -> str:
         raw = text.encode()
         return varint(number << 3 | 2) + varint(len(raw)) + raw
 
-    return base64.urlsafe_b64encode(field(1, user_id) + field(2, connector)).rstrip(b"=").decode()
+    # proto3 leaves an empty string out, as Dex's encoder does: a client signed in for itself has no connector.
+    return base64.urlsafe_b64encode(field(1, user_id) + (field(2, connector) if connector else b"")).rstrip(b"=").decode()
 
 
 class DexIssuer:
@@ -493,8 +494,11 @@ class DexIssuer:
         self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self._thread.start()
 
-    def mint(self, user_id: str, *, connector: str, audience: str, federated: bool = True, ttl: int = 600) -> str:
-        """The token Dex issues `user_id` of `connector`, with `federated_claims` when the client asked for `federated:id`."""
+    def mint(self, user_id: str, *, connector: str, audience: str, federated: bool = True, azp: str | None = None, ttl: int = 600) -> str:
+        """The token Dex issues `user_id` of `connector`, with `federated_claims` when the client asked for `federated:id`.
+
+        `azp` names the client a token issued for another audience was asked by, as Dex sets it then.
+        """
         import time
 
         import jwt
@@ -511,6 +515,31 @@ class DexIssuer:
         }
         if federated:
             claims["federated_claims"] = {"connector_id": connector, "user_id": user_id}
+        if azp is not None:
+            claims["azp"] = azp
+        return jwt.encode(claims, self._signing_key, algorithm="RS256", headers={"kid": self.kid})
+
+    def mint_client(self, client_id: str, *, audience: str, ttl: int = 600) -> str:
+        """The token Dex v2.46 issues a confidential client signing in for itself with the client-credentials grant.
+
+        Its claims are the client's own (`UserID = client.ID`) under the empty connector id, so `sub` is `dex_subject` of
+        the client id and no connector; asked for another audience (`audience:server:client_id:<audience>`), `aud` holds
+        that audience and the client, and `azp` names the client; `federated:id` is refused on the grant, so no
+        `federated_claims` (dex v2.46.1 `server/grants/clientcredentials.go`, `server/tokens/issuer.go`).
+        """
+        import time
+
+        import jwt
+
+        now = int(time.time())
+        claims: dict[str, object] = {
+            "iss": self.issuer,
+            "sub": dex_subject(client_id, ""),
+            "aud": [audience, client_id],
+            "azp": client_id,
+            "iat": now,
+            "exp": now + ttl,
+        }
         return jwt.encode(claims, self._signing_key, algorithm="RS256", headers={"kid": self.kid})
 
     def close(self) -> None:

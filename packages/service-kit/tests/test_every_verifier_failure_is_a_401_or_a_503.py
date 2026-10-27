@@ -56,8 +56,8 @@ from pydantic import BaseModel
 from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import AUDIT_LOGGER
 from service_kit.governed.deps import make_auth_deps
+from service_kit.governed.idp_identity import IdpVerifier
 from service_kit.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
-from service_kit.governed.person_identity import PersonVerifier
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -216,7 +216,7 @@ def _client(idp: _IdP, *, clock: Callable[[], float] = time.monotonic) -> TestCl
     app = FastAPI()
     register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.state.oidc = PersonVerifier(OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock), {"corp": "corp"})
+    app.state.oidc = IdpVerifier(OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock), {"corp": "corp"})
 
     @app.get("/gated")
     def _gated(subject: _Subject) -> dict[str, str]:

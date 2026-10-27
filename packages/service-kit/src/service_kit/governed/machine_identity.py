@@ -19,11 +19,11 @@ from pathlib import Path
 
 import jwt
 from lance_namespace import UnauthenticatedError
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.oidc import OIDCVerifier
-from service_kit.governed.principal import SERVICE_ACCOUNT_IDP, Principal
+from service_kit.governed.principal import CLIENT_IDP, SERVICE_ACCOUNT_IDP, Principal
 
 
 #: The username prefix the Kubernetes API server gives every service account (`system:serviceaccount:<ns>:<sa>`).
@@ -42,16 +42,29 @@ def service_account_principal(account: str) -> Principal:
     return Principal(idp_id=SERVICE_ACCOUNT_IDP, subject=account)
 
 
+def client_principal(client_id: str) -> Principal:
+    """The principal a Dex client signed in for itself is: `dex-client~` and its client id (ADR 0181)."""
+    return Principal(idp_id=CLIENT_IDP, subject=client_id)
+
+
 class ServicePrincipal(BaseModel):
-    """A caller the cluster vouched for: the service account its token names, and the principal that account is."""
+    """A machine caller: a service account the cluster vouched for, or a Dex client the IdP vouched for (ADR 0181)."""
 
     model_config = ConfigDict(frozen=True)
 
-    service_account: str
+    principal: Principal
 
-    @property
-    def principal(self) -> Principal:
-        return service_account_principal(self.service_account)
+    @field_validator("principal")
+    @classmethod
+    def _a_machine(cls, principal: Principal) -> Principal:
+        if not principal.is_machine:
+            raise ValueError(f"{principal.key!r} is a person, not a machine")
+        return principal
+
+    @classmethod
+    def for_account(cls, account: str) -> ServicePrincipal:
+        """The service account `account` names; `UnauthenticatedError` for a username that names none."""
+        return cls(principal=service_account_principal(account))
 
     @property
     def subject(self) -> str:
@@ -89,9 +102,7 @@ class ServiceAccountVerifier:
 
     def verify(self, token: str) -> ServicePrincipal:
         """The principal the token proves; `UnauthenticatedError` for a token at fault, `ProviderUnavailableError` for the issuer."""
-        account = self._oidc.verify(token).sub
-        service_account_principal(account)
-        return ServicePrincipal(service_account=account)
+        return ServicePrincipal.for_account(self._oidc.verify(token).sub)
 
 
 class IdentityTokenUnavailableError(ServiceUnavailableError):

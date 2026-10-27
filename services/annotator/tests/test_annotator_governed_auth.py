@@ -29,8 +29,8 @@ from annotator.api.security import (
 )
 from annotator.core.config import AnnotatorSettings
 from service_kit.exceptions import register_handlers
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 

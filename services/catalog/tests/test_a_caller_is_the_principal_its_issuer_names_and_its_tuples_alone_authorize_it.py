@@ -10,6 +10,11 @@ authenticated them (`RASK_OIDC_CONNECTORS`), and the upstream user id Dex report
 `sub`, which encodes the connector (measured on the dev Dex v2.42.0, `conftest.dex_subject`). So a connector renamed
 under the same idp id keeps every grant, and a token that names no mapped connector names nobody.
 
+ADR 0181. A Dex client signed in for itself with the client-credentials grant is the machine `dex-client~<client id>`: its
+token carries no federated claims, names the client in `azp`, and its `sub` encodes the client under the empty connector
+id no connector may carry (`conftest.DexIssuer.mint_client`). A person's token that asked for another audience carries
+`azp` too, but its `sub` encodes a connector, so without federated claims it still names nobody.
+
 What a subject may do is decided by the tuples that name it, as the `user` OpenFGA accepts: `user:` and the principal,
 percent-encoded. A user id may carry one `:` only (measured on the live store 2026-10-14:
 `user:kubernetes~system:serviceaccount:default:rask-sa-maintenance` is refused "the 'user' field is malformed", HTTP 400)
@@ -31,6 +36,7 @@ from typing import Any
 
 import httpx
 import jwt
+import pyarrow as pa
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
@@ -40,6 +46,7 @@ from openfga_sdk.client.models import ClientCheckRequest, ClientWriteRequest
 from openfga_sdk.exceptions import ValidationException
 
 from service_kit.lakehouse.naming import UUID_PROPERTY
+from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 #: A pipeline's own account in a namespace the release knows nothing about.
@@ -55,6 +62,9 @@ _PERSON_USER = f"user:corp~{_PERSON_ID}"
 #: An upstream user id carrying `#`, and the one user it is.
 _HASHED_ID = "corp#7"
 _HASHED_USER = "user:corp~corp%237"
+#: A pipeline outside Kubernetes, signed in as its own Dex client, and the one user that client is.
+_CLIENT_ID = "nightly-etl"
+_CLIENT_USER = f"user:dex-client~{_CLIENT_ID}"
 
 
 class _CheckResponse:
@@ -125,7 +135,7 @@ def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.
 
     # The namespace the request reads, granted to the pipeline's account, the person and the user id carrying `#`; and the
     # root object the access-admin door's gate checks, granted to the person.
-    openfga = _OpenFga({(_PIPELINE_USER, db), (_PERSON_USER, db), (_HASHED_USER, db), (_PERSON_USER, "estate:rask")})
+    openfga = _OpenFga({(_PIPELINE_USER, db), (_PERSON_USER, db), (_HASHED_USER, db), (_CLIENT_USER, db), (_PERSON_USER, "estate:rask")})
     with TestClient(app, raise_server_exceptions=False) as client:
         # Authorization on for the requests, after a lifespan that built the verifiers and no OpenFGA client.
         governed = Settings.model_validate(
@@ -214,6 +224,55 @@ def test_a_person_is_the_principal_their_connector_maps_so_a_renamed_connector_k
 
     assert answered.status_code == status, answered.text
     assert set(openfga.asked) == ({asked_about} if asked_about else set()), f"OpenFGA was asked about {sorted(set(openfga.asked))}"
+
+
+@pytest.mark.parametrize(
+    ("caller", "status", "asked_about"),
+    [
+        pytest.param("granted-client", 200, _CLIENT_USER, id="a-client-signed-in-for-itself-holding-a-tuple"),
+        pytest.param("ungranted-client", 403, "user:dex-client~other-job", id="a-client-holding-none"),
+        pytest.param("person-for-another-audience", 401, None, id="a-persons-token-naming-its-client-but-no-federated-claims"),
+    ],
+)
+def test_a_dex_client_signed_in_for_itself_is_its_client_principal_and_its_tuples_alone_authorize_it(
+    catalog: tuple[TestClient, _OpenFga], dex_issuer: Any, caller: str, status: int, asked_about: str | None
+) -> None:
+    client, openfga = catalog
+    token = {
+        "granted-client": lambda: dex_issuer.mint_client(_CLIENT_ID, audience="lance-catalog"),
+        "ungranted-client": lambda: dex_issuer.mint_client("other-job", audience="lance-catalog"),
+        "person-for-another-audience": lambda: dex_issuer.mint(_PERSON_ID, connector="corp", audience="lance-catalog", federated=False, azp=_CLIENT_ID),
+    }[caller]()
+
+    answered = _describe(client, token)
+
+    assert answered.status_code == status, answered.text
+    assert set(openfga.asked) == ({asked_about} if asked_about else set()), f"OpenFGA was asked about {sorted(set(openfga.asked))}"
+
+
+@pytest.mark.parametrize(
+    ("caller", "owner"),
+    [
+        pytest.param("person", _PERSON_USER, id="a-person-creating-a-table-owns-it"),
+        pytest.param("client", None, id="a-client-creating-a-table-is-a-machine-and-is-not-granted-owner"),
+    ],
+)
+def test_a_dex_client_is_a_machine_so_a_table_it_creates_is_owned_by_its_project_not_by_it(
+    catalog: tuple[TestClient, _OpenFga], dex_issuer: Any, caller: str, owner: str | None
+) -> None:
+    """A machine never owns what it creates: the project's admin owns it through the namespace (LH-433)."""
+    client, openfga = catalog
+    token = {
+        "person": lambda: dex_issuer.mint(_PERSON_ID, connector="corp", audience="lance-catalog"),
+        "client": lambda: dex_issuer.mint_client(_CLIENT_ID, audience="lance-catalog"),
+    }[caller]()
+    rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
+
+    created = client.post("/v1/table/db$t/create", content=rows, headers={"Authorization": f"Bearer {token}", "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+
+    assert created.status_code == 200, created.text
+    owners = [user for user, relation, obj in openfga.written if relation == "owner" and obj.startswith("table:")]
+    assert owners == ([owner] if owner else []), f"owner tuples written: {owners}"
 
 
 #: The object a raw tuple names: a table's uuid's (ADR 0173 §8).

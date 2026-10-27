@@ -13,8 +13,8 @@ from fastapi.testclient import TestClient
 from lance_namespace import ListTablesResponse, UnauthenticatedError
 
 from catalog.core.config import Settings, get_settings
+from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
-from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
 
 
