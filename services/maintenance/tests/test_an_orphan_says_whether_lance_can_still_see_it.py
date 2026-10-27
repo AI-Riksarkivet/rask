@@ -30,14 +30,17 @@ the host's offset, so both sides go through `.timestamp()`.
 from __future__ import annotations
 
 import datetime as dt
+import math
 import os
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
+import pytest
 
 from maintenance.services.orphans import scan_dataset
 from service_kit.lancekit.versions import committed_at
@@ -54,17 +57,6 @@ def _dataset_with_orphan(offset_s: float, rel: str = "_transactions/99-aaaaaaaa-
     orphan.write_bytes(b"leftover from a commit that never landed")
     os.utime(orphan, (floor + offset_s, floor + offset_s))
     return str(uri), str(uri)
-
-
-def test_an_orphan_BELOW_the_floor_is_lance_s_to_reclaim() -> None:
-    """Lance lists it, so the 7-day rule is the only thing holding it and time alone clears it."""
-    uri, prefix = _dataset_with_orphan(-60)
-
-    scan = scan_dataset(pafs.LocalFileSystem(), uri, prefix=prefix)
-
-    assert scan.checked
-    assert len(scan.orphans) == 1
-    assert scan.orphans[0].reclaimable_by_lance is True
 
 
 def test_a_data_file_ABOVE_the_floor_is_still_lance_s_to_reclaim() -> None:
@@ -84,3 +76,30 @@ def test_a_data_file_ABOVE_the_floor_is_still_lance_s_to_reclaim() -> None:
     assert [(o.path, o.kind, o.reclaimable_by_lance) for o in scan.orphans] == [("data/stranded.lance", "data", True)]
     lance.dataset(uri).cleanup_old_versions(older_than=dt.timedelta(seconds=0), delete_unverified=True)
     assert not orphan.exists(), "Lance kept a data file above the floor, so the classification is wrong for this pylance"
+
+
+@pytest.mark.parametrize(
+    ("within_second", "lance_s"),
+    [
+        pytest.param(lambda floor: float(math.floor(floor)), False, id="a-whole-second-listing-cannot-place-it"),
+        pytest.param(lambda floor: math.floor(floor) + (floor % 1) / 2, True, id="a-sub-second-listing-places-it-below"),
+    ],
+)
+def test_an_orphan_in_the_floor_s_second_is_lance_s_only_when_its_listing_places_it_below(within_second: Callable[[float], float], lance_s: bool) -> None:
+    """A listing in whole seconds cannot place a file inside the floor's second; one with the fraction can.
+
+    pyarrow's S3 listing answers whole seconds: measured on RustFS 1.0.3 for one transaction file, pyarrow
+    `1792418837.0`, boto3 `LastModified` `1792418837.942`, its table's first commit `1792418837.559`, so the file
+    lay above the floor that Lance's own listing compares against while the scan read it below. Measured on a moto
+    server, both clients list whole seconds while the floor keeps its fraction. The file's mtime is pinned inside the
+    floor's second and below the floor: at the whole second, as such a listing reports it, and at a fraction of it.
+    """
+    uri, prefix = _dataset_with_orphan(0)
+    floor = committed_at(lance.dataset(uri).versions()[0]).timestamp()
+    listed = within_second(floor)
+    orphan = Path(uri) / "_transactions" / "99-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.txn"
+    os.utime(orphan, (listed, listed))
+
+    scan = scan_dataset(pafs.LocalFileSystem(), uri, prefix=prefix)
+
+    assert [(o.kind, o.reclaimable_by_lance) for o in scan.orphans] == [("transactions", lance_s)]

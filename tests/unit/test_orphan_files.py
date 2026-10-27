@@ -67,7 +67,7 @@ def test_files_only_an_OLD_version_references_are_not_orphans(tmp_path: pathlib.
     only_v1 = {f"data/{f.path}" for fr in at_v1.get_fragments() for f in fr.data_files()}
     assert only_v1, "fixture must actually have a v1 data file"
 
-    referenced, versions, note = orphans.referenced_paths(uri)
+    referenced, versions, note = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
     assert note is None
     assert versions >= 2
     assert only_v1 <= referenced, "a file referenced only by an older version was treated as unreferenced"
@@ -157,7 +157,7 @@ def test_a_blob_sidecar_of_a_referenced_data_file_is_not_an_orphan(tmp_path: pat
     is exactly the reclamation gap this pass exists to name.
     """
     uri, prefix = _dataset(tmp_path)
-    referenced, _, _ = orphans.referenced_paths(uri)
+    referenced, _, _ = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
     stems = [p.removeprefix("data/").removesuffix(".lance") for p in referenced if p.endswith(".lance")]
     assert stems, "fixture must have at least one referenced data file"
 
@@ -293,7 +293,7 @@ def test_a_registered_but_unused_base_is_refused_by_the_flag(tmp_path: pathlib.P
     alt.mkdir()
     lance.dataset(uri).add_bases([DatasetBasePath(path=str(alt), name="alt")])
     # The consequence detector genuinely has nothing to go on: every referenced path is local.
-    referenced, _versions, _note = orphans.referenced_paths(uri)
+    referenced, _versions, _note = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
     assert all((tmp_path / "based.lance" / rel).exists() for rel in referenced if not rel.endswith("/"))
 
     result = orphans.scan_dataset(_fs(), uri, prefix=uri)

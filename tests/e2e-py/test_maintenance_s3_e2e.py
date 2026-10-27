@@ -356,7 +356,7 @@ def test_a_real_blob_sidecar_written_by_lance_is_not_an_orphan(estate: Estate, s
     implementation detail, and a test that hardcoded it would keep passing if Lance changed the layout
     while the scan started naming live blobs.
     """
-    referenced, _, note = orphans.referenced_paths(estate.blob_uri, settings.storage_options())
+    referenced, _, note = orphans.referenced_paths_of(orphans.open_dataset(estate.blob_uri, settings.storage_options()), estate.blob_uri)
     assert note is None
     stems = [p.removeprefix("data/").removesuffix(".lance") for p in referenced if p.endswith(".lance")]
     assert stems, "the blob fixture must have at least one referenced data file"

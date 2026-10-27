@@ -177,6 +177,17 @@ def test_a_floor_that_already_covers_its_orphans_is_refused(tmp_path: Path) -> N
     assert [r.refused for r in report.refused] == ["floor already covers these orphans"]
 
 
+def test_an_orphan_listed_in_the_floor_s_own_second_is_raised_not_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A whole-second listing cannot place a file inside the floor's second, so the scan strands it and the raise
+    must not call it covered: the pass and the scan ask one rule (`orphans.listed_at_or_below`), or the file is
+    stranded and refused on every tick."""
+    monkeypatch.setattr("maintenance.services.floor._current_floor", lambda uri, storage_options: 1_000_000_000.559)
+
+    plan = _plan(tmp_path, [_orphan("s3://wh/a", False, mtime=1_000_000_000.0)])
+
+    assert ([r.dataset for r in plan.raised], plan.refused) == (["s3://wh/a"], [])
+
+
 def test_an_unreadable_dataset_is_refused_and_does_not_stop_the_others(tmp_path: Path) -> None:
     uri, orphan, _ = _stranded_dataset(tmp_path)
 

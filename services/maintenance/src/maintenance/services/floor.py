@@ -66,7 +66,7 @@ from pydantic import BaseModel, Field
 from maintenance.core.config import shared_lance_session
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, write_options_for
 from maintenance.services.due import TableIds
-from maintenance.services.orphans import OrphanFile
+from maintenance.services.orphans import OrphanFile, listed_at_or_below
 from maintenance.services.sweep import trashed_locations, why_in_trash
 from service_kit.lakehouse import trash
 from service_kit.lancekit.versions import committed_at
@@ -207,7 +207,7 @@ def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: Maint
     outcome.floor_before = floor
     if (stamped := _already_raised(uri, storage_options)) is not None:
         return outcome.model_copy(update={"refused": f"already raised at {stamped} and the floor has not moved — the sweep cannot clean this dataset"})
-    if all(o.mtime_epoch <= floor for o in found):
+    if all(listed_at_or_below(o.mtime_epoch, floor) for o in found):
         # The floor already covers them: something committed to this dataset between the report and
         # now, so the next sweep will reclaim without help and a commit here buys only a version.
         return outcome.model_copy(update={"refused": "floor already covers these orphans"})

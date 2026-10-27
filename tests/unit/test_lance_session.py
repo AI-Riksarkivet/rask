@@ -29,7 +29,7 @@ def _dataset(tmp_path: Path, rows: int = 8) -> str:
 
 def test_referenced_paths_walks_versions_on_the_HEAD_dataset_cache(tmp_path: Path, monkeypatch) -> None:
     """The N+1 fix: the per-version walk must NOT construct fresh datasets. Counted at the real
-    seam — lance.dataset call count during referenced_paths is exactly ONE (the head open);
+    seam — lance.dataset call count during the scan's open and walk is exactly ONE (the head open);
     versions ride checkout_version, which reuses the head's cache by contract."""
     uri = _dataset(tmp_path)
     calls: list[str] = []
@@ -40,7 +40,7 @@ def test_referenced_paths_walks_versions_on_the_HEAD_dataset_cache(tmp_path: Pat
         return real(uri_arg, *args, **kwargs)
 
     monkeypatch.setattr(orphans.lance, "dataset", counting)
-    referenced, count, note = orphans.referenced_paths(uri)
+    referenced, count, note = orphans.referenced_paths_of(orphans.open_dataset(uri), uri)
     assert count >= 4 and referenced, "the walk saw the versions and files"
     assert note is None
     assert len(calls) == 1, f"per-version REOPENS are back ({len(calls)} constructor calls) — the #102 N+1"

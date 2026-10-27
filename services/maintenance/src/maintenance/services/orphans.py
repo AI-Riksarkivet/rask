@@ -220,17 +220,17 @@ def _kind_of(rel_path: str) -> str:
 def open_dataset(dataset_uri: str, storage_options: dict[str, str] | None = None) -> lance.LanceDataset:
     """The scan's ONE open per dataset — threading the shared bounded session (#102).
 
-    Split out of :func:`referenced_paths` so :func:`scan_dataset` can hold the handle and hand it to
-    the layout gate (which reads the manifest's feature flags) without a second open.
+    :func:`scan_dataset` holds the handle and hands it to :func:`referenced_paths_of` and to the layout gate
+    (which reads the manifest's feature flags), so neither opens the dataset again.
     """
     return lance.dataset(dataset_uri, storage_options=storage_options, session=shared_lance_session())
 
 
-def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = None) -> tuple[set[str], int, str | None]:
+def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[str], int, str | None]:
     """Every dataset-relative path referenced by ANY live version. Returns ``(paths, versions, note)``.
 
-    Read-only: opens each version and reads its fragment metadata. The union across versions is the
-    point — see the module docstring on why the latest version alone is not the referenced set.
+    Read-only over the open handle ``ds``: checks out each version and reads its fragment metadata. The union
+    across versions is the point — see the module docstring on why the latest version alone is not the referenced set.
 
     Sidecar DIRECTORIES are returned as trailing-slash entries, so the caller can prefix-test them
     without a second return value.
@@ -241,11 +241,6 @@ def referenced_paths(dataset_uri: str, storage_options: dict[str, str] | None = 
     Raises:
         _HistoryPastTheCeiling: the dataset keeps more than :data:`_MAX_VERSIONS` versions; none was read.
     """
-    return referenced_paths_of(open_dataset(dataset_uri, storage_options), dataset_uri)
-
-
-def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[str], int, str | None]:
-    """:func:`referenced_paths` over an ALREADY-OPEN dataset. Same contract, no open."""
     referenced: set[str] = set()
     referenced_dirs: set[str] = set()
     # `version_refs()`, not `versions()`: pylance 11 answers it WITHOUT reading or deserializing a
@@ -479,6 +474,13 @@ def _classify_against_floor(orphans: list[OrphanFile], ds: lance.LanceDataset, d
     written two hours apart. Comparing the datetimes raises on the mix, and stamping UTC onto the naive
     one to silence that misclassifies every file within the host's offset of a commit, one way only.
 
+    A LISTED MTIME MAY BE A WHOLE SECOND while the floor keeps its fraction. pyarrow's S3 listing answered
+    `1792418837.0` for a file boto3 read at `1792418837.942` on RustFS 1.0.3, against a floor of
+    `1792418837.559`, and a moto server lists whole seconds through both clients. Such an mtime places the file
+    anywhere in that second, so it is Lance's only when the whole second lies at or below the floor
+    (:func:`listed_at_or_below`, which the listing-floor pass asks too); a file the scan cannot place falls to the floor-bound class, which the
+    listing-floor pass resolves.
+
     An unreadable floor leaves the class None. "We could not tell" and "Lance will take it" must stay
     distinguishable, for the same reason `checked=False` is not `orphans=[]`.
     """
@@ -494,7 +496,17 @@ def _classify_against_floor(orphans: list[OrphanFile], ds: lance.LanceDataset, d
         log.warning("orphan_floor_unreadable", extra={"dataset": dataset_uri, "error": str(exc)})
         return
     for orphan in floor_bound:
-        orphan.reclaimable_by_lance = orphan.mtime_epoch <= floor
+        orphan.reclaimable_by_lance = listed_at_or_below(orphan.mtime_epoch, floor)
+
+
+def listed_at_or_below(mtime_epoch: float, floor: float) -> bool:
+    """Whether a file listed at ``mtime_epoch`` was surely modified at or before ``floor``.
+
+    A whole-second mtime may be a listing that dropped the fraction, so the file's own mtime lies anywhere in
+    ``[mtime_epoch, mtime_epoch + 1)`` and only the end of that second decides.
+    """
+    latest = mtime_epoch + 1 if mtime_epoch.is_integer() else mtime_epoch
+    return latest <= floor
 
 
 def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_options: dict[str, str] | None = None) -> DatasetOrphanScan:
