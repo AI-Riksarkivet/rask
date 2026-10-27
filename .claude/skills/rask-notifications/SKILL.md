@@ -180,6 +180,16 @@ delegator, `onBehalfOf` equal to the whole actor. No action is exempt, so the la
 signed events (ADR 0171). A refusal is acked and counted in
 `notifications_signature_refused_total{lance_notifications_door,lance_notifications_reason}`.
 
+**A control event that dead-letters is kept and re-driven** ([[LH-331]], `notifications.api.control_parks`). The lineage
+lane's second path is the reconcile cron's walk of lineage's feed; the control lane has no durable feed (the catalog's
+`/management/v1/events` is a per-replica ring of hints), so the `/dlq-event` route parks each control event in the
+sidecar's plain state API, beside the lineage cursor: one insert-only key per event (`control-park-<event_id>`) and an
+ETag-guarded index of their ids (`control-parks`), since the state API cannot list keys. Every reconcile tick offers each
+park again, within a 4 s budget and on `Lane.PARK`, to the same signature door and idempotent control ingest. A park
+retires when it lands, when it is refused for good, or after the dead-letter stream's 168h retention (`expired`,
+alerted as `NotificationsControlNotificationLost`); nothing else drops one, and a park the store cannot keep answers the
+dead letter RETRY rather than acking the only copy.
+
 **One action erases rather than delivers: `principal_deleted`** (`ERASING_ACTIONS`, CTL-022). The catalog's offboarding door
 ([[LH-233]]) names the principal in `extra.subject`, and `erase_subject` leaves every project index the person's watch list
 names, then `InboxActor.erase` removes the rows, meta, prefs, digest window and watch list and unregisters both reminders.

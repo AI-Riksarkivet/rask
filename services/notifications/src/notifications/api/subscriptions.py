@@ -27,24 +27,19 @@ before its handler runs: under `RASK_SIGNATURE_DOORS=enforce` an event no permit
 key verifies is acknowledged and reaches no inbox, and under `observe` it is delivered and counted.
 """
 
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import Annotated, Any
 
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 
-from notifications.api.control_events import UsersetExpander, ingest_control_event
+from notifications.api.control_events import ingest_control_event, userset_expander
 from notifications.api.dlq import register_dlq_route
 from notifications.api.ingest import ingest_run_event
-from notifications.api.metrics import Lane, create_signature_refused_series
+from notifications.api.metrics import Lane, create_control_park_series, create_signature_refused_series
 from notifications.api.security import VisibilityDep
 from notifications.api.settings import get_ingress_settings
 from notifications.api.signature_door import screen_control_event, screen_lineage_event
-from notifications.config import get_notifications_settings
 from notifications.proxies import channel_push, inbox_for, watch_index_for, watchers_of
-
-
-if TYPE_CHECKING:  # no runtime cost, and it breaks no import cycle
-    from service_kit.governed.decider import AccessDecider
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -92,30 +87,6 @@ def register_subscriptions(app: FastAPI) -> None:
             return withheld
         return await ingest_run_event(data, lane=Lane.BUS, visibility=visibility, open_inbox=inbox_for, watchers=watchers_of, push=channel_push())
 
-    def _make_expander(decider: "AccessDecider | None") -> UsersetExpander | None:
-        """Resolve `role:reviewers#assignee` to the people holding that relation, via the SAME
-        `list_users` primitive the access review uses.
-
-        `None` when authorization is off or unwired — the lane then names nobody for a userset rather
-        than inventing an audience. Raises on an FGA outage rather than answering empty: the caller
-        turns that into a RETRY, because an empty answer would read as "this group has no members" and
-        silently drop everyone's notification.
-        """
-        # `get_notifications_settings()`, NOT the ingress settings closed over above: the FGA flag
-        # lives on the service settings and `IngressSettings` has never carried one. Reading it off the
-        # wrong object raised AttributeError on the FIRST control event with a userset — invisible to
-        # the unit tests, which inject an expander directly and never build one.
-        if decider is None or not get_notifications_settings().fga_enabled:
-            return None
-
-        async def expand(userset: str) -> tuple[str, ...]:
-            obj, _, relation = userset.partition("#")
-            if not obj or not relation:
-                return ()
-            return tuple(await decider.list_users(relation=relation, obj=obj))
-
-        return expand
-
     @dapr_app.subscribe(
         pubsub=settings.control_pubsub,
         topic=settings.control_topic,
@@ -149,9 +120,10 @@ def register_subscriptions(app: FastAPI) -> None:
             data,
             open_inbox=inbox_for,
             open_watch_index=watch_index_for,
-            expand=_make_expander(getattr(request.app.state, "decider", None)),
+            expand=userset_expander(getattr(request.app.state, "decider", None)),
         )
 
     # The doors' refusal series, at 0 from the moment the doors exist. `notifications/__init__.py` calls this function
     # after `make_service_app`, which installed the MeterProvider these zeros must reach.
     create_signature_refused_series()
+    create_control_park_series()

@@ -26,15 +26,21 @@ the gate reads.)
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from notifications.api.fanout import InboxOpener
 from notifications.api.metrics import Lane, Outcome, record_ingress
+from notifications.config import get_notifications_settings
 from notifications.errors import InboxUnreadable
 from notifications.models import NotificationDelivery, NotificationReason
 from notifications.proxies import TypedActorProxy
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga
 from service_kit.lakehouse.subjects import is_person_subject
+
+
+if TYPE_CHECKING:  # no runtime cost, and it breaks no import cycle
+    from service_kit.governed.decider import AccessDecider
 
 
 log = logging.getLogger(__name__)
@@ -64,6 +70,29 @@ type WatchIndexOpener = Callable[[str], TypedActorProxy]
 #: than a stub that invents an audience. `None` means "cannot expand", which resolves to NO audience —
 #: quiet, never wrong.
 type UsersetExpander = Callable[[str], Awaitable[tuple[str, ...]]]
+
+
+def userset_expander(decider: "AccessDecider | None") -> UsersetExpander | None:
+    """Resolve `role:reviewers#assignee` to the people holding that relation, via the SAME
+    `list_users` primitive the access review uses.
+
+    `None` when authorization is off or unwired — the lane then names nobody for a userset rather
+    than inventing an audience. Raises on an FGA outage rather than answering empty: the caller
+    turns that into a RETRY, because an empty answer would read as "this group has no members" and
+    silently drop everyone's notification.
+    """
+    # `get_notifications_settings()`: the FGA flag lives on the service settings, and `IngressSettings`
+    # carries none, so reading it there raises AttributeError on the first control event naming a userset.
+    if decider is None or not get_notifications_settings().fga_enabled:
+        return None
+
+    async def expand(userset: str) -> tuple[str, ...]:
+        obj, _, relation = userset.partition("#")
+        if not obj or not relation:
+            return ()
+        return tuple(await decider.list_users(relation=relation, obj=obj))
+
+    return expand
 
 
 def _is_userset(principal: str) -> bool:
@@ -140,7 +169,7 @@ def _person(raw: str) -> str | None:
     return subject if is_person_subject(subject) else None
 
 
-async def erase_subject(event: CatalogControlEvent, *, open_inbox: InboxOpener, open_watch_index: WatchIndexOpener) -> dict[str, str]:
+async def erase_subject(event: CatalogControlEvent, *, open_inbox: InboxOpener, open_watch_index: WatchIndexOpener, lane: Lane = Lane.BUS) -> dict[str, str]:
     """Erase everything this plane holds for the principal an `ERASING_ACTIONS` event names (CTL-022).
 
     The person's own watch list names the projects whose index enrols them, so each index is left first and the inbox
@@ -151,7 +180,7 @@ async def erase_subject(event: CatalogControlEvent, *, open_inbox: InboxOpener, 
     raw = event.extra.get("subject")
     subject = _person(raw) if isinstance(raw, str) and not _is_userset(raw.strip()) else None
     if subject is None:
-        record_ingress(Lane.BUS, Outcome.IGNORED)
+        record_ingress(lane, Outcome.IGNORED)
         return {"status": "SUCCESS"}
     inbox = open_inbox(subject)
     try:
@@ -162,10 +191,10 @@ async def erase_subject(event: CatalogControlEvent, *, open_inbox: InboxOpener, 
     except Exception:
         # RETRY: the actor plane was unreachable or refused, and an erasure the redelivery can finish must not be acked.
         log.exception("control_erasure_failed", extra={"action": event.action})
-        record_ingress(Lane.BUS, Outcome.RETRIED)
+        record_ingress(lane, Outcome.RETRIED)
         return {"status": "RETRY"}
     log.info("principal_erased", extra={"action": event.action, "watches_left": len(watched)})
-    record_ingress(Lane.BUS, Outcome.ERASED)
+    record_ingress(lane, Outcome.ERASED)
     return {"status": "SUCCESS"}
 
 
@@ -226,7 +255,12 @@ async def _deliver_to_all(subjects: tuple[str, ...], payload: dict[str, object],
 
 
 async def ingest_control_event(
-    raw: object, *, open_inbox: InboxOpener, open_watch_index: WatchIndexOpener, expand: UsersetExpander | None = None
+    raw: object,
+    *,
+    open_inbox: InboxOpener,
+    open_watch_index: WatchIndexOpener,
+    expand: UsersetExpander | None = None,
+    lane: Lane = Lane.BUS,
 ) -> dict[str, str]:
     """Ingest one Dapr-delivered control event. Same DROP/RETRY/SUCCESS discipline as the run lane.
 
@@ -236,12 +270,12 @@ async def ingest_control_event(
     try:
         event = CatalogControlEvent.model_validate(raw)
     except Exception:
-        log.error("control_event_invalid", extra={"lane": Lane.BUS.value})
-        record_ingress(Lane.BUS, Outcome.DROPPED)
+        log.error("control_event_invalid", extra={"lane": lane.value})
+        record_ingress(lane, Outcome.DROPPED)
         return {"status": "DROP"}
 
     if event.action in ERASING_ACTIONS:
-        return await erase_subject(event, open_inbox=open_inbox, open_watch_index=open_watch_index)
+        return await erase_subject(event, open_inbox=open_inbox, open_watch_index=open_watch_index, lane=lane)
 
     try:
         subjects = await named_subjects(event, expand)
@@ -250,11 +284,11 @@ async def ingest_control_event(
         # than IGNORE: the grant really did name people, and acking here would lose their notification
         # permanently — the same fail-closed reasoning the visibility gate uses on the run lane.
         log.exception("control_userset_expansion_failed", extra={"action": event.action})
-        record_ingress(Lane.BUS, Outcome.RETRIED)
+        record_ingress(lane, Outcome.RETRIED)
         return {"status": "RETRY"}
 
     if not subjects:
-        record_ingress(Lane.BUS, Outcome.IGNORED)
+        record_ingress(lane, Outcome.IGNORED)
         return {"status": "SUCCESS"}
 
     # ONE ROW PER PERSON, EVERY PERSON ATTEMPTED, and any failure retries the whole set (CTL-027): a loop that stopped at
@@ -262,8 +296,8 @@ async def ingest_control_event(
     # fails for good. Retrying the set is safe because delivery is idempotent on `notification_id` (`<event_id>@<ACTION>`,
     # stable across redelivery), so a member who already has the row takes it as a duplicate.
     if not await _deliver_to_all(subjects, as_delivery(event).model_dump(mode="json"), open_inbox=open_inbox, action=event.action):
-        record_ingress(Lane.BUS, Outcome.RETRIED)
+        record_ingress(lane, Outcome.RETRIED)
         return {"status": "RETRY"}
 
-    record_ingress(Lane.BUS, Outcome.DELIVERED)
+    record_ingress(lane, Outcome.DELIVERED)
     return {"status": "SUCCESS"}

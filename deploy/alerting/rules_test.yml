@@ -229,7 +229,7 @@ tests:
   # having: a rule that only ever fires is a rule nobody can distinguish from a broken one.
 
   # 10. Sustained dead-lettering → ALERT. A park means the sidecar's whole retry schedule was
-  #     exhausted, so this is a notification that will never arrive without a replay.
+  #     exhausted, so the notification is late (kept and re-driven, or offered again by the feed walk).
   - interval: 1m
     input_series:
       - series: 'notifications_dlq_parked_total{app="notifications"}'
@@ -243,7 +243,7 @@ tests:
               service: notifications
             exp_annotations:
               summary: "Notifications are dead-lettering — deliveries are being parked, not retried"
-              description: "The notifications service has parked messages on dlq.notifications for 10m: the sidecar's full retry schedule was exhausted, so these notifications will not arrive without a replay. Check the inbox actor plane (lance-statestore reachable? actors registered?) and OpenFGA. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+              description: "The notifications service has parked messages on dlq.notifications for 10m: the sidecar's full retry schedule was exhausted. A parked governance notification is kept and offered again on every reconcile tick, and a run notification is offered again by the walk of lineage's feed unless its row keeps stalling, so each arrives late if at all. Check the inbox actor plane (lance-statestore reachable? actors registered?) and OpenFGA. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # 11. A plane that has NEVER parked anything → NO alert. The counter sits flat at zero, which is the
   #     ordinary state and must never page.
@@ -254,6 +254,36 @@ tests:
     alert_rule_test:
       - eval_time: 15m
         alertname: NotificationsDeadLettering
+        exp_alerts: []
+
+  # 11b. A parked control event retired undelivered → ALERT on the first one: a person was never told.
+  - interval: 1m
+    input_series:
+      - series: 'notifications_control_parks_total{lance_notifications_outcome="expired"}'
+        values: "0 0 1 1 1" # created at 0 when the routes are registered, so the first loss is an increase
+      - series: 'notifications_control_parks_total{lance_notifications_outcome="delivered"}'
+        values: "0 3 6 9 12"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: NotificationsControlNotificationLost
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: notifications
+            exp_annotations:
+              summary: "A governance notification was lost — a parked control event was retired undelivered"
+              description: "A dead-lettered control event (a grant, a revoke or an erasure release) was retired without reaching its person: it stayed undeliverable for the dead-letter stream's 168h retention. The ERROR log control_park_expired names it by event_id. Find why its inbox kept refusing (lance-statestore, actors, an unreadable inbox record). Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+
+  # 11c. Parks that are re-driven and delivered → NO alert: late, not lost.
+  - interval: 1m
+    input_series:
+      - series: 'notifications_control_parks_total{lance_notifications_outcome="expired"}'
+        values: "0x5"
+      - series: 'notifications_control_parks_total{lance_notifications_outcome="delivered"}'
+        values: "0 3 6 9 12"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: NotificationsControlNotificationLost
         exp_alerts: []
 
   # 12. A turn queue that keeps growing → ALERT. Something inside the turn is slow, and every call for

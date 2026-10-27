@@ -19,6 +19,7 @@ import httpx
 from dapr.ext.fastapi import DaprActor
 from fastapi import FastAPI, Request
 
+from notifications.api.control_parks import ControlParkStore
 from notifications.api.reconciler import LineageCursorStore, LineageFeedClient
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
@@ -114,6 +115,7 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
             store_name=ingress.state_store,
             dapr_http_port=ingress.dapr_http_port,
         )
+        app.state.control_parks = ControlParkStore(client=app.state.http, store_name=ingress.state_store, dapr_http_port=ingress.dapr_http_port)
 
         actor_ext: DaprActor | None = getattr(app.state, "actor_ext", None)
         if actor_ext is not None:

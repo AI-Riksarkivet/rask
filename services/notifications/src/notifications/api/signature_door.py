@@ -70,7 +70,9 @@ def _published_keys(request: Request, settings: IngressSettings) -> PublishedKey
     return keys
 
 
-async def _answer(door: Door, check: Callable[[], VerifiedSignature], mode: DoorMode, *, identity: str | None, event_id: str) -> dict[str, str] | None:
+async def _answer(
+    door: Door, check: Callable[[], VerifiedSignature], mode: DoorMode, *, identity: str | None, event_id: str, lane: Lane = Lane.BUS
+) -> dict[str, str] | None:
     """Run ``check`` under ``mode``, count and log the verdict, and return what the route answers instead of acting, or None to act."""
     verdict: DoorVerdict = await run_in_threadpool(judge, check, mode)
     logged = {"door": door.value, "identity": _bounded(identity), "event_id": _bounded(event_id)}
@@ -83,11 +85,11 @@ async def _answer(door: Door, check: Callable[[], VerifiedSignature], mode: Door
         # A verdict that neither acts nor names a refusal is the keys being unreadable: nothing is known about the
         # signature, so the sidecar redelivers rather than this door losing an honest event.
         log.warning("notifications_signature_keys_unavailable", extra=logged)
-        record_ingress(Lane.BUS, Outcome.RETRIED)
+        record_ingress(lane, Outcome.RETRIED)
         return DAPR_RETRY
     record_signature_refused(door, verdict.refused)
     log.warning("notifications_signature_refused", extra={**logged, "reason": verdict.refused})
-    record_ingress(Lane.BUS, Outcome.SIGNATURE_REFUSED)
+    record_ingress(lane, Outcome.SIGNATURE_REFUSED)
     return DAPR_SUCCESS
 
 
@@ -117,7 +119,7 @@ async def screen_lineage_event(arrived: object, request: Request, settings: Ingr
     )
 
 
-async def screen_control_event(arrived: object, request: Request, settings: IngressSettings) -> dict[str, str] | None:
+async def screen_control_event(arrived: object, request: Request, settings: IngressSettings, *, lane: Lane = Lane.BUS) -> dict[str, str] | None:
     """None when `/control-events` may act on ``arrived``; otherwise the answer the sidecar gets instead, the event told to nobody.
 
     ``arrived`` is the CloudEvent's data. The envelope is parsed only to read its action and object; the signature is
@@ -142,4 +144,5 @@ async def screen_control_event(arrived: object, request: Request, settings: Ingr
         mode,
         identity=claim.identity if claim else None,
         event_id=event.event_id,
+        lane=lane,
     )

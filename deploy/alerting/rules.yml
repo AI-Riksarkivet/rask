@@ -385,7 +385,9 @@ groups:
       # 1. The DLQ filling. `dlq.notifications` is this app's OWN parking subject (a per-app DLQ, so a
       #    park counted here belongs to this plane and not to a neighbour sharing a subTopic). A park
       #    means the sidecar's whole retry schedule was exhausted, so this is not "one delivery was
-      #    slow" — it is a notification that will now never arrive unless someone replays it.
+      #    slow". A governance notification is kept and re-driven each tick (`notifications.api.control_parks`,
+      #    LH-331) and a run one is offered again by the feed walk unless its row keeps stalling; the rule
+      #    below pages on a governance one that is lost.
       - alert: NotificationsDeadLettering
         expr: sum(rate(notifications_dlq_parked_total[10m])) > 0
         for: 10m
@@ -396,8 +398,27 @@ groups:
           summary: "Notifications are dead-lettering — deliveries are being parked, not retried"
           description: >-
             The notifications service has parked messages on dlq.notifications for 10m: the sidecar's full
-            retry schedule was exhausted, so these notifications will not arrive without a replay. Check the
-            inbox actor plane (lance-statestore reachable? actors registered?) and OpenFGA.
+            retry schedule was exhausted. A parked governance notification is kept and offered again on every
+            reconcile tick, and a run notification is offered again by the walk of lineage's feed unless its row
+            keeps stalling, so each arrives late if at all. Check the inbox actor plane (lance-statestore
+            reachable? actors registered?) and OpenFGA.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
+
+      # 1b. A governance notification LOST: a kept control event retired undelivered because it outlived the
+      #     dead-letter stream's 168h retention (`expired`). Each is a person who was never told of a grant, a
+      #     revoke or an erasure release, so one is enough to page.
+      - alert: NotificationsControlNotificationLost
+        expr: sum(increase(notifications_control_parks_total{lance_notifications_outcome="expired"}[30m])) > 0
+        labels:
+          severity: warning
+          service: notifications
+        annotations:
+          summary: "A governance notification was lost — a parked control event was retired undelivered"
+          description: >-
+            A dead-lettered control event (a grant, a revoke or an erasure release) was retired without reaching
+            its person: it stayed undeliverable for the dead-letter stream's 168h retention. The ERROR log
+            control_park_expired names it by event_id. Find why its inbox kept refusing (lance-statestore,
+            actors, an unreadable inbox record).
             Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
       # 2. The INBOX ACTOR TURN QUEUE. Single-activation is the plane's lock, which means every call for

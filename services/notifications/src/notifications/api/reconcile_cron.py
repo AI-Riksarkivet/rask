@@ -24,16 +24,20 @@ succeeded, so nothing is lost by failing loudly and nothing is duplicated by try
 
 import asyncio
 import logging
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request, Response
 
-from notifications.api.metrics import PassOutcome, record_feed_gap, record_pass
+from notifications.api.control_events import ingest_control_event, userset_expander
+from notifications.api.control_parks import ControlParksUnavailable, RedriveResult, redrive
+from notifications.api.ingest import DAPR_RETRY, DAPR_SUCCESS
+from notifications.api.metrics import Lane, ParkOutcome, PassOutcome, record_feed_gap, record_pass
 from notifications.api.reconciler import LineageCursorStore, LineageFeedClient, ReconcileResult, reconcile
 from notifications.api.security import VisibilityDep
-from notifications.api.settings import get_ingress_settings
+from notifications.api.settings import IngressSettings, get_ingress_settings
+from notifications.api.signature_door import screen_control_event
 from notifications.dependencies import ActorPlaneDep
-from notifications.proxies import channel_push, inbox_for, watchers_of
+from notifications.proxies import channel_push, inbox_for, watch_index_for, watchers_of
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -82,7 +86,36 @@ def get_cursor_store(request: Request) -> LineageCursorStore:
 CursorStoreDep = Annotated[LineageCursorStore, Depends(get_cursor_store)]
 
 
-async def on_reconcile_cron(feed: FeedClientDep, cursor: CursorStoreDep, visibility: VisibilityDep, _: ActorPlaneDep) -> ReconcileResult:
+#: How long a tick spends re-driving parks before the lineage walk. The walk's own budget (25 s by default) and this sit
+#: inside the chart's `@every 30s` schedule; a park the budget does not reach is offered on the next tick.
+_REDRIVE_BUDGET_SECONDS = 4.0
+
+
+async def _redrive_control_parks(request: Request, settings: IngressSettings) -> None:
+    """Offer every parked control event again (LH-331), as the control subscription would: its signature door, then the
+    idempotent control ingest. A park this pass cannot reach is logged and leaves the lineage walk to run."""
+    store = getattr(request.app.state, "control_parks", None)
+    if store is None:
+        return
+    expand = userset_expander(getattr(request.app.state, "decider", None))
+
+    async def offer(data: dict[str, Any]) -> ParkOutcome:
+        withheld = await screen_control_event(data, request, settings, lane=Lane.PARK)
+        if withheld is not None:
+            return ParkOutcome.KEPT if withheld == DAPR_RETRY else ParkOutcome.REFUSED
+        status = await ingest_control_event(data, open_inbox=inbox_for, open_watch_index=watch_index_for, expand=expand, lane=Lane.PARK)
+        return {DAPR_SUCCESS["status"]: ParkOutcome.DELIVERED, DAPR_RETRY["status"]: ParkOutcome.KEPT}.get(status["status"], ParkOutcome.REFUSED)
+
+    try:
+        result = await redrive(store, ingest=offer, budget_seconds=_REDRIVE_BUDGET_SECONDS)
+    except ControlParksUnavailable:
+        log.exception("control_parks_unreachable")
+        return
+    if result != RedriveResult():
+        log.info("control_parks_redriven", extra=result.model_dump())
+
+
+async def on_reconcile_cron(request: Request, feed: FeedClientDep, cursor: CursorStoreDep, visibility: VisibilityDep, _: ActorPlaneDep) -> ReconcileResult:
     """One catch-up pass over lineage's durable feed, on the chart's schedule.
 
     Gated on the actor plane for the same reason the inbox routes are, plus one this route learned the
@@ -103,6 +136,7 @@ async def on_reconcile_cron(feed: FeedClientDep, cursor: CursorStoreDep, visibil
         record_pass(PassOutcome.SKIPPED)
         return ReconcileResult(skipped=True)
     async with _reconcile_lock:
+        await _redrive_control_parks(request, settings)
         # `reconcile()` raises `LineageFeedBudgetExceeded` (a domain error → 503) when its own budget
         # fires, and lets every other failure keep its own type and traceback. Nothing is caught here:
         # routes raise domain exceptions and the app's handlers shape the response.

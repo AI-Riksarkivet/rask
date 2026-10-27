@@ -45,6 +45,9 @@ class Lane(StrEnum):
 
     BUS = "bus"
     FEED = "feed"
+    #: A dead-lettered control event offered again from the park (`notifications.api.control_parks`). Its own lane so a
+    #: re-drive is never counted as the bus delivering, which the retire-a-lane query above reads.
+    PARK = "park"
 
 
 class Outcome(StrEnum):
@@ -71,6 +74,20 @@ class Outcome(StrEnum):
     SIGNATURE_REFUSED = "signature_refused"
     #: A principal the estate admin offboarded: everything this plane held for them erased, nobody told (CTL-022).
     ERASED = "erased"
+
+
+class ParkOutcome(StrEnum):
+    """What became of one dead-lettered control event in the park (`notifications.api.control_parks`). Closed, and
+    disjoint from `Outcome`: a park is the control lane's second path, not an ingress."""
+
+    PARKED = "parked"
+    DELIVERED = "delivered"
+    #: Offered again and asked for a retry; tried on the next tick.
+    KEPT = "kept"
+    #: Refused for good on the re-drive: by the signature door, or as a payload that will not parse.
+    REFUSED = "refused"
+    #: Kept past the dead-letter stream's retention and never delivered: a person who was not told.
+    EXPIRED = "expired"
 
 
 class PassOutcome(StrEnum):
@@ -110,6 +127,11 @@ _dlq_parked = _meter.create_counter(
     "notifications.dlq.parked",
     unit="{delivery}",
     description="Deliveries DEAD-LETTERED — parked after the sidecar's retry schedule was exhausted.",
+)
+_control_parks = _meter.create_counter(
+    "notifications.control.parks",
+    unit="{event}",
+    description="Dead-lettered control events by what became of them in the park. `expired` is a person never told.",
 )
 _feed_passes = _meter.create_counter(
     "notifications.feed.passes",
@@ -160,6 +182,18 @@ def record_dead_letter(app_label: str) -> None:
     to each other's dead letters double-counting every park — per-app naming is what avoids both.
     """
     _dlq_parked.add(1, {"lance.notifications.app": app_label})
+
+
+def record_control_park(outcome: ParkOutcome) -> None:
+    """Count one park decision."""
+    _control_parks.add(1, {"lance.notifications.outcome": outcome.value})
+
+
+def create_control_park_series() -> None:
+    """Create every park series at 0 when the routes are registered, so an alert over `expired` sees its first loss as an
+    increase from 0 even when that loss is the first decision a restarted pod makes."""
+    for member in ParkOutcome:
+        _control_parks.add(0, {"lance.notifications.outcome": member.value})
 
 
 def record_pass(outcome: PassOutcome) -> None:

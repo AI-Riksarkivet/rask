@@ -18,16 +18,24 @@ Three rules, each of which has already cost the estate something:
   nobody.
 """
 
+import asyncio
+import json
 import logging
 from collections.abc import Iterator
-from typing import Any
+from datetime import UTC, datetime, timedelta
+from typing import Any, cast
 
+import httpx
 import pytest
+import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from notifications.api import metrics as metrics_module
+from notifications.api import reconcile_cron
 from notifications.api import subscriptions as subscriptions_module
+from notifications.api.control_parks import INDEX_KEY, PARK_HORIZON, ControlParkStore, park_key
+from notifications.api.reconciler import FeedPage, LineageCursor, LineageCursorStore, LineageFeedClient
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
 from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -137,3 +145,149 @@ def test_a_malformed_parked_payload_is_still_parked(envelope: dict[str, Any], wi
     500 to the sidecar, which is a RETRY, onto the end of the line."""
     assert with_dead_lettering.post("/dlq-event", json=envelope).json() == {"status": "SUCCESS"}
     assert len(parked.adds) == 1
+
+
+# --- the control lane's second path (LH-331) -----------------------------------------------------
+
+STATE = "http://localhost:3500/v1.0/state/lance-statestore"
+GRANT: dict[str, Any] = {
+    "event_id": "evt-grant-7",
+    "occurred_at": "2026-10-27T12:00:00+00:00",
+    "action": "grant_added",
+    "object_type": "grant",
+    "object_id": "project:acme",
+    "actor": "user:dex~admin",
+    "extra": {"relation": "member", "subject": "user:dex~alice"},
+}
+
+
+class _StateStore:
+    """The sidecar's plain state API as the live daprd with `state.postgresql` answered it (measured 2026-10-27): 204 for
+    an absent key, an ETag on every read, a first-write save answering 409 on a stale ETag and 500 "no item was updated"
+    when it carries no ETag for a key that exists, and DELETE."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, Any] = {}
+        self.etags: dict[str, int] = {}
+        #: Set while the store is down: every call answers 500.
+        self.down = False
+        #: How many index writes still find the index moved by another writer between their read and their write.
+        self.races = 0
+
+    def get(self, request: httpx.Request, key: str) -> httpx.Response:
+        if self.down:
+            return httpx.Response(500)
+        if key not in self.values:
+            return httpx.Response(204)
+        return httpx.Response(200, json=self.values[key], headers={"etag": str(self.etags[key])})
+
+    def post(self, request: httpx.Request) -> httpx.Response:
+        if self.down:
+            return httpx.Response(500)
+        (entry,) = json.loads(request.content)
+        key = entry["key"]
+        if self.races and key == INDEX_KEY:
+            self.races -= 1
+            self.etags[key] = self.etags.get(key, 0) + 1
+        if "etag" in entry and entry["etag"] != str(self.etags.get(key)):
+            return httpx.Response(409)
+        if "etag" not in entry and key in self.values and entry.get("options", {}).get("concurrency") == "first-write":
+            return httpx.Response(500, json={"errorCode": "ERR_STATE_SAVE", "message": "no item was updated"})
+        self.values[key], self.etags[key] = entry["value"], self.etags.get(key, 0) + 1
+        return httpx.Response(204)
+
+    def delete(self, request: httpx.Request, key: str) -> httpx.Response:
+        self.values.pop(key, None)
+        return httpx.Response(204)
+
+    def parked(self) -> list[str]:
+        return list(self.values.get(INDEX_KEY, {}).get("event_ids", []))
+
+    def kept_events(self) -> list[str]:
+        return sorted(key for key in self.values if key != INDEX_KEY)
+
+
+class _Inbox:
+    def __init__(self, plane: "_Plane", subject: str) -> None:
+        self._plane, self._subject = plane, subject
+
+    async def deliver(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if self._plane.down:
+            raise RuntimeError("the actor plane is unreachable")
+        self._plane.boxes.setdefault(self._subject, []).append(payload["notification_id"])
+        return {"delivered": True}
+
+
+class _Plane:
+    def __init__(self) -> None:
+        self.boxes: dict[str, list[str]] = {}
+        self.down = True
+
+    def open(self, subject: str) -> Any:
+        return _Inbox(self, subject)
+
+
+class _QuietFeed:
+    """Lineage's feed with nothing past the cursor, so a tick's walk is a no-op beside the re-drive."""
+
+    async def page(self, *, since: int | None) -> FeedPage:
+        return FeedPage()
+
+
+class _Cursor:
+    async def get(self) -> LineageCursor:
+        return LineageCursor(seq=1, updated_at=datetime.now(UTC))
+
+    async def set(self, seq: int, *, stalls: int = 0) -> None:
+        return None
+
+
+@respx.mock
+def test_a_dead_lettered_grant_is_kept_and_reaches_its_person_on_a_later_tick(
+    with_dead_lettering: TestClient, parked: _Counter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LH-331, a guarantee: a governance notification that exhausted its retries is no longer acked into nothing. The
+    dead-letter route keeps it, every reconcile tick offers it again through the control ingest, it stays kept while the
+    inbox is still down and is retired once it lands, and a park older than the dead-letter stream's retention is
+    retired undelivered (counted as `expired`). A dead letter the store cannot keep is retried rather than acked and
+    lost, a redelivered one is kept once, and a park whose index write loses a race to another writer reads again and
+    lands. An index entry whose event is gone (a retire cut short) is cleared on the next tick. The real routes and the real park
+    store run against the sidecar's state API."""
+    state = _StateStore()
+    expired = {**GRANT, "event_id": "evt-too-old", "extra": {"relation": "member", "subject": "user:dex~bob"}}
+    too_old = (datetime.now(UTC) - PARK_HORIZON - timedelta(hours=1)).isoformat()
+    state.values = {
+        park_key("evt-too-old"): {"event_id": "evt-too-old", "event": expired, "parked_at": too_old},
+        INDEX_KEY: {"event_ids": ["evt-orphan", "evt-too-old"]},
+    }
+    state.etags = dict.fromkeys(state.values, 1)
+    respx.get(url__regex=rf"{STATE}/(?P<key>[^/]+)$").mock(side_effect=state.get)
+    respx.delete(url__regex=rf"{STATE}/(?P<key>[^/]+)$").mock(side_effect=state.delete)
+    respx.post(STATE).mock(side_effect=state.post)
+    plane = _Plane()
+    monkeypatch.setattr(reconcile_cron, "inbox_for", plane.open)
+    app = cast(FastAPI, with_dead_lettering.app)
+    app.include_router(reconcile_cron.router)
+    app.state.actors_registered = True
+    app.state.lineage_feed = cast(LineageFeedClient, _QuietFeed())
+    app.state.lineage_cursor = cast(LineageCursorStore, _Cursor())
+    client = httpx.AsyncClient()
+    app.state.control_parks = ControlParkStore(client=client, store_name="lance-statestore")
+    tick = f"/{get_ingress_settings().binding_name}"
+
+    dead_letter = {"id": "ce-7", "topic": "catalog.control.v1", "data": GRANT}
+    state.down = True
+    assert with_dead_lettering.post("/dlq-event", json=dead_letter).json() == {"status": "RETRY"}
+    state.down, state.races = False, 1
+    assert with_dead_lettering.post("/dlq-event", json=dead_letter).json() == {"status": "SUCCESS"}
+    assert state.parked() == ["evt-orphan", "evt-too-old", "evt-grant-7"]
+    assert with_dead_lettering.post("/dlq-event", json=dead_letter).json() == {"status": "SUCCESS"}
+    assert (state.parked(), len(parked.adds)) == (["evt-orphan", "evt-too-old", "evt-grant-7"], 1)
+
+    assert with_dead_lettering.post(tick).status_code == 200
+    assert (state.parked(), plane.boxes) == (["evt-grant-7"], {})
+
+    plane.down = False
+    assert with_dead_lettering.post(tick).status_code == 200
+    assert (state.parked(), state.kept_events(), plane.boxes) == ([], [], {"dex~alice": ["evt-grant-7@GRANT_ADDED"]})
+    asyncio.run(client.aclose())
