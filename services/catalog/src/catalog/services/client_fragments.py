@@ -462,7 +462,9 @@ def _verify_external_blobs(descriptors: Sequence[_Descriptor], bases: dict[int, 
         if blob.kind != _EXTERNAL_KIND:
             continue
         if not bases:
-            raise InvalidInputError(f"commit refused: {blob.where} is an external blob and the table has no external blob base. Nothing was committed")
+            raise InvalidInputError(
+                f"commit refused: {blob.where} points at {blob.blob_uri!r} as an external blob, and the table has no external blob base. Nothing was committed"
+            )
         base = bases.get(blob.blob_id)
         if base is None or not _RELATIVE_BLOB_URI.fullmatch(blob.blob_uri):
             raise InvalidInputError(

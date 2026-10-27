@@ -397,7 +397,12 @@ def _missing_sidecar(sidecar_id: int) -> Callable[[_Staged], list[dict[str, Any]
             "an external blob is a path relative to",
             id="external-blob-at-another-tables-object-through-a-planted-base",
         ),
-        pytest.param(_bronze, _external("s3://{bucket}/elsewhere/secret.bin"), "the table has no external blob base", id="external-blob-without-a-base"),
+        pytest.param(
+            _bronze,
+            _external("s3://{bucket}/elsewhere/secret.bin"),
+            "/elsewhere/secret.bin' as an external blob, and the table has no external blob base",
+            id="external-blob-without-a-base",
+        ),
         pytest.param(_plain, lambda staged: [staged.copy(), staged.copy()], "one data file is named twice", id="same-file-in-two-fragments"),
         pytest.param(_committed, lambda staged: [staged.copy()], "names data file(s) the table already holds", id="re-append-a-held-file-after-a-delete"),
     ],
