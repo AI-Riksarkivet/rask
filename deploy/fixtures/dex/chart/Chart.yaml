@@ -1,8 +1,9 @@
 apiVersion: v2
 name: idp
 description: >-
-  NOT FOR PRODUCTION. A development OIDC issuer for rask: Dex with in-memory storage, two demo users, the publish saga's
-  service account and one static client. A platform runs its own IdP; rask names it.
+  NOT FOR PRODUCTION. A development OIDC issuer for rask: Dex with in-memory storage, its demo users, the sign-in client,
+  the lakehouse's audience client and the machine clients a pipeline off the cluster signs in as (ADR 0181). A platform
+  runs its own IdP; rask names it.
 type: application
 version: 0.1.0
-appVersion: v2.42.0
+appVersion: v2.46.1
