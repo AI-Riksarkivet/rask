@@ -173,6 +173,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/access/principals/{principal}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Principal
+         * @description The deletion record of an offboarded principal; 404 for one the door never removed.
+         */
+        get: operations["read_principal_management_v1_access_principals__principal__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Principal
+         * @description Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).
+         *
+         *     A grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door
+         *     reads them type by type rather than trusting any one door's list. It never strands an administration: a principal
+         *     holding the only direct ``admin`` of a project is refused before anything is revoked (:func:`_refuse_stranding`), and
+         *     each project ``admin`` goes through the members door's store-arbitrated revoke, which refuses again should another
+         *     revoke leave the principal a project's last admin meanwhile; what was revoked before that stays revoked, and calling
+         *     the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
+         *     them, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door
+         *     revokes whatever was granted since, keeps the first deletion's record and announces again, so a lost announcement is
+         *     recovered by calling it again. ``revoked`` counts the tuples this call removed.
+         */
+        delete: operations["delete_principal_management_v1_access_principals__principal__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/access/simulate": {
         parameters: {
             query?: never;
@@ -4928,7 +4962,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -4947,7 +4981,7 @@ export interface components {
              * Object Type
              * @enum {string}
              */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "gate";
+            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "gate" | "principal";
             /** Object Uuid */
             object_uuid?: string | null;
             /**
@@ -7851,6 +7885,35 @@ export interface components {
             uuid?: string | null;
         };
         /**
+         * PrincipalDeleted
+         * @description What one run of the offboarding door did: the record, and how many tuples naming the principal it revoked.
+         */
+        PrincipalDeleted: {
+            record: components["schemas"]["PrincipalRecord"];
+            /** Revoked */
+            revoked: number;
+        };
+        /**
+         * PrincipalRecord
+         * @description A principal the estate admin offboarded ([[LH-233]]): who it was, who removed it and when.
+         */
+        PrincipalRecord: {
+            /**
+             * Deleted At
+             * Format: date-time
+             */
+            deleted_at: string;
+            /** Deleted By */
+            deleted_by: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "person" | "service";
+            /** Principal */
+            principal: string;
+        };
+        /**
          * ProbeCheck
          * @description One step of the probe, with its own outcome — never folded into a neighbour's.
          */
@@ -9263,6 +9326,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AccessModelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_principal_management_v1_access_principals__principal__get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description the principal, '<idp-id>~<subject>' (e.g. 'dex~alice') */
+                principal: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalRecord"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_principal_management_v1_access_principals__principal__delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                /** @description the principal, '<idp-id>~<subject>' (e.g. 'dex~alice') */
+                principal: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PrincipalDeleted"];
                 };
             };
             /** @description Validation Error */

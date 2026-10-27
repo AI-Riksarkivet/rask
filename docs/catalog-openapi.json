@@ -2757,7 +2757,8 @@
               "table_tag_created",
               "table_tag_updated",
               "table_tag_deleted",
-              "erasure_release_scheduled"
+              "erasure_release_scheduled",
+              "principal_deleted"
             ],
             "title": "Action",
             "type": "string"
@@ -2816,7 +2817,8 @@
               "policy",
               "namespace",
               "table",
-              "gate"
+              "gate",
+              "principal"
             ],
             "title": "Object Type",
             "type": "string"
@@ -9431,6 +9433,58 @@
         "title": "PolicyResponse",
         "type": "object"
       },
+      "PrincipalDeleted": {
+        "description": "What one run of the offboarding door did: the record, and how many tuples naming the principal it revoked.",
+        "properties": {
+          "record": {
+            "$ref": "#/components/schemas/PrincipalRecord"
+          },
+          "revoked": {
+            "title": "Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "record",
+          "revoked"
+        ],
+        "title": "PrincipalDeleted",
+        "type": "object"
+      },
+      "PrincipalRecord": {
+        "description": "A principal the estate admin offboarded ([[LH-233]]): who it was, who removed it and when.",
+        "properties": {
+          "deleted_at": {
+            "format": "date-time",
+            "title": "Deleted At",
+            "type": "string"
+          },
+          "deleted_by": {
+            "title": "Deleted By",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "person",
+              "service"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "principal": {
+            "title": "Principal",
+            "type": "string"
+          }
+        },
+        "required": [
+          "principal",
+          "kind",
+          "deleted_at",
+          "deleted_by"
+        ],
+        "title": "PrincipalRecord",
+        "type": "object"
+      },
       "ProbeCheck": {
         "description": "One step of the probe, with its own outcome \u2014 never folded into a neighbour's.",
         "properties": {
@@ -12480,6 +12534,140 @@
           }
         ],
         "summary": "Get Access Model",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/management/v1/access/principals/{principal}": {
+      "delete": {
+        "description": "Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).\n\nA grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door\nreads them type by type rather than trusting any one door's list. It never strands an administration: a principal\nholding the only direct ``admin`` of a project is refused before anything is revoked (:func:`_refuse_stranding`), and\neach project ``admin`` goes through the members door's store-arbitrated revoke, which refuses again should another\nrevoke leave the principal a project's last admin meanwhile; what was revoked before that stays revoked, and calling\nthe door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with\nthem, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door\nrevokes whatever was granted since, keeps the first deletion's record and announces again, so a lost announcement is\nrecovered by calling it again. ``revoked`` counts the tuples this call removed.",
+        "operationId": "delete_principal_management_v1_access_principals__principal__delete",
+        "parameters": [
+          {
+            "description": "the principal, '<idp-id>~<subject>' (e.g. 'dex~alice')",
+            "in": "path",
+            "name": "principal",
+            "required": true,
+            "schema": {
+              "description": "the principal, '<idp-id>~<subject>' (e.g. 'dex~alice')",
+              "title": "Principal",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrincipalDeleted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Principal",
+        "tags": [
+          "access"
+        ]
+      },
+      "get": {
+        "description": "The deletion record of an offboarded principal; 404 for one the door never removed.",
+        "operationId": "read_principal_management_v1_access_principals__principal__get",
+        "parameters": [
+          {
+            "description": "the principal, '<idp-id>~<subject>' (e.g. 'dex~alice')",
+            "in": "path",
+            "name": "principal",
+            "required": true,
+            "schema": {
+              "description": "the principal, '<idp-id>~<subject>' (e.g. 'dex~alice')",
+              "title": "Principal",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrincipalRecord"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Principal",
         "tags": [
           "access"
         ]

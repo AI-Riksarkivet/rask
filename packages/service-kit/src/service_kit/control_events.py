@@ -112,13 +112,17 @@ ControlAction = Literal[
     # release deletes the tags and recreates the branches at the deadline in `extra.due_at`, and a branch's own
     # commits are lost with it. Being told is the only window to copy work out; there is no door that defers it.
     "erasure_release_scheduled",
+    # A principal removed from every grant by the estate admin's offboarding door ([[LH-233]]). `object_id` and
+    # `extra.subject` are the OpenFGA user it was (`fga.user_object`). Not a delivery: the notifications plane erases
+    # the person's inbox, preferences, cursor and watches on it, since nobody is left to tell (CTL-022).
+    "principal_deleted",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the
 #: top of rask's hierarchy (project > warehouse > namespace > table) and became a first-class control object
 #: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1). Every member is a lakehouse
 #: object: a tool that works on the lakehouse keeps its own objects and its own channel for them (ADR 0171).
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "gate"]
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "gate", "principal"]
 
 #: The caps on the two cascade CLAIMS a publication echoes onto `table_published`'s `extra`: the batch
 #: id and the person the batch is for. The catalog's publish door enforces them, and a door that takes
@@ -229,6 +233,7 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             | "table_tag_updated"
             | "table_tag_deleted"
             | "erasure_release_scheduled"
+            | "principal_deleted"
         ):
             return "catalog"
         case "table_purged" | "namespace_purged":

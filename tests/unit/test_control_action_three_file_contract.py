@@ -78,6 +78,9 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
         "table_tag_deleted",
         "gate_deleted",
         "gate_set",
+        # A principal the estate admin offboarded ([[LH-233]]). It names a person, and delivers them nothing: they are
+        # gone, so the notifications plane erases their inbox, preferences, cursor and watches on it (CTL-022) instead.
+        "principal_deleted",
         "namespace_created",
         "namespace_dropped",
         "namespace_protected",

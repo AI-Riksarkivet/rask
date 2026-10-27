@@ -1947,6 +1947,9 @@ TupleOrigin = Literal[
     # Revoking a recoverable drop's grants at its deadline (ADR 0146). Its own value because no person revoked them and
     # nothing was destroyed: the grace period ended, and the bytes wait for the purge (`lifecycle_delete`).
     "trash_expired",
+    # Revoking every tuple naming a principal the estate admin offboarded ([[LH-233]]). Its own value because the
+    # grants were not revoked one by one by someone deciding each: one door removed a person from the estate.
+    "principal_delete",
     "lifecycle_delete",
     "train",
 ]

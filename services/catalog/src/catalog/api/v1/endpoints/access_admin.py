@@ -22,17 +22,20 @@ import logging
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    ConcurrentModificationError,
     InvalidInputError,
     ServiceUnavailableError,
+    TableNotFoundError,
 )
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
+from catalog.core.config import Settings
 from catalog.schemas import (
     AccessCheckBody,
     AccessCheckResult,
@@ -48,8 +51,11 @@ from catalog.schemas import (
     AccessSimulateResult,
     AccessTuple,
     AccessTuplesPage,
+    PrincipalDeleted,
+    PrincipalRecord,
     TupleCondition,
 )
+from catalog.services import principals, project_admins
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -61,6 +67,8 @@ log = logging.getLogger(__name__)
 
 #: OpenFGA's Read page-size ceiling — a larger request is a server-side 400, so cap it at the API edge.
 _MAX_PAGE_SIZE = 100
+#: The warehouse relation only the chart's bootstrap hook and the catalog's own maintainer seed write ([[LH-473]]).
+_MAINTENANCE = "maintenance"
 
 
 @lru_cache
@@ -78,6 +86,22 @@ def _defined_relations(fga_type: str) -> frozenset[str]:
         if td["type"] == fga_type:
             return frozenset(td.get("relations") or {})
     return frozenset()
+
+
+@lru_cache
+def _types_granting_principals() -> tuple[str, ...]:
+    """The types with a relation a principal can hold directly (``[user]``, never only ``user:*``): where a tuple naming
+    one can sit, and so every type a Read by user is asked about."""
+    granting = []
+    for td in fga.load_model()["type_definitions"]:
+        meta = (td.get("metadata") or {}).get("relations") or {}
+        if any(
+            t.get("type") == "user" and not t.get("relation") and not t.get("wildcard")
+            for m in meta.values()
+            for t in m.get("directly_related_user_types") or []
+        ):
+            granting.append(td["type"])
+    return tuple(sorted(granting))
 
 
 @lru_cache
@@ -579,3 +603,112 @@ async def simulate_access(client: EstateFgaClient, token: CurrentToken, body: Ac
         checked=AccessTuple(user=user, relation=relation, object=obj),
         hypothetical=[_as_access_tuple(t) for t in hypothetical],
     )
+
+
+def _principal_key(principal: str) -> str:
+    """``principal`` when it names an identity provider and a subject (``<idp-id>~<subject>``), else a 400."""
+    if not is_principal(principal):
+        raise InvalidInputError(f"{principal[:128]!r} is not a principal: one is '<idp-id>~<subject>'")
+    return principal
+
+
+async def _tuples_naming(client: OpenFgaClient, user: str) -> list[fga.ClientTuple]:
+    """Every direct tuple naming ``user``, read type by type and page by page, since Read takes a user only with a type."""
+    found: list[fga.ClientTuple] = []
+    for fga_type in _types_granting_principals():
+        continuation: str | None = None
+        while True:
+            page, continuation = await fga.read_tuples(client, user=user, obj=f"{fga_type}:", page_size=_MAX_PAGE_SIZE, continuation_token=continuation)
+            found.extend(page)
+            if not continuation:
+                break
+    return found
+
+
+#: A principal key in a path: the identity provider's id and the subject it vouched for.
+PrincipalPath = Annotated[str, Path(description="the principal, '<idp-id>~<subject>' (e.g. 'dex~alice')")]
+
+
+def _refuse_what_git_declares(key: str, naming: list[fga.ClientTuple], settings: Settings) -> None:
+    """Refuse (400, code 13) a principal the next upgrade or boot would grant again, naming where it is declared.
+
+    Only the chart's bootstrap hook writes a tuple on the estate root, and only it and the catalog's own seed write a
+    warehouse ``maintenance`` tuple; the catalog grants the accounts its settings name at boot. Judging the tuples rather
+    than a list the chart renders keeps the catalog naming no client the hook grants a decision role.
+    """
+    if key in {*settings.fga_maintainers, *settings.provenance_writers, *settings.provenance_maintainers}:
+        raise InvalidInputError(f"{key} is an account the catalog grants from its settings at boot: remove it from the values that name it")
+    if authorities := sorted(f"{t.relation} on {t.object}" for t in naming if t.object == settings.fga_root_object or t.relation == _MAINTENANCE):
+        raise InvalidInputError(
+            f"{key} holds an estate authority the chart's bootstrap hook grants ({', '.join(authorities)}): remove it from the "
+            "values that declare it (auth.bootstrapAdmin, the services the hook grants), or revoke those tuples first"
+        )
+
+
+async def _refuse_stranding(client: OpenFgaClient, key: str, user: str, naming: list[fga.ClientTuple]) -> list[str]:
+    """The projects ``user`` holds a direct ``admin`` on; refused (409, code 14) while it is any one's only direct admin."""
+    administered = sorted({t.object for t in naming if t.relation == project_admins.ADMIN and t.object.startswith("project:")})
+    if stranded := [obj for obj in administered if project_admins.sole_admin(await fga.read_object_tuples(client, obj), obj, user)]:
+        raise ConcurrentModificationError(f"{key} holds the only direct admin of {', '.join(stranded)} — grant another admin first; nothing was revoked")
+    return administered
+
+
+async def _revoke_all(client: OpenFgaClient, user: str, naming: list[fga.ClientTuple], administered: list[str], *, actor: str) -> int:
+    """Revoke every tuple in ``naming``, each project ``admin`` through the store-arbitrated revoke; how many this removed."""
+    revoked = 0
+    for obj in administered:
+        removed_admin, _ = await project_admins.revoke_admin(client, obj, user, actor=actor, origin="principal_delete")
+        revoked += int(removed_admin)
+    rest = [
+        fga.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in naming if t.object not in administered or t.relation != project_admins.ADMIN
+    ]
+    if rest:
+        revoked += len(await fga.delete_tuples(client, rest, actor=actor, origin="principal_delete"))  # noqa: TID251
+    return revoked
+
+
+@router.delete("/principals/{principal:path}")
+async def delete_principal(
+    principal: PrincipalPath, client: EstateFgaClient, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
+) -> PrincipalDeleted:
+    """Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).
+
+    A grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door
+    reads them type by type rather than trusting any one door's list. It never strands an administration: a principal
+    holding the only direct ``admin`` of a project is refused before anything is revoked (:func:`_refuse_stranding`), and
+    each project ``admin`` goes through the members door's store-arbitrated revoke, which refuses again should another
+    revoke leave the principal a project's last admin meanwhile; what was revoked before that stays revoked, and calling
+    the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
+    them, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door
+    revokes whatever was granted since, keeps the first deletion's record and announces again, so a lost announcement is
+    recovered by calling it again. ``revoked`` counts the tuples this call removed.
+    """
+    key = _principal_key(principal)
+    actor = token.subject if token else "anonymous"
+    if token is not None and token.subject == key:
+        raise InvalidInputError("an estate admin cannot offboard themselves: the rung this door asks would go with them")
+    user = fga.user_object(key)
+    naming = await _tuples_naming(client, user)
+    _refuse_what_git_declares(key, naming, settings)
+    administered = await _refuse_stranding(client, key, user, naming)
+    revoked = await _revoke_all(client, user, naming, administered, actor=actor)
+    record = await run_in_threadpool(principals.record_deletion, settings.registry_root, settings.storage_options(), key, deleted_by=actor)
+    audit("principal_delete", SUCCESS, subject=actor, resource=user, revoked=revoked)
+    await emit_control(
+        control,
+        action="principal_deleted",
+        object_type="principal",
+        object_id=user,
+        actor=f"user:{token.subject}" if token else None,
+        extra={"subject": user, "revoked": revoked},
+    )
+    return PrincipalDeleted(record=record, revoked=revoked)
+
+
+@router.get("/principals/{principal:path}")
+async def read_principal(principal: PrincipalPath, settings: SettingsDep) -> PrincipalRecord:
+    """The deletion record of an offboarded principal; 404 for one the door never removed."""
+    record = await run_in_threadpool(principals.read_record, settings.registry_root, settings.storage_options(), _principal_key(principal))
+    if record is None:
+        raise TableNotFoundError(f"no principal {principal[:128]!r} was offboarded")
+    return record

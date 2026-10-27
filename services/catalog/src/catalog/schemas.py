@@ -161,6 +161,24 @@ class AccessTuplesPage(BaseModel):
     continuation: str | None
 
 
+class PrincipalRecord(BaseModel):
+    """A principal the estate admin offboarded ([[LH-233]]): who it was, who removed it and when."""
+
+    principal: str
+    #: ``service`` for a principal the cluster's service-account issuer vouched for, else ``person``.
+    kind: Literal["person", "service"]
+    deleted_at: datetime
+    #: The estate admin's principal that ran the door.
+    deleted_by: str
+
+
+class PrincipalDeleted(BaseModel):
+    """What one run of the offboarding door did: the record, and how many tuples naming the principal it revoked."""
+
+    record: PrincipalRecord
+    revoked: int
+
+
 class AccessModelResponse(BaseModel):
     """The authorization model: the checked-in ``model.fga`` DSL text and the model id the catalog's
     checks are pinned to."""

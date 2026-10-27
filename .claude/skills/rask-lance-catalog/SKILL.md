@@ -221,7 +221,14 @@ and permission drifting apart. **A project always keeps a direct admin** ([[LH-4
 An admin revoke deletes the admin tuple and moves `project#admin_revision` (`revision:<n>` to `<n+1>`, a bookkeeping
 relation no permission reads) in ONE Write without ignoring duplicates (`fga.commit_unless_changed`), so of two
 overlapping revokes one commits and the other re-reads and judges again; a refused Write is a 400 on the memory
-datastore and a 409 rollback on a SQL one. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create any more: one
+datastore and a 409 rollback on a SQL one. Both doors that revoke a project `admin` go through `catalog.services.project_admins.revoke_admin`: the members door
+and the estate admin's offboarding door ([[LH-233]]), `DELETE /management/v1/access/principals/{principal}`, which revokes
+every tuple naming a principal (read type by type), refuses 409 code 14 before revoking anything while the principal is
+any project's only direct admin, refuses 400 code 13 the caller and every principal whose grants git declares (one holding
+a tuple on the estate root or a warehouse `maintenance` tuple, which only the bootstrap hook and the catalog's own seed
+write, and the accounts the catalog's settings name; judged on the tuples, so the catalog names no client the hook
+grants a decision role, XC-183), records `_principals/<blake2s>.json` (`GET` on the same path), answers `revoked` as the tuples it removed and
+emits `principal_deleted` (signed by the catalog) for the notifications plane's erasure. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create any more: one
 door, and a warehouse-owner cannot ride a create into project admin.
 
 Check order at every create door: **identity (401) → shape (`InvalidInput` 400) → parent exists
