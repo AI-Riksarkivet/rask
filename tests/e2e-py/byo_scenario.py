@@ -215,10 +215,10 @@ class Tenant:
 
 
 def lance_facet(row: dict[str, Any]) -> dict[str, Any]:
-    """The `lance` facet of a feed row: on the run of a write, on the dataset of a definition change."""
+    """The `rask_lance` facet of a feed row: on the run of a write, on the dataset of a definition change."""
     event = row.get("event") or {}
     carrier = event.get("run") or event.get("dataset") or {}
-    return (carrier.get("facets") or {}).get("lance") or {}
+    return (carrier.get("facets") or {}).get("rask_lance") or {}
 
 
 def feed_start(identity: Identity) -> int:

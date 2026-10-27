@@ -58,7 +58,7 @@ def test_maintenance_event_round_trips_through_lineage_run_event() -> None:
     assert parsed.operation == EXPIRE_VERSIONS
     assert [d.name for d in parsed.outputs] == ["silver$features"]
     assert parsed.inputs == []
-    assert set(event["run"]["facets"]) == {"lance"}
+    assert set(event["run"]["facets"]) == {"rask_lance"}
 
 
 # --------------------------------------------------------------------------- #
@@ -84,7 +84,7 @@ def test_fail_event_round_trips_through_lineage_run_event() -> None:
     # asserts no edge, because a failed run derived nothing.
     event = _fail_event()
     parsed = RunEvent.model_validate(event)
-    assert set(event["run"]["facets"]) == {"errorMessage", "lance"}
+    assert set(event["run"]["facets"]) == {"errorMessage", "rask_lance"}
     assert not parsed.is_success
     assert parsed.operation == EXPIRE_VERSIONS
     assert [d.name for d in parsed.outputs] == ["ns$table"]
@@ -306,7 +306,7 @@ def test_dapr_emitter_publishes_to_configured_pubsub_and_topic() -> None:
     assert client.published[0]["topic"] == "lineage.events.v1"
     payload = json.loads(client.published[0]["data"])
     assert payload["outputs"][0]["name"] == "ns$a"
-    assert payload["run"]["facets"]["lance"]["operation"] == EXPIRE_VERSIONS
+    assert payload["run"]["facets"]["rask_lance"]["operation"] == EXPIRE_VERSIONS
 
 
 def test_dapr_emitter_best_effort_swallows_publish_failure() -> None:

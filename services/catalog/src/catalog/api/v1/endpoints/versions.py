@@ -94,7 +94,7 @@ async def table_history(
 
     **It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not
     have one — identity is this estate's concern, not the format's. The actor per version already lives in
-    the lineage store, on the ``author`` run facet
+    the lineage store, on the ``rask_author`` run facet
     (``GET /datasets/{name}/producers`` → ``dataset_version`` + ``author`` + ``operation``), which is written
     from the verified caller's principal key on every governed write. A who/when/what view joins the two on the version
     number. Two sources, each authoritative for its own half — a third that merged them would just be a copy

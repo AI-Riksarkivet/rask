@@ -60,7 +60,7 @@ def _commits(rows: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
         event: Mapping[str, Any] = row["event"]
         for output in event.get("outputs") or []:
             if output["name"] == "db$t":
-                found.append((output["name"], event["run"]["facets"]["lance"]["operation"], output["facets"]["version"]["datasetVersion"]))
+                found.append((output["name"], event["run"]["facets"]["rask_lance"]["operation"], output["facets"]["version"]["datasetVersion"]))
     return found
 
 

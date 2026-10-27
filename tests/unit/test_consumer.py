@@ -18,7 +18,7 @@ from lineage.services.consumer import handle_cloud_event
 _VALID = {
     "eventType": "COMPLETE",
     "eventTime": "2026-06-20T09:00:00Z",
-    "run": {"runId": "r1", "facets": {"author": {"name": "alice"}}},
+    "run": {"runId": "r1", "facets": {"rask_author": {"name": "alice"}}},
     "job": {"namespace": "ray-jobs", "name": "ingest"},
     "inputs": [{"namespace": "source", "name": "raw"}],
     "outputs": [{"namespace": "bronze", "name": "bronze$x"}],

@@ -55,9 +55,9 @@ def _declared(catalog_url: str, table: str) -> str:
 
 def _event(state: str, table: str, *, outputs: bool) -> dict[str, Any]:
     """The run's ``state`` event, as the bus delivers it: each output named by the uuid the catalog stamps on it."""
-    data = run_event(_RUN, state, "2026-10-27T09:00:00Z", outputs=[_TABLE] if outputs else [], facets={"author": {"sub": _AUTHOR}})
+    data = run_event(_RUN, state, "2026-10-27T09:00:00Z", outputs=[_TABLE] if outputs else [], facets={"rask_author": {"sub": _AUTHOR}})
     for output in data["outputs"]:
-        output["facets"] = {"lance": {"tableUuid": table.removeprefix("table:")}}
+        output["facets"] = {"rask_lance": {"tableUuid": table.removeprefix("table:")}}
     return data
 
 

@@ -46,7 +46,7 @@ DLQ_TOPIC = "dlq.notifications"
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
     "eventTime": "2026-08-09T12:00:00+00:00",
-    "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "alice"}}},
+    "run": {"runId": "run-77", "facets": {"rask_author": {"name": "alice", "sub": "alice"}}},
     "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
 }
 

@@ -55,6 +55,7 @@ from service_kit.lakehouse.schema import SchemaFields
 from service_kit.lakehouse.subjects import is_person_subject
 from service_kit.lakehouse.warehouse_registry import is_safe_project
 from service_kit.openlineage import (
+    AUTHOR_FACET,
     BRANCH_IDENTIFIER,
     DATASET_EVENT_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
@@ -86,7 +87,7 @@ _emit_failed = _meter.create_counter(
     "at staging does not. The counter cannot tell those apart, which is why any increase is worth a look.",
 )
 
-#: Operation markers carried in the OpenLineage ``lance`` run facet. Lineage's ingest authorizer reads them to
+#: Operation markers carried in the OpenLineage ``rask_lance`` run facet. Lineage's ingest authorizer reads them to
 #: pick the relation a write needs and to admit a drop (``lineage.api.fga_deps``), and the notifications plane
 #: renders them, so the producers and those readers share these contract strings.
 CREATE_TABLE = "create_table"
@@ -140,7 +141,7 @@ PROMOTE_MODEL = "promote_model"
 #: The tag gate (ADR 0156 C1, [[LH-466]]): a table's ``published`` tag moved, so readers of its tier now read
 #: ``version``, the tag's target. Like a model promotion it mints no version, and it is a run of its own so the
 #: project's watchers are told that new data is live: the notifications plane targets them by this event's
-#: ``lance.project`` (`.claude/skills/rask-notifications`, WATCH).
+#: ``rask_lance.project`` (`.claude/skills/rask-notifications`, WATCH).
 PUBLISH_TABLE = "publish_table"
 
 #: The operations that move a tag and commit no version: the ``version`` their event names is the tag's target, a version
@@ -154,7 +155,7 @@ _PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/catalog/s
 #: OpenLineage standard ``DatasetVersionDatasetFacet`` schema URL. The output dataset carries this
 #: facet so the lineage service records the Lance version on every edge the write asserts
 #: (``lineage.services.provenance.edges_of`` reads ``outputs[].facets.version.datasetVersion``) — without it
-#: the edge is versionless (the custom ``lance`` run facet is not read for version).
+#: the edge is versionless (the custom ``rask_lance`` run facet is not read for version).
 _VERSION_FACET_SCHEMA = VERSION_FACET_SCHEMA_URL
 
 #: OpenLineage standard ``DatasourceDatasetFacet`` schema URL. The output dataset carries this facet with
@@ -230,7 +231,7 @@ def run_inputs(run: RunContext | None) -> list[InputPin] | None:
 
 def _input_dataset(ref: InputRef) -> dict[str, Any]:
     """An OpenLineage INPUT dataset, carrying the standard ``DatasetVersionDatasetFacet`` when a source
-    version is pinned, and rask's ``lance`` facet naming the branch that version is on."""
+    version is pinned, and rask's ``rask_lance`` facet naming the branch that version is on."""
     dataset: dict[str, Any] = {"namespace": ref.namespace, "name": ref.name}
     if ref.version is not None:
         dataset["facets"] = {
@@ -242,7 +243,7 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
         }
     if ref.branch is not None:
         identifier = {BRANCH_IDENTIFIER: ref.branch_identifier} if ref.branch_identifier is not None else {}
-        dataset.setdefault("facets", {})["lance"] = custom_facet(_PRODUCER, ref=ref.branch, **identifier)
+        dataset.setdefault("facets", {})[LANCE_FACET] = custom_facet(_PRODUCER, ref=ref.branch, **identifier)
     return with_dataset_uuids(dataset, ref.uuids, producer=_PRODUCER)
 
 
@@ -277,9 +278,9 @@ def _as_dataset_event(*, output: dict[str, Any], run_facets: dict[str, Any], eve
 
     THE RUN FACETS MOVE ONTO THE DATASET, they are not dropped. `author` and `lance` are rask's OWN
     custom facets rather than spec-typed run facets, and two readers depend on them: the ingest
-    authorizer takes `author.sub` (and refuses the standard `ownership` facet, so there is nowhere else
-    for it to go) and `lance.operation` (the relation the change needs, and whether it is a drop), and
-    the notifications plane takes `author.sub`, `lance.project`, `lance.originator` and `lance.operation`. Leaving them on
+    authorizer takes `rask_author.sub` (and refuses the standard `ownership` facet, so there is nowhere else
+    for it to go) and `rask_lance.operation` (the relation the change needs, and whether it is a drop), and
+    the notifications plane takes `rask_author.sub`, `rask_lance.project`, `rask_lance.originator` and `rask_lance.operation`. Leaving them on
     a run that no longer exists would silently unauthor every DDL change and silence the person it
     belongs to.
 
@@ -289,10 +290,10 @@ def _as_dataset_event(*, output: dict[str, Any], run_facets: dict[str, Any], eve
     the engine is always the catalog committing in-process.
     """
     facets = dict(output.get("facets") or {})
-    for name in ("author", "lance"):
+    for name in (AUTHOR_FACET, LANCE_FACET):
         if name in run_facets:
             facets[name] = run_facets[name]
-    # The dataset's own `lance` facet names the table's uuids (ADR 0173 §10); the run's joins it rather than replacing it.
+    # The dataset's own `rask_lance` facet names the table's uuids (ADR 0173 §10); the run's joins it rather than replacing it.
     if LANCE_FACET in run_facets and isinstance(own := (output.get("facets") or {}).get(LANCE_FACET), dict):
         facets[LANCE_FACET] = {**own, **run_facets[LANCE_FACET]}
     return {
@@ -329,7 +330,7 @@ def build_write_event(
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
     ``table_id`` is the catalog's canonical id (e.g. ``alpha$bronze$images``), the lineage ``Dataset`` name a caller of
-    the doors reads; the table's identity across a rename is the uuid ``uuids`` carries in the output's ``lance`` facet,
+    the doors reads; the table's identity across a rename is the uuid ``uuids`` carries in the output's ``rask_lance`` facet,
     which its OpenFGA object (``table:<uuid>``) names (ADR 0173 §8, §10). ``operation`` is the catalog op (``create_table`` / ``insert`` / ``merge_insert``
     / ``update`` / ``delete``). ``version`` is the Lance version the write produced; when it is ``None``
     (e.g. an insert whose response carries no version) the standard version facet is omitted so the
@@ -348,7 +349,7 @@ def build_write_event(
     ``create`` door or a stock client's ``version/create``. Such a create is announced as a run whose output names
     the version and whose author is the caller, as an Overwrite is, because only a run's output carries a write.
 
-    ``uuids`` are the table's and its namespace's (ADR 0173 §10): the output's ``lance`` facet carries them beside its
+    ``uuids`` are the table's and its namespace's (ADR 0173 §10): the output's ``rask_lance`` facet carries them beside its
     name, as each input's carries its own, so lineage keys the table by what a rename keeps.
     """
     lance_fields: dict[str, Any] = {"operation": operation}
@@ -377,7 +378,7 @@ def build_write_event(
         if branch_identifier:
             lance_fields[BRANCH_IDENTIFIER] = branch_identifier
     # THE TENANT, and it is WATCH targeting's only key. `notifications` reads
-    # `run.facets.lance.project` (`api/lineage_events.py::project_id`) and its fan-out skips the
+    # `run.facets.rask_lance.project` (`api/lineage_events.py::project_id`) and its fan-out skips the
     # watcher loop ENTIRELY when it is absent — so while this facet carried only operation/version,
     # every catalog-authored event in the estate reached zero watchers. Not a broken watch: a
     # producer that never named the tenant the watch is keyed on. `ingest/lineage.py` was the
@@ -394,15 +395,15 @@ def build_write_event(
     # write can only name its human here. Targeting only — it authorizes nothing.
     if is_person_subject(originator):
         lance_fields["originator"] = originator
-    run_facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, **lance_fields)}
+    run_facets: dict[str, Any] = {LANCE_FACET: custom_facet(_PRODUCER, **lance_fields)}
     # WHICH ENGINE WROTE THIS, in the field a non-rask consumer reads. The catalog commits through
     # pylance in-process while the medallion's stage lanes write through Ray, so "what produced this
     # table" has two answers and, without this facet, no way for a forwarded graph backend to tell them apart. Stamped
-    # beside `lance` rather than inside it: `lance.operation` is rask's own vocabulary and opaque to
+    # beside `lance` rather than inside it: `rask_lance.operation` is rask's own vocabulary and opaque to
     # anyone else, and the engine is exactly the part that is not rask-specific.
     run_facets["processing_engine"] = processing_engine_facet(_PRODUCER, name="lance", version=lance.__version__)
     if author is not None:
-        run_facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
+        run_facets[AUTHOR_FACET] = custom_facet(_PRODUCER, name=author, sub=author)
     output: dict[str, Any] = {"namespace": namespace, "name": table_id}
     facets: dict[str, Any] = {}
     if version is not None:
@@ -420,7 +421,7 @@ def build_write_event(
             "name": source_uri,
             "uri": source_uri,
         }
-    # WHAT THIS DID TO THE DATASET, in the spec's own six-value vocabulary. `lance.operation` already
+    # WHAT THIS DID TO THE DATASET, in the spec's own six-value vocabulary. `rask_lance.operation` already
     # carries rask's more specific name and stays — this is the half a standard consumer can read, and
     # without it a create, a drop and an alter are one event with a different opaque string. Empty for
     # a DATA operation, deliberately: see `lifecycle_facet`.
@@ -512,7 +513,7 @@ class EmitFields(TypedDict, total=False):
     schema_fields: SchemaFields | None
     #: The version-pinned source dataset(s) this write DERIVES FROM.
     inputs: list[InputRef] | None
-    #: The run the writer named, whose id and job ride the ``lance`` facet.
+    #: The run the writer named, whose id and job ride the ``rask_lance`` facet.
     run: RunContext | None
     #: The TENANT owning the namespace — WATCH targeting's only key.
     project: str | None
@@ -566,7 +567,7 @@ class OriginatorBoundEmitter:
     """One request's ORIGINATOR claim bound to the app-scoped emitter.
 
     `enforce_author` overwrites `author` with the authenticating service's sub, so a write a service
-    makes FOR a person can only name that person through `lance.originator`. Every layer below already
+    makes FOR a person can only name that person through `rask_lance.originator`. Every layer below already
     carried the field; nothing above could set it, which made the capability unreachable from any door.
 
     A wrapper rather than a field on the emitter, because the two have different lifetimes: the emitter

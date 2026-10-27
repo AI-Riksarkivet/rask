@@ -24,9 +24,9 @@ something adjacent.
 
 | | Question | Source | What you emit |
 | --- | --- | --- | --- |
-| **Q1** | Does a named person cause it, ending in a terminal run over a governed object? | `AUTHOR` | terminal lineage event + verified `author.sub` + ≥1 output |
-| **Q2** | Does a **service** run it, on a named person's behalf? | `ORIGINATOR` | the same event carrying `lance.originator` = that person's sub |
-| **Q3** | Should people *other than the actor* know, because it is the project's work? | `WATCH` | the same event **plus** `lance.project` |
+| **Q1** | Does a named person cause it, ending in a terminal run over a governed object? | `AUTHOR` | terminal lineage event + verified `rask_author.sub` + ≥1 output |
+| **Q2** | Does a **service** run it, on a named person's behalf? | `ORIGINATOR` | the same event carrying `rask_lance.originator` = that person's sub |
+| **Q3** | Should people *other than the actor* know, because it is the project's work? | `WATCH` | the same event **plus** `rask_lance.project` |
 | **Q4** | Does it give a specific person access? | `GRANT_ADDED` | `CatalogControlEvent`, `extra.subject` = the principal |
 | **Q5** | Does it take access away from a specific person? | `GRANT_REVOKED` | the same envelope, `action="grant_revoked"` |
 | **Q6** | Does a tool hand a person work, or take it away (an annotation task, a review)? | none | nothing on the lakehouse's lanes: a tool's work queue is the tool's, announced on its own channel (ADR 0171) |
@@ -43,11 +43,11 @@ person is not told.
 **A user's pipeline is its own producer** (ADR 0155). Moving data between tiers runs on the user's own
 compute and orchestrator, and the lakehouse emits no run event for work it does not run: a pipeline's
 runs reach people through the OpenLineage events the pipeline's job emits, targeted by their
-`author.sub` (Q1), or by `lance.originator` when the job authenticates as a service (Q2). The catalog's
+`rask_author.sub` (Q1), or by `rask_lance.originator` when the job authenticates as a service (Q2). The catalog's
 own COMPLETE for each commit the pipeline makes is authored as the verified caller.
 
 Moving a table's `published` tag notifies the project's watchers (ADR 0156 C1, ADR 0161, [[LH-466]]): the catalog
-emits a `publish_table` run authored by the verified caller, its `lance.project` the tenant and its output the table,
+emits a `publish_table` run authored by the verified caller, its `rask_lance.project` the tenant and its output the table,
 so it is delivered by WATCH like any catalog write. Lineage records it only because its bus door authorizes a
 `publish_table` run on `can_update_tag` or `can_promote` rather than the writer rung (`lineage/api/fga_deps.py`): a
 validator's approval demanded `can_write_data`, was refused and dead-lettered, and still rang the watcher's bell, the
@@ -85,14 +85,14 @@ reports the loss. This is the estate's most expensive silent failure mode.
 1. **Terminal state** — `COMPLETE` / `FAIL` / `ABORT` (`TERMINAL_STATES`, `lineage_events.py:32`).
    `START`/`RUNNING` notify nobody by product decision. `RECONCILED` is excluded on purpose: it is
    lineage's REPAIR marker for a run whose real terminal event was lost, not an outcome anyone chose.
-2. **A VERIFIED `author.sub`** — see the trap below. This is the one that keeps biting.
-3. **`lance.project`** — optional, but omitting it costs you **every** watcher.
+2. **A VERIFIED `rask_author.sub`** — see the trap below. This is the one that keeps biting.
+3. **`rask_lance.project`** — optional, but omitting it costs you **every** watcher.
 4. **≥1 output, each naming its table's uuid.** Delivery runs `can_be_notified` and render re-runs
-   `can_get_metadata` against `table:<uuid>`, the uuid the output's own `lance` facet carries (`tableUuid`, ADR 0173
+   `can_get_metadata` against `table:<uuid>`, the uuid the output's own `rask_lance` facet carries (`tableUuid`, ADR 0173
    §10, [[LH-522]], [[LH-524]]); the pointer stores that object as `object_id`, the output's name as `object_name` and
    the uuid as `object_uuid`. An output without a uuid names no object any grant could reach, so the run reaches
    nobody. The catalog and maintenance stamp the uuids, lineage's HTTP door resolves an outside producer's names as its
-   token, and `/events/projection` keeps each output's `lance` facet for the reconciler.
+   token, and `/events/projection` keeps each output's `rask_lance` facet for the reconciler.
 
 **One more holds before notifications is asked, and it is not `notifiable()`'s: the event is SIGNED.** Lineage verifies
 the `rask_signature` of every event on the bus and in the outbox (`signing.enforce`, on by default) and refuses what
@@ -111,7 +111,7 @@ event = {
             # (2) The VERIFIED principal key (`token.subject`, `<idp-id>~<user id>`, [[LH-063]]). NOT settings.author,
             #     NOT a role/team string, NOT a display name. `{name, sub}` together is what every verifying writer stamps.
             #     (5) binds it: a signer is its own author, so a service stamps its own signing
-            #     identity and the person rides in `lance.originator` (Q2). Only the catalog signs
+            #     identity and the person rides in `rask_lance.originator` (Q2). Only the catalog signs
             #     for a person it authenticated (`on_behalf_of=`).
             "author": {"name": token.subject, "sub": token.subject},
             "lance": {
@@ -122,7 +122,7 @@ event = {
             "errorMessage": {"message": reason},
         },
     },
-    # (4) Each output carries its table's uuids (`with_dataset_uuids` stamps `facets.lance.tableUuid` and
+    # (4) Each output carries its table's uuids (`with_dataset_uuids` stamps `facets.rask_lance.tableUuid` and
     #     `namespaceUuid`), as the table's and namespace's DescribeTable/DescribeNamespace answer them (`rask.uuid`).
     #     An output without one names no object any grant reaches, so the run reaches nobody.
     "outputs": [with_dataset_uuids({"namespace": "gold", "name": f"{project_id}-gold$catalog"}, uuids, producer=PRODUCER)],
@@ -247,8 +247,8 @@ so it must read as a reason a person would accept; and `notification-center.stor
 
 ## The five traps — an event emitted is not a person told
 
-1. **A role literal in `author.sub` reaches nobody.** `author_subject()` reads `author.sub` and
-   **nothing else** — never `author.name`, never the standard `ownership` facet — because those are
+1. **A role literal in `rask_author.sub` reaches nobody.** `author_subject()` reads `rask_author.sub` and
+   **nothing else** — never `rask_author.name`, never the standard `ownership` facet — because those are
    producer-supplied and honouring them would let any producer put a row in a named person's inbox.
    A service that authors with a role literal or its own identity addresses an inbox actor of that
    name; the literal is *correct* as the author, and what reaches the person is the ORIGINATOR riding
@@ -265,7 +265,7 @@ so it must read as a reason a person would accept; and `notification-center.stor
    `enforce_author` (`lineage/api/fga_deps.py:96-103`) **overwrites** the facet with that service's
    sub — "never trust the request body" is doing its job, and your human is gone. Carrying the human's
    sub through your own call graph is the only fix.
-3. **No `lance.project` disables WATCH silently.** `fanout.py:88` skips the watcher loop entirely when
+3. **No `rask_lance.project` disables WATCH silently.** `fanout.py:88` skips the watcher loop entirely when
    `project` is `None`. The catalog was the estate-wide instance of this — it stamped
    `lance = {operation, version}` and no project, so no catalog write reached a watcher anywhere.
    **Closed:** `emit_write_event` now resolves the tenant centrally via `emitter.project_for(segments[0])`
@@ -299,7 +299,7 @@ whole run feed with no per-dataset filter, gated on the estate rung `can_read_ev
 chart's bootstrap hook grants it as `event_reader` on `estate:rask`. Not the governed `/events`: that
 shows a service only the tables its grants reach, so every tenant warehouse's runs would be invisible to
 the lane and the tick would still log success. Each row carries only the targeting view (run id, state,
-time, the `author` and `lance` facets, and each output's name with its own `lance` facet, which carries the table's
+time, the `rask_author` and `rask_lance` facets, and each output's name with its own `rask_lance` facet, which carries the table's
 uuids), because addressing people needs nothing more. A
 deployment that forgets the grant gets a 403 on every tick, and no retry helps — the sidecar's
 `invokeRetry` (`<release>-invocation-resiliency`, scoped to `notifications`, targeting `lineage`) retries

@@ -38,7 +38,7 @@ def _wire() -> dict[str, Any]:
         "eventType": "COMPLETE",
         "eventTime": "2026-09-24T06:00:00Z",
         "producer": "https://rask/medallion",
-        "run": {"runId": RUN_ID, "facets": {"author": {"sub": IDENTITY}}},
+        "run": {"runId": RUN_ID, "facets": {"rask_author": {"sub": IDENTITY}}},
         "job": {"namespace": "lance", "name": "stage.silver"},
         "outputs": [{"namespace": "lance", "name": "silver$features"}],
     }

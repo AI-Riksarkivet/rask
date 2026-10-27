@@ -67,8 +67,10 @@ def test_a_run_reaches_the_backend_once_across_an_outage(tmp_path: Path, monkeyp
             after = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
 
     assert posted.status_code == 201, posted.text
-    assert [(row["event"]["run"]["runId"], row["event"]["run"]["facets"]["author"]["sub"]) for row in projected["events"]] == [(run["run"]["runId"], _ALICE)]
+    assert [(row["event"]["run"]["runId"], row["event"]["run"]["facets"]["rask_author"]["sub"]) for row in projected["events"]] == [
+        (run["run"]["runId"], _ALICE)
+    ]
     assert [(tick["forwarded"], tick["forward_stalled"]) for tick in (while_down, once_up, after)] == [(0, "HTTP 503"), (1, None), (0, None)]
-    assert [(event["run"]["runId"], event["eventType"], event["run"]["facets"]["author"]["sub"]) for event in graph.received] == [
+    assert [(event["run"]["runId"], event["eventType"], event["run"]["facets"]["rask_author"]["sub"]) for event in graph.received] == [
         (run["run"]["runId"], "COMPLETE", _ALICE)
     ]

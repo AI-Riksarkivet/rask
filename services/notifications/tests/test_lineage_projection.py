@@ -24,18 +24,18 @@ def _event(
     return {
         "eventType": event_type,
         "eventTime": event_time,
-        "run": {"runId": run_id, "facets": facets if facets is not None else {"author": {"name": "alice", "sub": "alice"}}},
+        "run": {"runId": run_id, "facets": facets if facets is not None else {"rask_author": {"name": "alice", "sub": "alice"}}},
         "job": {"namespace": "lance-medallion", "name": "htr"},
         "outputs": [_output(name) for name in (outputs if outputs is not None else ["silver$pages"])],
     }
 
 
 def _output(name: str) -> dict[str, Any]:
-    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet (ADR 0173 §10). A
+    """An output as the catalog names it: its name, and its table's uuid in the ``rask_lance`` facet (ADR 0173 §10). A
     nameless output carries none, as no producer can stamp one."""
     if not name:
         return {"namespace": "silver", "name": name}
-    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": str(uuid.uuid5(uuid.NAMESPACE_URL, name))}}}
+    return {"namespace": "silver", "name": name, "facets": {"rask_lance": {"tableUuid": str(uuid.uuid5(uuid.NAMESPACE_URL, name))}}}
 
 
 @pytest.mark.parametrize("state", ["FAIL", "complete"])
@@ -44,16 +44,16 @@ def test_the_terminal_states_are_the_notifiable_ones(state: str) -> None:
 
 
 def test_the_author_comes_from_the_verified_sub() -> None:
-    event = LineageRunEvent.model_validate(_event(facets={"author": {"name": "alice", "sub": "alice-sub"}}))
+    event = LineageRunEvent.model_validate(_event(facets={"rask_author": {"name": "alice", "sub": "alice-sub"}}))
     assert author_subject(event.run) == "alice-sub"
 
 
 def test_a_name_without_a_sub_is_not_an_audience() -> None:
-    """`RunEvent.author` falls back to `author.name` and then the standard `ownership` JOB facet,
+    """`RunEvent.author` falls back to `rask_author.name` and then the standard `ownership` JOB facet,
     which is right for attribution on a board and wrong for targeting: `ownership` is a
     producer-supplied string nobody verified, so honouring it would let any producer drop a row into a
     named person's inbox. Every estate writer that VERIFIES the author writes `sub`."""
-    event = LineageRunEvent.model_validate(_event(facets={"author": {"name": "alice"}}))
+    event = LineageRunEvent.model_validate(_event(facets={"rask_author": {"name": "alice"}}))
     assert author_subject(event.run) is None
     assert notifiable(event) is None
 
@@ -66,9 +66,9 @@ def test_an_ownership_job_facet_is_never_targeted() -> None:
 @pytest.mark.parametrize(
     "facets",
     [
-        pytest.param({"author": "alice"}, id="facets1"),
-        pytest.param({"author": {"sub": ""}}, id="facets2"),
-        pytest.param({"author": {"sub": 7}}, id="facets3"),
+        pytest.param({"rask_author": "alice"}, id="facets1"),
+        pytest.param({"rask_author": {"sub": ""}}, id="facets2"),
+        pytest.param({"rask_author": {"sub": 7}}, id="facets3"),
     ],
 )
 def test_a_malformed_author_facet_is_a_missing_one_never_a_raise(facets: dict[str, Any]) -> None:
@@ -104,7 +104,7 @@ def test_the_pointer_names_the_primary_output_while_the_check_covers_them_all() 
     """The pointer is a claim-check: it names ONE object, which the render path re-checks, and says
     nothing about the others. The delivery check is the subset test over the whole set — a different
     question (may you be told at all), not a weaker version of the same one. Every object is the table the uuid its
-    output's `lance` facet carries names (ADR 0173 §10, [[LH-524]]), and the pointer keeps the name to show beside it."""
+    output's `rask_lance` facet carries names (ADR 0173 §10, [[LH-524]]), and the pointer keeps the name to show beside it."""
     event = _event(outputs=["silver$pages", "gold$lines"])
     event["outputs"] = [
         with_dataset_uuids(output, DatasetUuids(table_uuid=minted, namespace_uuid="ns-uuid"), producer="https://producer.test")

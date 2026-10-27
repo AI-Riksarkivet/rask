@@ -16,7 +16,7 @@ store directly and publishes nothing, so a recovered event never lands back on `
 which is the closes-when's first clause, and the reason this cannot be done through the relay, whose
 drain re-publishes by design.
 
-IT DOES NOT PRE-EMPT THE OWNER'S RULING on the ~86% role-literal population (`author.sub` = a role, not
+IT DOES NOT PRE-EMPT THE OWNER'S RULING on the ~86% role-literal population (`rask_author.sub` = a role, not
 a person). Those fail `enforce_bus_authz` by construction, so they park exactly as before and their
 disposition stays open. What changes is only the authorizable remainder, which today is lost on a timer.
 
@@ -114,7 +114,7 @@ def _client(monkeypatch: pytest.MonkeyPatch, repo: _Repo | None, *, authorized: 
 
 def _event(run_id: str | None) -> dict[str, Any]:
     """A parseable OpenLineage event. ``run_id=None`` omits ``runId``: a park with no readable run."""
-    run: dict[str, Any] = {"facets": {"author": {"sub": "alice"}}}
+    run: dict[str, Any] = {"facets": {"rask_author": {"sub": "alice"}}}
     if run_id is not None:
         run["runId"] = run_id
     return {

@@ -30,7 +30,7 @@ from maintenance.services.sweep import NamedDataset, SweepPlan, expire_dataset, 
 from service_kit.lakehouse import trash
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.maintenance_due import CloneList, read_clone_list
-from service_kit.openlineage import dataset_uuids
+from service_kit.openlineage import LANCE_FACET, dataset_uuids
 
 
 log = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ def triggering_write(event: dict[str, Any]) -> TriggeringWrite | None:
     """
     run = event.get("run")
     facets = run.get("facets") if isinstance(run, dict) else None
-    lance = facets.get("lance") if isinstance(facets, dict) else None
+    lance = facets.get(LANCE_FACET) if isinstance(facets, dict) else None
     operation = lance.get("operation") if isinstance(lance, dict) else None
     if not isinstance(operation, str) or operation in _BYTE_FREE_OPERATIONS:
         return None

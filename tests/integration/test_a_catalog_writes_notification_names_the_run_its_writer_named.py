@@ -1,6 +1,6 @@
 """[[CTL-33]] The notification for a catalog write names the run its writer named.
 
-The catalog's write event carries the writer's run in its `lance` facet as `runId`, the key lineage's edge list reads
+The catalog's write event carries the writer's run in its `rask_lance` facet as `runId`, the key lineage's edge list reads
 too, and notifications projects the producer's own run from the same facet. One key spelled two ways is a silent loss:
 the notification names no run, so the inbox row and the email's `Run:` line lose the one id the writer's own tooling
 answers to.

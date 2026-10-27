@@ -17,7 +17,7 @@ lineage's feed serves it, and holds them to six claims:
 6. nothing the scenario caused, nor the redelivery and forgeries above, parked on the DLQ stream or stayed staged in
    the outbox.
 
-WHAT IS NOT CLAIMED, and why. The `lance` and `author` facets point at BaseFacet and have no versioned schema of their
+WHAT IS NOT CLAIMED, and why. The `rask_lance` and `rask_author` facets point at BaseFacet and have no versioned schema of their
 own, so (1) holds them only to OpenLineage's facet shape (LH-500, #649, parked). The edge list's one door,
 `/tables/{t}/derived`, answers a set of tables, so a duplicated edge row is invisible there and (4) reads the feed,
 which shows every row. Refusing a publish from a client the bus does not admit is the bus's own work (operator mode,
@@ -227,7 +227,7 @@ def forgeries(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> F
     insert = [
         message
         for message in captured.lineage
-        if _tables_of(message.event) == {byo_run.silver_table} and _facets(message.event).get("lance", {}).get("operation") == "insert"
+        if _tables_of(message.event) == {byo_run.silver_table} and _facets(message.event).get("rask_lance", {}).get("operation") == "insert"
     ]
     grant = _grant_messages(captured, pipeline).get(byo_tenant.bronze)
     assert insert and grant, "the capture holds no silver insert or no grant to the pipeline to forge"
@@ -284,7 +284,12 @@ def test_lineage_recorded_each_event_as_the_person_who_called_the_catalogs_door(
     def stamp(event: dict[str, Any], project: object) -> dict[str, object]:
         facets = _facets(event)
         signature = facets.get("rask_signature") or {}
-        return {"author": (facets.get("author") or {}).get("sub"), "project": project, "signer": signature.get("identity"), "for": signature.get("onBehalfOf")}
+        return {
+            "author": (facets.get("rask_author") or {}).get("sub"),
+            "project": project,
+            "signer": signature.get("identity"),
+            "for": signature.get("onBehalfOf"),
+        }
 
     def expected(row: dict[str, Any]) -> dict[str, object]:
         who = validator if _commit(row) == (byo_run.silver_table, "publish_table", 2) else pipeline
@@ -318,7 +323,7 @@ def test_each_person_the_scenario_names_is_told_exactly_their_part(captured: Cap
     def run(row: dict[str, Any], reason: str) -> tuple[str, str, str]:
         return (f"{event_identity(row['event'])}@COMPLETE", reason, _commit(row)[0])
 
-    authored = [row for row in captured.feed if (_facets(row["event"]).get("author") or {}).get("sub") == tenant.pipeline.principal]
+    authored = [row for row in captured.feed if (_facets(row["event"]).get("rask_author") or {}).get("sub") == tenant.pipeline.principal]
     approval = [row for row in captured.feed if _commit(row) == (byo_run.silver_table, "publish_table", 2)]
     expected = {
         "admin": sorted([grant(tenant.admin, f"project:{tenant.project}"), *(run(row, "watch") for row in approval)]),

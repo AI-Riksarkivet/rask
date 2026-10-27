@@ -66,8 +66,8 @@ PAGES_UUID, GOLD_PAGES_UUID, GOLD_UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b",
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
     "eventTime": "2026-08-09T12:00:00+00:00",
-    "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "dex~alice"}}},
-    "outputs": [{"namespace": "bronze", "name": "bronze$pages", "facets": {"lance": {"tableUuid": PAGES_UUID}}}],
+    "run": {"runId": "run-77", "facets": {"rask_author": {"name": "alice", "sub": "dex~alice"}}},
+    "outputs": [{"namespace": "bronze", "name": "bronze$pages", "facets": {"rask_lance": {"tableUuid": PAGES_UUID}}}],
 }
 
 #: The control envelope as its producer publishes it: the catalog's grant on a table for the person it authenticated.
@@ -118,7 +118,7 @@ def _run_event(case: str, *, catalog: Any, intruder: Any) -> dict[str, Any]:
             return intruder.sign(RUN_EVENT)
         case "tampered":
             signed = catalog.sign(RUN_EVENT, on_behalf_of="dex~alice")
-            signed["outputs"] = [{"namespace": "gold", "name": "gold$pages", "facets": {"lance": {"tableUuid": GOLD_PAGES_UUID}}}]
+            signed["outputs"] = [{"namespace": "gold", "name": "gold$pages", "facets": {"rask_lance": {"tableUuid": GOLD_PAGES_UUID}}}]
             return signed
         case "valid" | "store-down":
             return catalog.sign(RUN_EVENT, on_behalf_of="dex~alice")

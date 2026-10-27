@@ -431,7 +431,7 @@ async def test_the_drop_log_names_the_field_that_failed_and_never_what_it_held(c
     hostile = {
         "eventType": "FAIL",
         "eventTime": {"note": "patient 4417", "token": "hunter2"},
-        "run": {"runId": "run-1", "facets": {"author": {"sub": SUBJECT}}},
+        "run": {"runId": "run-1", "facets": {"rask_author": {"sub": SUBJECT}}},
         "outputs": [{"name": "gold$restricted"}],
     }
 

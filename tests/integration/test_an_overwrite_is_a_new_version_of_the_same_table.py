@@ -128,7 +128,7 @@ def test_a_forced_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
     assert len(events) == 1, f"{door}: expected one lineage event, got {[e.get('job') or e.get('dataset') for e in events]}"
     event = events[0]
     assert "run" in event, f"{door}: recorded as a static DatasetEvent, which carries no WROTE edge: {event}"
-    assert event["run"]["facets"]["lance"]["operation"] == "overwrite_table", event["run"]["facets"]["lance"]
+    assert event["run"]["facets"]["rask_lance"]["operation"] == "overwrite_table", event["run"]["facets"]["rask_lance"]
     facets = event["outputs"][0]["facets"]
     assert event["outputs"][0]["name"] == TABLE
     assert facets.get("lifecycleStateChange", {}).get("lifecycleStateChange") == "OVERWRITE", facets.get("lifecycleStateChange")

@@ -90,7 +90,7 @@ def _event(*, outputs: tuple[str, ...] = (), inputs: tuple[str, ...] = ()) -> Ru
         {
             "eventType": "COMPLETE",
             "eventTime": "2026-09-09T00:00:00+00:00",
-            "run": {"runId": "11111111-1111-1111-1111-111111111111", "facets": {"author": {"name": "alice", "sub": "dex~alice"}}},
+            "run": {"runId": "11111111-1111-1111-1111-111111111111", "facets": {"rask_author": {"name": "alice", "sub": "dex~alice"}}},
             "job": {"namespace": "bus", "name": "probe"},
             "inputs": [_dataset(name, with_uuid=False) for name in inputs],
             "outputs": [_dataset("bronze$pages", with_uuid=True), *(_dataset(name, with_uuid=False) for name in outputs)],

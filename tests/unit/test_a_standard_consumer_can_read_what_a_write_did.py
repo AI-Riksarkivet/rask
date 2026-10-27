@@ -1,6 +1,6 @@
 """A catalog write says WHAT it did and WHICH ENGINE did it, in fields the spec defines.
 
-[[LIN-002]]. The estate stamped both facts only inside its own `lance` run facet — `operation` as a
+[[LIN-002]]. The estate stamped both facts only inside its own `rask_lance` run facet — `operation` as a
 rask-private name (`CREATE_TABLE`, `DROP_COLUMNS`, …) and the engine nowhere at all. To any
 OpenLineage-native reader that makes a create, a drop and an alter the same event carrying a different
 opaque string, and leaves "what produced this table" unanswerable.
@@ -16,7 +16,7 @@ MEASURED AGAINST UPSTREAM, not assumed. `LifecycleStateChangeDatasetFacet` defin
 `version` — both read from `OpenLineage/OpenLineage/spec/facets` on 2026-09-19, where every one of the
 estate's eight pinned facet versions also matched.
 
-THE RASK NAME STAYS. The two are not redundant: `lance.operation` is more specific than the enum
+THE RASK NAME STAYS. The two are not redundant: `rask_lance.operation` is more specific than the enum
 admits (`CREATE_INDEX` and `DROP_COLUMNS` are both `ALTER`), so collapsing onto the standard field
 would lose information the estate's own consumers read. Both are emitted.
 

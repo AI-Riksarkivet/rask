@@ -12,7 +12,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lineage_kit.signing import SIGNATURE_FACET, RefusalReason
-from service_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, static_event_id
+from service_kit.openlineage import AUTHOR_FACET, BRANCH_IDENTIFIER, LANCE_FACET, static_event_id
 
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
@@ -66,7 +66,7 @@ class Dataset(BaseModel):
     """An OpenLineage dataset (a Lance table / source); ``name`` is the catalog id.
 
     ``facets`` carries the standard OpenLineage dataset facets; lineage reads ``version`` (which Lance
-    version a run produced or read), the catalog's ``lance`` facet (the ref an input was read on) and
+    version a run produced or read), the catalog's ``rask_lance`` facet (the ref an input was read on) and
     ``columnLineage`` (whose upstreams the ingest authorizer checks).
 
     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
@@ -155,7 +155,7 @@ class Job(BaseModel):
 
 
 class Run(BaseModel):
-    """A single run of a job. ``facets.author`` carries the OIDC sub when present."""
+    """A single run of a job. ``facets.rask_author`` carries the OIDC sub when present."""
 
     model_config = _MODEL
     run_id: str = Field(alias="runId")
@@ -309,8 +309,8 @@ class DatasetEvent(BaseModel):
 
     @property
     def operation(self) -> str | None:
-        """The catalog operation (``create_table``, ``drop_columns``, …) from the ``lance`` dataset facet."""
-        lance = (self.dataset.facets or {}).get("lance")
+        """The catalog operation (``create_table``, ``drop_columns``, …) from the ``rask_lance`` dataset facet."""
+        lance = (self.dataset.facets or {}).get(LANCE_FACET)
         return lance.get("operation") if isinstance(lance, dict) else None
 
     @property
@@ -353,14 +353,14 @@ class DatasetEvent(BaseModel):
 
     @property
     def author(self) -> str | None:
-        """Who made the change — rask's ``author`` dataset facet, else the standard ``ownership`` facet.
+        """Who made the change — rask's ``rask_author`` dataset facet, else the standard ``ownership`` facet.
 
         Same preference order as :attr:`RunEvent.author` and for the same reason: this is ATTRIBUTION,
         where a producer's claimed owner beats no owner. It is NOT what authorizes the event — see
         :func:`author_sub_from_payload`, which takes the verified ``sub`` and nothing else.
         """
         facets = self.dataset.facets or {}
-        author = facets.get("author")
+        author = facets.get(AUTHOR_FACET)
         if isinstance(author, dict) and (name := author.get("name") or author.get("sub")):
             return str(name)
         ownership = facets.get("ownership")
@@ -410,7 +410,7 @@ def author_sub_from_payload(raw: object) -> str | None:
     ``notifications.author_subject`` applies for the same reason.
 
     TWO HOMES, ONE RULE. A :class:`DatasetEvent` has no run, so its stamp rides the same reserved
-    ``author`` facet on the DATASET — and it is read under exactly the same restriction. Moving DDL off
+    ``rask_author`` facet on the DATASET — and it is read under exactly the same restriction. Moving DDL off
     the run must not move its author onto ``ownership``, which this is required to distrust; a producer
     that could sign there would authorize itself under anyone's display name.
     """
@@ -422,7 +422,7 @@ def author_sub_from_payload(raw: object) -> str | None:
         facets = holder.get("facets")
         if not isinstance(facets, dict):
             continue
-        author = facets.get("author")
+        author = facets.get(AUTHOR_FACET)
         if not isinstance(author, dict):
             continue
         sub = author.get("sub")
@@ -493,13 +493,13 @@ class RunEvent(BaseModel):
 
     @property
     def author(self) -> str | None:
-        """The run author (OIDC sub) — our custom ``author`` run facet, else standard ``ownership``.
+        """The run author (OIDC sub) — our custom ``rask_author`` run facet, else standard ``ownership``.
 
-        Prefers the ``author`` run facet (set by our producers/catalog); falls back to the
+        Prefers the ``rask_author`` run facet (set by our producers/catalog); falls back to the
         first owner in the standard ``ownership`` job facet so events from external
         OpenLineage producers (Marquez-style) still attribute an owner.
         """
-        author = (self.run.facets or {}).get("author")
+        author = (self.run.facets or {}).get(AUTHOR_FACET)
         if isinstance(author, dict):
             name = author.get("name") or author.get("sub")
             if name:
@@ -520,17 +520,17 @@ class RunEvent(BaseModel):
 
     @property
     def operation(self) -> str | None:
-        """The catalog operation (e.g. ``create_table``) from the ``lance`` run facet, if any.
+        """The catalog operation (e.g. ``create_table``) from the ``rask_lance`` run facet, if any.
 
         Set by the catalog's emitter (``catalog.core.lineage_emit``); it decides which rung may record the
         event (``api.fga_deps.relations_for_operation``).
         """
-        lance = (self.run.facets or {}).get("lance")
+        lance = (self.run.facets or {}).get(LANCE_FACET)
         return lance.get("operation") if isinstance(lance, dict) else None
 
     @property
     def write_ref(self) -> str | None:
-        """The Lance REF this run wrote to, from the ``lance`` run facet (``ref``); ``None`` = main.
+        """The Lance REF this run wrote to, from the ``rask_lance`` run facet (``ref``); ``None`` = main.
 
         The version number alone does not identify a snapshot: a branch is a whole parallel dataset with
         its OWN version sequence, so one number names two different states. Measured on pylance 11.0.0 —
@@ -546,7 +546,7 @@ class RunEvent(BaseModel):
 
     @property
     def write_ref_identifier(self) -> str | None:
-        """The incarnation of :attr:`write_ref`, from the ``lance`` run facet (``branchIdentifier``); ``None`` on main.
+        """The incarnation of :attr:`write_ref`, from the ``rask_lance`` run facet (``branchIdentifier``); ``None`` on main.
 
         A branch deleted and created again under one name restarts its numbering, so ``(table, ref, N)`` names two
         commits until the incarnation is named beside it ([[LH-413]]).
@@ -557,6 +557,6 @@ class RunEvent(BaseModel):
         return str(identifier) if identifier else None
 
     def _run_lance_facet(self) -> dict[str, Any]:
-        """The run's ``lance`` facet, or an empty one when it carries none."""
+        """The run's ``rask_lance`` facet, or an empty one when it carries none."""
         lance = (self.run.facets or {}).get(LANCE_FACET)
         return lance if isinstance(lance, dict) else {}

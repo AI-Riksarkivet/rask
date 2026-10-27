@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from notifications.models import NotificationDelivery, NotificationReason, UtcDatetime, notification_id
 from service_kit.governed import fga
-from service_kit.openlineage import dataset_uuids, static_event_id
+from service_kit.openlineage import AUTHOR_FACET, LANCE_FACET, dataset_uuids, static_event_id
 
 
 #: The states a person needs to be told about. RESOLVED as a product decision, not a technical
@@ -33,14 +33,6 @@ from service_kit.openlineage import dataset_uuids, static_event_id
 #: service's REPAIR marker for a run whose real terminal event was lost, not an outcome anyone chose,
 #: and a notification for it would announce lineage's bookkeeping to a data scientist.
 TERMINAL_STATES: Final[frozenset[str]] = frozenset({"COMPLETE", "FAIL", "ABORT"})
-
-#: The run facet carrying the VERIFIED identity. Both writers that verify it — the HTTP door
-#: (`enforce_author`, which overwrites whatever the body claimed with the token sub) and the catalog's
-#: emitter — write `{"name": sub, "sub": sub}`.
-AUTHOR_FACET: Final = "author"
-
-#: The lakehouse run facet carrying the producer's OWN run id.
-LANCE_FACET: Final = "lance"
 
 
 def _as_run_event(raw: dict[str, Any]) -> dict[str, Any]:
@@ -60,7 +52,7 @@ def _as_run_event(raw: dict[str, Any]) -> dict[str, Any]:
     and silence a change that notifies a person today — measured on the live feed 2026-09-23, all four
     DDL events project to a deliverable pointer.
 
-    The dataset's ``lance`` facet rides its synthesised output too, since that is where an output names its table's
+    The dataset's ``rask_lance`` facet rides its synthesised output too, since that is where an output names its table's
     uuid (ADR 0173 §10).
     """
     dataset = raw.get("dataset")
@@ -95,7 +87,7 @@ class LineageDataset(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     name: str = ""
-    #: Read for the ``lance`` facet alone, where the dataset names its table's uuid (:func:`object_uuid`).
+    #: Read for the ``rask_lance`` facet alone, where the dataset names its table's uuid (:func:`object_uuid`).
     facets: dict[str, Any] = Field(default_factory=dict)
 
     def object_uuid(self) -> str | None:
@@ -187,8 +179,8 @@ def _facet_field(facets: dict[str, Any], facet: str, key: str) -> str | None:
 def author_subject(run: LineageRun) -> str | None:
     """The run's VERIFIED author, or `None`.
 
-    `author.sub` and nothing else, and the two things it deliberately does not fall back to are the
-    point. `lineage.models.RunEvent.author` prefers `author.name` and then the standard `ownership`
+    `rask_author.sub` and nothing else, and the two things it deliberately does not fall back to are the
+    point. `lineage.models.RunEvent.author` prefers `rask_author.name` and then the standard `ownership`
     JOB facet, which is right for ATTRIBUTION on a board — an external OpenLineage producer's claimed
     owner is better than no owner. It is wrong for TARGETING: `ownership` is a producer-supplied
     string nobody verified, so honouring it would let any producer put a row in a named person's
@@ -200,9 +192,9 @@ def author_subject(run: LineageRun) -> str | None:
 
 
 def originator_subject(run: LineageRun) -> str | None:
-    """The human a SERVICE-authored run is working on behalf of — `lance.originator`, or `None`.
+    """The human a SERVICE-authored run is working on behalf of — `rask_lance.originator`, or `None`.
 
-    Read from the same `lance` facet the tenant rides, and held to the SAME bar as `author.sub`: it is a
+    Read from the same `rask_lance` facet the tenant rides, and held to the SAME bar as `rask_author.sub`: it is a
     targeting field, so only a producer that verified the subject may stamp it. The medallion's cascade
     head carries the sub of the principal who passed `authorize_produce`; nothing derives it from a name.
 
@@ -219,7 +211,7 @@ def source_run_id(run: LineageRun) -> str | None:
     was used as the link. `None` for runs recorded before producers stated it, which a consumer must
     render unlinked rather than guess at.
 
-    Read as `lance.runId`, the one spelling the estate's producers stamp: the catalog writes it and
+    Read as `rask_lance.runId`, the one spelling the estate's producers stamp: the catalog writes it and
     lineage's edge list reads it, so a second spelling here would name no run for every catalog write
     ([[CTL-33]]).
     """
@@ -227,7 +219,7 @@ def source_run_id(run: LineageRun) -> str | None:
 
 
 def project_id(run: LineageRun) -> str | None:
-    """The TENANT this run belongs to — v2 targeting's key, from the same `lance` facet as `runId`.
+    """The TENANT this run belongs to — v2 targeting's key, from the same `rask_lance` facet as `runId`.
 
     `None` for a producer that stamps no project, which is not an error: v1 authorship targeting needs
     no tenant, so a project-less run still reaches its author and simply reaches no watchers. Silence
@@ -246,7 +238,7 @@ def notifiable(event: LineageRunEvent) -> Notifiable | None:
     * NOT A TERMINAL STATE. START and RUNNING notify nobody (:data:`TERMINAL_STATES`).
     * NO VERIFIED AUTHOR. v1's audience IS the author, so an event without one has no audience; see
       :func:`author_subject` for why an unverified name does not count as one.
-    * AN OUTPUT NAMING NO TABLE. Every output is checked as the table its ``lance`` facet's uuid names,
+    * AN OUTPUT NAMING NO TABLE. Every output is checked as the table its ``rask_lance`` facet's uuid names,
       ``table:<uuid>`` ([[LH-524]]); an output without one is no object any grant could name, so nobody can be
       notified about the run.
     * NO OUTPUTS. A dataset-less run is dropped by the estate's governed read path when FGA is on,

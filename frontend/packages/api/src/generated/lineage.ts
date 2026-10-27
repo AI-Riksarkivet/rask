@@ -727,7 +727,7 @@ export interface operations {
                     producer?: string | null;
                     /**
                      * Run
-                     * @description A single run of a job. ``facets.author`` carries the OIDC sub when present.
+                     * @description A single run of a job. ``facets.rask_author`` carries the OIDC sub when present.
                      */
                     run: {
                         /** Facets */

@@ -35,15 +35,15 @@ from notifications.proxies import TypedActorProxy
 LINEAGE = "http://lineage.invalid"
 OPEN = Visibility(decider=None, enabled=False)
 
-#: The uuid the catalog minted for `bronze$pages`, which its events carry in the output's `lance` facet (ADR 0173 §10).
+#: The uuid the catalog minted for `bronze$pages`, which its events carry in the output's `rask_lance` facet (ADR 0173 §10).
 PAGES_UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b"
 
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
     "eventTime": "2026-08-09T12:00:00+00:00",
-    "run": {"runId": "run-77", "facets": {"author": {"name": "alice", "sub": "alice"}, "lance": {"runId": "ingest-77"}}},
+    "run": {"runId": "run-77", "facets": {"rask_author": {"name": "alice", "sub": "alice"}, "rask_lance": {"runId": "ingest-77"}}},
     "job": {"namespace": "lance-ingest", "name": "harvest"},
-    "outputs": [{"namespace": "bronze", "name": "bronze$pages", "facets": {"lance": {"tableUuid": PAGES_UUID}}}],
+    "outputs": [{"namespace": "bronze", "name": "bronze$pages", "facets": {"rask_lance": {"tableUuid": PAGES_UUID}}}],
 }
 
 

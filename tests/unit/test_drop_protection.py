@@ -89,7 +89,7 @@ class _NoopLineage:
     """The lineage protocol's write half, doing nothing — the doors' happy path awaits it."""
 
     async def project_for(self, top_ns: str) -> str | None:
-        """Part of `LineageEmitter` since the tenant became `lance.project` (WATCH targeting's key).
+        """Part of `LineageEmitter` since the tenant became `rask_lance.project` (WATCH targeting's key).
         `None` is the honest answer for a fake with no registry behind it."""
         return None
 

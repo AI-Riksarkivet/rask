@@ -36,7 +36,7 @@ LINEAGE = "http://lineage.invalid"
 OPEN = Visibility(decider=None, enabled=False)
 
 pytestmark = pytest.mark.usefixtures("lineage_identity_token")
-#: The uuid the catalog minted for `silver$pages`, which the feed's projection keeps in the output's `lance` facet
+#: The uuid the catalog minted for `silver$pages`, which the feed's projection keeps in the output's `rask_lance` facet
 #: (ADR 0173 §10).
 PAGES_UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b"
 
@@ -47,8 +47,8 @@ def _event(seq: int, *, run_id: str | None = None, author: str = "alice", event_
         "event": {
             "eventType": event_type,
             "eventTime": "2026-08-09T12:00:00+00:00",
-            "run": {"runId": run_id or f"run-{seq}", "facets": {"author": {"name": author, "sub": author}}},
-            "outputs": [{"namespace": "silver", "name": "silver$pages", "facets": {"lance": {"tableUuid": PAGES_UUID}}}],
+            "run": {"runId": run_id or f"run-{seq}", "facets": {"rask_author": {"name": author, "sub": author}}},
+            "outputs": [{"namespace": "silver", "name": "silver$pages", "facets": {"rask_lance": {"tableUuid": PAGES_UUID}}}],
         },
     }
 
@@ -384,9 +384,9 @@ async def test_a_walk_cut_off_by_the_budget_keeps_what_it_handled_and_reports_it
 
 
 def _watched_event(seq: int, *, project: str, author: str = "bob") -> dict[str, Any]:
-    """A run carrying its TENANT — the `lance` facet `project_id()` reads to find watchers."""
+    """A run carrying its TENANT — the `rask_lance` facet `project_id()` reads to find watchers."""
     event = _event(seq, author=author)
-    event["event"]["run"]["facets"]["lance"] = {"project": project}
+    event["event"]["run"]["facets"]["rask_lance"] = {"project": project}
     return event
 
 

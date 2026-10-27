@@ -13,7 +13,7 @@ class of run.
    in commit order (`lineage.services.provenance`), so the mark is simply the last row handled:
    every row at or below it was offered, and no row below it can still appear (LH-472).
 2. Each row's payload is lineage's TARGETING VIEW of the event (`events.py::targeting_view`): the run id,
-   its `author` and `lance` facets, the state and time, and the output names — exactly what
+   its `rask_author` and `rask_lance` facets, the state and time, and the output names — exactly what
    `lineage_events.py` reads, and nothing describing data. The feed row carries no `run_id` column, so
    the payload is the only place a notification id can come from.
 3. The projection is NOT filtered per dataset; it is gated on the estate rung `can_read_event_feed`,

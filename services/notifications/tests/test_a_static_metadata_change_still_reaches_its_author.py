@@ -22,15 +22,15 @@ from notifications.api.lineage_events import LineageRunEvent, notifiable
 
 
 AUTHOR = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs"
-#: The uuid the catalog minted for `silver$features`, which the dataset's `lance` facet names (ADR 0173 §10).
+#: The uuid the catalog minted for `silver$features`, which the dataset's `rask_lance` facet names (ADR 0173 §10).
 TABLE_UUID = "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
 
 
 def _static(**facet_overrides: object) -> dict[str, object]:
     """A spec-shaped DatasetEvent for a `create_table`, as the catalog will publish it."""
     facets: dict[str, object] = {
-        "author": {"sub": AUTHOR, "name": "Alice"},
-        "lance": {"operation": "create_table", "version": 1, "project": "acme", "tableUuid": TABLE_UUID},
+        "rask_author": {"sub": AUTHOR, "name": "Alice"},
+        "rask_lance": {"operation": "create_table", "version": 1, "project": "acme", "tableUuid": TABLE_UUID},
         "lifecycleStateChange": {"lifecycleStateChange": "CREATE"},
     }
     facets.update(facet_overrides)
@@ -67,5 +67,5 @@ def test_the_ownership_facet_is_still_not_an_author() -> None:
     assert isinstance(dataset, dict)
     facets = dataset["facets"]
     assert isinstance(facets, dict)
-    del facets["author"]
+    del facets["rask_author"]
     assert notifiable(LineageRunEvent.model_validate(payload)) is None

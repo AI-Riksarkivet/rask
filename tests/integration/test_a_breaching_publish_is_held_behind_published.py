@@ -246,7 +246,7 @@ def test_approval_moves_published_and_tells_the_watchers_and_rejection_restores_
     assert approved.status_code == 200, approved.text
     assert (approved.json()["published_version"], approved.json()["hold"]["state"], approved.json()["hold"]["decided_by"]) == (2, "approved", "dex~bob")
     assert (estate.rows("published"), estate.holds()) == (12, [])
-    announced = [event for event in lineage if event["run"]["facets"]["lance"]["operation"] == "publish_table"]
+    announced = [event for event in lineage if event["run"]["facets"]["rask_lance"]["operation"] == "publish_table"]
     assert [event["outputs"][0]["facets"]["version"]["datasetVersion"] for event in announced] == ["2"]
     told = estate.obj("table", TABLE)
     assert _told(announced[-1], watchers=["dex~wendy"]) == {"dex~bob": [("author", told)], "dex~wendy": [("watch", told)]}

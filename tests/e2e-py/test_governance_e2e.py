@@ -171,7 +171,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     # 5. a promote run (bronze -> silver), as a user's pipeline would emit.
     # Spec-true on purpose: this fixture is our stand-in for a real producer, so it has to carry what the
     # spec REQUIRES — a UUID ``runId`` (``format: uuid``; Marquez rejects anything else), ``producer`` and
-    # ``schemaURL`` on the envelope, and ``_producer``/``_schemaURL`` on the custom ``author`` facet. The
+    # ``schemaURL`` on the envelope, and ``_producer``/``_schemaURL`` on the custom ``rask_author`` facet. The
     # first cut had none of those (``runId`` was ``promote-<pid>``) and the ingest accepted it, so what the
     # test really pinned was our own tolerance, not the contract (found 2026-07-26 — the event was still
     # sitting in the live /events feed as the one non-conforming non-reconcile event).
@@ -182,7 +182,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
         "schemaURL": RUN_EVENT_SCHEMA_URL,
         "run": {
             "runId": run_id_for(f"promote-{ns}-{os.getpid()}"),
-            "facets": {"author": custom_facet(_PRODUCER, name=alice_sub, sub=alice_sub)},
+            "facets": {"rask_author": custom_facet(_PRODUCER, name=alice_sub, sub=alice_sub)},
         },
         "job": {"namespace": "e2e-pipeline", "name": "promote_bronze_to_silver"},
         "inputs": [{"namespace": ns, "name": bronze}],

@@ -64,7 +64,7 @@ def _object(name: str) -> str:
 
 
 def _table_payload(namespace: str, name: str) -> dict[str, Any]:
-    """A governed table as the catalog names it on an event: its name, and its uuid in the ``lance`` facet."""
+    """A governed table as the catalog names it on an event: its name, and its uuid in the ``rask_lance`` facet."""
     return with_dataset_uuids({"namespace": namespace, "name": name}, DatasetUuids(table_uuid=_uuid(name)), producer="rask://test")
 
 

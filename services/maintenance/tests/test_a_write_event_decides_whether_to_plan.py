@@ -43,7 +43,7 @@ def _event(operation: str, *, name: str = "db$t", version: int | None = 7) -> di
         output["facets"] = {"version": {"datasetVersion": str(version)}}
     return {
         "eventType": "COMPLETE",
-        "run": {"runId": "r-1", "facets": {"lance": {"operation": operation}}},
+        "run": {"runId": "r-1", "facets": {"rask_lance": {"operation": operation}}},
         "outputs": [output],
     }
 
@@ -71,7 +71,7 @@ def test_a_COMPACTION_is_an_arrival() -> None:
 
 
 def test_an_event_naming_no_output_is_ignored() -> None:
-    assert triggering_write({"run": {"facets": {"lance": {"operation": "insert"}}}, "outputs": []}) is None
+    assert triggering_write({"run": {"facets": {"rask_lance": {"operation": "insert"}}}, "outputs": []}) is None
 
 
 def test_an_event_with_no_operation_facet_is_ignored() -> None:
@@ -254,7 +254,7 @@ def arrival_door(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[],
 def _arrived_write() -> dict[str, Any]:
     """A catalog write as it reaches the lane: the table, its version, its physical URI, and the person it was made for."""
     event = _event("insert")
-    event["run"]["facets"]["author"] = {"name": AUTHOR, "sub": AUTHOR}
+    event["run"]["facets"]["rask_author"] = {"name": AUTHOR, "sub": AUTHOR}
     event["outputs"][0]["facets"]["dataSource"] = {"uri": URI}
     return event
 

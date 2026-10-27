@@ -69,14 +69,14 @@ _BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
 def _event(author: str = STAGE) -> dict[str, Any]:
-    """A medallion COMPLETE: its `lance` facet carries a float that happens to be integral."""
+    """A medallion COMPLETE: its `rask_lance` facet carries a float that happens to be integral."""
     return {
         "eventType": "COMPLETE",
         "eventTime": "2026-10-02T12:00:00+00:00",
         "producer": "https://example.invalid/producer",
         "run": {
             "runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b",
-            "facets": {"author": {"sub": author, "name": author}, "lance": {"duration_seconds": 5.0, "rows": 12}},
+            "facets": {"rask_author": {"sub": author, "name": author}, "rask_lance": {"duration_seconds": 5.0, "rows": 12}},
         },
         "job": {"namespace": "lance", "name": "stage.silver"},
         "outputs": [{"namespace": "silver", "name": "acme-silver$events"}],
@@ -86,7 +86,7 @@ def _event(author: str = STAGE) -> dict[str, Any]:
 def _dataset_event(author: str) -> dict[str, Any]:
     return {
         "eventTime": "2026-10-02T12:00:00+00:00",
-        "dataset": {"namespace": "lance", "name": "acme-bronze$dropped", "facets": {"lance": {"operation": "drop_table"}, "author": {"sub": author}}},
+        "dataset": {"namespace": "lance", "name": "acme-bronze$dropped", "facets": {"rask_lance": {"operation": "drop_table"}, "rask_author": {"sub": author}}},
     }
 
 
@@ -116,7 +116,7 @@ def _with_control_signature_members(signed: dict[str, Any], **members: Any) -> d
 
 def _with_author(signed: dict[str, Any], sub: str) -> dict[str, Any]:
     bag = signed["run"]["facets"]
-    return {**signed, "run": {**signed["run"], "facets": {**bag, "author": {**bag["author"], "sub": sub}}}}
+    return {**signed, "run": {**signed["run"], "facets": {**bag, "rask_author": {**bag["rask_author"], "sub": sub}}}}
 
 
 def _nested(containers: int) -> list[Any]:
@@ -201,7 +201,7 @@ def test_a_signature_is_the_wire_format_the_contract_writes_and_verifies_against
     assert parse_published_keys(f" {catalog.public} ,, {rfc.public_nkey}\n") == [catalog.public, rfc.public_nkey]
 
     # The signed event is a copy: changing it leaves the event it was made from alone.
-    again["run"]["facets"]["lance"]["rows"] = 99
+    again["run"]["facets"]["rask_lance"]["rows"] = 99
     assert original == _event(PERSON)
 
     # A control event has no facet bag: the same facet rides as a top-level member, and the independent writer produces it byte for byte.
@@ -260,7 +260,7 @@ def test_the_verifier_accepts_what_a_published_key_signed_and_refuses_the_rest_r
     second_spelling = value[:-1] + _BASE64URL[_BASE64URL.index(value[-1]) ^ 1]
 
     def nested_600_deep() -> tuple[dict[str, Any], _Source]:
-        bomb = {**self_signed, "run": {**self_signed["run"], "facets": {**self_signed["run"]["facets"], "lance": {"deep": _nested(600)}}}}
+        bomb = {**self_signed, "run": {**self_signed["run"], "facets": {**self_signed["run"]["facets"], "rask_lance": {"deep": _nested(600)}}}}
         return bomb, _Source(published)
 
     def a_fault_in_the_crypto_library() -> tuple[dict[str, Any], _Source]:

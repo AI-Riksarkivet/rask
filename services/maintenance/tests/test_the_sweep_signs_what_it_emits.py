@@ -147,7 +147,7 @@ def _signed(event: dict[str, Any], public: str) -> tuple[str, str, str, DatasetU
     try:
         if "run" in event:
             verified = verify_signature(event, source=source, signers=frozenset({IDENTITY}), delegators=frozenset())
-            return verified.identity, event["run"]["facets"]["author"]["sub"], event["eventType"], dataset_uuids(event["outputs"][0])
+            return verified.identity, event["run"]["facets"]["rask_author"]["sub"], event["eventType"], dataset_uuids(event["outputs"][0])
         verified = verify_control_signature(event, source=source, signers=frozenset({IDENTITY}), delegators=frozenset())
     except SignatureError as exc:
         return exc.reason

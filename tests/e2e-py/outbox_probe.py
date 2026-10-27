@@ -86,7 +86,7 @@ def owned_output_table(namespace: str, table: str) -> str:
     """Create ``<namespace>$<table>`` through the catalog and answer the identity that now owns it.
 
     BOTH HALVES ARE NEEDED AND THE SECOND IS THE NON-OBVIOUS ONE. Creating the table gives it an FGA
-    parent and owner tuples; but the bus door authorizes AS `author.sub`, so an event authored by
+    parent and owner tuples; but the bus door authorizes AS `rask_author.sub`, so an event authored by
     anyone else is still refused on a table that now exists. Returning the creating subject is what
     lets the caller stamp an author the gate can actually resolve.
     """

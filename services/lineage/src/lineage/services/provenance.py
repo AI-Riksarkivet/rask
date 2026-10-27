@@ -64,7 +64,7 @@ from service_kit.lancekit.catalog_client import catalog_api_client, request_head
 from service_kit.lancekit.filters import in_lists, sql_literal
 from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from service_kit.lancekit.writer import RestCatalogWriteTransport
-from service_kit.openlineage import BRANCH_IDENTIFIER, dataset_uuids
+from service_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, dataset_uuids
 
 
 log = logging.getLogger(__name__)
@@ -223,15 +223,15 @@ def _version_of(dataset: Dataset) -> int | None:
 
 
 def _branch_of(dataset: Dataset) -> str | None:
-    """The ref an input was read on, from the catalog's ``lance`` dataset facet; ``None`` is main."""
-    facet = dataset.facet("lance")
+    """The ref an input was read on, from the catalog's ``rask_lance`` dataset facet; ``None`` is main."""
+    facet = dataset.facet(LANCE_FACET)
     ref = facet.get("ref") if facet else None
     return ref if isinstance(ref, str) and ref else None
 
 
 def _branch_identifier_of(dataset: Dataset) -> str | None:
-    """The incarnation of the ref an input was read on, from the catalog's ``lance`` dataset facet; ``None`` on main."""
-    facet = dataset.facet("lance")
+    """The incarnation of the ref an input was read on, from the catalog's ``rask_lance`` dataset facet; ``None`` on main."""
+    facet = dataset.facet(LANCE_FACET)
     identifier = facet.get(BRANCH_IDENTIFIER) if facet else None
     return identifier if isinstance(identifier, str) and identifier else None
 
@@ -284,7 +284,7 @@ def edges_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> list[d
     """
     if not isinstance(event, RunEvent) or not event.is_success:
         return []
-    lance_facet = event.run.facets.get("lance")
+    lance_facet = event.run.facets.get(LANCE_FACET)
     writer_run = lance_facet.get("runId") if isinstance(lance_facet, dict) else None
     rows: list[dict[str, Any]] = []
     for output in event.outputs:

@@ -85,7 +85,7 @@ def _feed(lineage_url: str) -> list[dict[str, Any]]:
 
 
 def _facets(event: dict[str, Any]) -> dict[str, Any]:
-    """Where the catalog's `lance` and `author` facets sit: on the run, or on the dataset of a dataset change."""
+    """Where the catalog's `rask_lance` and `rask_author` facets sit: on the run, or on the dataset of a dataset change."""
     return event["run"]["facets"] if "run" in event else event["dataset"]["facets"]
 
 
@@ -101,11 +101,11 @@ def test_a_create_that_commits_rows_is_announced_as_a_write(tmp_path: Path, monk
     ):
         assert httpx.post(f"{catalog_url}/v1/namespace/{_NAMESPACE}/create", json={}, timeout=60).status_code == 200
         DOORS[door](catalog_url, _rows(count))
-        creates = [row for row in _feed(lineage_url) if _facets(row["event"])["lance"]["operation"] == "create_table"]
+        creates = [row for row in _feed(lineage_url) if _facets(row["event"])["rask_lance"]["operation"] == "create_table"]
 
     assert len(creates) == 1, f"{door}: the create must appear once in the feed, got {creates}"
     row, event = creates[0], creates[0]["event"]
-    assert _facets(event)["author"]["sub"] == "dex~alice", f"{door}: the create is not the verified caller's: {_facets(event)}"
+    assert _facets(event)["rask_author"]["sub"] == "dex~alice", f"{door}: the create is not the verified caller's: {_facets(event)}"
     if count == 0:
         assert row["job"] is None and "run" not in event, f"{door}: a create that committed no rows ran no job: {event}"
         return

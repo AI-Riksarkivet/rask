@@ -1,7 +1,7 @@
 """A renamed table's grants stay on its uuid, so lineage still admits what is written to it and its watchers are still told.
 
 A rename keeps a table's uuid and every grant held by it (ADR 0173 §8, [[LH-524]]); an event names each table by its
-name and carries its uuid in the dataset's `lance` facet (ADR 0173 §10, [[LH-522]]). Lineage and notifications ask the
+name and carries its uuid in the dataset's `rask_lance` facet (ADR 0173 §10, [[LH-522]]). Lineage and notifications ask the
 decision door about that uuid, never the name. So after a live catalog renames `acme$t` to `acme$u`, a write to
 `acme$u` whose run read the source under the name it held before the rename, and an outside producer's event naming
 `acme$u` (which lineage's HTTP door resolves to the same uuid), are both admitted, and the project's watcher, who reads
@@ -49,7 +49,7 @@ _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
 
 
 def _dataset(name: str, uuid: str | None = None) -> dict[str, Any]:
-    return {"namespace": "acme", "name": name, **({"facets": {"lance": {"tableUuid": uuid}}} if uuid else {})}
+    return {"namespace": "acme", "name": name, **({"facets": {"rask_lance": {"tableUuid": uuid}}} if uuid else {})}
 
 
 def _write(*, outputs: list[dict[str, Any]], inputs: list[dict[str, Any]], producer: str) -> dict[str, Any]:
@@ -59,7 +59,7 @@ def _write(*, outputs: list[dict[str, Any]], inputs: list[dict[str, Any]], produ
         "producer": producer,
         "run": {
             "runId": f"run-{producer[-8:]}",
-            "facets": {"author": {"name": PIPELINE, "sub": PIPELINE}, "lance": {"operation": "insert", "project": "acme"}},
+            "facets": {"rask_author": {"name": PIPELINE, "sub": PIPELINE}, "rask_lance": {"operation": "insert", "project": "acme"}},
         },
         "job": {"namespace": "pipeline", "name": "derive"},
         "inputs": inputs,

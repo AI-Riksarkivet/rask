@@ -55,7 +55,7 @@ from lineage_kit.signing import VerifiedSignature
 from service_kit.governed import fga
 from service_kit.governed.decider import AccessDecider
 from service_kit.governed.principal import is_principal
-from service_kit.openlineage import dataset_uuids, lifecycle_state
+from service_kit.openlineage import AUTHOR_FACET, dataset_uuids, lifecycle_state
 
 
 log = logging.getLogger(__name__)
@@ -132,7 +132,7 @@ def governed_refs(datasets: Iterable[object], *, column_upstreams: Iterable[str]
     """The :class:`Governed` of an event's ``datasets`` (models or payload dicts) and the column upstreams it names.
 
     An external source is the outside world (:func:`is_external_source`) and governs nothing. A governed dataset is the
-    table its ``lance`` facet's uuid names, and one without a uuid is unresolved. A column upstream is the table a
+    table its ``rask_lance`` facet's uuid names, and one without a uuid is unresolved. A column upstream is the table a
     dataset of the event by that name is, else unresolved.
     """
     objects: set[str] = set()
@@ -161,7 +161,7 @@ def governed_refs(datasets: Iterable[object], *, column_upstreams: Iterable[str]
 
 def output_refs(outputs: Iterable[object]) -> Governed:
     """The :class:`Governed` of an event's outputs (models or payload dicts), none exempted: an output is the table its
-    ``lance`` facet's uuid names, and one without a uuid, an external one included, is unresolved."""
+    ``rask_lance`` facet's uuid names, and one without a uuid, an external one included, is unresolved."""
     objects: set[str] = set()
     unresolved: set[str] = set()
     for dataset in outputs:
@@ -292,12 +292,12 @@ async def require_metadata_access(name: str, request: Request, settings: Setting
 def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None:
     """Bind the author to the *verified* principal — never trust the request body.
 
-    When the request is authenticated, overwrite the ``author`` facet with the token subject so a
+    When the request is authenticated, overwrite the ``rask_author`` facet with the token subject so a
     producer cannot self-assert someone else's identity (provenance forgery). When OIDC is off
     (dev/tests) the body-supplied author is left as-is.
 
     THE FACET LIVES SOMEWHERE ELSE ON A STATIC EVENT, and stamping the wrong place is silent: a
-    `DatasetEvent` has no run, so its author rides the DATASET's `author` facet — which is exactly
+    `DatasetEvent` has no run, so its author rides the DATASET's `rask_author` facet — which is exactly
     where :attr:`DatasetEvent.author` reads it, and so where the feed's `author` column and the
     notifications plane's targeting take it from. Writing a run facet onto it would leave the
     verified subject unread and the create attributed to whatever the body claimed.
@@ -306,9 +306,9 @@ def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None
         return
     stamp = {"name": token.subject, "sub": token.subject}
     if isinstance(event, DatasetEvent):
-        event.dataset.facets["author"] = stamp
+        event.dataset.facets[AUTHOR_FACET] = stamp
     else:
-        event.run.facets["author"] = stamp
+        event.run.facets[AUTHOR_FACET] = stamp
 
 
 def is_external_source(namespace: str, name: str) -> bool:
@@ -517,7 +517,7 @@ async def enforce_output_authz(
     External sources are exempt and :func:`is_external_source` says why — they are unauthorizable by
     construction, and requiring a tuple for one refused every honest producer of a raw ingest.
 
-    Every governed dataset is asked about as the table its ``lance`` facet's uuid names, ``table:<uuid>`` ([[LH-524]]):
+    Every governed dataset is asked about as the table its ``rask_lance`` facet's uuid names, ``table:<uuid>`` ([[LH-524]]):
     the catalog stamps it on every event it signs, and the HTTP door stamps what the caller's name resolves to. A
     rename keeps the uuid, so a rename's register names its source by the uuid the destination holds, and its grants
     with it. A governed dataset carrying no uuid names no table the producer may see, so it is refused.

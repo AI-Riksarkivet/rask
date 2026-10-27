@@ -182,8 +182,8 @@ def test_gate_denies_without_permission(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 def _table(name: str) -> dict[str, Any]:
-    """A governed table as the catalog names it on an event: its name, and its uuid in the ``lance`` facet."""
-    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": _uuid(name)}}}
+    """A governed table as the catalog names it on an event: its name, and its uuid in the ``rask_lance`` facet."""
+    return {"namespace": "silver", "name": name, "facets": {"rask_lance": {"tableUuid": _uuid(name)}}}
 
 
 def _event(claimed_author: str = "anon", outputs: list[str] | None = None, inputs: list[str] | None = None) -> RunEvent:
@@ -191,7 +191,7 @@ def _event(claimed_author: str = "anon", outputs: list[str] | None = None, input
         {
             "eventType": "COMPLETE",
             "eventTime": "2026-06-24T00:00:00Z",
-            "run": {"runId": "r1", "facets": {"author": {"name": claimed_author}}},
+            "run": {"runId": "r1", "facets": {"rask_author": {"name": claimed_author}}},
             "job": {"namespace": "jobs", "name": "promote"},
             "inputs": [_table(n) for n in (inputs or [])],
             "outputs": [_table(n) for n in (outputs or [])],
@@ -398,13 +398,13 @@ def test_service_principal_is_attributed_and_fga_bounded() -> None:
             "run": {"runId": "11111111-1111-5111-8111-111111111111", "facets": {}},
             "job": {"namespace": "ray-jobs", "name": "train.churn"},
             "inputs": [],
-            "outputs": [{"namespace": "models", "name": "models$churn", "facets": {"lance": {"tableUuid": _uuid("models$churn")}}}],
+            "outputs": [{"namespace": "models", "name": "models$churn", "facets": {"rask_lance": {"tableUuid": _uuid("models$churn")}}}],
         }
     )
     # (1) attributed — the run's author is the service's verified subject
     fga_deps.enforce_author(event, principal)
     trainer = "kubernetes~system:serviceaccount:default:rask-sa-ray"
-    assert event.run.facets["author"] == {"name": trainer, "sub": trainer}
+    assert event.run.facets["rask_author"] == {"name": trainer, "sub": trainer}
 
     # (2) authorized — the FGA check runs as the SERVICE subject, and a denial is a 403
     checked: dict[str, Any] = {}

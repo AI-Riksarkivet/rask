@@ -33,7 +33,7 @@ _SOURCE = "acme-bronze$src"
 
 
 def _authored(author: str) -> dict[str, Any]:
-    return {"author": {"name": author, "sub": author}}
+    return {"rask_author": {"name": author, "sub": author}}
 
 
 def _complete(run_id: str, output: str, *, author: str = _ALICE, inputs: tuple[str, ...] = (_SOURCE,), outputs: Sequence[str] = ()) -> dict[str, Any]:

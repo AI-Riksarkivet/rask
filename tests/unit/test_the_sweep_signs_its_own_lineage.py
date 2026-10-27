@@ -36,6 +36,7 @@ from __future__ import annotations
 from typing import Any
 
 from maintenance.core.lineage_emit import build_maintenance_event
+from service_kit.openlineage import AUTHOR_FACET
 
 
 def _event(*, author: str) -> dict[str, Any]:
@@ -59,4 +60,4 @@ def test_an_unnamed_emitter_stays_anonymous_rather_than_inventing_a_subject() ->
     """
     facets = _event(author="")["run"]["facets"]
 
-    assert "author" not in facets, f"an unconfigured identity invented an author: {facets.get('author')}"
+    assert AUTHOR_FACET not in facets, f"an unconfigured identity invented an author: {facets.get(AUTHOR_FACET)}"

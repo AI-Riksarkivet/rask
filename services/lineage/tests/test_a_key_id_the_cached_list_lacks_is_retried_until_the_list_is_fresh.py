@@ -82,7 +82,7 @@ def _event(run_id: str) -> dict[str, Any]:
     return {
         "eventType": "COMPLETE",
         "eventTime": "2026-10-02T12:00:00+00:00",
-        "run": {"runId": run_id, "facets": {"author": {"name": SIGNER, "sub": SIGNER}}},
+        "run": {"runId": run_id, "facets": {"rask_author": {"name": SIGNER, "sub": SIGNER}}},
         "job": {"namespace": "maintenance", "name": "compaction.acme-silver"},
         "outputs": [{"namespace": "silver", "name": "acme-silver$events"}],
         "producer": "https://github.com/AI-Riksarkivet/rask",

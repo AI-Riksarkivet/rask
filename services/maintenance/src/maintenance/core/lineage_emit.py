@@ -42,7 +42,9 @@ from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavail
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.openlineage import (
+    AUTHOR_FACET,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
+    LANCE_FACET,
     RUN_EVENT_SCHEMA_URL,
     DatasetUuids,
     custom_facet,
@@ -170,12 +172,12 @@ def build_maintenance_event(
     unverified, and its rule is that anonymous beats misattributed. A fabricated subject would be worse
     than none — a later bus gate would authorize it.
 
-    ``uuids`` name the output's table and namespace in its ``lance`` facet (ADR 0173 §10): a rename keeps a table's
+    ``uuids`` name the output's table and namespace in its ``rask_lance`` facet (ADR 0173 §10): a rename keeps a table's
     uuid and changes its name, so the feed keys the pass on the table it reclaimed, not on whatever holds the name later.
     """
-    facets: dict[str, Any] = {"lance": custom_facet(_PRODUCER, operation=EXPIRE_VERSIONS)}
+    facets: dict[str, Any] = {LANCE_FACET: custom_facet(_PRODUCER, operation=EXPIRE_VERSIONS)}
     if author:
-        facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
+        facets[AUTHOR_FACET] = custom_facet(_PRODUCER, name=author, sub=author)
     return {
         "eventType": "COMPLETE",
         "eventTime": event_time,

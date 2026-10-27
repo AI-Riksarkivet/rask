@@ -415,7 +415,7 @@ def project_for_namespace(control_root: str, storage_options: StorageOptions, to
     and a namespace a user named freely follows no convention at all. The binding is the only sound
     answer, and guessing wrong would attribute a write to the wrong tenant.
 
-    Its consumer is lineage's ``lance.project`` facet, which is WATCH targeting's only key — see
+    Its consumer is lineage's ``rask_lance.project`` facet, which is WATCH targeting's only key — see
     ``catalog/core/lineage_emit.py``. ``None`` is a legitimate answer (an unbound namespace, a
     single-tenant estate) and costs the event its watchers, never its author.
     """

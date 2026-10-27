@@ -138,7 +138,11 @@ def _a_catalog_drop() -> dict[str, Any]:
     return {
         "eventTime": EVENT_TIME,
         "producer": "https://github.com/AI-Riksarkivet/rask",
-        "dataset": {"namespace": "acme", "name": "acme$events", "facets": {"lance": {"operation": "drop_table"}, "author": {"name": PERSON, "sub": PERSON}}},
+        "dataset": {
+            "namespace": "acme",
+            "name": "acme$events",
+            "facets": {"rask_lance": {"operation": "drop_table"}, "rask_author": {"name": PERSON, "sub": PERSON}},
+        },
     }
 
 

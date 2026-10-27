@@ -967,9 +967,9 @@ maintenance:
   # persists in /runs indefinitely (the deterministic id means exactly one node per dataset).
   # ON since 2026-08-16. The reason it was off — "opt-in, like the medallion toggles" — was a posture,
   # not a cost: the events are graph-only by construction, so turning it on adds provenance and cannot
-  # add notification noise. `maintenance/core/lineage_emit.py` stamps a `lance` facet and outputs, and
-  # NO `author` facet and no `lance.project`; per `.claude/skills/rask-notifications`, AUTHOR targeting
-  # reads `author.sub` and nothing else, and WATCH needs `lance.project` — so a sweep addresses nobody.
+  # add notification noise. `maintenance/core/lineage_emit.py` stamps a `rask_lance` facet and outputs, and
+  # NO `rask_author` facet and no `rask_lance.project`; per `.claude/skills/rask-notifications`, AUTHOR targeting
+  # reads `rask_author.sub` and nothing else, and WATCH needs `rask_lance.project` — so a sweep addresses nobody.
   # That is correct rather than a gap: a cron tick has no human to name.
   #
   # What it buys is the FAILURE surface named below. Left off, a persistently failing dataset was

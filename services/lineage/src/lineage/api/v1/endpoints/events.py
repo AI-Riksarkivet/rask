@@ -23,7 +23,7 @@ from lineage.schemas import EventRecord, Events, FeedProjection, ProjectedEvent
 from lineage.services.names import CatalogNames
 from service_kit.governed import fga
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.openlineage import LANCE_FACET
+from service_kit.openlineage import AUTHOR_FACET, LANCE_FACET
 
 
 router = APIRouter(tags=["query"])
@@ -92,7 +92,7 @@ def _governed_datasets(record: EventRecord) -> Governed:
 _TARGETING_FIELDS: Final = ("eventType", "eventTime", "producer")
 #: The facets that name WHO: the verified author, and rask's own facet carrying the tenant, the originator
 #: and the producer's run id. Every other facet describes the data or the job.
-_TARGETING_FACETS: Final = ("author", "lance")
+_TARGETING_FACETS: Final = (AUTHOR_FACET, LANCE_FACET)
 #: The facet an output keeps: rask's own, carrying the uuids the catalog keys the table by (ADR 0173 §10), which an
 #: inbox row names the table by beside its name.
 _OUTPUT_FACETS: Final = (LANCE_FACET,)
@@ -117,8 +117,8 @@ def targeting_view(event: dict[str, Any]) -> dict[str, Any]:
     """An event cut to what deciding WHOM TO TELL reads, and nothing describing data.
 
     The one consumer is the notifications reconciler, and what it reads is
-    `notifications/api/lineage_events.py`'s: the run id and its `author` and `lance` facets, the state and
-    time, and the output names with each output's `lance` facet, which names the table by its uuids; for a static
+    `notifications/api/lineage_events.py`'s: the run id and its `rask_author` and `rask_lance` facets, the state and
+    time, and the output names with each output's `rask_lance` facet, which names the table by its uuids; for a static
     change, the dataset's name, namespace and those two facets, plus `producer`. Inputs, the job, every other
     output facet (column lineage among them, which names other tables and their columns) and every other run facet
     stay in the feed and never cross this door.

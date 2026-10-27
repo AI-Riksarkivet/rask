@@ -228,7 +228,7 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
     # did nothing at all. The pre-flight assertion below is what catches that; keep both.
     run_id = str(uuid.uuid4())
     # THE AUTHOR MUST BE A SUBJECT AND THE OUTPUT MUST EXIST, or the relay can never drain what this
-    # leg stages — `enforce_bus_authz` resolves the event's `author.sub` and asks whether it may write
+    # leg stages — `enforce_bus_authz` resolves the event's `rask_author.sub` and asks whether it may write
     # the table the event names. A role LITERAL matches no subject and a table the catalog never
     # created carries no tuples, so an event with either is refused by every identity, for ever.
     #

@@ -4,7 +4,7 @@
 `emit_write_event` accepts it. `EmitFields` declares it. The whole channel is plumbed — and
 `emit_measured_write`, the trailer EVERY catalog write door goes through (insert, merge_insert, update,
 delete, add/alter/drop columns, restore, compact_table), never passed one. So the facet was reachable
-from no door, exactly the shape `test_originator_reaches_the_event.py` pins for `lance.originator`.
+from no door, exactly the shape `test_originator_reaches_the_event.py` pins for `rask_lance.originator`.
 
 The cost is already written down at the facet's own declaration
 (`lineage_emit.py`, `_DATASOURCE_FACET_SCHEMA`): "Without it, reconcile has no URI to read → every real

@@ -3137,7 +3137,7 @@ def table_history(table: table_claims.DoorTable, so: StorageOptions, limit: int 
 
     It deliberately does NOT answer WHO. Lance's transaction log has no notion of a user and should not —
     identity is our concern, not the format's. The actor per version lives in the lineage store's
-    ``author`` run facet (``GET /datasets/{name}/producers`` returns ``dataset_version`` + ``author`` +
+    ``rask_author`` run facet (``GET /datasets/{name}/producers`` returns ``dataset_version`` + ``author`` +
     ``operation``), so a caller that wants who/when/what joins this with that on the version number. Two
     sources, each authoritative for its own half; inventing a third would mean keeping a copy of one of
     them in sync.

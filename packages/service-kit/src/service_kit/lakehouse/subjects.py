@@ -1,6 +1,6 @@
 """Who may be addressed — the ONE rule deciding whether a value names a person.
 
-`lance.originator` is an inbox ADDRESS: `notifications`' fan-out appends it to the audience and
+`rask_lance.originator` is an inbox ADDRESS: `notifications`' fan-out appends it to the audience and
 delivers under `NotificationReason.ORIGINATOR`. So a value that is not one person's subject is not a
 weaker address — it is a row in an inbox actor named after a role, a team, or `*`, which no one reads.
 
@@ -21,7 +21,7 @@ from service_kit.governed.principal import Principal
 
 
 def is_person_subject(value: str | None) -> bool:
-    """Is this value an ADDRESS for one person — the only thing `lance.originator` may carry?
+    """Is this value an ADDRESS for one person — the only thing `rask_lance.originator` may carry?
 
     One definition, used by every run-event builder and by the door that accepts the claim, because the
     two disagreeing is the whole failure mode: a value the door lets through and the builder drops is a

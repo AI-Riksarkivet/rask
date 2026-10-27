@@ -73,7 +73,7 @@ def custom_facet(producer: str, **fields: object) -> dict[str, object]:
     """Wrap a custom run-facet payload with the required ``_producer`` + ``_schemaURL`` (``BaseFacet``).
 
     Standard facets (version, dataSource, outputStatistics, …) carry their own published schema URL;
-    our custom facets (``lance``, ``author``) have none, so they point at ``BaseFacet`` — which is what
+    our custom facets (:data:`LANCE_FACET`, :data:`AUTHOR_FACET`) have none, so they point at ``BaseFacet`` — which is what
     keeps them spec-legal for a strict consumer.
     """
     return {"_producer": producer, "_schemaURL": BASE_FACET_SCHEMA_URL, **fields}
@@ -108,8 +108,8 @@ def schema_facet(producer: str, fields: object) -> dict[str, object]:
 #: Standard ``LifecycleStateChangeDatasetFacet`` schema URL — what a DDL operation did to the dataset's
 #: EXISTENCE or SHAPE, in the spec's own vocabulary.
 #:
-#: WHY THE STANDARD FACET AND NOT ONLY ``lance.operation``. The estate stamps a rask-private operation
-#: name (``CREATE_TABLE``, ``DROP_COLUMNS``, …) inside the custom ``lance`` run facet, and no consumer
+#: WHY THE STANDARD FACET AND NOT ONLY ``rask_lance.operation``. The estate stamps a rask-private operation
+#: name (``CREATE_TABLE``, ``DROP_COLUMNS``, …) inside the custom ``rask_lance`` run facet, and no consumer
 #: that is not rask can read it — so to any OpenLineage-native reader a create, a drop and an alter are
 #: the same event with a different opaque string. This is the field they DO read. Both are emitted: the
 #: rask name is more specific than the enum admits, and collapsing to the enum alone would lose it.
@@ -269,10 +269,14 @@ def catalog_facet(producer: str, *, impl: str, name: str, warehouse_uri: str = "
     return facet
 
 
-#: rask's own dataset facet: the ref an input was read on, and the uuids the catalog minted for the dataset's table and
-#: its namespace. Custom, so it points at ``BaseFacet`` (:func:`custom_facet`).
-LANCE_FACET: Final = "lance"
-#: The ``lance`` facet's key for the incarnation of the ref it names: the last uuid of pylance's ``branch_identifier`` chain,
+#: rask's own dataset and run facet: the ref an input was read on or a run wrote, and the uuids the catalog minted for the
+#: dataset's table and its namespace. Custom, so its key is ``{prefix}_{name}`` (OpenLineage spec, "Custom Facet Naming")
+#: and it points at ``BaseFacet`` (:func:`custom_facet`).
+LANCE_FACET: Final = "rask_lance"
+#: rask's run facet (a DatasetEvent's dataset facet) naming the verified subject a run was authored by, ``{"name", "sub"}``.
+#: Custom, named and schema'd as :data:`LANCE_FACET` is.
+AUTHOR_FACET: Final = "rask_author"
+#: The :data:`LANCE_FACET` key for the incarnation of the ref it names: the last uuid of pylance's ``branch_identifier`` chain,
 #: on a run's facet for the ref it wrote and on an input's for the ref it was read on ([[LH-413]]).
 BRANCH_IDENTIFIER: Final = "branchIdentifier"
 _TABLE_UUID: Final = "tableUuid"
@@ -293,7 +297,7 @@ class DatasetUuids(BaseModel):
 
 
 def dataset_uuids(dataset: object) -> DatasetUuids:
-    """The uuids an OpenLineage dataset's ``lance`` facet carries, reading only the plain ``facets`` slot.
+    """The uuids an OpenLineage dataset's ``rask_lance`` facet carries, reading only the plain ``facets`` slot.
 
     Tolerant of a payload that is not the shape it should be, since every reader holds an event it did not build: a value
     that is not a non-empty string is no uuid.
@@ -310,10 +314,10 @@ def dataset_uuids(dataset: object) -> DatasetUuids:
 
 
 def with_dataset_uuids(dataset: dict[str, Any], uuids: DatasetUuids, *, producer: str) -> dict[str, Any]:
-    """``dataset`` with its ``lance`` facet naming exactly ``uuids``: a uuid set where it has one, and removed where it has none.
+    """``dataset`` with its ``rask_lance`` facet naming exactly ``uuids``: a uuid set where it has one, and removed where it has none.
 
     Removed rather than kept, so a stamp is the whole answer: a dataset carrying a uuid the stamping service did not
-    resolve would keep a claim nobody checked. The ``lance`` facet's other fields (an input's ``ref``) stay. The facet is
+    resolve would keep a claim nobody checked. The ``rask_lance`` facet's other fields (an input's ``ref``) stay. The facet is
     left out when it would hold nothing but its ``_producer`` and ``_schemaURL``. ``dataset`` itself is not changed.
     """
     facets = dict(dataset.get("facets") or {})
@@ -406,7 +410,7 @@ def event_identity(event: dict[str, Any]) -> str:
     dataset = dataset if isinstance(dataset, dict) else {}
     facets = dataset.get("facets")
     facets = facets if isinstance(facets, dict) else {}
-    lance = facets.get("lance")
+    lance = facets.get(LANCE_FACET)
     lance = lance if isinstance(lance, dict) else {}
     return static_event_id(
         producer=str(event.get("producer") or ""),

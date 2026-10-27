@@ -61,7 +61,7 @@ def _written(event: dict) -> dict:
 def _facets(event: dict) -> dict:
     """Every facet describing the written dataset, run-slot and dataset-slot merged.
 
-    On a DatasetEvent rask's `author` and `lance` facets ride the dataset, because there is no run to
+    On a DatasetEvent rask's `rask_author` and `rask_lance` facets ride the dataset, because there is no run to
     hang them on; on a RunEvent they ride the run. Merged here so one assertion covers both.
     """
     merged = dict(_written(event).get("facets") or {})
@@ -73,7 +73,7 @@ def test_build_write_event_stamps_the_project_so_watchers_can_be_found() -> None
     """THE WATCH DEFECT. `lance_fields` carried `operation` + `version` and nothing else, so every
     catalog-authored event reached ZERO watchers estate-wide.
 
-    `notifications/api/lineage_events.py::project_id` reads `run.facets.lance.project`, and
+    `notifications/api/lineage_events.py::project_id` reads `run.facets.rask_lance.project`, and
     `fanout.py:88` skips the watcher loop ENTIRELY when it is `None`. So a table created, dropped,
     renamed or reindexed in a project nobody could hear about — not because the watch was wrong, but
     because the producer never named the tenant. `ingest/lineage.py:213-215` had it right all along.
@@ -94,7 +94,7 @@ def test_build_write_event_stamps_the_project_so_watchers_can_be_found() -> None
         job_namespace="lance-catalog",
         project="acme",
     )
-    assert _facets(event)["lance"]["project"] == "acme"
+    assert _facets(event)["rask_lance"]["project"] == "acme"
     # Validated into the CONSUMER's model (notifications' own `LineageRunEvent`), not lineage's
     # `RunEvent`: the assertion worth making is that the plane which reads this wire JSON finds the
     # tenant, and only its parser proves that.
@@ -119,7 +119,7 @@ def test_build_write_event_omits_an_unsafe_project_rather_than_qualifying_with_i
         job_namespace="lance-catalog",
         project="../etc/passwd",
     )
-    assert "project" not in _facets(event)["lance"]
+    assert "project" not in _facets(event)["rask_lance"]
     assert project_id(LineageRunEvent.model_validate(event).run) is None
 
 
@@ -177,7 +177,7 @@ def test_emitted_event_round_trips_into_lineage_model() -> None:
     assert parsed.operation == "create_table"
     assert parsed.author == "alice"
     assert parsed.outputs[0].name == "alpha$bronze$images"
-    assert set(event["run"]["facets"]) == {"author", "lance", "processing_engine"}
+    assert set(event["run"]["facets"]) == {"rask_author", "rask_lance", "processing_engine"}
 
 
 class _Resp:
@@ -212,7 +212,7 @@ def test_http_emitter_posts_the_event() -> None:
     assert output["namespace"] == "a"
     assert output["name"] == "a$b"
     assert output["facets"]["version"]["datasetVersion"] == "3"  # #20
-    assert _facets(client.posted)["author"]["sub"] == "alice"
+    assert _facets(client.posted)["rask_author"]["sub"] == "alice"
 
 
 def test_http_emitter_forwards_authorization() -> None:
@@ -325,8 +325,8 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch() -> No
         inputs=[InputRef("db", "db$silver", 4), InputRef("db", "db$review", 2, "draft")],
     )
     on_main, on_branch = event["inputs"]
-    assert (on_main["facets"]["version"]["datasetVersion"], "lance" in on_main["facets"]) == ("4", False)
-    assert (on_branch["facets"]["version"]["datasetVersion"], on_branch["facets"]["lance"]["ref"]) == ("2", "draft")
+    assert (on_main["facets"]["version"]["datasetVersion"], "rask_lance" in on_main["facets"]) == ("4", False)
+    assert (on_branch["facets"]["version"]["datasetVersion"], on_branch["facets"]["rask_lance"]["ref"]) == ("2", "draft")
     from datetime import UTC, datetime
 
     from lineage.services.provenance import edges_of
@@ -401,8 +401,8 @@ def test_build_write_event_drop_is_versionless_and_named_drop_table() -> None:
         job_namespace="lance-catalog",
     )
     assert "version" not in _written(event).get("facets", {})  # no version facet for a drop
-    assert _facets(event)["lance"]["operation"] == "drop_table"
-    assert "version" not in _facets(event)["lance"]
+    assert _facets(event)["rask_lance"]["operation"] == "drop_table"
+    assert "version" not in _facets(event)["rask_lance"]
     assert "job" not in event, "a drop still mints a Job node for an operation nobody performed"
 
 
@@ -471,7 +471,7 @@ def test_dapr_emitter_publishes_event_to_topic() -> None:
     assert pub["pubsub"] == "lineage-pubsub" and pub["topic"] == "lineage.events.v1"
     assert pub["content_type"] == "application/json"
     assert _written(pub["event"])["name"] == "a$b"  # the spec-correct OpenLineage event is the data
-    assert _facets(pub["event"])["author"]["sub"] == "alice"  # the verified catalog author
+    assert _facets(pub["event"])["rask_author"]["sub"] == "alice"  # the verified catalog author
 
 
 def test_dapr_emitter_swallows_publish_failure() -> None:
@@ -501,8 +501,8 @@ def test_build_write_event_insert_omits_version_facet() -> None:
         job_namespace="lance-catalog",
     )
     assert event["job"]["name"] == "insert.a$b"
-    assert _facets(event)["lance"]["operation"] == "insert"
-    assert "version" not in _facets(event)["lance"]  # no version key on a version-less insert
+    assert _facets(event)["rask_lance"]["operation"] == "insert"
+    assert "version" not in _facets(event)["rask_lance"]  # no version key on a version-less insert
     # The SUBJECT, stated directly. This was `"facets" not in …` while the version facet was the only
     # dataset facet a version-less insert could carry; `datasetType` is now always present ([[LIN-002]]),
     # so the blanket check would pass or fail for reasons unrelated to versions.
@@ -520,10 +520,10 @@ def test_build_write_event_merge_carries_version() -> None:
         event_time="t",
         job_namespace="lance-catalog",
     )
-    assert _facets(event)["lance"]["operation"] == "merge_insert"
-    assert _facets(event)["lance"]["version"] == 4
+    assert _facets(event)["rask_lance"]["operation"] == "merge_insert"
+    assert _facets(event)["rask_lance"]["version"] == 4
     assert _written(event)["facets"]["version"]["datasetVersion"] == "4"
-    assert "author" not in _facets(event)
+    assert "rask_author" not in _facets(event)
 
 
 def test_http_emitter_emit_write_posts_operation_and_version_under_the_commits_run_id() -> None:
@@ -552,7 +552,7 @@ def test_http_emitter_emit_write_posts_operation_and_version_under_the_commits_r
 async def test_a_catalog_write_RESOLVES_its_tenant_so_watchers_are_reachable() -> None:
     """Trap 3, closed at the one place that can close it.
 
-    `lance.project` is what the notifications plane's WATCH fan-out keys on: `fanout.py` skips the
+    `rask_lance.project` is what the notifications plane's WATCH fan-out keys on: `fanout.py` skips the
     watcher loop ENTIRELY when it is None. The catalog had the whole mechanism — a `project` kwarg on
     every emit, an `is_safe_project` guard, and a registry-backed `project_for` resolver — and not one
     caller passed it, so no catalog write reached a watcher anywhere in the estate.
@@ -571,7 +571,7 @@ async def test_a_catalog_write_RESOLVES_its_tenant_so_watchers_are_reachable() -
 
     await emitter.emit_create(table_id="acme-bronze$events", namespace="acme-bronze", author="alice", version=1)
 
-    lance = _facets(client.posted)["lance"]
+    lance = _facets(client.posted)["rask_lance"]
     assert lance["project"] == "acme", "without this the watcher loop is skipped and every watcher is silently lost"
 
 
@@ -588,7 +588,7 @@ async def test_an_EXPLICIT_project_is_not_overridden_by_resolution() -> None:
 
     await emitter.emit_create(table_id="acme-bronze$events", namespace="acme-bronze", author="alice", version=1, project="acme")
 
-    assert _facets(client.posted)["lance"]["project"] == "acme"
+    assert _facets(client.posted)["rask_lance"]["project"] == "acme"
 
 
 @pytest.mark.asyncio
@@ -598,7 +598,7 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
     Some catalog writes are made BY a service ON BEHALF OF a person: the annotator's publish saga is
     the live case, driven from an actor reminder under a dedicated `publisher@rask.internal` service
     account. `enforce_author` correctly overwrites `author` with that service's verified principal, so the
-    human CANNOT be the author and must not try to be — `lance.originator` is the field for exactly
+    human CANNOT be the author and must not try to be — `rask_lance.originator` is the field for exactly
     this, and the catalog had no way to carry it.
 
     It is a TARGETING hint and authorizes nothing: the notifications plane re-derives every
@@ -612,9 +612,9 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
         table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, originator="dex~08a8684b-db88"
     )
 
-    lance = _facets(client.posted)["lance"]
+    lance = _facets(client.posted)["rask_lance"]
     assert lance["originator"] == "dex~08a8684b-db88"
-    assert _facets(client.posted)["author"]["sub"] == "service-publisher", "the service remains the author; originator is additive"
+    assert _facets(client.posted)["rask_author"]["sub"] == "service-publisher", "the service remains the author; originator is additive"
 
 
 @pytest.mark.asyncio
@@ -627,4 +627,4 @@ async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
 
     await emitter.emit_create(table_id="db$t", namespace="db", author="svc", version=1, originator=junk)
 
-    assert "originator" not in _facets(client.posted)["lance"]
+    assert "originator" not in _facets(client.posted)["rask_lance"]

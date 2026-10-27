@@ -49,15 +49,15 @@ def _object(name: str) -> str:
 
 
 def _output(name: str) -> dict[str, Any]:
-    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet."""
-    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": _uuid(name)}}}
+    """An output as the catalog names it: its name, and its table's uuid in the ``rask_lance`` facet."""
+    return {"namespace": "silver", "name": name, "facets": {"rask_lance": {"tableUuid": _uuid(name)}}}
 
 
 def _event(*, author: str = "alice", outputs: list[str] | None = None, project: str | None = None, at: datetime | None = None) -> dict[str, Any]:
-    facets: dict[str, Any] = {"author": {"name": author, "sub": author}}
+    facets: dict[str, Any] = {"rask_author": {"name": author, "sub": author}}
     if project is not None:
-        # The same `lance` facet `runId` rides — the producer stamps the tenant there.
-        facets["lance"] = {"project": project}
+        # The same `rask_lance` facet `runId` rides — the producer stamps the tenant there.
+        facets["rask_lance"] = {"project": project}
     return {
         "eventType": "FAIL",
         "eventTime": (at or datetime(2026, 8, 9, 12, 0, tzinfo=UTC)).isoformat(),
@@ -177,7 +177,7 @@ async def test_an_author_who_also_watches_is_told_once() -> None:
 
 @pytest.mark.asyncio
 async def test_a_run_with_no_project_reaches_its_author_and_no_watchers() -> None:
-    """A producer that stamps no `lance.project` facet is not an error — it is v1's case, still.
+    """A producer that stamps no `rask_lance.project` facet is not an error — it is v1's case, still.
 
     Silence for the watchers is the safe direction: the alternative is guessing a tenant and
     notifying the wrong one.
@@ -302,7 +302,7 @@ def _cascade_event(*, originator: str | None, author: str = "data_eng") -> dict[
 
     `author` is a ROLE LITERAL from chart values (`data_eng`/`analyst`/`htr`/`ray`), which is the whole
     problem: it is a truthful statement about who ran the stage and a useless inbox address. The human
-    who started the cascade rides `lance.originator`.
+    who started the cascade rides `rask_lance.originator`.
     """
     lance: dict[str, Any] = {"operation": "embed_features", "project": "acme"}
     if originator is not None:
@@ -310,7 +310,7 @@ def _cascade_event(*, originator: str | None, author: str = "data_eng") -> dict[
     return {
         "eventType": "FAIL",
         "eventTime": "2026-08-16T12:00:00+00:00",
-        "run": {"runId": "run-cascade-1", "facets": {"author": {"name": author, "sub": author}, "lance": lance}},
+        "run": {"runId": "run-cascade-1", "facets": {"rask_author": {"name": author, "sub": author}, "rask_lance": lance}},
         "outputs": [_output("acme-silver$features")],
     }
 

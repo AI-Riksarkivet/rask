@@ -43,7 +43,7 @@ def _event(*, inputs: list[dict[str, Any]] | None = None, **run_facets: Any) -> 
         {
             "eventType": "COMPLETE",
             "eventTime": "2026-09-09T00:00:00+00:00",
-            "run": {"runId": "11111111-1111-1111-1111-111111111111", "facets": {**run_facets, "lance": {"operation": "insert"}}},
+            "run": {"runId": "11111111-1111-1111-1111-111111111111", "facets": {**run_facets, "rask_lance": {"operation": "insert"}}},
             "job": {"namespace": "bus", "name": "probe"},
             "inputs": inputs or [],
             "outputs": [_dataset("bronze$pages", _PAGES)],
@@ -143,7 +143,7 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
     app.state.provenance = repo
     app.state.decider = OpenFgaDecider(cast("OpenFgaClient", object()))
 
-    payload = {"data": _event(author={"name": "mallory", "sub": "dex~mallory"}).model_dump(by_alias=True)}
+    payload = {"data": _event(rask_author={"name": "mallory", "sub": "dex~mallory"}).model_dump(by_alias=True)}
     response = TestClient(app).post("/lineage-events", json=payload, headers={"dapr-api-token": "s3cret"})
 
     assert response.status_code == 200, "a refusal must be an ACK, not an error the sidecar retries"
@@ -201,7 +201,7 @@ def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(monkeypatch: pytest.
     from lineage.api import fga_deps
 
     _deny_all(monkeypatch)
-    event = _event(author={"name": "someone", "sub": "dex~someone"})
+    event = _event(rask_author={"name": "someone", "sub": "dex~someone"})
     stored = event.model_dump(by_alias=True)
     asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings()), event.model_dump(by_alias=True)))
 
@@ -216,8 +216,8 @@ def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(monkeypatch: pytest
     from lineage.api import fga_deps
 
     _deny_all(monkeypatch)
-    event = _event(author={"name": "mallory", "sub": "dex~mallory"})
-    stored = _event(author={"name": "the-real-author", "sub": "dex~the-real-author"}).model_dump(by_alias=True)
+    event = _event(rask_author={"name": "mallory", "sub": "dex~mallory"})
+    stored = _event(rask_author={"name": "the-real-author", "sub": "dex~the-real-author"}).model_dump(by_alias=True)
     with pytest.raises(PermissionDeniedError):
         asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings()), event.model_dump(by_alias=True)))
 
@@ -271,7 +271,7 @@ def test_a_write_naming_a_table_by_a_name_another_rename_took_is_authorized_on_t
     from lineage.api import fga_deps
 
     grants = _Grants({("can_write_data", f"table:{_PAGES}"), ("can_get_metadata", f"table:{_SOURCE}")})
-    event = _event(inputs=[_dataset("bronze$renamed_since", _SOURCE)], author={"name": "pipeline", "sub": "dex~pipeline"})
+    event = _event(inputs=[_dataset("bronze$renamed_since", _SOURCE)], rask_author={"name": "pipeline", "sub": "dex~pipeline"})
     request = type("R", (), {"app": type("A", (), {"state": type("S", (), {"decider": grants, "provenance": _Feed(None)})()})()})()
 
     asyncio.run(fga_deps.enforce_bus_authz(event, cast(Any, request), cast(Any, _Settings()), event.model_dump(by_alias=True)))

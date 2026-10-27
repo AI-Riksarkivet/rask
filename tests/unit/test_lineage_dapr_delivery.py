@@ -42,7 +42,7 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 _VALID = {
     "eventType": "COMPLETE",
     "eventTime": "2026-06-20T09:00:00Z",
-    "run": {"runId": "r1", "facets": {"author": {"name": "alice"}}},
+    "run": {"runId": "r1", "facets": {"rask_author": {"name": "alice"}}},
     "job": {"namespace": "ray-jobs", "name": "ingest"},
     "inputs": [{"namespace": "source", "name": "raw"}],
     "outputs": [

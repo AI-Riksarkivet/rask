@@ -57,8 +57,8 @@ def _uuid(name: str) -> str:
 
 
 def _output(name: str) -> dict[str, Any]:
-    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet."""
-    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": _uuid(name)}}}
+    """An output as the catalog names it: its name, and its table's uuid in the ``rask_lance`` facet."""
+    return {"namespace": "silver", "name": name, "facets": {"rask_lance": {"tableUuid": _uuid(name)}}}
 
 
 #: The object `silver$pages`'s grants are held by ([[LH-524]]).
@@ -72,7 +72,7 @@ def _event(
     author: str | None = "alice",
     outputs: list[str] | None = None,
 ) -> dict[str, Any]:
-    facets: dict[str, Any] = {} if author is None else {"author": {"name": author, "sub": author}}
+    facets: dict[str, Any] = {} if author is None else {"rask_author": {"name": author, "sub": author}}
     return {
         "eventType": event_type,
         "eventTime": "2026-08-09T12:00:00+00:00",
@@ -234,7 +234,7 @@ async def test_the_lane_is_recorded_because_the_two_ingresses_fail_differently(l
             {
                 "eventType": "FAIL",
                 "eventTime": "2026-08-09T12:00:00+00:00",
-                "run": {"runId": "r", "facets": {"author": {"sub": "alice"}}},
+                "run": {"runId": "r", "facets": {"rask_author": {"sub": "alice"}}},
                 "outputs": "not-a-list",
             },
             id="payload9",

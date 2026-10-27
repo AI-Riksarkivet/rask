@@ -58,8 +58,8 @@ def _uuid(name: str) -> str:
 
 
 def _dataset(namespace: str, name: str) -> dict[str, Any]:
-    """A governed table as the catalog names it on an event: its name, and its uuid in the ``lance`` facet."""
-    return {"namespace": namespace, "name": name, "facets": {"lance": {"tableUuid": _uuid(name)}}}
+    """A governed table as the catalog names it on an event: its name, and its uuid in the ``rask_lance`` facet."""
+    return {"namespace": namespace, "name": name, "facets": {"rask_lance": {"tableUuid": _uuid(name)}}}
 
 
 def _event_json(
@@ -72,7 +72,7 @@ def _event_json(
         {
             "eventType": "COMPLETE",
             "eventTime": "2026-07-20T00:00:00Z",
-            "run": {"runId": run_id, "facets": {"author": {"name": author, "sub": author}} if author else {}},
+            "run": {"runId": run_id, "facets": {"rask_author": {"name": author, "sub": author}} if author else {}},
             "job": {"namespace": "ray-jobs", "name": "ingest"},
             "inputs": [_dataset(ns, n) for ns, n in inputs],
             "outputs": [_dataset(ns, n) for ns, n in outputs],

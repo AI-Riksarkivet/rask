@@ -44,7 +44,7 @@ def _event() -> dict[str, Any]:
     return {
         "eventType": "COMPLETE",
         "eventTime": "2026-10-02T12:00:00+00:00",
-        "run": {"runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d", "facets": {"author": {"name": SIGNER, "sub": SIGNER}}},
+        "run": {"runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5d", "facets": {"rask_author": {"name": SIGNER, "sub": SIGNER}}},
         "job": {"namespace": "maintenance", "name": "compaction.acme-silver"},
         "outputs": [{"namespace": "silver", "name": "acme-silver$events"}],
         "producer": "https://github.com/AI-Riksarkivet/rask",

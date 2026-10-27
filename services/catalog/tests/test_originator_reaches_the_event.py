@@ -2,7 +2,7 @@
 
 `enforce_author` OVERWRITES `author` with the authenticating service's principal key — "never trust the request
 body" doing its job — so a catalog write made by a service for a human can never author as the human.
-`lance.originator` is the field invented for exactly that, and the emitter carried it end to end:
+`rask_lance.originator` is the field invented for exactly that, and the emitter carried it end to end:
 protocol, no-op, HTTP emitter and the run-event builder all take `originator`.
 
 Nothing could set it. `emit_write_event` is the trailer every catalog write goes through, and it had
@@ -135,9 +135,9 @@ def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
     [event] = emitter.events
     facets = event["run"]["facets"]
     assert event["eventTime"] == "2026-10-25T12:00:00+00:00"
-    assert facets["lance"]["project"] == "acme"
-    assert facets["lance"]["originator"] == "dex~bob"
-    assert (facets["lance"]["runId"], facets["lance"]["job"]) == ("pipeline-7", "nightly")
+    assert facets["rask_lance"]["project"] == "acme"
+    assert facets["rask_lance"]["originator"] == "dex~bob"
+    assert (facets["rask_lance"]["runId"], facets["rask_lance"]["job"]) == ("pipeline-7", "nightly")
     assert event["inputs"][0]["name"] == "acme$src"
     assert event["outputs"][0]["facets"]["dataSource"]["uri"] == "s3://bkt/t.lance"
 
@@ -145,8 +145,8 @@ def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
 def test_the_originator_binding_still_overrides_only_an_absent_claim() -> None:
     inner = _RecordingEmitter()
     asyncio.run(_create(OriginatorBoundEmitter(inner, "dex~carol"), **_optional()))
-    assert inner.events[-1]["run"]["facets"]["lance"]["originator"] == "dex~bob", "an explicit originator must win"
+    assert inner.events[-1]["run"]["facets"]["rask_lance"]["originator"] == "dex~bob", "an explicit originator must win"
     absent = _optional()
     absent["originator"] = None
     asyncio.run(_create(OriginatorBoundEmitter(inner, "dex~carol"), **absent))
-    assert inner.events[-1]["run"]["facets"]["lance"]["originator"] == "dex~carol", "the bound claim must fill an absent one"
+    assert inner.events[-1]["run"]["facets"]["rask_lance"]["originator"] == "dex~carol", "the bound claim must fill an absent one"

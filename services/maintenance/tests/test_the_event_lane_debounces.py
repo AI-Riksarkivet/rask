@@ -61,7 +61,7 @@ async def test_a_debounced_insert_is_never_evaluated_and_a_compaction_always_is(
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b", "MAINTENANCE_EVENT_MIN_VERSIONS": 10})
     event = {
         "data": {
-            "run": {"facets": {"lance": {"operation": operation}}},
+            "run": {"facets": {"rask_lance": {"operation": operation}}},
             "outputs": [
                 with_dataset_uuids(
                     {"name": "db$t", "facets": {"version": {"datasetVersion": "101"}, "dataSource": {"uri": "s3://b/t.lance"}}},

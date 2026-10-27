@@ -1,7 +1,7 @@
 """`table_published` must name the tenant, because it is the only party that can.
 
 The medallion's `/publication-arrival` head needs a project to route the cascade and to stamp
-`lance.project`, which is WATCH targeting's only key. It had no project on the event, so it derived
+`rask_lance.project`, which is WATCH targeting's only key. It had no project on the event, so it derived
 one by taking the first segment of the table id — and for `acme-bronze$pages` that is `acme-bronze`,
 the qualified NAMESPACE, not the project.
 

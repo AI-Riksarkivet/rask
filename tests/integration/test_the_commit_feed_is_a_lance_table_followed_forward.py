@@ -73,7 +73,7 @@ def _follow(client: httpx.Client, headers: Mapping[str, str] | None = None, **fi
 def _operation(event: dict[str, Any]) -> str:
     """The catalog operation an announcement names: on its run, or on the dataset of a DDL change, which has no run."""
     facets = event["run"]["facets"] if "run" in event else event["dataset"]["facets"]
-    return facets["lance"]["operation"]
+    return facets["rask_lance"]["operation"]
 
 
 def _compact_the_feed(catalog_url: str) -> None:

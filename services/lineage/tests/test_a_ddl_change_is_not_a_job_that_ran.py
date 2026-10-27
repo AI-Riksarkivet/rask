@@ -11,7 +11,7 @@ authorizes a bus-delivered event as the subject the producer STAMPED, read by `a
 — which takes `sub` and refuses `name`/`ownership` because those are producer-supplied attribution and
 would let a producer authorize itself under someone else's display name. Moving DDL off the run must not
 move its author onto a facet the authorizer is required to distrust, so the verified sub rides rask's own
-reserved `author` facet on the DATASET, and `ownership` may ride beside it for external consumers only.
+reserved `rask_author` facet on the DATASET, and `ownership` may ride beside it for external consumers only.
 """
 
 from __future__ import annotations
@@ -32,9 +32,9 @@ def _payload(**overrides: object) -> dict[str, object]:
             "namespace": "lance-catalog",
             "name": "bronze$events",
             "facets": {
-                "author": {"sub": "auth0|alice", "name": "Alice"},
+                "rask_author": {"sub": "auth0|alice", "name": "Alice"},
                 "lifecycleStateChange": {"lifecycleStateChange": "CREATE"},
-                "lance": {"operation": "create_table", "version": 1},
+                "rask_lance": {"operation": "create_table", "version": 1},
             },
         },
     }

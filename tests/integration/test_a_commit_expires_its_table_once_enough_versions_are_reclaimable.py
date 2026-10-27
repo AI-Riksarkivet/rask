@@ -114,7 +114,7 @@ def _written(uri: str, version: int) -> dict[str, object]:
         "id": "ce-1",
         "specversion": "1.0",
         "type": "com.dapr.event.sent",
-        "data": {"run": {"facets": {"lance": {"operation": "insert"}}}, "outputs": [output]},
+        "data": {"run": {"facets": {"rask_lance": {"operation": "insert"}}}, "outputs": [output]},
     }
 
 

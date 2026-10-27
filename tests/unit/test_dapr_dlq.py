@@ -75,9 +75,9 @@ def test_the_verified_author_is_read_off_a_payload_even_when_it_will_not_parse()
     """
     from lineage.models import author_sub_from_payload
 
-    assert author_sub_from_payload({"run": {"facets": {"author": {"name": "Alice A", "sub": "alice"}}}}) == "alice"
+    assert author_sub_from_payload({"run": {"facets": {"rask_author": {"name": "Alice A", "sub": "alice"}}}}) == "alice"
     # A name without a verified sub names nobody: the loss is anonymous rather than misattributed.
-    assert author_sub_from_payload({"run": {"facets": {"author": {"name": "Alice A"}}}}) is None
+    assert author_sub_from_payload({"run": {"facets": {"rask_author": {"name": "Alice A"}}}}) is None
     assert author_sub_from_payload({"job": {"facets": {"ownership": {"owners": [{"name": "claimed"}]}}}}) is None
     # Shapes a discard path really meets: truncated, wrong-typed, absent.
     for junk in ({}, {"run": {}}, {"run": {"facets": None}}, {"run": {"facets": {"author": "alice"}}}, "not-a-dict", None):

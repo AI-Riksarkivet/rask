@@ -33,7 +33,7 @@ def _event(
     author: str | None = "alice",
     outputs: list[str] | None = None,
 ) -> dict[str, Any]:
-    facets: dict[str, Any] = {} if author is None else {"author": {"name": author, "sub": author}}
+    facets: dict[str, Any] = {} if author is None else {"rask_author": {"name": author, "sub": author}}
     return {
         "eventType": event_type,
         "eventTime": "2026-08-09T12:00:00+00:00",
@@ -43,8 +43,8 @@ def _event(
 
 
 def _output(name: str) -> dict[str, Any]:
-    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet (ADR 0173 §10)."""
-    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": str(uuid.uuid5(uuid.NAMESPACE_URL, name))}}}
+    """An output as the catalog names it: its name, and its table's uuid in the ``rask_lance`` facet (ADR 0173 §10)."""
+    return {"namespace": "silver", "name": name, "facets": {"rask_lance": {"tableUuid": str(uuid.uuid5(uuid.NAMESPACE_URL, name))}}}
 
 
 class _Inbox:

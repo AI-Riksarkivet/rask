@@ -31,7 +31,7 @@ canonicalization, so an editable one is a downgrade surface, and `onBehalfOf` is
 honest service acting for a person from one stamping the wrong author.
 
 THE SIGNER MUST BE THE AUTHOR, or declare a delegation. A signature made with the bronze-to-silver key over a
-body stamped `author.sub = "service-trainer"` is valid, and the event still records provenance as somebody
+body stamped `rask_author.sub = "service-trainer"` is valid, and the event still records provenance as somebody
 else; covering the author in the bytes does not stop that. So the identity that signed has to equal the author
 it stamped, or it has to declare `onBehalfOf` equal to that author and be one of the delegators the verifier is
 configured with. An event with no author binds to nothing and does not verify.
@@ -67,6 +67,10 @@ if TYPE_CHECKING:
 
 #: The facet's key. IN the event rather than beside it, so a transport change never moves the signature.
 SIGNATURE_FACET = "rask_signature"
+
+#: The facet naming the subject a producer stamped on its own event, read by :func:`author_of`. The same name as
+#: ``service_kit.openlineage.AUTHOR_FACET``, which every emitter writes: the two packages never import each other.
+AUTHOR_FACET = "rask_author"
 
 #: The schema the facet's `_schemaURL` names. The URL is inside the signed bytes, so it cannot be corrected
 #: after an event carries it: the git tag `facets-1.0.0` must exist before the first signed event is emitted.
@@ -348,9 +352,9 @@ def _located_bag(event: Mapping[str, Any]) -> tuple[str, dict[str, Any]] | None:
 
 
 def author_of(event: Mapping[str, Any]) -> str | None:
-    """The subject the producer stamped on its own event, from the `author` facet's `sub`."""
+    """The subject the producer stamped on its own event, from the :data:`AUTHOR_FACET`'s `sub`."""
     located = _located_bag(event)
-    facet = located[1].get("author") if located else None
+    facet = located[1].get(AUTHOR_FACET) if located else None
     sub = facet.get("sub") if isinstance(facet, dict) else None
     return sub if isinstance(sub, str) and sub else None
 
@@ -467,12 +471,12 @@ def attach_signature(payload: Mapping[str, Any], *, key: SigningKey, identity: s
     """Return a copy of `payload` carrying its own signature, on `run.facets` or, for a DatasetEvent, `dataset.facets`.
 
     `identity` NAMES THE SIGNER so a verifier knows whose published keys to read, and it is deliberately not read off
-    the author facet, which is the field under attack: a verifier that keyed on `author.sub` would ask whether the key
+    the rask_author facet, which is the field under attack: a verifier that keyed on `rask_author.sub` would ask whether the key
     of whoever the event claims to be verifies it, which any producer holding its own key can satisfy for a stamp it
     has no right to.
 
     `on_behalf_of` DECLARES A DELEGATION, for the producer that authenticated a PERSON and emits for them, the
-    catalog's case: `author.sub` is the signed-in subject and the service holds no credential of theirs. Stating it is
+    catalog's case: `rask_author.sub` is the signed-in subject and the service holds no credential of theirs. Stating it is
     what separates that from a producer stamping the wrong author. Omitted, the event is self-signed and the signer
     has to be the author, which is every service-authored run.
 

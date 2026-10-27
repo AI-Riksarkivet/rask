@@ -149,7 +149,7 @@ def main() -> int:
         "eventTime": "2026-06-24T00:00:00+00:00",
         "run": {
             "runId": f"promote-{os.getpid()}",
-            "facets": {"author": {"name": alice_sub, "sub": alice_sub}},
+            "facets": {"rask_author": {"name": alice_sub, "sub": alice_sub}},
         },
         "job": {"namespace": "pipeline", "name": "promote_bronze_to_silver"},
         "inputs": [{"namespace": ns, "name": bronze}],

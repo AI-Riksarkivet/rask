@@ -1,4 +1,4 @@
-"""CONTRACT (LH-093, condition 4): every producer applies ONE rule to `lance.originator`.
+"""CONTRACT (LH-093, condition 4): every producer applies ONE rule to `rask_lance.originator`.
 
 `originator` is an inbox ADDRESS — `notifications`' fan-out appends it to the audience and delivers
 under `NotificationReason.ORIGINATOR`. So a value that is not one person's subject is not a weaker
@@ -59,4 +59,4 @@ def test_the_CATALOG_builder_drops_it_too(value: str) -> None:
         job_namespace="lance-catalog",
         originator=value,
     )
-    assert "originator" not in event["run"]["facets"]["lance"], f"the catalog stamped {value!r} as an address"
+    assert "originator" not in event["run"]["facets"]["rask_lance"], f"the catalog stamped {value!r} as an address"

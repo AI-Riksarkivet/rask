@@ -100,9 +100,9 @@ def _dataset(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _lance(event: dict[str, Any]) -> dict[str, Any]:
-    """The ``lance`` facet: on the run, or on the dataset of a ``DatasetEvent``, which has no run."""
+    """The ``rask_lance`` facet: on the run, or on the dataset of a ``DatasetEvent``, which has no run."""
     facets = event["run"]["facets"] if "run" in event else event["dataset"]["facets"]
-    return dict(facets["lance"])
+    return dict(facets["rask_lance"])
 
 
 def _version(event: dict[str, Any]) -> int | None:
@@ -313,7 +313,7 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
     uuids = {"tableUuid": table_uuid, "namespaceUuid": namespace_uuid}
 
     def _named(dataset: dict[str, Any]) -> dict[str, Any]:
-        return {key: dataset.get("facets", {}).get("lance", {}).get(key) for key in uuids}
+        return {key: dataset.get("facets", {}).get("rask_lance", {}).get(key) for key in uuids}
 
     announced = [(_lance(event)["operation"], _named(_dataset(event))) for event in events]
     assert announced == [

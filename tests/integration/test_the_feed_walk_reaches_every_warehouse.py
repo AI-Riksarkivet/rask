@@ -60,7 +60,7 @@ RECONCILER = ServicePrincipal.for_account("system:serviceaccount:rask:rask-sa-no
 #: `event_reader` tuple on the estate root derives for the reconciler, and nothing else.
 GRANTED = frozenset({("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-notifications", "can_read_event_feed", "estate:rask")})
 
-#: The uuids the catalog minted for the two runs' outputs, which every governed dataset's `lance` facet carries (ADR 0173
+#: The uuids the catalog minted for the two runs' outputs, which every governed dataset's `rask_lance` facet carries (ADR 0173
 #: §10) and an inbox row names its object by ([[LH-524]]).
 TENANT_UUID, DEFAULT_UUID = "1f2e3d4c-5b6a-4798-8a7b-6c5d4e3f2a1b", "9e8d7c6b-5a4f-4e3d-8c2b-1a0f9e8d7c6b"
 
@@ -74,8 +74,8 @@ TENANT_RUN = {
     "run": {
         "runId": "run-tenant",
         "facets": {
-            "author": {"name": "dex~alice", "sub": "dex~alice"},
-            "lance": {"operation": "insert", "project": "acme", "runId": "ingest-7"},
+            "rask_author": {"name": "dex~alice", "sub": "dex~alice"},
+            "rask_lance": {"operation": "insert", "project": "acme", "runId": "ingest-7"},
             "errorMessage": {"message": "row 12: value out of range", "programmingLanguage": "python"},
         },
     },
@@ -86,7 +86,7 @@ TENANT_RUN = {
             "namespace": "acme-gold",
             "name": "acme-gold$catalog",
             "facets": {
-                "lance": {"tableUuid": TENANT_UUID},
+                "rask_lance": {"tableUuid": TENANT_UUID},
                 "columnLineage": {"fields": {"title": {"inputFields": [{"namespace": "globex-gold", "name": "globex-gold$secret", "field": "title"}]}}},
             },
         }
@@ -98,8 +98,8 @@ DEFAULT_RUN = {
     "eventType": "FAIL",
     "eventTime": "2026-10-05T07:00:00+00:00",
     "producer": "https://rask.invalid/train",
-    "run": {"runId": "run-default", "facets": {"author": {"name": "dex~bob", "sub": "dex~bob"}}},
-    "outputs": [{"namespace": "gold", "name": "gold$catalog", "facets": {"lance": {"tableUuid": DEFAULT_UUID}}}],
+    "run": {"runId": "run-default", "facets": {"rask_author": {"name": "dex~bob", "sub": "dex~bob"}}},
+    "outputs": [{"namespace": "gold", "name": "gold$catalog", "facets": {"rask_lance": {"tableUuid": DEFAULT_UUID}}}],
 }
 
 
@@ -220,9 +220,9 @@ async def test_the_walk_reaches_a_tenant_warehouse_run_and_is_sent_only_what_tar
         "producer": "https://rask.invalid/ingest",
         "run": {
             "runId": "run-tenant",
-            "facets": {"author": {"name": "dex~alice", "sub": "dex~alice"}, "lance": {"operation": "insert", "project": "acme", "runId": "ingest-7"}},
+            "facets": {"rask_author": {"name": "dex~alice", "sub": "dex~alice"}, "rask_lance": {"operation": "insert", "project": "acme", "runId": "ingest-7"}},
         },
-        "outputs": [{"namespace": "acme-gold", "name": "acme-gold$catalog", "facets": {"lance": {"tableUuid": TENANT_UUID}}}],
+        "outputs": [{"namespace": "acme-gold", "name": "acme-gold$catalog", "facets": {"rask_lance": {"tableUuid": TENANT_UUID}}}],
     }
 
     # The rung IS the gate: an unfiltered feed of every warehouse's runs answers a verified caller that holds
@@ -244,7 +244,7 @@ async def test_an_outside_producers_run_is_recorded_by_its_tables_uuid_and_rings
         **DEFAULT_RUN,
         "eventType": "COMPLETE",
         "job": {"namespace": "train", "name": "nightly"},
-        "outputs": [{"namespace": "gold", "name": "gold$catalog", "facets": {"lance": {"tableUuid": forged, "namespaceUuid": forged}}}],
+        "outputs": [{"namespace": "gold", "name": "gold$catalog", "facets": {"rask_lance": {"tableUuid": forged, "namespaceUuid": forged}}}],
     }
     boxes: dict[str, list[dict[str, Any]]] = {}
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, live_lineage(catalog_url, monkeypatch) as lineage_url:

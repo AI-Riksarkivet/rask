@@ -36,7 +36,7 @@ CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-bronze-to-silver"
 #: A listed signer that is no delegator and signs its own runs, as the principal it is.
 PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
-#: The uuid the catalog minted for the run's output, which its events carry in the output's `lance` facet (ADR 0173 §10).
+#: The uuid the catalog minted for the run's output, which its events carry in the output's `rask_lance` facet (ADR 0173 §10).
 EVENTS_UUID = "5d0f6a1e-8b2c-4f3d-9e7a-1c2b3d4e5f60"
 
 
@@ -58,9 +58,9 @@ def _run(author: str) -> dict[str, Any]:
     return {
         "eventType": "COMPLETE",
         "eventTime": "2026-10-02T12:00:00+00:00",
-        "run": {"runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c", "facets": {"author": {"name": author, "sub": author}}},
+        "run": {"runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c", "facets": {"rask_author": {"name": author, "sub": author}}},
         "job": {"namespace": "lance", "name": "catalog.insert"},
-        "outputs": [{"namespace": "bronze", "name": "acme-bronze$events", "facets": {"lance": {"tableUuid": EVENTS_UUID}}}],
+        "outputs": [{"namespace": "bronze", "name": "acme-bronze$events", "facets": {"rask_lance": {"tableUuid": EVENTS_UUID}}}],
         "producer": "https://github.com/AI-Riksarkivet/rask",
         "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent",
     }
@@ -72,7 +72,7 @@ def _drop() -> dict[str, Any]:
         "dataset": {
             "namespace": "lance",
             "name": "acme-bronze$dropped",
-            "facets": {"lance": {"operation": "drop_table"}, "author": {"name": PERSON, "sub": PERSON}},
+            "facets": {"rask_lance": {"operation": "drop_table"}, "rask_author": {"name": PERSON, "sub": PERSON}},
         },
         "producer": "https://github.com/AI-Riksarkivet/rask",
         "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/DatasetEvent",

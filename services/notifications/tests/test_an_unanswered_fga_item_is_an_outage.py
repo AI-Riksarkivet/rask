@@ -154,14 +154,14 @@ class _Plane:
 
 
 def _run_event(output: str = "silver$pages", *, table_uuid: str | None = _uuid("silver$pages")) -> dict[str, Any]:
-    """A failed run of ``output``, carrying ``table_uuid`` in its ``lance`` facet as the catalog stamps it."""
+    """A failed run of ``output``, carrying ``table_uuid`` in its ``rask_lance`` facet as the catalog stamps it."""
     dataset: dict[str, Any] = {"namespace": "silver", "name": output}
     if table_uuid is not None:
-        dataset["facets"] = {"lance": {"tableUuid": table_uuid}}
+        dataset["facets"] = {"rask_lance": {"tableUuid": table_uuid}}
     return {
         "eventType": "FAIL",
         "eventTime": "2026-08-09T12:00:00+00:00",
-        "run": {"runId": "run-1", "facets": {"author": {"name": CALLER, "sub": CALLER}}},
+        "run": {"runId": "run-1", "facets": {"rask_author": {"name": CALLER, "sub": CALLER}}},
         "outputs": [dataset],
     }
 

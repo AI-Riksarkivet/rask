@@ -18,7 +18,7 @@ erasure ◀── GET /tables/{name}/derived ──────┤              
 
 | Question | System |
 |---|---|
-| **who** may read/write/commit | OpenFGA (`can_*` on `table:<uuid>`, the uuid each event's `lance` facet names) |
+| **who** may read/write/commit | OpenFGA (`can_*` on `table:<uuid>`, the uuid each event's `rask_lance` facet names) |
 | **what / when** changed | Lance versions + tags (immutable, time-travel) |
 | **how / from where / by whom** | this service: the commit feed and the edge list; the full graph in the forwarded backend |
 
@@ -88,7 +88,7 @@ An in-place refinement (a run that reads and writes one table) bumps that table'
 | `POST /lineage-relay-cron` | Dapr cron binding that drives the relay tick (sidecar only) |
 | `GET /livez` | Liveness |
 
-**Intake.** The author is stamped from the verified bearer token, overwriting any `author` facet the body carries, and
+**Intake.** The author is stamped from the verified bearer token, overwriting any `rask_author` facet the body carries, and
 only a run's author may extend an existing run. A producer may record writing a governed output only where it holds
 `can_write_data`, and reading a governed input only where it holds `can_get_metadata`; an external input is exempt,
 since no tuple could ever exist for it. One event names at most 64 inputs and 64 outputs and weighs at most 1 MiB as
@@ -146,8 +146,8 @@ so a forwarded backend ingests them unchanged. Intake tolerates every facet, sto
 
 | Facet | Kind | Read for |
 |---|---|---|
-| `author` (custom), `ownership` | run / job | the feed's `author` column, stamped from the verified token at the HTTP door |
-| `lance` (custom) | run / dataset | the catalog operation, the run's write ref, the ref an input was read on |
+| `rask_author` (custom), `ownership` | run / job | the feed's `author` column, stamped from the verified token at the HTTP door |
+| `rask_lance` (custom) | run / dataset | the catalog operation, the run's write ref, the ref an input was read on |
 | `version` | dataset | the Lance version on each side of an edge |
 | `errorMessage` | run | carried in the feed for a failed run |
 | `rask_signature` (custom) | run / dataset | the signature a bus or outbox event must carry (below) |

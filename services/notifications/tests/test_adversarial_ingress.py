@@ -1,7 +1,7 @@
 """The ingress under attack: a hostile publisher, a hostile payload, and a lane that must not livelock.
 
 This suite is written from the OTHER side of the bus. Everything it sends is something a producer could
-send — the run id, the author facet, the output names and the event time are all attacker-influenced on
+send — the run id, the rask_author facet, the output names and the event time are all attacker-influenced on
 an ungoverned topic — and each test names what the plane is supposed to do about it and, where it does
 not, says so in its own name rather than in a comment nobody reads.
 
@@ -46,7 +46,7 @@ def _event(
     outputs: list[str] | None = None,
     event_time: str = "2026-08-09T12:00:00+00:00",
 ) -> dict[str, Any]:
-    bag: dict[str, Any] = {} if author is None else {"author": {"name": author, "sub": author}}
+    bag: dict[str, Any] = {} if author is None else {"rask_author": {"name": author, "sub": author}}
     if facets is not None:
         bag.update(facets)
     return {
@@ -58,8 +58,8 @@ def _event(
 
 
 def _table(name: str) -> dict[str, Any]:
-    """An output as the catalog names it: its name, and its table's uuid in the ``lance`` facet (ADR 0173 §10)."""
-    return {"namespace": "silver", "name": name, "facets": {"lance": {"tableUuid": str(uuid.uuid5(uuid.NAMESPACE_URL, name))}}}
+    """An output as the catalog names it: its name, and its table's uuid in the ``rask_lance`` facet (ADR 0173 §10)."""
+    return {"namespace": "silver", "name": name, "facets": {"rask_lance": {"tableUuid": str(uuid.uuid5(uuid.NAMESPACE_URL, name))}}}
 
 
 class _Inbox:
@@ -129,10 +129,10 @@ def test_no_ingest_route_exists_when_dapr_ingest_is_disabled(monkeypatch: pytest
 @pytest.mark.asyncio
 @pytest.mark.parametrize("author", [""])
 async def test_an_author_facet_that_is_not_a_verified_string_names_nobody(author: object, plane: _Plane) -> None:
-    """Targeting reads `author.sub` and nothing else, and every non-string shape has to cost a
+    """Targeting reads `rask_author.sub` and nothing else, and every non-string shape has to cost a
     notification rather than an exception inside a subscription handler."""
     event = _event()
-    event["run"]["facets"]["author"]["sub"] = author
+    event["run"]["facets"]["rask_author"]["sub"] = author
 
     assert await ingest_run_event(event, lane=Lane.BUS, visibility=OPEN, open_inbox=plane.open) == DAPR_SUCCESS
     assert plane.boxes == {}

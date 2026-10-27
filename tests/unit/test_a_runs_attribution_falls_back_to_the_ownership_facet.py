@@ -1,4 +1,4 @@
-"""A run's attribution is rask's `author` run facet, else the standard `ownership` job facet, else nobody.
+"""A run's attribution is rask's `rask_author` run facet, else the standard `ownership` job facet, else nobody.
 
 The feed records this as the row's `author`, the name a reader sees. It is attribution, not authorization:
 an external OpenLineage producer that names its owner only in the standard facet is still attributed, and

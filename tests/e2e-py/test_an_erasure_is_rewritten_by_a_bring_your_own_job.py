@@ -69,7 +69,7 @@ def _feed_start(identity: Identity) -> int:
 
 
 def _authors_of(identity: Identity, *, since: int, table: str, versions: set[int]) -> dict[int, str]:
-    """The `author.sub` of the feed row that committed each of ``versions`` of ``table``, following the feed forward."""
+    """The `rask_author.sub` of the feed row that committed each of ``versions`` of ``table``, following the feed forward."""
     authors: dict[int, str] = {}
     cursor = since
     deadline = time.monotonic() + SETTLE_SECONDS
@@ -80,9 +80,9 @@ def _authors_of(identity: Identity, *, since: int, table: str, versions: set[int
             # dataset (`docs/COMMIT-EVENTS.md` § A dataset change).
             event = row.get("event") or {}
             facets = (event.get("run") or event.get("dataset") or {}).get("facets") or {}
-            version = (facets.get("lance") or {}).get("version")
+            version = (facets.get("rask_lance") or {}).get("version")
             if version is not None:
-                authors[int(version)] = str((facets.get("author") or {}).get("sub"))
+                authors[int(version)] = str((facets.get("rask_author") or {}).get("sub"))
         cursor = int(body["next_cursor"])
         assert time.monotonic() < deadline, f"the feed for {table} did not show versions {sorted(versions - set(authors))} within {SETTLE_SECONDS:.0f} s"
         if not versions <= set(authors):
