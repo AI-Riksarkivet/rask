@@ -79,6 +79,18 @@ def test_a_durable_carrying_FLEET_redelivery_values_is_on_a_stream_the_loop_walk
     )
 
 
+def _durable_streams(rendered: str) -> dict[str, str | None]:
+    """``{durableName: the stream its component names, or None for the one its subject resolves to}``."""
+    out: dict[str, str | None] = {}
+    for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
+        if not doc or doc.get("kind") != "Component" or doc.get("spec", {}).get("type") != "pubsub.jetstream":
+            continue
+        meta = {entry["name"]: str(entry.get("value", "")) for entry in doc["spec"].get("metadata", []) if isinstance(entry, dict) and "name" in entry}
+        if "durableName" in meta:
+            out[meta["durableName"]] = meta.get("streamName")
+    return out
+
+
 def _job_expected_durables(rendered: str) -> list[str]:
     """The durable set the orphan pass spares, read out of the rendered Job script."""
     match = re.search(r'EXP_DURABLES="([^"]*)"', rendered)
@@ -103,4 +115,8 @@ def test_the_orphan_pass_spares_EVERY_durable_the_chart_renders(resiliency: bool
     """
     rendered = _helm_template("dapr.enabled=true", f"dapr.resiliency.enabled={str(resiliency).lower()}")
 
-    assert set(_job_expected_durables(rendered)) == set(_durables(rendered))
+    # A durable on a stream the pass does not walk is not one it may see: each catalog replica's, on the mirror whose
+    # consumer limit reaps it ([[LH-305]]).
+    walked = set(_job_stream_list(rendered))
+    on_walked = {name for name, stream in _durable_streams(rendered).items() if stream is None or stream in walked}
+    assert set(_job_expected_durables(rendered)) == on_walked

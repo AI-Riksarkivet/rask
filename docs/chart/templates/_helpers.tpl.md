@@ -92,6 +92,14 @@ Hardcoded, deliberately NOT a values knob: the Collector's filelog json_parser i
 daprd container and is only correct while this is true. A knob would let someone turn the sidecar
 plane back into unparsed logfmt with no gate firing.
 
+## `checksum/dapr-pubsub: {{ include "lance.daprPubsubDigest" (list $root $appId) | quote }}`
+
+daprd loads its Components once, at boot (HotReload is off), and only a changed pod spec starts a rollout, so a Component
+edit would otherwise reach a sidecar only when something else restarted its pod, which no reconcile does ([[LH-305]]).
+Each Dapr pod carries a digest of the pub/sub Components scoped to its app, so an edit rolls exactly the pods whose app
+loads it, as a Configuration's hash-named object does. `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py`
+holds both directions.
+
 ## `dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sidecarBlockShutdownSeconds) |...`
 
 THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. This block emitted nothing about

@@ -358,6 +358,10 @@ def test_every_DURABLE_pubsub_component_has_a_sidecar_retry_target() -> None:
         # a DLQ is retried, which is the opposite of the rule. (This exemption is not hypothetical:
         # `lineage-pubsub-lineage-dlq` is durable, by design, and correctly has no target.)
         and not d["metadata"]["name"].endswith("-dlq")
+        # A durable each catalog replica names for its pod is EXEMPT too: it carries the broadcast every replica buffers,
+        # whose loss the buffer tolerates by design (`catalog/api/dapr.py::register_control_dapr`: no dead-letter topic),
+        # so no delivery of it is one that must not be lost ([[LH-305]]).
+        and not any(m.get("name") == "durableName" and chart_render.POD_NAME in str(m.get("value")) for m in d["spec"]["metadata"])
     }
     assert durable, "no durable pub/sub component rendered — this gate would pass vacuously"
 

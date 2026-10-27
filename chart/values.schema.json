@@ -252,6 +252,11 @@
                         }
                     }
                 },
+                "controlConsumerInactiveSeconds": {
+                    "description": "Seconds a catalog replica's control-event consumer outlives lost interest before NATS reaps it; also the broadcast mirror's message age.",
+                    "type": "integer",
+                    "minimum": 121
+                },
                 "controlEmit": {
                     "description": "Publish catalog control events (catalog.control.v1) on a broadcast Dapr topic; renders the control pubsub component, CATALOG_CONTROL stream and subscription. Best-effort.",
                     "type": "boolean"

@@ -52,6 +52,7 @@ dapr.io/log-as-json: "true"
 dapr.io/max-body-size: {{ . | quote }}
 {{- end }}
 dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
+checksum/dapr-pubsub: {{ include "lance.daprPubsubDigest" (list $root $appId) | quote }}
 dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sidecarBlockShutdownSeconds) | quote }}
 {{- include "lance.daprSidecarResources" $root | nindent 0 }}
 
@@ -65,6 +66,19 @@ dapr.io/config: "lance-tracing"
 {{- end }}
 {{- end }}
 {{- end }}
+{{- end -}}
+
+{{- define "lance.daprPubsubDigest" -}}
+{{- $root := index . 0 -}}
+{{- $appId := index . 1 -}}
+{{- $scoped := list -}}
+{{- range $doc := splitList "\n---" (include (print $root.Template.BasePath "/dapr-component.yaml") $root) -}}
+{{- $component := fromYaml $doc -}}
+{{- if and (eq (get $component "kind") "Component") (has $appId (get $component "scopes" | default list)) -}}
+{{- $scoped = append $scoped (toJson $component) -}}
+{{- end -}}
+{{- end -}}
+{{- join "\n" $scoped | sha256sum | trunc 16 -}}
 {{- end -}}
 
 {{- define "lance.daprOtlpTarget" -}}

@@ -12,7 +12,7 @@ is what each sidecar subscribes, read off every `dapr_app.subscribe`. A table th
 subject fails, and so does one that withholds a subject or a JetStream API call a client makes.
 
 The Dapr half is measured rather than derived: the real daprd the Dapr fixture injects runs each Component shape (publisher-only, durable
-subscriber with a dead-letter topic, the catalog's ephemeral broadcast subscriber) from the chart's own render, and
+subscriber with a dead-letter topic, the catalog's per-replica broadcast subscriber) from the chart's own render, and
 every subject it used must be one the replay of that app's subscriptions also exercises, so the replay that covers
 every other app cannot drift from what Dapr does.
 
@@ -36,6 +36,7 @@ from nats_auth_rig import (
     VALUES_ENV,
     Broker,
     Client,
+    Link,
     Mint,
     Permissions,
     Sidecar,
@@ -52,7 +53,7 @@ from nats_auth_rig import (
     violations,
 )
 
-from tests.unit.chart_render import DEFAULT_ARGS, containers, nats_users, render, render_fixture
+from tests.unit.chart_render import DEFAULT_ARGS, POD_NAME, containers, nats_users, render, render_fixture
 
 
 pytestmark = pytest.mark.nats_auth
@@ -63,6 +64,11 @@ REPO = Path(__file__).resolve().parents[2]
 #: The rig's own observer: it reads stream state and plants consumers for the Job's second pass, so no table user's
 #: call set carries the test's bookkeeping. It is minted beside the table and is not a row of it.
 RIG = "rask-test-rig"
+#: How long the broadcast sidecar's connection is cut: past an ephemeral consumer's 5 s inactivity threshold
+#: (nats-server v2.14.2 `consumer.go:1462-1467`), well inside nats.go's 120 s reconnect budget (60 tries, 2 s apart).
+LINK_DOWN_SECONDS = 10.0
+#: The durable the replay binds for the catalog's broadcast, named as a replica named `replay-catalog` would name it.
+BROADCAST_REPLAY = "catalog-control-replay-catalog"
 
 
 #: Who may publish each data subject; every other table user must be refused on it.
@@ -97,11 +103,11 @@ PUBLISHERS: dict[str, frozenset[str]] = {
 #: whether it was refused.
 UNSTORED = frozenset(subject for subject in PUBLISHERS if subject.startswith("probe."))
 
-#: What each sidecar subscribes, as (durableName, topic); None is the catalog's ephemeral broadcast consumer.
+#: What each sidecar subscribes, as (durableName, topic); a `{podName}` durable is one each replica names for its pod.
 #: catalog/api/dapr.py; lineage/api/dapr.py;
 #: notifications/api/{subscriptions,dlq}.py; maintenance/api/arrival.py.
-DAPR_SUBSCRIPTIONS: dict[str, tuple[tuple[str | None, str], ...]] = {
-    "catalog": ((None, "catalog.control.v1"),),
+DAPR_SUBSCRIPTIONS: dict[str, tuple[tuple[str, str], ...]] = {
+    "catalog": ((f"catalog-control-{POD_NAME}", "catalog.control.v1"),),
     "lineage": (("lineage-durable", "lineage.events.v1"), ("lineage-dlq-durable", "dlq.lineage.events")),
     "notifications": (
         ("notifications-durable", "lineage.events.v1"),
@@ -133,15 +139,9 @@ def _named(components: list[dict[str, Any]], name: str) -> dict[str, Any]:
     return next(c for c in components if c["metadata"]["name"] == name)
 
 
-def _subscriber_component(components: list[dict[str, Any]], app: str, durable: str | None) -> list[dict[str, Any]]:
-    """The Components scoped to `app` that carry `durable`; for None, its broadcast one (a deliver policy, no durable)."""
-    return [
-        c
-        for c in components
-        if app in c.get("scopes", [])
-        and component_metadata(c).get("durableName") == durable
-        and (durable is not None or "deliverPolicy" in component_metadata(c))
-    ]
+def _subscriber_component(components: list[dict[str, Any]], app: str, durable: str) -> list[dict[str, Any]]:
+    """The Components scoped to `app` that carry `durable`."""
+    return [c for c in components if app in c.get("scopes", []) and component_metadata(c).get("durableName") == durable]
 
 
 def _lane_runs_the_charts_images(tools: Tools, docs: tuple[dict, ...]) -> list[str]:
@@ -171,7 +171,7 @@ def _table_names_every_client(table: dict[str, Permissions], components: list[di
     for app, subscriptions in DAPR_SUBSCRIPTIONS.items():
         for durable, topic in subscriptions:
             if len(_subscriber_component(components, app, durable)) != 1:
-                findings.append(f"{app}'s subscription to {topic} ({durable or 'ephemeral'}) does not resolve to exactly one rendered Component")
+                findings.append(f"{app}'s subscription to {topic} ({durable}) does not resolve to exactly one rendered Component")
     return findings
 
 
@@ -288,6 +288,8 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
         SubscriberApp([]),
         SubscriberApp([{"pubsubname": "catalog-control-pubsub", "topic": "catalog.control.v1", "route": "/control-events"}]),
     )
+    link = Link(broker.port)
+    await link.start()
     sidecars = [
         Sidecar(
             tools.daprd,
@@ -306,7 +308,7 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
         Sidecar(
             tools.daprd,
             "catalog",
-            [sidecar_component(_named(components, "catalog-control-pubsub"), broker.url, creds["catalog"])],
+            [sidecar_component(_named(components, "catalog-control-pubsub"), link.url, creds["catalog"])],
             broadcast_app,
             workdir / "broadcast",
         ),
@@ -320,6 +322,7 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
         for sidecar in sidecars:
             sidecar.stop()
             sidecar.app.stop()
+        await link.stop()
         return findings
     try:
         marker = await _publish_until_delivered(publisher, "lineage-pubsub", "lineage.events.v1", subscriber_app, "/lineage-events")
@@ -334,11 +337,24 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
                 findings.append(f"daprd notifications never dead-lettered {marker} through dlq.notifications back to itself")
             findings += await _unacked(rig, ("LINEAGE", "DLQ"), component_metadata(_named(components, "lineage-pubsub-notifications")))
         if await _publish_until_delivered(broadcast, "catalog-control-pubsub", "catalog.control.v1", broadcast_app, "/control-events") is None:
-            findings.append("daprd catalog (ephemeral broadcast): nothing reached /control-events")
+            findings.append("daprd catalog (broadcast): nothing reached /control-events")
+        else:
+            # The broadcast's connection is cut for longer than an ephemeral consumer outlives lost interest, and shorter
+            # than nats.go's reconnect budget, so the sidecar reconnects rather than closing ([[LH-305]]).
+            await link.cut(LINK_DOWN_SECONDS)
+            before = set(broadcast_app.markers("/control-events"))
+            for attempt in range(120):
+                await broadcast.publish("catalog-control-pubsub", "catalog.control.v1", {"marker": f"after-cut#{attempt}"})
+                await asyncio.sleep(0.5)
+                if set(broadcast_app.markers("/control-events")) - before:
+                    break
+            else:
+                findings.append(f"daprd catalog (broadcast): nothing reached /control-events once its connection came back after {LINK_DOWN_SECONDS} s")
     finally:
         for sidecar in sidecars:
             sidecar.stop()
             sidecar.app.stop()
+        await link.stop()
     for sidecar in sidecars:
         findings += [f"daprd {sidecar.app_id} logged: {line.strip()[:300]}" for line in sidecar.log_text().splitlines() if "violation" in line.lower()]
     return findings
@@ -351,23 +367,25 @@ async def _replay_subscriptions(url: str, mint_: Mint, components: list[dict[str
         client = await Client.connect(url, mint_.credentials[app], f"replay-{app}")
         for durable, topic in subscriptions:
             metadata = component_metadata(_subscriber_component(components, app, durable)[0])
-            label = f"{app} {topic} ({durable or 'ephemeral'})"
-            names = await client.request("$JS.API.STREAM.NAMES", {"subject": topic})
-            if not names or len(names.get("streams") or []) != 1:
-                findings.append(f"{label}: STREAM.NAMES answered {names}")
-                continue
-            stream = names["streams"][0]
-            if durable and await client.request(f"$JS.API.CONSUMER.INFO.{stream}.{durable}") is None:
+            label = f"{app} {topic} ({durable})"
+            durable = durable.replace(POD_NAME, f"replay-{app}")
+            metadata = {**metadata, "durableName": durable}
+            if not (stream := metadata.get("streamName", "")):
+                names = await client.request("$JS.API.STREAM.NAMES", {"subject": topic})
+                if not names or len(names.get("streams") or []) != 1:
+                    findings.append(f"{label}: STREAM.NAMES answered {names}")
+                    continue
+                stream = names["streams"][0]
+            if await client.request(f"$JS.API.CONSUMER.INFO.{stream}.{durable}") is None:
                 findings.append(f"{label}: CONSUMER.INFO.{stream}.{durable} was not answered")
-            create = f"$JS.API.CONSUMER.CREATE.{stream}.{durable}.{topic}" if durable else f"$JS.API.CONSUMER.CREATE.{stream}"
+            create = f"$JS.API.CONSUMER.CREATE.{stream}.{durable}.{topic}"
             created = await client.request(create, {"stream_name": stream, "config": dapr_consumer_config(metadata, topic, client.nc.new_inbox())})
             if created is None:
                 findings.append(f"{label}: {create} was not answered")
                 continue
-            name = durable or str(created.get("name"))
-            bound = await client.request(f"$JS.API.CONSUMER.INFO.{stream}.{name}")
+            bound = await client.request(f"$JS.API.CONSUMER.INFO.{stream}.{durable}")
             if not bound or "config" not in bound:
-                findings.append(f"{label}: CONSUMER.INFO.{stream}.{name} answered {bound}")
+                findings.append(f"{label}: CONSUMER.INFO.{stream}.{durable} answered {bound}")
                 continue
             sub = await client.nc.subscribe(bound["config"]["deliver_subject"], queue=bound["config"].get("deliver_group") or "")
             try:
@@ -385,7 +403,8 @@ async def _replay_subscriptions(url: str, mint_: Mint, components: list[dict[str
 
 async def _stream_job_repairs(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, rig: Client, home: Path) -> list[str]:
     """The Job's second run, over an orphan durable and a durable whose redelivery config drifted, both of which it must
-    delete as `admin` (the sidecar re-creates the drifted one with the component's config)."""
+    delete as `admin` (the sidecar re-creates the drifted one with the component's config), and over a broadcast mirror whose
+    consumer limit drifted, which it must set back to the chart's value."""
     arrival = component_metadata(_subscriber_component(_pubsub_components(docs), "maintenance", "maintenance-durable")[0])
     orphan = {"durable_name": "orphan-durable", "ack_policy": "explicit", "deliver_policy": "new", "filter_subject": "lineage.events.v1"}
     await rig.request("$JS.API.CONSUMER.CREATE.LINEAGE.orphan-durable.lineage.events.v1", {"stream_name": "LINEAGE", "config": orphan})
@@ -393,7 +412,25 @@ async def _stream_job_repairs(tools: Tools, docs: tuple[dict, ...], broker: Brok
     drifted["max_deliver"] = int(arrival["maxDeliver"]) + 1
     update = {"stream_name": "LINEAGE", "config": drifted, "action": "update"}
     await rig.request("$JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.lineage.events.v1", update)
+    mirror = ((await rig.request("$JS.API.STREAM.INFO.CATALOG_CONTROL_BROADCAST")) or {}).get("config", {})
+    declared = mirror.get("consumer_limits", {}).get("inactive_threshold")
+    # Drifted above the chart's value, a replica's durable with it, so the Job must lower the durable before the server
+    # lets the mirror's limit come down (nats-server v2.14.2 `stream.go:2420-2446`).
+    above = 2 * int(declared or 0)
+    limits = {**mirror.get("consumer_limits", {}), "inactive_threshold": above}
+    drifted_mirror = await rig.request("$JS.API.STREAM.UPDATE.CATALOG_CONTROL_BROADCAST", {**mirror, "consumer_limits": limits})
+    replica = ((await rig.request(f"$JS.API.CONSUMER.INFO.CATALOG_CONTROL_BROADCAST.{BROADCAST_REPLAY}")) or {}).get("config", {})
+    raised = {"stream_name": "CATALOG_CONTROL_BROADCAST", "config": {**replica, "inactive_threshold": above}, "action": "update"}
+    drifted_replica = await rig.request(f"$JS.API.CONSUMER.CREATE.CATALOG_CONTROL_BROADCAST.{BROADCAST_REPLAY}.catalog.control.v1", raised)
+    planted = (
+        ((drifted_mirror or {}).get("config") or {}).get("consumer_limits", {}).get("inactive_threshold"),
+        ((drifted_replica or {}).get("config") or {}).get("inactive_threshold"),
+    )
+    assert planted == (above, above), f"the rig could not drift the broadcast mirror and a replica's durable: {drifted_mirror}, {drifted_replica}"
     findings = await asyncio.to_thread(_stream_job, tools, docs, broker, mint_, home)
+    mirror = ((await rig.request("$JS.API.STREAM.INFO.CATALOG_CONTROL_BROADCAST")) or {}).get("config", {})
+    if not declared or mirror.get("consumer_limits", {}).get("inactive_threshold") != declared:
+        findings.append(f"the stream Job left CATALOG_CONTROL_BROADCAST's consumer limit at {mirror.get('consumer_limits')}, not the chart's {declared}")
     for durable in ("orphan-durable", "maintenance-durable"):
         gone = (await rig.request(f"$JS.API.CONSUMER.INFO.LINEAGE.{durable}") or {}).get("error") or {}
         if gone.get("err_code") != 10014:

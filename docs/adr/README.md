@@ -194,3 +194,4 @@ before they had a record here; each names its source document and the date of th
 | [0179](0179-branch-creates-take-turns-and-leases-run-on-the-stores-clock.md) | LH-413 | Branch creates take turns, leases run on the store's clock, and edges name a branch's incarnation (2026-10-26) |
 | [0180](0180-no-lakehouse-run-carries-a-nominal-time.md) | LIN-002 | No lakehouse run carries a nominal time (2026-10-27) |
 | [0181](0181-a-dex-client-signed-in-for-itself-is-a-machine-principal.md) | XC-174 | A Dex client signed in for itself is a machine principal (2026-10-27) |
+| [0182](0182-each-catalog-replica-hears-the-control-broadcast-through-a-durable-of-its-own.md) | LH-305 | Each catalog replica hears the control broadcast through a durable of its own (2026-10-27) |

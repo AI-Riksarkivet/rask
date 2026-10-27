@@ -34,6 +34,8 @@ spec:
   metadata:
     - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
     - { name: name, value: "lance-dapr-catalog-control" }
+    - { name: streamName, value: "CATALOG_CONTROL_BROADCAST" }
+    - { name: durableName, value: "catalog-control-{podName}" }
     - { name: deliverPolicy, value: "new" }
     {{- with include "lance.natsCreds" (list . .Values.services.catalog.daprAppId) }}{{ . | nindent 4 }}{{- end }}
 {{- include "lance.natsAuth" . }}

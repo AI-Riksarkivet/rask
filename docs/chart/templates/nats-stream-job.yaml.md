@@ -52,3 +52,20 @@ may recreate the durable as it was: the Job checks again every 5 s and deletes i
 bound, and after 300 s, which outlasts the outgoing pod's grace period, it fails for its retry if a durable is
 still at another value. Each recreation starts at the stream's first message (`deliverPolicy: all`), a replay
 the keyed ingest lands nothing twice from.
+
+## `BROADCAST_INACTIVE_NS="{{ mul (int (required "catalog.controlConsumerInactiveSeconds is required" .Values.catalog.controlConsumerInactiveSeconds)) 1000000000 }}"`
+
+The mirror CATALOG_CONTROL_BROADCAST holds each catalog replica's durable ([[LH-305]]); its consumer limit is what
+reaps a deleted pod's, so the Job declares it in git and converges it: a mirror whose limit or message age differs from
+the value is edited from the same config (`nats stream edit --config`, measured on nats-server v2.14.2 to update both).
+The server refuses a change to a stream's consumer limits while any consumer exceeds them, comparing `max_ack_pending`
+too (v2.14.2 `stream.go:2420-2446`), so the limits name `max_ack_pending: 1000`, the server's default for a consumer
+that sets none, and a lowered limit first lowers each durable above it (`nats consumer edit --inactive-threshold`):
+measured, a raise applies directly, and a lower is refused until the durables are lowered.
+A consumer takes the stream's limit when it is created or re-bound (measured: a second create of one durable with a new
+deliver subject is accepted and carries the limit), so an edited limit reaches each replica's durable when its sidecar
+next subscribes. The message age equals the limit, so a replica back within it resumes at its acknowledgement floor. The
+config is written whole because `nats stream add --mirror` asks for the mirror's details even under `--defaults`
+(nats-box 0.14.5's CLI v0.1.5), which a Job without a terminal cannot answer. Before the Job creates the mirror on an
+upgrade, a rolled catalog pod's subscribe fails on the missing stream and daprd retries it (dapr
+`pkg/runtime/processor/subscriber/subscriber.go:354-360`).

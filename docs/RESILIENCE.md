@@ -134,8 +134,9 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    retained stream into the idempotent ingest; to REBUILD the feed from the stream, remove the durable
    and restart lineage — `nats consumer rm LINEAGE lineage-durable`, then
    `kubectl rollout restart deploy/rask-lineage` — and the new durable replays from the first message. With NATS auth on, run it as `admin` ([OPERATORS.md](OPERATORS.md) § 7): nats-box itself runs as the read-only `monitor`.
-   Residual: gap #2's poison/no-DLQ window, which durable cursors do not change; and the catalog's own
-   broadcast consumer, still ephemeral by design (one per replica), which a NATS restart also removes.
+   The catalog's own broadcast is durable as well, one consumer per replica named by its pod on the mirror stream
+   `CATALOG_CONTROL_BROADCAST`, whose consumer limit (`catalog.controlConsumerInactiveSeconds`, 1 h) reaps a deleted
+   pod's ([[LH-305]]). Residual: gap #2's poison/no-DLQ window, which durable cursors do not change.
 
 4. **The feed is the record.** Lineage writes the edges, then the feed row, each keyed; a failed write answers
    `RETRY`, and the redelivery lands what is missing and nothing twice. The feed keeps `eventsRetentionDays`

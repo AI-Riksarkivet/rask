@@ -120,8 +120,8 @@ def _kept_by_the_catalog(admin: Identity, *, forged: str, marker: str) -> list[s
     """The forged control event's rows in the catalog's control feed, read once the feed holds the binding of
     ``marker``, a namespace the warehouse door made after the forgery was published (`warehouse_bound`, naming it).
 
-    The catalog's broadcast consumer is ephemeral, so no durable says it has acknowledged the forgery; the stream
-    reaches it in order, so a feed holding an event published after the forgery has judged the forgery too. The marker
+    Each catalog replica's broadcast consumer is named by its pod, so the test reads the feed rather than a consumer's
+    acknowledgement; the stream reaches it in order, so a feed holding an event published after the forgery has judged the forgery too. The marker
     is also the feed's own control: a subscription refusing every event would hold neither.
     """
     deadline = time.monotonic() + scenario.SETTLE_SECONDS

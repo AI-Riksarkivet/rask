@@ -16,6 +16,7 @@ spec:
       restartPolicy: OnFailure
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
       {{- $creds := hasKey (include "lance.natsFiles" . | fromJson) "nats-admin-creds" }}
+      {{- $replicas := (hasKey .Values.nats "streamReplicas") | ternary .Values.nats.streamReplicas 1 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- if $creds }}
@@ -62,7 +63,7 @@ spec:
                   nats --server "$S" stream add "$1" --defaults \
                     --subjects "$2" --storage file --retention limits \
                     --max-age=168h --max-bytes=-1 --max-msgs=-1 --max-msgs-per-subject=-1 \
-                    --max-msg-size=-1 --discard old --dupe-window=2m --replicas {{ (hasKey .Values.nats "streamReplicas") | ternary .Values.nats.streamReplicas 1 }} \
+                    --max-msg-size=-1 --discard old --dupe-window=2m --replicas {{ $replicas }} \
                     --no-allow-rollup --deny-delete --deny-purge \
                     || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
                 fi
@@ -101,7 +102,7 @@ spec:
                   echo "stream $1: retention=$got (as intended)"
                 fi
               }
-              for stream in LINEAGE DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
+              for stream in LINEAGE DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL CATALOG_CONTROL_BROADCAST{{ end }}; do
                 assert_retention "$stream" limits
               done
 
@@ -116,9 +117,7 @@ spec:
               {{- if .Values.catalog.controlEmit }}
               # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
               # replica's ring buffer (GET /management/v1/events). Its own stream so a parking-free broadcast publish
-              # can't fail for want of a stream. The CATALOG's own consumer is ephemeral (no durableName)
-              # and deliverPolicy=new, so retention isn't load-bearing for it — a booting replica skips the
-              # backlog rather than replaying it into memory.
+              # can't fail for want of a stream. The catalog's replicas consume it through the mirror below.
               #
               # IT IS NOT THE ONLY CONSUMER, and this stream IS in the drift loop below because of the
               # other one. `dapr-component.yaml` renders `notifications-control-durable`, a chart-owned
@@ -126,6 +125,31 @@ spec:
               # `dapr.resiliency.enabled` conditional as EXP_MAXD/EXP_BOFF, which is exactly the pair the
               # loop repairs; walking the stream is what makes that repair reach it.
               add_if_missing CATALOG_CONTROL "catalog.control.>"
+              # The mirror holding each catalog replica's durable, its consumer limit reaping a deleted pod's (LH-305).
+              BROADCAST_INACTIVE_NS="{{ mul (int (required "catalog.controlConsumerInactiveSeconds is required" .Values.catalog.controlConsumerInactiveSeconds)) 1000000000 }}"
+              printf '%s' '{"name":"CATALOG_CONTROL_BROADCAST","mirror":{"name":"CATALOG_CONTROL"},"storage":"file","retention":"limits","discard":"old","max_age":'"$BROADCAST_INACTIVE_NS"',"max_bytes":-1,"max_msgs":-1,"max_msgs_per_subject":-1,"max_msg_size":-1,"num_replicas":{{ $replicas }},"deny_delete":true,"deny_purge":true,"allow_rollup_hdrs":false,"consumer_limits":{"inactive_threshold":'"$BROADCAST_INACTIVE_NS"',"max_ack_pending":1000}}' > "$HOME/catalog-control-broadcast.json"
+              if info=$(nats --server "$S" stream info CATALOG_CONTROL_BROADCAST --json 2>/dev/null); then
+                info=$(echo "$info" | tr -d ' \n')
+                limit=$(echo "$info" | sed -n 's/.*"consumer_limits":{[^}]*"inactive_threshold":\([0-9]*\).*/\1/p')
+                age=$(echo "$info" | sed -n 's/.*"max_age":\([0-9]*\).*/\1/p')
+                if [ "$limit" != "$BROADCAST_INACTIVE_NS" ] || [ "$age" != "$BROADCAST_INACTIVE_NS" ]; then
+                  echo "RECONCILE CATALOG_CONTROL_BROADCAST: inactive_threshold=${limit:-none} max_age=$age != expected $BROADCAST_INACTIVE_NS"
+                  for c in $(nats --server "$S" consumer ls CATALOG_CONTROL_BROADCAST --names 2>/dev/null); do
+                    held=$(nats --server "$S" consumer info CATALOG_CONTROL_BROADCAST "$c" --json 2>/dev/null | tr -d ' \n' | sed -n 's/.*"inactive_threshold":\([0-9]*\).*/\1/p')
+                    if [ -n "$held" ] && [ "$held" -gt "$BROADCAST_INACTIVE_NS" ]; then
+                      nats --server "$S" consumer edit CATALOG_CONTROL_BROADCAST "$c" --inactive-threshold={{ .Values.catalog.controlConsumerInactiveSeconds }}s -f >/dev/null \
+                        || { echo "!! FAILED to lower $c's inactive threshold"; exit 1; }
+                    fi
+                  done
+                  nats --server "$S" stream edit CATALOG_CONTROL_BROADCAST --config "$HOME/catalog-control-broadcast.json" -f >/dev/null \
+                    || { echo "!! FAILED to reconcile stream CATALOG_CONTROL_BROADCAST"; exit 1; }
+                else
+                  echo "stream CATALOG_CONTROL_BROADCAST: consumer inactive threshold and age $BROADCAST_INACTIVE_NS ns (as intended)"
+                fi
+              else
+                nats --server "$S" stream add --config "$HOME/catalog-control-broadcast.json" >/dev/null \
+                  || { echo "!! FAILED to create stream CATALOG_CONTROL_BROADCAST — no catalog replica would hear a control event"; exit 1; }
+              fi
               {{- end }}
               # Reconcile app-durable config drift (the UPGRADE path): a Dapr jetstream subscription
               # can only BIND an existing durable whose config matches its request — after a values

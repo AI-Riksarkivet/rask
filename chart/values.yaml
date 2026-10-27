@@ -765,6 +765,15 @@ catalog:
   # inconsistent cursors and degrades to noisy `reset`s (safe, since events are hints, but wasteful).
   # -- Publish catalog control events (catalog.control.v1) on a broadcast Dapr topic; renders the control pubsub component, CATALOG_CONTROL stream and subscription. Best-effort.
   controlEmit: true
+  # Each replica hears the broadcast through a durable consumer of its own, `catalog-control-<pod>` on the mirror stream
+  # CATALOG_CONTROL_BROADCAST ([[LH-305]]): an ephemeral one is deleted after 5 s without interest and Dapr never re-creates
+  # it, so a replica whose connection drops for longer is deaf until it restarts. A durable outlives a lapse up to this threshold,
+  # set on the mirror as its consumer limit so a deleted pod's consumer is reaped; notifications' durable stays on
+  # CATALOG_CONTROL, which takes no such limit. Longer than nats.go's reconnect budget (60 tries, 2 s apart), past which the
+  # bus watchdog restarts the sidecar under the same pod name; the mirror keeps messages as long, so a returning replica
+  # resumes where it stopped.
+  # -- Seconds a catalog replica's control-event consumer outlives lost interest before NATS reaps it; also the broadcast mirror's message age.
+  controlConsumerInactiveSeconds: 3600 # @schema type: integer; minimum: 121
   # #4 transactional outbox on the CONTROL lane, and the RELAY that drains it — one switch for both,
   # because half of this is worse than neither. Staging without a relay leaves a durable copy nothing
   # reads; a relay without staging drains an empty prefix.
@@ -1497,12 +1506,12 @@ nats:
   # attestation below lists them. The rules, from the
   # components and the call sites, measured on nats-server 2.14.2 with protocol tracing on 2026-10-04:
   #   - a publisher may publish its topics and receive on _INBOX.>, where the publish acknowledgement arrives;
-  #   - a subscriber on stream S through durable D also requests $JS.API.STREAM.NAMES (no component sets streamName),
+  #   - a subscriber on stream S through durable D also requests $JS.API.STREAM.NAMES (unless its component sets streamName),
   #     $JS.API.CONSUMER.INFO.S.D and $JS.API.CONSUMER.CREATE.S.D.> (the create and the bind's lookup), and acknowledges on
   #     $JS.ACK.S.D.>. The server sends the v1 ack subject `$JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<ts>.<pending>`
   #     (measured, and FeatureFlagJsAckFormatV2 is false at v2.14.2), so a v2 pattern refuses every ack and every message
-  #     redelivers to the DLQ; a server upgrade that flips the flag changes these rows. A consumer the server names (the
-  #     catalog's ephemeral broadcast) acknowledges on $JS.ACK.S.>;
+  #     redelivers to the DLQ; a server upgrade that flips the flag changes these rows. A durable each pod names (the
+  #     catalog's broadcast, `catalog-control-{podName}` on CATALOG_CONTROL_BROADCAST) takes D as `*`;
   #   - a sidecar parks a dead letter through the component the delivery came on, so a subscriber publishes its own dlq.<app>;
   #   - each service probes its own sidecar's connections on probe.<app-id> (service_kit.bus_watchdog), which no stream
   #     captures, so a probe stores nothing;
@@ -1544,10 +1553,9 @@ nats:
   # the server config and the route credential from this chart's dev store.
   #
   # RESIDUALS, named: _INBOX.> is shared within the APP account (a client could read another's replies; Dapr exposes no inbox
-  # prefix); the catalog's ack on CATALOG_CONTROL is stream-wide, because its broadcast consumer's name is the server's, so a
-  # compromised catalog could ack or terminate notifications' control deliveries (a lesser power than the
-  # one it already holds: it signs every control event; ackPolicy none does not stop daprd 1.18.1 acking, measured);
-  # and 8222 monitoring is unauthenticated by design.
+  # prefix); the catalog's grant on CATALOG_CONTROL_BROADCAST covers every consumer there, since each replica's durable is
+  # named by its pod, so one replica could ack another's broadcast copy (the same identity, and the copies are hints); and
+  # 8222 monitoring is unauthenticated by design.
   auth:
     # -- Attests the platform's store holds every `nats-user-<user>`; required when the store is the platform's (`openbao.enabled` false).
     provisioned: false
@@ -1566,16 +1574,15 @@ nats:
     # -- The bus user table, one user per Dapr app-id plus admin and monitor, each with publish and subscribe subject lists (never empty).
     users:
       admin:
-        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
+        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.STREAM.UPDATE.CATALOG_CONTROL_BROADCAST, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
         subscribe: [_INBOX.>]
       catalog:
         publish:
           - lineage.events.v1
           - catalog.control.v1
-          - $JS.API.STREAM.NAMES
-          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL # the ephemeral broadcast every replica holds
-          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.*
-          - $JS.ACK.CATALOG_CONTROL.>
+          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL_BROADCAST.* # each replica's durable, named by its pod
+          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL_BROADCAST.*.>
+          - $JS.ACK.CATALOG_CONTROL_BROADCAST.*.>
           - probe.catalog # its sidecar's own connections, probed (service_kit.bus_watchdog); no stream captures it
         subscribe: [_INBOX.>]
       lineage:

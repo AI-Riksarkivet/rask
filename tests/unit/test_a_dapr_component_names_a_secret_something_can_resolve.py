@@ -81,10 +81,10 @@ def _secret_refs(node: object, found: list[dict]) -> list[dict]:
 
 
 def _consumes(publish: frozenset[str], stream: str, durables: set[str]) -> bool:
-    """Whether a user may create, read and acknowledge a consumer on `stream`: one of its durables, or a server-named one."""
-    durable = any({f"$JS.API.CONSUMER.INFO.{stream}.{d}", f"$JS.API.CONSUMER.CREATE.{stream}.{d}.>", f"$JS.ACK.{stream}.{d}.>"} <= publish for d in durables)
-    ephemeral = {f"$JS.API.CONSUMER.CREATE.{stream}", f"$JS.API.CONSUMER.INFO.{stream}.*", f"$JS.ACK.{stream}.>"} <= publish
-    return durable or ephemeral
+    """Whether a user may create, read and acknowledge one of its durables on `stream`; a durable each pod names for itself
+    may carry any name there."""
+    names = {"*" if chart_render.POD_NAME in d else d for d in durables}
+    return any({f"$JS.API.CONSUMER.INFO.{stream}.{d}", f"$JS.API.CONSUMER.CREATE.{stream}.{d}.>", f"$JS.ACK.{stream}.{d}.>"} <= publish for d in names)
 
 
 def _bus_credential_problems(docs: tuple[dict, ...], components: list[dict]) -> list[str]:
@@ -120,12 +120,12 @@ def _bus_credential_problems(docs: tuple[dict, ...], components: list[dict]) -> 
         publish, subscribe = users[app]
         if "_INBOX.>" not in subscribe:
             problems.append(f"{app} may not receive a reply, a delivery or a publish acknowledgement")
+        # A Component naming its stream binds there, and Dapr looks no stream up (components-contrib v1.18.0 jetstream.go:261-268).
+        bound = [str(rows["streamName"]["value"])] if "streamName" in rows else list(streams)
         if durable := (rows.get("durableName") or {}).get("value"):
             durables[app].add(str(durable))
-            if "$JS.API.STREAM.NAMES" not in publish or not any(_consumes(publish, stream, {str(durable)}) for stream in streams):
+            if ("streamName" not in rows and "$JS.API.STREAM.NAMES" not in publish) or not any(_consumes(publish, stream, {str(durable)}) for stream in bound):
                 problems.append(f"{app} may not create, bind and acknowledge its durable {durable} on any stream")
-        elif "deliverPolicy" in rows and not any(_consumes(publish, stream, set()) for stream in streams):
-            problems.append(f"{app} may not create, bind and acknowledge the ephemeral consumer {name} subscribes with")
     app_of = {
         f"{doc['kind']}/{doc['metadata']['name']}": ((doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
         for doc in docs

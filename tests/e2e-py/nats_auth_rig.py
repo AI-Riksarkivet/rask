@@ -19,6 +19,7 @@ import asyncio
 import base64
 import copy
 import json
+import os
 import re
 import socket
 import subprocess
@@ -224,6 +225,52 @@ class Broker:
         return self.log_path.read_text(errors="replace") if self.log_path.exists() else ""
 
 
+class Link:
+    """A TCP relay between one client and the broker that the test can cut, as a network fault or the restart of the
+    server a client is attached to looks to the server that holds its consumer: the connection drops, the server stays
+    up, and the client's interest is gone until it reconnects."""
+
+    def __init__(self, target_port: int) -> None:
+        self._target_port = target_port
+        self.port = free_port()
+        self.url = f"nats://127.0.0.1:{self.port}"
+        self._server: asyncio.Server | None = None
+        self._writers: set[asyncio.StreamWriter] = set()
+
+    async def start(self) -> None:
+        self._server = await asyncio.start_server(self._relay, "127.0.0.1", self.port)
+
+    async def cut(self, down: float) -> None:
+        """Drop every relayed connection and refuse new ones for `down` seconds."""
+        await self.stop()
+        await asyncio.sleep(down)
+        await self.start()
+
+    async def stop(self) -> None:
+        server, self._server = self._server, None
+        if server is not None:
+            server.close()
+        for writer in list(self._writers):
+            writer.close()
+
+    async def _relay(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
+        broker_reader, broker_writer = await asyncio.open_connection("127.0.0.1", self._target_port)
+        self._writers |= {client_writer, broker_writer}
+
+        async def pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            try:
+                while chunk := await reader.read(65536):
+                    writer.write(chunk)
+                    await writer.drain()
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                writer.close()
+                self._writers.discard(writer)
+
+        await asyncio.gather(pipe(client_reader, broker_writer), pipe(broker_reader, client_writer))
+
+
 class Violation(BaseModel):
     """One permission refusal the broker logged."""
 
@@ -248,7 +295,7 @@ def client_subjects(log: str) -> dict[tuple[str, str], set[str]]:
 
 
 def call_template(subject: str, consumers: set[str]) -> str:
-    """A subject with its per-run parts folded: inboxes, ack-reply tails, and consumer names nobody chose."""
+    """A subject with its per-run parts folded: inboxes, ack-reply tails, and consumer names the server or a pod chose."""
     if subject.startswith("_INBOX."):
         return "_INBOX.>"
     tokens = subject.split(".")
@@ -257,6 +304,8 @@ def call_template(subject: str, consumers: set[str]) -> str:
         return f"$JS.ACK.{tokens[2]}.{consumer}.>"
     if subject.startswith("$JS.API.CONSUMER.INFO.") and len(tokens) == 6 and tokens[5] not in consumers:
         return ".".join([*tokens[:5], "*"])
+    if subject.startswith("$JS.API.CONSUMER.CREATE.") and len(tokens) > 6 and tokens[5] not in consumers:
+        return ".".join([*tokens[:5], "*", *tokens[6:]])
     return subject
 
 
@@ -357,8 +406,11 @@ class Sidecar:
             *("--dapr-internal-grpc-port", str(free_port()), "--dapr-public-port", str(free_port())),
             *("--enable-metrics=false", "--resources-path", str(resources), "--log-level", "debug"),
         ]
+        # The injector sets POD_NAME from the pod's name (Dapr 1.18.1 `pkg/injector/patcher/sidecar_container.go:264`), and
+        # daprd fills a Component's `{podName}` from it.
+        env = {**os.environ, "POD_NAME": f"{self.app_id}-{self._dir.name}"}
         with self.log_path.open("wb") as log:
-            self._process = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT)  # noqa: S603
+            self._process = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT, env=env)  # noqa: S603
         deadline = time.monotonic() + timeout
         async with httpx.AsyncClient(timeout=2.0) as client:
             while True:

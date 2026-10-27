@@ -6,7 +6,9 @@ consumers on LINEAGE delivering and lineage's ephemeral one gone, and the sideca
 so lineage recorded nothing from the bus until its pod was restarted. A durable consumer persists in the
 stream's own storage and resumes where it stopped, on a NATS restart as on a pod restart.
 
-A publisher-only component (no queue group) holds no consumer and is outside the rule.
+A subscriber is a component carrying a queue group or a deliver policy: the catalog's broadcast takes no queue group,
+since every replica hears every event, and each replica holds a durable named for its pod ([[LH-305]]). A
+publisher-only component holds no consumer and is outside the rule.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ def _subscriber_components(docs: tuple[dict, ...]) -> dict[str, dict[str, str]]:
         if doc.get("kind") != "Component" or doc.get("spec", {}).get("type") != "pubsub.jetstream":
             continue
         metadata = {item["name"]: str(item.get("value")) for item in doc["spec"].get("metadata", [])}
-        if "queueGroupName" in metadata:
+        if "queueGroupName" in metadata or "deliverPolicy" in metadata:
             found[doc["metadata"]["name"]] = metadata
     return found
 
@@ -28,6 +30,6 @@ def _subscriber_components(docs: tuple[dict, ...]) -> dict[str, dict[str, str]]:
 def test_every_subscriber_holds_a_durable_consumer() -> None:
     subscribers = _subscriber_components(chart_render.render(*chart_render.DEFAULT_ARGS))
 
-    assert "lineage-pubsub-lineage" in subscribers, "the render no longer carries lineage's own subscription, so this gate checks nothing"
+    assert {"lineage-pubsub-lineage", "catalog-control-pubsub"} <= subscribers.keys(), "the render no longer carries the subscriptions this gate checks"
     ephemeral = sorted(name for name, metadata in subscribers.items() if not metadata.get("durableName"))
     assert not ephemeral, f"these subscribers lose their consumer on a NATS restart: {ephemeral}"

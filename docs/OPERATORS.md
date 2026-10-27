@@ -225,9 +225,9 @@ with no credential is refused ("Authorization Violation") and one with another a
 does not own is refused ("Permissions Violation"), each leaving the stream's last sequence unchanged.
 
 **Residuals, named.** `_INBOX.>` is shared within the account, so a client could read another's replies (Dapr exposes no
-inbox prefix). The catalog's ack on CATALOG_CONTROL is stream-wide because its broadcast consumer's name is the
-server's, so a compromised catalog could ack or terminate notifications' control deliveries, a lesser
-power than the one it holds as the signer of every control event. Port 8222 is unauthenticated by design.
+inbox prefix). The catalog's grant on CATALOG_CONTROL_BROADCAST covers every consumer there, since each replica's
+durable is named by its pod, so one replica could ack another's broadcast copy: the same identity, and the copies are
+hints. Port 8222 is unauthenticated by design.
 
 ## 8 · Credentials: generated for the dev store, provisioned for a real one (XC-004)
 

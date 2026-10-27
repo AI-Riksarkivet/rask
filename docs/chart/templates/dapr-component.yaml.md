@@ -23,8 +23,27 @@ BROADCAST component for the catalog's OWN control-plane change-events (grants/wa
 DEDICATED (not the shared lineage-pubsub) and with NO queueGroupName → jetstream sets no DeliverGroup, so
 EVERY catalog replica receives EVERY event and appends it to its per-replica ring buffer (GET /management/v1/events).
 The catalog is BOTH publisher (core/control_emit.py) and subscriber (api/dapr.py) on this one component.
-Ephemeral (no durableName) + deliverPolicy=new: a booting/redeployed replica must NOT replay 168h of past
-governance events into a fresh in-memory buffer — the buffer is a live-refresh hint window, not a log.
+deliverPolicy=new: a booting/redeployed replica must NOT replay 168h of past governance events into a fresh in-memory
+buffer — the buffer is a live-refresh hint window, not a log.
+
+## `- { name: durableName, value: "catalog-control-{podName}" }`
+
+Each replica's consumer is a durable it names for its pod ([[LH-305]]): daprd fills `{podName}` from `POD_NAME`, which
+the injector sets from `metadata.name` (Dapr 1.18.1 `pkg/runtime/meta/meta.go:88-93`,
+`pkg/injector/patcher/sidecar_container.go:264`). An ephemeral consumer is deleted after 5 s without interest (nats-server
+v2.14.2 `consumer.go:1462-1467`) and Dapr's jetstream component binds a consumer once and never re-creates it
+(components-contrib v1.18.0 `jetstream.go:268-279`), so a connection that dropped and reconnected left the replica deaf
+until its pod restarted; measured on the nats-auth rig, a 10 s cut silenced the ephemeral and the durable delivered again.
+The name carries no `-durable` suffix, so the stream Job's orphan and drift passes never touch it.
+
+## `- { name: streamName, value: "CATALOG_CONTROL_BROADCAST" }`
+
+The durables live on a mirror of CATALOG_CONTROL whose consumer limit reaps a deleted pod's durable after
+`catalog.controlConsumerInactiveSeconds`. Dapr gives a consumer no inactivity threshold, and a stream's limit applies to
+every consumer on it (nats-server v2.14.2 `consumer.go:663-667`), so on CATALOG_CONTROL it would reap notifications'
+durable as well. Naming the stream also makes Dapr skip its subject lookup, which would answer CATALOG_CONTROL (a mirror
+captures no subject). The catalog still publishes through this component onto CATALOG_CONTROL, since a publish names
+only its subject.
 
 ## `{{- if and .Values.maintenance.enabled .Values.maintenance.controlEmit }}`
 

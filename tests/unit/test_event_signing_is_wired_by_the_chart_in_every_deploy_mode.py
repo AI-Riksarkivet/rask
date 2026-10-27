@@ -233,3 +233,36 @@ def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod
         f"these pods' Configuration was edited under the name the old one had, so a pod that boots first loads the stale spec: {sorted(edited - renamed)}"
     )
     assert not renamed - edited, f"these pods are rolled onto a Configuration whose spec did not change: {sorted(renamed - edited)}"
+
+
+def _loaded_pubsub(docs: tuple[dict, ...]) -> dict[str, tuple[str, str]]:
+    """`Deployment/name` -> (its pod's pub/sub digest, the pub/sub Components scoped to its app), for every Dapr pod."""
+    by_app: dict[str, list[str]] = {}
+    for doc in docs:
+        if doc.get("kind") == "Component" and doc["spec"]["type"].startswith("pubsub."):
+            for app in doc.get("scopes") or []:
+                by_app.setdefault(app, []).append(json.dumps(doc, sort_keys=True))
+    loaded: dict[str, tuple[str, str]] = {}
+    for doc in docs:
+        if doc.get("kind") != "Deployment":
+            continue
+        annotations = (doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}
+        if app := annotations.get("dapr.io/app-id"):
+            loaded[doc["metadata"]["name"]] = (str(annotations.get("checksum/dapr-pubsub")), "\n".join(sorted(by_app.get(app, []))))
+    return loaded
+
+
+def test_a_pubsub_component_edit_rolls_exactly_the_pods_whose_app_it_scopes() -> None:
+    """daprd loads its Components once, at boot, and only a changed pod spec starts a rollout ([[LH-305]]): a Component edit
+    that changed no pod would reach a sidecar only when something else restarted it, which no reconcile does."""
+    before = _loaded_pubsub(chart_render.render(*DEFAULT_ARGS))
+    after = _loaded_pubsub(chart_render.render(*DEFAULT_ARGS, "--set", "dapr.resiliency.enabled=false"))
+
+    assert before.keys() == after.keys() and len(before) >= 4, f"the Dapr pods are {sorted(before)}"
+    edited = {pod for pod in before if before[pod][1] != after[pod][1]}
+    rolled = {pod for pod in before if before[pod][0] != after[pod][0]}
+    assert edited and edited != before.keys(), (
+        f"the overlay must edit some apps' Components and leave others, or one direction measures nothing: {sorted(edited)}"
+    )
+    assert not edited - rolled, f"these pods' Components changed and their pod spec did not, so their sidecars keep the old ones: {sorted(edited - rolled)}"
+    assert not rolled - edited, f"these pods are rolled though no Component their app loads changed: {sorted(rolled - edited)}"
