@@ -180,6 +180,17 @@ delegator, `onBehalfOf` equal to the whole actor. No action is exempt, so the la
 signed events (ADR 0171). A refusal is acked and counted in
 `notifications_signature_refused_total{lance_notifications_door,lance_notifications_reason}`.
 
+**One action erases rather than delivers: `principal_deleted`** (`ERASING_ACTIONS`, CTL-022). The catalog's offboarding door
+([[LH-233]]) names the principal in `extra.subject`, and `erase_subject` leaves every project index the person's watch list
+names, then `InboxActor.erase` removes the rows, meta, prefs, digest window and watch list and unregisters both reminders.
+Each step is idempotent, so a redelivery converges and enrols nobody; a userset, wildcard or service account erases
+nothing. It has no `NotificationReason`, because no row is written, and the signature door verifies it like a named action,
+since a forged one would erase someone's inbox. Not erased: a project index the person's own list does not name (the watch
+door's index-first write that failed before the list was written), or every index a list the inbox refuses to read named
+(it is erased anyway, logged `control_erasure_watches_unreadable`, rather than retried forever); no plane-wide listing
+can find either. A lineage delivery whose visibility check passed before LH-233 revoked the grants can still land after
+the erasure and write rows again, never an enrolment.
+
 **A new named action is a THREE-file change, and all three are load-bearing:**
 
 1. `service_kit/control_events.py` — add the member to `ControlAction`, or the envelope will not validate, and

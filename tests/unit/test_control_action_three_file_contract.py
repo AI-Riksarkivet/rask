@@ -31,12 +31,13 @@ that reached across into it would be asserting someone else's contract from here
 
 `ControlAction` is deliberately the SUPERSET: an action may be emitted for console invalidation without
 naming a person, and `_UNTARGETED_ACTIONS` records each such member with the reason it targets nobody —
-so the set is stated rather than inferred from whatever happens to be missing.
+so the set is stated rather than inferred from whatever happens to be missing. An action in `ERASING_ACTIONS` names a
+person and tells them nothing: the lane erases what it holds for them (`principal_deleted`, CTL-022).
 """
 
 from __future__ import annotations
 
-from notifications.api.control_events import NAMED_ACTIONS
+from notifications.api.control_events import ERASING_ACTIONS, NAMED_ACTIONS
 from service_kit.control_events import ControlAction
 
 
@@ -78,9 +79,6 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
         "table_tag_deleted",
         "gate_deleted",
         "gate_set",
-        # A principal the estate admin offboarded ([[LH-233]]). It names a person, and delivers them nothing: they are
-        # gone, so the notifications plane erases their inbox, preferences, cursor and watches on it (CTL-022) instead.
-        "principal_deleted",
         "namespace_created",
         "namespace_dropped",
         "namespace_protected",
@@ -127,7 +125,7 @@ def test_every_targeted_control_action_is_declared_in_named_actions() -> None:
     Nothing retries, nothing logs an error, and the producer's own tests pass — the event was emitted
     correctly and simply reached nobody.
     """
-    unlisted = sorted(_control_actions() - set(NAMED_ACTIONS) - _UNTARGETED_ACTIONS)
+    unlisted = sorted(_control_actions() - set(NAMED_ACTIONS) - ERASING_ACTIONS - _UNTARGETED_ACTIONS)
     assert not unlisted, (
         f"these ControlActions are not in NAMED_ACTIONS: {unlisted}. The lane files them IGNORED with "
         "a SUCCESS ack, so they reach nobody and nothing reports it. Add them to NAMED_ACTIONS "

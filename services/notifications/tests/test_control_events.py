@@ -36,6 +36,10 @@ def _event(*, action: str = "grant_added", subject: str | None = "user:dex~alice
     )
 
 
+def _no_index(project_id: str) -> Any:
+    raise AssertionError(f"a delivery opened the watch index of {project_id!r}")
+
+
 class _Inbox:
     def __init__(self, plane: "_Plane", subject: str) -> None:
         self._plane = plane
@@ -121,7 +125,7 @@ class TestIngest:
     async def test_a_named_grant_reaches_that_subject_and_nobody_else(self) -> None:
         plane = _Plane()
 
-        assert await ingest_control_event(_event().model_dump(mode="json"), open_inbox=plane.open) == {"status": "SUCCESS"}
+        assert await ingest_control_event(_event().model_dump(mode="json"), open_inbox=plane.open, open_watch_index=_no_index) == {"status": "SUCCESS"}
 
         assert list(plane.boxes) == ["dex~alice"]
 
@@ -131,7 +135,7 @@ class TestIngest:
         every check on the object, and dropping the row would make losing access silent."""
         plane = _Plane()
 
-        await ingest_control_event(_event(action="grant_revoked").model_dump(mode="json"), open_inbox=plane.open)
+        await ingest_control_event(_event(action="grant_revoked").model_dump(mode="json"), open_inbox=plane.open, open_watch_index=_no_index)
 
         delivered = plane.boxes["dex~alice"][0]
         assert (delivered["reason"], delivered["object_id"], delivered["object_uuid"]) == ("grant_revoked", "table:acme$gold", TABLE_UUID)
@@ -141,7 +145,9 @@ class TestIngest:
         """It arrived intact; this plane simply has no audience for it. DROP is for what cannot parse."""
         plane = _Plane()
 
-        assert await ingest_control_event(_event(action="table_created").model_dump(mode="json"), open_inbox=plane.open) == {"status": "SUCCESS"}
+        assert await ingest_control_event(_event(action="table_created").model_dump(mode="json"), open_inbox=plane.open, open_watch_index=_no_index) == {
+            "status": "SUCCESS"
+        }
         assert plane.boxes == {}
 
     @pytest.mark.asyncio
@@ -150,7 +156,7 @@ class TestIngest:
         subscription stops delivering anything at all."""
         plane = _Plane()
 
-        assert await ingest_control_event({"nonsense": True}, open_inbox=plane.open) == {"status": "DROP"}
+        assert await ingest_control_event({"nonsense": True}, open_inbox=plane.open, open_watch_index=_no_index) == {"status": "DROP"}
 
     @pytest.mark.asyncio
     async def test_an_unreachable_inbox_retries(self) -> None:
@@ -158,7 +164,7 @@ class TestIngest:
         unreachable, and the delivery is idempotent on the notification id."""
         plane = _Plane(broken={"dex~alice"})
 
-        assert await ingest_control_event(_event().model_dump(mode="json"), open_inbox=plane.open) == {"status": "RETRY"}
+        assert await ingest_control_event(_event().model_dump(mode="json"), open_inbox=plane.open, open_watch_index=_no_index) == {"status": "RETRY"}
 
 
 class TestUsersetGrants:
@@ -196,7 +202,9 @@ class TestUsersetGrants:
             assert userset == "role:reviewers#assignee"
             return ("dex~bob", "dex~carol")
 
-        result = await ingest_control_event(self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open, expand=expand)
+        result = await ingest_control_event(
+            self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open, open_watch_index=_no_index, expand=expand
+        )
 
         assert result == {"status": "SUCCESS"}
         assert sorted(plane.boxes) == ["dex~bob", "dex~carol"]
@@ -212,7 +220,7 @@ class TestUsersetGrants:
             calls.append(userset)
             return ()
 
-        await ingest_control_event(self._event("user:dex~alice").model_dump(mode="json"), open_inbox=plane.open, expand=expand)
+        await ingest_control_event(self._event("user:dex~alice").model_dump(mode="json"), open_inbox=plane.open, open_watch_index=_no_index, expand=expand)
 
         assert list(plane.boxes) == ["dex~alice"]
         assert calls == [], "a plain principal must not be expanded"
@@ -223,7 +231,7 @@ class TestUsersetGrants:
         all. Quiet, never wrong: the alternative is the phantom actor this whole class exists to end."""
         plane = _Plane()
 
-        result = await ingest_control_event(self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open)
+        result = await ingest_control_event(self._event("role:reviewers#assignee").model_dump(mode="json"), open_inbox=plane.open, open_watch_index=_no_index)
 
         assert result == {"status": "SUCCESS"}
         assert plane.boxes == {}

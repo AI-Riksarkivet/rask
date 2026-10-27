@@ -13,6 +13,9 @@ out of the rule — it is a different question. The lineage lane asks "may this 
 this OBJECT"; this lane asks "was this person the SUBJECT of this act", and the event itself answers
 it. Nothing about the object is disclosed beyond its id, which the subject was already named against.
 
+**An action in `ERASING_ACTIONS` is the one exception that tells nobody:** it names a person the estate admin
+offboarded, and the lane erases their inbox and watch enrolment instead (`erase_subject`, CTL-022).
+
 **Only the actions in `NAMED_ACTIONS`, and only when `extra.subject` is present.** Every other control
 action is a catalog mutation with no named party, and delivering those would recreate the estate-wide
 feed this plane exists to replace. (This read "only the two grant actions" until 2026-08-16, by which
@@ -25,7 +28,9 @@ from collections.abc import Awaitable, Callable
 
 from notifications.api.fanout import InboxOpener
 from notifications.api.metrics import Lane, Outcome, record_ingress
+from notifications.errors import InboxUnreadable
 from notifications.models import NotificationDelivery, NotificationReason
+from notifications.proxies import TypedActorProxy
 from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga
 from service_kit.lakehouse.subjects import is_person_subject
@@ -41,6 +46,15 @@ log = logging.getLogger(__name__)
 #: envelope will not validate) and `NotificationReason` must too, because `as_delivery` builds
 #: `NotificationReason(event.action)` and would raise on every delivery.
 NAMED_ACTIONS: frozenset[str] = frozenset({"grant_added", "grant_revoked", "erasure_release_scheduled"})
+
+#: The control actions that name a person and tell them nothing: the plane ERASES what it holds for them instead.
+#: `principal_deleted` is the estate admin offboarding a principal ([[LH-233]]), and nobody is left to tell (CTL-022).
+#: No `NotificationReason` matches, because no row is ever written for one. Verified like `NAMED_ACTIONS` at the
+#: signature door: an erasure is the most destructive thing an event can make this plane do.
+ERASING_ACTIONS: frozenset[str] = frozenset({"principal_deleted"})
+
+#: How the lane addresses one project's `WatchIndexActor`. A callable for the reason `InboxOpener` is one.
+type WatchIndexOpener = Callable[[str], TypedActorProxy]
 
 #: How a USERSET (`role:reviewers#assignee`, `team:eng#member`) resolves to the people in it.
 #:
@@ -100,9 +114,58 @@ async def named_subjects(event: CatalogControlEvent, expand: UsersetExpander | N
     # and a wildcard or a service account's principal addresses no person, so each is quiet here rather than an
     # inbox actor nobody opens, or an empty subject that `inbox_actor_id` raises on, turning a malformed producer
     # field into a RETRY loop on an event that can never succeed.
+    person = _person(raw)
+    return (person,) if person is not None else ()
+
+
+async def _watched_projects(inbox: TypedActorProxy) -> list[str]:
+    """The projects the person's watch list names; none when the list is unreadable, so the erasure still removes it.
+
+    A list this build cannot parse, or one naming another subject, names no project this lane can trust, and refusing
+    on it would RETRY the same refusal on every redelivery while the whole inbox stayed. The index enrolments it named
+    are logged as left, the one residue the erasure cannot reach.
+    """
+    try:
+        return [str(p) for p in (await inbox.get_watches()).get("projects") or []]
+    except InboxUnreadable:
+        log.warning("control_erasure_watches_unreadable")
+        return []
+
+
+def _person(raw: str) -> str | None:
+    """The inbox a stamped plain subject addresses, or None when it addresses no person (a userset is not handled here)."""
     stripped = raw.strip()
     subject = fga.subject_of(stripped.removeprefix("user:")) if stripped.startswith("user:") else stripped
-    return (subject,) if is_person_subject(subject) else ()
+    return subject if is_person_subject(subject) else None
+
+
+async def erase_subject(event: CatalogControlEvent, *, open_inbox: InboxOpener, open_watch_index: WatchIndexOpener) -> dict[str, str]:
+    """Erase everything this plane holds for the principal an `ERASING_ACTIONS` event names (CTL-022).
+
+    The person's own watch list names the projects whose index enrols them, so each index is left first and the inbox
+    erased last: a failure between the two leaves the list to find them by on the redelivery, and every step is
+    idempotent, so a redelivered or replayed event converges on the same empty state and re-enrols nobody. A userset,
+    a wildcard or a service account names no person whose state could be erased, so it erases nothing.
+    """
+    raw = event.extra.get("subject")
+    subject = _person(raw) if isinstance(raw, str) and not _is_userset(raw.strip()) else None
+    if subject is None:
+        record_ingress(Lane.BUS, Outcome.IGNORED)
+        return {"status": "SUCCESS"}
+    inbox = open_inbox(subject)
+    try:
+        watched = await _watched_projects(inbox)
+        for project_id in watched:
+            await open_watch_index(project_id).unwatch({"subject": subject})
+        await inbox.erase()
+    except Exception:
+        # RETRY: the actor plane was unreachable or refused, and an erasure the redelivery can finish must not be acked.
+        log.exception("control_erasure_failed", extra={"action": event.action})
+        record_ingress(Lane.BUS, Outcome.RETRIED)
+        return {"status": "RETRY"}
+    log.info("principal_erased", extra={"action": event.action, "watches_left": len(watched)})
+    record_ingress(Lane.BUS, Outcome.ERASED)
+    return {"status": "SUCCESS"}
 
 
 def as_delivery(event: CatalogControlEvent) -> NotificationDelivery:
@@ -123,7 +186,9 @@ def as_delivery(event: CatalogControlEvent) -> NotificationDelivery:
     )
 
 
-async def ingest_control_event(raw: object, *, open_inbox: InboxOpener, expand: UsersetExpander | None = None) -> dict[str, str]:
+async def ingest_control_event(
+    raw: object, *, open_inbox: InboxOpener, open_watch_index: WatchIndexOpener, expand: UsersetExpander | None = None
+) -> dict[str, str]:
     """Ingest one Dapr-delivered control event. Same DROP/RETRY/SUCCESS discipline as the run lane.
 
     An event naming nobody is a SUCCESS, not a DROP: it arrived intact and this plane simply has no
@@ -135,6 +200,9 @@ async def ingest_control_event(raw: object, *, open_inbox: InboxOpener, expand: 
         log.error("control_event_invalid", extra={"lane": Lane.BUS.value})
         record_ingress(Lane.BUS, Outcome.DROPPED)
         return {"status": "DROP"}
+
+    if event.action in ERASING_ACTIONS:
+        return await erase_subject(event, open_inbox=open_inbox, open_watch_index=open_watch_index)
 
     try:
         subjects = await named_subjects(event, expand)

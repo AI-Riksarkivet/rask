@@ -69,6 +69,8 @@ class Outcome(StrEnum):
     #: and a DROP on a subscription with a dead-letter topic parks the event on every replay.
     #: `notifications.signature.refused` carries the reason this label cannot.
     SIGNATURE_REFUSED = "signature_refused"
+    #: A principal the estate admin offboarded: everything this plane held for them erased, nobody told (CTL-022).
+    ERASED = "erased"
 
 
 class PassOutcome(StrEnum):

@@ -203,6 +203,10 @@ class InboxActorInterface(ActorInterface):
     async def drain_digest(self) -> dict[str, Any]:
         raise NotImplementedError
 
+    @actormethod(name="Erase")
+    async def erase(self) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 class InboxActor(Actor, InboxActorInterface, Remindable):
     """Holds one subject's pointer rows and their read state."""
@@ -624,6 +628,22 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
             return {"pointers": [], "total": 0}
         due = [p.model_dump(mode="json") for p in rows.pointers if not p.seen and not p.dismissed and not p.sent]
         return {"pointers": due, "total": len(due)}
+
+    async def erase(self) -> dict[str, Any]:
+        """Remove every partition this subject's inbox holds and both its reminders; the principal was offboarded (CTL-022).
+
+        Idempotent, so a redelivered erasure converges: an absent partition and an unregistered reminder are already
+        erased. No record is read, so one this build cannot parse, or one that names another subject, is removed too
+        rather than refusing the erasure. Both reminders are unregistered AFTER the partitions are removed, and a refusal
+        raises rather than being logged as `_disarm_compaction` does: a compaction or digest tick left registered would
+        write a record naming the subject into the inbox just erased. The watch list this removes names the project
+        indexes enrolling the subject, so the caller leaves those first.
+        """
+        removed = [key for key in (META_KEY, ROWS_KEY, WATCHES_KEY, DIGEST_KEY, PREFS_KEY) if await self._state_manager.try_remove_state(key)]
+        await self._state_manager.save_state()
+        await self.unregister_reminder(COMPACTION_REMINDER)
+        await self.unregister_reminder(DIGEST_REMINDER)
+        return {"removed": removed}
 
     async def _send_digest(self) -> None:
         """The digest tick: drain the window and push it, INSIDE THIS TURN.

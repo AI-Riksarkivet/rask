@@ -10,7 +10,7 @@ exactly as delivered: a model dump grows the fields a schema defaults, and the p
 
 * `/lineage-events`: an event `notifiable()` would deliver, against the estate's signer sets (`RASK_EVENT_SIGNERS`,
   `RASK_EVENT_DELEGATORS`), as lineage verifies it.
-* `/control-events`: an event whose action is in `NAMED_ACTIONS`, against the identities of the role
+* `/control-events`: an event whose action is in `NAMED_ACTIONS` or `ERASING_ACTIONS`, against the identities of the role
   `control_signer_role` names for its action (`RASK_CONTROL_SIGNER_ROLES`), so a valid signature from another service
   is no authority over the action. A role the chart did not render verifies against no identity, and its events are
   refused as `signer`. Every action needs a signature: the lane carries only the lakehouse's own signed events.
@@ -42,7 +42,7 @@ from pydantic import ValidationError
 from lineage_kit.door import DoorMode, DoorVerdict, judge
 from lineage_kit.keys import PublishedKeys
 from lineage_kit.signing import VerifiedSignature, control_signature_of, signature_of, verify_control_signature, verify_signature
-from notifications.api.control_events import NAMED_ACTIONS
+from notifications.api.control_events import ERASING_ACTIONS, NAMED_ACTIONS
 from notifications.api.ingest import DAPR_RETRY, DAPR_SUCCESS
 from notifications.api.lineage_events import LineageRunEvent, notifiable
 from notifications.api.metrics import Door, Lane, Outcome, record_ingress, record_signature_refused, record_signature_would_refuse
@@ -121,7 +121,7 @@ async def screen_control_event(arrived: object, request: Request, settings: Ingr
     """None when `/control-events` may act on ``arrived``; otherwise the answer the sidecar gets instead, the event told to nobody.
 
     ``arrived`` is the CloudEvent's data. The envelope is parsed only to read its action and object; the signature is
-    checked over ``arrived`` itself. An action outside `NAMED_ACTIONS` (or an envelope that does not parse, which the
+    checked over ``arrived`` itself. An action in neither `NAMED_ACTIONS` nor `ERASING_ACTIONS` (or an envelope that does not parse, which the
     route drops) is not verified, and neither is one the policy exempts.
     """
     mode = DoorMode(settings.signature_doors)
@@ -131,7 +131,7 @@ async def screen_control_event(arrived: object, request: Request, settings: Ingr
         event = CatalogControlEvent.model_validate(arrived)
     except ValidationError:
         return None
-    if event.action not in NAMED_ACTIONS:
+    if event.action not in NAMED_ACTIONS | ERASING_ACTIONS:
         return None
     signers = settings.control_signer_roles.get(control_signer_role(event.action), frozenset())
     claim = control_signature_of(arrived)

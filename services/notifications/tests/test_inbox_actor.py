@@ -17,12 +17,16 @@ from typing import Any, cast
 import pytest
 from dapr.actor import ActorId
 
+from notifications.api.control_events import ingest_control_event
 from notifications.config import get_notifications_settings
 from notifications.errors import InboxUnreadable
 from notifications.feed import unread_count
-from notifications.inbox_actor import COMPACTION_REMINDER, DIGEST_KEY, DIGEST_REMINDER, META_KEY, PREFS_KEY, ROWS_KEY, InboxActor
-from notifications.models import InboxMeta, InboxRows, NotificationReason, notification_id
+from notifications.inbox_actor import COMPACTION_REMINDER, DIGEST_KEY, DIGEST_REMINDER, META_KEY, PREFS_KEY, ROWS_KEY, WATCHES_KEY, InboxActor
+from notifications.models import InboxMeta, InboxRows, InboxWatches, NotificationReason, notification_id
 from notifications.proxies import inbox_actor_id
+from notifications.watch_actor import WatchIndexActor
+from service_kit.control_events import CatalogControlEvent
+from service_kit.governed import fga
 
 
 SUBJECT = "alice@example.test"
@@ -41,6 +45,7 @@ class _FakeStateManager:
     def __init__(self, events: list[str]) -> None:
         self.store: dict[str, str] = {}
         self.staged: dict[str, str] = {}
+        self.removing: set[str] = set()
         self.ttls: dict[str, int | None] = {}
         self.saves = 0
         #: Set to make the transaction refuse — "the state store is down mid-transition".
@@ -50,6 +55,8 @@ class _FakeStateManager:
     async def try_get_state(self, key: str) -> tuple[bool, str | None]:
         if key in self.staged:
             return (True, self.staged[key])
+        if key in self.removing:
+            return (False, None)
         return (key in self.store, self.store.get(key))
 
     async def set_state(self, key: str, value: str) -> None:
@@ -66,9 +73,20 @@ class _FakeStateManager:
         self.staged[key] = value
         self.ttls[key] = ttl_in_seconds
 
+    async def try_remove_state(self, key: str) -> bool:
+        """Staged like a write: the key reads as absent in this turn, and `save_state` removes it from the store."""
+        present = key in self.staged or (key in self.store and key not in self.removing)
+        self.staged.pop(key, None)
+        if key in self.store:
+            self.removing.add(key)
+        return present
+
     async def save_state(self) -> None:
         if self.save_error is not None:
             raise self.save_error
+        for key in self.removing:
+            self.store.pop(key, None)
+        self.removing.clear()
         self.store.update(self.staged)
         self.staged.clear()
         self.saves += 1
@@ -1003,3 +1021,61 @@ async def test_a_failed_PUSH_is_still_swallowed() -> None:
     finally:
         proxies.digest_push_into = original
     assert _digest_record(actor)["pending"] is False, "the window did not close durably before the push"
+
+
+@pytest.mark.parametrize("watch_list_readable", [pytest.param(True, id="a-readable-watch-list"), pytest.param(False, id="a-watch-list-naming-another")])
+@pytest.mark.asyncio
+async def test_an_offboarded_principals_inbox_prefs_digest_and_watches_are_erased_and_a_replay_enrols_nothing(
+    watch_index: WatchIndexActor, watch_list_readable: bool
+) -> None:
+    """CTL-022: the catalog's `principal_deleted` (LH-233) erases everything this plane holds for the principal.
+
+    Driven through the control lane into the real InboxActor and the real WatchIndexActor of each project the person
+    watched: their rows, meta, prefs, digest window and watch list are gone with both reminders, they are in no project's
+    index while the colleague watching beside them stays, and the event delivered again (at least once, and replayed)
+    re-creates none of it. A watch list the inbox refuses to read is erased all the same, and the enrolments it named are
+    the one residue left.
+    """
+    person, colleague = "dex~alice", "dex~bob"
+    inbox = _Actor(person)
+    await inbox.deliver(_delivery("run-1"))
+    await inbox.set_prefs({"channels": ["email"], "destinations": {"email": "alice@example.test"}, "digest_seconds": 60})
+    await inbox.arm_digest({"seconds": 60})
+    other_index = WatchIndexActor.__new__(WatchIndexActor)
+    other_index._state_manager = cast(Any, _FakeStateManager([]))
+    indexes = {"acme": watch_index, "globex": other_index}
+    for project_id, index in indexes.items():
+        await index.watch({"subject": person})
+        await index.watch({"subject": colleague})
+        await inbox.set_watch({"project_id": project_id, "watching": True})
+    if not watch_list_readable:
+        inbox.sm.store[WATCHES_KEY] = InboxWatches(subject=colleague, projects=["acme"], updated_at=datetime.now(UTC)).model_dump_json()
+    assert set(inbox.sm.store) == {META_KEY, ROWS_KEY, PREFS_KEY, DIGEST_KEY, WATCHES_KEY}
+    assert set(inbox.reminders) == {COMPACTION_REMINDER, DIGEST_REMINDER}
+
+    def open_inbox(subject: str) -> Any:
+        assert subject == person, f"the erasure addressed {subject!r}"
+        return inbox
+
+    def open_index(project_id: str) -> Any:
+        return indexes[project_id]
+
+    event = CatalogControlEvent(
+        event_id="evt-offboard",
+        occurred_at=datetime(2026, 10, 27, 12, 0, tzinfo=UTC),
+        action="principal_deleted",
+        object_type="principal",
+        object_id=fga.user_object(person),
+        actor="user:dex~admin",
+        extra={"subject": fga.user_object(person), "revoked": 3},
+    ).model_dump(mode="json")
+
+    for _delivered in range(2):
+        assert await ingest_control_event(event, open_inbox=open_inbox, open_watch_index=open_index) == {"status": "SUCCESS"}
+
+        assert inbox.sm.store == {}
+        assert inbox.reminders == {}
+        for index in indexes.values():
+            assert (await index.list_watchers({"at": datetime.now(UTC).isoformat()}))["subjects"] == (
+                [colleague] if watch_list_readable else [person, colleague]
+            )

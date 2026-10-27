@@ -40,7 +40,7 @@ from notifications.api.security import VisibilityDep
 from notifications.api.settings import get_ingress_settings
 from notifications.api.signature_door import screen_control_event, screen_lineage_event
 from notifications.config import get_notifications_settings
-from notifications.proxies import channel_push, inbox_for, watchers_of
+from notifications.proxies import channel_push, inbox_for, watch_index_for, watchers_of
 
 
 if TYPE_CHECKING:  # no runtime cost, and it breaks no import cycle
@@ -148,6 +148,7 @@ def register_subscriptions(app: FastAPI) -> None:
         return await ingest_control_event(
             data,
             open_inbox=inbox_for,
+            open_watch_index=watch_index_for,
             expand=_make_expander(getattr(request.app.state, "decider", None)),
         )
 

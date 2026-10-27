@@ -101,6 +101,9 @@ class _Plane:
     def open(self, subject: str) -> TypedActorProxy:
         return cast(TypedActorProxy, _Inbox(self, subject))
 
+    def open_index(self, project_id: str) -> TypedActorProxy:
+        raise AssertionError(f"a delivery opened the watch index of {project_id!r}")
+
 
 def _cloud_event(event: dict[str, Any], topic: str = "lineage.events.v1") -> dict[str, Any]:
     return {"id": "ce-1", "source": "lineage", "type": "com.dapr.event.sent", "topic": topic, "data": event}
@@ -138,6 +141,8 @@ def _control_event(case: str, *, catalog: Any, maintenance: Any) -> dict[str, An
             return signed
         case "catalog-grant":
             return catalog.sign_control(GRANT, on_behalf_of="user:dex~admin")
+        case "unsigned-principal-deleted":
+            return {**GRANT, "action": "principal_deleted", "object_type": "principal", "object_id": "user:dex~alice", "extra": {"subject": "user:dex~alice"}}
         case "unsigned-unnamed-action":
             return {**GRANT, "action": "warehouse_bound", "object_type": "warehouse", "object_id": "warehouse:acme", "extra": {"namespace": "acme"}}
     raise AssertionError(f"no control event for case {case!r}")
@@ -158,6 +163,7 @@ def _build(plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClien
     # Before any request: the real `inbox_for` builds a Dapr `ActorProxy`, whose constructor blocks on
     # a sidecar health check for a full minute when there is no daprd to answer it.
     monkeypatch.setattr(subscriptions_module, "inbox_for", plane.open)
+    monkeypatch.setattr(subscriptions_module, "watch_index_for", plane.open_index)
     with TestClient(app) as client:
         yield client
     get_ingress_settings.cache_clear()
@@ -297,6 +303,9 @@ def test_a_delivery_carrying_the_sidecars_token_reaches_an_inbox_only_when_a_lis
         pytest.param("enforce", "grant-signed-by-another-role", {}, ("notifications.signature.refused", "signer"), id="enforce-a-grant-maintenance-signed"),
         pytest.param("enforce", "tampered-grant", {}, ("notifications.signature.refused", "signature"), id="enforce-a-grant-changed-after-it-was-signed"),
         pytest.param("enforce", "catalog-grant", {"dex~alice": 1}, None, id="enforce-a-grant-the-catalog-signed-for-its-actor"),
+        pytest.param(
+            "enforce", "unsigned-principal-deleted", {}, ("notifications.signature.refused", "unsigned"), id="enforce-an-unsigned-erasure-erases-nothing"
+        ),
         pytest.param("enforce", "unsigned-unnamed-action", {}, None, id="enforce-an-action-the-route-ignores-is-not-checked"),
         pytest.param(
             "observe", "unsigned-catalog-grant", {"dex~alice": 1}, ("notifications.signature.would_refuse", "unsigned"), id="observe-an-unsigned-grant"
