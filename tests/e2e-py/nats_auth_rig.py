@@ -547,5 +547,6 @@ def run_stream_job(cli: Path, script: str, credential: Credential, home: Path, t
         text=True,
         timeout=timeout,
         env={"HOME": str(home), "PATH": f"{cli.parent}:/usr/bin:/bin", "NATS_CREDS": str(credential.creds_file)},
+        stdin=subprocess.DEVNULL,
         check=False,
     )

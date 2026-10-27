@@ -42,6 +42,17 @@ The path of the `admin` creds file the nats CLI reads (values.yaml `nats.auth`),
 
 A server that is not up yet is waited for; one that refuses this Job's credential fails it now, by name.
 
+## `consumer_of() {`
+
+The drift passes judge a durable by its info, and a judgement on a failed read deleted a healthy durable, which the
+sidecar re-creates at `deliverPolicy: new`, skipping what was published in between ([[LH-343]]). Measured 2026-10-27 on
+the nats-auth rig with an admin that may list and delete but not read: every durable on LINEAGE, DLQ and CATALOG_CONTROL was
+deleted and the Job exited 0. The CLI's `consumer info` cannot tell a missing consumer from a failed read (on a missing
+name nats-box 0.14.5's CLI v0.1.5 tries to prompt for one, "cannot pick a Consumer without a terminal"), so the reader
+asks `$JS.API.CONSUMER.INFO` itself: error 10014 is a consumer that does not exist (nothing to judge), a `config` is
+one read, and anything else (a timeout during a leader move, a refusal, no server) is retried five times, 3 s apart,
+then fails the Job with that durable left in place; `backoffLimit` runs it again.
+
 ## `LIN="{{ .Values.services.lineage.daprAppId }}-durable"`
 
 LINEAGE'S DURABLE IS HELD TO ITS IN-FLIGHT BOUND ([[LH-533]]). `services.lineage.deliveriesInFlight` is the

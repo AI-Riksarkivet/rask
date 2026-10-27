@@ -106,6 +106,19 @@ spec:
                 assert_retention "$stream" limits
               done
 
+              consumer_of() {
+                tries=0
+                while :; do
+                  got=$(nats --server "$S" req "\$JS.API.CONSUMER.INFO.$1.$2" '' 2>/dev/null | tr -d ' \n')
+                  case "$got" in
+                    *'"err_code":10014'*) return 0 ;;
+                    *'"config":'*) echo "$got"; return 0 ;;
+                  esac
+                  tries=$((tries + 1))
+                  if [ "$tries" -ge 5 ]; then echo "!! could not read consumer $1/$2 (answer: ${got:-none}); it is left in place" >&2; return 1; fi
+                  sleep 3
+                done
+              }
               add_if_missing LINEAGE "lineage.events.>"
               # DLQ parks dead-lettered deliveries (dapr.resiliency — the sidecar publishes to dlq.*
               # after retry exhaustion). Its OWN stream for two load-bearing reasons: Dapr does NOT
@@ -135,7 +148,8 @@ spec:
                 if [ "$limit" != "$BROADCAST_INACTIVE_NS" ] || [ "$age" != "$BROADCAST_INACTIVE_NS" ]; then
                   echo "RECONCILE CATALOG_CONTROL_BROADCAST: inactive_threshold=${limit:-none} max_age=$age != expected $BROADCAST_INACTIVE_NS"
                   for c in $(nats --server "$S" consumer ls CATALOG_CONTROL_BROADCAST --names 2>/dev/null); do
-                    held=$(nats --server "$S" consumer info CATALOG_CONTROL_BROADCAST "$c" --json 2>/dev/null | tr -d ' \n' | sed -n 's/.*"inactive_threshold":\([0-9]*\).*/\1/p')
+                    held=$(consumer_of CATALOG_CONTROL_BROADCAST "$c") || exit 1
+                    held=$(echo "$held" | sed -n 's/.*"inactive_threshold":\([0-9]*\).*/\1/p')
                     if [ -n "$held" ] && [ "$held" -gt "$BROADCAST_INACTIVE_NS" ]; then
                       nats --server "$S" consumer edit CATALOG_CONTROL_BROADCAST "$c" --inactive-threshold={{ .Values.catalog.controlConsumerInactiveSeconds }}s -f >/dev/null \
                         || { echo "!! FAILED to lower $c's inactive threshold"; exit 1; }
@@ -193,7 +207,8 @@ spec:
               done
               for st in LINEAGE DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 for c in $(nats --server "$S" consumer ls "$st" --names 2>/dev/null | grep -- '-durable$'); do
-                  info=$(nats --server "$S" consumer info "$st" "$c" --json 2>/dev/null | tr -d ' \n')
+                  info=$(consumer_of "$st" "$c") || exit 1
+                  [ -n "$info" ] || continue
                   maxd=$(echo "$info" | sed -n 's/.*"max_deliver":\(-\{0,1\}[0-9]*\).*/\1/p')
                   boff=$(echo "$info" | sed -n 's/.*"backoff":\[\([0-9,]*\)\].*/\1/p')
                   if [ "$maxd" != "$EXP_MAXD" ] || [ "$boff" != "$EXP_BOFF" ]; then
@@ -204,19 +219,20 @@ spec:
               done
               LIN="{{ .Values.services.lineage.daprAppId }}-durable"
               EXP_MACK="{{ required "services.lineage.deliveriesInFlight is required" .Values.services.lineage.deliveriesInFlight }}"
-              mack_of() { nats --server "$S" consumer info LINEAGE "$LIN" --json 2>/dev/null | tr -d ' \n' | sed -n 's/.*"max_ack_pending":\(-\{0,1\}[0-9]*\).*/\1/p'; }
-              mack=$(mack_of)
+              mack_of() { info=$(consumer_of LINEAGE "$LIN") || return 1; echo "$info" | sed -n 's/.*"max_ack_pending":\(-\{0,1\}[0-9]*\).*/\1/p'; }
+              mack=$(mack_of) || exit 1
               if [ -n "$mack" ] && [ "$mack" != "$EXP_MACK" ]; then
                 deadline=$(( $(date +%s) + 300 ))
                 while :; do
-                  mack=$(mack_of)
+                  mack=$(mack_of) || exit 1
                   if [ "$mack" = "$EXP_MACK" ]; then echo "RECONCILED LINEAGE/$LIN: max_ack_pending=$mack"; break; fi
                   if [ -n "$mack" ]; then
                     echo "RECONCILE LINEAGE/$LIN: max_ack_pending=$mack != expected $EXP_MACK — deleting (sidecar re-creates)"
                     nats --server "$S" consumer rm LINEAGE "$LIN" -f
                   fi
                   if [ "$(date +%s)" -ge "$deadline" ]; then
-                    [ -z "$(mack_of)" ] && break
+                    mack=$(mack_of) || exit 1
+                    [ -z "$mack" ] && break
                     echo "!! LINEAGE/$LIN is not at max_ack_pending=$EXP_MACK after 300 s"; exit 1
                   fi
                   sleep 5

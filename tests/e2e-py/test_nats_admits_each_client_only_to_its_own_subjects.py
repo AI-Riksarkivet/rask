@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,9 @@ REPO = Path(__file__).resolve().parents[2]
 #: The rig's own observer: it reads stream state and plants consumers for the Job's second pass, so no table user's
 #: call set carries the test's bookkeeping. It is minted beside the table and is not a row of it.
 RIG = "rask-test-rig"
+#: `admin`'s grants without `$JS.API.CONSUMER.INFO`, so every consumer read the stream Job makes fails as a read during a
+#: JetStream leader move does, while it may still list and delete ([[LH-343]]). Minted beside the table, not a row of it.
+BLIND_ADMIN = "rask-test-blind-admin"
 #: How long the broadcast sidecar's connection is cut: past an ephemeral consumer's 5 s inactivity threshold
 #: (nats-server v2.14.2 `consumer.go:1462-1467`), well inside nats.go's 120 s reconnect budget (60 tries, 2 s apart).
 LINK_DOWN_SECONDS = 10.0
@@ -175,17 +179,24 @@ def _table_names_every_client(table: dict[str, Permissions], components: list[di
     return findings
 
 
-def _stream_job(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path) -> list[str]:
-    """The chart's stream Job, run as `admin` against this broker; it must finish and exit 0."""
+def _run_stream_job(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path, user: str) -> subprocess.CompletedProcess[str] | str:
+    """The chart's stream Job, run as `user` against this broker: its run, or why it did not finish."""
     job = next(d for d in docs if d.get("kind") == "Job" and "-nats-stream-" in d["metadata"]["name"])
     script = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
     rendered_url = component_metadata(_pubsub_components(docs)[0])["natsURL"]
     if rendered_url not in script:
-        return [f"the stream Job's script does not name the broker as {rendered_url}"]
+        return f"the stream Job's script does not name the broker as {rendered_url}"
     try:
-        done = run_stream_job(tools.job_cli, script.replace(rendered_url, broker.url), mint_.credentials["admin"], home)
+        return run_stream_job(tools.job_cli, script.replace(rendered_url, broker.url), mint_.credentials[user], home, 300.0)
     except subprocess.TimeoutExpired as exc:
-        return [f"the stream Job did not finish as admin (its readiness loop retries a refused connection): {str(exc.stdout or '')[-600:]}"]
+        return f"the stream Job did not finish as {user} (its readiness loop retries a refused connection): {str(exc.stdout or '')[-600:]}"
+
+
+def _stream_job(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path) -> list[str]:
+    """The chart's stream Job, run as `admin` against this broker; it must finish and exit 0."""
+    done = _run_stream_job(tools, docs, broker, mint_, home, "admin")
+    if isinstance(done, str):
+        return [done]
     return [] if done.returncode == 0 else [f"the stream Job exited {done.returncode} as admin: {(done.stdout + done.stderr)[-800:]}"]
 
 
@@ -438,6 +449,37 @@ async def _stream_job_repairs(tools: Tools, docs: tuple[dict, ...], broker: Brok
     return findings
 
 
+async def _judged_durables(rig: Client, docs: tuple[dict, ...]) -> set[tuple[str, str]]:
+    """The durables the Job's drift passes judge: every `-durable` consumer on the streams they walk."""
+    script = next(d for d in docs if d.get("kind") == "Job" and "-nats-stream-" in d["metadata"]["name"])["spec"]["template"]["spec"]["containers"][0][
+        "command"
+    ][2]
+    walked = re.search(r"for st in ([A-Z_ ]+); do", script)
+    assert walked, "the drift loop's `for st in` line is not in the rendered Job"
+    return {
+        (stream, name)
+        for stream in walked.group(1).split()
+        for name in (await rig.request(f"$JS.API.CONSUMER.NAMES.{stream}") or {}).get("consumers") or []
+        if name.endswith("-durable")
+    }
+
+
+async def _stream_job_deletes_nothing_it_could_not_read(
+    tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, rig: Client, home: Path
+) -> list[str]:
+    """A Job run whose every consumer read fails must fail and delete nothing: a durable it could not read is not one that
+    drifted, and the sidecar would re-create a deleted one at `deliverPolicy: new`, skipping what was published between."""
+    before = await _judged_durables(rig, docs)
+    assert before, "no durable sits on a stream the drift passes walk, so this leg judges nothing"
+    done = await asyncio.to_thread(_run_stream_job, tools, docs, broker, mint_, home, BLIND_ADMIN)
+    if isinstance(done, str):
+        return [done]
+    findings = [f"the stream Job deleted {stream}/{name}, whose info it could not read" for stream, name in sorted(before - await _judged_durables(rig, docs))]
+    if done.returncode == 0:
+        findings.append(f"the stream Job exited 0 though it could read no consumer: {(done.stdout + done.stderr)[-600:]}")
+    return findings
+
+
 def _monitor_reads(tools: Tools, broker: Broker, mint_: Mint, home: Path) -> list[str]:
     """nats-box's read-only operator view, as `monitor`."""
     findings = []
@@ -454,7 +496,9 @@ def _refusals_against_the_matrix(log_text: str, mint_: Mint, foreign: set[tuple[
     refused = {(user, v.subject) for user, v in seen if v.kind == "Publish"}
     accepted = [f"{user} published {subject}, which only {sorted(PUBLISHERS.get(subject, ())) or 'nobody'} may" for user, subject in sorted(foreign - refused)]
     unexpected = {
-        f"the broker refused {user} {v.kind.lower()} on {v.subject} (connection {v.connection})" for user, v in seen if (user, v.subject) not in foreign
+        f"the broker refused {user} {v.kind.lower()} on {v.subject} (connection {v.connection})"
+        for user, v in seen
+        if (user, v.subject) not in foreign and not (user == BLIND_ADMIN and v.subject.startswith("$JS.API.CONSUMER.INFO."))
     }
     return accepted + sorted(unexpected)
 
@@ -490,7 +534,8 @@ async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path) 
     components = _pubsub_components(docs)
     findings = [*_lane_runs_the_charts_images(tools, docs), *_table_names_every_client(table, components)]
     assert findings == [], "\n".join(findings)
-    mint_ = mint(tools.nsc, {**table, RIG: Permissions(publish=("$JS.API.>",), subscribe=("_INBOX.>",))}, tmp_path / "nsc")
+    blind = Permissions(publish=tuple(s for s in table["admin"].publish if not s.startswith("$JS.API.CONSUMER.INFO.")), subscribe=table["admin"].subscribe)
+    mint_ = mint(tools.nsc, {**table, RIG: Permissions(publish=("$JS.API.>",), subscribe=("_INBOX.>",)), BLIND_ADMIN: blind}, tmp_path / "nsc")
     broker = Broker(tools.nats_server, mint_, tmp_path / "broker")
     broker.start()
     try:
@@ -502,6 +547,7 @@ async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path) 
         findings += await _daprd_shapes(tools, broker, mint_, components, rig, tmp_path / "daprd")
         findings += await _replay_subscriptions(broker.url, mint_, components, probes)
         findings += await _stream_job_repairs(tools, docs, broker, mint_, rig, tmp_path)
+        findings += await _stream_job_deletes_nothing_it_could_not_read(tools, docs, broker, mint_, rig, tmp_path)
         findings += await asyncio.to_thread(_monitor_reads, tools, broker, mint_, tmp_path)
         for client in [rig, *probes.values()]:
             await client.close()
