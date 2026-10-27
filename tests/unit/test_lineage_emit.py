@@ -159,7 +159,9 @@ def test_build_write_event_without_schema_omits_facet() -> None:
 
 
 def test_emitted_event_round_trips_into_lineage_model() -> None:
-    """The event the catalog emits must parse in the lineage service's RunEvent model."""
+    """The event the catalog emits must parse in the lineage service's RunEvent model, and its run carries no facet
+    beyond rask's own and the engine's: a catalog write is triggered by its caller and has no schedule time, so it
+    carries no ``nominalTime`` (ADR 0180)."""
     event = build_write_event(
         table_id="alpha$bronze$images",
         namespace="alpha$bronze",
@@ -169,11 +171,13 @@ def test_emitted_event_round_trips_into_lineage_model() -> None:
         run_id="r1",
         event_time="2026-06-24T00:00:00+00:00",
         job_namespace="lance-catalog",
+        commits_rows=True,
     )
     parsed = _parsed(event)
     assert parsed.operation == "create_table"
     assert parsed.author == "alice"
     assert parsed.outputs[0].name == "alpha$bronze$images"
+    assert set(event["run"]["facets"]) == {"author", "lance", "processing_engine"}
 
 
 class _Resp:

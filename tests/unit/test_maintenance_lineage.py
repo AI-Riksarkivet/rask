@@ -44,7 +44,8 @@ from service_kit.openlineage import DatasetUuids
 
 def test_maintenance_event_round_trips_through_lineage_run_event() -> None:
     # The wire contract: the lineage service must parse a compaction event as a successful, input-less run on
-    # the dataset — so it records the run and asserts no edge (nothing was derived from anything).
+    # the dataset — so it records the run and asserts no edge (nothing was derived from anything). Its run carries no
+    # `nominalTime`: a sweep tick is no schedule time of the table's run (ADR 0180).
     event = build_maintenance_event(
         table_id="silver$features",
         namespace="silver",
@@ -57,6 +58,7 @@ def test_maintenance_event_round_trips_through_lineage_run_event() -> None:
     assert parsed.operation == EXPIRE_VERSIONS
     assert [d.name for d in parsed.outputs] == ["silver$features"]
     assert parsed.inputs == []
+    assert set(event["run"]["facets"]) == {"lance"}
 
 
 # --------------------------------------------------------------------------- #
@@ -80,7 +82,9 @@ def _fail_event(**overrides: Any) -> dict[str, Any]:
 def test_fail_event_round_trips_through_lineage_run_event() -> None:
     # The wire contract: lineage parses it as a FAILED run on the dataset, which the feed records and which
     # asserts no edge, because a failed run derived nothing.
-    parsed = RunEvent.model_validate(_fail_event())
+    event = _fail_event()
+    parsed = RunEvent.model_validate(event)
+    assert set(event["run"]["facets"]) == {"errorMessage", "lance"}
     assert not parsed.is_success
     assert parsed.operation == EXPIRE_VERSIONS
     assert [d.name for d in parsed.outputs] == ["ns$table"]

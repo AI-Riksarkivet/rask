@@ -192,3 +192,4 @@ before they had a record here; each names its source document and the date of th
 | [0177](0177-the-commit-is-the-outbox.md) | LH-497 | The commit is the outbox: every version names its author, and a lost announcement is made from the version log (2026-10-25) |
 | [0178](0178-an-erasure-is-held-until-every-table-derived-from-it-has-an-obligation.md) | LH-332 | An erasure is held until every table derived from its table has an obligation of its own (2026-10-26) |
 | [0179](0179-branch-creates-take-turns-and-leases-run-on-the-stores-clock.md) | LH-413 | Branch creates take turns, leases run on the store's clock, and edges name a branch's incarnation (2026-10-26) |
+| [0180](0180-no-lakehouse-run-carries-a-nominal-time.md) | LIN-002 | No lakehouse run carries a nominal time (2026-10-27) |
