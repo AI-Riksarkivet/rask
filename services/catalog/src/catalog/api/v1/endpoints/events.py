@@ -31,7 +31,7 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.control_buffer import ControlEventBuffer
 from catalog.schemas import EventsResponse
-from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 
 
 log = logging.getLogger(__name__)
@@ -64,8 +64,8 @@ async def poll_control_events(
     # console floods the #41 audit trail. The gate's own allow/deny audit still records every authorized read.
     if events or reset:
         audit(
-            "event_stream_opened",
-            SUCCESS,
+            AuditAction.EVENT_STREAM_OPENED,
+            AuditOutcome.SUCCESS,
             subject=token.subject if token is not None else None,
             resource=settings.fga_root_object,
             delivered=len(events),

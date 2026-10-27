@@ -2503,7 +2503,14 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, re
         )
 
 
-def count_rows(table: table_claims.DoorTable, so: StorageOptions, req: CountTableRowsRequest, *, data_ns: LanceNamespace) -> int:
+class RowCount(BaseModel):
+    """A count and the version it was counted at, which is what the door's read record states."""
+
+    count: int
+    version: int
+
+
+def count_rows(table: table_claims.DoorTable, so: StorageOptions, req: CountTableRowsRequest, *, data_ns: LanceNamespace) -> RowCount:
     """Count rows on the ref the request NAMES — the read-side twin of `update_table`'s omission; main's native count runs on ``data_ns``.
 
     The upstream `count_table_rows` takes the whole request and answers from main whatever `branch`
@@ -2532,10 +2539,11 @@ def count_rows(table: table_claims.DoorTable, so: StorageOptions, req: CountTabl
         response = table.read_natively("count_table_rows", req, via=data_ns)
         if not isinstance(response, CountTableRowsResponse) or response.count is None:
             raise TypeError(f"count_table_rows must answer a CountTableRowsResponse with a count, got {type(response).__name__}: {response!r}")
-        return response.count
+        return RowCount(count=response.count, version=req.version)
     dataset = table.open(so, version=req.version, branch=req.branch)
     with caller_sql("invalid count predicate"):
-        return int(dataset.count_rows(filter=req.predicate) if req.predicate else dataset.count_rows())
+        counted = dataset.count_rows(filter=req.predicate) if req.predicate else dataset.count_rows()
+    return RowCount(count=int(counted), version=int(dataset.version))
 
 
 def add_columns(
@@ -2711,8 +2719,8 @@ def read_changes(
     kind: changes.ChangeKind,
     columns: list[str] | None = None,
     branch: str | None = None,
-) -> Iterator[bytes]:
-    """The rows that changed in ``(begin_version, end_version]``, Arrow FILE-framed (§ J4), handed out in pieces.
+) -> tuple[int, Iterator[bytes]]:
+    """The version the window ends at, and the rows that changed in ``(begin_version, end_version]``, Arrow FILE-framed (§ J4), handed out in pieces.
 
     ONE SNAPSHOT, the window's end. The dataset is opened AT ``end_version`` — at the head it read, for
     an open window — and every kind is answered from that handle, so a closed window answers the same set
@@ -2772,7 +2780,7 @@ def read_changes(
         # A window from version 0 names only rows the consumer never held, and `delta()` would need the
         # manifest of version 1, which maintenance cleanup removes from every table older than its
         # retention: that resynchronisation is answered empty rather than read.
-        return _deleted_row_ids(spans) if begin_version > 0 else _arrow_file_chunks(_DELETED_SCHEMA, None, iter(()))
+        return end, (_deleted_row_ids(spans) if begin_version > 0 else _arrow_file_chunks(_DELETED_SCHEMA, None, iter(())))
     predicate = changes.change_filter(begin_version=begin_version, end_version=end, kind=kind)
     projection = changes.feed_projection(columns, data_columns=dataset.schema.names)
     with caller_sql("invalid change-feed predicate"):
@@ -2783,7 +2791,7 @@ def read_changes(
         # where a raise becomes a truncated 200 instead of the 400 `caller_sql` exists to produce.
         batches = scanner.to_batches()
         first = next(batches, None)
-    return _arrow_file_chunks(scanner.projected_schema, first, batches)
+    return end, _arrow_file_chunks(scanner.projected_schema, first, batches)
 
 
 class _WindowSpan(BaseModel):

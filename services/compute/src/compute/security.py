@@ -23,9 +23,10 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from compute.audit_actions import ComputeAuditAction
 from compute.dependencies import ComputeSettingsDep
 from service_kit.exceptions import ForbiddenError
-from service_kit.governed.audit import ALLOW, DENY, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from service_kit.governed.deps import FgaChecker, make_auth_deps
 
 
@@ -47,6 +48,6 @@ async def require_read(subject: CurrentSubject, checker: CheckerDep, settings: C
     """
     obj = settings.fga_root_object
     allowed = await checker(user=subject, relation=READ, obj=obj)
-    audit("compute_read", ALLOW if allowed else DENY, subject=subject, resource=obj)
+    audit(ComputeAuditAction.COMPUTE_READ, AuditOutcome.ALLOW if allowed else AuditOutcome.DENY, subject=subject, resource=obj)
     if not allowed:
         raise ForbiddenError(f"'{subject}' lacks '{READ}' on '{obj}' — reading the compute plane needs the estate admin")

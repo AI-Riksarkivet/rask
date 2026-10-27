@@ -49,11 +49,12 @@ from client_kit.lancekit.predicate import eq
 from client_kit.media.authz import table_object
 from client_kit.media.deps import StateDep
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
-from service_kit.governed.audit import FAILURE, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from service_kit.governed.deps import RawBearerToken
 from service_kit.lakehouse.blobs import is_blob_field
 from viewer.api.security import READ_DATA, READ_METADATA, CheckerDep, CurrentSubject
 from viewer.api.v1.endpoints.media import MAX_BUFFERED_BLOB_BYTES, _handle_size, _stream_handle
+from viewer.audit_actions import ViewerAuditAction
 
 
 logger = logging.getLogger(__name__)
@@ -251,7 +252,7 @@ async def _authorized_dataset(
     checker: object,
     subject: str,
     relation: str,
-    action: str,
+    action: ViewerAuditAction,
 ) -> lance.LanceDataset:
     """Check the caller against ``table`` and return the open dataset, or raise.
 
@@ -265,7 +266,7 @@ async def _authorized_dataset(
     """
     obj = table_object(table)
     if not await checker(user=subject, relation=relation, obj=obj):  # ty: ignore[call-non-callable]
-        audit(action, FAILURE, subject=subject, resource=table, relation=relation)
+        audit(action, AuditOutcome.FAILURE, subject=subject, resource=table, relation=relation)
         raise ForbiddenError(f"{subject} lacks {relation} on {obj}")
     return await run_in_threadpool(_open, state, table, token)
 
@@ -377,7 +378,7 @@ async def list_pages(
     megabytes to render a contact sheet; the browser fetches each page's bytes from ``/api/page``,
     which the ``<img>`` tag streams on demand.
     """
-    ds = await _authorized_dataset(state, table, token, checker=checker, subject=subject, relation=READ_METADATA, action="viewer.pages.list")
+    ds = await _authorized_dataset(state, table, token, checker=checker, subject=subject, relation=READ_METADATA, action=ViewerAuditAction.VIEWER_PAGES_LIST)
     rows, descriptors = await run_in_threadpool(_page_rows, ds, limit)
     pages: list[Page] = []
     for i in range(rows.num_rows):
@@ -429,7 +430,7 @@ async def get_page(
     a governed row whose payload is genuinely zero bytes is present, and this route's absence signal
     is the null above.
     """
-    ds = await _authorized_dataset(state, table, token, checker=checker, subject=subject, relation=READ_DATA, action="viewer.page.read")
+    ds = await _authorized_dataset(state, table, token, checker=checker, subject=subject, relation=READ_DATA, action=ViewerAuditAction.VIEWER_PAGE_READ)
     blob, size, media_type = await run_in_threadpool(_take_page, ds, table, page_id)
     headers = {"Cache-Control": "public, max-age=300"}
     if size > MAX_BUFFERED_BLOB_BYTES:

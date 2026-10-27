@@ -41,7 +41,7 @@ from catalog.api.v1.router import api_router
 from catalog.core import tier_policy
 from catalog.core.config import Settings, get_settings
 from catalog.services.table_claims import ResolvedTable
-from service_kit.governed.audit import AUDIT_LOGGER, FAILURE
+from service_kit.governed.audit import AUDIT_LOGGER, AuditOutcome
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
@@ -183,7 +183,7 @@ def test_the_guard_refuses_an_undeclared_door_before_asking_openfga(
     assert asked == [], f"the guard asked OpenFGA {asked} for a door nobody declared"
     audited = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER]
     assert [(r["audit.action"], r["audit.outcome"], r["audit.subject"], r["audit.resource"], r["audit.reason"], r["audit.suffix"]) for r in audited] == [
-        ("authz", FAILURE, "dex~alice", resource, "undeclared_door", _UNDECLARED)
+        ("authz", AuditOutcome.FAILURE, "dex~alice", resource, "undeclared_door", _UNDECLARED)
     ], audited
     path = template.replace("{id}", _ID)
     errors = [r for r in caplog.records if r.name == fga_deps.log.name and r.levelno == logging.ERROR]

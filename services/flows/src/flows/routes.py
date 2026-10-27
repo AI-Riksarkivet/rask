@@ -22,6 +22,7 @@ from fastapi import APIRouter, Header
 from pydantic import BaseModel, ValidationError
 
 from flows import executor, security
+from flows.audit_actions import FlowsAuditAction
 from flows.catalog import CATALOG
 from flows.dependencies import FlowsSettingsDep, HttpDep, RunReaderDep, RunsDep, SchedulerDep, ScheduleUnconfirmed
 from flows.graph import validate_graph
@@ -37,7 +38,7 @@ from flows.models import (
     ValidateResponse,
 )
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
-from service_kit.governed.audit import ALLOW, DENY, audit
+from service_kit.governed.audit import AuditOutcome, audit
 
 
 log = logging.getLogger(__name__)
@@ -161,7 +162,7 @@ async def create_run(
     # denial NAMES the missing tuple — the estate's FGA-denial format, so the fix is in the message.
     obj = settings.fga_root_object
     allowed = await checker(user=subject, relation=security.ESTATE_ADMIN, obj=obj)
-    audit("flows_run", ALLOW if allowed else DENY, subject=subject, resource=obj)
+    audit(FlowsAuditAction.FLOWS_RUN, AuditOutcome.ALLOW if allowed else AuditOutcome.DENY, subject=subject, resource=obj)
     if not allowed:
         raise ForbiddenError(f"'{subject}' lacks '{security.ESTATE_ADMIN}' on '{obj}' — running a flow needs the estate admin")
 
@@ -277,7 +278,7 @@ async def terminate_run(
     """
     obj = settings.fga_root_object
     allowed = await checker(user=subject, relation=security.ESTATE_ADMIN, obj=obj)
-    audit("flows_run_terminate", ALLOW if allowed else DENY, subject=subject, resource=obj)
+    audit(FlowsAuditAction.FLOWS_RUN_TERMINATE, AuditOutcome.ALLOW if allowed else AuditOutcome.DENY, subject=subject, resource=obj)
     if not allowed:
         raise ForbiddenError(f"'{subject}' lacks '{security.ESTATE_ADMIN}' on '{obj}' — stopping a run needs the estate admin")
     if reader is None:
@@ -310,7 +311,7 @@ async def get_run(
     """
     obj = settings.fga_root_object
     allowed = await checker(user=subject, relation=security.ESTATE_ADMIN, obj=obj)
-    audit("flows_run_read", ALLOW if allowed else DENY, subject=subject, resource=obj)
+    audit(FlowsAuditAction.FLOWS_RUN_READ, AuditOutcome.ALLOW if allowed else AuditOutcome.DENY, subject=subject, resource=obj)
     if not allowed:
         raise ForbiddenError(f"'{subject}' lacks '{security.ESTATE_ADMIN}' on '{obj}' — reading a run needs the estate admin")
 

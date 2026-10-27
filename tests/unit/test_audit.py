@@ -7,7 +7,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from service_kit.governed.audit import ALLOW, AUDIT_LOGGER, DENY, audit, configure_audit
+from service_kit.context import request_id_ctx
+from service_kit.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome, audit, configure_audit
 
 
 class _Capture(logging.Handler):
@@ -32,24 +33,33 @@ def captured() -> Iterator[list[logging.LogRecord]]:
         configure_audit(enabled=True)  # leave the stream on for the rest of the suite
 
 
-def test_audit_emits_a_structured_who_what_outcome_event(captured: list[logging.LogRecord]) -> None:
-    configure_audit(enabled=True)
-    audit("can_write_data", ALLOW, subject="alice", resource="table:db$t", request_id="r1")
+#: The golden record of format 1.0: every field a compliance query may name, as one authorization verdict made under a
+#: request carries it. A renamed, retyped or dropped field changes this dict, and so is a new ``audit.format``.
+_GOLDEN_1_0 = {
+    "audit.format": "1.0",
+    "audit.action": "authz",
+    "audit.outcome": "allow",
+    "audit.request_id": "r1",
+    "audit.subject": "alice",
+    "audit.resource": "table:db$t",
+    "audit.relation": "can_write_data",
+}
 
-    assert len(captured) == 1
-    fields = {k: v for k, v in captured[0].__dict__.items() if k.startswith("audit.")}
-    assert fields == {
-        "audit.action": "can_write_data",
-        "audit.outcome": "allow",
-        "audit.subject": "alice",
-        "audit.resource": "table:db$t",
-        "audit.request_id": "r1",  # extra fields ride under the audit. prefix
-    }
+
+def test_audit_emits_the_golden_record_of_its_format(captured: list[logging.LogRecord]) -> None:
+    configure_audit(enabled=True)
+    token = request_id_ctx.set("r1")
+    try:
+        audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, subject="alice", resource="table:db$t", relation="can_write_data")
+    finally:
+        request_id_ctx.reset(token)
+
+    assert [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in captured] == [_GOLDEN_1_0]
 
 
 def test_configure_audit_disabled_drops_every_event(captured: list[logging.LogRecord]) -> None:
     # The whole trail is gated by one flag: disabled → nothing is emitted at all (dropped at the logger).
     configure_audit(enabled=False)
-    audit("can_read_data", DENY, subject="bob", resource="table:x")
-    audit("authn", "success", subject="alice")
+    audit(AuditAction.AUTHZ, AuditOutcome.DENY, subject="bob", resource="table:x", relation="can_read_data")
+    audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject="alice")
     assert captured == []

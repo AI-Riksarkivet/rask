@@ -33,6 +33,7 @@ from starlette.concurrency import run_in_threadpool
 
 from annotator.api.security import Checker, CheckerDep, CurrentSubject, SettingsDep
 from annotator.api.v1.responses import DraftImport
+from annotator.audit_actions import AnnotatorAuditAction
 from annotator.projects.actor import AnnotationTaskActorInterface
 from annotator.projects.imports import shapes_from_ipc
 from annotator.projects.machines import (
@@ -47,7 +48,7 @@ from annotator.projects.machines import (
 from annotator.projects.models import Draft, Link, ProjectState, Shape, Task, TaskState
 from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from service_kit.governed.principal import is_principal
 
 
@@ -138,7 +139,7 @@ def _proxy(task_id: str) -> AnnotationTaskActorInterface:
     return cast(AnnotationTaskActorInterface, typed_proxy("AnnotationTaskActor", task_id, AnnotationTaskActorInterface))
 
 
-async def _authorize(checker: Checker, subject: str, permission: str, project_id: str, what: str) -> None:
+async def _authorize(checker: Checker, subject: str, permission: str, project_id: str, what: AnnotatorAuditAction, **context: str) -> None:
     """Check one relation on the ANNOTATION PROJECT, fail closed, and audit either way.
 
     The object is `annotation_project:<project_id>`, the project whose roles grant `can_claim` / `can_annotate` /
@@ -150,7 +151,7 @@ async def _authorize(checker: Checker, subject: str, permission: str, project_id
     """
     obj = f"annotation_project:{project_id}"
     if not await checker(user=subject, relation=permission, obj=obj):
-        audit(what, FAILURE, subject=subject, resource=obj, relation=permission)
+        audit(what, AuditOutcome.FAILURE, subject=subject, resource=obj, relation=permission, **context)
         raise ForbiddenError(f"{subject} lacks {permission} on {obj}")
 
 
@@ -225,7 +226,7 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
         raise ForbiddenError(f"{payload.event} requires no principal permission and is not exposed")
 
     project_id = str(current["project_id"])
-    await _authorize(checker, subject, permission, project_id, f"task.{payload.event}")
+    await _authorize(checker, subject, permission, project_id, AnnotatorAuditAction.TASK_TRANSITION, event=payload.event)
     # An assignee is the subject the assigned person's own token will prove ([[LH-063]]): with authentication on that
     # is a principal, so a bare name, which no token proves, is refused rather than stored for nobody to claim.
     if settings.oidc_enabled and payload.assignee is not None and not is_principal(payload.assignee):
@@ -259,7 +260,7 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
         subject_can_manage=subject_can_manage,
     )
     if violation is not None:
-        audit(f"task.{payload.event}", FAILURE, subject=subject, resource=task_id, reason="identity_bound")
+        audit(AnnotatorAuditAction.TASK_TRANSITION, AuditOutcome.FAILURE, event=payload.event, subject=subject, resource=task_id, reason="identity_bound")
         raise ForbiddenError(violation)
 
     try:
@@ -283,7 +284,7 @@ async def fire_task_event(task_id: TaskId, payload: FireRequest, checker: Checke
     except IllegalTransition as exc:  # lost a race — the state moved between our read and the call
         raise ConflictError(str(exc)) from exc
 
-    audit(f"task.{payload.event}", SUCCESS, subject=subject, resource=task_id)
+    audit(AnnotatorAuditAction.TASK_TRANSITION, AuditOutcome.SUCCESS, event=payload.event, subject=subject, resource=task_id)
     # NOT `Task.model_validate(updated)`. The actor returns a PARTIAL document — it carries the
     # transition it just made, not `source`/`media`, which live on the task record the actor does not
     # reload. ANN-07 changed this to validate and left three integration tests RED; typing the return
@@ -298,7 +299,7 @@ async def get_task(task_id: TaskId, checker: CheckerDep, subject: CurrentSubject
     task = await _proxy(task_id).get()
     if task is None:
         raise ConflictError(f"task {task_id} has not been sent into a project")
-    await _authorize(checker, subject, "can_view", str(task["project_id"]), "task.view")
+    await _authorize(checker, subject, "can_view", str(task["project_id"]), AnnotatorAuditAction.TASK_VIEW)
     return Task.model_validate(task)
 
 
@@ -310,7 +311,7 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
     current = await actor.get()
     if current is None:
         raise ConflictError(f"task {task_id} has not been sent into a project")
-    await _authorize(checker, subject, "can_annotate", str(current["project_id"]), "task.save_draft")
+    await _authorize(checker, subject, "can_annotate", str(current["project_id"]), AnnotatorAuditAction.TASK_SAVE_DRAFT)
 
     # A draft is only writable while the task is CLAIMED. Without this an ACCEPTED task's shapes
     # could be rewritten after review — and during a publish — which would put annotations into the
@@ -343,7 +344,7 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
 
-    audit("task.save_draft", SUCCESS, subject=subject, resource=task_id)
+    audit(AnnotatorAuditAction.TASK_SAVE_DRAFT, AuditOutcome.SUCCESS, subject=subject, resource=task_id)
     return Draft.model_validate(draft)
 
 
@@ -370,7 +371,7 @@ async def import_annotations(task_id: TaskId, request: Request, checker: Checker
     current = await actor.get()
     if current is None:
         raise ConflictError(f"task {task_id} has not been sent into a project")
-    await _authorize(checker, subject, "can_annotate", str(current["project_id"]), "task.import")
+    await _authorize(checker, subject, "can_annotate", str(current["project_id"]), AnnotatorAuditAction.TASK_IMPORT)
 
     project_state = await _verified_project_state(str(current["project_id"]), "import")
     if TaskState(current["state"]) is not TaskState.CLAIMED:
@@ -434,7 +435,7 @@ async def import_annotations(task_id: TaskId, request: Request, checker: Checker
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
 
-    audit("task.import", SUCCESS, subject=subject, resource=task_id)
+    audit(AnnotatorAuditAction.TASK_IMPORT, AuditOutcome.SUCCESS, subject=subject, resource=task_id)
     return DraftImport(imported=len(shapes), links=len(links), draft=Draft.model_validate(draft))
 
 
@@ -444,7 +445,7 @@ async def get_draft(task_id: TaskId, checker: CheckerDep, subject: CurrentSubjec
     task = await actor.get()
     if task is None:
         raise ConflictError(f"task {task_id} has not been sent into a project")
-    await _authorize(checker, subject, "can_view", str(task["project_id"]), "task.view_draft")
+    await _authorize(checker, subject, "can_view", str(task["project_id"]), AnnotatorAuditAction.TASK_VIEW_DRAFT)
     draft = await actor.get_draft()
     if draft is None:
         raise NotFoundError(f"task {task_id} has no draft")

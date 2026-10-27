@@ -21,7 +21,7 @@ from openfga_sdk.client import OpenFgaClient
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
 from service_kit.control_emit import NoopControlEmitter
-from service_kit.governed.audit import AUDIT_LOGGER, FAILURE, SUCCESS, configure_audit
+from service_kit.governed.audit import AUDIT_LOGGER, AuditOutcome, configure_audit
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.person_identity import PersonPrincipal
 from service_kit.governed.principal import Principal
@@ -238,7 +238,7 @@ def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyP
     assert row["audit.grantee"] == "user:dex~bob"
     assert row["audit.relation"] == "writer"
     assert row["audit.resource"] == f"table:{uuid_of('table', ['db1', 'users'])}"
-    assert row["audit.outcome"] == SUCCESS
+    assert row["audit.outcome"] == AuditOutcome.SUCCESS
 
 
 def test_a_failed_grant_is_audited_too_so_attempts_are_reviewable(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -255,7 +255,7 @@ def test_a_failed_grant_is_audited_too_so_attempts_are_reviewable(monkeypatch: p
         logger.removeHandler(handler)
 
     rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in handler.records if r.__dict__.get("audit.action") == "access_grant"]
-    assert rows and rows[-1]["audit.outcome"] == FAILURE
+    assert rows and rows[-1]["audit.outcome"] == AuditOutcome.FAILURE
     assert rows[-1]["audit.subject"] == "dex~alice" and rows[-1]["audit.grantee"] == "user:dex~bob"
 
 

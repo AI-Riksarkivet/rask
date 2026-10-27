@@ -21,10 +21,11 @@ from fastapi import APIRouter, Path, Query, status
 from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject, SettingsDep
+from annotator.audit_actions import AnnotatorAuditAction
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.roles import GRANTABLE, MemberGrant, Rung
 from service_kit.exceptions import ConflictError, ForbiddenError, ValidationError
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from service_kit.governed.principal import is_principal
 
 
@@ -64,10 +65,10 @@ def _project(project_id: str) -> Any:
     return typed_proxy("AnnotationProjectActor", project_id, AnnotationProjectActorInterface)
 
 
-async def _require_manage(checker: Any, subject: str, project_id: str, action: str) -> None:
+async def _require_manage(checker: Any, subject: str, project_id: str, action: AnnotatorAuditAction) -> None:
     obj = f"annotation_project:{project_id}"
     if not await checker(user=subject, relation="can_manage", obj=obj):
-        audit(action, FAILURE, subject=subject, resource=project_id, relation="can_manage")
+        audit(action, AuditOutcome.FAILURE, subject=subject, resource=project_id, relation="can_manage")
         raise ForbiddenError(f"{subject} lacks can_manage on {obj}")
 
 
@@ -83,7 +84,7 @@ async def list_members(project_id: ProjectId, checker: CheckerDep, subject: Curr
     revocable here and showing an entry whose remove button cannot work is worse than not showing it. The tenant is
     where that access lives and where it is removed.
     """
-    await _require_manage(checker, subject, project_id, "annotation_project.members.list")
+    await _require_manage(checker, subject, project_id, AnnotatorAuditAction.ANNOTATION_PROJECT_MEMBERS_LIST)
     try:
         return _listing(await _project(project_id).members())
     except IllegalTransition as exc:
@@ -93,12 +94,12 @@ async def list_members(project_id: ProjectId, checker: CheckerDep, subject: Curr
 @router.put("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def grant_member(project_id: ProjectId, payload: GrantRequest, checker: CheckerDep, subject: CurrentSubject, settings: SettingsDep) -> MemberList:
     """Grant one role to one person. Idempotent — re-granting what someone already has is a no-op."""
-    await _require_manage(checker, subject, project_id, "annotation_project.members.grant")
+    await _require_manage(checker, subject, project_id, AnnotatorAuditAction.ANNOTATION_PROJECT_MEMBERS_GRANT)
     try:
         answer = await _project(project_id).grant_member({"user": _person(payload.user, settings), "relation": payload.relation})
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
-    audit("annotation_project.members.grant", SUCCESS, subject=subject, resource=project_id, relation=payload.relation)
+    audit(AnnotatorAuditAction.ANNOTATION_PROJECT_MEMBERS_GRANT, AuditOutcome.SUCCESS, subject=subject, resource=project_id, relation=payload.relation)
     return _listing(answer)
 
 
@@ -121,11 +122,11 @@ async def revoke_member(
     is nobody. Revoking a role nobody holds is a no-op rather than a 404: the caller asked for a state and that state
     already holds.
     """
-    await _require_manage(checker, subject, project_id, "annotation_project.members.revoke")
+    await _require_manage(checker, subject, project_id, AnnotatorAuditAction.ANNOTATION_PROJECT_MEMBERS_REVOKE)
     try:
         answer = await _project(project_id).revoke_member({"user": _person(user, settings), "relation": relation})
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
     if answer.get("changed"):
-        audit("annotation_project.members.revoke", SUCCESS, subject=subject, resource=project_id, relation=relation)
+        audit(AnnotatorAuditAction.ANNOTATION_PROJECT_MEMBERS_REVOKE, AuditOutcome.SUCCESS, subject=subject, resource=project_id, relation=relation)
     return _listing(answer)

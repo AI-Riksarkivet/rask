@@ -29,10 +29,11 @@ from typing import Annotated
 
 from fastapi import Depends
 
+from flows.audit_actions import FlowsAuditAction
 from flows.config import FlowsSettings
 from flows.dependencies import FlowsSettingsDep
 from service_kit.exceptions import ForbiddenError
-from service_kit.governed.audit import ALLOW, DENY, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from service_kit.governed.deps import FgaChecker, make_auth_deps
 
 
@@ -55,6 +56,6 @@ async def require_read(checker: FgaChecker, settings: FlowsSettings, subject: st
     """
     obj = settings.fga_root_object
     allowed = await checker(user=subject, relation=ESTATE_ADMIN, obj=obj)
-    audit("flows_read", ALLOW if allowed else DENY, subject=subject, resource=obj)
+    audit(FlowsAuditAction.FLOWS_READ, AuditOutcome.ALLOW if allowed else AuditOutcome.DENY, subject=subject, resource=obj)
     if not allowed:
         raise ForbiddenError(f"'{subject}' lacks '{ESTATE_ADMIN}' on '{obj}' — reading the flow plane needs the estate admin")

@@ -19,8 +19,9 @@ from client_kit.media.authz import corpus_object
 from client_kit.media.deps import StateDep
 from client_kit.media.state import AppState, dataset_handle, ensure_registry
 from service_kit.exceptions import ForbiddenError
-from service_kit.governed.audit import FAILURE, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from viewer.api.security import READ_METADATA, CheckerDep, CurrentSubject, DeciderDep, SettingsDep
+from viewer.audit_actions import ViewerAuditAction
 
 
 logger = logging.getLogger(__name__)
@@ -153,11 +154,11 @@ async def dataset_descriptor(dataset_id: str, state: StateDep, checker: CheckerD
         # that appears in the list must also be openable from it. Denying unconditionally here (the
         # first version of this guard) would have broken every FGA-off dev stack.
         if settings.fga_enabled:
-            audit("viewer.descriptor.read", FAILURE, subject=subject, resource=dataset_id, relation=READ_METADATA)
+            audit(ViewerAuditAction.VIEWER_DESCRIPTOR_READ, AuditOutcome.FAILURE, subject=subject, resource=dataset_id, relation=READ_METADATA)
             raise ForbiddenError(f"corpus {dataset_id} declares no searchable table — nothing to authorize against")
         return handle.descriptor
     obj = corpus_object(settings, dataset_id, search.row_table)
     if not await checker(user=subject, relation=READ_METADATA, obj=obj):
-        audit("viewer.descriptor.read", FAILURE, subject=subject, resource=dataset_id, relation=READ_METADATA)
+        audit(ViewerAuditAction.VIEWER_DESCRIPTOR_READ, AuditOutcome.FAILURE, subject=subject, resource=dataset_id, relation=READ_METADATA)
         raise ForbiddenError(f"{subject} lacks {READ_METADATA} on {obj}")
     return handle.descriptor

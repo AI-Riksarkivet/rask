@@ -33,9 +33,10 @@ from fastapi import Depends, Query, Request
 from client_kit.media.authz import corpus_object
 from client_kit.media.state import AppState
 from search.api.dependencies import StateDep
+from search.audit_actions import SearchAuditAction
 from search.core.config import SearchSettings, get_search_settings
 from service_kit.exceptions import ForbiddenError
-from service_kit.governed.audit import FAILURE, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from service_kit.governed.deps import FgaChecker, make_auth_deps
 
 
@@ -113,7 +114,7 @@ async def require_search(
     """
     if await may_search(state, dataset_id, table=table, subject=subject, checker=checker, settings=settings):
         return
-    audit("search.corpus.read", FAILURE, subject=subject, resource=dataset_id or "<default>", relation=READ_DATA)
+    audit(SearchAuditAction.SEARCH_CORPUS_READ, AuditOutcome.FAILURE, subject=subject, resource=dataset_id or "<default>", relation=READ_DATA)
     raise ForbiddenError(f"{subject} lacks {READ_DATA} on corpus {dataset_id or '<default>'}")
 
 
@@ -152,7 +153,7 @@ async def authorized_corpora(
             if await may_search(state, dataset_id, table=table, subject=subject, checker=checker, settings=settings):
                 allowed.append(dataset_id)
             else:
-                audit("search.corpus.read", FAILURE, subject=subject, resource=dataset_id, relation=READ_DATA)
+                audit(SearchAuditAction.SEARCH_CORPUS_READ, AuditOutcome.FAILURE, subject=subject, resource=dataset_id, relation=READ_DATA)
         return allowed
     await require_search(state, request.query_params.get("dataset"), table=table, subject=subject, checker=checker, settings=settings)
     return None

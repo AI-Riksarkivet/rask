@@ -39,7 +39,7 @@ from catalog.core.config import Settings
 from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
 from catalog.services import commit_reconcile, dataplane, native, table_claims
 from service_kit.governed import fga
-from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.base_refs import decoded_path
@@ -164,8 +164,8 @@ async def _announce(
         event_time=commit.committed_at,
     )
     audit(
-        "commit_version_announced",
-        SUCCESS,
+        AuditAction.COMMIT_VERSION_ANNOUNCED,
+        AuditOutcome.SUCCESS,
         subject=commit.author,
         resource=f"table:{fga.canonical_object_id(table.segments)}",
         version=commit.version,

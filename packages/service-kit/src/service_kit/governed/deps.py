@@ -54,7 +54,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import UnauthenticatedError
 
 from service_kit.exceptions import ServiceUnavailableError
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.decider import AccessDecider
 from service_kit.governed.oidc import ProviderUnavailableError
 from service_kit.governed.person_identity import PersonPrincipal, PersonVerifier
@@ -140,10 +140,10 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             return None
         verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
         if verifier is None:
-            audit("authn", FAILURE, reason="verifier_unavailable")
+            audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
             raise ServiceUnavailableError("Authentication is enabled but unavailable")
         if credentials is None or not credentials.credentials:
-            audit("authn", FAILURE, reason="missing_token")
+            audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="missing_token")
             raise UnauthenticatedError("Missing bearer token")
         try:
             token = verifier.verify(credentials.credentials)
@@ -155,12 +155,12 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             # same status as the missing-verifier branch above, because it is the same fact arriving
             # later. The verifier's own subclass rather than the fleet base, so a provider-fault site
             # raising anything else is audited against the caller and a test sees it.
-            audit("authn", FAILURE, reason="verifier_unavailable")
+            audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
             raise
         except Exception:
-            audit("authn", FAILURE, reason="invalid_token")
+            audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="invalid_token")
             raise
-        audit("authn", SUCCESS, subject=token.subject)
+        audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=token.subject)
         return token
 
     def current_subject(request: Request, token: Annotated[PersonPrincipal | None, Depends(authenticate)]) -> str:
@@ -197,7 +197,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             return ANONYMOUS_SUBJECT
         verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
         if verifier is None:
-            audit("authn", FAILURE, reason="verifier_unavailable")
+            audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
             raise ServiceUnavailableError("Authentication is enabled but unavailable")
         if credentials is None or not credentials.credentials:
             return ANONYMOUS_SUBJECT
@@ -207,10 +207,10 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             # The same split as `authenticate`. Applying it to one door only would leave the other
             # writing the false records, and this door is the one an anonymous-capable endpoint uses
             # — so it is the one most likely to be called during an outage.
-            audit("authn", FAILURE, reason="verifier_unavailable")
+            audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
             raise
         except Exception:
-            audit("authn", FAILURE, reason="invalid_token")
+            audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="invalid_token")
             raise
         return token.subject
 
@@ -253,7 +253,7 @@ def _require_decider(request: Request) -> AccessDecider:
     """`app.state.decider`, or the 503 an enabled-but-unwired authorization layer answers."""
     decider = getattr(request.app.state, "decider", None)
     if decider is None:
-        audit("authz", FAILURE, reason="client_unavailable")
+        audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, reason="client_unavailable")
         raise ServiceUnavailableError("Authorization is enabled but unavailable")
     return decider
 

@@ -84,7 +84,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.machine_identity import read_identity_token
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
@@ -1955,7 +1955,7 @@ TupleOrigin = Literal[
 ]
 
 
-def _audit_tuples(action: str, tuples: list[ClientTuple], actor: str, origin: TupleOrigin, **extra: str) -> None:
+def _audit_tuples(action: AuditAction, tuples: list[ClientTuple], actor: str, origin: TupleOrigin, **extra: str) -> None:
     """One audit row PER TUPLE, emitted from inside the write path.
 
     This lives here rather than at the call sites because coverage by convention does not hold: of the
@@ -1972,7 +1972,7 @@ def _audit_tuples(action: str, tuples: list[ClientTuple], actor: str, origin: Tu
     anything — a compliance query filtering them out reads only what OpenFGA confirmed.
     """
     for t in tuples:
-        audit(action, SUCCESS, subject=actor, resource=t.object, grantee=t.user, relation=t.relation, origin=origin, **extra)
+        audit(action, AuditOutcome.SUCCESS, subject=actor, resource=t.object, grantee=t.user, relation=t.relation, origin=origin, **extra)
 
 
 async def write_tuples(
@@ -2021,7 +2021,7 @@ async def write_tuples(
     )
     # A duplicate IS the post-condition holding, so it is audited like any other success —
     # otherwise re-running a seed silently erases the provenance of tuples that are present.
-    _audit_tuples("access_tuple_write", tuples, actor, origin)
+    _audit_tuples(AuditAction.ACCESS_TUPLE_WRITE, tuples, actor, origin)
 
 
 async def grant_on_create(
@@ -2170,8 +2170,8 @@ async def delete_tuples(
         # grant standing while the trail said it was gone. The absent row keeps the attempt visible
         # (an auditor must be able to tell "never attempted" from "attempted, already gone") without
         # asserting a removal that did not happen.
-        _audit_tuples("access_tuple_delete", removed, actor, origin)
-        _audit_tuples("access_tuple_delete", absent, actor, origin, reason="tuple_absent")
+        _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, removed, actor, origin)
+        _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, absent, actor, origin, reason="tuple_absent")
     return removed
 
 
@@ -2211,8 +2211,8 @@ async def commit_unless_changed(
             return False
         log.error("openfga_write_unavailable", exc_info=True)
         raise ServiceUnavailableError("authorization service unavailable") from exc
-    _audit_tuples("access_tuple_delete", deletes, actor, origin)
-    _audit_tuples("access_tuple_write", writes, actor, origin)
+    _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, deletes, actor, origin)
+    _audit_tuples(AuditAction.ACCESS_TUPLE_WRITE, writes, actor, origin)
     return True
 
 

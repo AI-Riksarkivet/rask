@@ -53,7 +53,7 @@ from catalog.schemas import (
 )
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 
 
 log = logging.getLogger(__name__)
@@ -156,11 +156,11 @@ async def _access_list(
     except* ServiceUnavailableError as outage:
         # #41: the review FAILED mid-enumeration — without this, the gate's earlier allow would be
         # the only trace, indistinguishable from a completed disclosure.
-        audit("access_review", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        audit(AuditAction.ACCESS_REVIEW, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise outage.exceptions[0] from None
     # #41 audit the actual ACL disclosure (who reviewed what) — the gate's can_drop/can_delete allow
     # alone would be byte-identical to a pending destructive op.
-    audit("access_review", SUCCESS, subject=subject, resource=obj)
+    audit(AuditAction.ACCESS_REVIEW, AuditOutcome.SUCCESS, subject=subject, resource=obj)
     # TRUNCATION IS REPORTED, not just logged (diff2 F10 item 8). `list_users` stops at OpenFGA's
     # `listUsersMaxResults` and warned into the log; the response looked complete. On this surface that
     # is the dangerous direction to be wrong in — a reviewer reading 1000 of 1500 holders concludes the
@@ -219,11 +219,11 @@ async def _access_check(
     try:
         allowed = await fga.check(client, user=user, relation=body.relation, obj=obj, qualify=False)
     except ServiceUnavailableError:
-        audit("access_simulate", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        audit(AuditAction.ACCESS_SIMULATE, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
     # #41: the simulation IS an authz-graph disclosure (who probed what) — audit it distinctly from the
     # gate's owner allow, exactly like access_review / credential vending.
-    audit("access_simulate", SUCCESS, subject=subject, resource=obj)
+    audit(AuditAction.ACCESS_SIMULATE, AuditOutcome.SUCCESS, subject=subject, resource=obj)
     return AccessCheckResponse(object=obj, name=name, user=user, relation=body.relation, allowed=allowed)
 
 
@@ -391,19 +391,19 @@ async def _access_mutate(
     if grant:
         await fga_deps.refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=settings)
     tup = fga.ClientTuple(user=grantee, relation=body.relation, object=obj)
-    event = "access_grant" if grant else "access_revoke"
+    event = AuditAction.ACCESS_GRANT if grant else AuditAction.ACCESS_REVOKE
     try:
         if grant:
             await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
         else:
             await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
     except ServiceUnavailableError:
-        audit(event, FAILURE, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
+        audit(event, AuditOutcome.FAILURE, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
         raise
     # The per-tuple SUCCESS row is emitted by the library (one row per write site, structurally). This
     # keeps only the surface-specific vocabulary — `access_grant`/`access_revoke` is the compliance
     # verb for the per-object grant API, and dropping it would break the existing audit queries.
-    audit(event, SUCCESS, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
+    audit(event, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
     await emit_control(
         control,
         action="grant_added" if grant else "grant_revoked",
@@ -509,7 +509,7 @@ async def _access_graph(
     try:
         tuples = await fga.read_object_tuples(client, obj)
     except ServiceUnavailableError:
-        audit("access_graph", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        audit(AuditAction.ACCESS_GRAPH, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
     nodes: dict[str, GraphNode] = {obj: _graph_node(obj)}
     edges: list[GraphEdge] = []
@@ -521,7 +521,7 @@ async def _access_graph(
             edges.append(GraphEdge(source=obj, target=t.user, relation=t.relation))
         else:
             edges.append(GraphEdge(source=t.user, target=obj, relation=t.relation))
-    audit("access_graph", SUCCESS, subject=subject, resource=obj)
+    audit(AuditAction.ACCESS_GRAPH, AuditOutcome.SUCCESS, subject=subject, resource=obj)
     return AccessGraphResponse(object=obj, name=name, nodes=list(nodes.values()), edges=edges)
 
 
@@ -608,7 +608,7 @@ async def _set_managed_access(
     # Audited distinctly from a grant: this does not move anyone's access, it changes WHO MAY move it —
     # a governance act whose blast radius is every object beneath, and one an auditor will look for by
     # name rather than by inferring it from the absence of later grants.
-    audit("managed_access_set", SUCCESS, subject=actor, resource=obj, enabled=enabled)
+    audit(AuditAction.MANAGED_ACCESS_SET, AuditOutcome.SUCCESS, subject=actor, resource=obj, enabled=enabled)
     await emit_control(
         control,
         action="grant_added" if enabled else "grant_revoked",

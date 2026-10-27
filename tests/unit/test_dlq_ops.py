@@ -291,8 +291,10 @@ def test_replay_audits_success_with_the_actor(tmp_path: Path, audit_records: lis
     assert len(audit_records) == 1
     fields = {k: v for k, v in audit_records[0].__dict__.items() if k.startswith("audit.")}
     assert fields == {
+        "audit.format": "1.0",
         "audit.action": "dlq_replay",
         "audit.outcome": "success",
+        "audit.request_id": "-",
         "audit.subject": "dex~alice",
         "audit.resource": "run:r1",
     }

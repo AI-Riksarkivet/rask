@@ -21,11 +21,12 @@ from pydantic import BaseModel, Field
 
 from annotator.api.security import CheckerDep, CurrentSubject
 from annotator.api.v1.responses import LegalEvent, ProjectDetail, ProjectListing
+from annotator.audit_actions import AnnotatorAuditAction
 from annotator.projects.machines import legal_project_events
 from annotator.projects.models import AnnotationProject, ProjectState
 from annotator.projects.ontology import LabelOntology
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditOutcome, audit
 
 
 logger = logging.getLogger(__name__)
@@ -83,7 +84,7 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
     parent = f"project:{payload.tenant}"
     allowed = await checker(user=subject, relation=CREATE_RELATION, obj=parent)
     if not allowed:
-        audit("annotation_project.create", FAILURE, subject=subject, resource=parent, relation=CREATE_RELATION)
+        audit(AnnotatorAuditAction.ANNOTATION_PROJECT_CREATE, AuditOutcome.FAILURE, subject=subject, resource=parent, relation=CREATE_RELATION)
         raise ForbiddenError(f"{subject} lacks {CREATE_RELATION} on {parent}")
 
     now = datetime.now(UTC)
@@ -120,10 +121,10 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
         await _undo_create(project.project_id)
         # `reason`, not `relation`: the create was AUTHORIZED — a later write in the sequence
         # failed. Stamping the door here would read as a denial that never happened.
-        audit("annotation_project.create", FAILURE, subject=subject, resource=project.authz_object, reason="compensated")
+        audit(AnnotatorAuditAction.ANNOTATION_PROJECT_CREATE, AuditOutcome.FAILURE, subject=subject, resource=project.authz_object, reason="compensated")
         raise
 
-    audit("annotation_project.create", SUCCESS, subject=subject, resource=project.authz_object)
+    audit(AnnotatorAuditAction.ANNOTATION_PROJECT_CREATE, AuditOutcome.SUCCESS, subject=subject, resource=project.authz_object)
     return AnnotationProject.model_validate(stored)
 
 
@@ -156,7 +157,7 @@ async def list_projects(tenant: Annotated[str, Query(min_length=1)], checker: Ch
     """
     parent = f"project:{tenant}"
     if not await checker(user=subject, relation=LIST_RELATION, obj=parent):
-        audit("annotation_project.list", FAILURE, subject=subject, resource=parent, relation=LIST_RELATION)
+        audit(AnnotatorAuditAction.ANNOTATION_PROJECT_LIST, AuditOutcome.FAILURE, subject=subject, resource=parent, relation=LIST_RELATION)
         raise ForbiddenError(f"{subject} lacks {LIST_RELATION} on {parent}")
 
     listing = await _tenant_actor(tenant).list_projects()
@@ -185,7 +186,7 @@ async def get_project(project_id: ProjectId, checker: CheckerDep, subject: Curre
     disabled action — while the ACTUAL gate stays server-side on the event POST.
     """
     if not await checker(user=subject, relation="can_view", obj=f"annotation_project:{project_id}"):
-        audit("annotation_project.get", FAILURE, subject=subject, resource=project_id, relation="can_view")
+        audit(AnnotatorAuditAction.ANNOTATION_PROJECT_GET, AuditOutcome.FAILURE, subject=subject, resource=project_id, relation="can_view")
         raise ForbiddenError(f"{subject} lacks can_view on annotation_project:{project_id}")
     doc = await _create_actor(project_id).get()
     if doc is None:
@@ -232,7 +233,7 @@ async def update_project_ontology(
     """
     obj = f"annotation_project:{project_id}"
     if not await checker(user=subject, relation=MANAGE_RELATION, obj=obj):
-        audit("annotation_project.update_ontology", FAILURE, subject=subject, resource=project_id, relation=MANAGE_RELATION)
+        audit(AnnotatorAuditAction.ANNOTATION_PROJECT_UPDATE_ONTOLOGY, AuditOutcome.FAILURE, subject=subject, resource=project_id, relation=MANAGE_RELATION)
         raise ForbiddenError(f"{subject} lacks {MANAGE_RELATION} on {obj}")
 
     actor = _create_actor(project_id)
@@ -244,7 +245,7 @@ async def update_project_ontology(
         raise ConflictError(f"project {project_id} is {state.value} — the ontology is editable only in {sorted(s.value for s in ONTOLOGY_EDITABLE_STATES)}")
 
     stored = await actor.set_ontology({"ontology": payload.ontology.model_dump(mode="json")})
-    audit("annotation_project.update_ontology", SUCCESS, subject=subject, resource=project_id, relation=MANAGE_RELATION)
+    audit(AnnotatorAuditAction.ANNOTATION_PROJECT_UPDATE_ONTOLOGY, AuditOutcome.SUCCESS, subject=subject, resource=project_id, relation=MANAGE_RELATION)
     return AnnotationProject.model_validate(stored)
 
 

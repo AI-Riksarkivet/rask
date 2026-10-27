@@ -36,8 +36,9 @@ from client_kit.media.authz import corpus_object
 from client_kit.media.deps import DatasetParam, StateDep
 from client_kit.media.state import dataset_handle
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, ValidationError
-from service_kit.governed.audit import FAILURE, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from viewer.api.security import READ_DATA, REQUIRE_MEDIA_BYTES, CheckerDep, CurrentSubject, SettingsDep
+from viewer.audit_actions import ViewerAuditAction
 from viewer.services.clips import MAX_CLIP_S, ClipBusyError, build_clip
 
 
@@ -413,7 +414,7 @@ async def media_clip(
     # route's `/api/explorer` rule.
     obj = corpus_object(settings, handle.id, binding.table)
     if not await checker(user=subject, relation=READ_DATA, obj=obj):
-        audit("viewer.clip.read", FAILURE, subject=subject, resource=handle.id, relation=READ_DATA)
+        audit(ViewerAuditAction.VIEWER_CLIP_READ, AuditOutcome.FAILURE, subject=subject, resource=handle.id, relation=READ_DATA)
         raise ForbiddenError(f"{subject} lacks {READ_DATA} on {obj}")
 
     # OFF THE LOOP, and refusing rather than queueing. This route was a plain `def`, so FastAPI

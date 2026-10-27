@@ -50,7 +50,7 @@ from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
 from catalog.services.erasure_obligations import ErasureObligation, ErasureObligations, ErasureObligationView, ErasureVerification
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.lakehouse import derived_tables
 from service_kit.lakehouse.history_fences import TableHistory
 from service_kit.lakehouse.records import RecordExistsError
@@ -142,13 +142,25 @@ async def erase_subject(
     )
     await run_in_threadpool(erasure_obligations.record, settings.registry_root, settings.storage_options(), obligation)
     audit(
-        "erasure_obligation_recorded",
-        SUCCESS,
+        AuditAction.ERASURE_OBLIGATION_RECORDED,
+        AuditOutcome.SUCCESS,
         subject=token.subject if token is not None else None,
         resource=obligation.object_id,
         obligation=obligation.obligation_id,
         deadline=obligation.deadline.isoformat(),
     )
+    # One record per ref the obligation covers, at the head it was recorded against: "was this subject's erasure
+    # owed on that branch" is answered from the trail alone, as each ref is a surface the verification judges apart.
+    for ref, head in obligation.refs.items():
+        audit(
+            AuditAction.ERASURE_REF_OBLIGED,
+            AuditOutcome.SUCCESS,
+            subject=token.subject if token is not None else None,
+            resource=obligation.object_id,
+            obligation=obligation.obligation_id,
+            ref=ref,
+            version=head,
+        )
     return obligation.view(now, table=canonical, hidden=())
 
 
@@ -242,13 +254,13 @@ async def verify_erasure(
         await _schedule_release(report, current, settings=settings, control=control, owners=owners, now=clock())
     standing = await run_in_threadpool(erasure_obligations.settle, control_root, control_options, obligation_id, report=report, now=clock())
     audit(
-        "erasure_obligation_verified",
-        SUCCESS,
+        AuditAction.ERASURE_OBLIGATION_VERIFIED,
+        AuditOutcome.SUCCESS,
         subject=token.subject if token is not None else None,
         resource=obligation.object_id,
         obligation=obligation_id,
         state=standing.state,
-        open_surfaces=[surface.surface for surface in standing.open_surfaces],
+        open_surfaces=",".join(surface.surface for surface in standing.open_surfaces),
     )
     hidden = await _hidden_derived([*report.surfaces, *standing.open_surfaces], settings=settings, client=client, token=token)
     shown = report.model_copy(update={"surfaces": erasure.shown(report.surfaces, hidden=hidden)})

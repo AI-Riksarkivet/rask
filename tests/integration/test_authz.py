@@ -993,7 +993,7 @@ def test_authz_decision_emits_an_audit_event(client: TestClient, fake_ns: MagicM
         logging.getLogger(AUDIT_LOGGER).removeHandler(handler)
 
     assert resp.status_code == 200
-    events = [r.__dict__ for r in records if r.__dict__.get("audit.action") == "can_get_metadata"]
+    events = [r.__dict__ for r in records if r.__dict__.get("audit.action") == "authz" and r.__dict__.get("audit.relation") == "can_get_metadata"]
     assert events, "the authz gate emitted no audit event"
     assert events[0]["audit.outcome"] == "allow"
     assert events[0]["audit.subject"] == "dex~alice"

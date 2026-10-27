@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core.provenance_guard import RESERVED_METADATA_PREFIXES, is_reserved_key
 from catalog.core.run_context import INPUTS_HEADER, INPUTS_PROPERTY, RUN_ID_HEADER, RUN_ID_PROPERTY, RunContext
 from catalog.services import native
-from service_kit.governed.audit import ALLOW, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 
 
 log = logging.getLogger(__name__)
@@ -183,7 +183,7 @@ async def judge(op: Write, *, caller: str | None, check: RungCheck | None, names
         )
     if op.op in STAMPING_DOORS:
         await judge_run(tier, op.run, op.input_rungs, check=check, names=f"the request's Context headers {RUN_ID_HEADER} and {INPUTS_HEADER}")
-    audit("tier_judge", ALLOW, subject=caller, resource=op.obj, op=op.op, tier=tier or "untiered")
+    audit(AuditAction.TIER_JUDGE, AuditOutcome.ALLOW, subject=caller, resource=op.obj, op=op.op, tier=tier or "untiered")
     return Judgement(tier=tier)
 
 

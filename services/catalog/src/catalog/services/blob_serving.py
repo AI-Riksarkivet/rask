@@ -46,7 +46,8 @@ class BlobStream(BaseModel):
     ``start``/``length`` are the RESOLVED window (``end`` derives the inclusive RFC 9110
     Content-Range position); ``ranged`` says whether the caller asked for a range (→ 206 +
     Content-Range) or the whole payload (→ 200); ``satisfiable=False`` means the requested range
-    starts beyond the blob (→ 416 with ``bytes */size``). ``etag`` is the strong validator for the
+    starts beyond the blob (→ 416 with ``bytes */size``). ``version`` is the version the read resolved, the pinned
+    one or the head. ``etag`` is the strong validator for the
     served ``(version, column, row)`` address. ``handle``/``dataset`` are the live pylance refs — the
     lazy ``BlobFile`` :meth:`chunks` reads through, and the dataset that owns it — held so neither is
     collected until the response finishes streaming.
@@ -59,6 +60,7 @@ class BlobStream(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    version: int
     size: int
     start: int
     length: int
@@ -146,7 +148,8 @@ def read_blob(
     rows = dataset.count_rows()
     if row >= rows:
         raise InvalidInputError(f"row {row} is out of range (table has {rows} rows)")
-    etag = f'"{int(dataset.version)}-{column}-{row}"'
+    served = int(dataset.version)
+    etag = f'"{served}-{column}-{row}"'
     if if_range is not None and if_range.strip() != etag:
         range_spec = None  # validator mismatch (or an If-Range date) → full current payload
     files = dataset.take_blobs(column, indices=[row])
@@ -158,13 +161,14 @@ def read_blob(
     # zero-length contract exists for.
     if not files or files[0] is None:  # zero-length payload (null collapses to size-0 at write)
         if range_spec is None:
-            return BlobStream(size=0, start=0, length=0, etag=etag, ranged=False, satisfiable=True)
-        return BlobStream(size=0, start=0, length=0, etag=etag, ranged=True, satisfiable=False)
+            return BlobStream(version=served, size=0, start=0, length=0, etag=etag, ranged=False, satisfiable=True)
+        return BlobStream(version=served, size=0, start=0, length=0, etag=etag, ranged=True, satisfiable=False)
     handle = files[0]
     size: int = handle.size()
 
     if range_spec is None:
         return BlobStream(
+            version=served,
             size=size,
             start=0,
             length=size,
@@ -177,15 +181,16 @@ def read_blob(
     first, last = range_spec
     if first is None:  # suffix range: the final `last` bytes
         if last is None or last <= 0 or size == 0:
-            return BlobStream(size=size, start=0, length=0, etag=etag, ranged=True, satisfiable=False)
+            return BlobStream(version=served, size=size, start=0, length=0, etag=etag, ranged=True, satisfiable=False)
         start = max(size - last, 0)
         end = size - 1
     else:
         if first >= size:
-            return BlobStream(size=size, start=0, length=0, etag=etag, ranged=True, satisfiable=False)
+            return BlobStream(version=served, size=size, start=0, length=0, etag=etag, ranged=True, satisfiable=False)
         start = first
         end = size - 1 if last is None else min(last, size - 1)
     return BlobStream(
+        version=served,
         size=size,
         start=start,
         length=end - start + 1,

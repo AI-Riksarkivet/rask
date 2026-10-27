@@ -57,7 +57,7 @@ from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy,
 from maintenance.services.naming import PolicyOwners, TableIds, policy_owners, read_uuids, table_uuid, under_a_declared_root
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
 from service_kit.governed import fga
-from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, data_directories, location_claims, maintenance_policies, trash
 from service_kit.lakehouse.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.history_fences import TableHistory
@@ -723,8 +723,8 @@ def audit_material_work(result: DatasetResult, *, subject: str) -> None:
     if not _did_material_work(result):
         return
     audit(
-        "expire_versions",
-        SUCCESS,
+        AuditAction.EXPIRE_VERSIONS,
+        AuditOutcome.SUCCESS,
         subject=subject,
         resource=f"table:{result.table_id}" if result.table_id else result.uri,
         dataset=result.uri,

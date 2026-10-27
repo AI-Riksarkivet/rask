@@ -28,6 +28,7 @@ from lance_namespace import (
     UpdateTableRequest,
     UpdateTableResponse,
 )
+from lance_namespace_urllib3_client.models import QueryTableRequestColumns
 from pydantic import StringConstraints
 
 from catalog.api import fga_deps, lineage_deps
@@ -541,10 +542,12 @@ async def read_table_blob(
         if_range=if_range,
     )
     # A BLOB READ IS THE MOST DISCLOSING READ THERE IS — it returns the bytes themselves — so it is
-    # recorded with the COLUMN it served, which is the closest this door has to J1's "which columns".
+    # recorded with the address it served: the column, the version it resolved (pinned or the head), the
+    # positional row at that version and the byte window. Version and row name one row exactly, so the
+    # record says which bytes left without a second read to resolve the row's `_rowid`.
     # Before the 416 branch on purpose: an unsatisfiable RANGE still told the caller the object's size
     # and ETag, which is a probe worth having in the log.
-    audit_read(subject=_reader(token), resource=id, version=version, columns=[column])
+    audit_read(subject=_reader(token), resource=id, version=blob.version, columns=[column], row=row, offset=blob.start, length=blob.length)
     headers = {"Accept-Ranges": "bytes", "ETag": blob.etag}
     if not blob.satisfiable:
         headers["Content-Range"] = f"bytes */{blob.size}"
@@ -562,17 +565,18 @@ async def read_table_blob(
     )
 
 
-def _column_names(columns: object) -> list[str] | None:
-    """The column NAMES a request asked for, whatever shape the spec model wraps them in.
+def _column_names(columns: QueryTableRequestColumns | None) -> list[str] | None:
+    """The source field paths a request narrowed its read to, or ``None`` when it named none (every column).
 
-    `QueryTableRequestColumns` is a generated union wrapper, so the names sit under `actual_instance`
-    on some spec revisions and are the object itself on others. Anything that is not a list of strings
-    records nothing rather than a repr: a column field carrying `<object at 0x...>` is worse than an
-    absent one, because it looks like data.
+    The spec's ``columns`` carries either ``column_names`` or ``column_aliases`` (alias → source path); an alias is
+    recorded by the path it reads, since the path is what was disclosed.
     """
-    inner = getattr(columns, "actual_instance", columns)
-    if isinstance(inner, list) and all(isinstance(c, str) for c in inner):
-        return inner
+    if columns is None:
+        return None
+    if columns.column_names:
+        return columns.column_names
+    if columns.column_aliases:
+        return list(columns.column_aliases.values())
     return None
 
 
@@ -609,9 +613,8 @@ def query_table(
     # AFTER the read, not before: an audit line for rows nobody received is a false record, and this
     # door's refusals (branch, identifier) raise above. § J1 — the estate authorized every read and then
     # forgot it happened.
-    # `columns` is the SPEC's union wrapper (`QueryTableRequestColumns`), not a list of names, so it is
-    # normalised here rather than typed loosely at the helper: the audit record is flat by contract,
-    # and a wrapper object would land differently in every sink.
+    # `columns` is the spec's `QueryTableRequestColumns` (names or aliases), normalised to the field paths read: the
+    # audit record is flat by contract, and a wrapper object would land differently in every sink.
     audit_read(subject=_reader(token), resource=id, version=body.version, columns=_column_names(body.columns))
     return Response(content=response.data, media_type=ARROW_FILE)
 
@@ -662,10 +665,10 @@ def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: S
     # ONE CALL FOR ALL THREE KINDS: the window is one snapshot, opened at its end, and `deleted` is
     # answered from the transaction range on that same handle rather than from a scan — learning which
     # rows a table LOST is as disclosing as learning which it gained, so it is audited identically.
-    data = dataplane.read_changes(
+    end, data = dataplane.read_changes(
         table, so, begin_version=body.begin_version, end_version=body.end_version, kind=body.kind, columns=body.columns, branch=body.branch
     )
-    audit_read(subject=_reader(token), resource=id, version=body.end_version, columns=body.columns, change_kind=body.kind)
+    audit_read(subject=_reader(token), resource=id, version=end, columns=body.columns, change_kind=body.kind)
     # STREAMED, like the blob door above and for the same reason: a feed's size is a property of the
     # DATA and this door has no bound to offer — the version window is the only cursor, and one
     # version can carry the whole table. The audit is emitted BEFORE the first byte on purpose: the
@@ -706,8 +709,8 @@ def count_table_rows(
     counted = dataplane.count_rows(table, so, req, data_ns=data_ns)
     # A COUNT IS A READ. It answers a question about the rows without returning them, and a subject that
     # can count is a subject that can probe — so it belongs in the same log as a query (§ J1).
-    audit_read(subject=_reader(token), resource=id, version=getattr(req, "version", None))
-    return JSONResponse(content=counted)
+    audit_read(subject=_reader(token), resource=id, version=counted.version)
+    return JSONResponse(content=counted.count)
 
 
 @router.post("/{id}/explain_plan")
@@ -733,13 +736,19 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
     # AN EXPLAIN IS A READ OF THE SHAPE, not of the rows: it discloses the columns, the filters and
     # the plan the engine would run — exactly what a subject probing a table it may not query would
     # ask for. § J1 counts it as a read for that reason.
-    audit_read(subject=_reader(token), resource=id, columns=_column_names(getattr(body, "columns", None)))
+    audit_read(subject=_reader(token), resource=id, version=judged, columns=_column_names(body.query.columns if body.query else None))
     return JSONResponse(content=plan)
 
 
 @router.post("/{id}/analyze_plan")
 def analyze_table_query_plan(
-    id: str, body: AnalyzeTableQueryPlanRequest, table: DoorTableDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep
+    id: str,
+    body: AnalyzeTableQueryPlanRequest,
+    table: DoorTableDep,
+    data_ns: DataNamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    token: CurrentToken = None,
 ) -> Response:
     """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text, served once the name still resolves to the door's location."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
@@ -756,4 +765,7 @@ def analyze_table_query_plan(
     # e2e never noticed). `JSONResponse` on a `str` encodes it AS a string, so a plan that happens to
     # look like JSON round-trips as the opaque text it is rather than being mistaken for structure.
     plan = result if isinstance(result, str) else json.dumps(dump(result))
+    # AN ANALYZE IS A READ OF THE ROWS: it runs the query and reports how many rows the filter matched, which is a
+    # yes/no about the values, so it is recorded like the query it ran.
+    audit_read(subject=_reader(token), resource=id, version=body.version, columns=_column_names(body.columns))
     return JSONResponse(content=plan)

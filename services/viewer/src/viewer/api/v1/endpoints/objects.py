@@ -36,10 +36,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError
-from service_kit.governed.audit import FAILURE, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from service_kit.governed.secrets import fetch_dapr_secret
 from storage import BucketNotFoundError, ObjectNotFoundError, s3_client, s3_errors
 from viewer.api.security import BROWSE_STORAGE, CheckerDep, CurrentSubject, SettingsDep
+from viewer.audit_actions import ViewerAuditAction
 from viewer.core.config import get_viewer_settings
 from viewer.core.stores import Store, StoreRegistry, registered_stores, store_by_name
 
@@ -224,7 +225,7 @@ def _bucket_missing(client: object, bucket: str) -> bool:
     return False
 
 
-async def _require_browse(checker: object, subject: str, settings: object, store: str, action: str) -> None:
+async def _require_browse(checker: object, subject: str, settings: object, store: str, action: ViewerAuditAction) -> None:
     """Estate-admin gate for the raw object routes (#90).
 
     These three routes — an S3 LIST, a HEAD, and a FULL BYTE DOWNLOAD over any bucket in the store
@@ -239,7 +240,7 @@ async def _require_browse(checker: object, subject: str, settings: object, store
     """
     obj = settings.fga_root_object  # ty: ignore[unresolved-attribute]
     if not await checker(user=subject, relation=BROWSE_STORAGE, obj=obj):  # ty: ignore[call-non-callable]
-        audit(action, FAILURE, subject=subject, resource=store, relation=BROWSE_STORAGE)
+        audit(action, AuditOutcome.FAILURE, subject=subject, resource=store, relation=BROWSE_STORAGE)
         raise ForbiddenError(f"{subject} lacks {BROWSE_STORAGE} on {obj}")
 
 
@@ -250,7 +251,7 @@ async def list_stores(checker: CheckerDep, subject: CurrentSubject, settings: Se
     Gated as its sibling routes are: the list names hosts and buckets outside the medallion, which is the estate-wide
     disclosure `_require_browse` exists for.
     """
-    await _require_browse(checker, subject, settings, "stores", "viewer.stores.list")
+    await _require_browse(checker, subject, settings, "stores", ViewerAuditAction.VIEWER_STORES_LIST)
     return StoreRegistry(stores=registered_stores(settings.stores))
 
 
@@ -272,7 +273,7 @@ async def list_objects(
 
     404s (never 500s) when the bucket itself is absent — see the module docstring.
     """
-    await _require_browse(checker, subject, settings, bucket, "viewer.objects.list")
+    await _require_browse(checker, subject, settings, bucket, ViewerAuditAction.VIEWER_OBJECTS_LIST)
 
     def _blocking() -> S3Listing:
         client = _client_for(bucket)
@@ -339,7 +340,7 @@ async def head_object(
     old blanket `except Exception` reported an outage as "object not found", which is
     the same lie in the other direction.
     """
-    await _require_browse(checker, subject, settings, bucket, "viewer.object.head")
+    await _require_browse(checker, subject, settings, bucket, ViewerAuditAction.VIEWER_OBJECT_HEAD)
 
     def _blocking() -> dict:
         client = _client_for(bucket)
@@ -389,7 +390,7 @@ async def download_object(
     the response starts: the GET is issued in the threadpool and only its BODY is deferred, so an
     absence is a 404 rather than an error rendered mid-download. Outages still surface as outages.
     """
-    await _require_browse(checker, subject, settings, bucket, "viewer.object.download")
+    await _require_browse(checker, subject, settings, bucket, ViewerAuditAction.VIEWER_OBJECT_DOWNLOAD)
 
     def _blocking() -> tuple[Any, dict]:
         # The client is RETURNED, not discarded: the streaming body borrows its connection pool, so

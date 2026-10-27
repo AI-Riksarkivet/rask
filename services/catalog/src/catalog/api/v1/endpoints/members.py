@@ -35,7 +35,7 @@ from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 
 
 if TYPE_CHECKING:
@@ -126,7 +126,7 @@ async def grant_member(
     if granted:
         await fga.write_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")  # noqa: TID251
         existing = await fga.read_object_tuples(wired, obj)
-    audit("project.members.grant", SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+    audit(AuditAction.PROJECT_MEMBER_GRANT, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
     # TELL THE PERSON. `access.py` has announced every per-object grant it writes since the control lane
     # existed; this door — one rung UP, and strictly more consequential — wrote the same class of tuple
     # and announced nothing, so being made a project admin arrived in silence.
@@ -174,7 +174,7 @@ async def revoke_member(
         if not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing):
             return MemberList(members=_direct_grants(existing, obj))
         await fga.delete_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")  # noqa: TID251
-    audit("project.members.revoke", SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
+    audit(AuditAction.PROJECT_MEMBER_REVOKE, AuditOutcome.SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
     # THE SHARPER HALF. After this the subject can no longer see the project, so no visibility-gated
     # feed could ever tell them — which is precisely why the control lane runs no visibility check and
     # why being NAMED is the targeting. Unannounced, losing tenant access is discovered as a 403 in the

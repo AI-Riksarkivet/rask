@@ -28,9 +28,10 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from annotator.audit_actions import AnnotatorAuditAction
 from annotator.projects.roles import PERMISSIONS, Rung, holds
 from service_kit.exceptions import ServiceUnavailableError, UnauthorizedError
-from service_kit.governed.audit import FAILURE, audit
+from service_kit.governed.audit import AuditOutcome, audit
 
 
 #: The tenant relations the annotator asks about. `member` is answered by the door admitting the caller at all.
@@ -123,7 +124,9 @@ class AnnotatorChecker:
         if user != self._subject:
             # The catalog answers for the bearer alone, so a question about anyone else would be answered about the
             # wrong person. No route asks one; refusing keeps a future one from being granted by mistake.
-            audit("annotator.authorize", FAILURE, subject=self._subject, resource=obj, relation=relation, reason="not_the_caller")
+            audit(
+                AnnotatorAuditAction.ANNOTATOR_AUTHORIZE, AuditOutcome.FAILURE, subject=self._subject, resource=obj, relation=relation, reason="not_the_caller"
+            )
             return False
         object_type, _, object_id = obj.partition(":")
         if not object_id:

@@ -42,7 +42,7 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, require_names
 from catalog.services.object_uuids import UnidentifiedObjectError
 from service_kit.governed import fga
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.decider import (
     DECISIONS_PREFIX,
     DecisionCheck,
@@ -79,9 +79,6 @@ def _is_decidable(relation: str) -> bool:
     """Whether a check may ask about ``relation``."""
     return (relation.startswith("can_") and relation not in _DECISION_PERMISSIONS) or relation in _DECIDABLE_ROLES
 
-
-#: The audit action every decision call records under.
-_ACTION: Final = "authz_decision"
 
 management_router = APIRouter(prefix=DECISIONS_PREFIX, tags=["decisions"])
 
@@ -151,7 +148,7 @@ async def _named_table(resolver: Resolver, name: str) -> tuple[str, str | None] 
 
 def _refused(caller: str, route: str, reason: str, **asked: str) -> InvalidInputError:
     """A question the door does not answer, audited with what was asked before it is refused 400."""
-    audit(_ACTION, FAILURE, subject=caller, route=route, reason="question_refused", **asked)
+    audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route=route, reason="question_refused", **asked)
     return InvalidInputError(reason)
 
 
@@ -174,13 +171,13 @@ async def decide_check(client: WiredFgaClient, token: CurrentToken, resolver: Re
     try:
         resolved = {name: uuids for name in body.tables if (uuids := await _named_table(resolver, name)) is not None}
     except Exception:
-        audit(_ACTION, FAILURE, subject=caller, route="check", reason="resolution_failed", **asked)
+        audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="check", reason="resolution_failed", **asked)
         raise
     objects = list(dict.fromkeys([*body.objects, *(fga.table_object(table) for table, _ in resolved.values())]))
     try:
         allowed = await fga.batch_check(client, user=body.user, relation=body.relation, objects=objects) if objects else {}
     except ServiceUnavailableError:
-        audit(_ACTION, FAILURE, subject=caller, route="check", reason="authz_unavailable", **asked)
+        audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="check", reason="authz_unavailable", **asked)
         raise
     decided = {name: TableDecision(allowed=False) for name in body.tables}
     decided |= {
@@ -189,7 +186,7 @@ async def decide_check(client: WiredFgaClient, token: CurrentToken, resolver: Re
         if allowed.get(fga.table_object(table))
     }
     granted = [*(o for o in body.objects if allowed.get(o)), *(name for name, decision in decided.items() if decision.allowed)]
-    audit(_ACTION, SUCCESS, subject=caller, route="check", allowed=",".join(granted), **asked)
+    audit(AuditAction.AUTHZ_DECISION, AuditOutcome.SUCCESS, subject=caller, route="check", allowed=",".join(granted), **asked)
     return DecisionCheckResult(allowed={o: allowed.get(o, False) for o in body.objects}, tables=decided)
 
 
@@ -204,9 +201,9 @@ async def decide_list_users(client: WiredFgaClient, token: CurrentToken, body: D
     try:
         users = await fga.list_users(client, relation=body.relation, obj=body.object)
     except ServiceUnavailableError:
-        audit(_ACTION, FAILURE, subject=caller, route="list-users", reason="authz_unavailable", **asked)
+        audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="list-users", reason="authz_unavailable", **asked)
         raise
-    audit(_ACTION, SUCCESS, subject=caller, route="list-users", users=",".join(users), delivered=len(users), **asked)
+    audit(AuditAction.AUTHZ_DECISION, AuditOutcome.SUCCESS, subject=caller, route="list-users", users=",".join(users), delivered=len(users), **asked)
     return DecisionListUsersResult(users=users)
 
 
@@ -221,9 +218,9 @@ async def decide_governed(client: WiredFgaClient, token: CurrentToken, body: Dec
         # A name that is no object id holds no tuple, and reading it would fail the read.
         governed = {o: fga.is_object_id(o) and bool(await fga.read_object_tuples(client, o)) for o in body.objects}
     except ServiceUnavailableError:
-        audit(_ACTION, FAILURE, subject=caller, route="governed", reason="authz_unavailable", **asked)
+        audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="governed", reason="authz_unavailable", **asked)
         raise
-    audit(_ACTION, SUCCESS, subject=caller, route="governed", governed=",".join(o for o, g in governed.items() if g), **asked)
+    audit(AuditAction.AUTHZ_DECISION, AuditOutcome.SUCCESS, subject=caller, route="governed", governed=",".join(o for o, g in governed.items() if g), **asked)
     return DecisionGovernedResult(governed=governed)
 
 

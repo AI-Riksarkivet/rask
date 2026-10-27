@@ -58,7 +58,7 @@ from catalog.schemas import (
 from catalog.services import principals, project_admins
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.principal import is_principal
 
 
@@ -290,11 +290,11 @@ async def read_access_tuples(
             continuation_token=continuation,
         )
     except ServiceUnavailableError:
-        audit("access_tuples_read", FAILURE, subject=subject, resource=resource, reason="authz_unavailable")
+        audit(AuditAction.ACCESS_TUPLES_READ, AuditOutcome.FAILURE, subject=subject, resource=resource, reason="authz_unavailable")
         raise
     # #41: the raw-tuple listing is an estate-wide ACL disclosure — audit it distinctly from the gate's
     # allow, exactly like access_review on the per-object surface.
-    audit("access_tuples_read", SUCCESS, subject=subject, resource=resource, delivered=len(tuples))
+    audit(AuditAction.ACCESS_TUPLES_READ, AuditOutcome.SUCCESS, subject=subject, resource=resource, delivered=len(tuples))
     return AccessTuplesPage(
         tuples=[_as_access_tuple(t) for t in tuples],
         continuation=next_token,
@@ -357,7 +357,7 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientT
 async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: Caller | None, body: AccessTuple, *, write: bool) -> AccessTuple:
     tup = _validated_write_tuple(body, evaluated=write)
     actor = token.subject if token else "anonymous"
-    event = "access_tuple_write" if write else "access_tuple_delete"
+    event = AuditAction.ACCESS_TUPLE_WRITE if write else AuditAction.ACCESS_TUPLE_DELETE
     try:
         if write:
             await fga.write_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
@@ -367,7 +367,7 @@ async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: C
         # Only the FAILURE row is emitted here. The SUCCESS row now comes from inside
         # `fga.write_tuples`/`delete_tuples`, so every write site gets one — and emitting it here too
         # would give this one surface two rows per write while the other six still had none.
-        audit(event, FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
+        audit(event, AuditOutcome.FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
         raise
     # The control-plane feed documents that GRANTS tick the cursor — and the per-object grant surface
     # emits, so a raw-tuple write that stayed silent made this the one grant path live surfaces could
@@ -439,10 +439,10 @@ async def check_access(client: EstateFgaClient, token: CurrentToken, body: Acces
     try:
         allowed = await fga.check(client, user=user, relation=body.relation, obj=obj, qualify=False, context=body.context or None)
     except ServiceUnavailableError:
-        audit("access_simulate", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        audit(AuditAction.ACCESS_SIMULATE, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
     # Same disclosure event as the per-object simulator — one queryable stream for "who probed the graph".
-    audit("access_simulate", SUCCESS, subject=subject, resource=obj)
+    audit(AuditAction.ACCESS_SIMULATE, AuditOutcome.SUCCESS, subject=subject, resource=obj)
     checked = AccessTuple(user=user, relation=body.relation, object=obj)
     return AccessCheckResult(allowed=allowed, checked=checked)
 
@@ -476,10 +476,18 @@ async def list_access_objects(client: EstateFgaClient, token: CurrentToken, body
     try:
         objects = (await fga.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)).objects
     except ServiceUnavailableError:
-        audit("access_list_objects", FAILURE, subject=subject, resource=f"{body.type}:", reason="authz_unavailable")
+        audit(AuditAction.ACCESS_LIST_OBJECTS, AuditOutcome.FAILURE, subject=subject, resource=f"{body.type}:", reason="authz_unavailable")
         raise
     # Enumerating one subject's whole reach is an estate-wide ACL disclosure, same tier as access_tuples_read.
-    audit("access_list_objects", SUCCESS, subject=subject, resource=f"{body.type}:", grantee=user, relation=relation, delivered=len(objects))
+    audit(
+        AuditAction.ACCESS_LIST_OBJECTS,
+        AuditOutcome.SUCCESS,
+        subject=subject,
+        resource=f"{body.type}:",
+        grantee=user,
+        relation=relation,
+        delivered=len(objects),
+    )
     return AccessListObjectsResponse(objects=objects, user=user, relation=relation, type=body.type)
 
 
@@ -508,9 +516,9 @@ async def list_access_users(client: EstateFgaClient, token: CurrentToken, body: 
             qualified=True,
         )
     except ServiceUnavailableError:
-        audit("access_list_users", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        audit(AuditAction.ACCESS_LIST_USERS, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
-    audit("access_list_users", SUCCESS, subject=subject, resource=obj, relation=relation, delivered=len(users))
+    audit(AuditAction.ACCESS_LIST_USERS, AuditOutcome.SUCCESS, subject=subject, resource=obj, relation=relation, delivered=len(users))
     # ListUsers has no pagination and the server truncates silently at listUsersMaxResults — an
     # under-reported access review must never render as a complete one, so the ceiling rides the wire.
     return AccessListUsersResponse(
@@ -544,9 +552,9 @@ async def expand_access(client: EstateFgaClient, token: CurrentToken, body: Acce
     try:
         tree = await fga.expand_tree(client, relation=relation, obj=obj, max_depth=depth)
     except ServiceUnavailableError:
-        audit("access_expand", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        audit(AuditAction.ACCESS_EXPAND, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
-    audit("access_expand", SUCCESS, subject=subject, resource=obj, relation=relation, depth=depth)
+    audit(AuditAction.ACCESS_EXPAND, AuditOutcome.SUCCESS, subject=subject, resource=obj, relation=relation, depth=depth)
     # An empty tree ({}) means the relation resolves to nothing here — a real answer, distinct from the
     # 503 an outage raises above. Keep them distinguishable on the wire: null tree, never a silent {}.
     return AccessExpandResponse(
@@ -592,11 +600,11 @@ async def simulate_access(client: EstateFgaClient, token: CurrentToken, body: Ac
             baseline if not hypothetical else await fga.check(client, user=user, relation=relation, obj=obj, qualify=False, contextual_tuples=hypothetical)
         )
     except ServiceUnavailableError:
-        audit("access_simulate_hypothetical", FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
+        audit(AuditAction.ACCESS_SIMULATE_HYPOTHETICAL, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
     # Probing the graph IS disclosing it, hypothetically or not — same tier as access_simulate, but a
     # distinct action so a compliance query can tell a what-if apart from a live check.
-    audit("access_simulate_hypothetical", SUCCESS, subject=subject, resource=obj, relation=relation, hypotheticals=len(hypothetical))
+    audit(AuditAction.ACCESS_SIMULATE_HYPOTHETICAL, AuditOutcome.SUCCESS, subject=subject, resource=obj, relation=relation, hypotheticals=len(hypothetical))
     return AccessSimulateResult(
         allowed=allowed,
         baseline=baseline,
@@ -693,7 +701,7 @@ async def delete_principal(
     administered = await _refuse_stranding(client, key, user, naming)
     revoked = await _revoke_all(client, user, naming, administered, actor=actor)
     record = await run_in_threadpool(principals.record_deletion, settings.registry_root, settings.storage_options(), key, deleted_by=actor)
-    audit("principal_delete", SUCCESS, subject=actor, resource=user, revoked=revoked)
+    audit(AuditAction.PRINCIPAL_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=user, revoked=revoked)
     await emit_control(
         control,
         action="principal_deleted",

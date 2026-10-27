@@ -60,7 +60,7 @@ from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rena
 from catalog.services import dataplane, native, object_uuids, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga
-from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.lakehouse import object_records, protection, trash
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
@@ -95,7 +95,10 @@ _FGA_TYPE: dict[str, str] = {
 # said so (2026-09-08: `can_write_data ALLOW` on `table:bronze$pages`, logged one line above the
 # `read_data` record for the same call). That refuses every reader who is not also a writer, which for a
 # change feed is its entire audience, and it writes a fiction into the compliance trail.
-_DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs", "changes"})
+# ``explain_plan`` and ``analyze_plan`` read data too: analyze RUNS the query and reports its output row count, so a
+# filter it is handed answers a yes/no about the values and a binary search over them recovers any value; explain
+# names the columns, filters and plan a reader would run. Both take the rung their query would.
+_DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs", "changes", "explain_plan", "analyze_plan"})
 # `tasks` (#75) reports what is SCHEDULED against this object — a pending undrop deadline today.
 # Reader tier: it discloses no data and no principals, and an owner must be able to see the
 # deadline they are racing.
@@ -105,7 +108,7 @@ _DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs", "
 # first and that weaker second check was unreachable for anyone who had not already cleared the higher
 # bar. Measured on the estate 2026-09-09: one GET logged `can_write_data ALLOW` then
 # `can_get_metadata ALLOW`, in that order.
-_META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "explain_plan", "analyze_plan", "version", "tasks", "history"})
+_META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "version", "tasks", "history"})
 
 #: The rungs that mean "this door only READS". Keyed on the relation `_action_relation` resolved, so a
 #: door is classified by what it DOES rather than by how its path happens to be spelled — `access/list`
@@ -474,7 +477,7 @@ def _record_undeclared(path: str, fga_type: str, suffix: str, *, user: str, obj:
     """Log and audit an undeclared-door refusal. The ERROR line names the path and suffix because the
     500 the caller receives is redacted, so it is where an operator finds the route that shipped bare."""
     log.error("undeclared_door", extra={"path": path, "fga_type": fga_type, "suffix": suffix})
-    audit("authz", FAILURE, subject=user, resource=obj, reason="undeclared_door", suffix=suffix)
+    audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, subject=user, resource=obj, reason="undeclared_door", suffix=suffix)
 
 
 def _action_relation(fga_type: str, suffix: str) -> str:
@@ -541,9 +544,11 @@ async def _require(client: OpenFgaClient, *, user: str, relation: str, obj: str,
     try:
         allowed = await fga.check(client, user=user, relation=relation, obj=obj)
     except ServiceUnavailableError:  # authz layer down during an access attempt — audit, then fail closed
-        audit(relation, FAILURE, subject=user, resource=obj, reason="authz_unavailable")
+        audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, relation=relation, subject=user, resource=obj, reason="authz_unavailable")
         raise
-    audit(relation, ALLOW if allowed else DENY, subject=user, resource=obj)  # #41 audit every authz decision
+    audit(
+        AuditAction.AUTHZ, AuditOutcome.ALLOW if allowed else AuditOutcome.DENY, relation=relation, subject=user, resource=obj
+    )  # #41 audit every authz decision
     if not allowed:
         log.info("access_denied", extra={"sub": user, "relation": relation, "object": obj})
         raise PermissionDeniedError(f"{relation} required on {label or obj}")
@@ -551,7 +556,7 @@ async def _require(client: OpenFgaClient, *, user: str, relation: str, obj: str,
 
 def _refuse_absent(*, user: str, relation: str, label: str) -> PermissionDeniedError:
     """The refusal of ``relation`` on a name that holds no object, audited by the name: no tuple can grant it."""
-    audit(relation, DENY, subject=user, resource=label, reason="no_such_object")
+    audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation=relation, subject=user, resource=label, reason="no_such_object")
     log.info("access_denied", extra={"sub": user, "relation": relation, "object": label})
     return PermissionDeniedError(f"{relation} required on {label}")
 
@@ -595,7 +600,7 @@ async def _require_trashed(
     objects = {fga.object_of(named.kind, uuid): record for record in trashed if (uuid := trash.object_uuid(record)) is not None}
     allowed = await fga.batch_check(client, user=user, relation=relation, objects=sorted(objects))
     for obj in sorted(objects):
-        audit(relation, ALLOW if allowed.get(obj, False) else DENY, subject=user, resource=obj)
+        audit(AuditAction.AUTHZ, AuditOutcome.ALLOW if allowed.get(obj, False) else AuditOutcome.DENY, relation=relation, subject=user, resource=obj)
     admitted = {obj: record for obj, record in objects.items() if allowed.get(obj, False)}
     resolver.admit_trashed(named.kind, list(named.segments), list(admitted.values()))
     if not admitted:
@@ -619,13 +624,13 @@ async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[st
         try:
             allowed = await fga.check(client, user=user, relation=relation, obj=obj)
         except ServiceUnavailableError:  # authz layer down mid-decision — audit, then fail closed
-            audit(relation, FAILURE, subject=user, resource=obj, reason="authz_unavailable")
+            audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, relation=relation, subject=user, resource=obj, reason="authz_unavailable")
             raise
         if allowed:
-            audit(relation, ALLOW, subject=user, resource=obj)
+            audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=relation, subject=user, resource=obj)
             return
     for relation, obj in doors:  # reaching here means every door was probed and every one denied
-        audit(relation, DENY, subject=user, resource=obj)
+        audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation=relation, subject=user, resource=obj)
     wanted = " or ".join(f"{relation} on {label or obj}" for relation, obj in doors)
     log.info("access_denied", extra={"sub": user, "relation": "any_of", "object": wanted})
     raise PermissionDeniedError(f"one of [{wanted}] required")
@@ -770,7 +775,7 @@ async def _refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: o
         try:
             inside = await fga.check(client, user=subject, relation=userset_relation, obj=userset_object, qualify=False)
         except ServiceUnavailableError:  # authz layer down mid-decision — fail closed, like every other door
-            audit("can_grant_self", FAILURE, subject=user, resource=obj, reason="authz_unavailable")
+            audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, relation="can_grant_self", subject=user, resource=obj, reason="authz_unavailable")
             raise
         if not inside:
             return
@@ -778,11 +783,11 @@ async def _refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: o
     try:
         already = await fga.check(client, user=subject, relation=relation, obj=obj, qualify=False)
     except ServiceUnavailableError:
-        audit("can_grant_self", FAILURE, subject=user, resource=obj, reason="authz_unavailable")
+        audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, relation="can_grant_self", subject=user, resource=obj, reason="authz_unavailable")
         raise
     if already:
         return
-    audit("can_grant_self", DENY, subject=user, resource=obj, grantee=resolved, relation=relation)
+    audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation="can_grant_self", subject=user, resource=obj, grantee=resolved, granted_relation=relation)
     log.info("self_elevation_refused", extra={"sub": user, "relation": relation, "object": obj, "grantee": resolved})
     raise PermissionDeniedError(f"a grant may not raise your own access: you do not hold {relation} on {obj}")
 
@@ -890,7 +895,7 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Re
         allowed = await fga.batch_check(client, user=user, relation=relation, objects=present) if present else {}
         for label, obj in objects.items():  # #41 audit every batch authz decision (allow AND deny), like the single-route gate
             granted = obj is not None and allowed.get(obj, False)
-            audit(relation, ALLOW if granted else DENY, subject=user, resource=obj or label)
+            audit(AuditAction.AUTHZ, AuditOutcome.ALLOW if granted else AuditOutcome.DENY, relation=relation, subject=user, resource=obj or label)
             if not granted:
                 denied.append(label)
     if denied:
@@ -1032,9 +1037,17 @@ async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user:
     try:
         allowed = await fga.check(client, user=user, relation="can_observe_events", obj=root)
     except ServiceUnavailableError:  # authz layer down during an access attempt — audit, then fail closed
-        audit("can_observe_events", FAILURE, subject=user, resource=label, decided_on=root, reason="authz_unavailable")
+        audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, relation="can_observe_events", subject=user, resource=label, decided_on=root, reason="authz_unavailable")
         raise
-    audit("can_observe_events", ALLOW if allowed else DENY, subject=user, resource=label, decided_on=root, reason="unidentified_table")
+    audit(
+        AuditAction.AUTHZ,
+        AuditOutcome.ALLOW if allowed else AuditOutcome.DENY,
+        relation="can_observe_events",
+        subject=user,
+        resource=label,
+        decided_on=root,
+        reason="unidentified_table",
+    )
     if not allowed:
         log.info("access_denied", extra={"sub": user, "relation": rung.relation, "object": label})
         raise PermissionDeniedError(f"{rung.relation} required on {label}")
@@ -1085,14 +1098,14 @@ async def _granted_vend_tier(client: OpenFgaClient, subject: str, obj: str) -> L
     """The tier ``subject``'s rungs on ``obj`` open at a spec door, each rung that decided it audited ALLOW."""
     writing = VEND_TIER_RUNGS["write"]
     if await fga.check(client, user=subject, relation=writing, obj=obj):
-        audit(writing, ALLOW, subject=subject, resource=obj)
+        audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=writing, subject=subject, resource=obj)
         return "write"
     if not await fga.check(client, user=subject, relation="can_read_data", obj=obj):
         return None
-    audit("can_read_data", ALLOW, subject=subject, resource=obj)
+    audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation="can_read_data", subject=subject, resource=obj)
     if not await fga.check(client, user=subject, relation="can_maintain", obj=obj):
         return "read"
-    audit("can_maintain", ALLOW, subject=subject, resource=obj)
+    audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation="can_maintain", subject=subject, resource=obj)
     return "write"
 
 

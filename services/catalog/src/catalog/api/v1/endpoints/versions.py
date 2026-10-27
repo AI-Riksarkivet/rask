@@ -49,7 +49,7 @@ from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, maintenance, managed_versions
 from catalog.services.table_claims import DoorTable
 from service_kit.governed import fga
-from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.lakehouse import commit_records, maintenance_due
 from service_kit.lakehouse.history_fences import HistoryWork
 
@@ -257,8 +257,8 @@ async def create_table_version(
         )
     response = await run_in_threadpool(managed_versions.finalize, table, staged, body, so)
     audit(
-        "commit_version",
-        SUCCESS,
+        AuditAction.COMMIT_VERSION,
+        AuditOutcome.SUCCESS,
         subject=token.subject if token is not None else None,
         resource=f"table:{canonical}",
         version=staged.version,

@@ -34,7 +34,7 @@ from lineage.schemas import DlqBacklog, DlqEvent, DlqReplayResponse, ParkedRuns
 from lineage.services.consumer import RETRY, handle_cloud_event
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 from service_kit.governed import audit, fga
-from service_kit.governed.audit import FAILURE, SUCCESS
+from service_kit.governed.audit import AuditAction, AuditOutcome
 from service_kit.lakehouse import outbox
 from service_kit.openlineage import dataset_uuids
 
@@ -173,14 +173,14 @@ async def replay_dlq(
     try:
         await republish_staged(publisher, settings, event_json)
     except Exception as exc:
-        audit.audit("dlq_replay", FAILURE, subject=token.subject if token else "", resource=_audited(event, run_id))
+        audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.FAILURE, subject=token.subject if token else "", resource=_audited(event, run_id))
         log.warning("lineage_dlq_replay_unannounced", extra={"run_id": run_id, "error": str(exc)})
         raise ServiceUnavailableError(f"replayed {run_id} into the feed, but re-announcing it failed; it stays staged for the relay to retry") from exc
     # Drop exactly what was replayed — dropping by run id would miss it and leave a redundant object.
     await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, staged_key)
     # A completed ACTION records SUCCESS unconditionally (house vocabulary: ALLOW/DENY belong to authz
     # decisions — mirror access_grant/vend_credentials); the subject is empty in auth-off dev.
-    audit.audit("dlq_replay", SUCCESS, subject=token.subject if token else "", resource=_audited(event, run_id))
+    audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.SUCCESS, subject=token.subject if token else "", resource=_audited(event, run_id))
     log.info("lineage_dlq_replayed", extra={"run_id": run_id, "sub": token.subject if token else None})
     return DlqReplayResponse(status="replayed", run_id=run_id)
 
@@ -230,11 +230,11 @@ async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep
     subject = token.subject if token else ""
     left = [(delivery, answer) for delivery, answer in zip(kept, answers, strict=True) if delivery.feed_key not in held]
     if left:
-        audit.audit("dlq_parked_replay", FAILURE, subject=subject, resource=f"run:{run_id}")
+        audit.audit(AuditAction.DLQ_PARKED_REPLAY, AuditOutcome.FAILURE, subject=subject, resource=f"run:{run_id}")
         names = [f"{delivery.feed_key or delivery.key}: {answer.get('status')}" for delivery, answer in left]
         if any(answer.get("status") == RETRY for _, answer in left):
             raise ServiceUnavailableError(f"re-presenting run {run_id} met an outage; {len(left)} delivery(ies) stay kept: {names}")
         raise InvalidInputError(f"run {run_id} is still refused on re-presentation; {len(left)} delivery(ies) stay kept, {len(recovered)} recovered: {names}")
-    audit.audit("dlq_parked_replay", SUCCESS, subject=subject, resource=f"run:{run_id}")
+    audit.audit(AuditAction.DLQ_PARKED_REPLAY, AuditOutcome.SUCCESS, subject=subject, resource=f"run:{run_id}")
     log.info("lineage_parked_replayed", extra={"run_id": run_id, "deliveries": len(kept), "sub": subject or None})
     return DlqReplayResponse(status="recovered", run_id=run_id)

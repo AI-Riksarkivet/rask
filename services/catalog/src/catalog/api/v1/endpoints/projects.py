@@ -66,7 +66,7 @@ from catalog.services import projects as project_registry
 from catalog.services import warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
-from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.lakehouse.naming import CONTROL_ID_RE
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
 
@@ -221,8 +221,8 @@ async def create_project(
     # `seed_project_admin` writes a grant only for a named admin, so `granted` implies one.
     if granted and admin is not None:
         audit(
-            "access_grant",
-            SUCCESS,
+            AuditAction.ACCESS_GRANT,
+            AuditOutcome.SUCCESS,
             subject=actor,
             resource=f"project:{project_id}",
             grantee=fga.user_object(admin),
@@ -255,11 +255,18 @@ async def _visible_projects(client: OpenFgaClient | None, settings: Settings, to
         observer = await fga.check(client, user=token.subject, relation="can_observe_events", obj=root)
         allowed = None if observer else await fga.batch_check(client, user=token.subject, relation="member", objects=[f"project:{p}" for p in candidates])
     except ServiceUnavailableError:
-        audit("list_projects", FAILURE, subject=token.subject, resource=root, reason="authz_unavailable")
+        audit(AuditAction.LIST_PROJECTS, AuditOutcome.FAILURE, subject=token.subject, resource=root, reason="authz_unavailable")
         raise
     # The estate-wide listing is the disclosure the root object guards, so its decision is audited like
     # every gate; a member's listing is scoped to their own tenants.
-    audit("can_observe_events", ALLOW if observer else DENY, subject=token.subject, resource=root, reason="list_projects")
+    audit(
+        AuditAction.AUTHZ,
+        AuditOutcome.ALLOW if observer else AuditOutcome.DENY,
+        relation="can_observe_events",
+        subject=token.subject,
+        resource=root,
+        reason="list_projects",
+    )
     return None if allowed is None else {p for p in candidates if allowed.get(f"project:{p}")}
 
 
@@ -383,8 +390,8 @@ async def delete_project(
         # subject-agnostic by design (it deletes EVERY tuple on the object), so the grantee is the wildcard
         # and `removed` carries the magnitude.
         audit(
-            "access_revoke",
-            SUCCESS,
+            AuditAction.ACCESS_REVOKE,
+            AuditOutcome.SUCCESS,
             subject=actor,
             resource=f"project:{project_id}",
             grantee="*",

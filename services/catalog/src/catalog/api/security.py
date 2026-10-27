@@ -27,7 +27,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.dependencies import SettingsDep
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
 from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from service_kit.governed.oidc import ProviderUnavailableError
@@ -59,17 +59,17 @@ def _service_principal(verifier: ServiceAccountVerifier | None, bearer: str) -> 
     if verifier is None:
         # The settings name a service-account issuer and this bearer claims it, but no verifier was
         # built: a 503 keeps a broken boot visible instead of handing the token to the IdP.
-        audit("authn", FAILURE, reason="verifier_unavailable")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
         raise ServiceUnavailableError("Authentication is enabled but unavailable")
     try:
         principal = verifier.verify(bearer)
     except ProviderUnavailableError as exc:
-        audit("authn", FAILURE, reason="verifier_unavailable")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
         raise ServiceUnavailableError("Authentication is enabled but unavailable") from exc
     except UnauthenticatedError:
-        audit("authn", FAILURE, reason="invalid_token")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="invalid_token")
         raise
-    audit("authn", SUCCESS, subject=principal.subject)
+    audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=principal.subject)
     return principal
 
 
@@ -96,22 +96,22 @@ def authenticate(
     verifier: PersonVerifier | None = getattr(request.app.state, "oidc", None)
     if verifier is None:
         # OIDC is enabled but no verifier is available: fail closed, never open.
-        audit("authn", FAILURE, reason="verifier_unavailable")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
         raise ServiceUnavailableError("Authentication is enabled but unavailable")
     if not bearer:
-        audit("authn", FAILURE, reason="missing_token")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="missing_token")
         raise UnauthenticatedError("Missing bearer token")
     try:
         token = verifier.verify(bearer)
     except ProviderUnavailableError as exc:
         # The IdP or this deployment's view of it failed, not the caller's bearer: the missing-verifier
         # branch's fact, so its reason and its body — the spec's `code` 17, the URL left to the log.
-        audit("authn", FAILURE, reason="verifier_unavailable")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
         raise ServiceUnavailableError("Authentication is enabled but unavailable") from exc
     except Exception:
-        audit("authn", FAILURE, reason="invalid_token")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="invalid_token")
         raise
-    audit("authn", SUCCESS, subject=token.subject)  # #41 record the authenticated principal
+    audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=token.subject)  # #41 record the authenticated principal
     return token
 
 

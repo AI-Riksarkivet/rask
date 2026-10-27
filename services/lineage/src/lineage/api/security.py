@@ -31,7 +31,7 @@ from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from lineage.api.dependencies import SettingsDep
 from lineage.core.config import LineageSettings
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from service_kit.governed.oidc import ProviderUnavailableError
 from service_kit.governed.person_identity import PersonPrincipal, PersonVerifier
@@ -74,17 +74,17 @@ def _service_account_issued(token: str, settings: LineageSettings, verifier: Ser
 def _service_account(token: str, verifier: ServiceAccountVerifier | None) -> ServicePrincipal:
     """The service a projected token proves, rendered in the door's problem vocabulary."""
     if verifier is None:
-        audit("authn", FAILURE, reason="verifier_unavailable")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
         raise ServiceUnavailableError("Authentication is enabled but unavailable")
     try:
         principal = verifier.verify(token)
     except ProviderUnavailableError as exc:
-        audit("authn", FAILURE, reason="verifier_unavailable")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="verifier_unavailable")
         raise ServiceUnavailableError("Authentication is enabled but unavailable") from exc
     except UnauthenticatedError:
-        audit("authn", FAILURE, reason="invalid_token")
+        audit(AuditAction.AUTHN, AuditOutcome.FAILURE, reason="invalid_token")
         raise
-    audit("authn", SUCCESS, subject=principal.subject, service_account=principal.service_account)
+    audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=principal.subject, service_account=principal.service_account)
     return principal
 
 

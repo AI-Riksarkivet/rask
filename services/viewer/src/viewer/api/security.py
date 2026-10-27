@@ -87,7 +87,8 @@ from client_kit.media import state as _media_state  # noqa: E402
 from client_kit.media.authz import corpus_object  # noqa: E402
 from client_kit.media.deps import DatasetParam, StateDep  # noqa: E402
 from service_kit.exceptions import ForbiddenError  # noqa: E402
-from service_kit.governed.audit import FAILURE, audit  # noqa: E402
+from service_kit.governed.audit import AuditOutcome, audit  # noqa: E402
+from viewer.audit_actions import ViewerAuditAction  # noqa: E402
 
 
 #: The verified principal, or ``anon`` — soft only on ABSENCE (a presented-but-invalid token still
@@ -124,11 +125,11 @@ def _corpus_gate(relation: str):
         handle = await run_in_threadpool(_media_state.dataset_handle, state, dataset)
         search = handle.descriptor.declared.search
         if search is None or not search.row_table:
-            audit("viewer.corpus.read", FAILURE, subject=subject, resource=handle.id, relation=relation)
+            audit(ViewerAuditAction.VIEWER_CORPUS_READ, AuditOutcome.FAILURE, subject=subject, resource=handle.id, relation=relation)
             raise ForbiddenError(f"corpus {handle.id!r} declares no searchable table, so no visibility object exists to authorize against")
         obj = corpus_object(settings, handle.id, search.row_table)
         if not await checker(user=subject, relation=relation, obj=obj):
-            audit("viewer.corpus.read", FAILURE, subject=subject, resource=handle.id, relation=relation)
+            audit(ViewerAuditAction.VIEWER_CORPUS_READ, AuditOutcome.FAILURE, subject=subject, resource=handle.id, relation=relation)
             raise ForbiddenError(f"{subject} lacks {relation} on {obj}")
 
     return Depends(_gate)
@@ -158,7 +159,7 @@ def _media_bytes_gate():
             return
         obj = corpus_object(settings, handle.id, binding.table)
         if not await checker(user=subject, relation=READ_DATA, obj=obj):
-            audit("viewer.media.read", FAILURE, subject=subject, resource=handle.id, relation=READ_DATA)
+            audit(ViewerAuditAction.VIEWER_MEDIA_READ, AuditOutcome.FAILURE, subject=subject, resource=handle.id, relation=READ_DATA)
             raise ForbiddenError(f"{subject} lacks {READ_DATA} on {obj}")
 
     return Depends(_gate)

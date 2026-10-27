@@ -37,6 +37,7 @@ from starlette.concurrency import run_in_threadpool
 
 from annotator.api.security import Checker, CheckerDep, CurrentSubject, RawBearerToken
 from annotator.api.v1.responses import DropReceipt, SendReceipt, TaskListing
+from annotator.audit_actions import AnnotatorAuditAction
 from annotator.corpus import input_tables
 from annotator.projects.machines import (
     FROZEN_PROJECT_STATES,
@@ -51,7 +52,7 @@ from annotator.projects.ontology import LabelOntology, ShapeLike, membership_vio
 from annotator.projects.project_actor import AnnotationProjectActorInterface
 from client_kit.media.deps import StateDep
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
-from service_kit.governed.audit import FAILURE, SUCCESS, audit
+from service_kit.governed.audit import AuditOutcome, audit
 from service_kit.lakehouse.warehouse_registry import namespace_for
 
 
@@ -181,10 +182,10 @@ def _task_proxy(task_id: str) -> AnnotationTaskActorInterface:
     return cast(AnnotationTaskActorInterface, typed_proxy("AnnotationTaskActor", task_id, AnnotationTaskActorInterface))
 
 
-async def _check(checker: Checker, subject: str, relation: str, obj: str, what: str) -> None:
+async def _check(checker: Checker, subject: str, relation: str, obj: str, what: AnnotatorAuditAction, **context: str) -> None:
     """One relation on one object, fail-closed, audited either way."""
     if not await checker(user=subject, relation=relation, obj=obj):
-        audit(what, FAILURE, subject=subject, resource=obj, relation=relation)
+        audit(what, AuditOutcome.FAILURE, subject=subject, resource=obj, relation=relation, **context)
         raise ForbiddenError(f"{subject} lacks {relation} on {obj}")
 
 
@@ -195,8 +196,8 @@ async def _authorize_publish(checker: Checker, subject: str, project_id: str, na
     than a composite verdict nobody can act on. The target's tier is not asked here: the write reaches
     the catalog, whose tier judge decides it under the tier the namespace declares (ADR 0160).
     """
-    await _check(checker, subject, "can_publish", f"annotation_project:{project_id}", "project.publish")
-    await _check(checker, subject, CREATE_TABLE_RELATION, f"namespace:{namespace}", "project.publish")
+    await _check(checker, subject, "can_publish", f"annotation_project:{project_id}", AnnotatorAuditAction.PROJECT_PUBLISH)
+    await _check(checker, subject, CREATE_TABLE_RELATION, f"namespace:{namespace}", AnnotatorAuditAction.PROJECT_PUBLISH)
 
 
 @router.post("/{project_id}/events", status_code=status.HTTP_200_OK)
@@ -229,7 +230,7 @@ async def fire_project_event(project_id: ProjectId, payload: ProjectEventRequest
     elif permission is not None:
         # `annotation_project`, not `project:<tenant>`: the project's roles grant can_manage /
         # can_send_items / can_publish, and the tenant answers only membership.
-        await _check(checker, subject, permission, f"annotation_project:{project_id}", f"project.{payload.event}")
+        await _check(checker, subject, permission, f"annotation_project:{project_id}", AnnotatorAuditAction.PROJECT_TRANSITION, event=payload.event)
 
     try:
         # `target_namespace` rides along so the actor can PIN it with the publish token — the saga
@@ -240,7 +241,7 @@ async def fire_project_event(project_id: ProjectId, payload: ProjectEventRequest
         # The actor's own preconditions — every task terminal, and a non-empty project.
         raise ConflictError(str(exc)) from exc
 
-    audit(f"project.{payload.event}", SUCCESS, subject=subject, resource=project_id)
+    audit(AnnotatorAuditAction.PROJECT_TRANSITION, AuditOutcome.SUCCESS, event=payload.event, subject=subject, resource=project_id)
     return AnnotationProject.model_validate(updated)
 
 
@@ -267,12 +268,12 @@ async def adjudicate_group(
     project is adjudicable is the intended idempotent shape; the actor refuses once provenance is
     frozen, and refuses a target that is not an accepted member of the group.
     """
-    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", "project.adjudicate")
+    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", AnnotatorAuditAction.PROJECT_ADJUDICATE)
     try:
         updated = await _project_proxy(project_id).adjudicate({"group": group_id, "task_id": payload.task_id, "actor": subject})
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
-    audit("project.adjudicate", SUCCESS, subject=subject, resource=project_id)
+    audit(AnnotatorAuditAction.PROJECT_ADJUDICATE, AuditOutcome.SUCCESS, subject=subject, resource=project_id)
     return AnnotationProject.model_validate(updated)
 
 
@@ -287,12 +288,12 @@ async def clear_adjudication(
     refuses a stale or groupless pick (correctly), so without removal one wrong pick would wedge
     the publish permanently (audit finding). Idempotent — clearing an absent pick is a no-op —
     and refused once provenance is frozen, exactly like setting one."""
-    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", "project.adjudicate")
+    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", AnnotatorAuditAction.PROJECT_ADJUDICATE)
     try:
         updated = await _project_proxy(project_id).adjudicate({"group": group_id, "task_id": None, "actor": subject})
     except IllegalTransition as exc:
         raise ConflictError(str(exc)) from exc
-    audit("project.adjudicate", SUCCESS, subject=subject, resource=project_id)
+    audit(AnnotatorAuditAction.PROJECT_ADJUDICATE, AuditOutcome.SUCCESS, subject=subject, resource=project_id)
     return AnnotationProject.model_validate(updated)
 
 
@@ -321,7 +322,7 @@ async def drop_task(
     dropping an absent task is a no-op, so a retry cannot 404 a project that is already how the
     caller wants it.
     """
-    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", "project.drop_task")
+    await _check(checker, subject, "can_manage", f"annotation_project:{project_id}", AnnotatorAuditAction.PROJECT_DROP_TASK)
     proxy = _project_proxy(project_id)
     doc = await proxy.get()
     if doc is None:
@@ -330,7 +331,7 @@ async def drop_task(
     if state not in DROPPABLE_STATES:
         raise ConflictError(f"project {project_id} is {state.value} — items can be dropped only in {sorted(s.value for s in DROPPABLE_STATES)}")
     result = await proxy.drop_task({"task_id": task_id, "actor": subject})
-    audit("project.drop_task", SUCCESS, subject=subject, resource=project_id)
+    audit(AnnotatorAuditAction.PROJECT_DROP_TASK, AuditOutcome.SUCCESS, subject=subject, resource=project_id)
     return DropReceipt.model_validate(result)
 
 
@@ -467,7 +468,7 @@ async def send_items(
         # Checked here as well as in the actor so a refusal costs zero seeded task actors — the
         # actor's own refusal would fire only after the first `seed` had already landed.
         raise ConflictError(f"project {project_id} is {project['state']} — items may only be sent while it is draft or labeling")
-    await _check(checker, subject, "can_send_items", f"annotation_project:{project_id}", "project.send")
+    await _check(checker, subject, "can_send_items", f"annotation_project:{project_id}", AnnotatorAuditAction.PROJECT_SEND)
 
     # REFUSE an item whose media dataset does not resolve. Deliberately after the role check: the
     # refusal can name the datasets that DO exist, which is what makes it actionable and also what
@@ -557,7 +558,7 @@ async def send_items(
     batch = await _project_proxy(project_id).send_many({"tasks": [body for body, _ in seeded]})
     created = [str(row["task_id"]) for row in batch["results"] if row.get("created")]
 
-    audit("project.send", SUCCESS, subject=subject, resource=project_id)
+    audit(AnnotatorAuditAction.PROJECT_SEND, AuditOutcome.SUCCESS, subject=subject, resource=project_id)
     return SendReceipt(sent=len(payload.items), created=len(created), task_ids=created)
 
 
@@ -611,7 +612,7 @@ async def list_project_tasks(
     queue UI needs the rest. A task whose actor holds no state is reported in ``missing`` rather
     than silently dropped or a 500 — the index can lead its actors after a half-completed send.
     """
-    await _check(checker, subject, "can_view", f"annotation_project:{project_id}", "project.list_tasks")
+    await _check(checker, subject, "can_view", f"annotation_project:{project_id}", AnnotatorAuditAction.PROJECT_LIST_TASKS)
     listing = await _project_proxy(project_id).list_tasks()
     # Against the MEMBER, not the string. A StrEnum compares equal to its value so the old form still
     # worked, but comparing to a literal here would leave the enum decorative — a renamed member

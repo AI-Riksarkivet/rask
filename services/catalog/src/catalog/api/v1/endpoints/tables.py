@@ -97,7 +97,7 @@ from catalog.services import dataplane, native, table_bases, table_claims, trash
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.governed.audit import SUCCESS, audit
+from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
 from service_kit.lakehouse import base_registry, location_claims, object_records, protection, trash
 from service_kit.lakehouse.naming import uuid_of
@@ -346,7 +346,7 @@ async def _vend_on_spec_door(
         return None
     if options is not None:
         resource = fga.table_object(table_uuid)
-        audit("vend_credentials", SUCCESS, subject=token.subject if token is not None else None, resource=resource, tier=tier, door=door)
+        audit(AuditAction.VEND_CREDENTIALS, AuditOutcome.SUCCESS, subject=token.subject if token is not None else None, resource=resource, tier=tier, door=door)
     return options
 
 

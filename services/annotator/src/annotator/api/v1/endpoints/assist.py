@@ -21,6 +21,7 @@ from starlette.concurrency import run_in_threadpool
 
 from annotator.api.security import CheckerDep, CurrentSubject, RawBearerToken
 from annotator.api.v1.endpoints.serve_discovery import discovered_backends
+from annotator.audit_actions import AnnotatorAuditAction
 from annotator.core.config import AssistBackend
 from annotator.corpus import Corpus, resolve
 from annotator.projects.generation_schema import generation_schema
@@ -31,7 +32,7 @@ from client_kit.media.authz import corpus_object
 from client_kit.media.deps import StateDep
 from client_kit.media.state import AppState
 from service_kit.exceptions import ForbiddenError, ServiceUnavailableError
-from service_kit.governed.audit import FAILURE, audit
+from service_kit.governed.audit import AuditOutcome, audit
 
 
 logger = logging.getLogger(__name__)
@@ -69,11 +70,11 @@ async def require_assist(request: Request, state: StateDep, subject: CurrentSubj
     if binding is None:
         # FAIL CLOSED. With no document binding there is no table to authorize against, and answering
         # anyway would make a malformed descriptor an authorization bypass.
-        audit("annotator.assist", FAILURE, subject=subject, resource=handle.id, relation=WRITE_DATA)
+        audit(AnnotatorAuditAction.ANNOTATOR_ASSIST, AuditOutcome.FAILURE, subject=subject, resource=handle.id, relation=WRITE_DATA)
         raise ForbiddenError(f"{subject} cannot be authorized for assist on {handle.id}: no documents table")
     obj = corpus_object(state.settings, handle.id, binding.table)
     if not await checker(user=subject, relation=WRITE_DATA, obj=obj):
-        audit("annotator.assist", FAILURE, subject=subject, resource=handle.id, relation=WRITE_DATA)
+        audit(AnnotatorAuditAction.ANNOTATOR_ASSIST, AuditOutcome.FAILURE, subject=subject, resource=handle.id, relation=WRITE_DATA)
         raise ForbiddenError(f"{subject} lacks {WRITE_DATA} on {obj}")
 
 
