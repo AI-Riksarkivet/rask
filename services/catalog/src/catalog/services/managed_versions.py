@@ -38,7 +38,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, InstanceOf
 
-from catalog.core import encoding, lineage_emit, manifest_bytes, provenance_guard
+from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.services import client_fragments, dataplane, maintenance, primary_keys, table_claims
 from service_kit.lakehouse import base_refs, base_registry, features, maintenance_due
@@ -362,11 +362,16 @@ def _field_at(schema: pa.Schema, path: str) -> pa.Field | None:
 
 
 def _refuse_config(proposed: lance.LanceDataset, current: lance.LanceDataset | None) -> None:
-    """No armed auto-cleanup, and the catalog's own ``rask.*`` config keys stay as the catalog wrote them."""
+    """No armed auto-cleanup, no ``lance.compaction.*`` key ([[LH-538]]), and the catalog's own ``rask.*`` config keys
+    stay as the catalog wrote them."""
     after = dict(proposed.config())
     armed = sorted(key for key in after if key.startswith(_ARMED_CLEANUP_PREFIX))
     if armed:
         raise InvalidInputError(f"commit refused: manifest config arms Lance auto-cleanup ({armed}), which deletes versions inside a commit")
+    if steering := formats.compaction_config_keys(after):
+        raise InvalidInputError(
+            f"commit refused: manifest config carries {steering}, which Lance would plan a compaction from in place of the table's maintenance policy"
+        )
     before = dict(current.config()) if current is not None else {}
     if {k: v for k, v in after.items() if k.startswith("rask.")} != {k: v for k, v in before.items() if k.startswith("rask.")}:
         raise InvalidInputError("commit refused: rask.* table config is the catalog's own and is not changed by a commit")

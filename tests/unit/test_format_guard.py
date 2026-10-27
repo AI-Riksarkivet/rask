@@ -39,6 +39,8 @@ from catalog.core.formats import reject_unsupported_properties
         pytest.param({"write.format.default": "parquet"}, id="non-lance-format"),
         # [[LH-245]]: the key that arms Lance to delete versions inside any later commit, past every hold.
         pytest.param({"lance.auto_cleanup.interval": "1"}, id="commit-path-auto-cleanup"),
+        # [[LH-538]]: Lance plans a compaction from these when the plan names no option, over the table's maintenance policy.
+        pytest.param({"lance.compaction.max_source_fragments": "2"}, id="compaction-config"),
     ],
 )
 def test_rejects_a_property_no_door_honours(props: dict[str, str]) -> None:

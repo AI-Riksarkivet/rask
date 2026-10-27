@@ -144,7 +144,7 @@ class TestThePublicDoor:
         assert resp.status_code == 400, resp.text
         assert not _is_registered(catalog, "db$t")
 
-    @pytest.mark.parametrize(("case", "status"), [("mixed", 400), ("unstable", 400), ("unreadable", 503), ("clean", 200)])
+    @pytest.mark.parametrize(("case", "status"), [("mixed", 400), ("unstable", 400), ("compaction-config", 400), ("unreadable", 503), ("clean", 200)])
     def test_a_refused_dataset_never_gains_an_owner_a_lineage_node_or_an_event(
         self, catalog: TestClient, root: Path, monkeypatch: pytest.MonkeyPatch, case: str, status: int
     ) -> None:
@@ -152,6 +152,8 @@ class TestThePublicDoor:
 
         ``unstable`` is a dataset created without stable row ids: its `_rowid` is an address compaction
         rewrites and its change feed answers empty windows (`lance_docs/lance/format/table/row_id_lineage.md:73-83`).
+        ``compaction-config`` carries a ``lance.compaction.*`` key, which Lance would plan a compaction from in place of the
+        table's maintenance policy ([[LH-538]]).
         """
         from catalog.api import fga_deps
         from catalog.api.v1.endpoints import tables
@@ -171,6 +173,8 @@ class TestThePublicDoor:
             _write(root / "t", [1, 2], version="2.1")
         if case == "mixed":
             _mix(root / "t")
+        elif case == "compaction-config":
+            lance.dataset(str(root / "t")).update_config({"lance.compaction.max_source_fragments": "2"})
         elif case == "unreadable":
             for manifest in (root / "t" / "_versions").iterdir():
                 manifest.write_bytes(b"not a manifest")

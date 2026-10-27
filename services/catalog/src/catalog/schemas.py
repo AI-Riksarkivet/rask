@@ -517,6 +517,9 @@ class PolicyRequest(BaseModel):
     # NO FIELD hands version reclamation to Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`).
     # That lane deletes inside whichever writer commits, past a legal hold and a protected base and with
     # no record, so the sweep is the one reclaimer and disarms those keys on every tick ([[LH-245]]).
+    # "Lance's default" for a field left unset holds because no writer sets Lance's own compaction config
+    # (`lance.compaction.*`), which a plan naming no option reads: `version/create`, every property door, the register
+    # door and the restore door refuse those keys ([[LH-538]]), so this record alone plans a table's compaction.
     # #60 — the columns this target's queries DEPEND ON having an index for. Reporting only: the sweep
     # never builds or drops an index, it says when one it expected is absent.
     #

@@ -491,6 +491,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`core/namespace.disarm_commit_path_cleanup`; the erasure door every ref, so the job's commits are admitted), the
   restore door refuses an armed version, and the
   expiry pass deletes every such key before its refusal gates, as the backstop for a table nobody commits on (LH-245).
+  A table's compaction plan has ONE source too, its maintenance policy: Lance plans from `lance.compaction.*` manifest
+  config whenever a plan names no option (`lance_docs/lance/format/table/table_config.md`), so the property guard
+  (`core/formats.compaction_config_keys`), `version/create`, the register judge (`table_bases.judge_registered_table`)
+  and the restore door (`dataplane.refuse_a_restore_carrying_refused_config`) refuse every such key ([[LH-538]]).
 - **Maintenance does not read a tier.** The due list plans a compaction at the #50 policy's
   `target_rows_per_fragment`, else Lance's own sizing. There are no per-tier defaults: a tier is the
   namespace's `rask.tier` property, which a dataset path does not carry, and a size guessed from a path is

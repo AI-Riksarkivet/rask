@@ -108,7 +108,7 @@ from lance_namespace import (
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api.pagination import paginate
-from catalog.core import encoding, manifest_bytes, provenance_guard
+from catalog.core import encoding, formats, manifest_bytes, provenance_guard
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
@@ -2353,22 +2353,29 @@ def _merge_builder(dataset: lance.LanceDataset, req: MergeInsertIntoTableRequest
     return builder
 
 
-def refuse_a_restore_that_arms_cleanup(target: lance.LanceDataset, *, version: int) -> None:
-    """Refuse restoring ``target``, the version a restore would commit again, when its config carries ``lance.auto_cleanup.*`` keys ([[LH-245]]).
+def refuse_a_restore_carrying_refused_config(target: lance.LanceDataset, *, version: int) -> None:
+    """Refuse restoring ``target``, the version a restore would commit again, when its config carries ``lance.auto_cleanup.*``
+    ([[LH-245]]) or ``lance.compaction.*`` ([[LH-538]]) keys, which no writer may set.
 
     A restore commits the restored version's config, and Lance's commit-path cleanup reads the manifest a
     commit produces (measured on pylance 12.0.0: disarming the latest version and then restoring an armed one
     re-armed the table and deleted versions in the restore's own commit). No disarm can precede that commit,
     because the keys arrive with it, so the door refuses rather than letting a restore delete history past
-    every hold.
+    every hold. Compaction keys would plan the table's next compaction in place of its maintenance policy.
 
     Raises:
-        InvalidInputError: The version to restore carries ``lance.auto_cleanup.*`` keys.
+        InvalidInputError: The version to restore carries ``lance.auto_cleanup.*`` or ``lance.compaction.*`` keys.
     """
-    if armed := auto_cleanup.armed_keys(target.config()):
+    config = target.config()
+    if armed := auto_cleanup.armed_keys(config):
         raise InvalidInputError(
             f"restore refused: version {version} carries commit-path auto-cleanup config {armed}, and restoring it would delete "
             "table versions inside the restore's own commit. Version reclamation belongs to the maintenance sweep; restore a version without these keys"
+        )
+    if steering := formats.compaction_config_keys(config):
+        raise InvalidInputError(
+            f"restore refused: version {version} carries compaction config {steering}, which Lance would plan a compaction from in place "
+            "of the table's maintenance policy; restore a version without these keys"
         )
 
 
@@ -2387,11 +2394,11 @@ def restore(
     the rows and schema the handle's own ``restore()`` leaves. Unchecked, because a restore reads no row.
 
     Raises:
-        InvalidInputError: The version to restore would arm commit-path cleanup.
+        InvalidInputError: The version to restore carries config no writer may set (auto-cleanup or compaction).
         TableChangedError: The table changed since the door's resolution.
     """
     target = table.open_unchecked(so, version=req.version, branch=req.branch)
-    refuse_a_restore_that_arms_cleanup(target, version=req.version)
+    refuse_a_restore_carrying_refused_config(target, version=req.version)
     restored = int(target.version)
 
     def plan(latest: lance.LanceDataset) -> tuple[Transaction, str]:

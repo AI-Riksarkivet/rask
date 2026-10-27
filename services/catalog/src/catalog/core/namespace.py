@@ -22,6 +22,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, Field
 
+from catalog.core import formats
 from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import Settings, StorePlane, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
@@ -299,6 +300,9 @@ class RegisteredDataset(BaseModel):
     #: Every base the manifest declares. Empty when the open itself was refused over flag 256, which
     #: the door refuses before it looks at a base.
     bases: list[BasePathRef] = Field(default_factory=list)
+    #: The ``lance.compaction.*`` keys its manifest config carries ([[LH-538]]). Empty when the open was refused over flag
+    #: 256, which the door refuses first.
+    compaction_config: list[str] = Field(default_factory=list)
 
 
 def registered_dataset_facts(location: str, storage_options: dict[str, str]) -> RegisteredDataset | None:
@@ -318,7 +322,12 @@ def registered_dataset_facts(location: str, storage_options: dict[str, str]) -> 
             return None
         raise
     reader, _writer = manifest_feature_flags(dataset)
-    return RegisteredDataset(mixed=mixes_data_file_versions(reader), stable_row_ids=dataset.has_stable_row_ids, bases=manifest_base_path_refs(dataset))
+    return RegisteredDataset(
+        mixed=mixes_data_file_versions(reader),
+        stable_row_ids=dataset.has_stable_row_ids,
+        bases=manifest_base_path_refs(dataset),
+        compaction_config=formats.compaction_config_keys(dataset.config()),
+    )
 
 
 def warn_if_mixed_file_versions(location: str, storage_options: dict[str, str], *, table: str) -> None:

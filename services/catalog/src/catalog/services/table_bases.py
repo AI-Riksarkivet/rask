@@ -353,7 +353,7 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
     In order: the location the backend RESOLVED, which is right for a warehouse-bound table too; no other
     registered table may overlap it (:func:`require_exclusive_location`, asked after the
     registration so a concurrent overlap is caught by whichever lands second); the dataset must not carry
-    reader flag 256 and must have stable row ids; and every base it declares must be its own, configured, approved or already recorded
+    reader flag 256, must have stable row ids and must carry no ``lance.compaction.*`` config ([[LH-538]]); and every base it declares must be its own, configured, approved or already recorded
     (:func:`entries_for_registration`). Only then is the record claimed, so a refused dataset
     leaves no entry behind.
 
@@ -367,7 +367,7 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
 
     Raises:
         InvalidInputError: Another table overlaps the location, the dataset mixes data file versions, it
-            has no stable row ids, or it declares a base nothing sanctions.
+            has no stable row ids, it carries compaction config, or it declares a base nothing sanctions.
         ServiceUnavailableError: The location, the object index or the record could not be read, so
             nothing was judged.
     """
@@ -403,6 +403,12 @@ def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: lis
             "rewrites, Lance tracks no row versions for it, and its change feed would answer empty windows. Stable row ids are "
             "create-time-only through pylance (lance_docs/lance/format/table/row_id_lineage.md:73-83; the format's migration is Rust-only); "
             "recreate it with enable_stable_row_ids=True, then register that."
+        )
+    if facts.compaction_config:
+        log.warning("register_refused_compaction_config", extra={"table": table, "location": location, "keys": facts.compaction_config})
+        raise InvalidInputError(
+            f"the dataset at {location!r} carries {facts.compaction_config} in its manifest config, which Lance would plan a compaction "
+            "from in place of the table's maintenance policy. Delete those keys (delete_config_keys), then register it."
         )
     entries = entries_for_registration(
         location, facts.bases, registry=context.registry, configured=context.configured, data_allowlist=context.data_allowlist, governed=context.governed
