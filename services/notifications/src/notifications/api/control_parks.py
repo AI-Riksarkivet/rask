@@ -32,6 +32,7 @@ import httpx
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from notifications.api.control_events import ParkForgetter, named_person
 from notifications.api.metrics import ParkOutcome, record_control_park
 from service_kit.control_events import CatalogControlEvent
 from service_kit.exceptions import ServiceUnavailableError
@@ -173,6 +174,18 @@ def get_control_parks(request: Request) -> ControlParkStore:
     return store
 
 
+def parks_forgetter(request: Request) -> ParkForgetter | None:
+    """How an erasure forgets the parks naming its person, or None when this process built no park store."""
+    store = getattr(request.app.state, "control_parks", None)
+    if store is None:
+        return None
+
+    async def forget(subject: str) -> None:
+        await forget_parks_naming(store, subject)
+
+    return forget
+
+
 def control_event_id(data: object) -> str | None:
     """The event id of ``data`` when it is a control event, else None (a run event, or a payload that will not parse)."""
     try:
@@ -192,6 +205,24 @@ async def park(store: ControlParkStore, *, event_id: str, data: dict[str, Any]) 
     if fresh:
         record_control_park(ParkOutcome.PARKED)
     return fresh
+
+
+async def forget_parks_naming(store: ControlParkStore, subject: str) -> None:
+    """Forget every parked control event naming ``subject``: the person was offboarded and their inbox erased.
+
+    A group grant a park holds is not expanded here, and it reaches the erased person only if they are still in the
+    group, which their offboarding revoked.
+    """
+    ids, _ = await store.read_index()
+    forgotten: set[str] = set()
+    for event_id in ids:
+        kept = await store.read_event(event_id)
+        if kept is not None and control_event_id(kept.event) is not None and named_person(CatalogControlEvent.model_validate(kept.event)) == subject:
+            await store.delete_event(event_id)
+            forgotten.add(event_id)
+    if forgotten:
+        await store.update_index(lambda current: [event_id for event_id in current if event_id not in forgotten])
+        log.info("control_parks_forgotten", extra={"forgotten": len(forgotten)})
 
 
 async def redrive(store: ControlParkStore, *, ingest: ControlIngest, budget_seconds: float, now: datetime | None = None) -> RedriveResult:

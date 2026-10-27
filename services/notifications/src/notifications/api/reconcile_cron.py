@@ -29,7 +29,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request, Response
 
 from notifications.api.control_events import ingest_control_event, userset_expander
-from notifications.api.control_parks import ControlParksUnavailable, RedriveResult, redrive
+from notifications.api.control_parks import ControlParksUnavailable, RedriveResult, parks_forgetter, redrive
 from notifications.api.ingest import DAPR_RETRY, DAPR_SUCCESS
 from notifications.api.metrics import Lane, ParkOutcome, PassOutcome, record_feed_gap, record_pass
 from notifications.api.reconciler import LineageCursorStore, LineageFeedClient, ReconcileResult, reconcile
@@ -103,7 +103,9 @@ async def _redrive_control_parks(request: Request, settings: IngressSettings) ->
         withheld = await screen_control_event(data, request, settings, lane=Lane.PARK)
         if withheld is not None:
             return ParkOutcome.KEPT if withheld == DAPR_RETRY else ParkOutcome.REFUSED
-        status = await ingest_control_event(data, open_inbox=inbox_for, open_watch_index=watch_index_for, expand=expand, lane=Lane.PARK)
+        status = await ingest_control_event(
+            data, open_inbox=inbox_for, open_watch_index=watch_index_for, expand=expand, forget_parks=parks_forgetter(request), lane=Lane.PARK
+        )
         return {DAPR_SUCCESS["status"]: ParkOutcome.DELIVERED, DAPR_RETRY["status"]: ParkOutcome.KEPT}.get(status["status"], ParkOutcome.REFUSED)
 
     try:

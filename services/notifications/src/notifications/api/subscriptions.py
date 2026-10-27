@@ -33,6 +33,7 @@ from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 
 from notifications.api.control_events import ingest_control_event, userset_expander
+from notifications.api.control_parks import parks_forgetter
 from notifications.api.dlq import register_dlq_route
 from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane, create_control_park_series, create_signature_refused_series
@@ -121,6 +122,7 @@ def register_subscriptions(app: FastAPI) -> None:
             open_inbox=inbox_for,
             open_watch_index=watch_index_for,
             expand=userset_expander(getattr(request.app.state, "decider", None)),
+            forget_parks=parks_forgetter(request),
         )
 
     # The doors' refusal series, at 0 from the moment the doors exist. `notifications/__init__.py` calls this function

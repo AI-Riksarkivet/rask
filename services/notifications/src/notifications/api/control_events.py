@@ -169,16 +169,36 @@ def _person(raw: str) -> str | None:
     return subject if is_person_subject(subject) else None
 
 
-async def erase_subject(event: CatalogControlEvent, *, open_inbox: InboxOpener, open_watch_index: WatchIndexOpener, lane: Lane = Lane.BUS) -> dict[str, str]:
+#: How the lane forgets every parked control event naming a person it erased (`control_parks.forget_parks_naming`).
+type ParkForgetter = Callable[[str], Awaitable[None]]
+
+
+def named_person(event: CatalogControlEvent) -> str | None:
+    """The one person ``event`` names by a plain subject, or None (a userset, a wildcard, a service account, or nobody)."""
+    raw = event.extra.get("subject")
+    return _person(raw) if isinstance(raw, str) and not _is_userset(raw.strip()) else None
+
+
+async def erase_subject(
+    event: CatalogControlEvent,
+    *,
+    open_inbox: InboxOpener,
+    open_watch_index: WatchIndexOpener,
+    forget_parks: ParkForgetter | None = None,
+    lane: Lane = Lane.BUS,
+) -> dict[str, str]:
     """Erase everything this plane holds for the principal an `ERASING_ACTIONS` event names (CTL-022).
 
     The person's own watch list names the projects whose index enrols them, so each index is left first and the inbox
     erased last: a failure between the two leaves the list to find them by on the redelivery, and every step is
     idempotent, so a redelivered or replayed event converges on the same empty state and re-enrols nobody. A userset,
     a wildcard or a service account names no person whose state could be erased, so it erases nothing.
+
+    Every dead-lettered notification parked for the person is forgotten with the inbox (``forget_parks``): a park is
+    re-driven after the bus has moved on, so a grant parked before the offboarding would otherwise land in the inbox
+    this erasure just emptied.
     """
-    raw = event.extra.get("subject")
-    subject = _person(raw) if isinstance(raw, str) and not _is_userset(raw.strip()) else None
+    subject = named_person(event)
     if subject is None:
         record_ingress(lane, Outcome.IGNORED)
         return {"status": "SUCCESS"}
@@ -188,6 +208,8 @@ async def erase_subject(event: CatalogControlEvent, *, open_inbox: InboxOpener, 
         for project_id in watched:
             await open_watch_index(project_id).unwatch({"subject": subject})
         await inbox.erase()
+        if forget_parks is not None:
+            await forget_parks(subject)
     except Exception:
         # RETRY: the actor plane was unreachable or refused, and an erasure the redelivery can finish must not be acked.
         log.exception("control_erasure_failed", extra={"action": event.action})
@@ -260,6 +282,7 @@ async def ingest_control_event(
     open_inbox: InboxOpener,
     open_watch_index: WatchIndexOpener,
     expand: UsersetExpander | None = None,
+    forget_parks: ParkForgetter | None = None,
     lane: Lane = Lane.BUS,
 ) -> dict[str, str]:
     """Ingest one Dapr-delivered control event. Same DROP/RETRY/SUCCESS discipline as the run lane.
@@ -275,7 +298,7 @@ async def ingest_control_event(
         return {"status": "DROP"}
 
     if event.action in ERASING_ACTIONS:
-        return await erase_subject(event, open_inbox=open_inbox, open_watch_index=open_watch_index, lane=lane)
+        return await erase_subject(event, open_inbox=open_inbox, open_watch_index=open_watch_index, forget_parks=forget_parks, lane=lane)
 
     try:
         subjects = await named_subjects(event, expand)

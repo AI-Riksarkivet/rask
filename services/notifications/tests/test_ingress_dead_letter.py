@@ -217,6 +217,13 @@ class _Inbox:
         self._plane.boxes.setdefault(self._subject, []).append(payload["notification_id"])
         return {"delivered": True}
 
+    async def get_watches(self) -> dict[str, Any]:
+        return {"projects": [], "total": 0}
+
+    async def erase(self) -> dict[str, Any]:
+        self._plane.boxes.pop(self._subject, None)
+        return {"removed": []}
+
 
 class _Plane:
     def __init__(self) -> None:
@@ -242,30 +249,26 @@ class _Cursor:
         return None
 
 
-@respx.mock
-def test_a_dead_lettered_grant_is_kept_and_reaches_its_person_on_a_later_tick(
-    with_dead_lettering: TestClient, parked: _Counter, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """LH-331, a guarantee: a governance notification that exhausted its retries is no longer acked into nothing. The
-    dead-letter route keeps it, every reconcile tick offers it again through the control ingest, it stays kept while the
-    inbox is still down and is retired once it lands, and a park older than the dead-letter stream's retention is
-    retired undelivered (counted as `expired`). A dead letter the store cannot keep is retried rather than acked and
-    lost, a redelivered one is kept once, and a park whose index write loses a race to another writer reads again and
-    lands. An index entry whose event is gone (a retire cut short) is cleared on the next tick. The real routes and the real park
-    store run against the sidecar's state API."""
-    state = _StateStore()
-    expired = {**GRANT, "event_id": "evt-too-old", "extra": {"relation": "member", "subject": "user:dex~bob"}}
-    too_old = (datetime.now(UTC) - PARK_HORIZON - timedelta(hours=1)).isoformat()
-    state.values = {
-        park_key("evt-too-old"): {"event_id": "evt-too-old", "event": expired, "parked_at": too_old},
-        INDEX_KEY: {"event_ids": ["evt-orphan", "evt-too-old"]},
-    }
-    state.etags = dict.fromkeys(state.values, 1)
-    respx.get(url__regex=rf"{STATE}/(?P<key>[^/]+)$").mock(side_effect=state.get)
-    respx.delete(url__regex=rf"{STATE}/(?P<key>[^/]+)$").mock(side_effect=state.delete)
-    respx.post(STATE).mock(side_effect=state.post)
-    plane = _Plane()
-    monkeypatch.setattr(reconcile_cron, "inbox_for", plane.open)
+class _ParkPlane:
+    """The dead-letter and cron routes on one app, the real park store against the stand-in state API, and an inbox
+    plane whose `down` the test controls."""
+
+    def __init__(self, door: TestClient, state: _StateStore, plane: _Plane) -> None:
+        self.door, self.state, self.plane = door, state, plane
+
+    def dead_letter(self, data: dict[str, Any]) -> dict[str, str]:
+        return self.door.post("/dlq-event", json={"id": f"ce-{data['event_id']}", "topic": "catalog.control.v1", "data": data}).json()
+
+    def tick(self) -> None:
+        assert self.door.post(f"/{get_ingress_settings().binding_name}").status_code == 200
+
+
+@pytest.fixture
+def park_plane(with_dead_lettering: TestClient, monkeypatch: pytest.MonkeyPatch) -> Iterator[_ParkPlane]:
+    state, plane = _StateStore(), _Plane()
+    for module in (reconcile_cron, subscriptions_module):
+        monkeypatch.setattr(module, "inbox_for", plane.open)
+        monkeypatch.setattr(module, "watch_index_for", plane.open)
     app = cast(FastAPI, with_dead_lettering.app)
     app.include_router(reconcile_cron.router)
     app.state.actors_registered = True
@@ -273,21 +276,69 @@ def test_a_dead_lettered_grant_is_kept_and_reaches_its_person_on_a_later_tick(
     app.state.lineage_cursor = cast(LineageCursorStore, _Cursor())
     client = httpx.AsyncClient()
     app.state.control_parks = ControlParkStore(client=client, store_name="lance-statestore")
-    tick = f"/{get_ingress_settings().binding_name}"
+    with respx.mock:
+        respx.get(url__regex=rf"{STATE}/(?P<key>[^/]+)$").mock(side_effect=state.get)
+        respx.delete(url__regex=rf"{STATE}/(?P<key>[^/]+)$").mock(side_effect=state.delete)
+        respx.post(STATE).mock(side_effect=state.post)
+        yield _ParkPlane(with_dead_lettering, state, plane)
+    asyncio.run(client.aclose())
 
-    dead_letter = {"id": "ce-7", "topic": "catalog.control.v1", "data": GRANT}
+
+def test_a_dead_lettered_grant_is_kept_and_reaches_its_person_on_a_later_tick(park_plane: _ParkPlane, parked: _Counter) -> None:
+    """LH-331, a guarantee: a governance notification that exhausted its retries is no longer acked into nothing. The
+    dead-letter route keeps it, every reconcile tick offers it again through the control ingest, it stays kept while the
+    inbox is still down and is retired once it lands, and a park older than the dead-letter stream's retention is
+    retired undelivered (counted as `expired`). A dead letter the store cannot keep is retried rather than acked and
+    lost, a redelivered one is kept once, and a park whose index write loses a race to another writer reads again and
+    lands. An index entry whose event is gone (a retire cut short) is cleared on the next tick. The real routes and the
+    real park store run against the sidecar's state API."""
+    state, plane = park_plane.state, park_plane.plane
+    expired = {**GRANT, "event_id": "evt-too-old", "extra": {"relation": "member", "subject": "user:dex~bob"}}
+    too_old = (datetime.now(UTC) - PARK_HORIZON - timedelta(hours=1)).isoformat()
+    state.values = {
+        park_key("evt-too-old"): {"event_id": "evt-too-old", "event": expired, "parked_at": too_old},
+        INDEX_KEY: {"event_ids": ["evt-orphan", "evt-too-old"]},
+    }
+    state.etags = dict.fromkeys(state.values, 1)
+
     state.down = True
-    assert with_dead_lettering.post("/dlq-event", json=dead_letter).json() == {"status": "RETRY"}
+    assert park_plane.dead_letter(GRANT) == {"status": "RETRY"}
     state.down, state.races = False, 1
-    assert with_dead_lettering.post("/dlq-event", json=dead_letter).json() == {"status": "SUCCESS"}
+    assert park_plane.dead_letter(GRANT) == {"status": "SUCCESS"}
     assert state.parked() == ["evt-orphan", "evt-too-old", "evt-grant-7"]
-    assert with_dead_lettering.post("/dlq-event", json=dead_letter).json() == {"status": "SUCCESS"}
+    assert park_plane.dead_letter(GRANT) == {"status": "SUCCESS"}
     assert (state.parked(), len(parked.adds)) == (["evt-orphan", "evt-too-old", "evt-grant-7"], 1)
 
-    assert with_dead_lettering.post(tick).status_code == 200
+    park_plane.tick()
     assert (state.parked(), plane.boxes) == (["evt-grant-7"], {})
 
     plane.down = False
-    assert with_dead_lettering.post(tick).status_code == 200
+    park_plane.tick()
     assert (state.parked(), state.kept_events(), plane.boxes) == ([], [], {"dex~alice": ["evt-grant-7@GRANT_ADDED"]})
-    asyncio.run(client.aclose())
+
+
+def test_an_offboarded_persons_parked_notification_is_forgotten_with_their_inbox(park_plane: _ParkPlane) -> None:
+    """LH-331, measured live on the dev estate (rev 13): a park is re-driven after the bus has moved on, so a grant
+    parked before its person was offboarded landed in the inbox the offboarding had just erased. The erasure now forgets
+    every park naming the person, through the real control route, and the next tick tells them nothing; a park naming
+    someone else stays."""
+    state, plane = park_plane.state, park_plane.plane
+    bobs = {**GRANT, "event_id": "evt-for-bob", "extra": {"relation": "member", "subject": "user:dex~bob"}}
+    assert park_plane.dead_letter(GRANT) == {"status": "SUCCESS"}
+    assert park_plane.dead_letter(bobs) == {"status": "SUCCESS"}
+    offboarding = {
+        **GRANT,
+        "event_id": "evt-offboard",
+        "action": "principal_deleted",
+        "object_type": "principal",
+        "object_id": "user:dex~alice",
+        "extra": {"subject": "user:dex~alice"},
+    }
+    plane.down = False
+
+    erased = park_plane.door.post("/control-events", json={"id": "ce-off", "topic": "catalog.control.v1", "data": offboarding})
+
+    assert erased.json() == {"status": "SUCCESS"}
+    assert (state.parked(), state.kept_events()) == (["evt-for-bob"], [park_key("evt-for-bob")])
+    park_plane.tick()
+    assert plane.boxes == {"dex~bob": ["evt-for-bob@GRANT_ADDED"]}
