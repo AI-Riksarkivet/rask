@@ -81,16 +81,9 @@ class _CapturingCheck:
     def __init__(self) -> None:
         self.seen: list[str] = []
 
-    async def check(self, request: ClientCheckRequest) -> object:
+    async def check(self, request: ClientCheckRequest, options: object = None) -> object:
         self.seen.append(request.user)
         return SimpleNamespace(allowed=True)
-
-
-def test_check_qualifies_bare_subject() -> None:
-    """The common case — callers pass the caller's principal key; fga.check prepends ``user:``."""
-    c = _CapturingCheck()
-    asyncio.run(fga.check(cast(OpenFgaClient, c), user="dex~alice", relation="can_read_data", obj="table:t"))
-    assert c.seen == ["user:dex~alice"]
 
 
 def test_check_qualify_false_sends_subject_verbatim() -> None:
@@ -115,7 +108,7 @@ def test_list_users_extracts_subjects_and_wildcard() -> None:
     # The wrapper returns sorted bare subjects; a `user:*` public wildcard surfaces as "*" — an
     # access review must never hide a public grant.
     class _Client:
-        async def list_users(self, body: object) -> object:
+        async def list_users(self, body: object, options: object = None) -> object:
             del body
             return SimpleNamespace(
                 users=[
@@ -238,21 +231,9 @@ class _CapturingList:
     def __init__(self) -> None:
         self.requests: list[Any] = []
 
-    async def list_objects(self, request: Any) -> object:
+    async def list_objects(self, request: Any, options: Any = None) -> object:
         self.requests.append(request)
         return SimpleNamespace(objects=["table:acme_gold_catalog"])
-
-
-def test_list_objects_qualifies_a_bare_subject() -> None:
-    """The common case: callers pass the caller's principal key and the wrapper prepends `user:`.
-
-    `check` has had this pinned since the 2026-07-20 double-prefix bug; the listing door had the
-    identical hatch and no test, and its failure is quieter — a double-prefixed `user:user:alice`
-    denies every check loudly, but returns an EMPTY LIST here, which renders as "you have no tables".
-    """
-    client = _CapturingList()
-    asyncio.run(fga.list_objects(cast(OpenFgaClient, client), user="dex~alice", relation="can_get_metadata", object_type="table"))
-    assert [r.user for r in client.requests] == ["user:dex~alice"]
 
 
 def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:

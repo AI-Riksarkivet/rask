@@ -42,7 +42,7 @@ class _Client:
     def __init__(self, objects: list[str]) -> None:
         self._objects = objects
 
-    async def list_objects(self, _request: object) -> _Response:
+    async def list_objects(self, _request: object, options: object = None) -> _Response:
         return _Response(self._objects)
 
 

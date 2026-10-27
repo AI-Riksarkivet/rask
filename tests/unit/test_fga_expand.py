@@ -72,7 +72,7 @@ class _ExpandClient:
         self.expanded: list[str] = []
         self.reads: list[str] = []
 
-    async def expand(self, body: Any) -> object:
+    async def expand(self, body: Any, options: Any = None) -> object:
         key = f"{body.object}#{body.relation}"
         self.expanded.append(key)
         root = self.trees.get(key)
@@ -242,7 +242,7 @@ def test_expand_tree_clamps_max_depth_to_the_module_ceiling() -> None:
 
 def test_list_users_returns_the_userset_arm_it_used_to_discard() -> None:
     class _Client:
-        async def list_users(self, body: Any) -> object:
+        async def list_users(self, body: Any, options: Any = None) -> object:
             del body
             return SimpleNamespace(
                 users=[
@@ -260,7 +260,7 @@ def test_list_users_passes_the_requested_filter_through() -> None:
     seen: dict[str, Any] = {}
 
     class _Client:
-        async def list_users(self, body: Any) -> object:
+        async def list_users(self, body: Any, options: Any = None) -> object:
             seen["filters"] = body.user_filters
             return SimpleNamespace(users=[])
 
@@ -322,7 +322,7 @@ def test_check_passes_contextual_tuples_through_without_writing() -> None:
     writes: list[Any] = []
 
     class _Client:
-        async def check(self, body: Any) -> object:
+        async def check(self, body: Any, options: Any = None) -> object:
             seen["user"] = body.user
             seen["contextual"] = body.contextual_tuples
             return SimpleNamespace(allowed=True)

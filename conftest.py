@@ -664,6 +664,10 @@ class OpenFgaServer:
     `make openfga` exports it to `.localbin/openfga` from the same image. Missing, the fixture fails rather than skips, so
     a lane without it reports the gap. Two free ports are picked here and handed to the server, and a port another xdist
     worker took in between makes the server exit, which is retried on new ports.
+
+    It runs with OpenFGA's check and iterator caches on, for longer than any test, as a platform's OpenFGA may run them
+    for scale ([[LH-488]]): a read that does not ask for `HIGHER_CONSISTENCY` is then answered from a cache a revoke
+    left stale, so a test that revokes and reads again proves the read asked for a fresh answer.
     """
 
     def __init__(self, binary: str, log_dir: pathlib.Path) -> None:
@@ -693,6 +697,12 @@ class OpenFgaServer:
                     "--playground-enabled=false",
                     "--metrics-enabled=false",
                     "--log-level=warn",
+                    "--check-query-cache-enabled",
+                    "--check-query-cache-ttl=1h",
+                    "--check-iterator-cache-enabled",
+                    "--check-iterator-cache-ttl=1h",
+                    "--list-objects-iterator-cache-enabled",
+                    "--list-objects-iterator-cache-ttl=1h",
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=log.open("wb"),

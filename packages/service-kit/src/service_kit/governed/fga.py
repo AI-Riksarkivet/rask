@@ -61,6 +61,7 @@ from openfga_sdk.configuration import RetryParams
 from openfga_sdk.credentials import CredentialConfiguration, Credentials
 from openfga_sdk.exceptions import ApiException, ForbiddenException, UnauthorizedException
 from openfga_sdk.models.check_error import CheckError
+from openfga_sdk.models.consistency_preference import ConsistencyPreference
 from openfga_sdk.models.create_store_request import CreateStoreRequest
 from openfga_sdk.models.error_code import ErrorCode
 from openfga_sdk.models.fga_object import FgaObject
@@ -1030,6 +1031,20 @@ def make_client(
 CLOCK_PARAMETER: Final = "current_time"
 
 
+def _fresh_read_options(**options: int | str) -> dict[str, int | str | dict[str, int | str]]:
+    """The options every read of the store sends: ``HIGHER_CONSISTENCY``, plus the call's own ``options``.
+
+    OpenFGA's check, iterator and list-objects caches are the platform's to turn on for scale, and a read they answer
+    may predate the last write: measured on OpenFGA v1.18.3 with them on, ListObjects kept listing a table for its
+    revoked reader, and a Check whose context repeats kept allowing it ([[LH-488]]). ``HIGHER_CONSISTENCY`` skips
+    every one of those caches (`openfga run --help`), so a revoke is answered by the next read, whichever request it
+    comes from. With the caches off, as the bundled OpenFGA runs, it costs nothing.
+
+    A new dict per call, since the SDK mutates the dict it is handed (:func:`read_tuples`).
+    """
+    return {"consistency": ConsistencyPreference.HIGHER_CONSISTENCY, **options}
+
+
 def reject_stored_clock(tuples: Iterable[ClientTuple]) -> None:
     """Refuse any tuple whose condition context carries :data:`CLOCK_PARAMETER`.
 
@@ -1123,7 +1138,8 @@ async def check(
                 object=obj,
                 contextual_tuples=contextual_tuples,
                 context=condition_context(context),
-            )
+            ),
+            options=_fresh_read_options(),
         )
         return bool(response.allowed)
 
@@ -1175,7 +1191,7 @@ async def batch_check(
         return unaskable
 
     async def _do_batch_check() -> dict[str, bool]:
-        response = await client.batch_check(ClientBatchCheckRequest(checks=items))
+        response = await client.batch_check(ClientBatchCheckRequest(checks=items), options=_fresh_read_options())
         unanswered = {r.request.object: r.error for r in response.result if r.error is not None}
         if unanswered:
             raise _UnansweredBatchItems(unanswered)
@@ -1264,7 +1280,9 @@ async def list_objects(
     subject = user_object(user) if qualify else user
 
     async def _do_list_objects() -> ObjectListing:
-        response = await client.list_objects(ClientListObjectsRequest(user=subject, relation=relation, type=object_type, context=condition_context(context)))
+        response = await client.list_objects(
+            ClientListObjectsRequest(user=subject, relation=relation, type=object_type, context=condition_context(context)), options=_fresh_read_options()
+        )
         objects = list(response.objects)
         # THE SAME GUARD `list_users` HAS CARRIED SINCE IT WAS WRITTEN, and the asymmetry is how this
         # one stayed invisible. ListObjects has no pagination either, so a result sitting exactly on
@@ -1339,7 +1357,7 @@ async def governed_objects(
         found: set[str] = set()
         token = ""
         for _ in range(READ_MAX_PAGES):
-            options: dict[str, int | str | dict[str, int | str]] = {"page_size": page_size}
+            options = _fresh_read_options(page_size=page_size)
             if token:
                 options["continuation_token"] = token
             response = await client.read(ReadRequestTupleKey(), options=options)
@@ -1424,7 +1442,8 @@ async def list_users(
                 relation=relation,
                 user_filters=[UserTypeFilter(type=user_type, relation=user_relation)],
                 context=condition_context(context),
-            )
+            ),
+            options=_fresh_read_options(),
         )
         subjects: list[str] = []
         for user in response.users or []:
@@ -1538,7 +1557,7 @@ async def expand(
     """
 
     async def _do_expand() -> dict[str, Any]:
-        response = await client.expand(ClientExpandRequest(relation=relation, object=obj))
+        response = await client.expand(ClientExpandRequest(relation=relation, object=obj), options=_fresh_read_options())
         tree = getattr(response, "tree", None)
         root = getattr(tree, "root", None) if tree is not None else None
         return _expand_node(root) if root is not None else {}
@@ -1813,7 +1832,7 @@ async def read_object_tuples(
         collected: list[ClientTuple] = []
         token: str | None = None
         for _ in range(_MAX_REVOKE_PAGES):
-            options = {"continuation_token": token} if token else None
+            options = _fresh_read_options(continuation_token=token) if token else _fresh_read_options()
             response = await client.read(ReadRequestTupleKey(object=obj), options=options)
             for t in response.tuples or []:
                 key = t.key
@@ -1868,12 +1887,12 @@ async def read_tuples(
     async def _do_read_page() -> tuple[list[ClientTuple], str | None]:
         # Built INSIDE the retry closure: the SDK pops page_size/continuation_token out of the options
         # dict it is handed, so a shared dict would silently lose the pagination on the second attempt.
-        options: dict[str, int | str | dict[str, int | str]] = {}
+        options = _fresh_read_options()
         if page_size is not None:
             options["page_size"] = page_size
         if continuation_token:
             options["continuation_token"] = continuation_token
-        response = await client.read(tuple_key, options=options or None)
+        response = await client.read(tuple_key, options=options)
         # The condition rides the tuple back out. Dropping it (as this did) makes a time-boxed grant
         # read as permanent everywhere downstream — the revoke-on-delete path would then try to delete
         # a tuple it has mis-described, and the UI would show an expiring grant as forever.
