@@ -12,7 +12,7 @@ import (
 
 const (
 	openfgaImage  = "openfga/openfga:v1.18.3"
-	dexImage      = "ghcr.io/dexidp/dex:v2.42.0"
+	dexImage      = "ghcr.io/dexidp/dex:v2.46.1"
 	fgaPostgresIm = "postgres:16-alpine"
 )
 

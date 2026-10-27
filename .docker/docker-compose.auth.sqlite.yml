@@ -80,7 +80,7 @@ services:
   # Dex OIDC provider (static, in-memory) with TWO dev users (alice + bob) so the
   # e2e can prove a 403 for a second principal that holds no grant.
   dex:
-    image: ghcr.io/dexidp/dex:v2.42.0
+    image: ghcr.io/dexidp/dex:v2.46.1
     container_name: lance-dex
     command: dex serve /etc/dex/config.yaml
     volumes:

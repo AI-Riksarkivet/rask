@@ -177,7 +177,7 @@ services:
 
   # --- Dex OIDC provider (static config; dev IdP) ---
   dex:
-    image: ghcr.io/dexidp/dex:v2.42.0
+    image: ghcr.io/dexidp/dex:v2.46.1
     container_name: lance-dex
     command: dex serve /etc/dex/config.yaml
     volumes:
