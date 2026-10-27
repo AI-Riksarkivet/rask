@@ -113,6 +113,7 @@ from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
+from catalog.core.run_context import OPERATION_PROPERTY
 from catalog.core.vending import classified_columns, labelled_fields
 from catalog.services import changes, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
@@ -1240,6 +1241,8 @@ def commit_stamped[T](
         TableChangedError: The table changed since the door's resolution.
         InvalidInputError: ``keeps_labels`` and the commit loses or changes a field's ``rask.*`` metadata.
         InvalidInputError: The commit adds or changes a field's encoding knob to one Lance cannot honour ([[LH-246]]).
+        InvalidInputError: The commit's new rows repeat a value of the table's primary key, within themselves or with a row it
+            carries ([[LH-540]]), as ``version/create`` refuses a stock commit's.
     """
     table_id = table.segments
     ref = recorded_branch(branch)
@@ -1261,6 +1264,7 @@ def commit_stamped[T](
             if keeps_labels:
                 _refuse_a_lost_label(dataset, detached)
             encoding.require_no_new_invalid_encoding(dataset, detached)
+            primary_keys.refuse_repeats_in_version(detached, dataset, door=properties[OPERATION_PROPERTY])
             fs, base = dataset_fs(location, so)
             versions = f"{base.rstrip('/')}/_versions"
             with fs.open_input_stream(f"{versions}/d{detached.version}.manifest") as source:

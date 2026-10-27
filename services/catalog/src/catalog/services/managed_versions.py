@@ -25,7 +25,6 @@ from functools import partial
 
 import lance
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.fs as pafs
 from lance.fragment import DataFile
 from lance_namespace import (
@@ -247,33 +246,24 @@ class _Fragments(BaseModel):
     """The proposed version's fragments split against the version it follows."""
 
     new: list[InstanceOf[lance.FragmentMetadata]]
-    carried: list[int]
     added_files: list[tuple[InstanceOf[lance.FragmentMetadata], InstanceOf[DataFile]]]
 
 
 def _split(proposed: lance.LanceDataset, current: lance.LanceDataset | None) -> _Fragments:
-    """New fragments, carried fragment ids, and the data files the proposed version adds.
+    """New fragments and the data files the proposed version adds.
 
     Raises:
         InvalidInputError: A new fragment names a data file the table already holds: re-referencing a committed file
             brings back rows a delete removed.
     """
-    held_ids = {fragment.fragment_id for fragment in current.get_fragments()} if current is not None else set()
     held_paths = {data_file.path for fragment in current.get_fragments() for data_file in fragment.metadata.files} if current is not None else set()
-    new: list[lance.FragmentMetadata] = []
-    carried: list[int] = []
-    added: list[tuple[lance.FragmentMetadata, DataFile]] = []
-    for fragment in proposed.get_fragments():
-        metadata = fragment.metadata
-        if fragment.fragment_id in held_ids:
-            carried.append(fragment.fragment_id)
-        else:
-            new.append(metadata)
-            resurrected = [data_file.path for data_file in metadata.files if data_file.path in held_paths]
-            if resurrected:
-                raise InvalidInputError(f"commit refused: new fragment {fragment.fragment_id} names data file(s) the table already holds: {resurrected[:5]}")
-        added.extend((metadata, data_file) for data_file in metadata.files if data_file.path not in held_paths)
-    return _Fragments(new=new, carried=carried, added_files=added)
+    new, carried = primary_keys.fragments_since(proposed, current)
+    for fragment in new:
+        resurrected = [data_file.path for data_file in fragment.metadata.files if data_file.path in held_paths]
+        if resurrected:
+            raise InvalidInputError(f"commit refused: new fragment {fragment.fragment_id} names data file(s) the table already holds: {resurrected[:5]}")
+    added = [(fragment.metadata, data_file) for fragment in [*new, *carried] for data_file in fragment.metadata.files if data_file.path not in held_paths]
+    return _Fragments(new=[fragment.metadata for fragment in new], added_files=added)
 
 
 class CloneEvidence(BaseModel):
@@ -431,29 +421,6 @@ def _refuse_unverified_blobs(version: _Judged, external_bases: Sequence[base_reg
         object_sizes=partial(dataplane.object_sizes, so=version.so),
         sidecar_sizes=partial(dataplane.data_object_sizes, version.staged.location, so=version.so),
     )
-
-
-def _refuse_held_keys(proposed: lance.LanceDataset, split: _Fragments) -> None:
-    """No two rows of the new fragments, and no new row and carried row, share a value of the table's primary key ([[LH-243]])."""
-    keys = primary_keys.key_columns(proposed.lance_schema)
-    if not keys or not split.new:
-        return
-    columns = list(dict.fromkeys(key.split(".", 1)[0] for key in keys))
-    new_ids = {metadata.id for metadata in split.new}
-    rows = proposed.scanner(columns=columns, fragments=[fragment for fragment in proposed.get_fragments() if fragment.fragment_id in new_ids]).to_table()
-    primary_keys.refuse_repeats_within(rows, keys, door="version/create")
-    if not split.carried or rows.num_rows == 0 or not primary_keys.joinable(rows, keys):
-        return
-    carried = [fragment for fragment in proposed.get_fragments() if fragment.fragment_id in set(split.carried)]
-    first = keys[0]
-    held = proposed.scanner(columns=list(keys), fragments=carried, filter=pc.field(first).isin(rows.column(first).unique())).to_table()
-    if held.num_rows == 0:
-        return
-    shared = rows.select(list(keys)).join(held.select(list(keys)), keys=list(keys), join_type="inner")
-    if shared.num_rows:
-        raise InvalidInputError(
-            f"commit refused: the table already holds a row with primary key {shared.slice(0, 1).to_pylist()[0]}; change it with merge_insert or update"
-        )
 
 
 def _refuse_added_feature_flags(proposed: lance.LanceDataset, current: lance.LanceDataset | None) -> None:
@@ -807,7 +774,7 @@ def judge(
     _refuse_rows_coming_back(version)
     _refuse_forged_files(version)
     _refuse_unverified_blobs(version, external_bases)
-    _refuse_held_keys(proposed, version.split)
+    primary_keys.refuse_repeats_in_version(proposed, current, door="version/create")
     _refuse_beyond_the_operation(version)
     _refuse_an_index_outside_its_directory(version)
     return version.adds_data

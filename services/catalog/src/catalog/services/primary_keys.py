@@ -16,18 +16,22 @@ twice: within the rows the write carries, and against the rows the table holds w
   .when_not_matched_insert_all().execute(rows)`: it raises on the first held key, and a merge that loses
   a commit race re-plans against the newer version, so two inserts racing one new key land it once
   (measured on 12.0.0: 20 of 20 races clean, where a check followed by an append landed both every time).
-- ``version/create`` judges a client-staged version: the rows of its new fragments are judged within
-  themselves and against the rows the version carries over (``catalog.services.managed_versions``). The
-  ``/insert`` merge runs on a scalar index on the key where one exists (Lance plans the join on the
-  scalar-index path).
+- Every commit is judged before its finalize by :func:`refuse_repeats_in_version`: the rows of the version's new
+  fragments within themselves and against the rows it carries over. ``version/create`` judges a client-staged version
+  this way (``catalog.services.managed_versions``), and so does every catalog door's commit
+  (``catalog.services.dataplane.commit_stamped``, [[LH-540]]): a ``/merge_insert`` whose ``on`` is not the key, or holds
+  more than the key, inserts every source row its fields leave unmatched, whatever key that row carries, and an
+  ``/update`` may set a key column. The ``/insert`` merge runs on a scalar index on the key where one exists (Lance plans
+  the join on the scalar-index path).
 
 A table that declares no key is append-only by the format's definition (`lance_docs/lance/format/index/system/mem_wal.md:7-8`)
 and is not judged.
 
 Two bounds, both measured on pylance 12.0.0:
 
-- A key on a field nested in a struct is judged within the rows only. `merge_insert` cannot key on a
-  nested field ("No field named target_k"), so Lance offers no join to judge it against the table.
+- ``/insert`` judges a key on a field nested in a struct within its rows only: `merge_insert` cannot key on a
+  nested field ("No field named target_k"), so Lance offers no join to judge it against the table. The commit is
+  then judged by :func:`refuse_repeats_in_version`, which reads the nested key through the scanner.
 - ``version/create`` judges the version that follows the one it was built on, and the backend's
   put-if-not-exists then decides the race: a writer that lost it re-stages against the newer version, and
   that version is judged again.
@@ -41,6 +45,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import pyarrow as pa
+import pyarrow.compute as pc
 from lance.schema import LanceSchema
 from lance_namespace import InvalidInputError
 
@@ -48,6 +53,7 @@ from lance_namespace import InvalidInputError
 if TYPE_CHECKING:
     import lance
     from lance.dataset import Transaction
+    from lance.fragment import LanceFragment
 
 
 #: How many repeated or held key values a refusal names. Enough to find the rows; a refusal that
@@ -95,9 +101,14 @@ def _key_rows(rows: pa.Table, keys: Sequence[str]) -> pa.Table:
     return pa.table({key: _column(rows, key) for key in keys})
 
 
+def _top_columns(keys: Sequence[str]) -> list[str]:
+    """The top-level columns holding the key paths, each once, in key order."""
+    return list(dict.fromkeys(key.split(".", 1)[0] for key in keys))
+
+
 def _carries(rows: pa.Table, keys: Sequence[str]) -> bool:
     """Whether ``rows`` carry every key column: rows that do not are a schema mismatch, which the write refuses itself."""
-    return bool(keys) and all(key.split(".", 1)[0] in rows.column_names for key in keys)
+    return bool(keys) and all(column in rows.column_names for column in _top_columns(keys))
 
 
 def refuse_repeats_within(rows: pa.Table, keys: Sequence[str], *, door: str) -> None:
@@ -160,3 +171,46 @@ def refuse_keys_held(dataset: lance.LanceDataset, rows: pa.Table, keys: Sequence
         return
     with _refusing_held_keys(door):
         dataset.merge_insert(list(keys)).when_matched_fail().execute_uncommitted(_key_rows(rows, keys))
+
+
+def fragments_since(proposed: lance.LanceDataset, followed: lance.LanceDataset | None) -> tuple[list[LanceFragment], list[LanceFragment]]:
+    """``proposed``'s new fragments and the ones it carries: a fragment is new when ``followed``, the version ``proposed``
+    follows (``None`` for a table's first), holds no fragment of its id."""
+    held = {fragment.fragment_id for fragment in followed.get_fragments()} if followed is not None else set()
+    fragments = proposed.get_fragments()
+    return [fragment for fragment in fragments if fragment.fragment_id not in held], [fragment for fragment in fragments if fragment.fragment_id in held]
+
+
+def refuse_repeats_in_version(proposed: lance.LanceDataset, followed: lance.LanceDataset | None, *, door: str) -> None:
+    """Refuse ``proposed`` when two rows of its new fragments, or one of them and a row it carries, share a key value.
+
+    New and carried are :func:`fragments_since`'s. Measured on pylance 13.0.0, ``update`` and ``merge_insert`` write every
+    row they change or insert to a new fragment and delete it from the fragment it left, so a key an update sets or a merge
+    inserts is read among the new rows, and the row it replaced is not read among the carried ones. A key on a field nested
+    in a struct is read through its struct, so the carried rows are narrowed by the key only where its first field is a
+    column.
+
+    Raises:
+        InvalidInputError: a key value repeats; nothing was committed.
+    """
+    keys = key_columns(proposed.lance_schema)
+    if not keys:
+        return
+    new, carried = fragments_since(proposed, followed)
+    if not new:
+        return
+    rows = proposed.scanner(columns=_top_columns(keys), fragments=new).to_table()
+    refuse_repeats_within(rows, keys, door=door)
+    if not carried or rows.num_rows == 0 or not _carries(rows, keys):
+        return
+    written, first = _key_rows(rows, keys), keys[0]
+    narrowed = pc.field(first).isin(written.column(first).unique()) if "." not in first else None
+    kept = _key_rows(proposed.scanner(columns=_top_columns(keys), fragments=carried, filter=narrowed).to_table(), keys)
+    if kept.num_rows == 0:
+        return
+    shared = written.join(kept, keys=list(keys), join_type="inner")
+    if shared.num_rows:
+        raise InvalidInputError(
+            f"{door} refused: the table already holds a row with primary key {shared.slice(0, 1).to_pylist()[0]}, which this write would repeat. "
+            "A repeated key makes every later merge on it ambiguous; change the existing row with merge_insert on the key, or update"
+        )
