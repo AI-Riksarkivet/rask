@@ -78,6 +78,7 @@ def test_a_tick_without_the_sidecars_token_forwards_nothing(tmp_path: Path, monk
         "outbox_refused": 0,
         "outbox_refusals_recorded": 0,
         "pruned_events": 0,
+        "parks_retired": 0,
         "forwarded": 1,
         "forward_refused": 0,
         "forward_stalled": None,

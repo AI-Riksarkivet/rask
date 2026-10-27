@@ -71,6 +71,8 @@ class RelayReport(BaseModel):
     outbox_refused: int = 0
     outbox_refusals_recorded: int = 0
     pruned_events: int = 0
+    #: Kept parks the feed now holds, however their rows got there, which the tick no longer keeps ([[LH-148]]).
+    parks_retired: int = 0
     forwarded: int = 0
     forward_refused: int = 0
     #: Why the forward stopped short of the feed's head, ``None`` when it did not or no backend is configured.
@@ -116,6 +118,10 @@ async def _on_cron(
         except Exception as exc:
             log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
     report.pruned_events = await _prune_old_events(provenance, settings)
+    try:
+        report.parks_retired = await provenance.retire_recovered_parks()
+    except Exception as exc:
+        log.warning("lineage_parks_retire_failed", extra={"error": str(exc)})
     client = getattr(request.app.state, "forward_client", None)
     if settings.forward_url and client is not None:
         try:

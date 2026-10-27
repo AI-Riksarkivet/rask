@@ -12,18 +12,21 @@ after ``app`` exists (the import-order constraint the split must preserve).
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping
 from typing import Annotated, Any
 
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
+from pydantic import BaseModel, ConfigDict
 
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import get_settings
 from lineage.core.metrics import Door, Outcome, create_signature_refused_series, record_outcome
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload, run_id_from_payload
 from lineage.services.consumer import handle_cloud_event
+from lineage.services.provenance import PARKED_KEY_PREFIX, delivery_feed_key
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
@@ -56,8 +59,11 @@ async def on_lineage_event(event: dict[str, Any], request: Request, _: Annotated
     return await handle_cloud_event(request.app.state.provenance, event, authorize, door=Door.SUBSCRIBER)
 
 
-async def _feed_already_holds(request: Request, run_id: str | None) -> bool:
-    """Does the feed already hold this run? Anything short of a clear YES is ``False``.
+async def _feed_already_holds(request: Request, event: Mapping[str, Any]) -> bool:
+    """Does the feed already hold the row this delivery writes? Anything short of a clear YES is ``False``.
+
+    The delivery's own row, never its run's: a run's START reaching the feed says nothing of its COMPLETE, the event
+    that names its outputs and so the one a missing grant refuses ([[LH-148]]).
 
     Every fallback leans toward reporting LOSS. A parking route that cannot ask must not answer
     "nothing was lost", and an unreachable feed is the moment the signal matters most; a false loss
@@ -67,26 +73,33 @@ async def _feed_already_holds(request: Request, run_id: str | None) -> bool:
     raise here becomes a 500, the sidecar retries the DLQ delivery, and the retry parks again — the
     parking route would manufacture the very inflation it is being taught to avoid.
     """
-    if run_id is None:
-        return False
+    key = delivery_feed_key(event)
     provenance = getattr(request.app.state, "provenance", None)
-    if provenance is None:
+    if key is None or provenance is None:
         return False
     try:
-        return await provenance.run_recorded(run_id)
+        return key in await provenance.events_recorded({key})
     except Exception as exc:  # noqa: BLE001 — see the docstring: this route must always ack
-        log.warning("dapr_dead_letter_feed_unreachable", extra={"run_id": run_id, "error": str(exc)})
+        log.warning("dapr_dead_letter_feed_unreachable", extra={"event_key": key, "error": str(exc)})
         return False
 
 
-async def _reingest_from_the_park(event: dict[str, Any], request: Request, run_id: str | None) -> bool:
-    """Give a parked delivery ONE more presentation to the ingest path. True when the feed then holds it.
+class _Presented(BaseModel):
+    """What one more presentation of a parked delivery did: whether the feed then holds its row, and what it answered."""
 
-    THE GAP THIS CLOSES was named in this module's own prose: "a dead letter older than the stream's
-    retention has no path back, because nothing re-ingests the DLQ stream itself". The DLQ stream is
-    `Max Age 7d` / `Discard Old`, so an unrecovered park is lost on a timer — measured on the live estate
-    2026-09-22, 74 parked deliveries aged out of the window inside the minutes it took to measure it
-    twice (Messages 1,659 -> 1,585).
+    model_config = ConfigDict(frozen=True)
+
+    recovered: bool
+    reason: str
+
+
+async def _reingest_from_the_park(event: dict[str, Any], request: Request, run_id: str | None) -> _Presented:
+    """Give a parked delivery ONE more presentation to the ingest path.
+
+    WHY A PARK IS PRESENTED HERE, AND KEPT WHEN IT FAILS. The DLQ stream is `Max Age 7d` / `Discard Old` and this
+    service reads no NATS, so a park nothing presents again is lost on a timer — measured on the live estate
+    2026-09-22, 74 parked deliveries aged out of the window inside the minutes it took to measure it twice (Messages
+    1,659 -> 1,585). What this presentation cannot recover the route keeps (:func:`_keep_the_park`).
 
     THE SAME FUNCTION THE LIVE SUBSCRIPTION USES, deliberately: `handle_cloud_event` carries the same
     authorization (`enforce_bus_authz` — may the stamped subject record THIS, and where signing is enforced
@@ -105,25 +118,43 @@ async def _reingest_from_the_park(event: dict[str, Any], request: Request, run_i
     """
     provenance = getattr(request.app.state, "provenance", None)
     if provenance is None or not run_id:
-        return False
+        return _Presented(recovered=False, reason="no feed to present it to" if provenance is None else "the delivery names no run")
     try:
-        await handle_cloud_event(provenance, event, lambda parsed, arrived: enforce_bus_authz(parsed, request, get_settings(), arrived), door=Door.DEAD_LETTER)
+        answered = await handle_cloud_event(
+            provenance, event, lambda parsed, arrived: enforce_bus_authz(parsed, request, get_settings(), arrived), door=Door.DEAD_LETTER
+        )
     except Exception as exc:  # noqa: BLE001 — a replay must never turn a park into a 500 or a retry loop
         log.info("dapr_dead_letter_replay_failed", extra={"run_id": run_id, "error": str(exc)})
-        return False
+        return _Presented(recovered=False, reason=f"re-presentation failed: {exc}")
     # ASK THE FEED, never the ack status: `handle_cloud_event` answers SUCCESS for a committed write AND
     # for an unrepairable discard, so only a second read can tell recovery from a shrug.
-    return await _feed_already_holds(request, run_id)
+    return _Presented(recovered=await _feed_already_holds(request, event), reason=f"re-presented at park, answered {answered.get('status')}")
+
+
+async def _keep_the_park(event: dict[str, Any], request: Request, run_id: str | None, author: str | None, reason: str) -> None:
+    """Keep a delivery the park could not recover, so the estate admin can re-present it once its cause is fixed ([[LH-148]]).
+
+    The DLQ stream holds it 168 h and this service reads no NATS, so the provenance namespace's ``refusals`` table holds
+    it instead, keyed by its CloudEvent id: a re-park of the same delivery lands on its row. FAIL-QUIET for the reason
+    the parking route acks: a failure here leaves the delivery as parked as it was.
+    """
+    provenance = getattr(request.app.state, "provenance", None)
+    event_id = event.get("id")
+    if provenance is None or not isinstance(event_id, str) or not event_id:
+        return
+    try:
+        await provenance.record_refusal(outbox_key=f"{PARKED_KEY_PREFIX}{event_id}", run_id=run_id, author=author, reason=reason, event_json=json.dumps(event))
+    except Exception as exc:  # noqa: BLE001 — the parking route must always ack
+        log.warning("dapr_dead_letter_unkept", extra={"run_id": run_id, "event_id": event_id, "error": str(exc)})
 
 
 async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[None, Depends(require_dapr_token)]) -> dict[str, str]:
     """Park one dead-lettered ingest delivery: log + ack (Dapr-native DLQ, RESILIENCE gap #2).
 
-    No auto-requeue — the delivery already exhausted the sidecar's Resiliency retry schedule, and
-    lineage's recovery story stays replay-from-stream (its deliverPolicy=all consumer, re-created to
-    rebuild, re-reads the retained stream); the DLQ adds operator VISIBILITY, not a second path. That bounds
-    what recovery can reach: a dead letter older than the stream's retention has no path back, because
-    nothing re-ingests the DLQ stream itself.
+    No auto-requeue — the delivery already exhausted the sidecar's Resiliency retry schedule. It is presented to the
+    ingest path once more here, and a delivery that presentation could not recover is kept in the provenance
+    namespace's ``refusals`` table (:func:`_keep_the_park`), where the estate admin re-presents it on demand once its
+    cause is fixed (``POST /admin/dlq/parked/{run_id}/replay``, [[LH-148]]), past the DLQ stream's retention.
 
     SEVERITY IS THE ANSWER, not the event. The same replay that recovers also re-parks — it re-reads up
     to the retention window on every restart and parks whatever still fails — so an unconditional ERROR
@@ -134,8 +165,11 @@ async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[N
     """
     payload = event.get("data") if isinstance(event, dict) else None
     run_id = run_id_from_payload(payload)
-    already_recorded = await _feed_already_holds(request, run_id)
-    recovered = False if already_recorded else await _reingest_from_the_park(event, request, run_id)
+    already_recorded = isinstance(event, dict) and await _feed_already_holds(request, event)
+    presented = _Presented(recovered=False, reason="") if already_recorded else await _reingest_from_the_park(event, request, run_id)
+    recovered = presented.recovered
+    if not already_recorded and not recovered and isinstance(event, dict):
+        await _keep_the_park(event, request, run_id, author_sub_from_payload(payload), presented.reason)
     log.log(
         logging.WARNING if already_recorded else logging.ERROR,
         "dapr_dead_letter_parked",

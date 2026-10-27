@@ -234,6 +234,9 @@ async def _require_relation(relation: str, obj: str | None, label: str, request:
 #: The estate rung that opens the unfiltered run feed (`model.fga`, `type estate`).
 _EVENT_FEED_RELATION: Final = "can_read_event_feed"
 
+#: The estate-admin rung (`model.fga`, `type estate`).
+_ESTATE_ADMIN_RELATION: Final = "can_observe_events"
+
 
 async def require_event_feed_reader(request: Request, settings: LineageSettings, token: Caller | None) -> None:
     """Gate the unfiltered run feed on ``can_read_event_feed`` at the configured root object ([[CTL-021]]).
@@ -249,6 +252,20 @@ async def require_event_feed_reader(request: Request, settings: LineageSettings,
     The same fail-closed ladder as every other gate here: FGA off → no-op; unwired client → 503;
     unauthenticated → 401; deny → 403; an OpenFGA outage inside `check` → 503, never allow.
     """
+    await _require_estate_rung(_EVENT_FEED_RELATION, request, settings, token)
+
+
+async def require_estate_admin(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
+    """Gate an estate operator's door on ``can_observe_events`` at the root object, the estate-admin rung ([[LH-148]]).
+
+    The re-presentation of a kept park records provenance for whoever the event's author is, so it is no rung of the
+    caller's own data; the rung that already holds the estate's other operator doors holds this one. The ladder is
+    :func:`require_event_feed_reader`'s.
+    """
+    await _require_estate_rung(_ESTATE_ADMIN_RELATION, request, settings, token)
+
+
+async def _require_estate_rung(relation: str, request: Request, settings: LineageSettings, token: Caller | None) -> None:
     if not settings.fga_enabled:
         return
     decider = getattr(request.app.state, "decider", None)
@@ -257,9 +274,9 @@ async def require_event_feed_reader(request: Request, settings: LineageSettings,
     if token is None:
         raise UnauthenticatedError("authentication required")
     obj = settings.fga_root_object
-    if not await decider.check(user=token.subject, relation=_EVENT_FEED_RELATION, obj=obj):
-        log.info("access_denied", extra={"sub": token.subject, "relation": _EVENT_FEED_RELATION, "object": obj})
-        raise PermissionDeniedError(f"{_EVENT_FEED_RELATION} required on {obj}")
+    if not await decider.check(user=token.subject, relation=relation, obj=obj):
+        log.info("access_denied", extra={"sub": token.subject, "relation": relation, "object": obj})
+        raise PermissionDeniedError(f"{relation} required on {obj}")
 
 
 async def require_metadata_access(name: str, request: Request, settings: SettingsDep, token: CurrentToken, names: NamesDep, bearer: BearerDep) -> None:

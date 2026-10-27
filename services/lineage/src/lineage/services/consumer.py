@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, Final
 
 from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
@@ -38,7 +38,9 @@ log = logging.getLogger(__name__)
 
 # Dapr pub/sub ack statuses (returned to the sidecar so it knows whether to ack / redeliver / drop).
 _SUCCESS = {"status": "SUCCESS"}
-_RETRY = {"status": "RETRY"}
+#: The ack that asks the sidecar to deliver again: an outage, never a verdict.
+RETRY: Final = "RETRY"
+_RETRY = {"status": RETRY}
 _DROP = {"status": "DROP"}
 
 

@@ -151,7 +151,7 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     """Lineage's router behind its real authentication-then-FGA gate, recording into the catalog at ``catalog_url``.
 
     The caller is the principal a request names by key in :data:`SUBJECT_HEADER`: a `kubernetes~` key is a service
-    principal, any other a person, as a verified token would prove either; OpenFGA answers from ``granted``, whose
+    principal, any other a person, as a verified token would prove either; OpenFGA answers from ``granted`` (held as ``app.state.grants``, so a test can write a tuple mid-flow), whose
     subjects are principal keys. The relay tick is mounted at :data:`RELAY` behind its sidecar-token guard,
     with the forward client lineage's lifespan builds when a graph backend is configured.
     """
@@ -198,6 +198,7 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     grants = Grants()
     grants.allowed = {(user_object(subject), relation, obj) for subject, relation, obj in granted}
     app.state.decider = OpenFgaDecider(cast(OpenFgaClient, grants))
+    app.state.grants = grants
     app.state.provenance = store
     app.state.names = CatalogNames.from_settings(settings)
     try:

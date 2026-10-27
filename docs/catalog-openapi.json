@@ -22522,7 +22522,7 @@
     },
     "/v1/table/{id}/insert": {
       "post": {
-        "description": "Append Arrow-IPC rows \u2014 ``insert_into_table``; emits an INSERT lineage event.\n``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).\n\n``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),\nso a protected table refuses it 409 unless ``force=true``, on any branch \u2014 the protection record is the\ntable's \u2014 and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).\n\nThe verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).",
+        "description": "Append Arrow-IPC rows \u2014 ``insert_into_table``; emits an INSERT lineage event.\n``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops).\n\n``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),\nso a protected table refuses it 409 unless ``force=true``, on any branch \u2014 the protection record is the\ntable's \u2014 and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]). It asks the\nwriter rung, not ``can_drop``: it keeps the table's schema, so it does what a delete of every row and an insert do\n(ADR 0099, [[LH-415]]).\n\nThe verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).",
         "operationId": "insert_into_table_v1_table__id__insert_post",
         "parameters": [
           {

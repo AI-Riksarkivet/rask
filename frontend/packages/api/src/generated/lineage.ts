@@ -28,6 +28,63 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/dlq/parked": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Parked
+         * @description The runs whose deliveries the parking route keeps, each with how many, for the estate admin ([[LH-148]]).
+         */
+        get: operations["list_parked_admin_dlq_parked_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/dlq/parked/{run_id}/replay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replay Parked
+         * @description Re-present the deliveries of ``run_id`` the parking route kept, once their cause is fixed ([[LH-148]]).
+         *
+         *     Each kept CloudEvent goes through the subscription's own ingest (``handle_cloud_event`` under
+         *     :func:`enforce_bus_authz`: the signature over the bytes that arrived, and what the stamped author may record), so
+         *     this admits nothing the bus refuses, however trusted the operator is. It writes to the feed directly and publishes
+         *     nothing: the run's subscribers heard the original publish, and the feed is what was missing it. Each delivery is
+         *     judged on its own feed row: one the feed then holds is RECOVERED and no longer kept, and one it still lacks stays
+         *     kept, so a run whose START landed while its COMPLETE is still refused keeps the COMPLETE.
+         *
+         *     The estate admin's door (:func:`require_estate_admin`, asked before any kept row is read, so it names no run to
+         *     anyone else).
+         *
+         *     Raises:
+         *         TransactionNotFoundError: No delivery of the run is kept.
+         *         InvalidInputError: A delivery is still refused on re-presentation; it stays kept, and those recovered with it
+         *             are no longer kept.
+         *         ServiceUnavailableError: A re-presentation met an outage (an authorization or key-store answer it could not
+         *             read); what it could not judge stays kept.
+         */
+        post: operations["replay_parked_admin_dlq_parked__run_id__replay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/dlq/{run_id}/replay": {
         parameters: {
             query?: never;
@@ -435,6 +492,16 @@ export interface components {
          */
         LivenessStatus: "ok";
         /**
+         * ParkedRuns
+         * @description The runs whose deliveries the parking route keeps, each with how many, for the estate admin ([[LH-148]]).
+         */
+        ParkedRuns: {
+            /** Runs */
+            runs?: {
+                [key: string]: number;
+            };
+        };
+        /**
          * ProjectedEvent
          * @description One feed row as the unfiltered projection serves it: its seq, and the event cut to what targeting reads.
          */
@@ -499,6 +566,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DlqBacklog"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_parked_admin_dlq_parked_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ParkedRuns"];
+                };
+            };
+        };
+    };
+    replay_parked_admin_dlq_parked__run_id__replay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DlqReplayResponse"];
                 };
             };
             /** @description Validation Error */

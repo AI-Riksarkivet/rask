@@ -1,9 +1,9 @@
 """A parked delivery is re-presented to the INGEST path before it is written off as loss.
 
-[[LH-148]], and the gap is stated in `on_dead_letter`'s own docstring: *"a dead letter older than the
-stream's retention has no path back, because nothing re-ingests the DLQ stream itself."* That sentence
-was the whole defect. The parking route receives the payload, logs it, counts it and ACKS it — and the
-event then sits on a stream with `Max Age 7d` and `Discard Old` until it ages out.
+[[LH-148]]. The parking route receives the payload, logs it, counts it and ACKS it, and the delivery then sits on a
+stream with `Max Age 7d` and `Discard Old` until it ages out, which lineage cannot read. So the route presents it to the
+ingest path once more, and keeps what that cannot recover for the estate admin's replay
+(`tests/integration/test_a_repaired_park_is_replayed_into_the_feed.py`).
 
 THE LOSS IS UNDER WAY, not hypothetical. Measured on the live estate 2026-09-22 minutes apart:
 `nats stream info DLQ` reported Messages 1,659 then 1,585, First Sequence 10,640 then 10,714 — 74
@@ -27,9 +27,9 @@ feed again instead: a run the feed lacked and now holds was RECOVERED.
 `DEAD_LETTERED` MEANS THE FEED IS MISSING THE RUN, which is the claim an alert on it makes. Measured
 against the live estate 2026-09-13: the DLQ held 8,515 parked deliveries of `lineage.events.v1` while the
 stream's last sequence was 5,860, and 17 of 21 distinct parked run ids sampled were already recorded. A
-feed row is written under its key, so every later park of a run the feed holds is visibility, not loss,
-and counting it as loss inflates the signal by roughly two orders of magnitude. The route asks
-`run_recorded` first. Every fallback leans toward loss: no run id, no store, or a store that raises all
+feed row is written under its key, so every later park of a row the feed holds is visibility, not loss,
+and counting it as loss inflates the signal by roughly two orders of magnitude. The route asks the feed
+for the delivery's own row first (`events_recorded`). Every fallback leans toward loss: no run id, no store, or a store that raises all
 record `DEAD_LETTERED`, because a parking route that cannot ask must not answer "nothing was lost".
 """
 
@@ -46,10 +46,10 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 class _Repo:
-    """`run_recorded` + `record` — the two the parking route needs.
+    """`events_recorded` + `record` + `record_refusal`, what the parking route needs.
 
-    `record` MOVES the run into `known`, which is what lets the route's second `run_recorded` read
-    report recovery honestly rather than trusting an ack status. `raises` makes `run_recorded` fail, the
+    `record` MOVES the run into `known`, which is what lets the route's second `events_recorded` read
+    report recovery honestly rather than trusting an ack status. `raises` makes `events_recorded` fail, the
     unreachable-feed case.
     """
 
@@ -60,11 +60,16 @@ class _Repo:
         self.ingested: list[str] = []
         self.asked: list[str] = []
 
-    async def run_recorded(self, run_id: str) -> bool:
-        self.asked.append(run_id)
+    async def events_recorded(self, keys: set[str]) -> set[str]:
+        """The feed rows held: every row of a run in ``known``, a row's key naming its run before its ``@``."""
+        runs = {key.split("@", 1)[0] for key in keys}
+        self.asked.extend(sorted(runs))
         if self.raises:
             raise RuntimeError("feed unreachable")
-        return run_id in self.known
+        return {key for key in keys if key.split("@", 1)[0] in self.known}
+
+    async def record_refusal(self, **_: object) -> None:
+        """The parking route keeps what it could not recover; what it keeps is the integration test's claim."""
 
     async def record(self, event: Any) -> None:
         run_id = event.run.run_id

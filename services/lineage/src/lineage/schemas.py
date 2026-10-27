@@ -123,6 +123,22 @@ class DlqBacklog(BaseModel):
     limit: int
 
 
+class ParkedDelivery(BaseModel):
+    """A delivery the parking route kept ([[LH-148]]): its row in ``refusals``, the CloudEvent as it arrived, and the feed
+    row it would write (``None`` for a delivery no event parses out of)."""
+
+    key: str
+    run_id: str | None
+    cloud_event: dict[str, Any]
+    feed_key: str | None
+
+
+class ParkedRuns(BaseModel):
+    """The runs whose deliveries the parking route keeps, each with how many, for the estate admin ([[LH-148]])."""
+
+    runs: dict[str, int] = Field(default_factory=dict)
+
+
 class DlqReplayResponse(BaseModel):
     """The result of re-ingesting one staged event (#83): recorded under its key, then dropped."""
 

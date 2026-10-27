@@ -42,7 +42,7 @@ import json
 import logging
 import threading
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
 from typing import Any, Final, TypeVar
@@ -50,11 +50,11 @@ from typing import Any, Final, TypeVar
 import pyarrow as pa
 from opentelemetry import trace
 from opentelemetry.trace import SpanContext
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from lineage.core.config import LineageSettings
-from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload
-from lineage.schemas import DerivedTable, EventRecord
+from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event
+from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
 from service_kit.governed.machine_identity import read_identity_token
 from service_kit.lakehouse import derived_tables
 from service_kit.lakehouse.derived_tables import EDGES
@@ -82,6 +82,9 @@ TERMINAL_STATES: Final = frozenset({"COMPLETE", "FAIL", "ABORT"})
 
 FEED: Final = "events"
 REFUSALS: Final = "refusals"
+#: A delivery the parking route could not recover is kept in ``refusals`` under this prefix and its CloudEvent id, beside
+#: the outbox refusals keyed by their staged object ([[LH-148]]): a re-park of the same delivery lands on its row.
+PARKED_KEY_PREFIX: Final = "dead_letter:"
 
 FEED_SCHEMA: Final = pa.schema(
     [
@@ -184,6 +187,19 @@ _BATCH_BYTES: Final = 16 * 1024 * 1024
 _REFUSED_ROWS: Final = frozenset({400, 413, 422})
 _SUMMARY_COLUMNS: Final = ["event_type", "event_time", "job", "author", "inputs", "outputs", "table_uuids", "namespace_uuids", "unresolved_tables"]
 _FEED_COLUMNS: Final = [*_SUMMARY_COLUMNS, "event"]
+
+
+def parked_delivery(key: str, run_id: str | None, cloud_event: dict[str, Any]) -> ParkedDelivery:
+    """A kept delivery, with the feed row it would write."""
+    return ParkedDelivery(key=key, run_id=run_id, cloud_event=cloud_event, feed_key=delivery_feed_key(cloud_event))
+
+
+def delivery_feed_key(cloud_event: Mapping[str, Any]) -> str | None:
+    """The feed row a Dapr-delivered CloudEvent would write, or ``None`` when no event parses out of it."""
+    try:
+        return feed_key(parse_event(cloud_event.get("data")))
+    except (ValidationError, TypeError, ValueError):
+        return None
 
 
 def feed_key(event: RunEvent | DatasetEvent) -> str:
@@ -630,6 +646,37 @@ class ProvenanceStore:
         """
         row = {"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event": event_json, "refused_at": datetime.now(UTC)}
         await self._run(lambda: self._writer(REFUSALS).merge_upsert(pa.Table.from_pylist([row], schema=REFUSAL_SCHEMA), on="outbox_key"))
+
+    async def parked(self, run_id: str | None = None) -> list[ParkedDelivery]:
+        """Each delivery the parking route kept ([[LH-148]]), of ``run_id`` or of every run."""
+        where = f"starts_with(outbox_key, {sql_literal(PARKED_KEY_PREFIX)})" + (f" AND run_id = {sql_literal(run_id)}" if run_id is not None else "")
+        rows = await self._run(lambda: self._reader(REFUSALS).to_table(columns=["outbox_key", "run_id", "event"], filter=where))
+        return [parked_delivery(row["outbox_key"], row["run_id"], json.loads(row["event"])) for row in rows.to_pylist()]
+
+    async def events_recorded(self, keys: Collection[str]) -> set[str]:
+        """Which of the feed row keys ``keys`` the feed holds."""
+        return await self._run(lambda: self._events_recorded(keys))
+
+    def _events_recorded(self, keys: Collection[str]) -> set[str]:
+        reader = self._reader(FEED)
+        return {key for where in in_lists("event_key", keys) for key in reader.to_table(columns=["event_key"], filter=where).column("event_key").to_pylist()}
+
+    async def forget_parked(self, keys: Collection[str]) -> None:
+        """Delete the kept deliveries ``keys`` name, once the feed holds what each would write."""
+        await self._run(lambda: [self._writer(REFUSALS).delete(where) for where in in_lists("outbox_key", keys)])
+
+    async def retire_recovered_parks(self) -> int:
+        """Delete every kept delivery whose feed row the feed holds, however it got there; return how many.
+
+        A run's events reach the feed by other paths too (a replay of the retained stream, a producer's re-announcement),
+        and a kept delivery the feed already holds has nothing left to recover.
+        """
+        kept = await self.parked()
+        held = await self.events_recorded({delivery.feed_key for delivery in kept if delivery.feed_key})
+        recovered = [delivery.key for delivery in kept if delivery.feed_key in held]
+        if recovered:
+            await self.forget_parked(recovered)
+        return len(recovered)
 
     async def prune_events(self, retention_days: int) -> int:
         """Delete the feed rows this service received more than ``retention_days`` ago; return how many it found to delete."""

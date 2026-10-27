@@ -17,18 +17,21 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import ServiceUnavailableError, TransactionNotFoundError, UnauthenticatedError, UnsupportedOperationError
+from lance_namespace import InvalidInputError, ServiceUnavailableError, TransactionNotFoundError, UnauthenticatedError, UnsupportedOperationError
 
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
-from lineage.api.fga_deps import FilterDep, Governed, enforce_bus_authz, enforce_output_authz, governed, governed_refs
+from lineage.api.fga_deps import FilterDep, Governed, enforce_bus_authz, enforce_output_authz, governed, governed_refs, require_estate_admin
 from lineage.api.security import CurrentToken
 from lineage.core.config import storage_options
+from lineage.core.metrics import Door, Outcome, record_outcome
 from lineage.models import DatasetEvent, RunEvent
-from lineage.schemas import DlqBacklog, DlqEvent, DlqReplayResponse
+from lineage.schemas import DlqBacklog, DlqEvent, DlqReplayResponse, ParkedRuns
+from lineage.services.consumer import RETRY, handle_cloud_event
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 from service_kit.governed import audit, fga
 from service_kit.governed.audit import FAILURE, SUCCESS
@@ -180,3 +183,58 @@ async def replay_dlq(
     audit.audit("dlq_replay", SUCCESS, subject=token.subject if token else "", resource=_audited(event, run_id))
     log.info("lineage_dlq_replayed", extra={"run_id": run_id, "sub": token.subject if token else None})
     return DlqReplayResponse(status="replayed", run_id=run_id)
+
+
+@router.get("/parked", dependencies=[Depends(require_estate_admin)])
+async def list_parked(provenance: ProvenanceDep) -> ParkedRuns:
+    """The runs whose deliveries the parking route keeps, each with how many, for the estate admin ([[LH-148]])."""
+    return ParkedRuns(runs=dict(Counter(delivery.run_id or "" for delivery in await provenance.parked())))
+
+
+@router.post("/parked/{run_id}/replay", dependencies=[Depends(require_estate_admin)])
+async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep, settings: SettingsDep, token: CurrentToken) -> DlqReplayResponse:
+    """Re-present the deliveries of ``run_id`` the parking route kept, once their cause is fixed ([[LH-148]]).
+
+    Each kept CloudEvent goes through the subscription's own ingest (``handle_cloud_event`` under
+    :func:`enforce_bus_authz`: the signature over the bytes that arrived, and what the stamped author may record), so
+    this admits nothing the bus refuses, however trusted the operator is. It writes to the feed directly and publishes
+    nothing: the run's subscribers heard the original publish, and the feed is what was missing it. Each delivery is
+    judged on its own feed row: one the feed then holds is RECOVERED and no longer kept, and one it still lacks stays
+    kept, so a run whose START landed while its COMPLETE is still refused keeps the COMPLETE.
+
+    The estate admin's door (:func:`require_estate_admin`, asked before any kept row is read, so it names no run to
+    anyone else).
+
+    Raises:
+        TransactionNotFoundError: No delivery of the run is kept.
+        InvalidInputError: A delivery is still refused on re-presentation; it stays kept, and those recovered with it
+            are no longer kept.
+        ServiceUnavailableError: A re-presentation met an outage (an authorization or key-store answer it could not
+            read); what it could not judge stays kept.
+    """
+    kept = await provenance.parked(run_id)
+    if not kept:
+        raise TransactionNotFoundError(f"no parked lineage delivery is kept for run {run_id}")
+    answers = [
+        await handle_cloud_event(
+            provenance, delivery.cloud_event, lambda parsed, arrived: enforce_bus_authz(parsed, request, settings, arrived), door=Door.DEAD_LETTER
+        )
+        for delivery in kept
+    ]
+    held = await provenance.events_recorded({delivery.feed_key for delivery in kept if delivery.feed_key})
+    recovered = [delivery for delivery in kept if delivery.feed_key in held]
+    if recovered:
+        await provenance.forget_parked([delivery.key for delivery in recovered])
+        for _ in recovered:
+            record_outcome(Outcome.RECOVERED, door=Door.DEAD_LETTER)
+    subject = token.subject if token else ""
+    left = [(delivery, answer) for delivery, answer in zip(kept, answers, strict=True) if delivery.feed_key not in held]
+    if left:
+        audit.audit("dlq_parked_replay", FAILURE, subject=subject, resource=f"run:{run_id}")
+        names = [f"{delivery.feed_key or delivery.key}: {answer.get('status')}" for delivery, answer in left]
+        if any(answer.get("status") == RETRY for _, answer in left):
+            raise ServiceUnavailableError(f"re-presenting run {run_id} met an outage; {len(left)} delivery(ies) stay kept: {names}")
+        raise InvalidInputError(f"run {run_id} is still refused on re-presentation; {len(left)} delivery(ies) stay kept, {len(recovered)} recovered: {names}")
+    audit.audit("dlq_parked_replay", SUCCESS, subject=subject, resource=f"run:{run_id}")
+    log.info("lineage_parked_replayed", extra={"run_id": run_id, "deliveries": len(kept), "sub": subject or None})
+    return DlqReplayResponse(status="recovered", run_id=run_id)

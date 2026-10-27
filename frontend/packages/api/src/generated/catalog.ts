@@ -3168,7 +3168,9 @@ export interface paths {
          *
          *     ``mode=overwrite`` removes every row on the ref before inserting (spec.yaml InsertIntoTableRequest.mode),
          *     so a protected table refuses it 409 unless ``force=true``, on any branch — the protection record is the
-         *     table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]).
+         *     table's — and it is recorded as ``overwrite_table`` with the ``OVERWRITE`` lifecycle state ([[LH-242]]). It asks the
+         *     writer rung, not ``can_drop``: it keeps the table's schema, so it does what a delete of every row and an insert do
+         *     (ADR 0099, [[LH-415]]).
          *
          *     The verified caller and the run the request's Context names are stamped into the commit, on any ref ([[LH-225]], [[LH-497]]).
          */
