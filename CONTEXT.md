@@ -128,7 +128,14 @@ and shows the obligation overdue once its deadline passes.
 _Avoid_: erasure job, erasure task, GDPR request
 
 **Derived table**:
-A table lineage's edge list records a run writing from another table, or from a table derived from it. An erasure
-obligation on the first is held until each derived table holds one of its own that follows it, recorded with a
+A table written by a run that declared another table, or a table derived from it, among its inputs. A write that
+declares no inputs derives from nothing, whatever it read: the catalog cannot see what a pipeline read. An erasure
+obligation on the first table is held until each derived table holds one of its own that follows it, recorded with a
 predicate of that table's own, since the first table's predicate cannot judge another table's columns.
 _Avoid_: downstream tier, child table
+
+**Late derived table**:
+A derived table whose write came before its source's erasure obligation was released but was found only after, so no
+obligation following the released one could hold it. It is reported for whoever may erase it to record an obligation
+of its own; the release itself stays final.
+_Avoid_: missed table, escaped table
