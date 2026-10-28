@@ -14,7 +14,8 @@ and dropped through its doors, so its base record and its directory claim are th
   unverified-file age (7 days, ``lance_docs/lance/guide/read_and_write.md:564-571``), keeps one a branch still references and every file
   younger than that age, and reports the base fragment a deleted row keeps alive, which only a compaction could rewrite;
 - the purge of an expired trashed table deletes its data directory with its root, then forgets its base record and
-  releases the directory's claim, also where an earlier tick released it ([[LH-535]]); a directory no claim names the
+  releases the directory's claim, also where an earlier tick released it, and writes no directory marker under a prefix
+  maintenance may not write ([[LH-535]]); a directory no claim names the
   table on is left to whoever's bytes it holds while the table is still purged: a record written before [[LH-252]]
   named the approved base itself, which every table naming it shared;
 - every catalog door that ends a table's bytes deletes its data directory before the record that names it goes: a
@@ -202,8 +203,8 @@ def _expired(estate: _Estate, table: str) -> None:
     "claim",
     [
         pytest.param("held", id="its-claim-held"),
-        # [[LH-535]] On RustFS an earlier tick's forget of the record fails on a directory marker after it released the
-        # claims, so the tick that finishes the purge finds the table's own claim released.
+        # A forget interrupted after it released the claims and before it deleted the record leaves the table's own claim
+        # released for the tick that finishes the purge.
         pytest.param("released", id="its-claim-released-by-an-earlier-tick"),
     ],
 )
@@ -220,6 +221,7 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
     _expired(estate, table)
     if claim == "released":
         location_claims.release(claims, directory, table)
+    markers = {key for key in estate.keys(estate.bucket, "") if key.endswith("/")}
 
     out = asyncio.run(
         purge_expired_trash(estate.maintenance(trash_purge_enabled=True), report=_clean_report(), control_root=estate.root, data_roots={estate.root})
@@ -228,6 +230,9 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
     assert out.refused == [], out.refused
     assert [(purged.id, purged.files_deleted, purged.bytes_deleted) for purged in out.purged] == [(table, len(held), sum(held.values()))]
     assert (estate.keys(estate.bucket, root_prefix), estate.files(directory)) == ({}, {}), "the purge left bytes of the table it reclaimed"
+    # Maintenance may not write under `_bases/` (the chart's ForgetABaseRecordNeverWriteOne), and a store that matches the
+    # Deny as AWS does refuses the marker a record delete would write, so the purge writes none ([[LH-535]]).
+    assert {key for key in estate.keys(estate.bucket, "") if key.endswith("/")} == markers, "the purge wrote a directory marker"
     assert base_registry.read_base_record(estate.registry, location) is None, "the base record outlived the bytes it named"
     assert location_claims.holder(claims, directory) is None
 

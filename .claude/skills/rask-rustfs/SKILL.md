@@ -229,6 +229,12 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
 - **A provider whose discovery fails at boot is recovered in the background,** backing off to 30 s
   (`rustfs@1.0.3:crates/iam/src/oidc/runtime.rs:151-216`), so a store that starts before the issuer mirror refuses every
   exchange until the mirror answers, and the catalog's boot exchange waits out a minute of it.
+- **A resource's trailing `*` does not match an empty suffix.** Measured on 1.0.3 (2026-10-28, [[LH-535]]): a user
+  holding maintenance's policy, with its Deny of `s3:PutObject` on `arn:aws:s3:::*/_bases/*`, is refused
+  `_bases/table-x.json` and `_bases/x` and admitted the bare key `_bases/` (the same for `_projects/`). AWS's `*`
+  matches zero characters, so a conformant store refuses that PUT: a test on this fixture cannot show a defect that
+  only a directory marker triggers. Assert that the code writes no marker instead (pyarrow's `delete_file` PUTs the
+  parent `<prefix>/` after every delete; `service_kit.lakehouse.stored_objects` deletes by key).
 
 ## 7. Testing against RustFS
 

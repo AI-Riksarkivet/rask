@@ -35,6 +35,7 @@ from typing import Any
 
 import pyarrow.fs as pafs
 
+from service_kit.lakehouse import stored_objects
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
@@ -82,13 +83,13 @@ def get_record(control_root: str, storage_options: StorageOptions, key: str, *, 
 
 
 def delete_record(control_root: str, storage_options: StorageOptions, key: str) -> bool:
-    """Remove one record; ``False`` when there was none (delete is idempotent)."""
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        fs.delete_file(f"{base}/{key}")
-    except FileNotFoundError:
-        return False
-    return True
+    """Remove one record; ``False`` when there was none (delete is idempotent). Writes nothing: maintenance may not write
+    under several record prefixes, so a directory marker would be refused (:func:`stored_objects.delete_object`).
+
+    Raises:
+        OSError: The store refused the delete.
+    """
+    return stored_objects.delete_object(control_root, storage_options, key)
 
 
 def list_records(control_root: str, storage_options: StorageOptions, prefix: str, *, event: str, strict: bool = False) -> list[dict[str, Any]]:

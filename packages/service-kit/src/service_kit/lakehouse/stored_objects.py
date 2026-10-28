@@ -1,8 +1,12 @@
 """The objects under one prefix, listed and deleted by key, the way the store keeps them.
 
-On S3 the object client lists and deletes by key (``DeleteObjects``, a thousand keys a request), because pyarrow's
-``delete_file`` and ``delete_dir`` write a directory marker into the emptied parent, which maintenance's own policy may
-deny it ([[LH-535]]). A local root is listed and deleted through pyarrow's filesystem.
+On S3 the object client lists and deletes by key (``DeleteObjects``, a thousand keys a request, or one ``DeleteObject``
+after a ``HeadObject``), because pyarrow's ``delete_file`` and ``delete_dir`` write a directory marker into the parent
+(pyarrow 25.0.0: HEAD, DELETE, then a PUT of ``<parent>/``), which maintenance's own policy denies it under ``_bases/`` and
+the other record prefixes ([[LH-535]]). A store that matches the Deny's ``*/_bases/*`` as AWS does refuses that PUT;
+RustFS 1.0.3 does not match ``*`` against an empty suffix and admits the bare marker while refusing every record key
+beneath it (measured 2026-10-28), so the refusal shows only on a conformant store. A local root is listed and deleted
+through pyarrow's filesystem.
 """
 
 from __future__ import annotations
@@ -39,7 +43,7 @@ def _on_object_client(uri: str, storage_options: dict[str, str]) -> bool:
 def _object_client(storage_options: dict[str, str]) -> Any:  # noqa: ANN401 — a boto3 S3 client
     access_key, secret_key, session_token = credential_of(storage_options)
     return s3_client(
-        storage_options["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=storage_options.get("region")
+        storage_options.get("endpoint"), access_key=access_key, secret_key=secret_key, session_token=session_token, region=storage_options.get("region")
     )
 
 
@@ -60,6 +64,39 @@ def list_under(uri: str, storage_options: dict[str, str]) -> list[StoredObject]:
         for info in infos
         if info.type == pafs.FileType.File and info.mtime is not None
     ]
+
+
+def delete_object(uri: str, storage_options: dict[str, str], key: str) -> bool:
+    """Delete the object at ``<uri>/<key>``; ``False`` when there was none.
+
+    Any ``s3://`` root takes the object client, endpoint or none: a vend naming no endpoint is AWS proper, the store whose
+    policy refuses the marker, and a missing endpoint resolves as ``records``' conditional writes resolve it.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the read or the delete.
+    """
+    if not uri.startswith("s3://"):
+        fs, base = fs_and_base(uri, storage_options)
+        try:
+            fs.delete_file(f"{base}/{key}")
+        except FileNotFoundError:
+            return False
+        return True
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
+    full_key = f"{prefix}/{key}" if prefix else key
+    client = _object_client(storage_options)
+    try:
+        client.head_object(Bucket=bucket, Key=full_key)
+        client.delete_object(Bucket=bucket, Key=full_key)
+    except ClientError as exc:
+        if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404:
+            return False
+        raise OSError(f"the store refused deleting {bucket}/{full_key}: {exc}") from exc
+    except BotoCoreError as exc:
+        raise OSError(f"the store could not be reached deleting {bucket}/{full_key}: {exc}") from exc
+    return True
 
 
 def delete_objects(uri: str, storage_options: dict[str, str], paths: list[str]) -> None:
