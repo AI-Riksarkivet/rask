@@ -86,6 +86,12 @@ class ErasureObligationView(BaseModel):
     )
     released_at: datetime | None = Field(description="When a verification released it; null while open.")
     release: PinRelease | None = Field(description="The release of the refs that pinned a residual, scheduled when the obligation was released.")
+    late_derived: list[str] = Field(
+        description=(
+            "The uuid of each table found derived from this table after the release, whose write was declared before it: whoever may erase "
+            "it records an obligation of its own, naming `follows`. Tables the reader may not see are left out."
+        )
+    )
 
 
 class ErasureObligation(BaseModel):
@@ -117,6 +123,8 @@ class ErasureObligation(BaseModel):
     open_surfaces: list[SurfaceResult] = Field(default_factory=list)
     released_at: datetime | None = None
     release: PinRelease | None = None
+    #: Each late derived table's uuid ([[LH-541]], ADR 0183 §5), in the order the reconciler found them.
+    late_derived: list[str] = Field(default_factory=list)
 
     def view(self, now: datetime, *, table: str, hidden: Collection[str]) -> ErasureObligationView:
         """The record as the doors show it at ``now``, naming its table ``table``, to a reader who may not see the derived
@@ -137,6 +145,7 @@ class ErasureObligation(BaseModel):
             open_surfaces=shown(self.open_surfaces, hidden=hidden),
             released_at=self.released_at,
             release=self.release,
+            late_derived=[key for key in self.late_derived if key not in hidden],
         )
 
 
@@ -228,6 +237,29 @@ def _reaches(obligation: ErasureObligation, source: str, by_id: dict[str, Erasur
         followed = by_id.get(step)
         step = followed.follows if followed is not None else None
     return False
+
+
+def list_late_derived(control_root: str, storage_options: StorageOptions, obligation_id: str, late: Sequence[str]) -> list[str]:
+    """List each of ``late`` on the released obligation ``obligation_id`` as a late derived table; answer those it did not
+    list already.
+
+    Raises:
+        InvalidTableStateError: No such obligation is recorded, or it is not released.
+    """
+    added: list[str] = []
+
+    def listing(raw: dict[str, Any]) -> dict[str, Any]:
+        standing = ErasureObligation.model_validate(raw)
+        if standing.state != "released":
+            raise InvalidTableStateError(f"erasure obligation {obligation_id} is open; a late derived table is listed on a released one")
+        added[:] = [key for key in late if key not in standing.late_derived]
+        return standing.model_copy(update={"late_derived": [*standing.late_derived, *added]}).model_dump(mode="json")
+
+    try:
+        mutate_json(control_root, storage_options, record_key(obligation_id), listing)
+    except RecordMissingError as exc:
+        raise InvalidTableStateError(f"no erasure obligation {obligation_id} is recorded") from exc
+    return added
 
 
 def require_verifiable(obligation: ErasureObligation, *, table_uuid: str, location: str, predicate: str) -> None:

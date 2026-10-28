@@ -260,8 +260,10 @@ def judged(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     """Every write the tier judge is handed; it asks the rung it was given, as the real one does."""
     recorded: list[str] = []
 
-    async def judge(write: tier_policy.Write, *, caller: str | None, check: tier_policy.RungCheck | None, namespace: object) -> tier_policy.Judgement:
-        del caller, namespace
+    async def judge(
+        write: tier_policy.Write, *, caller: str | None, check: tier_policy.RungCheck | None, inputs: tier_policy.InputsCheck, namespace: object
+    ) -> tier_policy.Judgement:
+        del caller, inputs, namespace
         recorded.append(write.op)
         if check is not None and write.rung is not None:
             await check(write.rung)

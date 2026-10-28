@@ -17,7 +17,7 @@ what an erasure removes from it.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from datetime import datetime
 from typing import Any, Final
 
@@ -33,8 +33,19 @@ EDGES: Final = "edges"
 #: recorded the edge.
 COLUMNS: Final = ("out_table", "out_name", "received_at")
 
-type EdgeRows = Callable[[str], Iterable[Mapping[str, Any]]]
-"""The edges a Lance filter matches, each carrying :data:`COLUMNS`; every call within one walk reads one version of the edge list."""
+type EdgeRows = Callable[[Collection[str]], Iterable[Mapping[str, Any]]]
+"""The edges whose input is one of the given keys, each carrying :data:`COLUMNS`; every call within one walk reads one
+version of what it reads."""
+
+
+def filtered(read: Callable[[str], Iterable[Mapping[str, Any]]]) -> EdgeRows:
+    """The edges a Lance reader answers, ``read`` taking the filter that selects their inputs, in bounded ``IN`` lists."""
+    return lambda inputs: [row for where in in_lists("in_table", inputs) for row in read(where)]
+
+
+def joined(*sources: EdgeRows) -> EdgeRows:
+    """The edges every one of ``sources`` answers, as one edge list."""
+    return lambda inputs: [row for rows in sources for row in rows(inputs)]
 
 
 class DerivedWalk(BaseModel):
@@ -79,13 +90,12 @@ def _outputs(rows: EdgeRows, inputs: set[str], newest: dict[str, tuple[datetime,
     """The keys of the tables the edge list records a run writing from any of ``inputs``; records in ``newest`` the newest
     name each was written under."""
     found: set[str] = set()
-    for where in in_lists("in_table", inputs):
-        for row in rows(where):
-            key = str(row["out_table"])
-            found.add(key)
-            named = (row["received_at"], str(row["out_name"] or key))
-            if key not in newest or named[0] >= newest[key][0]:
-                newest[key] = named
+    for row in rows(inputs):
+        key = str(row["out_table"])
+        found.add(key)
+        named = (row["received_at"], str(row["out_name"] or key))
+        if key not in newest or named[0] >= newest[key][0]:
+            newest[key] = named
     return found
 
 

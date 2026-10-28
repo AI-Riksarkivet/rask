@@ -46,7 +46,7 @@ from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import dataplane, maintenance, managed_versions
+from catalog.services import dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
@@ -237,7 +237,7 @@ async def create_table_version(
             staged,
             so,
         )
-        await fga_deps.judge_staged_run(settings, token, client, resolver, ns=table.namespace, segments=segments, run=run, adds_data=adds_data)
+        declared = await fga_deps.judge_staged_run(settings, token, client, resolver, ns=table.namespace, segments=segments, run=run, adds_data=adds_data)
         if staged.creates:
             # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
             labels = await run_in_threadpool(managed_versions.staged_field_labels, staged, so)
@@ -254,6 +254,11 @@ async def create_table_version(
         # BEFORE THE FINALIZE: once the version lands it must name its author, and this commit cannot ([[LH-497]]).
         await run_in_threadpool(
             commit_records.record_author, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), staged.transaction_uuid, caller
+        )
+    if declared:
+        # BEFORE THE FINALIZE: an erasure names this table from the moment the version lands ([[LH-541]]).
+        await run_in_threadpool(
+            partial(table_inputs.record, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), name=canonical, declared=declared)
         )
     response = await run_in_threadpool(managed_versions.finalize, table, staged, body, so)
     audit(

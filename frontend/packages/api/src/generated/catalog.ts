@@ -6528,6 +6528,11 @@ export interface components {
              */
             follows: string | null;
             /**
+             * Late Derived
+             * @description The uuid of each table found derived from this table after the release, whose write was declared before it: whoever may erase it records an obligation of its own, naming `follows`. Tables the reader may not see are left out.
+             */
+            late_derived: string[];
+            /**
              * Obligation Id
              * @description The obligation's id, which the verification door names.
              */
@@ -6620,6 +6625,12 @@ export interface components {
              * @default false
              */
             complete?: boolean;
+            /**
+             * Derived Scope
+             * @description What the `derived:` surfaces cover, and what lies outside the erasure's guarantee (ADR 0183).
+             * @default A table is derived from this one when a run writing it declared this table, or a table derived from it, among its inputs. A write that declared no inputs derives from nothing: what it wrote lies outside this erasure's guarantee.
+             */
+            derived_scope?: string;
             /**
              * Held By Retention
              * @description Residuals the retention window keeps, itself or through a newer branch version on their files: a verification after the window has passed reclaims them.
@@ -8639,7 +8650,7 @@ export interface components {
             outcome: string;
             /**
              * Surface
-             * @description A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, the scheduling of what pins a residual: `release` (its record) and `notice` (who is told), or a table the edge list records as derived from this one: `derived:<uuid>`, and `derived` for derived tables named nowhere here (the edge list could not be read, or the reader may not see them).
+             * @description A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, the scheduling of what pins a residual: `release` (its record) and `notice` (who is told), or a table derived from this one, which a run writing it declared it read: `derived:<uuid>`, and `derived` for derived tables named nowhere here (what names them could not be read, or the reader may not see them).
              */
             surface: string;
         };

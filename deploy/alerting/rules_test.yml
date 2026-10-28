@@ -1243,6 +1243,53 @@ tests:
               summary: "A table holds versions no catalog door committed"
               description: "The catalog's commit reconciler found committed versions that name no author and for which version/create recorded none: a manifest was finalized past every catalog door, by a credential that can write one. The version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
 
+  # One late derived table pages, a pod's first find included: its counter's first sample is already 1.
+  - interval: 1m
+    input_series:
+      - series: "catalog_erasure_late_derived_total"
+        values: "_ _ 1 1 1"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ErasureDerivedAfterRelease
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "catalog"
+            exp_annotations:
+              summary: "A table derived from an erased table was found after the erasure was released"
+              description: "The catalog's commit reconciler found a table derived from a released erasure obligation's table, whose write was declared before the release: the subject may stand in it. It is listed in the obligation's `late_derived`. Read the catalog's `erasure_late_derived` logs for the obligation and the tables. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-table-derived-from-an-erased-table-found-after-the-release"
+
+  # A watch that cannot read, tick after tick, pages after half an hour.
+  - interval: 1m
+    input_series:
+      - series: "catalog_erasure_late_derived_unwatched_total"
+        values: "0+1x70"
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: ErasureLateDerivedUnwatched
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+            exp_annotations:
+              summary: "The catalog cannot watch released erasures for late derived tables"
+              description: "The catalog's commit reconciler could not read the erasure obligations, the input record, the edge list or a location claim, so it found no late derived table this half hour. Read the catalog's `erasure_late_derived_unread` logs for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-table-derived-from-an-erased-table-found-after-the-release"
+
+  # A watch that finds nothing must NOT page.
+  - interval: 1m
+    input_series:
+      - series: "catalog_erasure_late_derived_total"
+        values: "0+0x20"
+      - series: "catalog_erasure_late_derived_unwatched_total"
+        values: "0+0x20"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: ErasureDerivedAfterRelease
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: ErasureLateDerivedUnwatched
+        exp_alerts: []
+
   # A reconciler that finds nothing must NOT page.
   - interval: 1m
     input_series:

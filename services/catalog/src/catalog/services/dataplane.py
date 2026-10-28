@@ -616,6 +616,7 @@ def create_table(
     holder: str = "",
     transaction_properties: dict[str, str] | None = None,
     overwriting: table_claims.DoorTable | None = None,
+    before_commit: Callable[[str], None] | None = None,
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
@@ -663,6 +664,10 @@ def create_table(
     ``overwriting`` is the table an ``Overwrite`` asked ``can_drop`` on, as its door resolved it ([[LH-530]]): the write
     lands at that location once the name still resolves there.
 
+    ``before_commit`` is handed the uuid of the table about to be written, once its location's claim holds it and before
+    the data's commit: a governed create records there what the commit declares it read ([[LH-541]]). A failure in it
+    fails the create as a failed write does.
+
     Raises:
         ConcurrentModificationError: The table an ``Overwrite`` resolved changed since.
     """
@@ -682,6 +687,7 @@ def create_table(
             current = disarm_commit_path_cleanup(opened, segments)
             # The table's key, not the payload's: a key is fixed once set (`lance_docs/lance/format/table/index.md:87`).
             primary_keys.refuse_repeats_within(table, primary_keys.key_columns(current.lance_schema), door="create")
+            _before_commit(before_commit, existing, registry)
             dataset = _write_blob(
                 provenance_guard.keep_provenance(current.schema, table),
                 existing,
@@ -720,6 +726,7 @@ def create_table(
             registry=registry,
             holder=holder,
             transaction_properties=transaction_properties,
+            before_commit=before_commit,
         )
 
     location = declare_table(ns, so, segments, root=root, claims=None if registry is None else _claim_store(registry), holder=holder)
@@ -736,7 +743,19 @@ def create_table(
         registry=registry,
         holder=holder,
         transaction_properties=transaction_properties,
+        before_commit=before_commit,
     )
+
+
+def _before_commit(hook: Callable[[str], None] | None, location: str, registry: base_registry.BaseRegistry | None) -> None:
+    """Hand ``hook`` the uuid the claim at ``location`` records; nothing for a caller outside governance, whose table holds
+    no claim."""
+    if hook is None or registry is None:
+        return
+    claim = location_claims.read(_claim_store(registry), location)
+    if claim is None or claim.claim.uuid is None:
+        raise InternalError(f"the table about to be written at {location} holds no claim recording its uuid")
+    hook(claim.claim.uuid)
 
 
 def _named_by_its_uuid(table: pa.Table, location: str, registry: base_registry.BaseRegistry | None) -> pa.Table:
@@ -772,6 +791,7 @@ def _write_blob_into(
     registry: base_registry.BaseRegistry | None,
     holder: str = "",
     transaction_properties: dict[str, str] | None = None,
+    before_commit: Callable[[str], None] | None = None,
 ) -> CreateTableResponse:
     """Write the blob table's first data version into an already-declared ``location``, rolling the declare
     back with ``drop_table`` on failure so the name stays retryable rather than stuck declared-but-unreadable.
@@ -808,6 +828,7 @@ def _write_blob_into(
         # winning, as `update_schema_metadata` merges.
         if properties:
             table = table.replace_schema_metadata({**(table.schema.metadata or {}), **{key.encode(): value.encode() for key, value in properties.items()}})
+        _before_commit(before_commit, location, registry)
         dataset = _write_blob(
             table,
             location,

@@ -20,11 +20,16 @@ from __future__ import annotations
 
 from fastapi.concurrency import run_in_threadpool
 
+from catalog.api import fga_deps
+from catalog.api.dependencies import Resolver
 from catalog.api.security import Caller
 from catalog.core import run_context
+from catalog.core.config import Settings
 from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event, run_inputs
 from catalog.core.run_context import RunContext
-from catalog.services import dataplane
+from catalog.services import dataplane, table_inputs
+from catalog.services.table_claims import ResolvedTable
+from service_kit.governed import fga
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -32,6 +37,23 @@ def door_stamp(token: Caller | None, operation: str, run: RunContext | None = No
     """The transaction properties a door stamps on the commit it makes ([[LH-497]]): the verified caller, the lineage
     ``operation`` it is announced as, and the run when the request names one (:func:`run_context.commit_properties`)."""
     return run_context.commit_properties(run, author=token.subject if token is not None else None, operation=operation)
+
+
+async def record_declared_inputs(settings: Settings, resolver: Resolver, run: RunContext | None, *, table: ResolvedTable, segments: list[str]) -> None:
+    """Record, before a door commits to ``table``, each input ``run`` declares, by the uuid the tier judge authorized it as
+    (:mod:`catalog.services.table_inputs`, [[LH-541]]); nothing for a run declaring none.
+
+    Raises:
+        InvalidInputError: A declared input names no table.
+        UnidentifiedObjectError: The run declares an input and the table records no uuid to keep it under.
+        InternalError: The table's input record does not read as one, or kept changing under every write.
+        OSError: The store refused the record's read or write.
+    """
+    hook = table_inputs.recorder(
+        settings.registry_root, settings.storage_options(), name=fga.canonical_object_id(segments), declared=await fga_deps.declared_inputs(resolver, run)
+    )
+    if hook is not None:
+        await run_in_threadpool(hook, table.require_uuid())
 
 
 async def emit_measured_write(

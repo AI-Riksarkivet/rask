@@ -262,7 +262,7 @@ async def verify_erasure(
         state=standing.state,
         open_surfaces=",".join(surface.surface for surface in standing.open_surfaces),
     )
-    hidden = await _hidden_derived([*report.surfaces, *standing.open_surfaces], settings=settings, client=client, token=token)
+    hidden = await _hidden_derived([*report.surfaces, *standing.open_surfaces], late=standing.late_derived, settings=settings, client=client, token=token)
     shown = report.model_copy(update={"surfaces": erasure.shown(report.surfaces, hidden=hidden)})
     return ErasureVerification(obligation=standing.view(clock(), table=canonical, hidden=hidden), report=shown)
 
@@ -293,15 +293,23 @@ async def list_erasure_obligations(
     page, next_token = paginate(sorted(by_key), page_token, limit)
     now = clock()
     listed = [by_key[key] for key in page]
-    hidden = await _hidden_derived([surface for _, obligation in listed for surface in obligation.open_surfaces], settings=settings, client=client, token=token)
+    hidden = await _hidden_derived(
+        [surface for _, obligation in listed for surface in obligation.open_surfaces],
+        late=[key for _, obligation in listed for key in obligation.late_derived],
+        settings=settings,
+        client=client,
+        token=token,
+    )
     return ErasureObligations(obligations=[obligation.view(now, table=name, hidden=hidden) for name, obligation in listed], page_token=next_token)
 
 
-async def _hidden_derived(surfaces: Sequence[SurfaceResult], *, settings: Settings, client: OpenFgaClient | None, token: Caller | None) -> frozenset[str]:
-    """The derived tables ``surfaces`` name that the caller may not see: none with authorization off, else every one the
-    caller holds no ``can_get_metadata`` on, the rung lineage's derived door asks to show one, and every one keyed by a name,
-    which no grant can reach."""
-    keys = {key for surface in surfaces if (key := erasure.derived_key(surface.surface)) is not None}
+async def _hidden_derived(
+    surfaces: Sequence[SurfaceResult], *, late: Sequence[str], settings: Settings, client: OpenFgaClient | None, token: Caller | None
+) -> frozenset[str]:
+    """The derived tables ``surfaces`` and the ``late`` derived tables name that the caller may not see: none with
+    authorization off, else every one the caller holds no ``can_get_metadata`` on, the rung lineage's derived door asks to
+    show one, and every one keyed by a name, which no grant can reach."""
+    keys = {key for surface in surfaces if (key := erasure.derived_key(surface.surface)) is not None} | set(late)
     if not keys or not settings.fga_enabled or token is None or client is None:
         return frozenset()
     objects = sorted(fga.table_object(key) for key in keys if derived_tables.is_table_uuid(key))

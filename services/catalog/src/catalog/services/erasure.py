@@ -51,14 +51,16 @@ reclaim here has been checked against is not cleaned.
        removed is listed in `untagged`, which the door announces on the control lane ([[LH-332]])
     3. reclaim every clean ref — now that nothing the erasure controls pins it
     4. verify every ref   — the evidence `complete` and `settled` are computed from
-    5. every table derived from this one — named by the edge list, each holding the obligation until an obligation
-       of its own follows this one (:mod:`catalog.services.erasure_derived`, [[LH-332]])
+    5. every table derived from this one — named by what its commits declared they read and by the edge list, each
+       holding the obligation until an obligation of its own follows this one (:mod:`catalog.services.erasure_derived`,
+       [[LH-332]], ADR 0183)
 
 **A DERIVED TABLE IS NAMED, NEVER JUDGED** (owner, 2026-10-20, ADR 0178). A run that read this table wrote its rows into
 another, under columns of that table's own, or only as the `source_rowid` of this one's stable row ids
 (`lance_docs/lance/format/table/row_id_lineage.md` "Stable Row ID"), so this predicate proves nothing about it. Each table
-the edge list records as derived from this one is a `derived:<uuid>` surface, open until whoever may erase that table
-records an obligation following this one with a predicate of its own.
+derived from this one, one whose run declared it or a table derived from it among its inputs (ADR 0183), is a
+`derived:<uuid>` surface, open until whoever may erase that table records an obligation following this one with a
+predicate of its own. A write that declared no inputs derives from nothing, and the report says so in `derived_scope`.
 
 **THE VERIFICATION READS BYTES, NOT VISIBILITY.** Two surfaces hold the subject while a filter reads every
 version clean (both measured on pylance 12.0.0). A data file holding a row behind a deletion vector: every
@@ -132,12 +134,12 @@ log = logging.getLogger(__name__)
 #: rewrites. An obligation names every surface with one of them.
 OPEN_OUTCOMES: Final = frozenset({"failed", "skipped", "held"})
 
-#: The surface of the tables derived from this one that a report does not name one by one: the edge list could not be
+#: The surface of the tables derived from this one that a report does not name one by one: what names them could not be
 #: read, or the reader may not see them (:func:`shown`).
 DERIVED: Final = "derived"
 
-#: The prefix of one derived table's surface, ``derived:<key>``, its key the edge list's: a governed table's uuid, or the
-#: name an outside producer's event keyed it by.
+#: The prefix of one derived table's surface, ``derived:<key>``: a governed table's uuid, or the name an outside producer's
+#: event keyed it by on the edge list.
 _DERIVED_PREFIX: Final = f"{DERIVED}:"
 
 
@@ -151,8 +153,8 @@ class SurfaceResult(BaseModel):
             "deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, "
             "`dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, "
             "`external_base:<name>`, `mem_wal`, `bases:<ref>`, the scheduling of what pins a residual: `release` (its record) and "
-            "`notice` (who is told), or a table the edge list records as derived from this one: `derived:<uuid>`, and `derived` for "
-            "derived tables named nowhere here (the edge list could not be read, or the reader may not see them)."
+            "`notice` (who is told), or a table derived from this one, which a run writing it declared it read: `derived:<uuid>`, and `derived` for "
+            "derived tables named nowhere here (what names them could not be read, or the reader may not see them)."
         )
     )
     outcome: str = Field(
@@ -215,6 +217,13 @@ class ErasureReport(BaseModel):
         default=0, description="Versions reclaimed across every ref's cleanup. Zero is not a failure: history inside the retention window stays."
     )
     bytes_reclaimed: int = Field(default=0, description="Bytes freed across every ref's cleanup.")
+    derived_scope: str = Field(
+        default=(
+            "A table is derived from this one when a run writing it declared this table, or a table derived from it, among its inputs. "
+            "A write that declared no inputs derives from nothing: what it wrote lies outside this erasure's guarantee."
+        ),
+        description="What the `derived:` surfaces cover, and what lies outside the erasure's guarantee (ADR 0183).",
+    )
     untagged: list[DroppedTag] = Field(
         default_factory=list,
         description="Every tag this verification deleted, with the branch whose version it pinned: each is announced as a `table_tag_deleted` control event.",
@@ -320,7 +329,7 @@ def ref_heads(dataset: _Dataset) -> dict[str, int]:
 
 
 def derived_surface(key: str) -> str:
-    """The surface of the derived table the edge list keys ``key``."""
+    """The surface of the derived table ``key`` names: its uuid, or the name an edge keyed it by."""
     return f"{_DERIVED_PREFIX}{key}"
 
 

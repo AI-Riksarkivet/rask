@@ -34,6 +34,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | `LineageSignatureRefusedForAListedSigner` firing, `lineage_signature_refused` WARN logs | [Lineage refusing a signer's events](#lineage-refusing-a-signers-events) |
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
 | `CatalogCommitsReannounced`, `CatalogCommitsUnauthored` or `CatalogCommitReconcileBlocked` firing | [Committed versions re-announced](#committed-versions-re-announced) |
+| `ErasureDerivedAfterRelease` or `ErasureLateDerivedUnwatched` firing | [A table derived from an erased table found after the release](#a-table-derived-from-an-erased-table-found-after-the-release) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
 | FGA failing, notifications' inbox state unreadable | [AGE down](#age-postgres-down--fga--dapr-state) |
 
@@ -205,6 +206,23 @@ retained version or its commit time; it keeps that ref's mark until the read suc
 **Act.** A re-announcement needs nothing further once its cause is understood. An unauthored version is unjudged:
 treat it as an incident on the credential that wrote it, and restore the table to the last authored version if its
 content is not trusted.
+
+## A table derived from an erased table found after the release
+
+**Symptom.** `ErasureDerivedAfterRelease` (critical): `erasure_late_derived` ERROR logs on the catalog name an obligation
+and table uuids, and `GET /management/v1/erasures` lists them in that obligation's `late_derived`.
+
+**Cause.** A verification names every table whose commits declared the erased table, or a table derived from it, among
+their inputs, from the catalog's own input record and lineage's edge list (ADR 0183). A table reached only after the
+release, from a run before it, is late: in practice an outside producer's lineage event recorded after the release. A
+release is final, so the subject may stand in that table.
+
+**Act.** Whoever may erase the listed table records an erasure obligation on it with `follows` naming the released
+obligation, and the bring-your-own job erases the subject there.
+
+`ErasureLateDerivedUnwatched` (warning): `erasure_late_derived_unread` ERROR logs name what the watch could not read, a
+malformed `_table_inputs/` record or claim, or the store or the edge list unreachable. Until it reads, no late derived
+table is found; fix the record or the store and the next tick finds what it missed.
 
 ## Object store down → data plane
 

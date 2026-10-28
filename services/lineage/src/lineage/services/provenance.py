@@ -768,7 +768,9 @@ class ProvenanceStore:
         reader = self._reader(EDGES)
         version = reader.table_version()
         walked = derived_tables.walk(
-            lambda where: reader.to_table(columns=list(derived_tables.COLUMNS), filter=where, version=version).to_pylist(), sources, max_depth=max_depth
+            derived_tables.filtered(lambda where: reader.to_table(columns=list(derived_tables.COLUMNS), filter=where, version=version).to_pylist()),
+            sources,
+            max_depth=max_depth,
         )
         found = [
             DerivedTable(table=walked.names.get(key, key), uuid=key if derived_tables.is_table_uuid(key) else None, depth=depth)

@@ -73,7 +73,7 @@ from catalog.core.lineage_emit import CREATE_TABLE, OVERWRITE_TABLE, LineageEmit
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
-from catalog.services import dataplane, native, table_bases, table_claims
+from catalog.services import dataplane, native, table_bases, table_claims, table_inputs
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import base_registry, data_directories, location_claims
@@ -279,6 +279,9 @@ async def create_governed_table(
         holder=table_id,
         transaction_properties=run_context.commit_properties(run, author=created_by, operation=OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE),
         overwriting=overwriting,
+        before_commit=table_inputs.recorder(
+            settings.registry_root, settings.storage_options(), name=table_id, declared=await fga_deps.declared_inputs(resolver, run)
+        ),
     )
     try:
         response: CreateTableResponse = await run_in_threadpool(create)

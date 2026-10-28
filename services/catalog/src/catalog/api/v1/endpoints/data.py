@@ -221,6 +221,7 @@ async def insert_into_table(
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     run: RunDep,
+    resolver: ResolverDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
     branch: Annotated[str | None, Query(description="The ref to insert into. Omit for main.")] = None,
@@ -251,6 +252,7 @@ async def insert_into_table(
         dataplane.coerce_insert_arrow, table, so, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
+    await lineage_deps.record_declared_inputs(settings, resolver, run, table=table.resolved, segments=segments)
     response: InsertIntoTableResponse = await run_in_threadpool(
         partial(
             dataplane.insert_into_table,
@@ -305,6 +307,7 @@ async def merge_insert_into_table(
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     run: RunDep,
+    resolver: ResolverDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     on: MergeKeyQuery,
     when_matched_update_all: bool | None = None,
@@ -339,6 +342,7 @@ async def merge_insert_into_table(
         use_index=use_index,
         branch=branch,
     )
+    await lineage_deps.record_declared_inputs(settings, resolver, run, table=table.resolved, segments=segments)
     response: MergeInsertIntoTableResponse = await run_in_threadpool(
         partial(
             dataplane.merge_insert_into_table,

@@ -11,6 +11,12 @@ Each find is counted on ``catalog.commit_reconcile.reannounced``, each version n
 ``catalog.commit_reconcile.unauthored``, and each ref whose log could not be read on ``catalog.commit_reconcile.unreadable``;
 each pages (`deploy/alerting/rules.yml`).
 
+The same tick watches every released erasure obligation for a late derived table (ADR 0183 §5,
+`catalog.services.erasure_derived.watch_released`): a table derived from the erased one, written before the release and
+found only since, is listed on the obligation and counted on ``catalog.erasure.late_derived``, which pages, and a watch
+that could not read what it judges counts ``catalog.erasure.late_derived_unwatched``, which pages too. It needs no commit
+feed, so it runs whether or not lineage has created one.
+
 **Delivered at the POD ROOT**, as ``POST /<component name>``, so the Component's name,
 ``LANCE_COMMIT_RECONCILE_BINDING_NAME`` and the served path are one string. Guarded by ``require_dapr_token``: an open
 door here would let anything that reaches the port make the catalog walk the estate.
@@ -37,7 +43,7 @@ from catalog.api.dependencies import ClockDep, ObjectUuids, SettingsDep, Storage
 from catalog.core.commit_ids import commit_ids_of
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
-from catalog.services import commit_reconcile, dataplane, native, table_claims
+from catalog.services import commit_reconcile, dataplane, erasure_derived, native, table_claims
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -63,6 +69,18 @@ _unreadable = _meter.create_counter(
     description="Table refs whose version log the commit reconciler could not read past a point: the ref keeps its mark, "
     "and every lost announcement after it waits until it is read.",
 )
+_late_derived = _meter.create_counter(
+    "catalog.erasure.late_derived",
+    unit="{table}",
+    description="Tables found derived from a released erasure obligation's table, whose write was declared before the release "
+    "(ADR 0183): the subject may stand in them, and whoever may erase each records an obligation following the released one.",
+)
+_late_derived_unwatched = _meter.create_counter(
+    "catalog.erasure.late_derived_unwatched",
+    unit="{tick}",
+    description="Ticks whose watch for late derived tables could not read the obligations, the input record, the edge list "
+    "or a claim (ADR 0183): until it can, no late derived table is found.",
+)
 _unauthored = _meter.create_counter(
     "catalog.commit_reconcile.unauthored",
     unit="{commit}",
@@ -86,6 +104,7 @@ class CommitReconcileTick(BaseModel):
     reannounced: int = 0
     unauthored: int = 0
     unreadable: int = 0
+    late_derived: int = 0
 
 
 class _LiveTable(BaseModel):
@@ -186,9 +205,11 @@ async def _on_cron(
         return CommitReconcileTick(skipped=True)
     emitter: LineageEmitter = request.app.state.lineage_emitter
     async with _tick_lock:
-        feed = await run_in_threadpool(_feed_location, settings, await estate_namespace(request, settings))
+        estate = await estate_namespace(request, settings)
+        late_derived = await _watch_released(settings, estate, so)
+        feed = await run_in_threadpool(_feed_location, settings, estate)
         if feed is None:
-            return CommitReconcileTick(skipped=True)
+            return CommitReconcileTick(skipped=True, late_derived=late_derived)
         tables = await _live_tables(request, settings)
         now = clock().astimezone(UTC)
         reannounced = unauthored = unreadable = 0
@@ -227,8 +248,26 @@ async def _on_cron(
                     log.error("commit_unauthored", extra={"table": table.segments, "versions": list(scan.unauthored), "branch": scan.branch})
                 reannounced += len(scan.missing)
                 unauthored += len(scan.unauthored)
-    log.info("commit_reconcile_tick", extra={"tables": len(tables), "reannounced": reannounced, "unauthored": unauthored, "unreadable": unreadable})
-    return CommitReconcileTick(tables=len(tables), reannounced=reannounced, unauthored=unauthored, unreadable=unreadable)
+    log.info(
+        "commit_reconcile_tick",
+        extra={"tables": len(tables), "reannounced": reannounced, "unauthored": unauthored, "unreadable": unreadable, "late_derived": late_derived},
+    )
+    return CommitReconcileTick(tables=len(tables), reannounced=reannounced, unauthored=unauthored, unreadable=unreadable, late_derived=late_derived)
+
+
+async def _watch_released(settings: Settings, estate: LanceNamespace, so: StorageOptions) -> int:
+    """List and count every late derived table of a released erasure obligation; how many were new this tick."""
+    provenance = estate if settings.provenance_namespace else None
+    try:
+        found = await run_in_threadpool(erasure_derived.watch_released, settings, provenance, so)
+    except Exception as exc:  # noqa: BLE001 — a watch this tick cannot read is read by the next; the announcing goes on
+        log.error("erasure_late_derived_unread", extra={"error": str(exc)[:300]})
+        _late_derived_unwatched.add(1)
+        return 0
+    for late in found:
+        _late_derived.add(len(late.tables))
+        log.error("erasure_late_derived", extra={"obligation": late.obligation_id, "tables": late.tables})
+    return sum(len(late.tables) for late in found)
 
 
 async def _ack_binding() -> dict[str, str]:

@@ -945,19 +945,37 @@ def _stock_append_naming(served: Served, inputs: str) -> tuple[int, str]:
 
 
 def _insert_door_naming(served: Served, inputs: str) -> tuple[int, str]:
-    with pytest.raises(lance_namespace.PermissionDeniedError) as refused:
+    with pytest.raises(lance_namespace.InvalidInputError) as refused:
         _insert(served.stock({"x-rask-run-id": "run-7", "x-rask-inputs": inputs}))
     return refused.value.code, str(refused.value)
 
 
-@pytest.mark.parametrize("commit", [pytest.param(_stock_append_naming, id="a-stock-commit"), pytest.param(_insert_door_naming, id="the-insert-door")])
-def test_a_commit_naming_an_input_the_caller_cannot_read_is_refused(served: Served, commit: Callable[[Served, str], tuple[int, str]]) -> None:
-    stock = _with_source(served)
+def _a_name_holding_no_table(served: Served, stock: lance_namespace.LanceNamespace) -> list[str]:
+    return ["db", "nowhere"]
+
+
+def _a_table_the_caller_cannot_read(served: Served, stock: lance_namespace.LanceNamespace) -> list[str]:
     # The input's grants are held by the uuid the catalog minted for it, which its describe answers (ADR 0173 §8).
     source_uuid = (stock.describe_table(lance_namespace.DescribeTableRequest(id=["db", "src"])).properties or {})["rask.uuid"]
     served.denied.add(f"can_read_data table:{source_uuid}")
+    return ["db", "src"]
 
-    code, detail = commit(served, json.dumps([{"table": ["db", "src"], "version": 1}]))
 
-    assert (code, "can_read_data required on table:db$src" in detail) == (15, True), detail
+@pytest.mark.parametrize("commit", [pytest.param(_stock_append_naming, id="a-stock-commit"), pytest.param(_insert_door_naming, id="the-insert-door")])
+@pytest.mark.parametrize(
+    "named", [pytest.param(_a_name_holding_no_table, id="a-name-holding-no-table"), pytest.param(_a_table_the_caller_cannot_read, id="an-unreadable-table")]
+)
+def test_a_commit_declaring_an_input_that_is_no_table_the_caller_may_read_is_refused(
+    served: Served,
+    commit: Callable[[Served, str], tuple[int, str]],
+    named: Callable[[Served, lance_namespace.LanceNamespace], list[str]],
+) -> None:
+    """ADR 0183 §2: one refusal for both, so it tells no committer which tables exist."""
+    stock = _with_source(served)
+    table = named(served, stock)
+
+    code, detail = commit(served, json.dumps([{"table": table, "version": 1}]))
+
+    refusal = f"the input {'$'.join(table)!r} its run declares (rask.inputs) names no table the committer may read (can_read_data)"
+    assert (code, refusal in detail) == (13, True), detail
     assert _opened(stock).version == 1

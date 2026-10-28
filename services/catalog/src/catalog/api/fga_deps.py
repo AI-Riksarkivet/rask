@@ -955,11 +955,8 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
     fga_type = _FGA_TYPE[resource]
     obj = _object(fga_type, segments)
     run = run_context.from_headers(request.headers) if suffix in tier_policy.STAMPING_DOORS else None
-    input_rungs = input_read_rungs(run)
     if suffix in _CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
-        return tier_policy.Write(
-            op=suffix, obj=obj, rung=_create_parent_rung(resource, segments, settings), table=tuple(segments), run=run, input_rungs=input_rungs
-        )
+        return tier_policy.Write(op=suffix, obj=obj, rung=_create_parent_rung(resource, segments, settings), table=tuple(segments), run=run)
     if suffix == "credentials":
         # A vend is a read at its default tier and a WRITE at a writing one: the credential is how a
         # direct-to-storage writer writes, so it is judged on the rung its tier opens.
@@ -981,15 +978,62 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
         rung=_rung(relation, fga_type, segments, suffix=suffix),
         table=table,
         run=run,
-        input_rungs=input_rungs,
         moved_from=moved_from,
     )
 
 
-def input_read_rungs(run: run_context.RunContext | None) -> tuple[tier_policy.Rung, ...]:
-    """The ``can_read_data`` rung on each input ``run`` names, by the input's name."""
-    return tuple(
-        tier_policy.Rung(relation="can_read_data", on=tier_policy.Named(kind="table", segments=tuple(entry.table))) for entry in (run.inputs if run else ())
+async def require_declared_inputs(
+    settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, run: run_context.RunContext
+) -> dict[str, run_context.RunInput]:
+    """Each input ``run`` declares, by the uuid of the table it names now, once each names a table the committer may read
+    (ADR 0183 §2).
+
+    The name is resolved through ``resolver``, the request's one resolution of every name, and asked ``can_read_data``
+    on that uuid with FGA on. A name holding no table and a table the committer may not read are refused alike, so the
+    refusal tells no committer which tables exist. A commit's provenance is then a fact the catalog checked, and an
+    erasure names what it declared by uuid (:mod:`catalog.services.table_inputs`).
+
+    Raises:
+        InvalidInputError: An input names no table, or one the committer may not read.
+        UnauthenticatedError: FGA is on and nobody is signed in.
+    """
+    check = _rung_check(settings, token, injected, resolver)
+    if check is not None:
+        for entry in run.inputs:
+            try:
+                await check(tier_policy.Rung(relation="can_read_data", on=tier_policy.Named(kind="table", segments=tuple(entry.table))))
+            except (PermissionDeniedError, object_uuids.UnidentifiedObjectError) as exc:
+                raise _unreadable_input(entry) from exc
+    return await declared_inputs(resolver, run)
+
+
+async def declared_inputs(resolver: Resolver, run: run_context.RunContext | None) -> dict[str, run_context.RunInput]:
+    """Each input ``run`` declares, by the uuid of the table its name resolves to through ``resolver``; none for no run.
+
+    A door reads here what the tier judge already judged (:func:`require_declared_inputs`), from the request's one
+    resolution, so the uuids it records are the ones authorized.
+
+    A table that records no uuid holds no grant ([[LH-534]]), so it is refused as one the committer may not read.
+
+    Raises:
+        InvalidInputError: An input names no table, or one no uuid identifies.
+    """
+    declared: dict[str, run_context.RunInput] = {}
+    for entry in run.inputs if run is not None else ():
+        try:
+            resolved = await resolver.table(list(entry.table))
+            if resolved.location is None:
+                raise _unreadable_input(entry)
+            declared.setdefault(resolved.require_uuid(), entry)
+        except (PermissionDeniedError, NamespaceNotFoundError, TableNotFoundError, object_uuids.UnidentifiedObjectError) as exc:
+            raise _unreadable_input(entry) from exc
+    return declared
+
+
+def _unreadable_input(entry: run_context.RunInput) -> InvalidInputError:
+    return InvalidInputError(
+        f"commit refused: the input {fga.canonical_object_id(entry.table)!r} its run declares ({run_context.INPUTS_PROPERTY}) names no table "
+        "the committer may read (can_read_data); a run declares each table it read, by its name now"
     )
 
 
@@ -1064,7 +1108,13 @@ async def _judge(
     async def namespace(top_ns: str) -> LanceNamespace:
         return await namespace_for_top_ns(request, settings, top_ns)
 
-    await tier_policy.judge(write, caller=token.subject if token is not None else None, check=check, namespace=namespace)
+    await tier_policy.judge(
+        write,
+        caller=token.subject if token is not None else None,
+        check=check,
+        inputs=partial(require_declared_inputs, settings, token, injected, resolver),
+        namespace=namespace,
+    )
 
 
 async def judge_staged_run(
@@ -1077,21 +1127,26 @@ async def judge_staged_run(
     segments: Sequence[str],
     run: run_context.RunContext | None,
     adds_data: bool,
-) -> None:
-    """Judge the run a stock client's staged commit to table ``segments`` names (ADR 0157).
+) -> dict[str, run_context.RunInput]:
+    """Judge the run a stock client's staged commit to table ``segments`` names (ADR 0157), and answer each input it
+    declares by the uuid of the table it names (:func:`require_declared_inputs`).
 
     Only a commit that ``adds_data`` must name a run on a derived tier, whose tier is then read through ``ns``, the
-    connection the door resolved for the table; any named input is checked either way, on the object its name
-    resolves to through ``resolver``.
+    connection the door resolved for the table; any declared input is judged either way.
 
     Raises:
-        InvalidInputError: The table is silver or gold and the commit names no run or no input.
-        PermissionDeniedError: The caller lacks ``can_read_data`` on a named input.
+        InvalidInputError: The table is silver or gold and the commit names no run or no input, or an input names no
+            table the committer may read.
     """
-    check = _rung_check(settings, token, injected, resolver)
     tier = await tier_policy.tier_of(ns, segments[:-1]) if adds_data and len(segments) > 1 else None
     names = f"the staged manifest's transaction properties {run_context.RUN_ID_PROPERTY} and {run_context.INPUTS_PROPERTY}"
-    await tier_policy.judge_run(tier, run, input_read_rungs(run), check=check, names=names)
+    declared: dict[str, run_context.RunInput] = {}
+
+    async def inputs(named: run_context.RunContext) -> None:
+        declared.update(await require_declared_inputs(settings, token, injected, resolver, named))
+
+    await tier_policy.judge_run(tier, run, inputs=inputs, names=names)
+    return declared
 
 
 async def _granted_vend_tier(client: OpenFgaClient, subject: str, obj: str) -> Literal["read", "write"] | None:
@@ -1147,8 +1202,13 @@ async def spec_vend_tier(
         return ns
 
     write = tier_policy.Write(op=door, obj=_object("table", list(segments)), rung=None, table=tuple(segments))
-    await tier_policy.judge(write, caller=token.subject if token is not None else None, check=None, namespace=namespace)
+    await tier_policy.judge(write, caller=token.subject if token is not None else None, check=None, inputs=_names_no_run, namespace=namespace)
     return "write"
+
+
+async def _names_no_run(run: run_context.RunContext) -> None:
+    """The inputs check of a write that names no run, which the judge never asks."""
+    raise InternalError(f"a vend names no run, yet the tier judge asked for the inputs of run {run.run_id!r}")
 
 
 #: The spec's ``delimiter`` query parameter, declared on every route by the router's shape rung.

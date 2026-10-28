@@ -6429,6 +6429,14 @@
             "description": "The erasure obligation, on a table this one was derived from, that this one follows: that obligation stays open until every table derived from its table holds one following it, directly or through a chain.",
             "title": "Follows"
           },
+          "late_derived": {
+            "description": "The uuid of each table found derived from this table after the release, whose write was declared before it: whoever may erase it records an obligation of its own, naming `follows`. Tables the reader may not see are left out.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Late Derived",
+            "type": "array"
+          },
           "obligation_id": {
             "description": "The obligation's id, which the verification door names.",
             "title": "Obligation Id",
@@ -6545,7 +6553,8 @@
           "verified_at",
           "open_surfaces",
           "released_at",
-          "release"
+          "release",
+          "late_derived"
         ],
         "title": "ErasureObligationView",
         "type": "object"
@@ -6593,6 +6602,12 @@
             "description": "True only when no surface failed, was skipped or is held, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code.",
             "title": "Complete",
             "type": "boolean"
+          },
+          "derived_scope": {
+            "default": "A table is derived from this one when a run writing it declared this table, or a table derived from it, among its inputs. A write that declared no inputs derives from nothing: what it wrote lies outside this erasure's guarantee.",
+            "description": "What the `derived:` surfaces cover, and what lies outside the erasure's guarantee (ADR 0183).",
+            "title": "Derived Scope",
+            "type": "string"
           },
           "held_by_retention": {
             "description": "Residuals the retention window keeps, itself or through a newer branch version on their files: a verification after the window has passed reclaims them.",
@@ -11116,7 +11131,7 @@
             "type": "string"
           },
           "surface": {
-            "description": "A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, the scheduling of what pins a residual: `release` (its record) and `notice` (who is told), or a table the edge list records as derived from this one: `derived:<uuid>`, and `derived` for derived tables named nowhere here (the edge list could not be read, or the reader may not see them).",
+            "description": "A ref's head as the job left it: `main` or `branch:<name>` (its rows deleted), `compact:<ref>` (no row of the subject behind a deletion vector), `index:<ref>` (every user index segment built from clean data); `tag:<name>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches`, `verify`, a surface outside the table's own files: `data_base:<name>`, `external_base:<name>`, `mem_wal`, `bases:<ref>`, the scheduling of what pins a residual: `release` (its record) and `notice` (who is told), or a table derived from this one, which a run writing it declared it read: `derived:<uuid>`, and `derived` for derived tables named nowhere here (what names them could not be read, or the reader may not see them).",
             "title": "Surface",
             "type": "string"
           }

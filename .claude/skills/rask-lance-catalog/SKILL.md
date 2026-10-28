@@ -264,7 +264,10 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   fails on a write that skips the judge; `tests/integration/test_a_tier_is_declared_by_its_admin_and_judged_on_every_write.py`
   covers the admin gate and the judged tier over HTTP.
 - **Silver and gold name their run** ([[LH-225]], ADR 0156 C2). A write adding data to a silver or gold table names
-  its run and inputs, and every named input, on any tier, needs `can_read_data` (`tier_policy.judge_run`). The
+  its run and inputs, and every named input, on any tier, must resolve to a table the committer may read (`can_read_data`),
+  or the commit is refused 400 code 13 with one sentence for an absent name and an unreadable table
+  (`fga_deps.require_declared_inputs`, ADR 0183 §2); before the commit is finalized the catalog records each input's uuid
+  for the writing table's uuid (`catalog.services.table_inputs`, `_table_inputs/` on the control root, never ended). The
   run is `catalog.core.run_context`: on `create`, `insert` and `merge_insert` it comes from the spec Context headers
   `x-rask-run-id`, `x-rask-job`, `x-rask-inputs` (a JSON array of `{table: [segments], version, branch}`) and the
   door stamps it as the transaction properties `rask.run_id` / `rask.job` / `rask.inputs`; at `version/create` the
@@ -747,9 +750,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   The job rewrites a branch head through branch commits (ADR 0164) exactly as it rewrites main. Pinned by `services/catalog/tests/test_an_erasure_is_an_obligation_the_catalog_verifies.py` and the
   stock job in `test_a_stock_client_commits_every_operation_through_version_create.py`.
 - **An erasure is held until every table derived from its table holds an obligation following it** ([[LH-332]],
-  ADR 0178). The verification's step 5 (`catalog.services.erasure_derived`) locates `provenance$edges` through
-  DescribeTable on the provenance namespace, reads it in-process, and walks it to its last table with lineage's own walk
-  (`service_kit.lakehouse.derived_tables`, which `GET /tables/{name}/derived` shares). Each derived table is a
+  ADR 0178, ADR 0183). A table is derived when a run writing it declared the source, or a table derived from it. The
+  verification's step 5 (`catalog.services.erasure_derived`) walks the catalog's input record (`table_inputs`, written
+  before each declaring commit, so a write is named while lineage is down) together with `provenance$edges`, located
+  through DescribeTable on the provenance namespace and read in-process, to the last table with lineage's own walk
+  (`service_kit.lakehouse.derived_tables`, which `GET /tables/{name}/derived` shares). A release stays final: the commit
+  reconciler's tick lists a late derived table (found after the release, its write declared before it) in the
+  obligation's `late_derived` and counts `catalog.erasure.late_derived`, which pages (`ErasureDerivedAfterRelease`). Each derived table is a
   `derived:<uuid>` surface: `followed` while an obligation recorded on it names this one in `follows`, directly or through
   a chain (`erasure_obligations.followed_tables`); `failed` while a claim is held for it (live or in the trash) and none
   does, which keeps the obligation open, as an unreadable edge list or claim does; `held` once deregistered with a dataset
@@ -760,7 +767,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   report and the obligation views alike (`erasure.shown`). Each tag the verification drops is announced as an untargeted
   `table_tag_deleted` control event naming the tag, the ref it pinned (`dataplane.tag_event_ref`, the tag door's own) and
   the obligation, and listed in `report.untagged`. A `follows` naming no recorded obligation is refused 400. A catalog
-  keeping no provenance namespace names no derived table. Pinned by
+  keeping no provenance namespace walks the input record alone. Pinned by
   `tests/integration/test_an_erasure_finds_every_table_derived_from_a_source.py` (live catalog and lineage) and
   `services/catalog/tests/test_an_erasure_is_an_obligation_the_catalog_verifies.py` (the refusal, and the governed
   reader matrix).

@@ -180,6 +180,36 @@ groups:
             `commit_reconcile_ref_unreadable` and `commit_reconcile_table_failed` logs for the table and the error.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
 
+      # A released erasure obligation is final, so a table found derived from its table after the release, written before
+      # it, may still hold the subject (ADR 0183 §5). One is enough to page.
+      - alert: ErasureDerivedAfterRelease
+        expr: (sum(increase(catalog_erasure_late_derived_total[15m])) > 0) or (sum(catalog_erasure_late_derived_total unless catalog_erasure_late_derived_total offset 15m) > 0)
+        labels:
+          severity: critical
+          service: catalog
+        annotations:
+          summary: "A table derived from an erased table was found after the erasure was released"
+          description: >-
+            The catalog's commit reconciler found a table derived from a released erasure obligation's table, whose write
+            was declared before the release: the subject may stand in it. It is listed in the obligation's `late_derived`.
+            Read the catalog's `erasure_late_derived` logs for the obligation and the tables.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-table-derived-from-an-erased-table-found-after-the-release
+
+      # A watch that cannot read what it judges finds no late derived table, tick after tick.
+      - alert: ErasureLateDerivedUnwatched
+        expr: (sum(increase(catalog_erasure_late_derived_unwatched_total[30m])) > 0) or (sum(catalog_erasure_late_derived_unwatched_total unless catalog_erasure_late_derived_unwatched_total offset 30m) > 0)
+        for: 30m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "The catalog cannot watch released erasures for late derived tables"
+          description: >-
+            The catalog's commit reconciler could not read the erasure obligations, the input record, the edge list or a
+            location claim, so it found no late derived table this half hour. Read the catalog's
+            `erasure_late_derived_unread` logs for the error.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-table-derived-from-an-erased-table-found-after-the-release
+
       - alert: LineageIngestDeadLettering
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="dead_lettered"}[5m])) > 0
         for: 5m
