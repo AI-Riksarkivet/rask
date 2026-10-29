@@ -134,6 +134,18 @@ def require_reclaimable(ds: ManifestCarrier, protected: BaseRefs | None = None) 
     refuse_a_referring_datasets_source(ds, protected)
 
 
+class ReferredSourceError(UnsupportedOperationError):
+    """A rewrite or reclaim refused because other datasets resolve their files through this one (#114).
+
+    Carries their locations, which the refusal itself does not name: a referrer may be a table the caller holds no grant on
+    ([[LH-436]]), so each door names them to whoever may see them (``fga_deps.referring_datasets``, [[LH-414]]).
+    """
+
+    def __init__(self, message: str, *, referrers: Sequence[str]) -> None:
+        super().__init__(message)
+        self.referrers = tuple(referrers)
+
+
 def refuse_a_referring_datasets_source(ds: object, protected: BaseRefs | None) -> None:
     """#114: refuse a dataset ANOTHER one resolves its files through — the half no flag check can see.
 
@@ -161,9 +173,10 @@ def refuse_a_referring_datasets_source(ds: object, protected: BaseRefs | None) -
             "maintenance refused: the estate's base references were collected but this dataset reports no location to check them against."
         )
     if (root := protected.is_protected(location)) is not None:
-        raise UnsupportedOperationError(
+        raise ReferredSourceError(
             f"maintenance refused: another dataset resolves its files through {root} (shallow clone / multi-base) — "
-            "compacting or reclaiming here would break it (the sweep's base-reference guard refuses it for the same reason)."
+            "compacting or reclaiming here would break it (the sweep's base-reference guard refuses it for the same reason).",
+            referrers=sorted(protected.referrers.get(root, ())),
         )
 
 

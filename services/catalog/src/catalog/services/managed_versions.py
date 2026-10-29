@@ -616,7 +616,7 @@ def _refuse_a_compaction_others_read_through(version: _Judged) -> None:
 
     Raises:
         ServiceUnavailableError: No sweep has written a clone list within its maximum age.
-        UnsupportedOperationError: Another dataset resolves its files through this table.
+        ReferredSourceError: Another dataset resolves its files through this table; the door names it to whoever may see it.
     """
     evidence = version.clone_evidence
     if evidence is None:
@@ -631,7 +631,7 @@ def _refuse_a_compaction_others_read_through(version: _Judged) -> None:
     location = version.staged.location
     reason = base_refs.rewrite_refusal(clones.refs(), location, version.followed.tags.list())
     if reason is not None:
-        raise UnsupportedOperationError(f"compaction refused: {reason} ({len(clones.clones_of(location))} dataset(s) resolve their files through it)")
+        raise maintenance.ReferredSourceError(f"compaction refused: {reason}.", referrers=clones.clones_of(location))
 
 
 #: What one operation may change beyond the rules every commit meets: a ``ReserveFragments`` and a ``CreateIndex``

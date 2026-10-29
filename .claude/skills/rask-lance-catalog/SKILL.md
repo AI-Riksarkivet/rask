@@ -714,7 +714,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   rolls the table back so the next append mints that number again. The door refuses any range
   that reaches the current version (400; ranges are end-exclusive), refuses a version a tag or a child
   branch pins (409, naming it), judges every range before deleting any, and asks `maintenance/run`'s
-  #114 base-reference gate, because the reclaim also removes data files only those versions referenced.
+  #114 base-reference gate, because the reclaim also removes data files only those versions referenced. A base inside a
+  table's own root is its own storage and protects nothing (`base_refs.protected_roots`, [[LH-414]]); a refusal for a
+  referring clone names each clone (as its claim names it now, with its uuid) only to a caller holding `can_get_metadata`
+  on it and counts the rest (`fga_deps.referring_datasets`, at the GC run, `version/delete` and the erasure report).
   **A ref written during a reclaim is held off by the table's history fence** ([[LH-308]], ADR 0176,
   `service_kit.lakehouse.history_fences`). Lance reads tags and branches once per `cleanup_old_versions`
   (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in

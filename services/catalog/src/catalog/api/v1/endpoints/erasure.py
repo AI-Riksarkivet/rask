@@ -37,6 +37,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
 from openfga_sdk import OpenFgaClient
 
+from catalog.api import fga_deps
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate
 from catalog.api.security import Caller, CurrentToken
@@ -263,8 +264,25 @@ async def verify_erasure(
         open_surfaces=",".join(surface.surface for surface in standing.open_surfaces),
     )
     hidden = await _hidden_derived([*report.surfaces, *standing.open_surfaces], late=standing.late_derived, settings=settings, client=client, token=token)
-    shown = report.model_copy(update={"surfaces": erasure.shown(report.surfaces, hidden=hidden)})
+    shown = report.model_copy(
+        update={"surfaces": erasure.shown(await _named_referrers(report.surfaces, settings=settings, client=client, token=token), hidden=hidden)}
+    )
     return ErasureVerification(obligation=standing.view(clock(), table=canonical, hidden=hidden), report=shown)
+
+
+async def _named_referrers(surfaces: Sequence[SurfaceResult], *, settings: Settings, client: OpenFgaClient | None, token: Caller | None) -> list[SurfaceResult]:
+    """``surfaces`` with each refusal a referring dataset caused naming those datasets the reader may see ([[LH-414]]); the
+    stored obligation keeps the refusal unnamed, since it is shown to readers this one is not."""
+    sentences: dict[tuple[str, ...], str] = {}
+    named: list[SurfaceResult] = []
+    for surface in surfaces:
+        if not surface.referrers:
+            named.append(surface)
+            continue
+        if surface.referrers not in sentences:
+            sentences[surface.referrers] = await fga_deps.referring_datasets(settings, token, client, surface.referrers)
+        named.append(surface.model_copy(update={"detail": f"{surface.detail}{sentences[surface.referrers]}"}))
+    return named
 
 
 @obligations_router.get("")

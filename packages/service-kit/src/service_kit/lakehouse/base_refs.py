@@ -426,7 +426,7 @@ def protected_roots(
     ``record_of`` (the catalog's base record for an owning root, which must RAISE when unreadable). A
     base nothing sanctions is a finding and protects nothing ([[LH-279]]): a manifest's base list is a
     writer's claim, and honouring a planted one froze every table beneath it. A dataset that references
-    only itself contributes nothing, which is the overwhelmingly common case — the cost is one manifest
+    only itself, or locations inside its own root, contributes nothing, which is the overwhelmingly common case — the cost is one manifest
     read per dataset, no data files touched, and a record read only for a root with a base outside its
     own and outside the configured ones.
 
@@ -516,7 +516,10 @@ def classify_base_refs(
     for uri, bases in declared.items():
         own = decoded_path(uri)
         owner, spelled = next(((root, spelling) for root, spelling in roots if location_within(spelling, uri)), (own, uri))
-        foreign = [ref for ref in bases if decoded_path(ref.path) != own]
+        # A base inside the dataset's own root, on its own store, is its own storage, not another dataset's: protecting it
+        # would refuse the dataset's own reclaim with itself as the referrer ([[LH-414]]). A branch names its parent,
+        # outside its own root; a base on another store is judged, since it reads another filesystem.
+        foreign = [ref for ref in bases if decoded_path(ref.path) != own and not (location_within(uri, ref.path) and store_of(ref.path) == store_of(uri))]
         if not foreign:
             continue
 

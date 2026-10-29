@@ -244,6 +244,9 @@ async def create_table_version(
             await fga_deps.require_classifier_to_set_labels(
                 client, settings, token, obj=fga.table_object(table.resolved.require_uuid()), label=canonical, labels=labels
             )
+    except maintenance.ReferredSourceError as exc:
+        await run_in_threadpool(managed_versions.refuse, staged, so)
+        raise await fga_deps.refusal_naming_referrers(settings, token, client, exc) from exc
     except BaseException:
         await run_in_threadpool(managed_versions.refuse, staged, so)
         raise
@@ -328,6 +331,8 @@ async def batch_delete_table_versions(
     table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
 ) -> BatchDeleteTableVersionsResponse:
     """Delete old versions of this table — never the current one, and never one a tag or a branch pins.
 
@@ -344,7 +349,10 @@ async def batch_delete_table_versions(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    return await run_in_threadpool(_delete_versions, table, so, settings, body)
+    try:
+        return await run_in_threadpool(_delete_versions, table, so, settings, body)
+    except maintenance.ReferredSourceError as exc:
+        raise await fga_deps.refusal_naming_referrers(settings, token, client, exc) from exc
 
 
 def _delete_versions(table: DoorTable, so: dict[str, str], settings: Settings, body: BatchDeleteTableVersionsRequest) -> BatchDeleteTableVersionsResponse:

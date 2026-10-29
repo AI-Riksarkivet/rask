@@ -57,12 +57,12 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, tier_policy
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
-from catalog.services import dataplane, native, object_uuids, table_claims, warehouses
+from catalog.services import dataplane, maintenance, native, object_uuids, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.lakehouse import object_records, protection, trash
+from service_kit.lakehouse import location_claims, object_records, protection, trash
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.subjects import is_person_subject
 
@@ -1147,6 +1147,57 @@ async def judge_staged_run(
 
     await tier_policy.judge_run(tier, run, inputs=inputs, names=names)
     return declared
+
+
+async def referring_datasets(settings: Settings, token: Caller | None, injected: OpenFgaClient | None, referrers: Sequence[str]) -> str:
+    """The sentence a refusal adds naming the datasets at ``referrers`` that resolve their files through the refused table
+    ([[LH-414]]), each only to a caller who may see it; ``""`` for none.
+
+    A referrer is named as its location's claim names it now, with its uuid, when the caller holds ``can_get_metadata``
+    on it, the rung lineage's derived door asks to show a table. Every other one, a referrer no claim records among them,
+    is counted, never named: it may be a table the caller holds no grant on ([[LH-436]]). Each is logged at WARNING for the
+    operator. With FGA off, every claimed referrer is named.
+
+    A claim that cannot be read, or a decision OpenFGA cannot give, counts its referrer as one the caller may not see,
+    so the refusal the sentence is added to stands as it was.
+    """
+    if not referrers:
+        return ""
+    log.warning("referring_datasets", extra={"referrers": list(referrers)})
+    store = table_claims.claim_store(settings)
+
+    def claimed(location: str) -> location_claims.LocationClaim | None:
+        try:
+            return location_claims.holder(store, location)
+        except (ValueError, OSError):
+            return None
+
+    claims = [claim for claim in await run_in_threadpool(lambda: [claimed(location) for location in referrers]) if claim is not None and claim.uuid]
+    named = {fga.table_object(str(claim.uuid)): f"{claim.table} ({claim.uuid})" for claim in claims}
+    if settings.fga_enabled:
+        try:
+            allowed = (
+                await fga.batch_check(require_wired(injected), user=token.subject, relation="can_get_metadata", objects=sorted(named))
+                if token and named
+                else {}
+            )
+        except ServiceUnavailableError as exc:
+            # The refusal stands either way; a referrer the decision could not be asked about is counted, never named.
+            log.warning("referring_datasets_unnamed", extra={"error": str(exc)[:300]})
+            allowed = {}
+        shown = sorted(name for obj, name in named.items() if allowed.get(obj))
+    else:
+        shown = sorted(named.values())
+    unseen = len(referrers) - len(shown)
+    parts = [*shown, *([f"{unseen} you may not see"] if unseen else [])]
+    return f" Resolving through it: {', '.join(parts)}."
+
+
+async def refusal_naming_referrers(
+    settings: Settings, token: Caller | None, injected: OpenFgaClient | None, refused: maintenance.ReferredSourceError
+) -> UnsupportedOperationError:
+    """``refused`` as its door answers it: the datasets resolving through the table named to whoever may see them."""
+    return UnsupportedOperationError(f"{refused}{await referring_datasets(settings, token, injected, refused.referrers)}")
 
 
 async def _granted_vend_tier(client: OpenFgaClient, subject: str, obj: str) -> Literal["read", "write"] | None:

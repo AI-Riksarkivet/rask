@@ -21,6 +21,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 
+from catalog.api import fga_deps
 from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
@@ -101,6 +102,8 @@ async def run_maintenance(
     table: DoorTableDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
     branch: Annotated[
         str | None, Query(description="The ref to reclaim. Omit for main; a reclaim through a branch handle is scoped to that branch's own files.")
     ] = None,
@@ -124,7 +127,10 @@ async def run_maintenance(
         with table.history_held(HistoryWork.RECLAIM):
             return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, protected=protected, branch=branch)
 
-    return GcRunResult(**await run_in_threadpool(_reclaim))
+    try:
+        return GcRunResult(**await run_in_threadpool(_reclaim))
+    except maintenance.ReferredSourceError as exc:
+        raise await fga_deps.refusal_naming_referrers(settings, token, client, exc) from exc
 
 
 @due_router.get("/due")

@@ -70,6 +70,26 @@ def test_a_dataset_that_references_only_ITSELF_does_not_protect_itself(tmp_path:
     assert refs.is_protected(clone) is None, "a dataset protected itself and can now never be maintained"
 
 
+def test_a_base_inside_a_datasets_own_root_does_not_protect_it(tmp_path: Path) -> None:
+    """A recorded data base under the table's own root is the table's own storage, not another dataset's ([[LH-414]]):
+    protecting it would refuse the table's own erasure and GC with the table as its own referrer."""
+    src = str(tmp_path / "src.lance")
+    inner = f"{src}/own-data"
+    lance.write_dataset(
+        pa.table({"id": pa.array([1, 2], pa.int64())}),
+        src,
+        initial_bases=[lance.DatasetBasePath(inner, name="own", is_dataset_root=False)],
+        target_bases=["own"],
+        data_storage_version="2.2",
+    )
+    entry = base_registry.RecordedBase(path=inner, role=base_registry.BaseRole.DATA, origin=base_registry.BaseOrigin.REGISTER)
+    base_registry.claim_bases(_registry(tmp_path), src, [entry])
+
+    refs = protected_roots([src], {}, **_judged(tmp_path))
+
+    assert (refs.is_protected(src), refs.findings) == (None, [])
+
+
 def test_a_BRANCH_is_refused_as_a_REFERRER_rather_than_as_a_referenced_root(tmp_path: Path) -> None:
     """THE REFUSAL IS RIGHT AND ITS STATED REASON IS BACKWARDS, which is half the estate's warnings.
 

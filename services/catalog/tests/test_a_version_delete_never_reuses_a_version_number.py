@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pyarrow as pa
@@ -30,6 +29,7 @@ from tables_by_name import open_by_name
 
 from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.v1.endpoints import versions as version_door
+from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import maintenance
 from catalog.services.dataplane import create_table
@@ -73,17 +73,7 @@ def client(ns: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(version_door.router)
-    # [[LH-209]] The judge also holds a configured base against governed roots and buckets; none here.
-    settings = SimpleNamespace(
-        storage_options=dict,
-        registry_root=str(tmp_path / "control"),
-        external_blob_base_list=[],
-        root="",
-        models_root="",
-        model_artifacts_root="",
-        reserved_bucket_set=frozenset(),
-        dapr_secret_store="",
-    )
+    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}

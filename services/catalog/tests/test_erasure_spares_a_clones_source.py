@@ -31,9 +31,10 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
+from catalog.services import table_claims
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
-from service_kit.lakehouse import base_registry
+from service_kit.lakehouse import base_registry, location_claims
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -151,3 +152,36 @@ def test_the_door_leaves_a_clones_source_readable_through_the_clone(client: Test
     }
     assert sorted(lance.dataset(str(tmp_path / "data" / "clone.lance")).to_table().column("pii").to_pylist()) == ["alice", "bob", "carol"]
     assert verification["obligation"]["state"] == "open"
+
+
+@pytest.mark.parametrize("granted", [pytest.param(True, id="a-caller-who-may-see-it"), pytest.param(False, id="a-caller-who-may-not")])
+def test_a_refused_reclaim_names_the_clone_only_to_a_caller_who_may_see_it(governed_catalog: Any, granted: bool) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """[[LH-414]] The GC door refuses alice's table while a clone resolves its files through it, and names that clone,
+    as its claim names it now and by uuid, only when she holds ``can_get_metadata`` on it ([[LH-436]]): another tenant's
+    clone is counted, never named."""
+    alice, client = governed_catalog.bearer("alice"), governed_catalog.client
+    assert client.post("/v1/namespace/db/create", json={}, headers=alice).status_code == 200
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, _rows(_SUBJECT, "bob").schema) as writer:
+        writer.write_table(_rows(_SUBJECT, "bob"))
+    created = client.post(
+        "/v1/table/db$subjects/create", content=sink.getvalue().to_pybytes(), headers={**alice, "Content-Type": "application/vnd.apache.arrow.stream"}
+    )
+    assert created.status_code == 200, created.text
+    source = str(client.post("/v1/table/db$subjects/describe", json={}, headers=alice).json()["location"]).removeprefix("file://")
+    clone = str(Path(source).parent / "clone")
+    lance.dataset(source).shallow_clone(clone, reference=1)
+    settings = get_settings()
+    recorded = base_registry.RecordedBase(
+        path=source, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER, source_table=source
+    )
+    base_registry.claim_bases(base_registry.BaseRegistry(control_root=settings.registry_root), clone, [recorded])
+    clone_uuid = "0f5c6a52-6b1e-4c8e-9a43-3c1c2e0d9b11"
+    location_claims.take(table_claims.claim_store(settings), clone, "db$clone", ["db", "clone"], is_gone=lambda _claim: False, uuid=clone_uuid)
+    if granted:
+        governed_catalog.store.write((governed_catalog.person("alice"), "reader", f"table:{clone_uuid}"))
+
+    refused = client.post("/management/v1/table/db$subjects/maintenance/run", json={"retain_versions": 1}, headers=alice)
+
+    assert (refused.status_code, refused.json()["code"]) == (406, 0), refused.text
+    assert refused.json()["detail"].endswith(f" Resolving through it: db$clone ({clone_uuid})." if granted else " Resolving through it: 1 you may not see.")

@@ -117,10 +117,10 @@ from typing import Any, Final, Protocol, cast
 
 import pyarrow.fs as pafs
 from lance_namespace import InvalidInputError, ServiceUnavailableError, UnsupportedOperationError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
-from catalog.services.maintenance import refuse_a_referring_datasets_source
+from catalog.services.maintenance import ReferredSourceError, refuse_a_referring_datasets_source
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
 from service_kit.lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
@@ -169,6 +169,21 @@ class SurfaceResult(BaseModel):
         )
     )
     detail: str = Field(default="", description="Why, in words: the error, what the job still owes, what a residual needs.")
+    #: The datasets resolving their files through the table that kept this surface from being reclaimed (#114). Never
+    #: serialized, so never stored: the door names them only to a reader who may see them ([[LH-414]]).
+    _referrers: tuple[str, ...] = PrivateAttr(default=())
+
+    @property
+    def referrers(self) -> tuple[str, ...]:
+        """The datasets resolving their files through the table, which kept this surface from being reclaimed."""
+        return self._referrers
+
+    @classmethod
+    def unreclaimed(cls, surface: str, refused: UnsupportedOperationError) -> SurfaceResult:
+        """The ``surface`` a #114 refusal kept from being reclaimed, with the referrers a ``ReferredSourceError`` names."""
+        result = cls(surface=surface, outcome="failed", detail=f"{refused} Not reclaimed.")
+        result._referrers = refused.referrers if isinstance(refused, ReferredSourceError) else ()
+        return result
 
 
 class Pin(BaseModel):
@@ -428,7 +443,7 @@ def verify(
     #    reclaimed: its history would go while the subject's bytes stay in its live data files ([[LH-210]]).
     referred = _referred(dataset, protected)
     if referred is not None:
-        log.warning("erasure_refused_referred_source", extra={"table": table, "reason": referred})
+        log.warning("erasure_refused_referred_source", extra={"table": table, "reason": str(referred)})
     cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, referred=referred, retention=retention, history=history)
 
     # 4. VERIFY EVERY REF, because every step above is an ATTEMPT and only this is evidence. Every head can be clean and
@@ -559,7 +574,7 @@ def _reclaim(
     deepest_first: Sequence[str | None],
     *,
     clean: Collection[str | None],
-    referred: str | None,
+    referred: UnsupportedOperationError | None,
     retention: timedelta,
     history: TableHistory | None,
 ) -> dict[str | None, datetime]:
@@ -581,14 +596,20 @@ def _reclaim(
 
 
 def _reclaim_refs(
-    report: ErasureReport, dataset: _Dataset, deepest_first: Sequence[str | None], *, clean: Collection[str | None], referred: str | None, retention: timedelta
+    report: ErasureReport,
+    dataset: _Dataset,
+    deepest_first: Sequence[str | None],
+    *,
+    clean: Collection[str | None],
+    referred: UnsupportedOperationError | None,
+    retention: timedelta,
 ) -> dict[str | None, datetime]:
     """Each clean ref's cleanup, deepest first; each reclaimed ref's cutoff."""
     cutoffs: dict[str | None, datetime] = {}
     for ref in deepest_first:
         surface = f"history:{_label(ref)}"
         if referred is not None:
-            report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=f"{referred} Not reclaimed."))
+            report.surfaces.append(SurfaceResult.unreclaimed(surface, referred))
             continue
         if ref not in clean:
             detail = "not reclaimed: this ref's head still holds the subject, so its history would go while the subject's bytes stay in its live files"
@@ -837,6 +858,15 @@ def _unproved_segments(handle: _Dataset, history: _History, listing: _StorageLis
 
     Any other segment is unproved while a file of it is on storage; one whose base lies outside the table
     cannot be compared with the listing, so it stays unproved.
+
+    NOTHING ELSE A SEGMENT RECORDS PROVES IT ([[LH-414]], owner, 2026-10-29). Its ``fragment_bitmap`` names the
+    fragments it covers (``lance_docs/lance/format/index/index.md`` "Basic Concepts"), but measured on pylance 13.0.0 a
+    materialising compaction keeps a BTREE or BITMAP segment's uuid, remaps its bitmap from ``[0, 1]`` onto the new
+    fragment ``[2]``, and keeps the deleted row's key in its files, so a bitmap of fragments that never held the subject
+    proves nothing. Nor do row versions (``_row_created_at_version``, ``lance_docs/lance/format/table/row_id_lineage.md``):
+    a subject row compacted out before the erasure leaves no retained version to read, while a segment built before it
+    keeps its key. A version whose segment stays unproved is a residual, and a tag over it is released, though that
+    version may never have held the subject: an erasure over-reports rather than under-reports.
     """
     bases = {int(base_id): str(base.path) for base_id, base in handle.base_paths().items()}
     root = str(handle.uri)
@@ -1214,12 +1244,12 @@ def _instant(stamp: object) -> datetime | None:
     return stamp.astimezone(UTC) if isinstance(stamp, datetime) else None
 
 
-def _referred(dataset: _Dataset, protected: BaseRefs | None) -> str | None:
+def _referred(dataset: _Dataset, protected: BaseRefs | None) -> UnsupportedOperationError | None:
     """Why this table's files may not be rewritten or reclaimed (#114), or None when they may."""
     try:
         refuse_a_referring_datasets_source(dataset, protected)
     except UnsupportedOperationError as exc:
-        return str(exc)
+        return exc
     return None
 
 
