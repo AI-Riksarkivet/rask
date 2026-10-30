@@ -1708,19 +1708,6 @@
                                             "type": "string"
                                         }
                                     }
-                                },
-                                "slack": {
-                                    "type": "object",
-                                    "properties": {
-                                        "enabled": {
-                                            "description": "Renders the Slack Dapr binding and adds `slack` to RASK_NOTIFICATIONS_CHANNELS. Off by default.",
-                                            "type": "boolean"
-                                        },
-                                        "secretName": {
-                                            "description": "Secret-store key holding the `webhookUrl` of the operator's one Slack channel, where every subject who opts into Slack is posted.",
-                                            "type": "string"
-                                        }
-                                    }
                                 }
                             }
                         },

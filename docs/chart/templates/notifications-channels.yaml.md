@@ -5,9 +5,14 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `{{- $ch := (.Values.services.notifications).channels | default dict }}`
 
-The notification plane's CHANNELS — Dapr OUTPUT bindings, so the
-SMTP host, the Slack webhook and their credentials live here and never in the service's env or
-its code. Swapping SMTP for a provider API is a Component change, not a code change.
+The notification plane's CHANNEL — a Dapr OUTPUT binding, so the SMTP host and its credentials
+live here and never in the service's env or its code. Swapping SMTP for a provider API is a
+Component change, not a code change.
+
+Email is the only channel because a push carries a row the visibility gate checked for one person,
+so it goes to an address that person supplied. A shared channel such as a Slack webhook would hand
+every reader of it a row nobody checked them against ([[CTL-34]]); estate events for operators are
+the event stream's to carry.
 
 OFF BY DEFAULT (`services.notifications.channels.*.enabled`), and that is the safe direction
 rather than a deferral: a channel Component that exists with no credentials produces a sidecar
@@ -23,14 +28,3 @@ through `stateStore.scopes`). There is deliberately no plaintext alternative to 
 
 hasKey+ternary, never `| default` — an explicit `port: 0` is falsy, so a default would
 silently resurrect 587 on a value someone deliberately set.
-
-## `apiVersion: dapr.io/v1alpha1`
-
-An HTTP binding rather than Dapr's `bindings.twitter`-style provider component: a Slack
-incoming webhook IS an HTTP POST, and the URL is the credential — which is exactly why it comes
-from the secret store and never from a value.
-
-That URL is the operator's one Slack channel, declared here and nowhere else ([[CTL-34]]). A
-`bindings.http` takes its target from the Component alone, so every subject who opts into Slack is
-posted to it; the prefs door refuses a destination of the subject's own, which would be stored and
-change nothing, and a per-subject webhook would put a credential in the inbox's state.

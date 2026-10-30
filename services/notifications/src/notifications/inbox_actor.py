@@ -501,9 +501,8 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         merge would make "I removed my address" indistinguishable from "I did not mention it".
 
         The destinations are held to the prefs door's own rule here as well, so no caller of this method
-        stores one the SMTP binding would read as several recipients ([[CTL-30]]) or a Slack one that
-        changes nothing ([[CTL-34]]). Imported here, as `digest_push_into` is: `notifications.api` mounts
-        the routers, which reach this module.
+        stores one the SMTP binding would read as several recipients ([[CTL-30]]). Imported here, as
+        `digest_push_into` is: `notifications.api` mounts the routers, which reach this module.
         """
         from notifications.api.channels import destination_fault
 

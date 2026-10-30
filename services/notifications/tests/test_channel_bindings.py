@@ -1,26 +1,17 @@
-"""What actually goes ONTO the wire for each channel.
+"""What actually goes ONTO the wire for the email channel: the SMTP binding's operation, body and keys.
 
-`make_binding_sender` had NO test at all, which is how the Slack body survived: everything above it —
-render, the claim ledger, the fan-out — was covered, so the plane looked tested while the one step
-that talks to a provider was not.
-
-The bug it hid: both channels were sent `data=body`, the plain-text render, on the argument that "the
-HTTP binding ignores them and takes the body … a difference the Component already absorbs". It does
-not absorb it. A Slack incoming webhook takes a JSON object and answers `invalid_payload` to a bare
-string, so every Slack push failed — and failed PERMANENTLY, because `deliver_to_channels` claims
-`(notification_id, channel)` BEFORE sending and deliberately does not roll the claim back. That
-ordering is a ruling with its own reasoning (a re-send is the failure a person sees; the bell already
-covers a missed push), so it stands; what was wrong is that the send could never succeed.
+Everything above the sender (render, the claim ledger, the fan-out) can be right while the one step
+that talks to a provider is wrong, and a send that can never succeed fails PERMANENTLY, because
+`deliver_to_channels` claims `(notification_id, channel)` BEFORE sending and does not roll it back.
 """
 
 import asyncio
-import json
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
-from notifications.api.channels import EMAIL, make_email_sender, make_push, make_slack_sender
+from notifications.api.channels import EMAIL, make_email_sender, make_push
 from notifications.models import InboxPointer, NotificationReason
 
 
@@ -108,20 +99,3 @@ def _pointer_for(subject: str) -> dict[str, Any]:
         object_id=f"bronze${subject}",
         occurred_at=datetime(2026, 10, 19, 12, 0, tzinfo=UTC),
     ).model_dump(mode="json")
-
-
-@pytest.mark.asyncio
-async def test_the_slack_sender_posts_the_render_escaped_as_slack_formatting_asks_in_a_json_object() -> None:
-    """An incoming webhook takes a JSON object (a bare string is `invalid_payload`) and reads `<` and `>` in its
-    text as a control sequence, a mention or a link, and `&` as an escape. The render interpolates an object id
-    and a run id, both estate-supplied, so the text escapes those three as Slack's message formatting asks, and
-    a quote or a backslash still leaves a body Slack can parse. The post names no target: the webhook is the
-    Component's own `url`, the operator's one channel ([[CTL-34]])."""
-    binding = _Binding()
-    send = make_slack_sender(binding, binding="notifications-slack", timeout_seconds=5)
-
-    await send(destination="", subject_line="x", body='silver$"<!channel>" & <https://x.example|y> — Fail\nline\\two')
-
-    call = binding.calls[0]
-    assert (call["operation"], call["metadata"]) == ("post", {"Content-Type": "application/json"})
-    assert json.loads(call["data"]) == {"text": 'silver$"&lt;!channel&gt;" &amp; &lt;https://x.example|y&gt; — Fail\nline\\two'}

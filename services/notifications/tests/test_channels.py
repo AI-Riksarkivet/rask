@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from notifications.api import prefs as prefs_module
-from notifications.api.channels import EMAIL, OPERATORS_CHANNEL, SLACK, deliver_to_channels, make_push, render
+from notifications.api.channels import EMAIL, deliver_to_channels, make_push, render
 from notifications.api.fanout import InboxOpener
 from notifications.config import get_notifications_settings
 from notifications.inbox_actor import DIGEST_REMINDER, InboxActor
@@ -65,22 +65,13 @@ class TestRender:
 
 class TestDeliverToChannels:
     @pytest.mark.asyncio
-    @pytest.mark.parametrize(
-        ("channel", "destinations", "sent_to"),
-        [
-            pytest.param(EMAIL, {EMAIL: "a@b.c"}, "a@b.c", id="email-to-the-subjects-own-address"),
-            pytest.param(SLACK, {}, OPERATORS_CHANNEL, id="slack-to-the-operators-channel-with-no-destination"),
-        ],
-    )
-    async def test_an_opted_in_channel_is_sent_once(self, channel: str, destinations: dict[str, str], sent_to: str) -> None:
-        """Email goes to the address the subject supplied. Slack posts to the one webhook the operator declares in the
-        chart, so the subject names no destination for it and its sender is handed none ([[CTL-34]])."""
-        sender, ledger = _Recorder(), _Ledger()
+    async def test_an_opted_in_channel_is_sent_once(self) -> None:
+        email, ledger = _Recorder(), _Ledger()
 
-        sent = await deliver_to_channels(_pointer(), channels=[channel], destinations=destinations, table={channel: sender}, mark_sent=ledger.claim)
+        sent = await deliver_to_channels(_pointer(), channels=[EMAIL], destinations={EMAIL: "a@b.c"}, table={EMAIL: email}, mark_sent=ledger.claim)
 
-        assert sent == [channel]
-        assert [send["destination"] for send in sender.sends] == [sent_to]
+        assert sent == [EMAIL]
+        assert [send["destination"] for send in email.sends] == ["a@b.c"]
 
     @pytest.mark.asyncio
     async def test_a_redelivery_sends_nothing(self) -> None:
@@ -93,23 +84,6 @@ class TestDeliverToChannels:
 
         assert sent == []
         assert email.sends == []
-
-    @pytest.mark.asyncio
-    async def test_one_channels_failure_never_stops_another(self) -> None:
-        """Batch with partial failure: independent destinations, and a Slack outage must not stop the
-        email."""
-        email, slack, ledger = _Recorder(), _Recorder(fails=True), _Ledger()
-
-        sent = await deliver_to_channels(
-            _pointer(),
-            channels=[SLACK, EMAIL],
-            destinations={EMAIL: "a@b.c"},
-            table={SLACK: slack, EMAIL: email},
-            mark_sent=ledger.claim,
-        )
-
-        assert sent == [EMAIL]
-        assert len(email.sends) == 1
 
     @pytest.mark.asyncio
     async def test_a_failed_send_is_not_retried_by_re_claiming(self) -> None:
@@ -175,19 +149,12 @@ class TestPrefsDoor:
         client, _ = prefs_client
         assert client.get("/notifications/prefs").json() == {"channels": [], "destinations": {}, "digest_seconds": None}
 
-    @pytest.mark.parametrize(
-        "prefs",
-        [
-            pytest.param({"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}}, id="email-to-the-subjects-own-address"),
-            pytest.param({"channels": [SLACK], "destinations": {}}, id="slack-to-the-operators-channel-with-no-destination"),
-        ],
-    )
-    def test_an_opt_in_round_trips(self, prefs_client: tuple[TestClient, dict[str, Any]], prefs: dict[str, Any]) -> None:
+    def test_an_opt_in_round_trips(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
         client, _ = prefs_client
 
-        client.put("/notifications/prefs", json=prefs)
+        client.put("/notifications/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}})
 
-        assert client.get("/notifications/prefs").json() == {**prefs, "digest_seconds": None}
+        assert client.get("/notifications/prefs").json() == {"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}, "digest_seconds": None}
 
     def test_a_channel_with_no_destination_is_refused_rather_than_stored(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
         """A channel that is on and unreachable is silently identical to one that is off — and the
@@ -202,47 +169,50 @@ class TestPrefsDoor:
         assert store == {}
 
     @pytest.mark.parametrize(
-        ("channel", "destination"),
+        "destination",
         [
-            pytest.param(EMAIL, '"a;b"@example.test', id="email-a-semicolon-the-binding-splits-on"),
-            pytest.param(EMAIL, '"a,b"@example.test', id="email-a-comma"),
-            pytest.param(EMAIL, "Ada <a@example.test>", id="email-a-display-name"),
-            pytest.param(EMAIL, "a@exa‮mple.test", id="email-an-invisible-format-character"),
-            pytest.param(EMAIL, "a@example.test\r\nBcc: b@example.test", id="email-a-cr-lf"),
-            pytest.param(EMAIL, f"{'a' * 64}@{'d' * 61}.{'d' * 61}.{'d' * 61}.test", id="email-longer-than-254-characters"),
-            pytest.param(EMAIL, "a@example.test (work)", id="email-not-what-the-parser-reads-back"),
-            pytest.param(SLACK, "https://hooks.example/elsewhere", id="slack-any-destination"),
+            pytest.param('"a;b"@example.test', id="a-semicolon-the-binding-splits-on"),
+            pytest.param('"a,b"@example.test', id="a-comma"),
+            pytest.param("Ada <a@example.test>", id="a-display-name"),
+            pytest.param("a@exa‮mple.test", id="an-invisible-format-character"),
+            pytest.param("a@example.test\r\nBcc: b@example.test", id="a-cr-lf"),
+            pytest.param(f"{'a' * 64}@{'d' * 61}.{'d' * 61}.{'d' * 61}.test", id="longer-than-254-characters"),
+            pytest.param("a@example.test (work)", id="not-what-the-parser-reads-back"),
         ],
     )
-    def test_a_destination_the_channel_cannot_send_to_is_refused_rather_than_stored(
-        self, prefs_client: tuple[TestClient, dict[str, Any]], channel: str, destination: str
+    def test_an_email_destination_that_is_not_one_bare_address_is_refused_rather_than_stored(
+        self, prefs_client: tuple[TestClient, dict[str, Any]], destination: str
     ) -> None:
         """The SMTP binding reads `emailTo` as a list split on `;` and sends to every address in it, and a
         destination it cannot parse fails every send, silently, because a failed send keeps its claim
         ([[CTL-30]]). So an email destination is exactly one addr-spec, and anything else is refused here.
-        Each email case but the CR/LF is one only its own rule refuses; a CR/LF, the audit's shape, is refused
-        by the control rule and by the parser both.
-
-        Slack takes no destination at all ([[CTL-34]]): its `bindings.http` posts to the one webhook the
-        operator declares in the chart and takes no target from a send, so a destination a subject named would
-        be stored and change nothing. A webhook URL is also a credential, which belongs in the secret store."""
+        Each case but the CR/LF is one only its own rule refuses; a CR/LF, the audit's shape, is refused by
+        the control rule and by the parser both."""
         client, store = prefs_client
-        refusal = {
-            EMAIL: "the email destination must be exactly one bare address: no list, display name or control character, at most 254 characters",
-            SLACK: "the slack channel takes no destination: it posts to the one channel the operator declares",
-        }
 
-        response = client.put("/notifications/prefs", json={"channels": [channel], "destinations": {channel: destination}})
+        response = client.put("/notifications/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: destination}})
 
-        assert (response.status_code, response.json()) == (400, {"detail": refusal[channel]}), response.text
+        refusal = "the email destination must be exactly one bare address: no list, display name or control character, at most 254 characters"
+        assert (response.status_code, response.json()) == (400, {"detail": refusal}), response.text
         assert store == {}
 
-    def test_an_unknown_channel_is_refused(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
-        client, _ = prefs_client
+    @pytest.mark.parametrize(
+        "prefs",
+        [
+            pytest.param({"channels": ["slack"], "destinations": {}}, id="as-a-channel"),
+            pytest.param({"channels": [EMAIL], "destinations": {EMAIL: "a@b.c", "slack": "https://hooks.example/T0/B0/x"}}, id="as-a-destination"),
+        ],
+    )
+    def test_an_unknown_channel_is_refused(self, prefs_client: tuple[TestClient, dict[str, Any]], prefs: dict[str, Any]) -> None:
+        """Slack among them: a shared channel cannot carry one person's governed rows, since nobody who reads it is
+        checked against what the row names, so email to the person's own address is the only push ([[CTL-34]]). Its
+        webhook is a credential too, so it is refused as a destination as well, and never kept in an inbox's state."""
+        client, store = prefs_client
 
-        response = client.put("/notifications/prefs", json={"channels": ["carrier-pigeon"], "destinations": {"carrier-pigeon": "coop"}})
+        response = client.put("/notifications/prefs", json=prefs)
 
-        assert response.status_code == 400
+        assert (response.status_code, response.json()) == (400, {"detail": "unknown notification channel(s): slack"}), response.text
+        assert store == {}
 
     def test_prefs_are_replaced_wholesale_not_merged(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
         """A partial merge makes "I removed my address" indistinguishable from "I did not mention it"."""
@@ -368,7 +338,7 @@ class TestFanoutHook:
 # A real broker redelivering to a real sidecar against a real SMTP conversation is a claim about the
 # thing a person sees, which no in-process test can make. The live read-back makes it against the
 # mailpit fixture (deploy/fixtures/mailpit), the relay deploy/values-local.yaml names, by reading
-# Mailpit's API ([[CTL-30]]); `make notifications-rig` runs Mailpit and a COUNTING Slack sink by hand.
+# Mailpit's API ([[CTL-30]]); `make notifications-rig` runs Mailpit by hand.
 
 
 class _ActorSm:
@@ -438,15 +408,6 @@ class TestRealClaimUnderRedelivery:
 
         assert first["claimed"] is True
         assert second["claimed"] is False
-
-    @pytest.mark.asyncio
-    async def test_two_channels_claim_independently(self) -> None:
-        """The key is `(event, subject, CHANNEL)` — an email must not suppress the Slack message."""
-        actor = _real_actor()
-        await actor.deliver(_delivery())
-
-        assert (await actor.claim_channel({"notification_id": "run-1@FAIL", "channel": EMAIL}))["claimed"] is True
-        assert (await actor.claim_channel({"notification_id": "run-1@FAIL", "channel": SLACK}))["claimed"] is True
 
     @pytest.mark.asyncio
     async def test_an_unknown_notification_claims_nothing(self) -> None:

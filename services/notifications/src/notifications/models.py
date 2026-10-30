@@ -281,8 +281,8 @@ class InboxMeta(BaseModel):
 class ChannelPrefs(BaseModel):
     """Where a subject wants to be pushed, beyond the bell.
 
-    OFF BY DEFAULT, every channel. The bell is in-app and costs the reader nothing; email and Slack
-    are interruptions someone has to ask for. An estate that mailed everyone by default would be the
+    OFF BY DEFAULT, every channel. The bell is in-app and costs the reader nothing; email is an
+    interruption someone has to ask for. An estate that mailed everyone by default would be the
     "badge that counts other people's work" failure again, arriving in an inbox that is not ours.
 
     An unknown channel name is not an error here — prefs are stored as a set of channel ids and the
@@ -293,11 +293,10 @@ class ChannelPrefs(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     subject: str = Field(min_length=1)
-    #: Channel ids the subject opted into (`email`, `slack`). Empty = the bell only.
+    #: Channel ids the subject opted into (`email`). Empty = the bell only.
     channels: list[str] = Field(default_factory=list)
-    #: Where to reach them, for each channel they address (email) — an address the subject supplied,
-    #: never one this plane inferred from a token. Slack has none: it posts to the operator's one
-    #: channel ([[CTL-34]]). Claim-check applies: a value here is a destination, never content.
+    #: Where to reach them per channel — an address the subject supplied, never one this plane
+    #: inferred from a token. Claim-check applies: a value here is a destination, never content.
     destinations: dict[str, str] = Field(default_factory=dict)
     #: Batch pushes into one message every N seconds instead of sending each immediately. `None` =
     #: immediate, which stays the default because the failure this plane exists to end is a MISSED

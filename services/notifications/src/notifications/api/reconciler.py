@@ -353,7 +353,7 @@ async def _walk(
             offered_again = bool(stored.stalls) and progress.scanned == 1
             # `watchers` and `push` are forwarded: this lane is the only one for runs the bus never
             # carries (ingest, external OpenLineage producers), so dropping them here would leave every
-            # one of those runs with no watcher resolved and no email or Slack sent.
+            # one of those runs with no watcher resolved and no email sent.
             status = await ingest_run_event(
                 record.event,
                 lane=Lane.FEED,

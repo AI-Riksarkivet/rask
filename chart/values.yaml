@@ -144,11 +144,12 @@ services:
     # One key, two renders: `notifications-cron.yaml` names the Component from it and `configmap.yaml`
     # renders RASK_NOTIFICATIONS_BINDING_NAME from it. Dapr delivers an input binding to the route
     # matching the COMPONENT NAME, so a second literal on the app side is a cron that ticks into a 404.
-    # CHANNELS (S5) — email and Slack, both OFF by default. A channel is an interruption someone has
-    # to ask for, so the estate's posture is chosen here rather than implied by a template; the
-    # per-user opt-in is a separate act on top (`PUT /api/notifications/prefs`).
+    # CHANNELS (S5) — email, OFF by default. A channel is an interruption someone has to ask for, so
+    # the estate's posture is chosen here rather than implied by a template; the per-user opt-in is a
+    # separate act on top (`PUT /api/notifications/prefs`). A push reaches the address its person
+    # supplied and no shared channel: every reader of one would get rows nobody checked them against.
     #
-    # Credentials come from the secret store ONLY — the Components carry `secretKeyRef`, never a
+    # Credentials come from the secret store ONLY — the Component carries `secretKeyRef`, never a
     # value. There is deliberately no plaintext fallback to fall back to.
     channels:
       email:
@@ -162,11 +163,6 @@ services:
         from: ""
         # -- Secret-store key holding the SMTP `user` and `password` fields.
         secretName: notifications-smtp
-      slack:
-        # -- Renders the Slack Dapr binding and adds `slack` to RASK_NOTIFICATIONS_CHANNELS. Off by default.
-        enabled: false
-        # -- Secret-store key holding the `webhookUrl` of the operator's one Slack channel, where every subject who opts into Slack is posted.
-        secretName: notifications-slack
     # -- Name of the reconcile cron binding; also rendered as RASK_NOTIFICATIONS_BINDING_NAME so the tick reaches the matching route.
     reconcileBindingName: notifications-reconcile-cron
     # Must stay ABOVE RASK_NOTIFICATIONS_RECONCILE_BUDGET_SECONDS (app default 25 s), or a slow lineage

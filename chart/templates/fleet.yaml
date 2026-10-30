@@ -117,7 +117,6 @@ spec:
             {{- if $svc.channels }}
             {{- $chans := list }}
             {{- if (($svc.channels).email).enabled }}{{- $chans = append $chans "email" }}{{- end }}
-            {{- if (($svc.channels).slack).enabled }}{{- $chans = append $chans "slack" }}{{- end }}
             - { name: RASK_NOTIFICATIONS_CHANNELS, value: {{ join "," $chans | quote }} }
             {{- end }}
           {{/**/}}

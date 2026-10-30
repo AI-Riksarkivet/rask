@@ -862,21 +862,13 @@ async def test_a_naive_instant_from_one_producer_cannot_take_paging_down() -> No
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("channel", "destination", "refusal"),
-    [
-        pytest.param("email", "alice@example.test;bob@example.test", "one bare address", id="email-several-recipients"),
-        pytest.param("slack", "https://hooks.example/elsewhere", "takes no destination", id="slack-any-destination"),
-    ],
-)
-async def test_set_prefs_refuses_a_destination_the_prefs_door_refuses(channel: str, destination: str, refusal: str) -> None:
+async def test_set_prefs_refuses_an_email_destination_the_prefs_door_refuses() -> None:
     """The door's rule holds at the write behind it too, so no other caller of the actor can store a
-    destination the SMTP binding would read as several recipients ([[CTL-30]]), or a Slack one, which
-    would change nothing because Slack posts to the operator's one channel ([[CTL-34]])."""
+    destination the SMTP binding would read as several recipients ([[CTL-30]])."""
     actor = _Actor()
 
-    with pytest.raises(ValueError, match=refusal):
-        await actor.set_prefs({"channels": [channel], "destinations": {channel: destination}})
+    with pytest.raises(ValueError, match="one bare address"):
+        await actor.set_prefs({"channels": ["email"], "destinations": {"email": "alice@example.test;bob@example.test"}})
 
     assert PREFS_KEY not in actor.sm.staged
     assert PREFS_KEY not in actor.sm.store

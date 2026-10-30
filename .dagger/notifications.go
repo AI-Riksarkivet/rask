@@ -18,7 +18,7 @@ const mailpitImage = "axllent/mailpit:v1.21"
 //
 //	dagger call notifications-mailpit up --ports=1025:1025 --ports=8025:8025
 //
-// or `make notifications-rig`, which brings this and the Slack sink up together.
+// or `make notifications-rig`.
 func (m *Rask) NotificationsMailpit() *dagger.Service {
 	return dag.Container().
 		From(mailpitImage).
@@ -26,25 +26,5 @@ func (m *Rask) NotificationsMailpit() *dagger.Service {
 		WithEnvVariable("MP_SMTP_AUTH_ALLOW_INSECURE", "true").
 		WithExposedPort(1025).
 		WithExposedPort(8025).
-		AsService()
-}
-
-// NotificationsSlackSink is the rig's webhook half — a stand-in that COUNTS rather than merely
-// accepting, so it can say "this arrived twice" without a human reading a log.
-//
-// The server is `scripts/slack_sink.py`, a real file. It used to be a 27-line HTTP server embedded as
-// an inline `command:` heredoc inside the compose YAML, where nothing could lint it, type-check it or
-// run it on its own; extracting it was the larger half of retiring that stack.
-//
-//	dagger call notifications-slack-sink up --ports=9099:9099
-func (m *Rask) NotificationsSlackSink(
-	// +defaultPath="/scripts/slack_sink.py"
-	sink *dagger.File,
-) *dagger.Service {
-	return dag.Container().
-		From(UvPythonImage).
-		WithFile("/srv/slack_sink.py", sink).
-		WithExposedPort(9099).
-		WithDefaultArgs([]string{"python", "/srv/slack_sink.py"}).
 		AsService()
 }

@@ -732,7 +732,7 @@ scoped_secret() {
 {{- $channels := list -}}
 {{- if eq $name "notifications" }}
 {{- $api = concat $api (ternary $everySigner list (and $v.auth.enabled $doors)) }}
-{{- range $channel := list "email" "slack" }}{{- with get ($svc.channels | default dict) $channel }}{{- if .enabled }}{{- $channels = append $channels .secretName }}{{- end }}{{- end }}{{- end }}
+{{- with get ($svc.channels | default dict) "email" }}{{- if .enabled }}{{- $channels = append $channels .secretName }}{{- end }}{{- end }}
 {{- end -}}
 {{- $apps = append $apps (dict "app" $name "sa" $name "api" $api "bus" (eq $name "notifications") "channels" $channels) -}}
 {{- end -}}

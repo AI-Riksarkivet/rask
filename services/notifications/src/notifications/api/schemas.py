@@ -8,8 +8,8 @@ only reason it never reaches a browser is that no model here declares it.
 
 `InboxPointer` was returned unchanged while it held nothing but the claim-check record. S5 gave it a
 `sent` ledger — which channels this notification has already been pushed to — and that is DELIVERY
-BOOKKEEPING, not something a reader has any business seeing: it discloses that a subject has email or
-Slack wired, and to a reader of a shared screen it discloses it about someone else. So the wire row is
+BOOKKEEPING, not something a reader has any business seeing: it discloses that a subject has email
+wired, and to a reader of a shared screen it discloses it about someone else. So the wire row is
 now a declared projection rather than the storage record, which is what this module said all along
 about `InboxMeta.rows` and now has a second reason to say.
 """

@@ -22,23 +22,5 @@ auth:
   secretStore: {{ .Values.stateStore.secretStore | default "lance-secrets" }}
 scopes:
   - notifications
----
-{{- end }}
-{{- if (($ch.slack).enabled) }}
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: notifications-slack
-  labels: {{- include "rask.componentLabels" (list . "notifications") | nindent 4 }}
-spec:
-  type: bindings.http
-  version: v1
-  metadata:
-    - name: url
-      secretKeyRef: { name: {{ $ch.slack.secretName | default "notifications-slack" | quote }}, key: webhookUrl }
-auth:
-  secretStore: {{ .Values.stateStore.secretStore | default "lance-secrets" }}
-scopes:
-  - notifications
 {{- end }}
 {{- end }}

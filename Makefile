@@ -193,8 +193,8 @@ prod-render-check: ## Render values-prod.yaml and assert its HA + security switc
 # ---- the notification channel verify rig (open_notifications.md §7) --------
 # A SIDE STACK, not a deploy path. It answers the one question unit tests cannot: does exactly ONE
 # message leave the estate per (event, subject, channel) when the broker redelivers? Mailpit shows
-# every message it received; the slack sink COUNTS them, so a duplicate is visible rather than
-# inferred. Point the Dapr bindings at localhost:1025 / http://localhost:9099 while it is up.
+# every message it received, so a duplicate is visible rather than inferred. Point the email
+# binding's host at localhost:1025 while it is up.
 # The notification-lane drives. Two tracked, documented .mjs files proving claims no unit test can
 # make — that a run whose AUTHOR is not you still reaches you because you are named as the human the
 # work is for — and until 2026-08-22 they were referenced by NOTHING: one grep hit each, their own
@@ -217,21 +217,13 @@ notifications-lanes: ## The notification-lane drives vs a deployed estate (ORIGI
 		echo "== $$drive"; ORIGIN=$(ORIGIN) node "$$drive" || exit 1; \
 	done
 
-# ONE command for both halves, and Ctrl-C tears both down — `trap 'kill 0'` kills the process group,
-# so nothing is left running the way a detached `compose up -d` could be. That was the last
-# `docker compose` in the Makefile.
-#
-# Foreground is right for THIS rig specifically: it is a thing you poke at (open the Mailpit UI, curl
-# the ledger, redeliver, look again), so seeing it run and killing it with Ctrl-C is the workflow
+# Foreground is right for THIS rig specifically: it is a thing you poke at (open the Mailpit UI,
+# redeliver, look again), so seeing it run and killing it with Ctrl-C is the workflow
 # rather than a cost. The rustfs smoke went the other way and became a single non-interactive
 # `dagger call smoke-rustfs`, because it is a script with an answer.
-notifications-rig: ## Mailpit + a counting Slack sink for the channel idempotency drive (Ctrl-C stops both)
+notifications-rig: ## Mailpit for the channel idempotency drive (Ctrl-C stops it)
 	@echo "Mailpit UI  : http://localhost:8025"
-	@echo "Slack ledger: curl -s localhost:9099/deliveries | jq"
-	@trap 'kill 0' INT TERM EXIT; \
-	  dagger call notifications-mailpit up --ports=1025:1025 --ports=8025:8025 & \
-	  dagger call notifications-slack-sink up --ports=9099:9099 & \
-	  wait
+	@dagger call notifications-mailpit up --ports=1025:1025 --ports=8025:8025
 
 # `promtool` is resolved, not assumed. A bare `promtool` had never been on PATH here: `make bootstrap`
 # installs it into .localbin and NOTHING prepends that to PATH — `.dagger/charts.go` asserted in a

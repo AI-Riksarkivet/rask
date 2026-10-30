@@ -417,7 +417,7 @@ async def test_the_feed_lane_tells_a_project_watcher_not_only_the_author() -> No
 @pytest.mark.asyncio
 @respx.mock
 async def test_the_feed_lane_pushes_channels_for_a_row_it_actually_wrote() -> None:
-    """Email/Slack for HTTP-emitted runs. `fan_out` only pushes for a row it really wrote, so a
+    """Email for HTTP-emitted runs. `fan_out` only pushes for a row it really wrote, so a
     re-walk cannot produce a second email — the catch-up lane needs no exemption of its own."""
     respx.get(f"{LINEAGE}/events/projection").mock(side_effect=_forward(9))
     plane = _Plane()
@@ -437,7 +437,7 @@ async def test_the_feed_lane_pushes_channels_for_a_row_it_actually_wrote() -> No
         budget_seconds=10,
     )
 
-    assert pushed == ["alice"], "no channel push on the feed lane — every HTTP-emitted run is silent on email/Slack"
+    assert pushed == ["alice"], "no channel push on the feed lane — every HTTP-emitted run is silent on email"
 
 
 # --- a poison row must not block every newer notification ----------------------------------------

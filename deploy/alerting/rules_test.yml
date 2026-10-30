@@ -301,7 +301,7 @@ tests:
               service: notifications
             exp_annotations:
               summary: "InboxActor turn queue is backing up — one subject's notifications are serializing"
-              description: "More than 10 calls are queued against a single InboxActor for 2m. Turn-based concurrency means they run one at a time, so something inside a turn is slow — most likely a channel send (SMTP or the Slack webhook) or an unhealthy state store. Notifications for that subject are delayed, not lost. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+              description: "More than 10 calls are queued against a single InboxActor for 2m. Turn-based concurrency means they run one at a time, so something inside a turn is slow — most likely a channel send (the SMTP relay) or an unhealthy state store. Notifications for that subject are delayed, not lost. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
 
   # 13. A BURST that drains → NO alert. A busy inbox briefly queues; the `for: 2m` is what separates a
   #     burst from a backlog, and this is the case that would false-page without it.
