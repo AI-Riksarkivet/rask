@@ -14,9 +14,11 @@ from unittest.mock import MagicMock
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeTableResponse
+from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
-from catalog.core.vending import Tier, VendedCredentials
+from catalog.core.vending import Tier, VendedSession
+from service_kit.governed.store_credential import S3KeyPair
 
 
 def _described(location: str | None) -> DescribeTableResponse:
@@ -41,19 +43,17 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
     class _FakeVendor:
         def vend(
             self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
-        ) -> VendedCredentials:
+        ) -> VendedSession:
             captured.update(table_location=table_location, tier=tier)
-            return VendedCredentials(
-                storage_options={"access_key_id": "AK", "secret_access_key": "SK", "session_token": "ST"},
-                expires_at_millis=123456,
-            )
+            key_pair = S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST"))
+            return VendedSession(key_pair=key_pair, endpoint=None, region="us-east-1", expires_at_millis=123456)
 
     client.app.dependency_overrides[get_vendor] = lambda: _FakeVendor()
     resp = client.post("/management/v1/table/db$t/credentials?tier=write")
     assert resp.status_code == 200
     body = resp.json()
     assert body["mode"] == "direct"
-    assert body["credentials"]["storage_options"]["session_token"] == "ST"
+    assert body["credentials"]["storage_options"]["aws_session_token"] == "ST"
     assert body["credentials"]["expires_at_millis"] == 123456
     # the table's real object-store location + the requested tier are passed to the vendor
     assert captured == {"table_location": "s3://lance-catalog/db$t", "tier": "write"}
@@ -67,7 +67,7 @@ def test_an_exchange_the_store_refuses_answers_unavailable(client: TestClient, f
     class _RefusedVendor:
         def vend(
             self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
-        ) -> VendedCredentials:
+        ) -> VendedSession:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "token verification failed"}}, "AssumeRoleWithWebIdentity")
 
     client.app.dependency_overrides[get_vendor] = lambda: _RefusedVendor()

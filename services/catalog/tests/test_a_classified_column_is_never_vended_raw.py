@@ -23,9 +23,11 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
+from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
-from catalog.schemas import VendedCredentials
+from catalog.core.vending import VendedSession
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
@@ -41,9 +43,9 @@ class _Vendor:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def vend(self, **kwargs: Any) -> VendedCredentials:  # noqa: ANN401 — the vendor protocol's keyword arguments
+    def vend(self, **kwargs: Any) -> VendedSession:  # noqa: ANN401 — the vendor protocol's keyword arguments
         self.calls.append(kwargs)
-        return VendedCredentials(storage_options={"aws_access_key_id": "AK", "aws_secret_access_key": "SK"})
+        return VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
 
 
 @pytest.fixture

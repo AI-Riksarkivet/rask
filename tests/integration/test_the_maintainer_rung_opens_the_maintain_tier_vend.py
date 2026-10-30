@@ -32,10 +32,12 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeTableResponse
+from pydantic import SecretStr
 
-from catalog.core.vending import Tier, VendedCredentials
+from catalog.core.vending import Tier, VendedSession
 from catalog.services import table_claims
 from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import location_claims
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
@@ -43,8 +45,9 @@ from tests.unit.named_resolver import NamedResolver, uuid_of
 class _Vendor:
     def vend(
         self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials:
-        return VendedCredentials(storage_options={"access_key_id": "AK", "secret_access_key": "SK", "session_token": "ST"}, expires_at_millis=1)
+    ) -> VendedSession:
+        key_pair = S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST"))
+        return VendedSession(key_pair=key_pair, endpoint=None, region="us-east-1", expires_at_millis=1)
 
 
 @pytest.fixture

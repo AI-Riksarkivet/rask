@@ -42,6 +42,7 @@ from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
 from service_kit.governed import store_session
 from service_kit.governed.machine_identity import IdentityTokenUnavailableError
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.governed.store_session import IssuedSession, WebIdentity
 from service_kit.lakehouse.base_refs import decoded_path, location_within
 from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
@@ -66,18 +67,6 @@ Tier = Literal["read", "write", "maintain"]
 VendingMode = Literal["mode_b", "web_identity"]
 
 
-class VendedCredentials(BaseModel):
-    """Scoped storage credentials for one table at one tier.
-
-    ``storage_options`` is consumed directly by pylance / lance-ray /
-    object_store. ``expires_at_millis`` is when the client must refresh
-    (``None`` for long-lived static keys).
-    """
-
-    storage_options: dict[str, str]
-    expires_at_millis: int | None = None
-
-
 class EncryptionAtRest(BaseModel):
     """What a vended credential must tell the writer about encrypting the bytes it lands (§ J5).
 
@@ -95,13 +84,67 @@ class EncryptionAtRest(BaseModel):
     bucket_key_enabled: bool | None = None
 
 
+class VendedSession(BaseModel):
+    """A session vended for one table at one tier ([[LH-072]]): the key pair STS issued and how a client reaches the store with it.
+
+    The secret access key and the session token are ``SecretStr`` (:class:`S3KeyPair`), so a repr, a str, a model dump, a
+    log line or an error that echoes a vend carries neither; Lakekeeper derives ``Redact`` on its credential structs for
+    the same reason. They leave the catalog only through :meth:`as_storage_options`, called where the vend is handed
+    over or used.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    key_pair: S3KeyPair
+    #: The object-store address the session is used at; ``None`` is AWS proper, whose regional endpoint botocore resolves.
+    endpoint: str | None
+    region: str
+    #: Travels with every vend: a direct writer has no other channel to learn it (§ J5).
+    encryption: EncryptionAtRest = Field(default_factory=EncryptionAtRest)
+    #: When the client must refresh: every vend is a session STS issued, and every such session expires.
+    expires_at_millis: int
+
+    def as_storage_options(self) -> dict[str, str]:
+        """The flat ``storage_options`` a client signs with, the secret and the session token in clear.
+
+        The spec's one map (`lance_docs/ns_catalog/spec.yaml:2883-2892`), at the keys
+        `lance_docs/lance/guide/object_store.md:127-136` names. Called only where the vend leaves the catalog: the body
+        that hands it to its caller, or the client the catalog signs with it.
+
+        BUILT THROUGH THE SHARED BUILDER, not hand-rolled. A hand-rolled dict carried the bare credential spellings, which
+        do not displace a pod's ambient AWS_* environment — object_store blends the two and signs as neither identity
+        (`403 SignatureDoesNotMatch`, measured in-cluster 2026-09-03) — and omitted `allow_http` and
+        `virtual_hosted_style_request`, without which Lance builds no client for an `http://` endpoint and RustFS refuses
+        virtual-hosted signing.
+
+        Raises:
+            ValueError: The encryption names a combination the store would ignore (`lance_storage_options`).
+        """
+        session_token = self.key_pair.session_token
+        options = lance_storage_options(
+            self.endpoint or "",
+            self.key_pair.access_key_id,
+            self.key_pair.secret_access_key.get_secret_value(),
+            self.region,
+            session_token=session_token.get_secret_value() if session_token is not None else None,
+            server_side_encryption=self.encryption.algorithm,
+            sse_kms_key_id=self.encryption.kms_key_id,
+            sse_bucket_key_enabled=self.encryption.bucket_key_enabled,
+        )
+        if not self.endpoint:
+            # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the client to
+            # nothing. The builder always emits the key, so it is removed rather than skipped.
+            options.pop("endpoint", None)
+        return options
+
+
 @runtime_checkable
 class CredentialVendor(Protocol):
     """Vend scoped storage credentials for one table prefix at one tier."""
 
     def vend(
         self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
+    ) -> VendedSession | None:
         """Return creds for ``table_location`` at ``tier``, named ``session_name`` at the store (:func:`role_session_name`).
 
         ``data_directories`` are those of ``bases`` the table's record holds as its own data directories
@@ -811,7 +854,7 @@ def vend_or_refuse(
     bases: Sequence[str],
     data_directories: Sequence[str] = (),
     branch: str = "",
-) -> VendedCredentials | None:
+) -> VendedSession | None:
     """``vendor.vend``, with a failed exchange answered as the spec's typed error rather than a bare 500.
 
     Every door that mints a credential calls this, so a refused exchange means one thing at each of them. The token
@@ -838,7 +881,7 @@ class ModeBVendor:
 
     def vend(
         self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
+    ) -> VendedSession | None:
         return None
 
 
@@ -879,7 +922,7 @@ class WebIdentityVendor:
 
     def vend(
         self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
+    ) -> VendedSession | None:
         bucket, prefix = split_s3_location(table_location)
         policy = build_session_policy(
             bucket,
@@ -901,27 +944,13 @@ class WebIdentityVendor:
                 characters=len(text),
             )
         issued = self._exchange(self._identity, session_name=session_name, duration_seconds=self._ttl, policy=text)
-        session_token = issued.key_pair.session_token
-        # BUILT THROUGH THE SHARED BUILDER, not hand-rolled. A hand-rolled dict carried the bare credential spellings,
-        # which do not displace a pod's ambient AWS_* environment — object_store blends the two and signs as neither
-        # identity (`403 SignatureDoesNotMatch`, measured in-cluster 2026-09-03) — and omitted `allow_http` and
-        # `virtual_hosted_style_request`, without which Lance builds no client for an `http://` endpoint and RustFS
-        # refuses virtual-hosted signing.
-        opts = lance_storage_options(
-            self._store_endpoint or "",
-            issued.key_pair.access_key_id,
-            issued.key_pair.secret_access_key.get_secret_value(),
-            self._identity.region,
-            session_token=session_token.get_secret_value() if session_token is not None else None,
-            server_side_encryption=self._encryption.algorithm,
-            sse_kms_key_id=self._encryption.kms_key_id,
-            sse_bucket_key_enabled=self._encryption.bucket_key_enabled,
+        return VendedSession(
+            key_pair=issued.key_pair,
+            endpoint=self._store_endpoint or None,
+            region=self._identity.region,
+            encryption=self._encryption,
+            expires_at_millis=int(issued.expiration.timestamp() * 1000),
         )
-        if not self._store_endpoint:
-            # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the client to
-            # nothing. The builder always emits the key, so it is removed rather than skipped.
-            opts.pop("endpoint", None)
-        return VendedCredentials(storage_options=opts, expires_at_millis=int(issued.expiration.timestamp() * 1000))
 
 
 def make_vendor(

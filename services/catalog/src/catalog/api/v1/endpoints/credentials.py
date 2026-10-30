@@ -29,7 +29,7 @@ from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, Ve
 from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, role_session_name, table_has_branch, unsanctioned_bases, vend_or_refuse
-from catalog.schemas import CredentialResponse
+from catalog.schemas import CredentialResponse, VendedCredentials
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.lakehouse.version_retention import recorded_branch
@@ -135,7 +135,7 @@ async def vend_credentials(
         return CredentialResponse(mode="server_mediated")
     # The blocking STS exchange runs in the threadpool; a refused or unreachable exchange answers 503
     # (`vend_or_refuse`), never a bare 500.
-    creds = await run_in_threadpool(
+    vended = await run_in_threadpool(
         partial(
             vend_or_refuse,
             vendor,
@@ -147,6 +147,9 @@ async def vend_credentials(
             branch=branch,
         )
     )
+    # The secret and the session token leave the catalog in this body and nowhere else ([[LH-072]]), built before the
+    # issuance is recorded: a vend whose options the builder refuses was never handed over.
+    creds = None if vended is None else VendedCredentials(storage_options=vended.as_storage_options(), expires_at_millis=vended.expires_at_millis)
     mode = "server_mediated" if creds is None else "direct"
     if mode == "direct":  # #41 audit the actual issuance of direct object-store credentials (who, what, tier)
         obj = fga.table_object(table.resolved.require_uuid())

@@ -18,11 +18,12 @@ from typing import Any
 import pyarrow as pa
 import pytest
 from lance import blob_array, blob_field
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from catalog.api.dependencies import get_vendor
-from catalog.core.vending import Tier, VendedCredentials
+from catalog.core.vending import Tier, VendedSession
 from service_kit.governed.audit import AUDIT_FORMAT, AUDIT_LOGGER, AuditAction, AuditOutcome, configure_audit
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
@@ -187,8 +188,10 @@ class _StsVendor:
 
     def vend(
         self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
-        return VendedCredentials(storage_options={"aws_access_key_id": f"AK-{tier}"}, expires_at_millis=1)
+    ) -> VendedSession | None:
+        return VendedSession(
+            key_pair=S3KeyPair(access_key_id=f"AK-{tier}", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1
+        )
 
 
 class _Capture(logging.Handler):

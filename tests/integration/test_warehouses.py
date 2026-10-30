@@ -15,17 +15,19 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import connect
+from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
 from catalog.api.v1.endpoints import warehouses as wh_ep
 from catalog.core.config import Settings, get_settings
-from catalog.core.vending import VendedCredentials
+from catalog.core.vending import EncryptionAtRest, VendedSession
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
 from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.naming import UUID_PROPERTY
 
 
@@ -130,14 +132,18 @@ class _ScopedVendor:
         self.unreachable = unreachable
         self.encrypts_with = encrypts_with
 
-    def vend(self, *, table_location: str, tier: str, **_kw: Any) -> VendedCredentials:
+    def vend(self, *, table_location: str, tier: str, **_kw: Any) -> VendedSession:
         if self.unreachable:
             raise ConnectionError("STS endpoint unreachable")
         self.store.scope = table_location.split("/", 3)[3]
-        options = {"endpoint": "http://store:9000", "aws_access_key_id": "k", "aws_secret_access_key": "s"}
-        if self.encrypts_with is not None:
-            options |= {"aws_server_side_encryption": "aws:kms", "aws_sse_kms_key_id": self.encrypts_with}
-        return VendedCredentials(storage_options=options)
+        encryption = EncryptionAtRest() if self.encrypts_with is None else EncryptionAtRest(algorithm="aws:kms", kms_key_id=self.encrypts_with)
+        return VendedSession(
+            key_pair=S3KeyPair(access_key_id="k", secret_access_key=SecretStr("s")),
+            endpoint="http://store:9000",
+            region="us-east-1",
+            encryption=encryption,
+            expires_at_millis=1,
+        )
 
 
 @pytest.mark.parametrize(

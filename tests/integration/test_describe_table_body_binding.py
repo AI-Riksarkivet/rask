@@ -19,12 +19,24 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeTableResponse
+from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
-from catalog.core.vending import VendedCredentials
+from catalog.core.vending import VendedSession
+from service_kit.governed.store_credential import S3KeyPair
 
 
 _LOCATION = "s3://lance-catalog/db$t"
+_VEND = VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
+#: What the describe door answers for `_VEND`: its storage options, AWS proper so no endpoint, and its expiry inside them.
+_VENDED_OPTIONS = {
+    "aws_access_key_id": "AK",
+    "aws_secret_access_key": "SK",
+    "region": "us-east-1",
+    "allow_http": "false",
+    "virtual_hosted_style_request": "false",
+    "expires_at_millis": "1",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -50,7 +62,7 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     fake_ns.describe_table.return_value = DescribeTableResponse(location=_LOCATION)
     claim_described("db$t")
     vend = MagicMock()
-    vend.vend.return_value = VendedCredentials(storage_options={"aws_access_key_id": "AK"})
+    vend.vend.return_value = _VEND
     client.app.dependency_overrides[get_vendor] = lambda: vend
     yield vend
     client.app.dependency_overrides.pop(get_vendor, None)
@@ -69,7 +81,7 @@ def test_body_vend_credentials_and_version_are_honoured(client: TestClient, fake
     # Exactly what a generic client sends: everything in the body, nothing in the query.
     resp = client.post("/v1/table/db$t/describe", json={"vend_credentials": True, "version": 1})
     assert resp.status_code == 200, resp.text
-    assert resp.json()["storage_options"] == {"aws_access_key_id": "AK"}
+    assert resp.json()["storage_options"] == _VENDED_OPTIONS
     assert _sent(fake_ns).version == 1
 
 
@@ -104,7 +116,7 @@ def test_the_query_form_still_works(client: TestClient, fake_ns: MagicMock, vend
     # rask's own callers (lakehouse's catalog.remote.ts, the e2e suites) send query params and no body.
     resp = client.post("/v1/table/db$t/describe?vend_credentials=true&version=3&with_table_uri=true")
     assert resp.status_code == 200, resp.text
-    assert resp.json()["storage_options"] == {"aws_access_key_id": "AK"}
+    assert resp.json()["storage_options"] == _VENDED_OPTIONS
     sent = _sent(fake_ns)
     assert (sent.version, sent.with_table_uri) == (3, True)
 
@@ -122,7 +134,7 @@ def test_the_body_wins_where_both_are_sent(client: TestClient, fake_ns: MagicMoc
     resp = client.post("/v1/table/db$t/describe?version=9&vend_credentials=false", json={"version": 4, "vend_credentials": True})
     assert resp.status_code == 200, resp.text
     assert _sent(fake_ns).version == 4
-    assert resp.json()["storage_options"] == {"aws_access_key_id": "AK"}
+    assert resp.json()["storage_options"] == _VENDED_OPTIONS
 
 
 def test_a_body_tag_and_a_query_version_still_conflict(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:

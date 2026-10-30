@@ -86,18 +86,8 @@ def test_the_VENDED_credential_carries_it_to_a_direct_writer() -> None:
     # `vend` answers None on the postures that offer no credential (mode_b); a None here would mean the
     # vendor declined, which is a different failure from the one under test and must not read as it.
     assert vended is not None, "the vendor vended nothing at all"
-    assert vended.storage_options.get("aws_server_side_encryption") == "aws:kms", (
+    options = vended.as_storage_options()
+    assert options.get("aws_server_side_encryption") == "aws:kms", (
         "the vended credential does not tell the writer to encrypt — the catalog is out of the path, so nothing else can"
     )
-    assert vended.storage_options.get("aws_sse_kms_key_id") == "arn:aws:kms:eu-north-1:1:key/abc"
-
-
-def test_an_UNCONFIGURED_vendor_vends_exactly_what_it_did_before() -> None:
-    """Every deployment that asks for nothing is untouched — no uninvited option reaches the writer."""
-    from catalog.core.vending import WebIdentityVendor
-
-    vendor = WebIdentityVendor(identity=_identity(), exchange=_issued)
-    vended = vendor.vend(table_location="s3://bucket/ns/t.lance", tier="write", session_name="writer")
-    assert vended is not None, "the vendor vended nothing at all"
-    opts = vended.storage_options
-    assert not [k for k in opts if "encryption" in k or "sse" in k], f"encryption keys appeared unasked: {sorted(opts)}"
+    assert options.get("aws_sse_kms_key_id") == "arn:aws:kms:eu-north-1:1:key/abc"

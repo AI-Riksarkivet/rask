@@ -4,9 +4,9 @@ Gathered here (mirroring ``services/lineage/schemas.py``) instead of scattered i
 modules, so the wire contract has one home and the endpoints stay routing-only. Grouped by concern. Class
 names are the OpenAPI schema names, so they are preserved verbatim on any move.
 
-Domain value objects that are NOT wire schemas stay where they belong: ``VendedCredentials`` in
-``core/vending`` (a credential-vending value type it owns) and ``InputPin`` in ``core/lineage_emit`` (a
-lineage-emit input reference).
+Domain value objects that are NOT wire schemas stay where they belong: ``VendedSession`` in ``core/vending``
+(a vend as the catalog holds it, its secret and session token typed secret, [[LH-072]]) and ``InputPin`` in
+``core/lineage_emit`` (a lineage-emit input reference).
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
 from catalog.services.changes import ChangeKind
 from catalog.services.control_records import DeleteMode
@@ -806,6 +805,20 @@ class CreateWarehouseNamespaceRequest(BaseModel):
 # --------------------------------------------------------------------------- #
 # Credential vending (Track B)
 # --------------------------------------------------------------------------- #
+
+
+# The vend as it is handed to its caller, the secret and the session token in clear: the door builds it from
+# `VendedSession.as_storage_options()` as it answers, and nothing in the catalog holds one otherwise ([[LH-072]]).
+class VendedCredentials(BaseModel):
+    """Scoped storage credentials for one table at one tier.
+
+    ``storage_options`` is consumed directly by pylance / lance-ray /
+    object_store. ``expires_at_millis`` is when the client must refresh
+    (``None`` for long-lived static keys).
+    """
+
+    storage_options: dict[str, str]
+    expires_at_millis: int | None = None
 
 
 class CredentialResponse(BaseModel):

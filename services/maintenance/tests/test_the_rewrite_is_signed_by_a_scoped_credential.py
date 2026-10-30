@@ -21,6 +21,9 @@ WHAT MUST NOT CHANGE, and each has a test below because each would be a silent r
 
 from __future__ import annotations
 
+import json
+import logging
+import traceback
 from typing import Any
 
 import httpx
@@ -29,6 +32,7 @@ import pytest
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned
+from service_kit.context import DiagnosticFormatter
 
 
 pytestmark = pytest.mark.usefixtures("catalog_identity_token")
@@ -82,6 +86,30 @@ def test_the_pass_is_signed_by_the_vended_credential(door: list[dict[str, Any]])
     assert settings.s3_endpoint.startswith("http://")
     assert options == {**_SCOPED, "endpoint": settings.s3_endpoint, "allow_http": "true"}
     assert options["aws_access_key_id"] != "rustfsadmin"
+
+
+def test_the_vend_maintenance_holds_renders_neither_its_secret_nor_its_session_token(door: list[dict[str, Any]], caplog: pytest.LogCaptureFixture) -> None:
+    """[[LH-072]] Maintenance holds the vend from the door's answer to the call that signs, and nothing that turns it into
+    text in between shows its secret or session token."""
+    vend = credentials._vend("acme-bronze$events", _settings())  # noqa: SLF001 — the holder is the unit under test
+    assert vend is not None, "the door vended nothing, so nothing below was rendered"
+    refused = RuntimeError("the store refused the vend", vend)
+    with caplog.at_level(logging.WARNING, logger=credentials.logger.name):
+        credentials.logger.warning("vend_refused %s %r", vend, vend, extra={"vended": vend}, exc_info=refused)
+
+    rendered = {
+        "repr": repr(vend),
+        "str": str(vend),
+        "format": f"{vend}",
+        "model_dump": repr(vend.model_dump()),
+        "model_dump json": json.dumps(vend.model_dump(mode="json")),
+        "model_dump_json": vend.model_dump_json(),
+        "log": "\n".join(DiagnosticFormatter("%(message)s").format(record) for record in caplog.records),
+        "error echo": "".join(traceback.format_exception(refused)),
+    }
+
+    held = (_SCOPED["aws_secret_access_key"], _SCOPED["aws_session_token"])
+    assert [how for how, text in rendered.items() if any(secret in text for secret in held)] == []
 
 
 def test_a_deployment_with_no_vending_door_is_still_maintained(door: list[dict[str, Any]]) -> None:

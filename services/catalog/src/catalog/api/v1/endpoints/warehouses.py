@@ -1304,29 +1304,30 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     checks: list[ProbeCheck] = []
     try:
         vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="maintain", session_name=session_name)
+        # The probe signs as the client a door hands the vend to, so it holds what that door would answer ([[LH-072]]).
+        options = None if vended is None else vended.as_storage_options()
     except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
         checks.append(ProbeCheck(name="issue", outcome="fail", detail=f"{type(exc).__name__}: {exc}"))
-        vended = None
+        options = None
     else:
         checks.append(
             ProbeCheck(name="issue", outcome="pass")
-            if vended is not None
+            if options is not None
             else ProbeCheck(name="issue", outcome="skip", detail="server_mediated: this warehouse vends no direct credentials")
         )
 
-    if vended is None:
+    if options is None:
         checks += [
             ProbeCheck(name=n, outcome="skip", detail="no credential") for n in ("write_inside", "read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, "cleanup")
         ]
         return checks
 
-    options = vended.storage_options
     s3 = s3_client(
         store_endpoint or None,
-        access_key=options.get("aws_access_key_id") or options.get("access_key_id"),
-        secret_key=options.get("aws_secret_access_key") or options.get("secret_access_key"),
-        session_token=options.get("aws_session_token") or options.get("session_token"),
-        region=options.get("region") or options.get("aws_region"),
+        access_key=options["aws_access_key_id"],
+        secret_key=options["aws_secret_access_key"],
+        session_token=options.get("aws_session_token"),
+        region=options["region"],
     )
 
     def _step(name: str, fn: Callable[[], object], *, expect_refusal: bool = False) -> bool:

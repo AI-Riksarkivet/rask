@@ -18,10 +18,12 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from pydantic import SecretStr
 
 from catalog.api.v1.endpoints import warehouses as endpoint
-from catalog.core.vending import VendedCredentials
+from catalog.core.vending import VendedSession
 from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, ProbeCheck
+from service_kit.governed.store_credential import S3KeyPair
 
 
 if TYPE_CHECKING:
@@ -33,14 +35,14 @@ ROOT = "s3://tenant-bucket/acme/warehouse"
 class _Vendor:
     """A `CredentialVendor` that records the location it was asked to scope to."""
 
-    def __init__(self, *, credentials: VendedCredentials | None, error: Exception | None = None) -> None:
+    def __init__(self, *, credentials: VendedSession | None, error: Exception | None = None) -> None:
         self._credentials = credentials
         self._error = error
         self.asked: list[tuple[str, str]] = []
 
     def vend(
         self, *, table_location: str, tier: str, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
-    ) -> VendedCredentials | None:
+    ) -> VendedSession | None:
         self.asked.append((table_location, tier))
         if self._error is not None:
             raise self._error
@@ -94,9 +96,12 @@ class _Store:
         return {}
 
 
-def _creds() -> VendedCredentials:
-    return VendedCredentials(
-        storage_options={"endpoint": "http://store:9000", "aws_access_key_id": "k", "aws_secret_access_key": "s", "aws_session_token": "t"}
+def _creds() -> VendedSession:
+    return VendedSession(
+        key_pair=S3KeyPair(access_key_id="k", secret_access_key=SecretStr("s"), session_token=SecretStr("t")),
+        endpoint="http://store:9000",
+        region="us-east-1",
+        expires_at_millis=1,
     )
 
 

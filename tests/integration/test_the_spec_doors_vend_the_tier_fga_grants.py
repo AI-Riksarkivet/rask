@@ -25,15 +25,17 @@ import pytest
 from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
 from lance_namespace import DeclareTableResponse, DescribeNamespaceResponse
+from pydantic import SecretStr
 
 from catalog.api.dependencies import get_resolver, get_vendor
 from catalog.core.config import Settings, get_settings
-from catalog.core.vending import VendedCredentials
+from catalog.core.vending import VendedSession
 from catalog.services import table_claims
 from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
+from service_kit.governed.store_credential import S3KeyPair
 from tests.unit.named_resolver import NamedResolver
 
 
@@ -74,7 +76,9 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     client.app.state.fga = fga_client
     fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(properties={"rask.tier": "silver"})
     recorder = MagicMock()
-    recorder.vend.side_effect = lambda **kw: VendedCredentials(storage_options={"aws_access_key_id": f"AK-{kw['tier']}"}, expires_at_millis=1)
+    recorder.vend.side_effect = lambda **kw: VendedSession(
+        key_pair=S3KeyPair(access_key_id=f"AK-{kw['tier']}", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1
+    )
     client.app.dependency_overrides[get_vendor] = lambda: recorder
     yield recorder
     client.app.dependency_overrides.pop(get_vendor, None)

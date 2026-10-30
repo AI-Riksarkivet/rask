@@ -19,7 +19,8 @@ catalog's own connection derives it that way; a vend is the same rule on the opt
 catalog, so an `https://` store must never be handed a credential that also permits plaintext. Measured
 on pylance 12.0.0 against a closed port: `http://` with `allow_http=false` dies at construction
 (`builder error`), `https://` with `allow_http=false` proceeds to a TLS request — so the scheme alone
-decides both halves and there is nothing a caller could need to override.
+decides both halves and there is nothing a caller could need to override. What both doors answer for an `https://`
+store is pinned by `test_a_vended_secret_leaves_the_catalog_only_on_the_wire.py`.
 
 What the exchange sends and the triple it answers are driven on a moto STS by
 `test_the_catalog_signs_only_with_sessions_its_token_is_exchanged_for.py`; this file is about whether a client can
@@ -28,27 +29,15 @@ BUILD from what it was handed.
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse
 from pydantic import SecretStr
 
-from catalog.api.dependencies import get_namespace, get_settings
-from catalog.api.v1.endpoints import tables
-from catalog.core.config import Settings
-from catalog.core.vending import VendFacts, WebIdentityVendor
-from catalog.services import table_claims
+from catalog.core.vending import WebIdentityVendor
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.governed.store_session import IssuedSession, WebIdentity
-from service_kit.lakehouse import location_claims
-from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 def _fake_exchange(*_: Any, **__: Any) -> IssuedSession:
@@ -65,7 +54,7 @@ def _vendor(endpoint: str | None) -> WebIdentityVendor:
 def _vend(endpoint: str | None) -> dict[str, str]:
     vended = _vendor(endpoint).vend(table_location="s3://bucket/tbl", tier="read", session_name="reader")
     assert vended is not None
-    return vended.storage_options
+    return vended.as_storage_options()
 
 
 def test_a_vended_credential_carries_what_a_lance_client_needs_to_build() -> None:
@@ -80,19 +69,6 @@ def test_a_vended_credential_carries_what_a_lance_client_needs_to_build() -> Non
     assert opts["virtual_hosted_style_request"] == "false"
 
 
-def test_an_https_endpoint_is_not_downgraded() -> None:
-    """A TLS endpoint keeps TLS AND is not handed a plaintext permit beside it.
-
-    The endpoint alone was never enough: object_store consults `allow_http` only when a request would
-    otherwise be refused, so a credential carrying `https://` with `allow_http=true` works identically
-    until something downgrades — and then permits it. The same trap `s3_filesystem` documents, where
-    hardcoding `http` once silently downgraded a secured connection.
-    """
-    opts = _vend("https://s3.example.com")
-    assert opts["endpoint"] == "https://s3.example.com"
-    assert opts["allow_http"] == "false", "an https store was vended a credential that also permits plaintext"
-
-
 def test_a_vend_against_aws_proper_permits_no_plaintext() -> None:
     """No configured endpoint means botocore's regional AWS endpoint, which is `https://`.
 
@@ -102,58 +78,3 @@ def test_a_vend_against_aws_proper_permits_no_plaintext() -> None:
     opts = _vend(None)
     assert "endpoint" not in opts
     assert opts["allow_http"] == "false", "a credential for AWS proper permits plaintext"
-
-
-_LOCATION = "s3://lakehouse/abc12345_ns$t"
-
-
-class _Namespace:
-    """A backend whose `describe_table` answers an `s3://` location, the only kind a vend scopes."""
-
-    def describe_table(self, request: Any) -> DescribeTableResponse:
-        return DescribeTableResponse(location=_LOCATION)
-
-    def describe_namespace(self, request: Any) -> DescribeNamespaceResponse:
-        """The namespace declares no tier; the tier judge reads it before a write-tier vend."""
-        return DescribeNamespaceResponse(properties={})
-
-
-@pytest.fixture
-def describe_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClient]:
-    application = FastAPI()
-    install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(tables.router)
-    application.state.vendor = _vendor("https://s3.example.com")
-    # The manifest read is the catalog's own root-credential open, not the vend, and needs a live store.
-    monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: VendFacts(read_version=1))
-    # The catalog's OWN connection is plaintext and root-keyed, so the production `get_storage_options`
-    # answers `allow_http=true` and the root pair: a door that merged it into the vend, either way round,
-    # would hand a reader the root secret or hand the https store a plaintext permit. The control root, where
-    # the describe reads the table's location claim for its uuid, is a local directory.
-    settings = Settings(
-        LANCE_S3_ENDPOINT="http://rustfs:9000",
-        LANCE_S3_ACCESS_KEY_ID="ROOTKEY",
-        LANCE_S3_SECRET_ACCESS_KEY="ROOTSECRET",
-        LANCE_CONTROL_ROOT=str(tmp_path),
-    )
-    # The table's location carries the claim the create took, recording the uuid a credential is scoped by.
-    location_claims.take(
-        table_claims.claim_store(settings), _LOCATION, "ns$t", ["ns", "t"], uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01", is_gone=lambda _claim: False
-    )
-    application.dependency_overrides[get_settings] = lambda: settings
-    application.dependency_overrides[get_namespace] = _Namespace
-    with TestClient(application) as client:
-        yield client
-
-
-def test_the_describe_door_hands_an_https_vend_on_without_a_plaintext_permit(describe_client: TestClient) -> None:
-    """The HTTP door, not only the vendor: `describe_table` answers the vend and nothing of its own connection."""
-    response = describe_client.post("/v1/table/ns%24t/describe", params={"vend_credentials": "true"})
-
-    assert response.status_code == 200, response.text
-    options = response.json()["storage_options"]
-    assert options["endpoint"] == "https://s3.example.com"
-    assert options["aws_session_token"] == "TOK", "the door answered without the vend — this proves nothing about it"
-    assert options["aws_access_key_id"] == "AK"
-    assert not {"ROOTKEY", "ROOTSECRET"} & set(options.values()), "the describe door handed a reader the catalog's root credential"
-    assert options["allow_http"] == "false", "the describe door handed an https store a credential that also permits plaintext"

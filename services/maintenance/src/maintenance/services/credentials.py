@@ -29,16 +29,18 @@ THE CREDENTIAL MAINTENANCE PRESENTS IS THE POD'S OWN SERVICE-ACCOUNT TOKEN, proj
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass  # noqa: TID251
 from typing import TYPE_CHECKING, Final
 
 import httpx
 from lance_namespace.errors import ErrorCode
+from pydantic import BaseModel, ConfigDict, SecretStr
 
 from maintenance.core.metrics import record_credential_tier
 from service_kit.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.base_refs import decoded_path, normalise
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
+from service_kit.lakehouse.objectfs import credential_of, without_credentials
 
 
 if TYPE_CHECKING:
@@ -180,8 +182,7 @@ def table_in_invalid_state(response: httpx.Response, *, table_id: str) -> Mainte
     return MaintenanceDenied(f"the catalog refused {table_id} as in an invalid state (409 code {code}): {detail}")
 
 
-@dataclass(frozen=True, slots=True)
-class Vended:
+class Vended(BaseModel):
     """What the catalog handed back: the scoped options AND where it says that table lives.
 
     THE LOCATION WAS ALWAYS IN THE RESPONSE AND WAS ALWAYS DISCARDED. `CredentialResponse` carries
@@ -192,10 +193,30 @@ class Vended:
     552 datasets).
 
     ``None`` where the door named none. A catalog that does not say is not a catalog that disagrees.
+
+    The key pair is held apart from the rest of the options, its secret and session token ``SecretStr`` ([[LH-072]]), so a
+    repr, a log line or an error that echoes a vend carries neither; :meth:`as_storage_options` puts it back beside the
+    rest for the call that signs.
     """
 
+    model_config = ConfigDict(frozen=True)
+
+    #: The storage options the door answered, less its credential (``objectfs.without_credentials``).
     options: dict[str, str]
+    #: The key pair the door answered; ``None`` where the answer carried no key id and secret to sign with.
+    key_pair: S3KeyPair | None
     location: str | None
+
+    def as_storage_options(self) -> dict[str, str]:
+        """The storage options the pass signs with, the key pair in clear and in the ``aws_`` spelling, which a pod's
+        ambient AWS_* environment cannot displace (``objectfs.lance_storage_options``)."""
+        if self.key_pair is None:
+            return dict(self.options)
+        pair = self.key_pair
+        credential = {"aws_access_key_id": pair.access_key_id, "aws_secret_access_key": pair.secret_access_key.get_secret_value()}
+        if pair.session_token is not None:
+            credential["aws_session_token"] = pair.session_token.get_secret_value()
+        return {**self.options, **credential}
 
 
 def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str, fallback: dict[str, str]) -> dict[str, str]:
@@ -242,7 +263,7 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str,
     _refuse_a_credential_that_does_not_cover(uri=uri, table_id=table_id, location=vended.location)
     logger.info("write credential SCOPED for %s — this pass is signed by a table-scoped credential", table_id)
     record_credential_tier(tier="scoped")
-    return _at_own_store(vended.options, settings.s3_endpoint)
+    return _at_own_store(vended.as_storage_options(), settings.s3_endpoint)
 
 
 def _at_own_store(options: dict[str, str], endpoint: str) -> dict[str, str]:
@@ -386,8 +407,16 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
     options = (payload.get("credentials") or {}).get("storage_options")
     if not isinstance(options, dict):
         return None
+    answered = {str(key): str(value) for key, value in options.items()}
     location = payload.get("location")
-    return Vended(
-        options={str(key): str(value) for key, value in options.items()},
-        location=str(location) if location else None,
+    return Vended(options=without_credentials(answered), key_pair=_key_pair(answered), location=str(location) if location else None)
+
+
+def _key_pair(answered: dict[str, str]) -> S3KeyPair | None:
+    """The key pair the door's answer carries under either spelling (``objectfs.credential_of``), or ``None`` without a key id and secret."""
+    access_key, secret_key, session_token = credential_of(answered)
+    if access_key is None or secret_key is None:
+        return None
+    return S3KeyPair(
+        access_key_id=access_key, secret_access_key=SecretStr(secret_key), session_token=None if session_token is None else SecretStr(session_token)
     )

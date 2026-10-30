@@ -283,13 +283,11 @@ def _mint(location: str, *, tier: Tier, bases: VendableBases, vendor: Credential
     ``expires_at_millis`` key ..."). Without it a temporary credential looks permanent, and the client discovers
     the TTL by failing at the 900-second mark instead of refreshing.
     """
-    creds = vend_or_refuse(vendor, table_location=location, tier=tier, session_name=session_name, bases=bases.bases, data_directories=bases.data_directories)
-    if creds is None:
+    vended = vend_or_refuse(vendor, table_location=location, tier=tier, session_name=session_name, bases=bases.bases, data_directories=bases.data_directories)
+    if vended is None:
         return None
-    options = dict(creds.storage_options)
-    if creds.expires_at_millis is not None:
-        options["expires_at_millis"] = str(creds.expires_at_millis)
-    return options
+    # The secret and the session token leave the catalog in the door's answer and nowhere else ([[LH-072]]).
+    return {**vended.as_storage_options(), "expires_at_millis": str(vended.expires_at_millis)}
 
 
 async def _vend_on_spec_door(

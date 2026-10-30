@@ -36,10 +36,12 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 from lance_namespace import TableBranchNotFoundError
+from pydantic import SecretStr
 
 from catalog.api.v1.endpoints.credentials import vend_credentials
-from catalog.schemas import VendedCredentials
+from catalog.core.vending import VendedSession
 from catalog.services.table_claims import DoorTable, ResolvedTable
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.location_claims import ClaimStore
 
@@ -63,9 +65,9 @@ class _Vendor:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
-    def vend(self, **kwargs: Any) -> VendedCredentials:
+    def vend(self, **kwargs: Any) -> VendedSession:
         self.calls.append(kwargs)
-        return VendedCredentials(storage_options={"aws_access_key_id": "AK", "aws_secret_access_key": "SK"})
+        return VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
 
 
 def _settings() -> SimpleNamespace:

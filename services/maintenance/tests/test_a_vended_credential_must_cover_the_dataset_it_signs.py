@@ -27,13 +27,15 @@ would refuse every one of them — a guard that fires on the healthy majority an
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
+from service_kit.governed.store_credential import S3KeyPair
 
 
 AMBIENT = {"aws_access_key_id": "rustfsadmin"}
-SCOPED = {"aws_access_key_id": "SCOPED"}
+SCOPED = {"aws_access_key_id": "SCOPED", "aws_secret_access_key": "scoped-secret"}
 
 
 def _settings() -> MaintenanceSettings:
@@ -42,7 +44,7 @@ def _settings() -> MaintenanceSettings:
 
 def _vends(location: str | None) -> object:
     def _vend(table_id: str, settings: MaintenanceSettings) -> credentials.Vended:
-        return credentials.Vended(options=dict(SCOPED), location=location)
+        return credentials.Vended(options={}, key_pair=S3KeyPair(access_key_id="SCOPED", secret_access_key=SecretStr("scoped-secret")), location=location)
 
     return _vend
 
