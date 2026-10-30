@@ -262,10 +262,13 @@ store before rask relies on it; it is not a contention test, so the CAS harness 
 The audit's requirement list (§ "What rask must demand of ANY platform store") plus these, each argued in
 `references/security.md` § Platform store checklist: no default root credential; root held by the platform only; an
 explicit `RUSTFS_RPC_SECRET` on multi-node; TLS with a CA rask trusts; console unreachable from workload namespaces;
-path-style accepted or the server domain named; durability `strict`; rask buckets unversioned (or versioned with a
-noncurrent-expiry the platform owns), no Object Lock default retention, no expiration lifecycle on rask prefixes
-beyond AbortIncompleteMultipartUpload; one writable site per table (async replication cannot arbitrate a Lance
-commit); conditional writes proven exclusive across nodes.
+path-style accepted or the server domain named; durability `strict`; rask buckets versioned, with a noncurrent-version
+expiry the platform owns and sets past the time it takes to answer a page, because a writer's vend can put over a
+committed file and the noncurrent version is what restores it ([[LH-419]]: maintenance's sweep names such a file and
+`CommittedFileOverwritten` pages); no Object Lock default retention, no expiration lifecycle on rask prefixes beyond
+AbortIncompleteMultipartUpload and that noncurrent-version expiry; one writable site per table (async replication cannot
+arbitrate a Lance commit); conditional writes proven exclusive across nodes. Nothing in rask checks that a store keeps
+versions: the dev fixture's buckets are unversioned, so a tampered file there is found and not restorable.
 
 ## Routing
 

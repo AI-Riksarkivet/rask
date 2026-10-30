@@ -127,6 +127,12 @@ spec:
                     "Resource": ["arn:aws:s3:::*/_bases/*"]
                   },
                   {
+                    "Sid": "ForgetACommittedFilesRecordNeverWriteOne",
+                    "Effect": "Deny",
+                    "Action": ["s3:PutObject"],
+                    "Resource": ["arn:aws:s3:::*/_file_identities/*"]
+                  },
+                  {
                     "Sid": "NeverTheRecordsThatGovernMaintenance",
                     "Effect": "Deny",
                     "Action": ["s3:PutObject", "s3:DeleteObject"],
@@ -141,6 +147,10 @@ spec:
                 ]
               }
               POLICY
+              # `_file_identities/` holds what each commit added as the catalog recorded it, which the sweep checks
+              # the store against ([[LH-419]]): maintenance deletes a record no retained version needs and writes
+              # none, so the catalog is the only writer of what an overwrite is judged by (ADR 0184).
+              #
               # The deny is on WRITES only: the sweep must READ `_warehouses/` to resolve the buckets it
               # sweeps and `_protection/` to compute the pre-pass verdict, and blinding it there would
               # widen what it destroys rather than narrow it.

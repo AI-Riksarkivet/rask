@@ -1,4 +1,4 @@
-"""The objects under one prefix, listed and deleted by key, the way the store keeps them.
+"""The objects under one prefix, listed, read and deleted by key, the way the store keeps them.
 
 On S3 the object client lists and deletes by key (``DeleteObjects``, a thousand keys a request, or one ``DeleteObject``
 after a ``HeadObject``), because pyarrow's ``delete_file`` and ``delete_dir`` write a directory marker into the parent
@@ -11,6 +11,9 @@ through pyarrow's filesystem.
 
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from typing import Any, Final
 
@@ -23,6 +26,12 @@ from storage import s3_client
 
 #: The most keys one S3 DeleteObjects request takes.
 _DELETE_BATCH: Final = 1000
+
+#: How many objects :func:`identities` asks the store about at once.
+_IDENTITY_READS: Final = 16
+
+#: How much of a local object :func:`identities` hashes per read.
+_HASH_CHUNK: Final = 1 << 20
 
 
 class StoredObject(BaseModel):
@@ -64,6 +73,72 @@ def list_under(uri: str, storage_options: dict[str, str]) -> list[StoredObject]:
         for info in infos
         if info.type == pafs.FileType.File and info.mtime is not None
     ]
+
+
+class ObjectIdentity(BaseModel):
+    """One object as the store holds it now: its ETag and its size."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: The store's ETag on S3, unquoted; on a local root the SHA-256 of the bytes, which means the same thing, "these
+    #: bytes", as a local record's ETag does in :mod:`service_kit.lakehouse.records`.
+    etag: str
+    size: int
+
+
+def identities(uri: str, storage_options: dict[str, str], keys: Sequence[str]) -> dict[str, ObjectIdentity]:
+    """Each object at ``<uri>/<key>`` the store holds, by key, as it holds it now; an absent one is left out.
+
+    ``uri`` is the store's own spelling of a root (``s3://<bucket>/<key>`` or a local path), never decoded here. An S3
+    object is read with one HEAD, sixteen at a time; a local one is hashed.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, a read.
+    """
+    if not keys:
+        return {}
+    read = _s3_identity(uri, storage_options) if uri.startswith("s3://") else _local_identity(uri, storage_options)
+    with ThreadPoolExecutor(max_workers=min(_IDENTITY_READS, len(keys))) as pool:
+        found = list(pool.map(read, keys))
+    return {key: identity for key, identity in zip(keys, found, strict=True) if identity is not None}
+
+
+def _s3_identity(uri: str, storage_options: dict[str, str]) -> Callable[[str], ObjectIdentity | None]:
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
+    client = _object_client(storage_options)
+
+    def read(key: str) -> ObjectIdentity | None:
+        full_key = f"{prefix}/{key}" if prefix else key
+        try:
+            head = client.head_object(Bucket=bucket, Key=full_key)
+        except ClientError as exc:
+            if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404:
+                return None
+            raise OSError(f"the store refused reading {bucket}/{full_key}: {exc}") from exc
+        except BotoCoreError as exc:
+            raise OSError(f"the store could not be reached reading {bucket}/{full_key}: {exc}") from exc
+        return ObjectIdentity(etag=str(head["ETag"]).strip('"'), size=int(head["ContentLength"]))
+
+    return read
+
+
+def _local_identity(uri: str, storage_options: dict[str, str]) -> Callable[[str], ObjectIdentity | None]:
+    fs, base = fs_and_base(uri, storage_options)
+
+    def read(key: str) -> ObjectIdentity | None:
+        digest, size = hashlib.sha256(), 0
+        try:
+            with fs.open_input_stream(f"{base}/{key}") as stream:
+                while chunk := stream.read(_HASH_CHUNK):
+                    digest.update(chunk)
+                    size += len(chunk)
+        except FileNotFoundError:
+            return None
+        return ObjectIdentity(etag=digest.hexdigest(), size=size)
+
+    return read
 
 
 def delete_object(uri: str, storage_options: dict[str, str], key: str) -> bool:

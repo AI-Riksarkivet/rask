@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack
 from pathlib import Path
@@ -53,7 +54,7 @@ from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.governed.signing_key import signing_key_name
-from service_kit.lakehouse import outbox
+from service_kit.lakehouse import location_claims, outbox
 
 
 #: The catalog's own service account, whose principal it signs as on the estate (`lance.saSubject`).
@@ -253,6 +254,12 @@ def _made_natively(root: Path, table: list[str]) -> None:
     else:
         namespace.create_namespace(CreateNamespaceRequest(id=table[:-1]))
     namespace.create_table(CreateTableRequest(id=table), _rows())
+    # The claim recording its uuid, which every table the catalog makes holds (ADR 0173 §6) and a write door records under.
+    from catalog.core.config import get_settings
+
+    location = str(namespace.describe_table(DescribeTableRequest(id=table)).location)
+    store = location_claims.ClaimStore(control_root=get_settings().registry_root, storage_options={})
+    location_claims.take(store, location, "$".join(table), table, is_gone=lambda _claim: False, uuid=str(uuid.uuid4()))
 
 
 def _version(root: Path, table: list[str]) -> int | None:

@@ -213,8 +213,10 @@ What rask demands of a production store, beyond the audit's list (R1-R11, R13, R
 - Console and admin API unreachable from workload namespaces, or reachable only by identities without `admin:*`.
 - Path-style accepted, or the server domain named so rask can be configured for virtual-hosted style.
 - `RUSTFS_DURABILITY_MODE=strict` (`operations.md`).
-- Buckets unversioned, or versioned with a noncurrent-version expiry the platform owns; no Object Lock default
-  retention; no expiration or transition lifecycle on rask prefixes except AbortIncompleteMultipartUpload.
+- Buckets versioned, with a noncurrent-version expiry the platform owns and sets past the time it takes to answer a
+  page: a writer's vend can put over a committed file, and its noncurrent version is what restores it ([[LH-419]]). No
+  Object Lock default retention; no expiration or transition lifecycle on rask prefixes except
+  AbortIncompleteMultipartUpload and that noncurrent-version expiry.
 - One writable site per table; replication only as a passive DR copy.
 - Conditional writes proven exclusive across nodes (rask's CAS harness run against it).
 - Encryption at rest from a KMS the platform owns, if required; SSE-C only with TLS required.

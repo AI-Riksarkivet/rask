@@ -50,6 +50,7 @@ class _Result:
     # record gained `duration_seconds` ([[LH-098]]) and every test here failed with AttributeError
     # rather than passing on a double that had quietly fallen behind the real model.
     duration_seconds = 4.25
+    overwritten_files: tuple[str, ...] = ()
     # The app-log half of the funnel names the three NON-outcomes too, so a double that omits
     # them cannot reach the audit call below it.
     refused = ""

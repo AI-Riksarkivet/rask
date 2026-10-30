@@ -30,6 +30,7 @@ from tables_by_name import open_by_name
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table, delete_from_table, update_table
 from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
 
 
@@ -55,7 +56,8 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     root = str(tmp_path / "data")
     namespace = connect("dir", {"root": root})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3], "main"), root=root, mode="create", registry=None)
+    registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3], "main"), root=root, mode="create", registry=registry, holder="$".join(TABLE_ID))
     dataset = open_by_name(namespace, {}, TABLE_ID)
     dataset.create_branch(BRANCH) if hasattr(dataset, "create_branch") else pytest.skip("pylance has no branch API here")
     return namespace

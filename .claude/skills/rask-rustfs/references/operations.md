@@ -85,8 +85,10 @@ Citations: `rustfs@1.0.3:<path>:<line>`, `docs:<path>`, rask paths bare.
 ## Data features against Lance
 
 - **Versioning**: a delete on a versioned bucket writes a marker and frees nothing; the inline budget is divided by 8
-  (`storageclass.rs:243-256`). Lance keeps its own versions; maintenance's sweep, Lance cleanup and the warehouse purge
-  free nothing on a versioned bucket. rask buckets stay unversioned.
+  (`storageclass.rs:243-256`). Lance keeps its own versions, so maintenance's sweep, Lance cleanup and the warehouse
+  purge free bytes on a versioned bucket only once its noncurrent-version expiry runs. A platform store keeps versions
+  anyway (SKILL.md § 8): a writer's vend can put over a committed file, the sweep names it ([[LH-419]]), and its
+  noncurrent version is what restores it. The expiry is the platform's, set past the time it takes to answer the page.
 - **Object Lock**: needs versioning; a locked version blocks Lance cleanup, the orphan sweep, trash purge and warehouse
   purge with AccessDenied (`docs:administration/data/object/object-lock.md`, not checked in source). Never on rask buckets.
 - **Lifecycle**: an expiration rule over a Lance prefix deletes fragments a manifest references and corrupts the table

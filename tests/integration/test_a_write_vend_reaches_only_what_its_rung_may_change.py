@@ -190,14 +190,15 @@ _FINAL_MANIFEST = re.compile(r"/_versions/\d+\.manifest$")
 
 
 def test_a_writer_lands_rows_with_only_what_its_vend_allows(estate: _Estate) -> None:
-    """A stock append on the vended write tier stages everything itself and leaves only the final manifest to the catalog."""
+    """A stock append on the vended write tier stages everything in the table itself and leaves only the final manifest to
+    the catalog, whose own records of the commit lie on its control root."""
     options, policy = estate.vend("write")
     stock = lance_namespace.connect("rest", {"uri": str(estate.client.base_url)})
     before = estate.keys()
 
     lance.write_dataset(_rows([1, 2], blob_bytes=200_000), namespace_client=stock, table_id=["db", "pages"], mode="append", storage_options=options)
 
-    new = sorted(estate.keys() - before)
+    new = sorted(key for key in estate.keys() - before if key.startswith(f"{_within(estate.location, estate.bucket)}/"))
     finalized = [key for key in new if _FINAL_MANIFEST.search(key)]
     staged_by_the_writer = [key for key in new if key not in finalized]
     assert finalized and not any(_permits(policy, "s3:PutObject", estate.bucket, key) for key in finalized), finalized

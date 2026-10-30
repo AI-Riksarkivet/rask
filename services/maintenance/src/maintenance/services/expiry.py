@@ -90,6 +90,9 @@ class DatasetResult(BaseModel):
     #: This pass found Lance's commit-path auto-cleanup armed and removed every ``lance.auto_cleanup.*`` key
     #: ([[LH-245]]).
     auto_cleanup_disarmed: bool = False
+    #: Each file a commit added, by its path under the table, that the store no longer holds as the catalog recorded it
+    #: when it committed: overwritten in place ([[LH-419]]).
+    overwritten_files: list[str] = Field(default_factory=list)
     #: The table this dataset is, or whose branch it is, as the catalog's ``__manifest`` names it; ``None`` when none does.
     table_id: str | None = None
     #: The uuids of that table and its namespace, read for a pass whose lineage event names them (ADR 0173 §10).

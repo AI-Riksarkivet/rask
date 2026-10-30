@@ -39,8 +39,8 @@ from pydantic import BaseModel, InstanceOf
 
 from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
-from catalog.services import client_fragments, dataplane, maintenance, primary_keys, table_claims
-from service_kit.lakehouse import base_refs, base_registry, features, maintenance_due
+from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, table_claims
+from service_kit.lakehouse import base_refs, base_registry, features, file_identities, maintenance_due
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.outage import reads_as_store_outage
@@ -124,6 +124,8 @@ class StagedVersion(BaseModel):
     properties: dict[str, str] = {}
     #: The staged transaction's own uuid, which keys the author the catalog records for a commit naming none ([[LH-497]]).
     transaction_uuid: str = ""
+    #: The version the staged transaction was planned on, which names its transaction file.
+    read_version: int = 0
     #: The staged manifest's ``max_fragment_id``, ``None`` when it states none.
     max_fragment_id: int | None = None
 
@@ -213,6 +215,7 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         operation=operation,
         properties=properties,
         transaction_uuid=transaction.uuid if transaction is not None else "",
+        read_version=transaction.read_version if transaction is not None else 0,
         max_fragment_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.MAX_FRAGMENT_ID_FIELD),
     )
 
@@ -738,6 +741,14 @@ def _refuse_an_index_that_does_not_open(proposed: lance.LanceDataset, index: _Ad
         raise InvalidInputError(f"commit refused: index {index.name!r} does not open: {exc}") from exc
 
 
+class Verdict(BaseModel):
+    """A staged version the judge admitted: whether it adds data, and the files it adds as the store held them."""
+
+    adds_data: bool
+    #: Read before any of the version's files is judged, so a file replaced after the read is found later ([[LH-419]]).
+    files: file_identities.CommittedFiles
+
+
 def judge(
     staged: StagedVersion,
     so: StorageOptions,
@@ -745,8 +756,9 @@ def judge(
     base_judge: BaseJudge,
     external_bases: Sequence[base_registry.RecordedBase],
     clone_evidence: CloneEvidence | None = None,
-) -> bool:
-    """Refuse the staged version if it breaks a rule the catalog's own write doors hold; say whether it adds data.
+) -> Verdict:
+    """Refuse the staged version if it breaks a rule the catalog's own write doors hold; say whether it adds data, and
+    what it adds under the table's root.
 
     The version is compared with the one it follows. What it adds is judged: a file or a row carried over was judged
     when it landed. It adds data when it names a data file the version it follows does not hold, unless it is a
@@ -767,6 +779,15 @@ def judge(
     encoding.require_no_new_invalid_encoding(current, proposed)
     _refuse_config(proposed, current)
     version = _Judged(staged=staged, so=so, proposed=proposed, current=current, split=_split(proposed, current), clone_evidence=clone_evidence)
+    files = committed_files.added(
+        current,
+        proposed,
+        table_location=staged.table_location,
+        branch=staged.branch,
+        so=so,
+        transaction_uuid=staged.transaction_uuid,
+        read_version=staged.read_version,
+    )
     _refuse_bases(version, base_judge)
     _refuse_foreign_file_versions(version)
     _refuse_added_feature_flags(proposed, current)
@@ -777,7 +798,7 @@ def judge(
     primary_keys.refuse_repeats_in_version(proposed, current, door="version/create")
     _refuse_beyond_the_operation(version)
     _refuse_an_index_outside_its_directory(version)
-    return version.adds_data
+    return Verdict(adds_data=version.adds_data, files=files)
 
 
 #: The lineage operation each staged Lance operation is announced as. pylance stages merge_insert as an ``Update`` and

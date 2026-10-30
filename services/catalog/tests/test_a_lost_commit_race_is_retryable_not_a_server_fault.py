@@ -22,6 +22,7 @@ from lance_namespace import ConcurrentModificationError, CreateNamespaceRequest,
 from catalog.services import table_claims
 from catalog.services.dataplane import add_columns, create_table
 from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
 
 
@@ -46,7 +47,14 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(
-        namespace, {}, TABLE_ID, pa.table({"id": pa.array([1, 2, 3], pa.int64())}, schema=SCHEMA), root=str(tmp_path / "data"), mode="create", registry=None
+        namespace,
+        {},
+        TABLE_ID,
+        pa.table({"id": pa.array([1, 2, 3], pa.int64())}, schema=SCHEMA),
+        root=str(tmp_path / "data"),
+        mode="create",
+        registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
+        holder="$".join(TABLE_ID),
     )
     return namespace
 

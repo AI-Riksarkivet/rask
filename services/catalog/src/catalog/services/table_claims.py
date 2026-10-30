@@ -37,7 +37,7 @@ from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_
 from catalog.services import native
 from catalog.services.object_uuids import UnidentifiedObjectError
 from service_kit.governed import fga
-from service_kit.lakehouse import history_fences, location_claims, trash
+from service_kit.lakehouse import file_identities, history_fences, location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 from service_kit.lakehouse.objectfs import StorageOptions
@@ -269,6 +269,15 @@ class DoorTable:
         except history_fences.HistoryFencedError as exc:
             log.info("table_history_fenced", extra={"table": self.segments, "work": work, "reason": str(exc)})
             raise ConcurrentModificationError(f"table {fga.canonical_object_id(self.segments)}: {exc}") from exc
+
+    def record_committed_files(self, committed: file_identities.CommittedFiles) -> None:
+        """Record what a commit about to land adds to the table, on the control root its claim is kept on, before the
+        version is final: maintenance's sweep reads each file again from then on ([[LH-419]]).
+
+        Raises:
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
+        file_identities.record(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), committed)
 
 
 class TableChangedError(ConcurrentModificationError):

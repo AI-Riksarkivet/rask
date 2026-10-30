@@ -227,7 +227,7 @@ async def create_table_version(
         record = await run_in_threadpool(judge.read_record, location)
         run = run_context.from_properties(staged.properties)
         run_context.require_caller_authored(staged.properties, caller=token.subject if token is not None else None)
-        adds_data = await run_in_threadpool(
+        verdict = await run_in_threadpool(
             partial(
                 managed_versions.judge,
                 base_judge=judge,
@@ -237,7 +237,9 @@ async def create_table_version(
             staged,
             so,
         )
-        declared = await fga_deps.judge_staged_run(settings, token, client, resolver, ns=table.namespace, segments=segments, run=run, adds_data=adds_data)
+        declared = await fga_deps.judge_staged_run(
+            settings, token, client, resolver, ns=table.namespace, segments=segments, run=run, adds_data=verdict.adds_data
+        )
         if staged.creates:
             # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
             labels = await run_in_threadpool(managed_versions.staged_field_labels, staged, so)
@@ -258,6 +260,8 @@ async def create_table_version(
         await run_in_threadpool(
             commit_records.record_author, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), staged.transaction_uuid, caller
         )
+    # BEFORE THE FINALIZE: each file the version adds is checked again from the moment it lands ([[LH-419]]).
+    await run_in_threadpool(table.record_committed_files, verdict.files)
     if declared:
         # BEFORE THE FINALIZE: an erasure names this table from the moment the version lands ([[LH-541]]).
         await run_in_threadpool(
@@ -285,7 +289,7 @@ async def create_table_version(
         pin_version=staged.version,
         branch=staged.branch,
         run=run,
-        commits_rows=staged.creates and adds_data,
+        commits_rows=staged.creates and verdict.adds_data,
     )
     return response
 

@@ -96,14 +96,14 @@ def _heads(ds: lance.LanceDataset) -> Iterator[lance.LanceDataset]:
         yield ds.checkout_version((name, None))
 
 
-def _every_retained_version(ds: lance.LanceDataset) -> Iterator[lance.LanceDataset]:
-    """Every version of main and of every branch the store still keeps a manifest for."""
+def every_retained_version(ds: lance.LanceDataset) -> Iterator[tuple[str | None, lance.LanceDataset]]:
+    """Every version of main and of every branch the store still keeps a manifest for, with its branch (``None`` for main)."""
     for version in ds.versions():
-        yield ds.checkout_version(int(version["version"]))
+        yield None, ds.checkout_version(int(version["version"]))
     for name in ds.branches.list():
         branch = ds.checkout_version((name, None))
         for version in branch.versions():
-            yield ds.checkout_version((name, int(version["version"])))
+            yield name, ds.checkout_version((name, int(version["version"])))
 
 
 def _held(directory: str, name: str, referenced: set[ReferencedFile]) -> bool:
@@ -137,7 +137,7 @@ def unreferenced(
     referenced = {file for head in _heads(ds) for file in _referenced_by(head, directories)}
     if not (candidates := _unheld(candidates, prefixes, referenced)):
         return {}
-    referenced |= {file for version in _every_retained_version(ds) for file in _referenced_by(version, directories)}
+    referenced |= {file for _, version in every_retained_version(ds) for file in _referenced_by(version, directories)}
     return _unheld(candidates, prefixes, referenced)
 
 

@@ -21,6 +21,7 @@ from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.services import dataplane, table_claims
 from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
 
 
@@ -38,7 +39,14 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     dataplane.create_table(
-        namespace, {}, TABLE_ID, pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA), root=str(tmp_path / "data"), mode="create", registry=None
+        namespace,
+        {},
+        TABLE_ID,
+        pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA),
+        root=str(tmp_path / "data"),
+        mode="create",
+        registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
+        holder="$".join(TABLE_ID),
     )
     dataplane.update_schema_metadata(
         table_claims.door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID), {}, {INTERNAL: "r-123"}, transaction_properties=STAMP

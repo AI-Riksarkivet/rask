@@ -611,7 +611,20 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   cleanup, and get/delete on the table's own data directories, those of its declared bases its base record holds as
   `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. It is also the
   shape for the warehouse scope probe. The management vend door checks the one rung its
-  tier names, never either. A put over an existing key is the residue no session policy can refuse.
+  tier names, never either. A put over an existing key is the residue no session policy can refuse, so it is DETECTED
+  ([[LH-419]], ADR 0184): every catalog commit records each file it adds under the table's root (data files, blob sidecars,
+  deletion files, index files and its transaction file), with the ETag and size the store answers, before its version is
+  announced (`service_kit.lakehouse.file_identities`, `_file_identities/<table
+  uuid>/<transaction uuid>.json`, written by `version/create` before it judges a stock commit's files, by
+  `commit_stamped` before its finalize, and by the create door and an unkeyed `/insert`, which Lance commits itself,
+  just after it lands, logging `committed_files_unrecorded` at ERROR and counting `catalog.committed_files.unrecorded`,
+  which warns, when that write fails), and the sweep reads each recorded file again (`maintenance.services.committed_files`):
+  one held with another ETag or size, or gone while a retained version names it, is named in `overwritten_files`, logged
+  `committed_file_overwritten` and counted `maintenance.files.overwritten`, which pages (`CommittedFileOverwritten`). A
+  record is forgotten only once no retained version names its files and the store holds none of them. The platform store keeps object versions to restore it (`rask-rustfs` § 8). Prevention
+  waits on upstream: stock pylance sends `If-None-Match` only on manifests, and object_store has no conditional
+  multipart. A file named through a base is not recorded, since no vend puts there, and a registered table's files are
+  recorded only from its first commit through the catalog.
   **Each vend is a session of its own** ([[XC-083]], ADR 0170): the catalog exchanges its OWN projected ServiceAccount
   token through STS `AssumeRoleWithWebIdentity` with that session policy, named for the verified caller
   (`vending.role_session_name`), and a refused or unanswered exchange answers 503 code 17 (`vending.vend_or_refuse`).

@@ -115,9 +115,9 @@ from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.core.run_context import OPERATION_PROPERTY
 from catalog.core.vending import classified_columns, labelled_fields
-from catalog.services import changes, native, primary_keys, table_bases, table_claims
+from catalog.services import changes, committed_files, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, data_directories, location_claims, trash
+from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, data_directories, file_identities, location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
 from service_kit.lakehouse.features import manifest_base_path_refs
@@ -699,6 +699,7 @@ def create_table(
                 properties=properties,
                 transaction_properties=transaction_properties,
             )
+            _record_written_files(registry, existing, so, dataset)
             return CreateTableResponse(location=existing, version=dataset.version)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
             return _kept_at(existing, so)
@@ -756,6 +757,22 @@ def _before_commit(hook: Callable[[str], None] | None, location: str, registry: 
     if claim is None or claim.claim.uuid is None:
         raise InternalError(f"the table about to be written at {location} holds no claim recording its uuid")
     hook(claim.claim.uuid)
+
+
+def _record_written_files(registry: base_registry.BaseRegistry | None, location: str, so: StorageOptions, written: lance.LanceDataset) -> None:
+    """Record what the create door's write added ([[LH-419]]), under the uuid the location's claim records; nothing for a
+    caller outside governance. ``write_dataset`` writes and commits in one call, so it is recorded once it lands
+    (:func:`committed_files.record_landed`)."""
+    if registry is None:
+        return
+
+    def record(committed: file_identities.CommittedFiles) -> None:
+        claim = location_claims.read(_claim_store(registry), location)
+        if claim is None or claim.claim.uuid is None:
+            raise InternalError(f"the table written at {location} holds no claim recording its uuid")
+        file_identities.record(registry.control_root, registry.storage_options, claim.claim.uuid, committed)
+
+    committed_files.record_landed(record, written, table_location=location, branch=None, so=so)
 
 
 def _named_by_its_uuid(table: pa.Table, location: str, registry: base_registry.BaseRegistry | None) -> pa.Table:
@@ -858,6 +875,7 @@ def _write_blob_into(
                 raise InvalidInputError(f"the table's schema holds a type Lance does not store: {clean_lance_message(str(exc))}") from exc
             raise
         raise InternalError("the table's first write panicked in Lance; the create was rolled back and may be retried") from exc
+    _record_written_files(registry, location, so, dataset)
     return CreateTableResponse(location=location, version=dataset.version)
 
 
@@ -1286,6 +1304,11 @@ def commit_stamped[T](
                 _refuse_a_lost_label(dataset, detached)
             encoding.require_no_new_invalid_encoding(dataset, detached)
             primary_keys.refuse_repeats_in_version(detached, dataset, door=properties[OPERATION_PROPERTY])
+            table.record_committed_files(
+                committed_files.added(
+                    dataset, detached, table_location=table.location, branch=ref, so=so, transaction_uuid=stamped.uuid, read_version=stamped.read_version
+                )
+            )
             fs, base = dataset_fs(location, so)
             versions = f"{base.rstrip('/')}/_versions"
             with fs.open_input_stream(f"{versions}/d{detached.version}.manifest") as source:
@@ -2306,9 +2329,12 @@ def insert_into_table(
                 table, so, transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"), branch=req.branch
             )
         else:
-            # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole.
+            # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole. Its files are
+            # recorded under the table's uuid once it lands, and a table no uuid identifies takes no write ([[LH-534]]).
+            table.resolved.require_uuid()
             dataset.insert(rows, mode=mode.value, transaction_properties=transaction_properties)
             version = int(dataset.version)
+            committed_files.record_landed(table.record_committed_files, dataset, table_location=table.location, branch=req.branch, so=so)
     # The rows this request wrote, read off its own payload: a row count diff across the commit would
     # include whatever a concurrent writer appended in between.
     return InsertIntoTableResponse(version=version, num_inserted_rows=rows.num_rows)

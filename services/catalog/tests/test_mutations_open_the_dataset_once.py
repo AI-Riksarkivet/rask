@@ -36,6 +36,7 @@ from lance_namespace import (
 
 from catalog.services import dataplane, table_claims
 from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
 
 
@@ -44,7 +45,9 @@ def table(tmp_path: Path) -> DoorTable:
     """``db$t`` as a door acts on it, resolved on a real ``dir`` namespace."""
     backend = connect("dir", {"root": str(tmp_path)})
     backend.create_namespace(CreateNamespaceRequest(id=["db"]))
-    dataplane.create_table(backend, {}, ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
+    registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+    rows = pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]})
+    dataplane.create_table(backend, {}, ["db", "t"], rows, root=str(tmp_path), mode="create", registry=registry, holder="db$t")
     return table_claims.door_table(backend, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
 
 

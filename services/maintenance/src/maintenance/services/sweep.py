@@ -42,6 +42,7 @@ from maintenance.core.metrics import (
     record_dataset_swept,
     record_failed,
     record_mixed_file_versions,
+    record_overwritten_files,
     record_reclaimed,
     record_refused,
     record_run,
@@ -50,7 +51,7 @@ from maintenance.core.metrics import (
     record_trashed_skipped,
     record_unrecorded_bases,
 )
-from maintenance.services import base_reclaim, credentials, purge
+from maintenance.services import base_reclaim, committed_files, credentials, purge
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.due import refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
@@ -248,6 +249,7 @@ def _emit_zero_baselines() -> None:
     record_reclaimed(versions_removed=0)
     record_refused(0)
     record_mixed_file_versions(0)
+    record_overwritten_files(0)
     record_unrecorded_bases(0)
 
 
@@ -484,8 +486,36 @@ def maintain_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSetting
         return _skipped(uri, plan, settings=settings)
     result = _expire_in_span(uri, named, plan, sweep=sweep, settings=settings)
     result.due = _evaluate_due(uri, named, plan, sweep=sweep, settings=settings)
+    _check_committed_files(result, named, sweep=sweep, settings=settings)
     _finish(result, plan=plan, now=sweep.context.now, settings=settings)
     return result
+
+
+def _check_committed_files(result: DatasetResult, named: NamedDataset, *, sweep: SweepPlan, settings: MaintenanceSettings) -> None:
+    """Name each file a commit added that the store no longer holds as the catalog recorded it ([[LH-419]]).
+
+    On the table's own pass only: a branch's files are recorded under its table, whose pass reads them. Whatever the
+    expiry did, so a table the expiry refuses is still read. A pass the policy cadence skips reads nothing, so a table
+    under a policy interval is read at that interval.
+    """
+    if sweep.table_ids.of(result.uri) is None:
+        return
+    options = settings.storage_options()
+    try:
+        found = committed_files.check(
+            result.uri,
+            named.owners.table_uuid,
+            open_table=lambda: lance.dataset(result.uri, storage_options=options, session=shared_lance_session()),
+            data_options=options,
+            control_root=settings.resolved_control_root,
+            control_options=options,
+        )
+    except (OSError, ValueError) as exc:
+        log.warning("committed_files_unchecked", extra={"uri": result.uri, "table_id": result.table_id, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        if result.error is None:
+            result.error, result.error_type = f"committed files: {exc}", type(exc).__name__
+        return
+    result.overwritten_files = found.overwritten
 
 
 def expire_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
@@ -563,6 +593,7 @@ def _record_dataset_metrics(result: DatasetResult) -> None:
     record_refused(1 if result.refused else 0, result.refused_by)
     _record_parked(result)
     record_mixed_file_versions(1 if result.mixed_data_file_versions else 0)
+    record_overwritten_files(len(result.overwritten_files))
     if result.error is not None:
         record_failed({result.error_type or "Unknown": 1})
 
@@ -604,6 +635,7 @@ def _record_dataset_outcome(result: DatasetResult, *, subject: str) -> None:
             "error_type": result.error_type,
             "data_storage_version": result.data_storage_version,
             "mixed_data_file_versions": result.mixed_data_file_versions,
+            "overwritten_files": result.overwritten_files,
         },
     )
     audit_material_work(result, subject=subject)

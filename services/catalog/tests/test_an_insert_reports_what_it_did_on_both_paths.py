@@ -29,6 +29,7 @@ from tables_by_name import open_by_name
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table, insert_into_table
 from catalog.services.table_claims import DoorTable
+from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
 
 
@@ -58,7 +59,8 @@ def _rows(start: int) -> pa.Table:
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, {}, TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=None)
+    registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
+    create_table(namespace, {}, TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(TABLE_ID))
     open_by_name(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
     return namespace
 

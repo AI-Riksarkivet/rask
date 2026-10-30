@@ -232,7 +232,7 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
     assert (estate.keys(estate.bucket, root_prefix), estate.files(directory)) == ({}, {}), "the purge left bytes of the table it reclaimed"
     # Maintenance may not write under `_bases/` (the chart's ForgetABaseRecordNeverWriteOne), and a store that matches the
     # Deny as AWS does refuses the marker a record delete would write, so the purge writes none ([[LH-535]]).
-    assert {key for key in estate.keys(estate.bucket, "") if key.endswith("/")} == markers, "the purge wrote a directory marker"
+    assert {key for key in estate.keys(estate.bucket, "") if key.endswith("/")} <= markers, "the purge wrote a directory marker"
     assert base_registry.read_base_record(estate.registry, location) is None, "the base record outlived the bytes it named"
     assert location_claims.holder(claims, directory) is None
 

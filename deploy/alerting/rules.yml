@@ -651,6 +651,38 @@ groups:
             indices. Find the table in the maintenance_dataset_outcome records where
             mixed_data_file_versions is true, and the writer that appended at another data_storage_version.
 
+      # A file a commit added, replaced in place ([[LH-419]]): readers are served bytes no commit wrote. No `for:`: the
+      # sweep counts the file on every tick until it is restored, and a page delayed is a noncurrent version nearer its
+      # expiry. The window spans two 30-minute ticks.
+      - alert: CommittedFileOverwritten
+        expr: sum(increase(maintenance_files_overwritten_total[1h])) > 0
+        labels:
+          severity: critical
+          service: maintenance
+        annotations:
+          summary: "A committed Lance file was overwritten in place"
+          description: >-
+            The sweep found a file a commit added whose ETag or size is no longer what the catalog recorded when it
+            committed: a holder of the table's write vend put over it, and readers are served bytes no commit wrote.
+            The committed_file_overwritten ERROR log names the table uuid, the path and both ETags. Restore the file's
+            noncurrent object version, which a platform store keeps for this, and find the writer in the store's
+            access log.
+
+      # A commit whose added files the catalog could not record ([[LH-419]]): the sweep never reads them, so an overwrite
+      # of them would go unseen. The table still serves what was committed, so this warns rather than pages critical.
+      - alert: CommittedFilesUnrecorded
+        expr: sum(increase(catalog_committed_files_unrecorded_total[1h])) > 0
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "A commit's files were not recorded, so maintenance never checks them"
+          description: >-
+            A write Lance commits in one call (the create door's write, an unkeyed /insert) landed a version whose
+            added files the catalog could not record on its control root, so maintenance never reads them again and an
+            overwrite of them goes unseen. The committed_files_unrecorded ERROR log names the location, the version and
+            the store's error.
+
       # One table the catalog keeps refusing, which the ratio rule cannot see: an id that holds no tuples is answered
       # 403 at the vend door on every tick. A series first appears at 1, which increase() cannot see, so the window
       # spans several sweep periods. vmalert keeps `for:` in memory, so its own restart restarts the clock.

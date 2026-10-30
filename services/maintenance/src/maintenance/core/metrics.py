@@ -76,6 +76,14 @@ _mixed_file_versions = _meter.create_counter(
     unit="{dataset}",
     description="Datasets whose data files are at more than one Lance file version (reader flag 256), counted each time the sweep opens one.",
 )
+#: [[LH-419]] Files a commit added that the store no longer holds as the catalog recorded them: overwritten in place,
+#: which a writer's vend can do and no session policy refuses. Its own series because nothing was refused: the table is
+#: maintained as usual while it serves bytes no commit wrote.
+_overwritten_files = _meter.create_counter(
+    "maintenance.files.overwritten",
+    unit="{file}",
+    description="Committed files the sweep found changed from what the catalog recorded at their commit, counted each tick they are seen.",
+)
 #: [[LH-286]] Fragments whose data file sits in their table's own data directory under a deletion vector: the deleted
 #: rows' bytes stay there until a compaction rewrites the fragment, which the compaction gate refuses for such a table.
 #: Reported rather than reclaimed (owner, 2026-10-24), so the count is how an operator sees what they cost.
@@ -348,6 +356,14 @@ def record_mixed_file_versions(datasets: int) -> None:
     `increase()` sees that mix as a step from 0 rather than as a series appearing.
     """
     _mixed_file_versions.add(datasets)
+
+
+def record_overwritten_files(files: int) -> None:
+    """Record how many committed files the sweep found overwritten in place ([[LH-419]]).
+
+    Always emits, including zero, for `record_mixed_file_versions`' reason.
+    """
+    _overwritten_files.add(files)
 
 
 def record_base_fragments_holding_deleted_rows(fragments: int) -> None:
