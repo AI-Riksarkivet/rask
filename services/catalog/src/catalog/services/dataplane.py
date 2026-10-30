@@ -1420,6 +1420,12 @@ class _CapturingNamespace(LanceNamespace):
     the V2 manifest's object-store path), with the version planned on as the latest: Lance then stages exactly the next
     version, and :func:`commit_stamped` plans again when another writer took it. Nothing here names the table, so nothing
     resolves its name again ([[LH-530]]).
+
+    THIS PATH IS rask's ONLY BECAUSE THESE OPERATIONS TAKE NO TRANSACTION PROPERTIES. pylance 13.0.0 takes them on
+    ``write_dataset``, ``insert`` and ``LanceDataset.commit`` alone; lance-format/lance#9888 (merged 2026-10-24) passes
+    ``WriteParams`` to merge insert and states that ``transaction_properties`` do not apply there, and a search of
+    lance-format/lance on 2026-10-30 found no issue asking for them on the operations above. Once Lance takes them, these doors commit through Lance's own call, which
+    retries a lost race itself, and this namespace and its re-planning ([[LH-542]]) go.
     """
 
     def __init__(self, table: table_claims.DoorTable, so: StorageOptions, *, ref: str | None, planned: int) -> None:
@@ -1473,6 +1479,19 @@ class _CapturingNamespace(LanceNamespace):
         self.staged = dict(request)
         raise _StagedCapture
 
+    def moved(self) -> bool:
+        """Whether the ref holds a version after the one planned on: another writer committed since the plan.
+
+        Asked of the store, never of Lance's wording: Lance learns of the version only by probing it here, so it either
+        stages over it, proves that staging lost and deletes it, or exhausts its own retries against the planned version
+        this namespace keeps answering as the latest ([[LH-542]]).
+        """
+        try:
+            self._version(self._ref, self._planned + 1)
+        except TableVersionNotFoundError:
+            return False
+        return True
+
 
 #: A V2 manifest is named ``u64::MAX - version``, zero-padded to 20 digits (measured on pylance 13.0.0: version 2 is
 #: ``18446744073709551613.manifest``); a V1 one is named by the version itself.
@@ -1510,12 +1529,25 @@ def captured[T](
                 # missing, not raced.
                 if _LANCE_RETRYABLE_CONFLICT in str(exc).lower():
                     raise _PlannedOnAStaleVersion from exc
+                # Lance gave up against the planned version, which this namespace keeps answering as the latest, while
+                # another writer's version stood after it ([[LH-542]]): measured on pylance 13.0.0, a delete exhausts its
+                # own retries ("Too many concurrent writers"). Conflict-shaped and found on the store, so a refusal of the
+                # caller's own keeps its answer however busy the table is.
+                if classify_commit_failure(exc) is CommitVerdict.RETRYABLE_CONFLICT and namespace.moved():
+                    raise _PlannedOnAStaleVersion from exc
                 raise
             if not isinstance(exc, (_StagedCapture, OSError, RuntimeError)):
                 raise
         if namespace.staged is None:
             raise InternalError("the operation committed no staged version; its handle was not opened under managed versioning")
-        transaction = _staged_transaction(namespace.ref_location(ref), so, str(namespace.staged["manifest_path"]))
+        try:
+            transaction = _staged_transaction(namespace.ref_location(ref), so, str(namespace.staged["manifest_path"]))
+        except FileNotFoundError as exc:
+            # Lance deletes a manifest it staged once it proves that version another writer's (`lose_or_retain`,
+            # `rust/lance-table/src/io/commit/external_manifest.rs` at v13.0.0); 1 race in 20 of six `add_columns` met it.
+            if namespace.moved():
+                raise _PlannedOnAStaleVersion from exc
+            raise
         if namespace.staged.get("version") != dataset.version + 1:
             raise _PlannedOnAStaleVersion
         return transaction, measured

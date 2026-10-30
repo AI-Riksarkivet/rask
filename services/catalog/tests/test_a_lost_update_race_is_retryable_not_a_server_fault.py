@@ -1,7 +1,11 @@
-"""The UPDATE and DELETE doors answer the rows they touched and advance the table's version.
+"""The UPDATE and DELETE doors answer the rows they touched and advance the table's version, and one that loses its race
+plans again.
 
 Both commit stamped ([[LH-497]], `dataplane.commit_stamped`): Lance's own operation, planned on the latest version and
-finalized as exactly the next one, so the update's row count is the rows its predicate matched on that version.
+finalized as exactly the next one, so the update's row count is the rows its predicate matched on that version. A
+writer that commits between the door's open and Lance's staging leaves the plan stale, and the door plans again on the
+version that won ([[LH-542]]): measured on pylance 13.0.0, Lance's own delete exhausts its retries against the planned
+version, which the door then reads as a race it lost.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ import pytest
 from lance_namespace import CreateNamespaceRequest, DeleteFromTableRequest, UpdateTableRequest, connect
 
 from catalog.services import table_claims
-from catalog.services.dataplane import create_table, delete_from_table, update_table
+from catalog.services.dataplane import captured, commit_stamped, create_table, delete_from_table, update_table
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
@@ -56,3 +60,15 @@ def test_the_doors_still_answer_and_advance_the_version(table: DoorTable) -> Non
     # which is the same defect as reporting a stale one and is asserted rather than narrowed away.
     assert deleted.version is not None, "delete answered no version"
     assert deleted.version > updated.version, "delete did not advance the table version"
+
+
+def test_a_delete_planned_on_a_version_another_writer_passed_plans_again_and_lands(table: DoorTable) -> None:
+    opened = table.open({})
+    update_table(table, {}, UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]), transaction_properties=STAMP)
+
+    version, _ = commit_stamped(
+        table, {}, {**STAMP, "rask.operation": "delete"}, captured(table, {}, lambda handle: handle.delete("id = 1"), branch=None), opened=opened
+    )
+
+    landed = table.open({}).to_table()
+    assert (version, sorted(landed.column("id").to_pylist()), set(landed.column("v").to_pylist())) == (3, [2, 3], {7})
