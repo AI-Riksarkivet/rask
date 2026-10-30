@@ -295,8 +295,9 @@ class ChannelPrefs(BaseModel):
     subject: str = Field(min_length=1)
     #: Channel ids the subject opted into (`email`, `slack`). Empty = the bell only.
     channels: list[str] = Field(default_factory=list)
-    #: Where to reach them per channel — an address the subject supplied, never one this plane
-    #: inferred from a token. Claim-check applies: a value here is a destination, never content.
+    #: Where to reach them, for each channel they address (email) — an address the subject supplied,
+    #: never one this plane inferred from a token. Slack has none: it posts to the operator's one
+    #: channel ([[CTL-34]]). Claim-check applies: a value here is a destination, never content.
     destinations: dict[str, str] = Field(default_factory=dict)
     #: Batch pushes into one message every N seconds instead of sending each immediately. `None` =
     #: immediate, which stays the default because the failure this plane exists to end is a MISSED

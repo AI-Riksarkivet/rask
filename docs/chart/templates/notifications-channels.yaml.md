@@ -29,3 +29,8 @@ silently resurrect 587 on a value someone deliberately set.
 An HTTP binding rather than Dapr's `bindings.twitter`-style provider component: a Slack
 incoming webhook IS an HTTP POST, and the URL is the credential — which is exactly why it comes
 from the secret store and never from a value.
+
+That URL is the operator's one Slack channel, declared here and nowhere else ([[CTL-34]]). A
+`bindings.http` takes its target from the Component alone, so every subject who opts into Slack is
+posted to it; the prefs door refuses a destination of the subject's own, which would be stored and
+change nothing, and a per-subject webhook would put a credential in the inbox's state.

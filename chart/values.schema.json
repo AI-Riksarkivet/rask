@@ -1717,7 +1717,7 @@
                                             "type": "boolean"
                                         },
                                         "secretName": {
-                                            "description": "Secret-store key holding the Slack `webhookUrl` field.",
+                                            "description": "Secret-store key holding the `webhookUrl` of the operator's one Slack channel, where every subject who opts into Slack is posted.",
                                             "type": "string"
                                         }
                                     }

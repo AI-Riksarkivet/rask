@@ -29,7 +29,7 @@ import html
 import json
 import logging
 import unicodedata
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from email.errors import HeaderParseError
 from email.headerregistry import Address
 from typing import Any, Final, Protocol
@@ -45,13 +45,20 @@ log = logging.getLogger(__name__)
 EMAIL: Final = "email"
 SLACK: Final = "slack"
 
+#: The channels a subject addresses, each with a destination they supplied. Slack is not one: it posts to the one
+#: webhook the operator declares in the chart, a credential the secret store holds, so a subject names no
+#: destination for it ([[CTL-34]]).
+SUBJECT_ADDRESSED: Final = frozenset({EMAIL})
+#: The destination a channel outside `SUBJECT_ADDRESSED` is handed: none, since it posts where the operator declared it.
+OPERATORS_CHANNEL: Final = ""
+
 #: RFC 5321's 256-octet path less its two angle brackets: the longest address a relay must take.
 _MAX_ADDRESS_LENGTH: Final = 254
 #: What the SMTP binding reads as a list of recipients (`;`), and what a header reads as one (`,`).
 _RECIPIENT_SEPARATORS: Final = (";", ",")
 
 
-def is_one_bare_address(value: str) -> bool:
+def _is_one_bare_address(value: str) -> bool:
     """Whether `value` is exactly one addr-spec, the only email destination the channel sends to ([[CTL-30]]).
 
     The SMTP binding reads `emailTo` as a list split on `;` and sends to every address in it, and a
@@ -77,6 +84,20 @@ def _breaks_or_hides(character: str) -> bool:
     return category[0] == "C" or category in {"Zl", "Zp"}
 
 
+def destination_fault(destinations: Mapping[str, str]) -> str | None:
+    """Why these destinations cannot be stored, or `None` when each is one its channel sends to.
+
+    Slack takes none: a `bindings.http` takes no target from a send, so a Slack destination would be stored and
+    change nothing ([[CTL-34]]). An email destination is exactly one bare address ([[CTL-30]]).
+    """
+    if SLACK in destinations:
+        return f"the {SLACK} channel takes no destination: it posts to the one channel the operator declares"
+    email = destinations.get(EMAIL)
+    if email and not _is_one_bare_address(email):
+        return f"the {EMAIL} destination must be exactly one bare address: no list, display name or control character, at most 254 characters"
+    return None
+
+
 class DaprBindingClient(Protocol):
     """The one method this module needs off a Dapr client. Narrowed to it rather than typed `Any`
     because the concrete SDK client carries a hundred others, and the fake in the tests should have
@@ -87,7 +108,10 @@ class DaprBindingClient(Protocol):
 
 class Sender(Protocol):
     """One channel's egress. A Protocol because there are genuinely three implementations — SMTP,
-    Slack, and the test fake — which is the bar `writing-python` sets for introducing one."""
+    Slack, and the test fake — which is the bar `writing-python` sets for introducing one.
+
+    `destination` is the address the subject supplied for a channel in `SUBJECT_ADDRESSED`, and
+    `OPERATORS_CHANNEL` for a channel that posts where the operator declared it."""
 
     async def __call__(self, *, destination: str, subject_line: str, body: str) -> None: ...
 
@@ -120,14 +144,24 @@ def _html_body(subject_line: str, body: str) -> str:
     return f"<!doctype html>\n<html><body><p>{lines}</p></body></html>\n"
 
 
-def _slack_body(subject_line: str, body: str) -> str:
-    """Slack's wire body: a JSON object, because an incoming webhook rejects anything else.
+def _smtp_metadata(destination: str, subject_line: str) -> dict[str, str]:
+    """The SMTP binding's own keys: `emailTo` names the recipient and `subject` the header."""
+    return {"emailTo": destination, "subject": subject_line}
 
-    `json.dumps` rather than an f-string, and that is not fastidiousness: the render interpolates an
-    object id and a run id, both estate-supplied, so a table named with a quote or a backslash would
-    otherwise produce a body Slack cannot parse — a channel that fails for one dataset and not another.
+
+def _slack_body(subject_line: str, body: str) -> str:
+    """Slack's wire body: the render in a JSON object, because an incoming webhook rejects anything else.
+
+    Slack reads `<` and `>` as a control sequence (a mention, a link) and `&` as an escape, and asks for exactly
+    those three to be escaped (`html.escape` without `quote`), so a table named `<!channel>` pings nobody
+    ([[CTL-34]]); `json.dumps` keeps a quote or a backslash in a name from producing a body Slack cannot parse.
     """
-    return json.dumps({"text": body})
+    return json.dumps({"text": html.escape(body, quote=False)})
+
+
+def _slack_metadata(_destination: str, _subject_line: str) -> dict[str, str]:
+    """The content type that makes the body JSON, and no target: a `bindings.http` posts to its Component's `url` alone."""
+    return {"Content-Type": "application/json"}
 
 
 def make_binding_sender(
@@ -137,7 +171,7 @@ def make_binding_sender(
     operation: str,
     timeout_seconds: float,
     encode: Callable[[str, str], str],
-    content_type: str | None = None,
+    metadata: Callable[[str, str], dict[str, str]],
 ) -> Sender:
     """A `Sender` over a Dapr OUTPUT BINDING.
 
@@ -152,19 +186,19 @@ def make_binding_sender(
     marks `(notification_id, channel)` before the send and deliberately does not roll back. What a
     Component absorbs is the ADDRESS and the CREDENTIAL; the payload contract belongs to the provider,
     so it belongs here, next to the render that produces it.
+
+    `metadata` builds the binding's own keys from a send's `(destination, subject_line)`, because each
+    binding reads its own: SMTP takes the recipient and the subject from them, and an HTTP binding takes
+    only headers.
     """
 
     async def send(*, destination: str, subject_line: str, body: str) -> None:
-        # `emailTo`/`subject` are the SMTP binding's own metadata keys; the HTTP binding ignores them.
-        metadata = {"emailTo": destination, "subject": subject_line}
-        if content_type is not None:
-            metadata["Content-Type"] = content_type
         async with asyncio.timeout(timeout_seconds):
             await client.invoke_binding(
                 binding_name=binding,
                 operation=operation,
                 data=encode(subject_line, body),
-                binding_metadata=metadata,
+                binding_metadata=metadata(destination, subject_line),
             )
 
     return send
@@ -176,6 +210,10 @@ def make_slack_sender(client: DaprBindingClient, *, binding: str, timeout_second
     Named rather than assembled at the call site so the provider's contract is stated in one place
     and cannot be half-applied: a JSON body sent as `text/plain` is refused just as firmly as a bare
     string.
+
+    It posts to the operator's one channel, the webhook the chart's Component names, whoever the push
+    is for ([[CTL-34]]): a subject opts in and names no destination. Opting in shares the row with
+    whoever reads that channel, which is the subject's act, as naming an email address is.
     """
     return make_binding_sender(
         client,
@@ -183,7 +221,7 @@ def make_slack_sender(client: DaprBindingClient, *, binding: str, timeout_second
         operation="post",
         timeout_seconds=timeout_seconds,
         encode=_slack_body,
-        content_type="application/json",
+        metadata=_slack_metadata,
     )
 
 
@@ -197,7 +235,7 @@ def make_email_sender(client: DaprBindingClient, *, binding: str, timeout_second
     per process, and so through this sender, and a process has one sidecar. The lock waits outside the
     binding's timeout, so a send queued behind others still has all of its own.
     """
-    send = make_binding_sender(client, binding=binding, operation="create", timeout_seconds=timeout_seconds, encode=_html_body)
+    send = make_binding_sender(client, binding=binding, operation="create", timeout_seconds=timeout_seconds, encode=_html_body, metadata=_smtp_metadata)
     one_at_a_time = asyncio.Lock()
 
     async def send_alone(*, destination: str, subject_line: str, body: str) -> None:
@@ -208,6 +246,13 @@ def make_email_sender(client: DaprBindingClient, *, binding: str, timeout_second
 
 
 type ChannelTable = dict[str, Sender]
+
+
+def _destination_of(channel: str, destinations: Mapping[str, str]) -> str | None:
+    """Where `channel` sends for this subject: the address they supplied, `OPERATORS_CHANNEL`, or `None` for nowhere."""
+    if channel not in SUBJECT_ADDRESSED:
+        return OPERATORS_CHANNEL
+    return destinations.get(channel) or None
 
 
 async def deliver_to_channels(
@@ -232,8 +277,8 @@ async def deliver_to_channels(
     sent: list[str] = []
     for channel in channels:
         sender = table.get(channel)
-        destination = destinations.get(channel)
-        if sender is None or not destination:
+        destination = _destination_of(channel, destinations)
+        if sender is None or destination is None:
             # An opted-into channel with no destination, or one this build does not ship. Not an
             # error: a preference must survive both, and the honest behaviour is to skip quietly.
             continue

@@ -498,21 +498,22 @@ class InboxActor(Actor, InboxActorInterface, Remindable):
         """Replace this subject's channel preferences wholesale.
 
         Whole-document rather than per-field: the door hands back what the form holds, and a partial
-        merge would make "I removed my Slack address" indistinguishable from "I did not mention it".
+        merge would make "I removed my address" indistinguishable from "I did not mention it".
 
-        An email destination is held to the prefs door's own rule here as well, so no caller of this
-        method stores one the SMTP binding would read as several recipients ([[CTL-30]]). Imported here,
-        as `digest_push_into` is: `notifications.api` mounts the routers, which reach this module.
+        The destinations are held to the prefs door's own rule here as well, so no caller of this method
+        stores one the SMTP binding would read as several recipients ([[CTL-30]]) or a Slack one that
+        changes nothing ([[CTL-34]]). Imported here, as `digest_push_into` is: `notifications.api` mounts
+        the routers, which reach this module.
         """
-        from notifications.api.channels import EMAIL, is_one_bare_address
+        from notifications.api.channels import destination_fault
 
-        email = str((payload.get("destinations") or {}).get(EMAIL) or "")
-        if email and not is_one_bare_address(email):
-            raise ValueError(f"the {EMAIL} destination must be exactly one bare address")
+        destinations = {str(k): str(v) for k, v in (payload.get("destinations") or {}).items()}
+        if fault := destination_fault(destinations):
+            raise ValueError(fault)
         record = ChannelPrefs(
             subject=self._subject(),
             channels=[str(c) for c in (payload.get("channels") or [])],
-            destinations={str(k): str(v) for k, v in (payload.get("destinations") or {}).items()},
+            destinations=destinations,
             digest_seconds=payload.get("digest_seconds"),
             updated_at=datetime.now(UTC),
         )

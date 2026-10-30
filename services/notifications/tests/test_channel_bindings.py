@@ -111,26 +111,17 @@ def _pointer_for(subject: str) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_the_slack_sender_sends_a_json_object_a_webhook_will_accept() -> None:
+async def test_the_slack_sender_posts_the_render_escaped_as_slack_formatting_asks_in_a_json_object() -> None:
+    """An incoming webhook takes a JSON object (a bare string is `invalid_payload`) and reads `<` and `>` in its
+    text as a control sequence, a mention or a link, and `&` as an escape. The render interpolates an object id
+    and a run id, both estate-supplied, so the text escapes those three as Slack's message formatting asks, and
+    a quote or a backslash still leaves a body Slack can parse. The post names no target: the webhook is the
+    Component's own `url`, the operator's one channel ([[CTL-34]])."""
     binding = _Binding()
     send = make_slack_sender(binding, binding="notifications-slack", timeout_seconds=5)
 
-    await send(destination="https://hooks.example/x", subject_line="silver$pages — Fail", body="silver$pages — Fail\n\nReason: author")
+    await send(destination="", subject_line="x", body='silver$"<!channel>" & <https://x.example|y> — Fail\nline\\two')
 
     call = binding.calls[0]
-    assert call["operation"] == "post"
-    payload = json.loads(call["data"])
-    assert payload["text"] == "silver$pages — Fail\n\nReason: author", "Slack takes {'text': …}; a bare string is invalid_payload"
-    assert call["metadata"]["Content-Type"] == "application/json"
-
-
-@pytest.mark.asyncio
-async def test_the_slack_body_is_valid_json_even_when_the_render_carries_quotes() -> None:
-    """The render is interpolated from an object id and a run id, both estate-supplied. Building the
-    JSON by hand would be one f-string away from an unparseable body for a table named with a quote."""
-    binding = _Binding()
-    send = make_slack_sender(binding, binding="notifications-slack", timeout_seconds=5)
-
-    await send(destination="https://hooks.example/x", subject_line="x", body='silver$"weird" — Fail\nline\\two')
-
-    assert json.loads(binding.calls[0]["data"])["text"] == 'silver$"weird" — Fail\nline\\two'
+    assert (call["operation"], call["metadata"]) == ("post", {"Content-Type": "application/json"})
+    assert json.loads(call["data"]) == {"text": 'silver$"&lt;!channel&gt;" &amp; &lt;https://x.example|y&gt; — Fail\nline\\two'}

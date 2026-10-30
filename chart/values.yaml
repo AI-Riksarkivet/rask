@@ -165,7 +165,7 @@ services:
       slack:
         # -- Renders the Slack Dapr binding and adds `slack` to RASK_NOTIFICATIONS_CHANNELS. Off by default.
         enabled: false
-        # -- Secret-store key holding the Slack `webhookUrl` field.
+        # -- Secret-store key holding the `webhookUrl` of the operator's one Slack channel, where every subject who opts into Slack is posted.
         secretName: notifications-slack
     # -- Name of the reconcile cron binding; also rendered as RASK_NOTIFICATIONS_BINDING_NAME so the tick reaches the matching route.
     reconcileBindingName: notifications-reconcile-cron

@@ -273,7 +273,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.notifications.channels.email.port | int | `587` | SMTP server port for the email channel (default 587). |
 | services.notifications.channels.email.secretName | string | `"notifications-smtp"` | Secret-store key holding the SMTP `user` and `password` fields. |
 | services.notifications.channels.slack.enabled | bool | `false` | Renders the Slack Dapr binding and adds `slack` to RASK_NOTIFICATIONS_CHANNELS. Off by default. |
-| services.notifications.channels.slack.secretName | string | `"notifications-slack"` | Secret-store key holding the Slack `webhookUrl` field. |
+| services.notifications.channels.slack.secretName | string | `"notifications-slack"` | Secret-store key holding the `webhookUrl` of the operator's one Slack channel, where every subject who opts into Slack is posted. |
 | services.notifications.daprIngest | bool | `true` | Renders APP_API_TOKEN for notifications, which refuses to start with Dapr on and no token. |
 | services.notifications.frontDoor | bool | `true` | Renders notifications outside singleTenant, because the cluster route publishes /api/notifications on it. |
 | services.notifications.governedAuth | bool | `true` | Gives notifications the OIDC/FGA env and FGA token mount when auth.enabled. |
