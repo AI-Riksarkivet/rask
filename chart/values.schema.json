@@ -299,6 +299,24 @@
                         }
                     }
                 },
+                "manifestReclaim": {
+                    "type": "object",
+                    "properties": {
+                        "bindingName": {
+                            "description": "Name of the manifest-reclaim Dapr cron Component; also the catalog's LANCE_MANIFEST_RECLAIM_BINDING_NAME and the route it serves.",
+                            "type": "string"
+                        },
+                        "retainSeconds": {
+                            "description": "Seconds a `__manifest` version is kept before the reclaim removes it (LANCE_MANIFEST_RETAIN_SECONDS); a dropped id stays readable in the history this long, and the catalog rebuilds each namespace connection after a quarter of it.",
+                            "type": "integer",
+                            "minimum": 0
+                        },
+                        "schedule": {
+                            "description": "Dapr cron schedule on which each root's `__manifest` versions past retainSeconds are removed; lateness only keeps history longer.",
+                            "type": "string"
+                        }
+                    }
+                },
                 "maxBodyBytes": {
                     "description": "Maximum request-body bytes on any catalog route (LANCE_MAX_BODY_BYTES); larger bodies get 413 before buffering. Default 256 MiB.",
                     "type": "integer"

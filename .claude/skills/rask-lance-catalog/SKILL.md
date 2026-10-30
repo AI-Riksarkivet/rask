@@ -494,8 +494,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
   `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,
   [[LH-493]], below). The maintain vend tier goes to the maintenance identity only (LH-473, #599).
-  `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. Version reclamation
-  has ONE owner, maintenance's expiry: Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`) deletes inside
+  `catalog/api/maintenance_mode.py` is read-only maintenance MODE (503 + Retry-After), not this. A table's version
+  reclamation has ONE owner, maintenance's expiry (each root's `__manifest` is the catalog's, below): Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`) deletes inside
   whichever writer commits, past a hold and a protected base. No door arms it (the property guard refuses the keys),
   `version/create` refuses a commit that does, every committing catalog door disarms the ref first
   (`core/namespace.disarm_commit_path_cleanup`; the erasure door every ref, so the job's commits are admitted), the
@@ -1073,6 +1073,17 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `LANCE_REST_IMPL=dir`). Only a TABLE materialises a directory. Any scan that enumerates namespaces
   by listing directories silently returns `[]` on every real estate — which reads as "checked and
   clean". The reconciler's `unbound_namespaces` detector shipped with exactly that bug.
+- **`__manifest` is the catalog's to reclaim, and its connections are why** ([[LH-251]], ADR 0185). Every namespace
+  operation rewrites a root's index whole as a new version, and the backend's rewrite skips `lance.auto_cleanup.*`, so
+  nothing but `catalog-manifest-reclaim-cron` (`catalog.api.manifest_reclaim`) bounds it: Lance's own
+  `cleanup_old_versions(older_than=catalog.manifestReclaim.retainSeconds)` on the catalog's root and every registered
+  warehouse's. The maintenance sweep never touches it (`discovery` skips `__` directories). A `dir` connection reloads by
+  probing only the version after the one it holds (lance v13.0.0 `DatasetConsistencyWrapper::reload`), so a reclaim
+  that removed that successor would leave the connection answering `InternalError` for good (measured); that is why
+  `NamespaceConnections` builds a connection again once it is a quarter of the retention old. Never run a cleanup on an
+  index with a shorter `older_than` than the chart's retention, and never by hand on a live root. The catalog sets
+  `inline_optimization_enabled=false`: the spec's three indexes cost store requests on every create and describe at
+  estate scale (measured over moto).
 - **The `warehouse_binding_cache` is invalidated ACROSS replicas by the control-event broadcast
   (#46, 2026-08-05).** `_resolve_warehouse_root` caches bindings positively and forever on the
   premise that a binding is immutable; the warehouse delete breaks that premise, and the local

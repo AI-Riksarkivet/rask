@@ -852,6 +852,20 @@ catalog:
     # it was announced; the render refuses a horizon at or past the retention.
     # -- Seconds back the reconciler looks for a version's announcement (LANCE_COMMIT_RECONCILE_HORIZON_SECONDS); kept inside services.lineage.eventsRetentionDays.
     horizonSeconds: 86400
+  # LH-251: every namespace operation writes the `dir` backend's namespace index (`<root>/__manifest`) again as a new
+  # version, and the backend reclaims none of them; this cron removes each root's versions older than retainSeconds.
+  manifestReclaim:
+    # ONE STRING, as for controlOutbox: the Component (catalog-manifest-reclaim-cron.yaml), the app's
+    # LANCE_MANIFEST_RECLAIM_BINDING_NAME and the route at the catalog's pod root.
+    # -- Name of the manifest-reclaim Dapr cron Component; also the catalog's LANCE_MANIFEST_RECLAIM_BINDING_NAME and the route it serves.
+    bindingName: catalog-manifest-reclaim-cron
+    # A tick lists each root's index versions, so it runs no more often than the history needs bounding.
+    # -- Dapr cron schedule on which each root's `__manifest` versions past retainSeconds are removed; lateness only keeps history longer.
+    schedule: "@every 600s"
+    # A dropped namespace or table stays readable in the index's history this long, and the catalog builds each
+    # namespace connection again after a quarter of it, so no connection holds a version the reclaim removed.
+    # -- Seconds a `__manifest` version is kept before the reclaim removes it (LANCE_MANIFEST_RETAIN_SECONDS); a dropped id stays readable in the history this long, and the catalog rebuilds each namespace connection after a quarter of it.
+    retainSeconds: 3600 # @schema type: integer; minimum: 0
 
 # Dapr pub/sub: the publish-side component name + the lineage topic. Each SUBSCRIBER app additionally
 # gets its own derived component `<name>-<app-id>` carrying its queue group + deliver policy

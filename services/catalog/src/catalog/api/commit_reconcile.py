@@ -33,12 +33,13 @@ from datetime import UTC, timedelta
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import DescribeTableRequest, LanceNamespace
 from opentelemetry import metrics
 from pydantic import BaseModel
 
+from catalog.api.cron import mount_cron
 from catalog.api.dependencies import ClockDep, ObjectUuids, SettingsDep, StorageOptionsDep, estate_namespace, namespace_for_top_ns
 from catalog.core.commit_ids import commit_ids_of
 from catalog.core.config import Settings
@@ -270,17 +271,6 @@ async def _watch_released(settings: Settings, estate: LanceNamespace, so: Storag
     return sum(len(late.tables) for late in found)
 
 
-async def _ack_binding() -> dict[str, str]:
-    """Dapr's input-binding handshake: an OPTIONS probe at the route, answered so the sidecar delivers to it."""
-    return {}
-
-
 def mount_commit_reconcile(app: FastAPI, binding_name: str) -> bool:
     """Mount the tick at ``POST /<binding_name>``; nothing when the chart names no binding. Whether it was mounted."""
-    if not binding_name:
-        return False
-    router = APIRouter()
-    router.add_api_route(f"/{binding_name}", _on_cron, methods=["POST"], tags=["commit-reconcile"])
-    router.add_api_route(f"/{binding_name}", _ack_binding, methods=["OPTIONS"], include_in_schema=False)
-    app.include_router(router)
-    return True
+    return mount_cron(app, binding_name, _on_cron, tag="commit-reconcile")

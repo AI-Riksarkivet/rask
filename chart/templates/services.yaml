@@ -126,10 +126,12 @@ spec:
             - { name: LANCE_ERASURE_RELEASE_GRACE_DAYS, value: {{ required "catalog.erasure.releaseGraceDays is required" .Values.catalog.erasure.releaseGraceDays | quote }} }
             - { name: LANCE_ERASURE_CLEANUP_WINDOW_DAYS, value: {{ required "maintenance.olderThanDays is required" .Values.maintenance.olderThanDays | quote }} }
             - { name: LANCE_CLONE_LIST_MAX_AGE_SECONDS, value: {{ required "maintenance.cloneListMaxAgeSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.cloneListMaxAgeSeconds | quote }} }
+            - { name: LANCE_MANIFEST_RETAIN_SECONDS, value: {{ required "catalog.manifestReclaim.retainSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.retainSeconds | quote }} }
             {{- if .Values.dapr.enabled }}
             - { name: LANCE_ERASURE_RELEASE_BINDING_NAME, value: {{ .Values.catalog.erasure.bindingName | quote }} }
             - { name: LANCE_PROMOTION_EXPIRY_BINDING_NAME, value: {{ .Values.catalog.promotion.bindingName | quote }} }
             - { name: LANCE_COMMIT_RECONCILE_BINDING_NAME, value: {{ .Values.catalog.commitReconcile.bindingName | quote }} }
+            - { name: LANCE_MANIFEST_RECLAIM_BINDING_NAME, value: {{ required "catalog.manifestReclaim.bindingName is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.bindingName | quote }} }
             - { name: LANCE_COMMIT_RECONCILE_GRACE_SECONDS, value: {{ required "catalog.commitReconcile.graceSeconds is required" .Values.catalog.commitReconcile.graceSeconds | quote }} }
             {{- $horizon := required "catalog.commitReconcile.horizonSeconds is required" .Values.catalog.commitReconcile.horizonSeconds | int }}
             {{- if ge $horizon (mul (.Values.services.lineage.eventsRetentionDays | int) 86400) }}

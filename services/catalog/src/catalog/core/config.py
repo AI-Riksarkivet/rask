@@ -369,6 +369,28 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: than that may have had its row pruned, and announcing it again would put a write back on the feed it left. Kept
     #: inside lineage's `eventsRetentionDays` by the chart.
     commit_reconcile_horizon_seconds: int = Field(default=86400, ge=1, alias="LANCE_COMMIT_RECONCILE_HORIZON_SECONDS")
+    #: The cron binding that reclaims each root's ``__manifest`` history (`catalog/api/manifest_reclaim.py`, [[LH-251]]).
+    #: One string with the Component's name and the served path, as for the erasure release. Empty = no reclaim route,
+    #: so every namespace operation's version of the index is kept: the chart renders both.
+    manifest_reclaim_binding_name: str = Field(default="", alias="LANCE_MANIFEST_RECLAIM_BINDING_NAME")
+    #: How old a ``__manifest`` version is before the reclaim removes it, and so how long a dropped namespace or table
+    #: stays readable in the index's history. It also bounds how long the catalog holds a namespace connection
+    #: (:attr:`connection_max_age_seconds`), which is what makes removing old versions safe for a connection.
+    manifest_retain_seconds: int = Field(default=3600, ge=0, alias="LANCE_MANIFEST_RETAIN_SECONDS")
+
+    @property
+    def connection_max_age_seconds(self) -> float:
+        """How long the catalog serves one namespace connection before it builds that connection again.
+
+        A ``dir`` connection holds a ``__manifest`` version and reloads by probing only the version after it (lance
+        v13.0.0 ``rust/lance-namespace-impls/src/dir/manifest.rs``, ``DatasetConsistencyWrapper::reload``): once the
+        reclaim removes that successor, the connection never moves on, and the data file of the version it holds is gone
+        too (measured on pylance 13.0.0: every call on it answered ``InternalError``). A connection built within this age
+        last read the index after the successor was written, and the reclaim removes only versions older than
+        :attr:`manifest_retain_seconds`; the factor of four leaves the rest of the retention for clocks that disagree.
+        """
+        return self.manifest_retain_seconds / 4
+
     #: The maintenance sweep's cleanup window (`maintenance.olderThanDays`), which an erasure report quotes as
     #: the last condition before the subject's bytes leave storage. Read here only to say it; the sweep owns it.
     erasure_cleanup_window_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_CLEANUP_WINDOW_DAYS")
@@ -721,6 +743,11 @@ class Settings(
         session = {f"{_STORAGE_PREFIX}session_token": pair.session_token.get_secret_value()} if pair.session_token is not None else {}
         return {
             "root": root or self.root,
+            # The `__manifest` rewrite builds no index of its own ([[LH-251]]). Measured over moto at 100 and 1,000
+            # objects on pylance 13.0.0, the spec's three indexes made a create 16 store requests instead of 12 and a
+            # describe 6 instead of 3: the unindexed table is one data file, read in one GET. Set, not left to the
+            # backend's default, so a default that changes does not change this.
+            "inline_optimization_enabled": "false",
             f"{_STORAGE_PREFIX}endpoint": self.s3_endpoint,
             f"{_STORAGE_PREFIX}access_key_id": pair.access_key_id,
             f"{_STORAGE_PREFIX}secret_access_key": pair.secret_access_key.get_secret_value(),

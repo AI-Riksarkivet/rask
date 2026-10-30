@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
+import weakref
+from collections.abc import Callable
 
 import lance
 from lance_namespace import (
@@ -41,6 +44,9 @@ def build_namespace(settings: Settings, *, plane: StorePlane = "metadata") -> La
     return connect(settings.impl, settings.namespace_properties(plane=plane))
 
 
+type _ConnectionKey = tuple[S3KeyPair, str, str | None, StorePlane]
+
+
 class NamespaceConnections:
     """The catalog's native namespace connections: one per (root, endpoint, plane), under the key pair in force.
 
@@ -49,16 +55,24 @@ class NamespaceConnections:
     with the store's refusal, while a connection built with the new key works, as does an open through the
     same `lance.Session` the old key opened with. So a connection is keyed on the pair it was built with,
     and the first request after a rotation builds anew and drops what the old pair built.
+
+    A CONNECTION IS SERVED ONLY WHILE IT IS YOUNGER THAN ``settings.connection_max_age_seconds`` ([[LH-251]]), then
+    built again at the index's latest version: the reclaim tick removes ``__manifest`` versions a connection idle for
+    longer could still be holding, and such a connection would never move past them.
     """
 
-    def __init__(self) -> None:
-        self._built: dict[tuple[S3KeyPair, str, str | None, StorePlane], LanceNamespace] = {}
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._built: dict[_ConnectionKey, tuple[LanceNamespace, float]] = {}
+        #: The key each connection was built under, for as long as anything holds the connection: a request keeps the
+        #: connection it resolved after a rebuild has replaced it here, and finds its data twin through this.
+        self._keys: weakref.WeakKeyDictionary[LanceNamespace, _ConnectionKey] = weakref.WeakKeyDictionary()
         #: One build at a time: building connects to the store. A held connection is read without it, and the map is
         #: replaced whole rather than changed in place, so a reader never sees it half-written.
         self._building = threading.Lock()
 
     def connection(self, settings: Settings, *, root: str | None = None, endpoint: str | None = None, plane: StorePlane = "metadata") -> LanceNamespace:
-        """The connection rooted at ``root`` (the estate's own root when ``None``), built on first use.
+        """The connection rooted at ``root`` (the estate's own root when ``None``), built on first use and again once old.
 
         Blocking: building a connection reaches the store, so an async caller runs this in the threadpool.
 
@@ -69,24 +83,31 @@ class NamespaceConnections:
         """
         pair = settings.s3_key_pair()
         key = (pair, root or settings.root, endpoint, plane)
-        if (built := self._built.get(key)) is not None:
+        if (built := self._young(key, settings)) is not None:
             return built
         with self._building:
-            if (built := self._built.get(key)) is not None:
+            if (built := self._young(key, settings)) is not None:
                 return built
             built = build_namespace(settings, plane=plane) if root is None else build_namespace_for_root(settings, root, endpoint=endpoint, plane=plane)
-            self._built = {**{held: conn for held, conn in self._built.items() if held[0] == pair}, key: built}
+            self._built = {**{held: entry for held, entry in self._built.items() if held[0] == pair}, key: (built, self._clock())}
+            self._keys[built] = key
             return built
+
+    def _young(self, key: _ConnectionKey, settings: Settings) -> LanceNamespace | None:
+        """The connection built under ``key``, while it is younger than the age a connection is served for."""
+        if (entry := self._built.get(key)) is None or self._clock() - entry[1] >= settings.connection_max_age_seconds:
+            return None
+        return entry[0]
 
     def data_twin(self, settings: Settings, metadata: LanceNamespace) -> LanceNamespace | None:
         """The data-plane connection to the root ``metadata`` reaches, or ``None`` when this did not build ``metadata``.
 
         Blocking, as :meth:`connection` is.
         """
-        for (_, root, endpoint, plane), conn in self._built.items():
-            if conn is metadata and plane == "metadata":
-                return self.connection(settings, root=None if root == settings.root else root, endpoint=endpoint, plane="data")
-        return None
+        if (key := self._keys.get(metadata)) is None or key[3] != "metadata":
+            return None
+        _, root, endpoint, _ = key
+        return self.connection(settings, root=None if root == settings.root else root, endpoint=endpoint, plane="data")
 
 
 def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str | None = None, plane: StorePlane = "metadata") -> LanceNamespace:

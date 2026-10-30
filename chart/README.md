@@ -87,6 +87,9 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.erasure.deadlineDays | int | `30` | Days after an erasure obligation is recorded that it is due; an obligation still open past it is shown overdue (LANCE_ERASURE_DEADLINE_DAYS). Required. |
 | catalog.erasure.releaseGraceDays | int | `7` | Days after an erasure blocked by a tag or branch pin, during which owners are told, before the pins are released (LANCE_ERASURE_RELEASE_GRACE_DAYS). Required. |
 | catalog.erasure.schedule | string | `"@every 300s"` | Dapr cron schedule on which due erasure pin releases run; lateness only costs time. |
+| catalog.manifestReclaim.bindingName | string | `"catalog-manifest-reclaim-cron"` | Name of the manifest-reclaim Dapr cron Component; also the catalog's LANCE_MANIFEST_RECLAIM_BINDING_NAME and the route it serves. |
+| catalog.manifestReclaim.retainSeconds | int | `3600` | Seconds a `__manifest` version is kept before the reclaim removes it (LANCE_MANIFEST_RETAIN_SECONDS); a dropped id stays readable in the history this long, and the catalog rebuilds each namespace connection after a quarter of it. |
+| catalog.manifestReclaim.schedule | string | `"@every 600s"` | Dapr cron schedule on which each root's `__manifest` versions past retainSeconds are removed; lateness only keeps history longer. |
 | catalog.maxBodyBytes | int | `268435456` | Maximum request-body bytes on any catalog route (LANCE_MAX_BODY_BYTES); larger bodies get 413 before buffering. Default 256 MiB. |
 | catalog.maxConcurrentWrites | int | `16` | Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. 0 disables shedding. |
 | catalog.multibase.dataBases | list | `[]` | Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates. |

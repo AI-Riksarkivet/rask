@@ -1,0 +1,14 @@
+{{- if .Values.dapr.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ required "catalog.manifestReclaim.bindingName is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.bindingName }}
+  labels: {{- include "rask.componentLabels" (list . "catalog") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ required "catalog.manifestReclaim.schedule is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.schedule | quote }} }
+scopes:
+  - {{ .Values.services.catalog.daprAppId }}
+{{- end }}

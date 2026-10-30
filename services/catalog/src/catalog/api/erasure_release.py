@@ -23,10 +23,11 @@ from functools import partial
 from typing import Annotated
 
 import lance
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from catalog.api.cron import mount_cron
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, StorageOptionsDep
 from catalog.core.config import fresh_lance_session
 from catalog.services import erasure_release, table_claims
@@ -87,17 +88,6 @@ def _named_now(claims: ClaimStore, change: erasure_release.RefChange) -> str:
         return change.table
 
 
-async def _ack_binding() -> dict[str, str]:
-    """Dapr's startup pre-flight (``OPTIONS /<binding name>``): a 2xx confirms this app consumes the binding."""
-    return {"status": "ok"}
-
-
 def mount_erasure_release(app: FastAPI, binding_name: str) -> bool:
     """Mount the tick at the exact binding name when one is configured; report whether it was."""
-    if not binding_name:
-        return False
-    router = APIRouter()
-    router.add_api_route(f"/{binding_name}", _on_cron, methods=["POST"], tags=["erasure-release"])
-    router.add_api_route(f"/{binding_name}", _ack_binding, methods=["OPTIONS"], include_in_schema=False)
-    app.include_router(router)
-    return True
+    return mount_cron(app, binding_name, _on_cron, tag="erasure-release")

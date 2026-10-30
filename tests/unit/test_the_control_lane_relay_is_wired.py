@@ -69,16 +69,12 @@ def _catalog_env(docs: list[dict]) -> dict[str, str]:
     return {}
 
 
-def _relay_component(docs: list[dict], name: str | None) -> dict:
-    """The ``bindings.cron`` Component scoped to `catalog` that is named ``name``, the relay binding the catalog is told."""
-    for doc in docs:
-        if doc.get("kind") != "Component" or (doc.get("spec") or {}).get("type") != "bindings.cron":
-            continue
-        if "catalog" in (doc.get("scopes") or []) and doc["metadata"]["name"] == name:
-            return doc
-    raise AssertionError(
-        f"no bindings.cron Component scoped to `catalog` is named {name!r}, the relay binding the catalog is told — every tick is "
-        "delivered to a route the service does not serve, and a staged table_published is never re-published"
+def _catalog_crons(docs: list[dict]) -> list[str]:
+    """The names of the ``bindings.cron`` Components scoped to `catalog`."""
+    return sorted(
+        doc["metadata"]["name"]
+        for doc in docs
+        if doc.get("kind") == "Component" and (doc.get("spec") or {}).get("type") == "bindings.cron" and "catalog" in (doc.get("scopes") or [])
     )
 
 
@@ -101,17 +97,22 @@ def test_the_catalog_stages_control_events_into_a_prefix_its_OWN_relay_drains() 
     )
 
 
-def test_the_relay_binding_name_is_the_route_the_catalog_serves() -> None:
-    """Component name, injected env and served path are ONE string.
+def test_every_catalog_cron_is_named_as_the_route_the_catalog_serves() -> None:
+    """For each cron Component scoped to the catalog, Component name, injected env and served path are ONE string.
 
-    The served path is probed in a SUBPROCESS on purpose: the route is mounted from `get_settings()` at
+    The served paths are probed in a SUBPROCESS on purpose: each route is mounted from `get_settings()` at
     import, which is `lru_cache`d, so setting the env in this process and reloading would re-use the
     cached settings and degrade the assertion to "the chart default equals the code default" — passing
     on a real drift and failing on a legitimate `bindingName` edit. A fresh process is what a pod is.
     """
     docs = _render()
     env = _catalog_env(docs)
-    binding = _relay_component(docs, env.get("LANCE_CONTROL_RELAY_BINDING_NAME"))["metadata"]["name"]
+    told = {name: value for name, value in env.items() if name.endswith("_BINDING_NAME")}
+    crons = _catalog_crons(docs)
+    assert sorted(told.values()) == crons, (
+        f"the catalog is told the bindings {sorted(told.values())} and the render schedules {crons} — a Component the catalog is "
+        "not told ticks into a 404 on every schedule, and a binding it is told that no Component schedules never ticks"
+    )
 
     probe = subprocess.run(  # noqa: S603
         [sys.executable, "-c", "import json,catalog.main as m; print(json.dumps(sorted(m.app.openapi()['paths'])))"],
@@ -120,16 +121,16 @@ def test_the_relay_binding_name_is_the_route_the_catalog_serves() -> None:
         check=True,
         env={
             **os.environ,
-            "LANCE_CONTROL_RELAY_BINDING_NAME": binding,
+            **told,
             "LANCE_S3_ACCESS_KEY_ID": env.get("LANCE_S3_ACCESS_KEY_ID", "k"),
             "LANCE_S3_SECRET_ACCESS_KEY": "probe-secret",
         },
         cwd=REPO,
     )
     served = json.loads(probe.stdout)
-    assert f"/{binding}" in served, f"the catalog serves no route at /{binding} — the cron Component ticks into a 404 on every schedule"
-    assert not any(path.endswith(f"/{binding}") and path != f"/{binding}" for path in served), (
-        "the relay route is mounted under a prefix — a Dapr input binding is delivered at the POD ROOT, never under RASK_API_PREFIX"
+    assert [cron for cron in crons if f"/{cron}" not in served] == [], "the catalog serves no route at these crons' names — each ticks into a 404"
+    assert [path for path in served if any(path.endswith(f"/{cron}") and path != f"/{cron}" for cron in crons)] == [], (
+        "a cron route is mounted under a prefix — a Dapr input binding is delivered at the POD ROOT, never under RASK_API_PREFIX"
     )
 
 

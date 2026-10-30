@@ -196,3 +196,5 @@ before they had a record here; each names its source document and the date of th
 | [0181](0181-a-dex-client-signed-in-for-itself-is-a-machine-principal.md) | XC-174 | A Dex client signed in for itself is a machine principal (2026-10-27) |
 | [0182](0182-each-catalog-replica-hears-the-control-broadcast-through-a-durable-of-its-own.md) | LH-305 | Each catalog replica hears the control broadcast through a durable of its own (2026-10-27) |
 | [0183](0183-an-erasure-names-every-table-a-run-declared-it-read-whatever-lineage-has-recorded.md) | LH-541 | An erasure names every table a run declared it read, whatever lineage has recorded (2026-10-28) |
+| [0184](0184-a-committed-file-overwritten-in-place-is-found-by-the-sweep.md) | LH-419 | A committed file overwritten in place is found by the sweep (2026-10-30) |
+| [0185](0185-the-catalog-reclaims-each-roots-namespace-index-and-holds-no-connection-past-it.md) | LH-251 | The catalog reclaims each root's namespace index, and holds no connection past it (2026-10-30) |

@@ -21,11 +21,12 @@ import logging
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ConcurrentModificationError, NamespaceNotFoundError, TableNotFoundError
 from pydantic import BaseModel
 
+from catalog.api.cron import mount_cron
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, StorageOptionsDep, namespace_for_top_ns
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
@@ -127,17 +128,6 @@ async def _unpin(request: Request, settings: Settings, so: dict[str, str], table
         log.warning("promotion_unpin_failed", extra={"table": table}, exc_info=True)
 
 
-async def _ack_binding() -> dict[str, str]:
-    """Dapr's startup pre-flight (``OPTIONS /<binding name>``): a 2xx confirms this app consumes the binding."""
-    return {"status": "ok"}
-
-
 def mount_promotion_expiry(app: FastAPI, binding_name: str) -> bool:
     """Mount the tick at the exact binding name when one is configured; report whether it was."""
-    if not binding_name:
-        return False
-    router = APIRouter()
-    router.add_api_route(f"/{binding_name}", _on_cron, methods=["POST"], tags=["promotion-expiry"])
-    router.add_api_route(f"/{binding_name}", _ack_binding, methods=["OPTIONS"], include_in_schema=False)
-    app.include_router(router)
-    return True
+    return mount_cron(app, binding_name, _on_cron, tag="promotion-expiry")
