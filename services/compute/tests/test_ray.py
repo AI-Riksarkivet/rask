@@ -84,6 +84,27 @@ def test_serve_proxy_restores_trailing_slash(client: TestClient, monkeypatch: py
     assert captured["path"] == "api/serve/applications/"
 
 
+def test_serve_proxy_forwards_only_the_applications_route(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The proxy relays exactly `applications/` (the one path the SPA and the flows catalog read) with
+    compute's Ray token. Any other GET under /api/serve must be refused at the router — 404, and the
+    dashboard is never reached. Reproduced before the fix: the `{path:path}` catch-all forwarded
+    `/api/serve/version` to the dashboard (502 here, since Ray is down)."""
+    from ray_kit import dashboard
+    from ray_kit.schemas import ProxyResponse
+
+    reached: list[str] = []
+
+    async def fake_proxy(http, dashboard_url, path, method, query, headers, body):
+        reached.append(path)
+        return ProxyResponse(content=b"{}", status_code=200, headers={"content-type": "application/json"})
+
+    monkeypatch.setattr(dashboard, "proxy", fake_proxy)
+
+    resp = client.get("/api/serve/version")
+    assert resp.status_code == 404, f"{resp.status_code}: {resp.text[:100]}"
+    assert reached == [], f"the dashboard was reached at {reached}"
+
+
 def test_serve_proxy_never_relays_stale_body_headers(client: TestClient) -> None:
     """A gzip-encoded Ray response reaches the browser with headers describing the DECODED body.
 
@@ -208,9 +229,9 @@ def test_get_ray_client_negative_caches_while_ray_down(monkeypatch: pytest.Monke
 
 def test_serve_proxy_refuses_an_encoded_dot_segment_end_to_end(client: TestClient) -> None:
     """The gateway is not the defence; the seam is. Driven through the REAL `dashboard.proxy` with the
-    app's HTTP client swapped for a recorder: the request must be refused 400 and the dashboard must
-    never see it. Reproduced before the fix: `%2e%2e` decoded at the handler and was forwarded as
-    `api/serve/../v0/logs/file/`."""
+    app's HTTP client swapped for a recorder: the request must be refused (no route matches it, 404) and
+    the dashboard must never see it. Reproduced before the fix: `%2e%2e` decoded at the handler and was
+    forwarded as `api/serve/../v0/logs/file/`."""
     import httpx
 
     seen: list[str] = []
@@ -221,5 +242,5 @@ def test_serve_proxy_refuses_an_encoded_dot_segment_end_to_end(client: TestClien
 
     client.app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(_record))
     resp = client.get("/api/serve/%2e%2e/v0/logs/file")
-    assert resp.status_code == 400, f"{resp.status_code}: {resp.text[:100]}"
+    assert resp.status_code == 404, f"{resp.status_code}: {resp.text[:100]}"
     assert seen == [], f"the dashboard was reached at {seen}"
