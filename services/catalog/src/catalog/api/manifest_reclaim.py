@@ -8,7 +8,9 @@ every root: level-triggered, idempotent and late-is-free, the shape `.claude/ski
 ``LANCE_MANIFEST_RECLAIM_BINDING_NAME`` and the served path are one string. Guarded by ``require_dapr_token``.
 
 **EVERY REPLICA TICKS, AND THAT IS HARMLESS.** Two reclaims of one root remove the same versions, and the store answers
-a delete of an object already gone as done. A root that fails is logged and leaves every other root to this tick.
+a delete of an object already gone as done. A root that fails is logged and counted on
+``catalog.manifest_reclaim.failed``, which pages once it keeps failing (``CatalogManifestReclaimFailing``), and leaves
+every other root to this tick.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from typing import Annotated
 
 from fastapi import Depends, FastAPI
 from fastapi.concurrency import run_in_threadpool
+from opentelemetry import metrics
 from pydantic import BaseModel, Field
 
 from catalog.api.cron import mount_cron
@@ -31,6 +34,14 @@ from service_kit.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)
+
+_meter = metrics.get_meter("lance.catalog")
+_failed = _meter.create_counter(
+    "catalog.manifest_reclaim.failed",
+    unit="{root}",
+    description="Roots whose __manifest history a reclaim tick could not reclaim ([[LH-251]]): while one keeps failing,"
+    " every namespace operation on it keeps a version again, and a dropped id stays readable in that history.",
+)
 
 #: One tick at a time per process: a second tick arriving while one runs would only repeat its deletes.
 _tick_lock = asyncio.Lock()
@@ -58,6 +69,7 @@ async def _on_cron(settings: SettingsDep, _: Annotated[None, Depends(require_dap
             # pylance raises each Lance error as one of these three (`python/src/error.rs` at v13.0.0).
             except (OSError, ValueError, RuntimeError):
                 log.warning("manifest_reclaim_failed", extra={"root": root}, exc_info=True)
+                _failed.add(1, {"lance.catalog.root": root})
                 tick.failed += 1
                 continue
             if done is not None:

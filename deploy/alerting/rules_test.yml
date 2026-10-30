@@ -1565,3 +1565,49 @@ tests:
       - eval_time: 70m
         alertname: CatalogListingLoadReachedInteractiveFrequency
         exp_alerts: []
+
+  # A root the manifest reclaim keeps failing pages from its second failed tick, while its series is new (the counter's
+  # first sample is already 1) and, past half an hour, through the increase; one tick's failure does not.
+  - interval: 1m
+    input_series:
+      - series: 'catalog_manifest_reclaim_failed_total{lance_catalog_root="s3://acme-bucket"}'
+        values: "_ _ _ 1+0x9 2+0x9 3+0x9 4+0x9 5+0x9"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CatalogManifestReclaimFailing
+        exp_alerts: []
+      - eval_time: 14m
+        alertname: CatalogManifestReclaimFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+              lance_catalog_root: "s3://acme-bucket"
+            exp_annotations:
+              summary: "The catalog cannot reclaim a root's namespace index history"
+              description: "The catalog's manifest reclaim tick failed on the root s3://acme-bucket on two ticks within half an hour, so every namespace operation there keeps a version of `__manifest` again and a dropped namespace or table stays readable in that history. Read the catalog's `manifest_reclaim_failed` logs for the root and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-roots-namespace-index-is-not-reclaimed"
+      - eval_time: 45m
+        alertname: CatalogManifestReclaimFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+              lance_catalog_root: "s3://acme-bucket"
+            exp_annotations:
+              summary: "The catalog cannot reclaim a root's namespace index history"
+              description: "The catalog's manifest reclaim tick failed on the root s3://acme-bucket on two ticks within half an hour, so every namespace operation there keeps a version of `__manifest` again and a dropped namespace or table stays readable in that history. Read the catalog's `manifest_reclaim_failed` logs for the root and the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-roots-namespace-index-is-not-reclaimed"
+
+  # One tick's blip on every root (a store that did not answer once) is repaired by the next tick and pages nothing.
+  - interval: 1m
+    input_series:
+      - series: 'catalog_manifest_reclaim_failed_total{lance_catalog_root="s3://acme-bucket"}'
+        values: "_ _ _ 1+0x56"
+      - series: 'catalog_manifest_reclaim_failed_total{lance_catalog_root="s3://beta-bucket"}'
+        values: "_ _ _ 1+0x56"
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: CatalogManifestReclaimFailing
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: CatalogManifestReclaimFailing
+        exp_alerts: []

@@ -11,8 +11,10 @@ backend reloads a held ``__manifest`` by probing only the version after it (lanc
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+import importlib.util
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
+from typing import cast
 
 import lance
 import pytest
@@ -62,6 +64,41 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Catalog
     get_settings.cache_clear()
 
 
+@pytest.fixture
+def failed_roots(monkeypatch: pytest.MonkeyPatch) -> Callable[[], dict[str, int]]:
+    """The tick's ``catalog.manifest_reclaim.failed`` counter, built by its own module against an in-memory reader."""
+    from opentelemetry import metrics as otel_metrics
+    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
+
+    from catalog.api import manifest_reclaim as tick
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(metric_readers=[reader])
+    spec = importlib.util.find_spec(tick.__name__)
+    assert spec is not None and spec.loader is not None, "the tick's module has no loader to run it again with"
+    measured = importlib.util.module_from_spec(spec)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(otel_metrics, "get_meter", lambda name, *_args, **_kwargs: provider.get_meter(name))
+        spec.loader.exec_module(measured)
+    monkeypatch.setattr(tick, "_failed", measured._failed)
+
+    def counts() -> dict[str, int]:
+        found: dict[str, int] = {}
+        data = reader.get_metrics_data()
+        for resource in data.resource_metrics if data is not None else ():
+            for scope in resource.scope_metrics:
+                for metric in scope.metrics:
+                    if metric.name != "catalog.manifest_reclaim.failed":
+                        continue
+                    # A counter only ever yields `NumberDataPoint`, the member of the reader's point union that has a value.
+                    for point in cast(Sequence[NumberDataPoint], metric.data.data_points):
+                        found[str((point.attributes or {}).get("lance.catalog.root"))] = int(point.value)
+        return found
+
+    return counts
+
+
 def _object_ids(root: str, version: int) -> list[str]:
     return lance.dataset(f"{root}/__manifest", version=version).to_table(columns=["object_id"]).column(0).to_pylist()
 
@@ -92,6 +129,29 @@ def test_the_reclaim_keeps_each_roots_history_bounded_and_the_catalog_reads_the_
     listed = catalog.client.get("/v1/namespace/$/list")
     assert listed.status_code == 200, listed.text
     assert sorted(listed.json()["namespaces"]) == ["kept", "other"]
+
+
+def test_a_root_the_reclaim_cannot_read_is_counted_and_leaves_the_others(catalog: Catalog, failed_roots: Callable[[], dict[str, int]], tmp_path: Path) -> None:
+    """A root whose index Lance cannot open fails alone: the tick still answers, reclaims every other root, and counts
+    the failure under that root, which is what pages once the same root keeps failing."""
+    from catalog.services import warehouses
+
+    broken = tmp_path / "broken"
+    (broken / "__manifest" / "_versions").mkdir(parents=True)
+    (broken / "__manifest" / "_versions" / "1.manifest").write_bytes(b"not a Lance manifest")
+    warehouses.put_warehouse(catalog.estate, {}, {"id": "broken", "bucket": "broken", "project": "p", "root_uri": str(broken)})
+    tenant = connect("dir", {"root": catalog.warehouse})
+    for name in ("one", "two"):
+        tenant.create_namespace(CreateNamespaceRequest(id=[name]))
+
+    tick = catalog.client.post(f"/{BINDING}")
+
+    assert tick.status_code == 200, tick.text
+    assert (tick.json()["failed"], [done["root"] for done in tick.json()["reclaimed"]], failed_roots()) == (
+        1,
+        [catalog.warehouse],
+        {str(broken): 1},
+    )
 
 
 class _Clock:
@@ -141,16 +201,3 @@ def test_the_namespace_index_is_written_without_indexes_of_its_own(catalog: Cata
     indexes = lance.dataset(f"{catalog.estate}/__manifest").describe_indices()
 
     assert indexes == []
-
-
-def test_a_commit_path_cleanup_policy_on_the_index_leaves_its_history(catalog: Catalog) -> None:
-    """``lance.auto_cleanup.*`` on ``__manifest`` bounds nothing: the backend's rewrite commits skip it
-    (``skip_auto_cleanup``), so the reclaim tick is what bounds the index, and a policy armed there is not a fix."""
-    assert catalog.client.post("/v1/namespace/seed/create", json={}).status_code == 200
-    lance.dataset(f"{catalog.estate}/__manifest").update_config({"lance.auto_cleanup.interval": "1", "lance.auto_cleanup.older_than": "0s"})
-    before = len(_versions(catalog.estate))
-
-    for name in ("a", "b", "c"):
-        assert catalog.client.post(f"/v1/namespace/{name}/create", json={}).status_code == 200
-
-    assert len(_versions(catalog.estate)) == before + 3

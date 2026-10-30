@@ -34,6 +34,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | `LineageSignatureRefusedForAListedSigner` firing, `lineage_signature_refused` WARN logs | [Lineage refusing a signer's events](#lineage-refusing-a-signers-events) |
 | `outbox_depth` sustained > 0, `outbox_oldest_age_seconds` climbing | [Outbox not draining](#outbox-not-draining) |
 | `CatalogCommitsReannounced`, `CatalogCommitsUnauthored` or `CatalogCommitReconcileBlocked` firing | [Committed versions re-announced](#committed-versions-re-announced) |
+| `CatalogManifestReclaimFailing` firing, `manifest_reclaim_failed` WARN logs | [A root's namespace index is not reclaimed](#a-roots-namespace-index-is-not-reclaimed) |
 | `ErasureDerivedAfterRelease` or `ErasureLateDerivedUnwatched` firing | [A table derived from an erased table found after the release](#a-table-derived-from-an-erased-table-found-after-the-release) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
 | FGA failing, notifications' inbox state unreadable | [AGE down](#age-postgres-down--fga--dapr-state) |
@@ -206,6 +207,25 @@ retained version or its commit time; it keeps that ref's mark until the read suc
 **Act.** A re-announcement needs nothing further once its cause is understood. An unauthored version is unjudged:
 treat it as an incident on the credential that wrote it, and restore the table to the last authored version if its
 content is not trusted.
+
+## A root's namespace index is not reclaimed
+
+**Symptom.** `CatalogManifestReclaimFailing` (warning) names a root, and the catalog's `manifest_reclaim_failed` WARN logs
+carry the root and the error, from the same root on at least two ticks within half an hour.
+
+**Cause.** Every namespace operation writes a root's `__manifest` again as a new version, and only the catalog's
+`catalog-manifest-reclaim-cron` tick removes the versions older than `catalog.manifestReclaim.retainSeconds` (LH-251,
+ADR 0185). While it fails on a root, that root's index keeps every version again, so a describe or a listing there slows
+as the history grows, and a namespace or table dropped there stays readable in the history.
+
+**Diagnose.** The error says which: a store that does not answer, or refuses the catalog's identity a delete under
+`<root>/__manifest/` (its canned policy grants `s3:DeleteObject` on every bucket; a platform store may not), a bucket
+that no longer exists under a warehouse record, or Lance refusing the index. The tick reports every root it reclaimed
+beside it (`manifest_reclaimed`, with `versions_kept`), so the failing root is the one missing there.
+
+**Act.** Restore the store or the grant; the next tick reclaims everything past the retention in one pass. Never run
+`cleanup_old_versions` on a live root by hand with a shorter `older_than` than the chart's retention: a catalog
+connection that holds a version it removes answers `InternalError` until it is built again.
 
 ## A table derived from an erased table found after the release
 

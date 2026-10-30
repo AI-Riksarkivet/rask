@@ -180,6 +180,22 @@ groups:
             `commit_reconcile_ref_unreadable` and `commit_reconcile_table_failed` logs for the table and the error.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
 
+      # A root whose __manifest history the catalog cannot reclaim keeps a version per namespace operation again, and keeps
+      # every id dropped there readable in that history (LH-251, ADR 0185). One tick's failure is a blip the next tick
+      # repairs; the same root failing on two ticks within half an hour is not.
+      - alert: CatalogManifestReclaimFailing
+        expr: (max by (lance_catalog_root) (increase(catalog_manifest_reclaim_failed_total[30m])) >= 2) or (max by (lance_catalog_root) (catalog_manifest_reclaim_failed_total unless catalog_manifest_reclaim_failed_total offset 30m) >= 2)
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "The catalog cannot reclaim a root's namespace index history"
+          description: >-
+            The catalog's manifest reclaim tick failed on the root {{ $labels.lance_catalog_root }} on two ticks within half an hour, so
+            every namespace operation there keeps a version of `__manifest` again and a dropped namespace or table stays
+            readable in that history. Read the catalog's `manifest_reclaim_failed` logs for the root and the error.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-roots-namespace-index-is-not-reclaimed
+
       # A released erasure obligation is final, so a table found derived from its table after the release, written before
       # it, may still hold the subject (ADR 0183 §5). One is enough to page.
       - alert: ErasureDerivedAfterRelease

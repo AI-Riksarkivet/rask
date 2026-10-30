@@ -1077,7 +1077,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   operation rewrites a root's index whole as a new version, and the backend's rewrite skips `lance.auto_cleanup.*`, so
   nothing but `catalog-manifest-reclaim-cron` (`catalog.api.manifest_reclaim`) bounds it: Lance's own
   `cleanup_old_versions(older_than=catalog.manifestReclaim.retainSeconds)` on the catalog's root and every registered
-  warehouse's. The maintenance sweep never touches it (`discovery` skips `__` directories). A `dir` connection reloads by
+  warehouse's. A root it keeps failing on pages (`CatalogManifestReclaimFailing`, counted on
+  `catalog.manifest_reclaim.failed` by root). The maintenance sweep never touches it (`discovery` skips `__` directories). A `dir` connection reloads by
   probing only the version after the one it holds (lance v13.0.0 `DatasetConsistencyWrapper::reload`), so a reclaim
   that removed that successor would leave the connection answering `InternalError` for good (measured); that is why
   `NamespaceConnections` builds a connection again once it is a quarter of the retention old. Never run a cleanup on an

@@ -39,8 +39,10 @@ A `dir` root keeps its namespaces and tables as rows of one Lance table, `<root>
    the reclaim judges a version's age by the timestamp its writer stamped.
 3. **The index builds no index of its own.** The catalog sets `inline_optimization_enabled=false` rather than leaving
    the backend's default, so an upstream default that changes does not change it.
-4. **A commit-path policy is not the fix.** A test arms `lance.auto_cleanup.*` on the index and shows the catalog's
-   commits keep every version, so the tick stays the one thing that bounds it.
+4. **A commit-path policy is not the fix.** The backend's rewrite commits with `skip_auto_cleanup`, so a
+   `lance.auto_cleanup.*` policy armed on the index bounds nothing (measured above), and the tick stays the one thing
+   that bounds it. That is Lance's behaviour rather than rask's, so no rask test pins it: a pylance bump re-reads
+   `rewrite_manifest`, as it re-reads the reload.
 
 ## Consequences
 
@@ -48,6 +50,8 @@ A `dir` root keeps its namespaces and tables as rows of one Lance table, `<root>
   and 600 s by default, `catalog.manifestReclaim`), and the history holds the operations of that window.
 - Every catalog replica opens each root's index again every 15 minutes per plane; every replica ticks, and two
   reclaims of one root remove the same versions.
+- A root the reclaim fails on is counted on `catalog.manifest_reclaim.failed` by root, and the same root failing on two
+  ticks within half an hour pages (`CatalogManifestReclaimFailing`); one tick's failure is repaired by the next.
 - The safety argument assumes no two clocks disagree by more than three quarters of the retention and that no
   single call on one connection runs that long; a smaller retention narrows both. A retention of 0 keeps only the
   latest version and builds a connection for every request.
