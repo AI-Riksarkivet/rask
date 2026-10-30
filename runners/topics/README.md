@@ -36,6 +36,17 @@ uv run ratch --db transcripts_v2.lance feature topic_tree   # the pure-compute f
 #   serve run runners/topics/deployment.py:app
 ```
 
+## Ray Serve security
+
+The Serve endpoint is a fixed-dataset build trigger. Configure `MEDIA_TOPICS_SERVE_TOKEN` from a
+secret and `MEDIA_TOPICS_DB_PATH` in the deployment environment. `MEDIA_TOPICS_LLM_URL` optionally
+selects the trusted LLM endpoint; when unset, the worker's local default is used. The service fails
+closed if the token or database path is missing.
+
+Send `POST` with `Authorization: Bearer <token>` and an empty JSON object (`{}`). Request-supplied
+database paths and LLM URLs are rejected; the batch CLI keeps its existing `--db` and `--llm-url`
+arguments.
+
 ## Why this shape
 
 - **ratch stays model-free** — pure Ray Data/Jobs orchestration; it knows the
