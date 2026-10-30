@@ -302,10 +302,10 @@ async def list_erasure_obligations(
     entries = [table_claims.TableRecord(location=o.location, uuid=o.table_uuid) for o in obligations]
     names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
     named = [(name, obligation) for name, obligation in zip(names, obligations, strict=True) if name is not None]
-    if settings.fga_enabled and token is not None and client is not None:
+    if (authz := fga_deps.authorization(settings, client, token)) is not None:
         # Checked on the uuid each obligation records ([[LH-524]]), which is the object the table's grants are held by.
         objects = sorted({fga.table_object(obligation.table_uuid) for _, obligation in named})
-        allowed = await fga.batch_check(client, user=token.subject, relation="can_maintain", objects=objects)
+        allowed = await authz.batch_check("can_maintain", objects)
         named = [(name, obligation) for name, obligation in named if allowed.get(fga.table_object(obligation.table_uuid))]
     by_key = {f"{obligation.deadline.isoformat()}|{obligation.obligation_id}": (name, obligation) for name, obligation in named}
     page, next_token = paginate(sorted(by_key), page_token, limit)
@@ -328,10 +328,12 @@ async def _hidden_derived(
     authorization off, else every one the caller holds no ``can_get_metadata`` on, the rung lineage's derived door asks to
     show one, and every one keyed by a name, which no grant can reach."""
     keys = {key for surface in surfaces if (key := erasure.derived_key(surface.surface)) is not None} | set(late)
-    if not keys or not settings.fga_enabled or token is None or client is None:
+    if not keys:
+        return frozenset()
+    if (authz := fga_deps.authorization(settings, client, token)) is None:
         return frozenset()
     objects = sorted(fga.table_object(key) for key in keys if derived_tables.is_table_uuid(key))
-    allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=objects) if objects else {}
+    allowed = await authz.batch_check("can_get_metadata", objects) if objects else {}
     return frozenset(key for key in keys if not (derived_tables.is_table_uuid(key) and allowed.get(fga.table_object(key))))
 
 

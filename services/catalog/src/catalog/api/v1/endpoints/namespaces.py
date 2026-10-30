@@ -500,11 +500,10 @@ async def list_namespaces(
     if not segments and settings.warehouses_enabled:
         names = _merge_bound_top_namespaces(names, await _bound_top_namespaces(settings))
 
-    if settings.fga_enabled and token is not None and client is not None:
+    if (authz := fga_deps.authorization(settings, client, token)) is not None:
         response.namespaces, response.page_token = await fga_deps.authorized_page(
-            client,
+            authz,
             resolver,
-            user=token.subject,
             relation="can_get_metadata",
             kind="namespace",
             candidates=[(name, [*segments, name]) for name in names],
@@ -1323,13 +1322,12 @@ async def list_tables(
     candidates = [(name, [*segments, name]) for name in names]
     if not include_declared:
         candidates = await listings.holding_a_version(resolver, so, candidates)
-    # When FGA is on and the caller is known, keep only the tables they may actually read, each judged on the object its
-    # name resolves to ([[LH-223]], [[LH-524]]).
-    if settings.fga_enabled and token is not None and client is not None:
+    # With FGA on, keep only the tables the caller may actually read, each judged on the object its name resolves to
+    # ([[LH-223]], [[LH-524]]).
+    if (authz := fga_deps.authorization(settings, client, token)) is not None:
         response.tables, response.page_token = await fga_deps.authorized_page(
-            client,
+            authz,
             resolver,
-            user=token.subject,
             relation="can_read_data",
             kind="table",
             candidates=candidates,

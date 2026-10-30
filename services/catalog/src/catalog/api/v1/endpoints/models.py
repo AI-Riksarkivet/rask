@@ -9,8 +9,8 @@ therefore explicit per handler: promote → the validator rung ``can_promote``; 
 ``table:models$<model>``, the per-model FGA object, granted directly: no door seeds a parent edge for a registry
 model, so no namespace grant cascades to it. A registry model is no lance-namespace table: no ``__manifest`` row names it and no location
 claim mints it a uuid (ADR 0173 §3 keys tables and namespaces), so its object keeps the model's name, which
-``_MODEL_RE`` holds to characters OpenFGA accepts. That router-level fail-closed floor is what keeps the list filter's
-``fga_enabled and token and client`` guards from ever being a fail-open path. Promotion moves the
+``_MODEL_RE`` holds to characters OpenFGA accepts. Each gate and the list filter ask ``fga_deps.authorization``, so each
+refuses on its own with no client or no caller, whatever the router's floor did before it. Promotion moves the
 ``blessed`` Lance tag after a fail-closed metrics gate; a distinct promotion RunEvent is emitted
 best-effort so the blessing lands in lineage without being mistaken for a training run.
 """
@@ -105,10 +105,10 @@ async def list_models(
     names = await run_in_threadpool(registry.list_models, settings.models_root, so)
     names = [name for name in names if _MODEL_RE.fullmatch(name)]
     names = sorted(set(names))
-    if settings.fga_enabled and token is not None and client is not None:
+    if (authz := fga_deps.authorization(settings, client, token)) is not None:
         # The page's own candidates, batch-checked ([[LH-223]]): a listing never asks OpenFGA what the caller reaches
         # across the estate, which stops at the server's ceiling.
-        allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[_model_object(name) for name in names])
+        allowed = await authz.batch_check("can_get_metadata", [_model_object(name) for name in names])
         names = [name for name in names if allowed.get(_model_object(name))]
     page, next_token = paginate(names, page_token, limit)
     return ModelsListResponse(

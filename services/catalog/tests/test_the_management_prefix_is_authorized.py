@@ -30,8 +30,8 @@ def test_a_suffix_the_parser_cannot_strip_is_refused() -> None:
     `_action_relation` refuses it rather than handing out a rung nobody chose.
 
     The guard never makes this call for such a path: `_resource_for` answers `None` for an unrecognised
-    mount and `authorize` stops at authentication, which
-    `test_stores_reads_are_gated.py::test_every_route_the_router_guard_waves_through_has_a_reason` covers."""
+    mount and `authorize` stops at authentication, leaving the route to its handler, which
+    `test_a_door_the_router_leaves_open_decides_for_itself.py` drives."""
     assert _suffix("/some/other/mount/table/x/erasure", "table", "x") == ""
     with pytest.raises(InternalError, match="declares no rung"):
         _action_relation("table", "")

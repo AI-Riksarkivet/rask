@@ -243,19 +243,19 @@ async def create_project(
 async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken, candidates: list[str]) -> set[str] | None:
     """Which of ``candidates`` (the registry's project ids) this caller may list, or ``None`` for every tenant.
 
-    ``None`` for an estate observer, and when FGA is off / unwired / unauthenticated (parity with every
-    ``require_*`` gate). Otherwise the candidates are batch-checked on ``member`` ([[LH-223]]): the listing never
-    asks OpenFGA which projects the caller reaches, an answer the server stops counting at its ceiling. Fail-closed:
-    an OpenFGA outage raises, so a caller is never shown more, or less, than their memberships by accident.
+    ``None`` for an estate observer, and with FGA off, as for every gate. Otherwise the candidates are batch-checked on
+    ``member`` ([[LH-223]]): the listing never asks OpenFGA which projects the caller reaches, an answer the server stops
+    counting at its ceiling. Fail-closed: no client, no caller (``fga_deps.authorization``) and an OpenFGA outage raise,
+    so a caller is never shown more, or less, than their memberships by accident.
     """
-    if not (settings.fga_enabled and client is not None and token is not None):
+    if (authz := fga_deps.authorization(settings, client, token)) is None:
         return None
     root = settings.fga_root_object
     try:
-        observer = await fga.check(client, user=token.subject, relation="can_observe_events", obj=root)
-        allowed = None if observer else await fga.batch_check(client, user=token.subject, relation="member", objects=[f"project:{p}" for p in candidates])
+        observer = await fga.check(authz.client, user=authz.subject, relation="can_observe_events", obj=root)
+        allowed = None if observer else await authz.batch_check("member", [f"project:{p}" for p in candidates])
     except ServiceUnavailableError:
-        audit(AuditAction.LIST_PROJECTS, AuditOutcome.FAILURE, subject=token.subject, resource=root, reason="authz_unavailable")
+        audit(AuditAction.LIST_PROJECTS, AuditOutcome.FAILURE, subject=authz.subject, resource=root, reason="authz_unavailable")
         raise
     # The estate-wide listing is the disclosure the root object guards, so its decision is audited like
     # every gate; a member's listing is scoped to their own tenants.
@@ -263,7 +263,7 @@ async def _visible_projects(client: OpenFgaClient | None, settings: Settings, to
         AuditAction.AUTHZ,
         AuditOutcome.ALLOW if observer else AuditOutcome.DENY,
         relation="can_observe_events",
-        subject=token.subject,
+        subject=authz.subject,
         resource=root,
         reason="list_projects",
     )

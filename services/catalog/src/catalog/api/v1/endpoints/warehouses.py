@@ -381,10 +381,10 @@ async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: Fg
     warehouses the caller has ``can_get_metadata`` on (never discloses another tenant's bucket names)."""
     _require_enabled(settings)
     records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
-    if settings.fga_enabled and client is not None and token is not None:
+    if (authz := fga_deps.authorization(settings, client, token)) is not None:
         # The listing's own candidates, batch-checked ([[LH-223]]): never what the caller reaches across the estate,
         # which OpenFGA stops counting at its ceiling.
-        allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=[f"warehouse:{r['id']}" for r in records])
+        allowed = await authz.batch_check("can_get_metadata", [f"warehouse:{r['id']}" for r in records])
         records = [r for r in records if allowed.get(f"warehouse:{r['id']}")]
     return [WarehouseResponse.model_validate(r) for r in records]
 
@@ -431,10 +431,10 @@ async def list_estate_bindings(
             f"{len(skipped)} namespace binding(s) could not be read (e.g. {skipped[0]}) — refusing to "
             f"report a partial estate, because a binding you cannot read is a namespace you cannot see."
         )
-    if settings.fga_enabled and client is not None and token is not None:
+    if (authz := fga_deps.authorization(settings, client, token)) is not None:
         # The listing's own candidates, batch-checked ([[LH-223]]).
         objects = sorted({f"warehouse:{r.get('warehouse_id')}" for r in records})
-        allowed = await fga.batch_check(client, user=token.subject, relation="can_get_metadata", objects=objects)
+        allowed = await authz.batch_check("can_get_metadata", objects)
         records = [r for r in records if allowed.get(f"warehouse:{r.get('warehouse_id')}")]
     return EstateBindingsResponse(bindings={str(r["top_ns"]): str(r["warehouse_id"]) for r in records})
 
@@ -469,11 +469,10 @@ async def list_warehouse_namespaces(
     #
     # A namespace name discloses how a tenant organises data, which is why the answer is FILTERED
     # rather than refused — refusing would break the breadcrumb the widened relation exists to serve.
-    if settings.fga_enabled and token is not None and client is not None:
+    if (authz := fga_deps.authorization(settings, client, token)) is not None:
         bound, _ = await fga_deps.authorized_page(
-            client,
+            authz,
             resolver,
-            user=token.subject,
             relation="can_get_metadata",
             kind="namespace",
             candidates=[(name, [name]) for name in sorted(bound)],

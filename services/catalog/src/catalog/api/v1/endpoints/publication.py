@@ -46,7 +46,7 @@ from catalog.api.dependencies import (
     SettingsDep,
     StorageOptionsDep,
 )
-from catalog.api.fga_deps import require_relation
+from catalog.api.fga_deps import authorization, require_relation
 from catalog.api.pagination import paginate
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
@@ -722,11 +722,9 @@ async def list_promotions(
     entries = [table_claims.TableRecord(location=hold.location, uuid=hold.uuid) for hold in holds]
     names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
     named = [(name, hold) for name, hold in zip(names, holds, strict=True) if name is not None]
-    if settings.fga_enabled and token is not None and client is not None:
+    if (authz := authorization(settings, client, token)) is not None:
         # Checked on the uuid each hold records ([[LH-524]]), which is the object the table's grants are held by.
-        visible = await fga.batch_check(
-            client, user=token.subject, relation="can_get_metadata", objects=sorted({fga.table_object(hold.uuid) for _, hold in named})
-        )
+        visible = await authz.batch_check("can_get_metadata", sorted({fga.table_object(hold.uuid) for _, hold in named}))
         named = [(name, hold) for name, hold in named if visible.get(fga.table_object(hold.uuid))]
     by_key = {f"{name}|{hold.uuid}": (name, hold) for name, hold in named}
     page, next_token = paginate(sorted(by_key), page_token, limit)

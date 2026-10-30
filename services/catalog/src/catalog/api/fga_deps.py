@@ -31,7 +31,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from functools import lru_cache, partial
-from typing import Annotated, Any, Final, Literal
+from typing import Annotated, Any, Final, Literal, NamedTuple
 
 from fastapi import Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -351,8 +351,8 @@ _BATCH_OWNER_OPS: dict[str, str] = {"deregister_table": "can_deregister"}
 #: and it is HERE rather than assumed because both helpers below matched `/v1/` literally: the first
 #: route mounted on the management prefix resolved to no resource, fell out of `authorize` entirely,
 #: and was reachable by any authenticated principal. It was the ERASURE door, which destroys a table's
-#: history. `test_stores_reads_are_gated.py` caught it before it shipped, and this list is what keeps
-#: the next management route from repeating it.
+#: history. This list is what keeps the next management route from repeating it, and a route that falls out of it
+#: is one `services/catalog/tests/test_a_door_the_router_leaves_open_decides_for_itself.py` finds with no entry.
 _MOUNTS: Final = ("/management/v1", "/v1")
 
 
@@ -823,6 +823,43 @@ def require_fga(settings: Settings, client: OpenFgaClient | None, *, feature: st
     return require_wired(client)
 
 
+class Authorization(NamedTuple):
+    """The authorization a request is decided under while FGA is on: the wired client, and the subject it decides for.
+
+    An internal value bundle, never boundary input, so a ``NamedTuple``: immutable and typed, with nothing to validate.
+    """
+
+    client: OpenFgaClient
+    subject: str
+
+    async def require(self, relation: str, obj: str, *, label: str | None = None) -> None:
+        """Refuse unless the subject holds ``relation`` on ``obj``, the decision audited as :func:`_require` audits it."""
+        await _require(self.client, user=self.subject, relation=relation, obj=obj, label=label)
+
+    async def batch_check(self, relation: str, objects: Sequence[str]) -> dict[str, bool]:
+        """Whether the subject holds ``relation`` on each of ``objects``, in one round trip: a listing judging its items."""
+        return await fga.batch_check(self.client, user=self.subject, relation=relation, objects=list(objects))
+
+
+def authorization(settings: Settings, client: OpenFgaClient | None, token: Caller | None) -> Authorization | None:
+    """The client and the subject a decision is asked with, ``None`` only with FGA off, when every decision allows.
+
+    Every gate and every listing that judges its items asks this, so none reads an authorization layer that is on as
+    one that is off ([[LH-237]]): an unwired client is the 503 :func:`require_wired` answers and no caller is a 401,
+    whatever ran before the gate. Off is one explicit answer, never a missing client.
+
+    Raises:
+        ServiceUnavailableError: FGA is on and unwired.
+        UnauthenticatedError: FGA is on and nobody is signed in.
+    """
+    if not settings.fga_enabled:
+        return None
+    wired = require_wired(client)
+    if token is None:
+        raise UnauthenticatedError("authentication required")
+    return Authorization(client=wired, subject=token.subject)
+
+
 def _string_list(value: object) -> list[str] | None:
     """``value`` when it is an identifier's segments (a list of strings), else ``None``."""
     return [item for item in value if isinstance(item, str)] if isinstance(value, list) and all(isinstance(item, str) for item in value) else None
@@ -1044,22 +1081,18 @@ def _rung_check(settings: Settings, token: Caller | None, injected: OpenFgaClien
         ServiceUnavailableError: FGA is on and unwired.
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
-    if not settings.fga_enabled:
+    if (authz := authorization(settings, injected, token)) is None:
         return None
-    client = require_wired(injected)
-    if token is None:
-        raise UnauthenticatedError("authentication required")
-    user = token.subject
 
     async def check(rung: tier_policy.Rung) -> None:
         try:
-            await _require_rung(client, resolver, user=user, rung=rung)
+            await _require_rung(authz.client, resolver, user=authz.subject, rung=rung)
         except object_uuids.UnidentifiedObjectError:
             # Every door but the deregister keeps answering code 18 for an object no uuid identifies, and the
             # deregister is a judged write door, so this is the one place that door's rung is asked.
             if rung.relation != _UNIDENTIFIED_TABLE_RUNG:
                 raise
-            await _require_estate_admin_for_unidentified(client, user=user, root=settings.fga_root_object, rung=rung)
+            await _require_estate_admin_for_unidentified(authz.client, user=authz.subject, root=settings.fga_root_object, rung=rung)
 
     return check
 
@@ -1548,10 +1581,9 @@ LISTING_BATCH: Final = 100
 
 
 async def authorized_page(
-    client: OpenFgaClient,
+    authz: Authorization,
     resolver: Resolver,
     *,
-    user: str,
     relation: str,
     kind: Literal["table", "namespace"],
     candidates: Sequence[tuple[str, Sequence[str]]],
@@ -1577,7 +1609,7 @@ async def authorized_page(
         batch = remaining[start : start + LISTING_BATCH]
         objects = await asyncio.gather(*(_listed_object(resolver, kind, name, segments) for name, segments in batch))
         present = sorted({obj for obj in objects if obj is not None})
-        allowed = await fga.batch_check(client, user=user, relation=relation, objects=present) if present else {}
+        allowed = await authz.batch_check(relation, present) if present else {}
         for offset, ((name, _), obj) in enumerate(zip(batch, objects, strict=True)):
             if obj is None or not allowed.get(obj, False):
                 continue
@@ -2056,13 +2088,15 @@ async def require_grants_may_follow(client: OpenFgaClient | None, settings: Sett
     namespace takes every grant along. Each is held to the grant door's own rule (:func:`refuse_a_cross_tenant_role_grant`):
     a role one tenant owns is not granted a rung on another tenant's object by renaming the object across. Asked BEFORE
     the native rename, so a refusal leaves the table where it was. A destination under the same top-level namespace has
-    the source's tenant, and nothing is read.
+    the source's tenant, and nothing is read; so does FGA off. With FGA on, an unwired client is the 503
+    :func:`require_wired` answers, never a rename whose grants nobody read ([[LH-237]]).
     """
-    if not (settings.fga_enabled and client is not None) or source[:1] == destination[:1]:
+    if not settings.fga_enabled or source[:1] == destination[:1]:
         return
-    for held in await fga.read_object_tuples(client, obj):
+    wired = require_wired(client)
+    for held in await fga.read_object_tuples(wired, obj):
         if held.user and held.relation != "parent":
-            await refuse_a_cross_tenant_role_grant(client, held.user, fga_type="table", segments=destination, settings=settings)
+            await refuse_a_cross_tenant_role_grant(wired, held.user, fga_type="table", segments=destination, settings=settings)
 
 
 async def move_parent_edge(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, obj: str, source: str, destination: str) -> None:
@@ -2303,12 +2337,10 @@ async def require_can_drop_table(
     as drop-then-recreate (spec.yaml CreateTableRequest.mode), and it replaces the tip's schema and rows, so it
     must clear the same owner-tier bar a real ``drop_table`` does — NOT the writer-tier ``can_create_table`` on
     the parent that ``authorize`` already applied for a create. Without this, a mere namespace writer could
-    replace another user's table. No-op when FGA is off / unwired / unauthenticated (the create path enforces
-    those elsewhere)."""
-    if not (settings.fga_enabled and client is not None and token is not None):
+    replace another user's table. With FGA off it allows (:func:`authorization`)."""
+    if (authz := authorization(settings, client, token)) is None:
         return
-    label = _object("table", table.segments)
-    await _require(client, user=token.subject, relation="can_drop", obj=fga.table_object(table.require_uuid()), label=label)
+    await authz.require("can_drop", fga.table_object(table.require_uuid()), label=_object("table", table.segments))
 
 
 #: The rung a staged commit's operation needs at ``version/create``, which the router opens to a writer or a maintainer
@@ -2343,9 +2375,8 @@ async def require_staged_operation(
     the writer rung, as every write does, since the router admits a maintainer too, and no protection record, since
     none holds a table with no version. An Overwrite of a table with a version is drop-then-recreate, so the
     protection record refuses it as it refuses a drop, with FGA on or off; ``force`` has no channel on the spec door.
-    The rung check is a no-op when FGA is off / unwired / unauthenticated, as the other ``require_*`` gates are; an
-    operation outside the map (``Clone`` among them, which the branch and clone doors own) is refused whatever FGA
-    says.
+    With FGA off the rung check allows (:func:`authorization`); an operation outside the map (``Clone`` among them,
+    which the branch and clone doors own) is refused whatever FGA says.
 
     Raises:
         InvalidInputError: ``operation`` is not one a stock commit may stage here.
@@ -2355,16 +2386,16 @@ async def require_staged_operation(
     relation = "can_write_data" if creates else _STAGED_OPERATION_RELATION[operation]
     replaces = operation == "Overwrite" and not creates
     canonical = fga.canonical_object_id(segments)
-    governed = settings.fga_enabled and client is not None and token is not None
-    if not replaces and not governed:
+    authz = authorization(settings, client, token)
+    if not replaces and authz is None:
         return
     table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), location, segments)
     if replaces:
         guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", table_uuid)
         require_not_protected(guard or {}, kind="table", obj_id=canonical, force=False)
-    if not governed or client is None or token is None:
+    if authz is None:
         return
-    await _require(client, user=token.subject, relation=relation, obj=fga.table_object(table_uuid), label=f"table:{canonical}")
+    await authz.require(relation, fga.table_object(table_uuid), label=f"table:{canonical}")
 
 
 async def require_create_on_parent(
@@ -2380,11 +2411,11 @@ async def require_create_on_parent(
     on the child's PARENT namespace (the same gate ``authorize`` applies to create/declare/register). Used by
     endpoints that mint a NEW child id outside the create routes — notably ``rename`` into a destination
     namespace: without it, a source-table owner could relocate (plant) their table into a namespace they have
-    no create rights on. No-op when FGA is off / unwired / unauthenticated."""
-    if not (settings.fga_enabled and client is not None and token is not None):
+    no create rights on. With FGA off it allows (:func:`authorization`)."""
+    if (authz := authorization(settings, client, token)) is None:
         return
     if (parent := _create_parent_rung(resource, segments, settings)) is not None:  # None => open top-level create (authn already enforced)
-        await _require_rung(client, resolver, user=token.subject, rung=parent)
+        await _require_rung(authz.client, resolver, user=authz.subject, rung=parent)
 
 
 async def require_relation(
@@ -2400,11 +2431,12 @@ async def require_relation(
 
     For handlers whose object is not table/namespace-shaped (e.g. the #3-A ``warehouse:<id>`` control
     plane) — funneling here instead of a bare ``fga.check`` keeps every deny/allow/outage on the #41 audit
-    trail. ``label`` names the object in a refusal: a table's or namespace's name, never the uuid it is held by. No-op when
-    FGA is off / unwired / unauthenticated (parity with the other ``require_*`` deps)."""
-    if not (settings.fga_enabled and client is not None and token is not None):
+    trail. ``label`` names the object in a refusal: a table's or namespace's name, never the uuid it is held by. A no-op
+    with FGA off. With it on, no client is 503 and no caller 401 (:func:`authorization`): a door the router leaves to its
+    handler is decided here alone, so this gate refuses on its own whatever ran before it ([[LH-237]])."""
+    if (authz := authorization(settings, client, token)) is None:
         return
-    await _require(client, user=token.subject, relation=relation, obj=obj, label=label)
+    await authz.require(relation, obj, label=label)
 
 
 async def require_classifier_to_copy_a_label(
@@ -2423,26 +2455,20 @@ async def require_classifier_to_copy_a_label(
     Such an expression copies the values into a column with no label (measured on pylance 13.0.0:
     ``add_columns({"leak": "secret"})`` copies them unlabelled), which a writer could then vend raw. This narrows the
     copy rather than closing it: a writer reads the column too, so a copy made outside the catalog is LH-288's.
-    No-op when FGA is off / unwired / unauthenticated, like every gate here.
+    With FGA off it allows (:func:`authorization`).
     """
-    if not (settings.fga_enabled and client is not None and token is not None):
+    if (authz := authorization(settings, client, token)) is None:
         return
     dataset = await run_in_threadpool(partial(table.open, so, branch=branch))
     try:
         read = await run_in_threadpool(dataplane.expressions_reading_a_label, dataset, list(expressions))
     except OSError:
         # Labels that cannot be read are not "no labels": the copy is judged as reading one.
-        log.warning("copy_labels_unreadable", extra={"sub": token.subject}, exc_info=True)
+        log.warning("copy_labels_unreadable", extra={"sub": authz.subject}, exc_info=True)
         read = ["<labels unreadable>"]
     if read:
-        log.info("copy_of_a_label_asks_can_classify", extra={"sub": token.subject, "expressions": read})
-        await _require(
-            client,
-            user=token.subject,
-            relation="can_classify",
-            obj=fga.table_object(table.resolved.require_uuid()),
-            label=fga.canonical_object_id(table.segments),
-        )
+        log.info("copy_of_a_label_asks_can_classify", extra={"sub": authz.subject, "expressions": read})
+        await authz.require("can_classify", fga.table_object(table.resolved.require_uuid()), label=fga.canonical_object_id(table.segments))
 
 
 async def require_classifier_to_set_labels(
@@ -2458,14 +2484,16 @@ async def require_classifier_to_set_labels(
     on each value, as a label set later through ``update_field_metadata`` is asked ([[LH-207]]).
 
     A label decides how a table's bytes leave the store, so a create may not set one its caller could not set after.
-    ``obj`` is the table, or for a table not made yet its namespace, whose ``classifier`` its tables inherit. No-op when
-    there are no labels or FGA is off / unwired / unauthenticated, like every gate here.
+    ``obj`` is the table, or for a table not made yet its namespace, whose ``classifier`` its tables inherit. With no
+    labels, or with FGA off, it allows (:func:`authorization`).
     """
-    if not labels or not (settings.fga_enabled and client is not None and token is not None):
+    if not labels:
         return
-    await _require(client, user=token.subject, relation="can_classify", obj=obj, label=label)
+    if (authz := authorization(settings, client, token)) is None:
+        return
+    await authz.require("can_classify", obj, label=label)
     for value in sorted({value for keys in labels.values() for value in keys.values()}):
-        await _require(client, user=token.subject, relation="can_apply", obj=f"classification:{value}")
+        await authz.require("can_apply", f"classification:{value}")
 
 
 async def require_tier_authority(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str | None) -> None:
@@ -2473,14 +2501,14 @@ async def require_tier_authority(client: OpenFgaClient | None, settings: Setting
 
     That is the namespace's project admin (``can_administer`` on ``project:<project>``), or the estate admin
     (``can_observe_events`` on the root object, the bar ``POST /management/v1/projects`` asks) where no project owns
-    the namespace. No-op when FGA is off / unwired / unauthenticated, like every gate here.
+    the namespace. With FGA off it allows (:func:`authorization`).
     """
-    if not (settings.fga_enabled and client is not None and token is not None):
+    if (authz := authorization(settings, client, token)) is None:
         return
     if project is not None:
-        await _require(client, user=token.subject, relation="can_administer", obj=f"project:{project}")
+        await authz.require("can_administer", f"project:{project}")
     else:
-        await _require(client, user=token.subject, relation="can_observe_events", obj=settings.fga_root_object)
+        await authz.require("can_observe_events", settings.fga_root_object)
 
 
 async def require_can_create_warehouse(
@@ -2495,8 +2523,7 @@ async def require_can_create_warehouse(
     The model's highest-privilege action (``project.can_create_warehouse = admin``,
     ``service_kit/governed/auth/model.fga``): provisioning a physical bucket is a project-admin
     operation, not the writer-tier create-on-parent that guards tables/namespaces. Fail-closed like
-    every other gate: 403 on deny, 503 on an OpenFGA outage. No-op when FGA is off / unwired /
-    unauthenticated (those postures are enforced at the boot/authn layer).
+    every other gate: 403 on deny, 503 on an OpenFGA outage. With FGA off it allows (:func:`authorization`).
 
     There is deliberately NO bootstrap exception any more. It existed because a not-yet-existing
     project had no tuples, so its first warehouse was uncreatable — the estate admin got a side door
@@ -2504,9 +2531,9 @@ async def require_can_create_warehouse(
     creates the PROJECT explicitly (``POST /management/v1/projects``, which seeds its admin), and
     ``require_project_exists`` refuses a warehouse for an unknown tenant BEFORE this gate runs — so
     by the time we are here, the project exists and has admins, and one door is enough."""
-    if not (settings.fga_enabled and client is not None and token is not None):
+    if (authz := authorization(settings, client, token)) is None:
         return
-    await _require(client, user=token.subject, relation="can_create_warehouse", obj=f"project:{project}")
+    await authz.require("can_create_warehouse", f"project:{project}")
 
 
 async def seed_warehouse(

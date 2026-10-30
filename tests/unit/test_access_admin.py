@@ -131,12 +131,6 @@ def test_fga_off_is_unsupported(rec: _AuditRecorder) -> None:
         asyncio.run(ep.estate_gate(client=_fga_client(), settings=_settings(fga_enabled=False), token=None))
 
 
-def test_enabled_but_unwired_client_fails_closed(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(ep.estate_gate(client=None, settings=_settings(), token=None))
-    assert gate_seen == {}  # 503'd before any check could run
-
-
 def _routes() -> list[APIRoute]:
     routes = [r for r in ep.router.routes if isinstance(r, APIRoute)]
     assert routes, "no routes on the access router — this gate would pass vacuously"

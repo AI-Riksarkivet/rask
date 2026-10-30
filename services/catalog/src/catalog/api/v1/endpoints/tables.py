@@ -238,13 +238,12 @@ async def list_all_tables(
     candidates = [(name, parse_identifier(name)) for name in await run_in_threadpool(_collect_tables, ns, response.tables)]
     if not include_declared:
         candidates = await listings.holding_a_version(resolver, so, candidates)
-    # When FGA is on and the caller is known, return only the tables they can read, each judged on the object its name
-    # resolves to; pages count only tables the caller can see.
-    if settings.fga_enabled and token is not None and client is not None:
+    # With FGA on, return only the tables the caller can read, each judged on the object its name resolves to; pages
+    # count only tables the caller can see.
+    if (authz := fga_deps.authorization(settings, client, token)) is not None:
         response.tables, response.page_token = await fga_deps.authorized_page(
-            client,
+            authz,
             resolver,
-            user=token.subject,
             relation="can_read_data",
             kind="table",
             candidates=candidates,

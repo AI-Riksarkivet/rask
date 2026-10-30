@@ -21,14 +21,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import uuid
 from enum import Enum
 from typing import Any, Literal, cast, get_args, get_origin
 
 import pytest
+import router_walk
 from fastapi import APIRouter, Depends, FastAPI, Request
-from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
 from lance_namespace import InternalError, LanceNamespace
 from openfga_sdk import OpenFgaClient
@@ -37,7 +36,6 @@ from starlette.types import Message
 from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver, get_fga_client
 from catalog.api.security import authenticate
-from catalog.api.v1.router import api_router
 from catalog.core import tier_policy
 from catalog.core.config import Settings, get_settings
 from catalog.services.table_claims import ResolvedTable
@@ -49,7 +47,6 @@ from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 _ID = "acme$events"
-_PARAM = re.compile(r"\{(\w+)(?::\w+)?\}")
 
 #: Nothing calls a method on it: `fga.check` / `fga.batch_check` are replaced below before it is used.
 _CLIENT = cast("OpenFgaClient", object())
@@ -79,8 +76,8 @@ def _token() -> PersonPrincipal:
 
 def _request(template: str, body: dict[str, object], query: str = "") -> Request:
     """A real Starlette request for `template` with every path parameter filled in."""
-    params = {name: (_ID if name == "id" else f"{name}-1") for name in _PARAM.findall(template)}
-    path = _PARAM.sub(lambda match: params[match.group(1)], template)
+    params = {name: (_ID if name == "id" else f"{name}-1") for name in router_walk.PARAM.findall(template)}
+    path = router_walk.PARAM.sub(lambda match: params[match.group(1)], template)
     payload = json.dumps(body).encode()
 
     async def receive() -> Message:
@@ -225,19 +222,11 @@ def _choices(annotation: object) -> list[str]:
 
 
 def _guarded_doors() -> list[tuple[str, str]]:
-    """Every mounted route the router guard authorizes by its `{id}`, walked off the composed app, once
-    bare and once per value of each closed-vocabulary query parameter: a value can turn a read into a
-    write (`credentials?tier=write`).
-
-    `iter_route_contexts` rather than `api_router.routes`: this FastAPI keeps included routers as
-    opaque wrappers, and a walk over them finds nothing and passes by iterating nothing.
-    """
-    app = FastAPI()
-    app.include_router(api_router)
+    """Every mounted route the router guard authorizes by its `{id}`, once bare and once per value of each
+    closed-vocabulary query parameter: a value can turn a read into a write (`credentials?tier=write`)."""
     doors: set[tuple[str, str]] = set()
-    for context in iter_route_contexts(app.routes):
-        path, route = context.path, context.original_route
-        if not isinstance(route, APIRoute) or path is None or "{id}" not in path or fga_deps._resource_for(_PARAM.sub("x", path)) is None:
+    for path, route in router_walk.mounted():
+        if not router_walk.names_a_guarded_object(path):
             continue
         doors.add((path, ""))
         doors |= {(path, f"{param.name}={value}") for param in route.dependant.query_params for value in _choices(param.field_info.annotation)}
@@ -248,7 +237,7 @@ def _grant_body(template: str) -> dict[str, object]:
     """The grant doors read the rung from the body, so they need one the model can grant on that type."""
     if not template.endswith(("/access/grant", "/access/revoke")):
         return {}
-    resource = fga_deps._resource_for(_PARAM.sub("x", template))
+    resource = fga_deps._resource_for(router_walk.PARAM.sub("x", template))
     assert resource is not None
     grantable = sorted(fga_deps._grant_actions(fga_deps._FGA_TYPE[resource]))
     assert grantable, f"{resource} defines no can_grant_* rung, so its grant door can never be authorized"
@@ -300,7 +289,7 @@ def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches
     assert asked, f"{template}?{query} was waved through without a single check"
 
     suffix = template.split("/{id}/", 1)[1]
-    resource = fga_deps._resource_for(_PARAM.sub("x", template))
+    resource = fga_deps._resource_for(router_walk.PARAM.sub("x", template))
     if resource not in ("table", "materialized_view") or suffix in ("access/grant", "access/revoke") or (suffix, query) in _READ_DOORS:
         assert judged == [], f"{template}?{query} only reads, yet the tier judge decided it"
         return

@@ -149,11 +149,9 @@ async def list_due_maintenance(
     entries = [table_claims.TableRecord(location=record.location, uuid=record.uuid) for record in records]
     names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
     named = [(name, record) for name, record in zip(names, records, strict=True) if name is not None]
-    if settings.fga_enabled and token is not None and client is not None:
+    if (authz := fga_deps.authorization(settings, client, token)) is not None:
         # Checked on the uuid each record keeps ([[LH-524]]), which is the object the table's grants are held by.
-        allowed = await fga.batch_check(
-            client, user=token.subject, relation="can_maintain", objects=sorted({fga.table_object(record.uuid) for _, record in named})
-        )
+        allowed = await authz.batch_check("can_maintain", sorted({fga.table_object(record.uuid) for _, record in named}))
         named = [(name, record) for name, record in named if allowed.get(fga.table_object(record.uuid))]
     by_key = {f"{name}|{record.uuid}": (name, record) for name, record in named}
     page, next_token = paginate(sorted(by_key), page_token, limit)

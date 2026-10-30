@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import create_autospec
 
 import pytest
 from lance_namespace import InvalidInputError, ServiceUnavailableError, TableNotFoundError
+from openfga_sdk import OpenFgaClient
 
 from catalog.api.v1.endpoints import projects as ep
 from service_kit.governed.idp_identity import PersonPrincipal
@@ -45,6 +47,14 @@ _RECORDS: list[dict[str, str]] = [
 
 def _patch_records(monkeypatch: pytest.MonkeyPatch, records: list[dict[str, str]]) -> None:
     monkeypatch.setattr(ep.warehouses, "list_warehouses", lambda _root, _so: records)
+
+
+_BOB = PersonPrincipal(principal=Principal(idp_id="dex", subject="bob"), claims=IDToken(iss="i", sub="bob", aud="lance", exp=1, iat=1))
+
+
+def _client() -> OpenFgaClient:
+    """A client carrying the real one's signature; the FGA calls these tests answer are replaced on `ep.fga`."""
+    return create_autospec(OpenFgaClient, instance=True)
 
 
 def _list(settings: Any, *, token: Any = None, client: Any = None) -> list[ep.ProjectResponse]:
@@ -137,11 +147,7 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     monkeypatch.setattr(ep.fga, "check", _fake_check)
     monkeypatch.setattr(ep.fga, "batch_check", _fake_batch_check)
     monkeypatch.setattr(ep.fga, "list_users", _no_admins)
-    result = _list(
-        _settings(fga_enabled=True),
-        token=PersonPrincipal(principal=Principal(idp_id="dex", subject="bob"), claims=IDToken(iss="i", sub="bob", aud="lance", exp=1, iat=1)),
-        client=object(),
-    )
+    result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [p.project for p in result] == expected
     assert checks == [("dex~bob", "can_observe_events", "warehouse:lance_catalog")]
     # A member's listing judges the registry's own candidates, never the projects FGA says the caller reaches.
@@ -164,15 +170,18 @@ def test_one_tenants_detail_is_estate_observer_gated(monkeypatch: pytest.MonkeyP
 # ── admins: fga.list_users on project:<id>#can_administer, degrading — never a 500 ───────────────────
 
 
-def _no_gate(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def _allow(*_a: Any, **_k: Any) -> None:
-        return None
+def _an_estate_observer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """bob holds ``can_observe_events`` on the estate root, so he lists every tenant: the check answers as a store
+    holding that one tuple would, and no for anything else."""
 
-    monkeypatch.setattr(ep.fga_deps, "require_relation", _allow)
+    async def _observes(_client: OpenFgaClient, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
+        return (user, relation, obj) == ("dex~bob", "can_observe_events", "warehouse:lance_catalog")
+
+    monkeypatch.setattr(ep.fga, "check", _observes)
 
 
 def test_admins_from_fga_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
-    _no_gate(monkeypatch)
+    _an_estate_observer(monkeypatch)
     _patch_records(monkeypatch, _RECORDS)
     calls: list[tuple[str, str]] = []
 
@@ -184,7 +193,7 @@ def test_admins_from_fga_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
         return ["alice"] if obj == "project:acme" else []
 
     monkeypatch.setattr(ep.fga, "list_users", _fake_list_users)
-    result = _list(_settings(fga_enabled=True), client=object())
+    result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [(p.project, p.admins) for p in result] == [("acme", ["alice"]), ("globex", [])]
     assert sorted(calls) == [("can_administer", "project:acme"), ("can_administer", "project:globex")]
 
@@ -192,14 +201,14 @@ def test_admins_from_fga_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_admins_degrade_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     # An OpenFGA outage during the admins lookup degrades to [] — the registry-derived facts still serve;
     # it must never surface as a 500/503 (the estate gate already ran fail-closed before this point).
-    _no_gate(monkeypatch)
+    _an_estate_observer(monkeypatch)
     _patch_records(monkeypatch, _RECORDS)
 
     async def _outage(*_a: Any, **_k: Any) -> list[str]:
         raise ServiceUnavailableError("authorization service unavailable")
 
     monkeypatch.setattr(ep.fga, "list_users", _outage)
-    result = _list(_settings(fga_enabled=True), client=object())
+    result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [p.project for p in result] == ["acme", "globex"]
     assert all(p.admins == [] for p in result)
 
@@ -207,7 +216,7 @@ def test_admins_degrade_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_admins_degrade_on_a_slow_fga(monkeypatch: pytest.MonkeyPatch) -> None:
     # A BROWNOUT (slow, not down): a lookup that outlives the per-call budget must degrade to [] on
     # expiry — never ride the wrapper's retry ladder toward the BFF's 8s request deadline.
-    _no_gate(monkeypatch)
+    _an_estate_observer(monkeypatch)
     _patch_records(monkeypatch, _RECORDS)
     monkeypatch.setattr(ep, "_ADMINS_TIMEOUT_SECONDS", 0.05)
 
@@ -216,6 +225,6 @@ def test_admins_degrade_on_a_slow_fga(monkeypatch: pytest.MonkeyPatch) -> None:
         return ["alice"]
 
     monkeypatch.setattr(ep.fga, "list_users", _slow)
-    result = _list(_settings(fga_enabled=True), client=object())
+    result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
     assert [p.project for p in result] == ["acme", "globex"]
     assert all(p.admins == [] for p in result)  # degraded per project, response still whole
