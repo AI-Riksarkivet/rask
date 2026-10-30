@@ -219,4 +219,5 @@ What rask demands of a production store, beyond the audit's list (R1-R11, R13, R
   AbortIncompleteMultipartUpload and that noncurrent-version expiry.
 - One writable site per table; replication only as a passive DR copy.
 - Conditional writes proven exclusive across nodes (rask's CAS harness run against it).
-- Encryption at rest from a KMS the platform owns, if required; SSE-C only with TLS required.
+- Encryption at rest from a KMS the platform owns, if required, its key policy granting the catalog's role
+  `kms:Decrypt` and `kms:GenerateDataKey`, which each vend narrows to its tier ([[LH-262]]); SSE-C only with TLS required.

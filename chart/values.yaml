@@ -678,7 +678,13 @@ vending:
   # so a wrong value would write plaintext while the config claimed encryption.
   #
   # A store that ignores SSE headers simply writes unencrypted; this is for an AWS/S3 deployment.
-  # -- Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default.
+  #
+  # A KMS key is named by its KEY ARN under web_identity vending, refused at boot otherwise: each vend's
+  # session policy grants the key's use through S3 alone (kms:Decrypt at every tier, kms:GenerateDataKey at
+  # write and maintain), and a policy grants a key only by its key ARN. The key's own policy granting the
+  # catalog's role is the platform's. A warehouse create writes and reads back an object encrypted with it,
+  # so a store without the grant is refused 400 rather than found at the first table's first write.
+  # -- Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default.
   encryption: {}
   # Allow blob-v2 columns to reference EXTERNAL objects outside the dataset root (Blob.from_uri) on create.
   # Off by default: (1) external bytes live outside the lakehouse (Lance's GC can't protect them, a source

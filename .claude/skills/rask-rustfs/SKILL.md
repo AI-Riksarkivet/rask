@@ -83,6 +83,11 @@ on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as r
   backups included, and a blank one fails the render. The dev OpenBao publishes no token: each app's sidecar logs in as
   its own ServiceAccount and reads only its own secrets, and the store's administrator token is generated in-cluster and
   held by its seed (ADR 0169).
+- **An SSE-KMS vend names its key and grants its use** ([[LH-262]]): `vending.encryption.kmsKeyId` is the key ARN under
+  web_identity vending (refused at boot otherwise), and each session policy grants `kms:Decrypt` on it at every tier and
+  `kms:GenerateDataKey` at write and maintain, only through S3 (`kms:ViaService`); the key policy trusting the catalog's
+  role is the platform's. A vended policy, sent as compact JSON, over 2,048 characters is refused before the exchange:
+  500 code 18 titled `SessionPolicyTooLong`, its length and the limit as extension members (a 5xx's detail is redacted).
 - **Session duration is 900–43,200 s**, default 3,600; a shorter request is clamped UP to 900
   (`sts.rs:64-83`). rask vends at 900 (`vending.ttlSeconds`, `chart/values.yaml`). rask cannot vend a credential shorter than 15 minutes.
 - **Session policies**: `Version` must be present and `2012-10-17` (`session_policy.rs:30-32`;

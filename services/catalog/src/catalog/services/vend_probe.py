@@ -41,6 +41,11 @@ CAS_CHECK: Final = "conditional_put_refused"
 #: proves nothing about a second writer (UNKNOWN), the second is a live hazard (UNSAFE).
 CAS_RESERVE: Final = "conditional_put"
 
+#: Writes and reads back an object encrypted as the vend tells its writer to (``vending.encryption``), run only when the
+#: vend names an encryption. It follows a plain write the store accepted, so its failure is the store refusing that
+#: encryption, its role holding no grant on the KMS key, and not a store it could not reach ([[LH-262]]).
+ENCRYPTED_WRITE: Final = "encrypted_write"
+
 
 class ProbeCheck(BaseModel):
     """One step of the probe, with its own outcome — never folded into a neighbour's."""

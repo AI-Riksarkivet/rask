@@ -10,9 +10,10 @@ deployment fails fast at boot.
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Self
+from typing import TYPE_CHECKING, Final, Literal, Self
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,7 +23,7 @@ from service_kit.governed.settings import GovernedAuthSettings, SignatureDoorSet
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.governed.store_session import WebIdentity, held_session
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
-from service_kit.lakehouse.objectfs import StoreTimeouts
+from service_kit.lakehouse.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts
 
 
 if TYPE_CHECKING:
@@ -31,6 +32,10 @@ if TYPE_CHECKING:
 
 
 _STORAGE_PREFIX = "storage."
+
+#: A KMS key named by its ARN (`arn:<partition>:kms:<region>:<account>:key/<id>`, a multi-region `mrk-` id included). A
+#: policy grants a key's use only through its key ARN; an alias or a bare id names no key there ([[LH-262]]).
+_KMS_KEY_ARN: Final = re.compile(r"arn:aws(?:-[a-z]+)*:kms:[a-z0-9-]+:\d{12}:key/[A-Za-z0-9-]+")
 
 #: Which object-store budget a connection runs under (`CatalogReadBounds`).
 StorePlane = Literal["metadata", "data"]
@@ -636,6 +641,22 @@ class Settings(
         """Fail fast on incomplete lineage configuration. The auth invariants are the shared mixin's."""
         if self.lineage_emit_enabled and self.lineage_transport == "http" and not self.lineage_url:
             raise ValueError("LANCE_LINEAGE_URL is required for the http lineage transport")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_vended_encryption(self) -> Self:
+        """Fail fast on a KMS key no vended session could be granted ([[LH-262]]).
+
+        A vend that tells its writer to encrypt with KMS must grant the key's use in the session policy, or every
+        SSE-KMS write and read through the credential is refused, and a policy grants a key only by its key ARN.
+        """
+        if self.vending_mode != "web_identity" or self.s3_server_side_encryption not in SSE_KMS_ALGORITHMS:
+            return self
+        if not _KMS_KEY_ARN.fullmatch(self.s3_sse_kms_key_id or ""):
+            raise ValueError(
+                f"LANCE_S3_SSE_KMS_KEY_ID must be the KMS key ARN under {self.s3_server_side_encryption} vending, since a vended session "
+                f"policy grants a key only by its key ARN (got {self.s3_sse_kms_key_id!r})"
+            )
         return self
 
     @model_validator(mode="after")

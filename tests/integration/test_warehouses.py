@@ -87,7 +87,8 @@ class _VendingStore:
     """An object store reached with vended credentials, which honours or ignores what Lance relies on.
 
     Ignoring a credential's prefix is what a store that accepts the inline session policy and drops it looks
-    like from outside; ignoring `If-None-Match` lets two writers both commit one Lance version.
+    like from outside; ignoring `If-None-Match` lets two writers both commit one Lance version. Its role holds no grant on
+    any KMS key, so it refuses every write encrypting with one.
     """
 
     def __init__(self, *, honours_scope: bool, honours_conditional_put: bool) -> None:
@@ -100,8 +101,12 @@ class _VendingStore:
         if self.honours_scope and not key.startswith(self.scope):
             raise PermissionError(f"AccessDenied: {key} is outside {self.scope}")
 
-    def put_object(self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None) -> dict[str, Any]:  # noqa: N803 — boto3's casing
+    def put_object(  # noqa: N803 — boto3's casing
+        self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None, SSEKMSKeyId: str | None = None, **_sse: object
+    ) -> dict[str, Any]:
         self._check(Key)
+        if SSEKMSKeyId is not None:
+            raise PermissionError(f"AccessDenied: kms:GenerateDataKey on {SSEKMSKeyId} is not granted")
         if IfNoneMatch is not None and self.honours_conditional_put and Key in self.keys:
             raise FileExistsError("PreconditionFailed")
         self.keys[Key] = Body
@@ -120,26 +125,31 @@ class _VendingStore:
 class _ScopedVendor:
     """Vends a credential for one prefix and tells the store which prefix that is; `unreachable` is an STS that is down."""
 
-    def __init__(self, store: _VendingStore, *, unreachable: bool) -> None:
+    def __init__(self, store: _VendingStore, *, unreachable: bool, encrypts_with: str | None) -> None:
         self.store = store
         self.unreachable = unreachable
+        self.encrypts_with = encrypts_with
 
     def vend(self, *, table_location: str, tier: str, **_kw: Any) -> VendedCredentials:
         if self.unreachable:
             raise ConnectionError("STS endpoint unreachable")
         self.store.scope = table_location.split("/", 3)[3]
-        return VendedCredentials(storage_options={"endpoint": "http://store:9000", "aws_access_key_id": "k", "aws_secret_access_key": "s"})
+        options = {"endpoint": "http://store:9000", "aws_access_key_id": "k", "aws_secret_access_key": "s"}
+        if self.encrypts_with is not None:
+            options |= {"aws_server_side_encryption": "aws:kms", "aws_sse_kms_key_id": self.encrypts_with}
+        return VendedCredentials(storage_options=options)
 
 
 @pytest.mark.parametrize(
-    ("honours_scope", "honours_conditional_put", "unreachable", "status", "code"),
+    ("honours_scope", "honours_conditional_put", "unreachable", "encrypts_with", "status", "code", "named"),
     [
-        (False, True, False, 400, 13),
-        (True, False, False, 400, 13),
-        (True, True, True, 503, 17),
-        (True, True, False, 200, None),
+        (False, True, False, None, 400, 13, "write_outside_refused"),
+        (True, False, False, None, 400, 13, "conditional_put_refused"),
+        (True, True, True, None, 503, 17, None),
+        (True, True, False, None, 200, None, None),
+        (True, True, False, "arn:aws:kms:eu-north-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab", 400, 13, "encrypted_write"),
     ],
-    ids=["store-ignores-scope", "store-ignores-conditional-put", "sts-unreachable", "store-conforms"],
+    ids=["store-ignores-scope", "store-ignores-conditional-put", "sts-unreachable", "store-conforms", "store-refuses-the-vended-kms-key"],
 )
 def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     client: TestClient,
@@ -148,19 +158,22 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     honours_scope: bool,
     honours_conditional_put: bool,
     unreachable: bool,
+    encrypts_with: str | None,
     status: int,
     code: int | None,
+    named: str | None,
 ) -> None:
     """Every Lance commit rests on the store refusing a second conditional put, and every vended credential on
     it honouring the session policy. A warehouse on a store that ignores either must not become routable, so the
     create runs the probe before it writes the registry record ([[LH-481]], ADR 0089). A store that broke a
     guarantee is the request's problem (InvalidInput, 13); a probe that could not reach the store learned
-    nothing and asks for a retry (ServiceUnavailable, 17)."""
+    nothing and asks for a retry (ServiceUnavailable, 17). A store refusing the encryption its vends name, its role
+    holding no grant on the KMS key, broke a guarantee every writer needs ([[LH-262]]). A store's refusal names its check."""
     store = _VendingStore(honours_scope=honours_scope, honours_conditional_put=honours_conditional_put)
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
     monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: store)
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
-    client.app.dependency_overrides[get_vendor] = lambda: _ScopedVendor(store, unreachable=unreachable)
+    client.app.dependency_overrides[get_vendor] = lambda: _ScopedVendor(store, unreachable=unreachable, encrypts_with=encrypts_with)
     _mk_projects(client, "acme")
 
     resp = client.post("/management/v1/warehouses", json={"id": "wh-p", "project": "acme"})
@@ -169,6 +182,8 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     assert (resp.status_code, registered) == (status, status == 200), resp.text
     if code is not None:
         assert (resp.headers["content-type"], resp.json()["code"]) == ("application/problem+json", code), resp.text
+    if named is not None:
+        assert f"({named})" in resp.json()["detail"], resp.text
 
 
 def test_create_warehouse_cross_project_collision_409(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

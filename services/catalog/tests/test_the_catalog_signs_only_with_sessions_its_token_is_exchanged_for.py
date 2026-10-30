@@ -12,6 +12,7 @@ dates the expiry STS answers, so a store whose clock disagrees with the catalog'
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import UTC, timedelta
@@ -102,7 +103,14 @@ def store_clock(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.fixture
-def sessions(store_clock: None, two_stores: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Rig]:  # noqa: ANN401 — conftest.TwoStores
+def encryption(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The encryption at rest a vend carries, as the chart's `vending.encryption` renders it; none unless a case names it."""
+    for key, value in getattr(request, "param", {}).items():
+        monkeypatch.setenv(key, value)
+
+
+@pytest.fixture
+def sessions(store_clock: None, encryption: None, two_stores: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Rig]:  # noqa: ANN401 — conftest.TwoStores
     """The real catalog app with a projected token and no key pair anywhere: not in its environment, not in a store."""
     from catalog.core.config import get_settings
 
@@ -205,6 +213,63 @@ def test_a_vend_is_a_session_of_its_own_named_for_the_caller(sessions: _Rig) -> 
     assert options["aws_session_token"] == session.session_token
     # moto keeps a session's expiry as a naive UTC datetime.
     assert body["credentials"]["expires_at_millis"] == int(session.expiration.replace(tzinfo=UTC).timestamp() * 1000)
+
+
+KMS_KEY = "arn:aws:kms:us-east-1:123456789012:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+
+
+@pytest.mark.parametrize("encryption", [{"LANCE_S3_SERVER_SIDE_ENCRYPTION": "aws:kms", "LANCE_S3_SSE_KMS_KEY_ID": KMS_KEY}], indirect=True)
+@pytest.mark.parametrize(
+    ("tier", "kms_actions"),
+    [
+        pytest.param("read", ["kms:Decrypt"], id="read-decrypts-only"),
+        pytest.param("write", ["kms:Decrypt", "kms:GenerateDataKey"], id="write-also-encrypts"),
+        pytest.param("maintain", ["kms:Decrypt", "kms:GenerateDataKey"], id="maintain-also-encrypts"),
+    ],
+)
+def test_a_vend_may_use_the_configured_kms_key_and_no_other(sessions: _Rig, tier: str, kms_actions: list[str]) -> None:
+    """A vend that tells its writer to encrypt with a KMS key grants the key's use, or every SSE-KMS read and write is refused.
+
+    S3 asks `kms:Decrypt` of a GET and `kms:GenerateDataKey` of a PUT (a multipart upload both), and a session's
+    policy can only narrow the catalog's own, so the session names exactly the configured key and, below the writer
+    rungs, only decryption ([[LH-262]]).
+    """
+    table = f"ses{uuid.uuid4().hex[:10]}$t"
+    assert sessions.catalog.post(f"/v1/namespace/{table.split('$')[0]}/create", json={}).status_code == 200
+    assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
+
+    vended = sessions.catalog.post(f"/management/v1/table/{table}/credentials", params={"tier": tier})
+
+    assert vended.status_code == 200, vended.text
+    options = vended.json()["credentials"]["storage_options"]
+    assert (options["aws_server_side_encryption"], options["aws_sse_kms_key_id"]) == ("aws:kms", KMS_KEY)
+    session = next(role for role in sessions.sessions() if role.access_key_id == options["aws_access_key_id"])
+    assert session.policy == json.dumps(json.loads(session.policy), separators=(",", ":")), "sent padded, the policy fits less of the 2,048 STS takes"
+    granted = [statement for statement in json.loads(session.policy)["Statement"] if any(action.startswith("kms:") for action in statement["Action"])]
+    assert granted == [
+        {"Sid": "KmsAccess", "Effect": "Allow", "Action": kms_actions, "Resource": KMS_KEY, "Condition": {"StringLike": {"kms:ViaService": "s3.*"}}}
+    ]
+
+
+def test_a_vend_whose_policy_sts_would_refuse_is_refused_naming_why(sessions: _Rig, monkeypatch: pytest.MonkeyPatch) -> None:
+    """STS takes an inline session policy of at most 2,048 characters (AWS counts the plaintext; RustFS the bytes it
+    re-serialises, `rustfs@1.0.3:rustfs/src/admin/service/session_policy.rs:34-39`), and a long location, several bases or a
+    KMS key carry a write policy past it. The catalog refuses before it asks, naming why in the problem's title and extension
+    members, since a 5xx's detail is redacted ([[LH-262]]). The limit is lowered so an ordinary table's policy is past it."""
+    from catalog.core import vending
+
+    table = f"ses{uuid.uuid4().hex[:10]}$t"
+    assert sessions.catalog.post(f"/v1/namespace/{table.split('$')[0]}/create", json={}).status_code == 200
+    assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
+    exchanged = len(sessions.sessions())
+    monkeypatch.setattr(vending, "SESSION_POLICY_LIMIT", 100)
+
+    refused = sessions.catalog.post(f"/management/v1/table/{table}/credentials", params={"tier": "write"})
+
+    body = refused.json()
+    assert (refused.status_code, refused.headers["content-type"], body["code"], body["title"]) == (500, "application/problem+json", 18, "SessionPolicyTooLong")
+    assert body["session_policy_limit"] == 100 < body["session_policy_characters"]
+    assert len(sessions.sessions()) == exchanged, "the store was asked to take a policy the catalog knew it refuses"
 
 
 def test_a_session_the_catalog_cannot_renew_is_refused_once_it_expires(sessions: _Rig) -> None:

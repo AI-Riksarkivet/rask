@@ -1832,7 +1832,7 @@
                     "type": "string"
                 },
                 "encryption": {
-                    "description": "Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default.",
+                    "description": "Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default.",
                     "type": "object"
                 },
                 "endpoint": {

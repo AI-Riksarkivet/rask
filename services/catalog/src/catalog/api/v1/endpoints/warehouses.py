@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Final
@@ -89,7 +89,7 @@ from catalog.schemas import (
     WarehouseResponse,
 )
 from catalog.services import native, object_uuids, table_claims, warehouses
-from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
+from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
@@ -105,7 +105,7 @@ log = logging.getLogger(__name__)
 #: The probe checks whose failure is a verdict on the STORE: it ignored a credential's scope, or a conditional
 #: put. Every other failing check (`issue`, `write_inside`, `read_inside`, `cleanup`) means the probe could not
 #: reach the store or its STS, which says nothing about the store.
-_CONFORMANCE_CHECKS: Final = frozenset({SCOPE_CHECK, CAS_RESERVE, CAS_CHECK})
+_CONFORMANCE_CHECKS: Final = frozenset({SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, ENCRYPTED_WRITE})
 
 router = APIRouter(prefix="/management/v1/warehouses", tags=["warehouse"])
 
@@ -270,7 +270,8 @@ async def create_warehouse(
         log.warning("warehouse_store_failed_probe", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": broken})
         raise InvalidInputError(
             f"warehouse {warehouse_id!r} was not registered: its object store failed the storage probe ({', '.join(broken)}). "
-            "A Lance warehouse needs a store that enforces vended-credential scope and refuses a second conditional write."
+            "A Lance warehouse needs a store that enforces vended-credential scope, refuses a second conditional write, and "
+            "takes the encryption its vends name (the catalog's role granted kms:Decrypt and kms:GenerateDataKey on the key)."
         )
     if failed:
         log.warning("warehouse_store_unprobed", extra={"warehouse": warehouse_id, "bucket": bucket, "failed": failed})
@@ -1266,6 +1267,18 @@ async def validate_warehouse_credentials(
     return summarize_probe(checks)
 
 
+def _encryption_put_args(options: Mapping[str, str]) -> dict[str, Any]:
+    """The ``put_object`` arguments that encrypt as a writer holding vended ``options`` does (``vending.encryption``)."""
+    args: dict[str, Any] = {}
+    if algorithm := options.get("aws_server_side_encryption"):
+        args["ServerSideEncryption"] = algorithm
+    if key := options.get("aws_sse_kms_key_id"):
+        args["SSEKMSKeyId"] = key
+    if (bucket_key := options.get("aws_sse_bucket_key_enabled")) is not None:
+        args["BucketKeyEnabled"] = bucket_key == "true"
+    return args
+
+
 def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint: str, session_name: str) -> list[ProbeCheck]:
     """The IO half: vend, write in, read in, write OUT (must fail), clean up.
 
@@ -1283,6 +1296,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     # Its own key, inside the same vended prefix: the conditional put must land on a key nothing else
     # wrote, or a leftover from a previous run would make the FIRST put look like a racing writer.
     cas = f"{probe_prefix}/cas"
+    sealed = f"{probe_prefix}/encrypted"
     # The PARENT, never a sibling: a credential scoped to `<probe>/` must not reach the warehouse root,
     # and the root is where a policy that was ignored would let it write.
     outside = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate_scope_probe_should_fail"
@@ -1332,6 +1346,16 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     wrote = _step("write_inside", lambda: s3.put_object(Bucket=bucket, Key=inside, Body=b"scope-probe"))
     if wrote:
         _step("read_inside", lambda: s3.get_object(Bucket=bucket, Key=inside))
+        # As the credential tells its writer to encrypt, after a plain write the store took: a store whose role holds no grant
+        # on the vended KMS key fails here, a verdict on the store, not the first write to the warehouse's first table
+        # ([[LH-262]]). The read back asks the key's decrypt as a reader would.
+        if encrypted := _encryption_put_args(options):
+
+            def _round_trip() -> None:
+                s3.put_object(Bucket=bucket, Key=sealed, Body=b"scope-probe", **encrypted)
+                s3.get_object(Bucket=bucket, Key=sealed)
+
+            _step(ENCRYPTED_WRITE, _round_trip)
         # `_step` returns "the step got the outcome we wanted", so a False here means the out-of-scope
         # write LANDED and left an object at the warehouse root. Cleaned below — but only in that case:
         # a correctly scoped credential is refused the delete too, and reporting that refusal as a
@@ -1356,6 +1380,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         def _clean() -> None:
             s3.delete_object(Bucket=bucket, Key=inside)
             s3.delete_object(Bucket=bucket, Key=cas)
+            s3.delete_object(Bucket=bucket, Key=sealed)
             if not scope_refused:
                 s3.delete_object(Bucket=bucket, Key=outside)
 

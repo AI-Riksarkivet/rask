@@ -603,7 +603,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   the branch's commits with it, and `can_write_data` writes every branch. Measured on MinIO
   `RELEASE.2025-04-22T22-12-26Z`, that grant leaves a write credential fitting a table prefix of 89 characters at a
   63-character bucket, inside a 2,048-byte session policy; RustFS enforces the same 2,048-byte limit, counted after it
-  re-serialises the policy, and its boundary is unmeasured (`docs/audits/2026-10-18/rustfs-zero-trust.md` R5). The
+  re-serialises the policy, and its boundary is unmeasured (`docs/audits/2026-10-18/rustfs-zero-trust.md` R5). The catalog sends the policy as compact JSON and refuses one past 2,048 characters before any exchange, 500 code 18 titled `SessionPolicyTooLong` with its length and the limit as extension members; with `vending.encryption` naming an SSE-KMS key (its key ARN, refused at boot otherwise) every tier's session may `kms:Decrypt` with that key, and write and maintain also `kms:GenerateDataKey`, only through S3 (`kms:ViaService`). The warehouse create door's probe then writes and reads back an object encrypted with it (`encrypted_write`), so a store whose role holds no grant on the key is refused 400 code 13 ([[LH-262]]). The
   Deny is load-bearing, measured on MinIO (LH-469, #594) and enforced by RustFS's Deny-first evaluation (R3): the
   staged Allow also matches
   `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest, and `tree/*` reaches every branch's

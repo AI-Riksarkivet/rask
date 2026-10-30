@@ -295,7 +295,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | stateStore.tableName | string | `"state"` | Postgres table holding Dapr state rows. |
 | vending.allowExternalBlobs | bool | `false` | Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`. |
 | vending.assumeRoleArn | string | `"arn:aws:iam::000000000000:role/lance-vend"` | The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one. |
-| vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only). Empty = bucket default. |
+| vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default. |
 | vending.endpoint | string | `""` | Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. |
 | vending.externalBlobBases | string | `""` | Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://<objectStore.bucket>/models/`; a value replaces that default. |
 | vending.mode | string | `"web_identity"` | How the catalog vends storage credentials for direct object I/O: `web_identity` (default, its own token exchanged for a per-table session) or `mode_b` (none, server-mediated). |

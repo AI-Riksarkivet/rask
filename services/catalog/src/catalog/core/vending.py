@@ -35,7 +35,7 @@ from typing import Any, Final, Literal, Protocol, assert_never, runtime_checkabl
 from urllib.parse import urlsplit
 
 from botocore.exceptions import BotoCoreError, ClientError
-from lance_namespace import InvalidInputError, ServiceUnavailableError
+from lance_namespace import InternalError, InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
@@ -140,6 +140,31 @@ _MAINTAIN_ACTIONS = (
 #: What a maintainer does in its table's own data directory: read it, and delete what no version references ([[LH-286]]).
 #: No put: a compaction writes its rewrite to the table's root, since pylance 13.0.0's ``CompactionOptions`` names no base.
 _DATA_DIRECTORY_MAINTAIN_ACTIONS = ("s3:GetObject", "s3:DeleteObject")
+#: What S3 asks of the KMS key an object is encrypted with: ``kms:Decrypt`` to GET one, ``kms:GenerateDataKey`` to PUT one,
+#: and both for a multipart upload (AWS, "Using server-side encryption with AWS KMS keys") ([[LH-262]]).
+_KMS_READ_ACTIONS = ("kms:Decrypt",)
+_KMS_WRITE_ACTIONS = ("kms:Decrypt", "kms:GenerateDataKey")
+
+#: The longest inline session policy STS takes: 2,048 characters of the plaintext on AWS, and 2,048 bytes as RustFS
+#: re-serialises it (`rustfs@1.0.3:rustfs/src/admin/service/session_policy.rs:34-39`). The policy is sent as compact,
+#: escaped (so ASCII) JSON, which neither store re-serialises any shorter, so its length is the bound ([[LH-262]]).
+SESSION_POLICY_LIMIT: Final = 2048
+
+
+class SessionPolicyTooLong(InternalError):
+    """A vend whose session policy STS would refuse: its table's location, bases or KMS key are too long ([[LH-262]]).
+
+    A 5xx's ``detail`` is redacted (``ns_errors.problem_detail``), so the cause travels in the problem's title (this class's
+    name) and in extension members the catalog wrote itself: the policy's length and the limit.
+    """
+
+    #: RFC 9457 extension members, merged into the problem body by ``ns_errors.problem_detail``.
+    problem_extra: dict[str, object]
+
+    def __init__(self, message: str, *, characters: int) -> None:
+        super().__init__(message)
+        self.problem_extra = {"session_policy_characters": characters, "session_policy_limit": SESSION_POLICY_LIMIT}
+
 
 #: What AWS lets a RoleSessionName hold (2 to 64 of `[\w+=,.@-]`); RustFS accepts the name and keeps none of it.
 _SESSION_NAME_UNSAFE: Final = re.compile(r"[^A-Za-z0-9_+=,.@-]")
@@ -562,6 +587,7 @@ def build_session_policy(
     sanctioned_bases: Sequence[str] = (),
     data_directories: Sequence[str] = (),
     branch: str = "",
+    kms_key: str | None = None,
 ) -> dict[str, object]:
     """Build an STS inline session policy scoping access to one table prefix + tier.
 
@@ -586,7 +612,7 @@ def build_session_policy(
       overrides any Allow on RustFS and on AWS S3 alike (Deny statements are evaluated first). The
       ``tree/`` grant costs 20 characters of the table prefix a write credential fits within a 2,048-byte
       session policy, the limit RustFS and AWS both enforce (109 to 89 at a 63-character bucket, counted on
-      the policy as this module serialises it).
+      the compact policy :class:`WebIdentityVendor` sends; a KMS key's grant costs 25 more, to 64, [[LH-262]]).
     * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get, put, delete and abort-upload on ``<prefix>/*``: compaction
       commits versions and cleanup deletes them, and an object store cannot tell a rewrite from a write.
 
@@ -603,6 +629,11 @@ def build_session_policy(
     resolves them THROUGH those paths, so a credential that cannot read them is scoped to less than the
     table actually is — measured 2026-09-08 as 69 datasets a tick refused compaction because the
     maintainer could not probe a declared base (§ H12).
+
+    ``kms_key`` is the key ARN a vend tells its writer to encrypt with (``vending.encryption``). The session may use that
+    key alone, and only through S3: ``kms:Decrypt`` at every tier, since a reader GETs what was encrypted with it, and
+    ``kms:GenerateDataKey`` as well at the write and maintain tiers, which PUT. Without the grant every SSE-KMS read and
+    write through the credential is refused, since the session can only narrow the catalog's own policy ([[LH-262]]).
 
     ``sanctioned_bases`` defaults to EMPTY, which sanctions nothing foreign: a caller that has not wired
     the operator's allowlist grants only bases inside the table's own scope. Fail-closed is the right
@@ -706,6 +737,18 @@ def build_session_policy(
                 "Effect": "Allow",
                 "Action": list(_MAINTAIN_ACTIONS),
                 "Resource": [f"arn:aws:s3:::{ref_root}/{directory}/*" for directory in BRANCH_FILE_DIRS],
+            }
+        )
+    if kms_key:
+        statements.append(
+            {
+                "Sid": "KmsAccess",
+                "Effect": "Allow",
+                "Action": list(_KMS_READ_ACTIONS if tier == "read" else _KMS_WRITE_ACTIONS),
+                "Resource": kms_key,
+                # Only through S3: `kms:ViaService` names the service calling KMS on the session's behalf, so the
+                # credential's holder cannot call KMS with the platform's key directly.
+                "Condition": {"StringLike": {"kms:ViaService": "s3.*"}},
             }
         )
     n = 0
@@ -838,8 +881,26 @@ class WebIdentityVendor:
         self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
     ) -> VendedCredentials | None:
         bucket, prefix = split_s3_location(table_location)
-        policy = build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases, data_directories=data_directories, branch=branch)
-        issued = self._exchange(self._identity, session_name=session_name, duration_seconds=self._ttl, policy=json.dumps(policy))
+        policy = build_session_policy(
+            bucket,
+            prefix,
+            tier,
+            bases,
+            sanctioned_bases=self._sanctioned_bases,
+            data_directories=data_directories,
+            branch=branch,
+            kms_key=self._encryption.kms_key_id,
+        )
+        text = json.dumps(policy, separators=(",", ":"))
+        if len(text) > SESSION_POLICY_LIMIT:
+            # Refused here, naming the cause: past the limit the store refuses the exchange, which the caller would read as
+            # an outage to retry, when no retry can shorten the table's location or its bases ([[LH-262]]).
+            raise SessionPolicyTooLong(
+                f"the {tier} session policy for {table_location} is {len(text)} characters, past the {SESSION_POLICY_LIMIT:,} STS accepts: "
+                "its location, bases or KMS key are too long for a direct credential",
+                characters=len(text),
+            )
+        issued = self._exchange(self._identity, session_name=session_name, duration_seconds=self._ttl, policy=text)
         session_token = issued.key_pair.session_token
         # BUILT THROUGH THE SHARED BUILDER, not hand-rolled. A hand-rolled dict carried the bare credential spellings,
         # which do not displace a pod's ambient AWS_* environment — object_store blends the two and signs as neither

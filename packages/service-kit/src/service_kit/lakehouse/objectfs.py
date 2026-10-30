@@ -148,7 +148,7 @@ class StoreTimeouts(BaseModel):
 _SSE_ALGORITHMS: Final = ("AES256", "aws:kms", "aws:kms:dsse")
 #: The two that carry a customer key. `lance_docs/lance/guide/object_store.md:135`, on `aws_sse_kms_key_id`: "If set,
 #: `aws_server_side_encryption` must be `"aws:kms"` or `"aws:kms:dsse"`."
-_SSE_KMS_ALGORITHMS: Final = ("aws:kms", "aws:kms:dsse")
+SSE_KMS_ALGORITHMS: Final = ("aws:kms", "aws:kms:dsse")
 
 
 def _encryption_options(algorithm: str | None, kms_key_id: str | None, bucket_key_enabled: bool | None) -> StorageOptions:
@@ -160,9 +160,9 @@ def _encryption_options(algorithm: str | None, kms_key_id: str | None, bucket_ke
     all — the write succeeds, unencrypted, under a configuration that claims otherwise. There is no
     later signal to catch it, which is why the check belongs at the only point that sees both fields.
     """
-    if kms_key_id and algorithm not in _SSE_KMS_ALGORITHMS:
+    if kms_key_id and algorithm not in SSE_KMS_ALGORITHMS:
         raise ValueError(
-            f"aws_sse_kms_key_id requires aws_server_side_encryption to be one of {_SSE_KMS_ALGORITHMS} (got {algorithm!r}) — "
+            f"aws_sse_kms_key_id requires aws_server_side_encryption to be one of {SSE_KMS_ALGORITHMS} (got {algorithm!r}) — "
             "the store would ignore the key id and encrypt with its default, so the key would appear configured and never be used"
         )
     if algorithm is not None and algorithm not in _SSE_ALGORITHMS:
