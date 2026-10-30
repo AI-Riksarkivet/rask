@@ -263,10 +263,16 @@ def _made_natively(root: Path, table: list[str]) -> None:
 
 
 def _version(root: Path, table: list[str]) -> int | None:
-    """The version ``table`` is at on the `dir` root, or None when it does not exist."""
+    """The version ``table`` is at on the `dir` root, or None when it does not exist.
+
+    A root no write has reached holds no ``__manifest``, and the `dir` backend answers a read of a child namespace there
+    NamespaceNotFoundError, so the table does not exist either. The catalog writes the warehouse root's index first from
+    a background boot task (its provenance namespace, `catalog.main._ensure_provenance_namespace`), so after a refused
+    write the index may or may not exist yet when this reads.
+    """
     try:
         return connect("dir", {"root": str(root)}).describe_table(DescribeTableRequest(id=table, load_detailed_metadata=True)).version
-    except TableNotFoundError:
+    except (TableNotFoundError, NamespaceNotFoundError):
         return None
 
 
