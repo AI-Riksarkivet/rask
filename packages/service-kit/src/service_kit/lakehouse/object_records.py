@@ -22,13 +22,13 @@ from __future__ import annotations
 
 from typing import Final
 
-from service_kit.lakehouse import commit_records, file_identities, history_fences, maintenance_policies, protection
+from service_kit.lakehouse import commit_records, commit_turns, file_identities, history_fences, maintenance_policies, protection
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import delete_record, record_key
 
 
 #: Every control-root registry holding one record per object under its uuid.
-OBJECT_RECORD_PREFIXES: Final = (protection.PREFIX, maintenance_policies.PREFIX, history_fences.PREFIX, commit_records.MARKS_PREFIX)
+OBJECT_RECORD_PREFIXES: Final = (protection.PREFIX, maintenance_policies.PREFIX, history_fences.PREFIX, commit_turns.PREFIX, commit_records.MARKS_PREFIX)
 
 
 def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, uuid: str) -> list[str]:

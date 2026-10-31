@@ -290,7 +290,16 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   `rask.author` (the verified caller) and `rask.operation` (the lineage operation it announces) on its commit, on main
   and on every branch, through `dataplane.commit_stamped`: the door's transaction is planned on the ref's latest version,
   committed detached with the stamp and finalized as exactly the next version by the backend's put-if-not-exists, and a
-  writer that lost that version plans again. Most pylance operations take no transaction properties (13.0.0: `update`,
+  writer that lost that version plans again. **A commit that lost its race takes its ref's commit turn** for its
+  remaining attempts ([[LH-259]], ADR 0186, `service_kit.lakehouse.commit_turns`, `_commit_turns/` per table uuid), and a
+  stock writer that lost its race, its staged version found taken by `version/create` (409 code 14) or its finalize lost,
+  is handed the ref's next turn under its verified caller and its transaction's uuid, which pylance keeps when it stages
+  again; a writer that let a handed turn lapse unused is handed none for 30 s. Every other finalize of the ref, and the
+  unkeyed `/insert` and the create door's Overwrite right before Lance commits them, waits while a turn is held (30 s, 5 s
+  when handed, and `HOLD` at most in all), so no writer is refused. Without it a writer committing in a tight loop won
+  every version: measured, a `cast(NULL)` add lost all ten plans and a stock writer landed 0 appends beside 639. The
+  capturing namespace answers no version after the one planned on, so Lance stages the next one rather than spending its
+  own retries on a version committed since. Most pylance operations take no transaction properties (13.0.0: `update`,
   `delete`, `add_columns`, `alter_columns`, `drop_columns`, both metadata updates, `drop_index`,
   `MergeInsertBuilder.execute`), so for those the plan is Lance's own call made on a handle opened through an in-process
   namespace under managed versioning (`dataplane.captured`), which keeps the staged manifest instead of finalizing it;
@@ -679,7 +688,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   create has no committed version to `checkout_version` from; the copy is a one-field wire edit of `Manifest.version =
   3`), opens it with pylance, judges it against the version it follows, deletes the copy, and finalizes through the
   `dir` backend's put-if-not-exists. A refusal leaves the table at its version; pylance reports it as an unknown
-  outcome and keeps its staged manifest. The door admits a writer or a maintainer (`can_create_version`), and the judge
+  outcome and keeps its staged manifest. A version another writer took since the writer staged it answers 409 code 14
+  before it is judged (`managed_versions.VersionTakenError`, the spec's 409 for a version that exists) and hands the
+  writer the ref's next turn ([[LH-259]]); a version beyond the next answers 400. The door admits a writer or a maintainer (`can_create_version`), and the judge
   asks the operation's own rung (`fga_deps.require_staged_operation`: the writer operations and a table's first version `can_write_data`, restore
   `can_restore`, rewrite `can_maintain`, an Overwrite after the first version `can_drop` plus protection,
   `Clone` and unknown operations refused); a create at 2.2 with stable row ids and no later change to either;

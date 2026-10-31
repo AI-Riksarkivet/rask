@@ -604,7 +604,7 @@ def _data_staged_under_an_index_label(stock: lance_namespace.LanceNamespace) -> 
         pytest.param(_re_append_a_held_file, set(), False, 400, 13, ("db$t", 4), id="a-held-data-file-is-not-appended-again"),
         pytest.param(_undelete_as_an_update, set(), False, 400, 13, ("db$t", 4), id="a-deleted-row-does-not-come-back-whatever-the-label"),
         pytest.param(_reuse_live_row_ids_as_an_update, set(), False, 400, 13, ("db$t", 4), id="live-row-ids-are-not-reused-whatever-the-label"),
-        pytest.param(_append_at_file_version_2_1, set(), False, 400, 13, ("db$t", 3), id="a-version-that-does-not-follow-the-latest-is-refused"),
+        pytest.param(_append_at_file_version_2_1, set(), False, 409, 14, ("db$t", 3), id="a-version-the-table-already-holds-is-taken"),
         pytest.param(_arm_auto_cleanup, set(), False, 400, 13, ("db$t", 4), id="auto-cleanup-is-not-armed-by-a-commit"),
         pytest.param(_steer_compaction, set(), False, 400, 13, ("db$t", 4), id="compaction-is-not-steered-by-a-commit"),
         pytest.param(_stamp_a_scheme_lance_does_not_know, set(), False, 400, 13, ("db$t", 4), id="an-encoding-knob-lance-cannot-honour-is-not-stamped"),
@@ -687,9 +687,9 @@ def _append_a_held_key_on_the_branch(stock: lance_namespace.LanceNamespace) -> N
         pytest.param(
             _append_a_held_key_on_the_branch,
             ("work", 2),
-            (400, 13),
-            "does not follow the latest version 2",
-            id="a-version-that-does-not-follow-the-branch-head-is-refused",
+            (409, 14),
+            "version 2 is taken, the latest version is 2",
+            id="a-version-the-branch-head-already-holds-is-taken",
         ),
     ],
 )
@@ -748,8 +748,8 @@ def test_a_commit_whose_answer_is_lost_lands_once_and_the_client_gets_its_versio
     finalize = managed_versions.finalize
     answered: list[int] = []
 
-    def answer_lost_after_the_finalize(*args: Any) -> Any:
-        landed = finalize(*args)
+    def answer_lost_after_the_finalize(*args: Any, **kwargs: Any) -> Any:
+        landed = finalize(*args, **kwargs)
         assert landed.version is not None
         answered.append(landed.version.version)
         if len(answered) == 1:
@@ -764,6 +764,65 @@ def test_a_commit_whose_answer_is_lost_lands_once_and_the_client_gets_its_versio
     table = _opened(stock)
     assert (written.version, answered, [entry["version"] for entry in table.versions()]) == (2, [2], [1, 2])
     assert _rows(table) == [(1, "a"), (2, "b"), (3, "c"), (4, "d")]
+
+
+#: An unkeyed table, so the catalog's ``/insert`` appends through Lance's own commit rather than a keyed plan.
+_APPENDED_TO = ["db", "w"]
+
+
+class _Appender:
+    """Appends one row after another through ``write``, on a thread of its own, until stopped; keeps what landed and what failed."""
+
+    def __init__(self, write: Callable[[int], object], first_id: int) -> None:
+        self.landed: list[int] = []
+        self.failed: list[BaseException] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, args=(write, first_id), daemon=True)
+        self._thread.start()
+
+    def _run(self, write: Callable[[int], object], row: int) -> None:
+        while not self._stop.is_set():
+            try:
+                write(row)
+            except BaseException as exc:  # noqa: BLE001 — every append's outcome is half of the claim
+                self.failed.append(exc)
+                return
+            self.landed.append(row)
+            row += 1
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=60)
+
+
+def _row(row: int) -> pa.Table:
+    return pa.table({"id": pa.array([row], pa.int64()), "v": pa.array([row], pa.int64())})
+
+
+def test_a_stock_writer_beside_a_writer_appending_through_insert_in_a_tight_loop_lands_every_append(served: Served) -> None:
+    """[[LH-259]] The catalog finalizes exactly the version a writer staged, so beside a writer the catalog's ``/insert``
+    commits in-process in a tight loop, a stock writer, whose every retry is a round trip through ``version/create``, wins no
+    version: measured without the turn, it landed 0 appends beside 639 and failed its commit once Lance's 30 s of retries
+    ran out. Most of its losses are found before the finalize, its staged version already taken (measured: 26 of 41), so a
+    loss found either way hands the writer the ref's next turn under its transaction's uuid, which pylance keeps when it
+    stages the commit again (measured on pylance 13.0.0); its retry lands while ``/insert`` waits, and neither fails."""
+    stock = served.stock()
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    through_version_create, through_insert = served.stock(), served.stock()
+    writers = [
+        _Appender(lambda row: lance.write_dataset(_row(row), namespace_client=through_version_create, table_id=_APPENDED_TO, mode="append"), 1),
+        _Appender(lambda row: through_insert.insert_into_table(lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(row))), 10**6),
+    ]
+    deadline = time.monotonic() + 60
+    while len(writers[0].landed) < 30 and not any(writer.failed for writer in writers):
+        assert time.monotonic() < deadline, "the stock writer landed fewer than 30 appends in 60 s"
+        time.sleep(0.01)
+    for writer in writers:
+        writer.stop()
+
+    ids = lance.dataset(namespace_client=stock, table_id=_APPENDED_TO).to_table(columns=["id"]).column("id").to_pylist()
+    assert ([writer.failed for writer in writers], sorted(ids)) == ([[], []], sorted([0, *writers[0].landed, *writers[1].landed]))
 
 
 #: The provenance a pipeline names on a governed write (ADR 0156 C2): its run, its job, and each input at a version.

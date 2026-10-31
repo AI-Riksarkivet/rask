@@ -24,6 +24,7 @@ from uuid import uuid4
 import lance
 from lance_namespace import (
     ConcurrentModificationError,
+    CreateTableVersionRequest,
     DescribeTableRequest,
     InvalidTableStateError,
     LanceNamespace,
@@ -37,10 +38,11 @@ from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_
 from catalog.services import native
 from catalog.services.object_uuids import UnidentifiedObjectError
 from service_kit.governed import fga
-from service_kit.lakehouse import file_identities, history_fences, location_claims, trash
+from service_kit.lakehouse import commit_turns, file_identities, history_fences, location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.lakehouse.version_retention import recorded_branch
 
 
 log = logging.getLogger(__name__)
@@ -224,6 +226,92 @@ class DoorTable:
         """
         self.require_named()
         return native.call(via if via is not None else self._ns, method, *args)
+
+    def finalize_version(self, request: CreateTableVersionRequest, *, turn: str | None = None) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
+        """Finalize a catalog door's version through the backend's put-if-not-exists (:meth:`write_natively`), once no commit
+        but the one holding ``turn`` holds the commit turn of the ref it names ([[LH-259]],
+        :mod:`service_kit.lakehouse.commit_turns`).
+
+        Raises:
+            ConcurrentModificationError: Another writer took the version first.
+            TableChangedError: The table changed since the request's resolution.
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
+        self.wait_for_turn(recorded_branch(request.branch), mine=turn)
+        return self.write_natively("create_table_version", request)
+
+    def finalize_staged_version(self, request: CreateTableVersionRequest, *, writer: commit_turns.Writer | None) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
+        """Finalize a stock writer's staged version as :meth:`finalize_version` does, under the turn ``writer`` was handed if
+        it lost a race before ([[LH-259]]).
+
+        A writer that loses the race is handed the ref's next turn (:meth:`hand_turn`), so its retry, staged again under the
+        same transaction, finalizes before any other writer of the ref. A retry that reaches its finalize releases it; one
+        refused before its finalize, or a writer that never retries, leaves it to lapse at its hold. ``None``, a staged
+        transaction naming no uuid, holds no turn and is handed none.
+
+        Raises:
+            ConcurrentModificationError: Another writer took the version first.
+            TableChangedError: The table changed since the request's resolution.
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
+        ref = recorded_branch(request.branch)
+        turns = self._turns()
+        token = writer.token if writer is not None else None
+        kept = turns.wait(ref, mine=token)
+        handed = False
+        try:
+            return self.write_natively("create_table_version", request)
+        except TableChangedError:
+            raise
+        except ConcurrentModificationError:
+            handed = self.hand_turn(ref, writer)
+            raise
+        finally:
+            if kept and not handed and token is not None:
+                turns.release(token)
+
+    def hand_turn(self, ref: str | None, writer: commit_turns.Writer | None) -> bool:
+        """Hand ``ref``'s next turn to the stock writer whose commit just lost its race, unless another commit holds the turn
+        now or ``writer`` let a handed turn lapse unused within the cooldown; whether it was handed. Never raises: the writer's
+        409 is the answer, and a turn not handed leaves its retry an ordinary race.
+
+        A commit whose staged version another writer took is the loser, whether its finalize lost or ``version/create``
+        found the version taken before judging it; a version/create naming a version beyond the next is refused before.
+        """
+        if writer is None:
+            return False
+        try:
+            self._turns().hand(ref, writer)
+        except Exception as exc:  # noqa: BLE001 — see the docstring
+            log.warning("commit_turn_not_handed", extra={"table": self.segments, "ref": ref, "error": f"{type(exc).__name__}: {exc}"[:300]})
+            return False
+        return True
+
+    def wait_for_turn(self, ref: str | None, *, mine: str | None = None) -> None:
+        """Return once no commit but the one holding ``mine`` holds ``ref``'s commit turn: a write Lance commits itself asks
+        this right before it, and every finalize does (:meth:`finalize_version`).
+
+        Raises:
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
+        self._turns().wait(ref, mine=mine)
+
+    @contextmanager
+    def commit_turn(self, ref: str | None) -> Generator[str]:
+        """``ref``'s commit turn held while the block runs, its token handed to the block: every other finalize of the ref
+        waits until the block ends, or the turn lapses (:data:`service_kit.lakehouse.commit_turns.HOLD`).
+
+        Raises:
+            CommitTurnBusyError: Every round of the take lost to another writer of the turn's record; the block did not run.
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
+        with self._turns().held(ref) as token:
+            yield token
+
+    def _turns(self) -> commit_turns.TableTurns:
+        return commit_turns.TableTurns(
+            control_root=self._claims.control_root, storage_options=self._claims.storage_options, table_uuid=self._resolved.require_uuid()
+        )
 
     def open(self, so: StorageOptions, *, version: int | None = None, branch: str | None = None) -> lance.LanceDataset:
         """The checked open of the ref named at the location (``namespace.open_resolved_dataset``), once it still holds the table (:meth:`require_held`).

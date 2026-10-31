@@ -198,3 +198,4 @@ before they had a record here; each names its source document and the date of th
 | [0183](0183-an-erasure-names-every-table-a-run-declared-it-read-whatever-lineage-has-recorded.md) | LH-541 | An erasure names every table a run declared it read, whatever lineage has recorded (2026-10-28) |
 | [0184](0184-a-committed-file-overwritten-in-place-is-found-by-the-sweep.md) | LH-419 | A committed file overwritten in place is found by the sweep (2026-10-30) |
 | [0185](0185-the-catalog-reclaims-each-roots-namespace-index-and-holds-no-connection-past-it.md) | LH-251 | The catalog reclaims each root's namespace index, and holds no connection past it (2026-10-30) |
+| [0186](0186-a-commit-that-lost-its-race-takes-its-refs-turn.md) | LH-259 | A commit that lost its race takes its ref's turn (2026-10-31) |

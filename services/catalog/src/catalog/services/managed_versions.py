@@ -28,6 +28,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 from lance.fragment import DataFile
 from lance_namespace import (
+    ConcurrentModificationError,
     CreateTableVersionRequest,
     CreateTableVersionResponse,
     InvalidInputError,
@@ -40,7 +41,7 @@ from pydantic import BaseModel, InstanceOf
 from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, table_claims
-from service_kit.lakehouse import base_refs, base_registry, features, file_identities, maintenance_due
+from service_kit.lakehouse import base_refs, base_registry, commit_turns, features, file_identities, maintenance_due
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.outage import reads_as_store_outage
@@ -163,6 +164,25 @@ def _write(location: str, so: StorageOptions, name: str, body: bytes) -> None:
         sink.write(body)
 
 
+class VersionTakenError(ConcurrentModificationError):
+    """Another writer took the version a staged commit names before the catalog judged it: the spec's 409 for a version that
+    exists (``lance_docs/ns_catalog/spec.yaml`` CreateTableVersion), and a lost race whose writer is handed the ref's next
+    turn ([[LH-259]])."""
+
+    def __init__(self, message: str, *, transaction_uuid: str) -> None:
+        super().__init__(message)
+        self.transaction_uuid = transaction_uuid
+
+
+def writer_turn(caller: str | None, transaction_uuid: str) -> commit_turns.Writer | None:
+    """The stock writer a staged commit's turn is handed to: its verified caller and the uuid of the transaction it staged,
+    which pylance keeps when it stages the commit again ([[LH-259]]). ``None`` for a transaction naming no uuid, whose retry
+    could not be told from any other writer's."""
+    if not transaction_uuid:
+        return None
+    return commit_turns.Writer(caller=caller or "", transaction=transaction_uuid)
+
+
 def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest) -> StagedVersion:
     """Read the staged manifest ``request`` names once, plant it for judging and for the finalize, and read its operation.
 
@@ -172,12 +192,13 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
 
     Raises:
         InvalidInputError: The manifest path is not a staged manifest under the ref, it is not a Lance manifest, it
-            cannot be opened, or its version is not the one after the ref's latest.
+            cannot be opened, or its version lies beyond the one after the ref's latest.
+        VersionTakenError: Another writer took the version it names: the ref's latest is that version or a later one.
     """
     location = ref.location
     staged = _staged_uri(location, request.manifest_path)
     latest = _latest_version(location, so)
-    if request.version != latest + 1:
+    if request.version > latest + 1:
         raise InvalidInputError(f"commit refused: version {request.version} does not follow the latest version {latest}")
     if request.naming_scheme not in (None, "V2"):
         raise InvalidInputError(f"commit refused: the table's manifests are named V2, not {request.naming_scheme}")
@@ -185,8 +206,6 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     with fs.open_input_stream(dataplane.dataset_fs(staged, so)[1]) as source:
         manifest = source.read()
     stated = manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.VERSION_FIELD)
-    if stated != request.version:
-        raise InvalidInputError(f"commit refused: the staged manifest is version {stated}, the request names {request.version}")
     detached_id, finalize_id = manifest_bytes.detached_id(), manifest_bytes.detached_id()
     _write(location, so, f"d{detached_id}.manifest", manifest_bytes.with_manifest_version(manifest, detached_id))
     _write(location, so, f"d{finalize_id}.manifest", manifest)
@@ -200,6 +219,17 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     except BaseException:
         _discard(location, so, detached_id, finalize_id)
         raise
+    # Taken first: the version a writer staged went to another writer whatever the manifest states, and the handed turn
+    # names the transaction the writer will stage again ([[LH-259]]).
+    if request.version <= latest:
+        _discard(location, so, detached_id, finalize_id)
+        raise VersionTakenError(
+            f"commit refused: version {request.version} is taken, the latest version is {latest}; stage the commit again on it",
+            transaction_uuid=transaction.uuid if transaction is not None else "",
+        )
+    if stated != request.version:
+        _discard(location, so, detached_id, finalize_id)
+        raise InvalidInputError(f"commit refused: the staged manifest is version {stated}, the request names {request.version}")
     operation = type(transaction.operation).__name__ if transaction is not None else "Unknown"
     if operation == lance.LanceOperation.BaseOperation.__name__:
         operation = _unmodelled_operation(manifest) or operation
@@ -845,19 +875,24 @@ def refuse(staged: StagedVersion, so: StorageOptions) -> None:
     _discard(staged.location, so, staged.finalize_id)
 
 
-def finalize(table: table_claims.DoorTable, staged: StagedVersion, request: CreateTableVersionRequest, so: StorageOptions) -> CreateTableVersionResponse:
+def finalize(
+    table: table_claims.DoorTable, staged: StagedVersion, request: CreateTableVersionRequest, so: StorageOptions, *, writer: commit_turns.Writer | None
+) -> CreateTableVersionResponse:
     """Finalize the judged bytes through the backend's put-if-not-exists; a lost race is the backend's 409.
 
     The backend is handed the catalog's own copy, which it moves into the version slot (measured on pylance 13.0.0), so
     the version that lands is the one judged whatever the writer puts over its staged key meanwhile. The copy carries the
     writer's transaction byte for byte, and a client whose answer was lost relies on that: Lance reads the version back
     and keeps the commit as its own only when the transaction there is the one it staged ([[LH-491]]). The finalize names
-    the table and no location, so it is the door's guarded native write ([[LH-530]]).
+    the table and no location, so it is the door's guarded native write ([[LH-530]]), made once no other commit holds the
+    ref's commit turn, and ``writer`` (:func:`writer_turn`) is handed the next one when it loses the race ([[LH-259]],
+    :meth:`table_claims.DoorTable.finalize_staged_version`). The writer waits rather than being refused, since pylance fails
+    a commit whose finalize answered 409 with no version at its target as of unknown outcome (measured on pylance 13.0.0).
     """
     path = f"{dataplane.object_store_path(staged.location.rstrip('/'))}/_versions/d{staged.finalize_id}.manifest"
     judged = request.model_copy(update={"manifest_path": path})
     try:
-        response = CreateTableVersionResponse.model_validate(table.write_natively("create_table_version", judged))
+        response = CreateTableVersionResponse.model_validate(table.finalize_staged_version(judged, writer=writer))
     except BaseException:
         refuse(staged, so)
         raise

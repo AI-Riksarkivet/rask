@@ -21,10 +21,11 @@ import itertools
 import logging
 import re
 import tempfile
+import time
 import uuid
 from collections import Counter
 from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import replace
 from typing import Any, Final, cast
 
@@ -117,7 +118,7 @@ from catalog.core.run_context import OPERATION_PROPERTY
 from catalog.core.vending import classified_columns, labelled_fields
 from catalog.services import changes, committed_files, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, data_directories, file_identities, location_claims, trash
+from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, commit_turns, data_directories, file_identities, location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
 from service_kit.lakehouse.features import manifest_base_path_refs
@@ -683,6 +684,9 @@ def create_table(
         if normalized is CreateMode.OVERWRITE:
             # A new version of the same table, so the table's provenance rides onto it ([[LH-242]]).
             # Disarmed first ([[LH-245]]): an overwrite carries the table's config forward, keys included.
+            if overwriting is not None:
+                # Lance commits the disarm and the overwrite itself, so both wait out another commit's turn here ([[LH-259]]).
+                overwriting.wait_for_turn(None)
             opened = (
                 overwriting.open_unchecked(so)
                 if overwriting is not None
@@ -1242,6 +1246,26 @@ def object_store_path(location: str) -> str:
 #: How many times a stamped commit plans again after another writer took the version it followed.
 _STAMPED_COMMIT_ATTEMPTS: Final = 10
 
+#: The wait before the next plan of a commit that lost its race and could not take its ref's turn (``commit_turns.backoff``),
+#: so writers racing for the turn's record plan again apart rather than in step: the nine waits ten attempts can make come to
+#: 2.75 s in all, and up to half as much again.
+_RETRY_WAIT_SECONDS: Final = 0.05
+_RETRY_WAIT_CAP_SECONDS: Final = 0.4
+
+
+def _turn_for_the_next_attempt(table: table_claims.DoorTable, ref: str | None, held: ExitStack, turn: str | None, attempt: int) -> str | None:
+    """The ref's commit turn the attempt after the lost attempt ``attempt`` plans under: the one the commit holds, else one it
+    takes now, held until ``held`` closes. A commit whose take lost to the turn record's other writers plans again without one,
+    after a wait; after its last attempt a commit takes nothing and waits for nothing."""
+    if turn is not None or attempt + 1 == _STAMPED_COMMIT_ATTEMPTS:
+        return turn
+    try:
+        return held.enter_context(table.commit_turn(ref))
+    except commit_turns.CommitTurnBusyError as exc:
+        log.warning("commit_turn_busy", extra={"table": table.segments, "ref": ref, "error": str(exc)})
+        time.sleep(commit_turns.backoff(attempt, first=_RETRY_WAIT_SECONDS, cap=_RETRY_WAIT_CAP_SECONDS))
+        return None
+
 
 def commit_stamped[T](
     table: table_claims.DoorTable,
@@ -1274,6 +1298,14 @@ def commit_stamped[T](
     branch it names, [[LH-490]]); a lost race plans again on the new latest version, which a planned operation then
     sees.
 
+    A COMMIT THAT LOST ITS RACE TAKES ITS REF'S TURN for its remaining attempts ([[LH-259]],
+    :mod:`service_kit.lakehouse.commit_turns`), whether Lance refused the plan for a version committed since or the finalize
+    lost: a writer committing more often than one plan takes would otherwise win every version, and Lance cannot rebase a
+    schema change over an append (``lance_docs/lance/format/table/transaction.md`` § Merge Compatibility). While the turn is
+    held every other finalize of the ref waits, so the next plans meet only the writers already past their wait; a commit
+    whose take lost to the turn's other writers plans again after a wait that doubles each attempt
+    (:func:`_turn_for_the_next_attempt`). Every finalize, this one's included, waits out a turn another commit holds.
+
     The finalize names the table and no location, so it is the door's guarded native write ([[LH-530]]), asking the name
     again after the plan has written its data files, which can take as long as the rows do. ``opened`` is the ref as the
     door already opened it (:meth:`table_claims.DoorTable.open`), which the first attempt plans on rather than opening it
@@ -1289,57 +1321,61 @@ def commit_stamped[T](
     """
     table_id = table.segments
     ref = recorded_branch(branch)
-    for _ in range(_STAMPED_COMMIT_ATTEMPTS):
-        dataset = disarm_commit_path_cleanup(opened if opened is not None else table.open(so, branch=ref), table_id)
-        opened = None
-        try:
-            transaction, measured = plan(dataset)
-        except _PlannedOnAStaleVersion:
-            continue
-        stamped = replace(transaction, read_version=dataset.version, transaction_properties={**(transaction.transaction_properties or {}), **properties})
-        detached = lance.LanceDataset.commit(dataset, stamped, detached=True)
-        # The ref's own location: a branch handle reports the table's root, while its versions live under
-        # `tree/<branch>/`, where the detached commit wrote (measured on pylance 13.0.0).
-        location = detached.uri
-        version = dataset.version + 1
-        finalize_id = manifest_bytes.detached_id()
-        try:
-            if keeps_labels:
-                _refuse_a_lost_label(dataset, detached)
-            encoding.require_no_new_invalid_encoding(dataset, detached)
-            primary_keys.refuse_repeats_in_version(detached, dataset, door=properties[OPERATION_PROPERTY])
-            table.record_committed_files(
-                committed_files.added(
-                    dataset, detached, table_location=table.location, branch=ref, so=so, transaction_uuid=stamped.uuid, read_version=stamped.read_version
-                )
-            )
-            fs, base = dataset_fs(location, so)
-            versions = f"{base.rstrip('/')}/_versions"
-            with fs.open_input_stream(f"{versions}/d{detached.version}.manifest") as source:
-                body = manifest_bytes.with_manifest_version(source.read(), version)
-            with fs.open_output_stream(f"{versions}/d{finalize_id}.manifest") as sink:
-                sink.write(body)
-            request = CreateTableVersionRequest(
-                id=table_id,
-                version=version,
-                branch=ref,
-                manifest_path=f"{object_store_path(location)}/_versions/d{finalize_id}.manifest",
-                manifest_size=len(body),
-            )
+    turn: str | None = None
+    with ExitStack() as held:
+        for attempt in range(_STAMPED_COMMIT_ATTEMPTS):
+            dataset = disarm_commit_path_cleanup(opened if opened is not None else table.open(so, branch=ref), table_id)
+            opened = None
             try:
-                table.write_natively("create_table_version", request)
-            except table_claims.TableChangedError:
-                raise
-            except ConcurrentModificationError:
-                discard_detached_manifest(location, so, finalize_id)
+                transaction, measured = plan(dataset)
+            except _PlannedOnAStaleVersion:
+                turn = _turn_for_the_next_attempt(table, ref, held, turn, attempt)
                 continue
-        except BaseException:
-            discard_detached_manifest(location, so, finalize_id)
-            raise
-        finally:
-            discard_detached_manifest(location, so, detached.version)
-        return version, measured
-    raise ConcurrentModificationError(f"the commit lost the race for the next version {_STAMPED_COMMIT_ATTEMPTS} times; retry it")
+            stamped = replace(transaction, read_version=dataset.version, transaction_properties={**(transaction.transaction_properties or {}), **properties})
+            detached = lance.LanceDataset.commit(dataset, stamped, detached=True)
+            # The ref's own location: a branch handle reports the table's root, while its versions live under
+            # `tree/<branch>/`, where the detached commit wrote (measured on pylance 13.0.0).
+            location = detached.uri
+            version = dataset.version + 1
+            finalize_id = manifest_bytes.detached_id()
+            try:
+                if keeps_labels:
+                    _refuse_a_lost_label(dataset, detached)
+                encoding.require_no_new_invalid_encoding(dataset, detached)
+                primary_keys.refuse_repeats_in_version(detached, dataset, door=properties[OPERATION_PROPERTY])
+                table.record_committed_files(
+                    committed_files.added(
+                        dataset, detached, table_location=table.location, branch=ref, so=so, transaction_uuid=stamped.uuid, read_version=stamped.read_version
+                    )
+                )
+                fs, base = dataset_fs(location, so)
+                versions = f"{base.rstrip('/')}/_versions"
+                with fs.open_input_stream(f"{versions}/d{detached.version}.manifest") as source:
+                    body = manifest_bytes.with_manifest_version(source.read(), version)
+                with fs.open_output_stream(f"{versions}/d{finalize_id}.manifest") as sink:
+                    sink.write(body)
+                request = CreateTableVersionRequest(
+                    id=table_id,
+                    version=version,
+                    branch=ref,
+                    manifest_path=f"{object_store_path(location)}/_versions/d{finalize_id}.manifest",
+                    manifest_size=len(body),
+                )
+                try:
+                    table.finalize_version(request, turn=turn)
+                except table_claims.TableChangedError:
+                    raise
+                except ConcurrentModificationError:
+                    discard_detached_manifest(location, so, finalize_id)
+                    turn = _turn_for_the_next_attempt(table, ref, held, turn, attempt)
+                    continue
+            except BaseException:
+                discard_detached_manifest(location, so, finalize_id)
+                raise
+            finally:
+                discard_detached_manifest(location, so, detached.version)
+            return version, measured
+        raise ConcurrentModificationError(f"the commit lost the race for the next version {_STAMPED_COMMIT_ATTEMPTS} times; retry it")
 
 
 #: What Lance raises planning an expression it cannot resolve: an unknown column is a ``ValueError`` (pylance 13.0.0).
@@ -1421,9 +1457,12 @@ class _CapturingNamespace(LanceNamespace):
     leaves the rows, schema, indices and version Lance's own call leaves.
 
     The ref's versions are answered off its own location, as the ``dir`` backend answers them (a ``TableVersion`` naming
-    the V2 manifest's object-store path), with the version planned on as the latest: Lance then stages exactly the next
-    version, and :func:`commit_stamped` plans again when another writer took it. Nothing here names the table, so nothing
-    resolves its name again ([[LH-530]]).
+    the V2 manifest's object-store path), with the version planned on as the latest and none after it, so Lance stages
+    exactly the next version and the finalize's put-if-not-exists decides the race ([[LH-259]]). Measured on pylance 13.0.0
+    with a writer appending through the catalog's ``/insert`` in a tight loop: answered as found, a version committed since
+    cost a delete, an update and a drop Lance's own retries on every plan, 214-302 s before :func:`commit_stamped` answered
+    409; answered as absent, each plan lost within a second. Lance can still find such a version on the store itself, which
+    :class:`_PlannedOnAStaleVersion` covers. Nothing here names the table, so nothing resolves its name again ([[LH-530]]).
 
     THIS PATH IS rask's ONLY BECAUSE THESE OPERATIONS TAKE NO TRANSACTION PROPERTIES. pylance 13.0.0 takes them on
     ``write_dataset``, ``insert`` and ``LanceDataset.commit`` alone; lance-format/lance#9888 (merged 2026-10-24) passes
@@ -1476,8 +1515,10 @@ class _CapturingNamespace(LanceNamespace):
     def describe_table_version(self, request: DescribeTableVersionRequest) -> DescribeTableVersionResponse:
         asked = dict(request)
         branch = recorded_branch(asked.get("branch"))
-        version = asked.get("version")
-        return DescribeTableVersionResponse(version=self._version(branch, int(version) if version is not None else self._latest(branch)))
+        version = int(asked["version"]) if asked.get("version") is not None else self._latest(branch)
+        if branch == self._ref and version > self._planned:
+            raise TableVersionNotFoundError(f"version {version} is not on the ref")
+        return DescribeTableVersionResponse(version=self._version(branch, version))
 
     def create_table_version(self, request: CreateTableVersionRequest) -> CreateTableVersionResponse:
         self.staged = dict(request)
@@ -2361,9 +2402,10 @@ def insert_into_table(
                 table, so, transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"), branch=req.branch
             )
         else:
-            # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole. Its files are
-            # recorded under the table's uuid once it lands, and a table no uuid identifies takes no write ([[LH-534]]).
-            table.resolved.require_uuid()
+            # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole. Lance commits it
+            # itself, so it waits out another commit's turn here rather than at a finalize ([[LH-259]]); the wait refuses a
+            # table no uuid identifies, which takes no write ([[LH-534]]), and its files are recorded under the uuid once it lands.
+            table.wait_for_turn(recorded_branch(req.branch))
             dataset.insert(rows, mode=mode.value, transaction_properties=transaction_properties)
             version = int(dataset.version)
             committed_files.record_landed(table.record_committed_files, dataset, table_location=table.location, branch=req.branch, so=so)

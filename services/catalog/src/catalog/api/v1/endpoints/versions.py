@@ -218,8 +218,14 @@ async def create_table_version(
     await run_in_threadpool(table.require_held)
     location = table.location
     canonical = fga.canonical_object_id(segments)
+    caller = token.subject if token is not None else None
     ref = await run_in_threadpool(managed_versions.commit_ref, location, so, dataplane.recorded_branch(body.branch))
-    staged = await run_in_threadpool(managed_versions.stage, ref, so, body)
+    try:
+        staged = await run_in_threadpool(managed_versions.stage, ref, so, body)
+    except managed_versions.VersionTakenError as exc:
+        # Another writer took the version since this one staged it: a lost race, so its retry gets the ref's next turn ([[LH-259]]).
+        await run_in_threadpool(table.hand_turn, ref.branch, managed_versions.writer_turn(caller, exc.transaction_uuid))
+        raise
     try:
         await fga_deps.require_staged_operation(
             client, settings, token, segments=segments, location=location, operation=staged.operation, creates=staged.creates
@@ -255,7 +261,6 @@ async def create_table_version(
         raise
     finally:
         await run_in_threadpool(managed_versions.discard, staged, so)
-    caller = token.subject if token is not None else None
     if caller is not None and run_context.AUTHOR_PROPERTY not in staged.properties:
         # BEFORE THE FINALIZE: once the version lands it must name its author, and this commit cannot ([[LH-497]]).
         await run_in_threadpool(
@@ -268,7 +273,9 @@ async def create_table_version(
         await run_in_threadpool(
             partial(table_inputs.record, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), name=canonical, declared=declared)
         )
-    response = await run_in_threadpool(managed_versions.finalize, table, staged, body, so)
+    response = await run_in_threadpool(
+        partial(managed_versions.finalize, writer=managed_versions.writer_turn(caller, staged.transaction_uuid)), table, staged, body, so
+    )
     audit(
         AuditAction.COMMIT_VERSION,
         AuditOutcome.SUCCESS,
