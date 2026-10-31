@@ -313,8 +313,8 @@ Full design + API in [`docs/LINEAGE.md`](LINEAGE.md).
 uv run pytest -q
 uvx ruff check . && uvx ty check
 
-# full auth stack end-to-end (Dagger services: catalog + Dex + OpenFGA + Postgres + RustFS)
-make auth-chain                 # = dagger call auth-chain: anon 401 → alice create/read/write 200 → bob 403
+# the governed stack end-to-end (Dagger services: catalog + lineage + Dex + OpenFGA + Postgres + RustFS)
+make governance-chain           # = dagger call governance-chain: anon 401 → alice's creates seed her tuples → an outsider is refused → lineage names alice
 ```
 
 Config is env-driven and estate-wide — ONE name per setting, declared once in

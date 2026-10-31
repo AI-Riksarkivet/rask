@@ -696,71 +696,12 @@ jobs:
       - name: Live e2e — governed kind stack, every module it can serve, Phase 1's acceptance and soak
         run: make e2e-ci
 
-  # Gated live auth end-to-end: brings up the SQLite OpenFGA + Dex stack via
-  # Dagger services and runs scripts/auth_chain.sh, which asserts APP-SIDE SEEDING
-  # (create namespace/table -> owner + parent cascade) and a 403 for a second
-  # user with no grant. GitHub-hosted ubuntu runners ship Docker + Compose v2,
-  # so this is feasible in CI. Skipped on forked-PR runs (no infra guarantees /
-  # to avoid untrusted-code docker builds) but always runs on branch pushes.
-  e2e-auth:
-    runs-on: ubuntu-latest
-    needs: ms-test
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Dagger CLI (pinned to the module's engineVersion)
-        run: |
-          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
-      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
-      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
-      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
-      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
-      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
-      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
-      # charts` rather than running it against a half-started engine.
-      #
-      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
-      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
-      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
-      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
-        env:
-          DAGGER_NO_NAG: "1"
-        run: |
-          for attempt in 1 2 3 4 5; do
-            if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
-            sleep $((attempt * 15))
-          done
-          dagger core version
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-
-      - name: Sync dependencies (Linux-only lockfile)
-        run: uv sync --frozen --all-packages --all-groups
-
-      # Dex + OpenFGA + a governed catalog, stood up as DAGGER SERVICES — the same seven-step
-      # app-side-seeding chain, with no compose stack to bring up, dump logs from, or tear down.
-      # Those three steps are gone with it: a service bound to the run ends with the run, so there is
-      # nothing left to clean up and no KEEP_STACK dance to let a later step read the logs.
-      #
-      # The assertions are unchanged and live in `scripts/auth_chain.sh`, which `dagger call
-      # auth-chain` runs. `scripts/auth_e2e.sh` existed only to bring up the compose stack for this
-      # job and is deleted.
-      - name: Auth e2e (Dex + OpenFGA, app-side seeding)
-        run: dagger call auth-chain
-
-  # THE LAKEHOUSE LANES NOBODY RAN. `auth-chain` above has been in CI since it landed and stayed
-  # green; its siblings were make targets only, and a lane nobody runs reports nothing when it rots.
-  # Measured 2026-09-24: `rustfs-lifecycle` and `governance-chain` had been broken for 17 and 18 days
-  # by three unrelated estate-wide changes that each reached only the CI-wired lane — a fail-closed
-  # auth assert (`start ... (aliased as catalog): exit code: 3`), a shared identity default repointed
-  # at the chart estate, and an event shape one of two ingest doors never learned. Being in CI is
-  # what makes those fixes stay fixed; the unit gates that ship with them catch the next one before
-  # a build, and this catches what a unit gate cannot see.
+  # THE LAKEHOUSE LANES RUN IN CI: a lane that runs nowhere reports nothing when it rots. Measured
+  # 2026-09-24, outside CI, `rustfs-lifecycle` and `governance-chain` had broken 17 and 18 days before, on
+  # three unrelated estate-wide changes: a fail-closed auth assert (`start ... (aliased as catalog): exit
+  # code: 3`), a shared identity default repointed at the chart estate, and an event shape one of two
+  # ingest doors never learned. In CI those fixes stay fixed; the unit gates that ship with them catch the
+  # next one before a build, and this catches what a unit gate cannot see.
   #
   # FOUR PROOFS, one per seam: `smoke-rustfs` that `packages/storage` works against a real S3
   # backend rather than moto, `rustfs-lifecycle` that the catalog is S3-AGNOSTIC (its lifecycle with

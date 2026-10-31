@@ -38,9 +38,8 @@ const lineageDexUser = `  - email: lineage@rask.internal
     userID: lineage
 `
 
-// governedStack is the shared scaffolding behind the auth and governance e2es: the pieces both lanes
-// need, built here once rather than as a near-identical function per lane — an object store with the
-// catalog's bucket, OpenFGA on its own Postgres, and Dex.
+// governedStack is the platform the governance chain's catalog runs on: an object store with the catalog's
+// bucket, OpenFGA on its own Postgres, and Dex.
 //
 // ORDERING IS EXPLICIT AND EACH STEP EARNED ITS PLACE. Compose said
 // `depends_on: {condition: service_completed_successfully}`; Dagger has no such thing on a binding,
@@ -178,12 +177,23 @@ type provenanceWiring struct {
 	Writers     []string
 }
 
-// catalogService builds the REST catalog from its own dockerfile and points it at a governed stack.
+// catalogService builds the REST catalog from its own dockerfile and points it at a governed stack: OIDC against the
+// stack's Dex, OpenFGA enforced, and every committed write announced to the lineage service `prov` names.
 //
-// `auth` decides whether OIDC + OpenFGA are enforced. Both e2es want the same image and differ only
-// in that flag, which is exactly why this is one function rather than two near-copies.
-func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth bool, prov *provenanceWiring) (*dagger.Service, error) {
-	c := m.Image(src, "rest-catalog", "", "", "", nil).
+// THE EMISSION IS ON, as the chart renders it (`LANCE_LINEAGE_EMIT_ENABLED`). Without it the catalog runs perfectly and
+// simply records nothing, so the provenance assertions fail against a healthy service: the emit is the thing under
+// test, not a side effect of it.
+//
+// LINEAGE IS REACHED BY ITS SESSION HOSTNAME, not a binding: lineage keeps its tables in this catalog and binds it, and
+// a binding cannot run both ways. The hostname must resolve when the first write emits, and the emit is BEST-EFFORT, so
+// a target that does not resolve is swallowed exactly as designed: the only symptom is a provenance assertion finding
+// no author.
+func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, prov provenanceWiring) (*dagger.Service, error) {
+	writers, err := json.Marshal(prov.Writers)
+	if err != nil {
+		return nil, err
+	}
+	return m.Image(src, "rest-catalog", "", "", "", nil).
 		WithServiceBinding("store", stack.Store).
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
 		WithEnvVariable("LANCE_REST_ROOT", "s3://lance-catalog").
@@ -192,47 +202,23 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth 
 		WithEnvVariable("LANCE_S3_SECRET_ACCESS_KEY", "rustfsadmin").
 		WithEnvVariable("LANCE_S3_REGION", "us-east-1").
 		WithEnvVariable("LANCE_S3_ALLOW_HTTP", "true").
-		WithEnvVariable("LANCE_S3_VIRTUAL_HOSTED", "false")
-
-	if auth {
-		c = c.
-			WithServiceBinding("dex", stack.Dex).
-			WithServiceBinding("openfga", stack.OpenFGA).
-			WithEnvVariable("RASK_OIDC_ENABLED", "true").
-			WithEnvVariable("RASK_OIDC_ISSUER", "http://dex:5556/dex").
-			WithEnvVariable("RASK_OIDC_AUDIENCE", "rask-lakehouse").
-			WithEnvVariable("RASK_OIDC_CONNECTORS", laneConnectors).
-			// Dex serves discovery over http here. Dev only — the chart never sets this.
-			WithEnvVariable("RASK_OIDC_ALLOW_INSECURE", "true").
-			WithEnvVariable("RASK_FGA_ENABLED", "true").
-			WithEnvVariable("RASK_FGA_API_URL", "http://openfga:8080")
-	} else {
-		// THE OTHER BRANCH NEEDS A POSTURE TOO, and having none made this parameter unusable:
-		// `assert_authentication_configured` refuses to boot on the ambiguity between "open because I
-		// meant it" and "open because nothing set it", so `auth == false` produced a catalog that
-		// exited 3 before serving anything. An unauthenticated lane must SAY that is what it meant.
-		c = c.WithEnvVariable("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true")
-	}
-	if prov != nil {
-		// The governance stack turns catalog->lineage emission ON. Without this the catalog runs
-		// perfectly and simply records nothing, so the provenance assertions fail against a healthy
-		// service — the emit is the thing under test, not a side effect of it.
-		//
-		// LINEAGE IS REACHED BY ITS SESSION HOSTNAME, not a binding: lineage keeps its tables in this
-		// catalog and binds it, and a binding cannot run both ways. The hostname must resolve when the
-		// first write emits, and the emit is BEST-EFFORT, so a target that does not resolve is
-		// swallowed exactly as designed: the only symptom is a provenance assertion finding no author.
-		writers, err := json.Marshal(prov.Writers)
-		if err != nil {
-			return nil, err
-		}
-		c = c.
-			WithEnvVariable("LANCE_LINEAGE_EMIT_ENABLED", "true").
-			WithEnvVariable("LANCE_LINEAGE_URL", "http://"+prov.LineageHost+":8000/api/v1/lineage").
-			WithEnvVariable("LANCE_PROVENANCE_NAMESPACE", provenanceNamespace).
-			WithEnvVariable("LANCE_PROVENANCE_WRITERS", string(writers))
-	}
-	return c.WithExposedPort(2333).AsService(), nil
+		WithEnvVariable("LANCE_S3_VIRTUAL_HOSTED", "false").
+		WithServiceBinding("dex", stack.Dex).
+		WithServiceBinding("openfga", stack.OpenFGA).
+		WithEnvVariable("RASK_OIDC_ENABLED", "true").
+		WithEnvVariable("RASK_OIDC_ISSUER", "http://dex:5556/dex").
+		WithEnvVariable("RASK_OIDC_AUDIENCE", "rask-lakehouse").
+		WithEnvVariable("RASK_OIDC_CONNECTORS", laneConnectors).
+		// Dex serves discovery over http here. Dev only — the chart never sets this.
+		WithEnvVariable("RASK_OIDC_ALLOW_INSECURE", "true").
+		WithEnvVariable("RASK_FGA_ENABLED", "true").
+		WithEnvVariable("RASK_FGA_API_URL", "http://openfga:8080").
+		WithEnvVariable("LANCE_LINEAGE_EMIT_ENABLED", "true").
+		WithEnvVariable("LANCE_LINEAGE_URL", "http://"+prov.LineageHost+":8000/api/v1/lineage").
+		WithEnvVariable("LANCE_PROVENANCE_NAMESPACE", provenanceNamespace).
+		WithEnvVariable("LANCE_PROVENANCE_WRITERS", string(writers)).
+		WithExposedPort(2333).
+		AsService(), nil
 }
 
 // lineageToken mints the token lineage presents to the catalog: a password grant for `lineageIdentity` against the
@@ -305,66 +291,6 @@ func (m *Rask) lineageService(src *dagger.Directory, catalog *dagger.Service, to
 		WithHostname(host)
 }
 
-// AuthChain runs the app-side-seeding authorization chain against a real Dex and a real OpenFGA.
-//
-// It replaces `scripts/auth_e2e.sh`'s STACK half only. The assertions are untouched and now live in
-// `scripts/auth_chain.sh`, ONE copy shared with that script — seven steps proving the app SEEDS
-// ownership tuples on create (no tuple is ever written by hand), that owner cascades to reader and
-// writer, and that a second identity holding no grant gets 403 on both read and write.
-//
-// The compose caller still exists because `.github/workflows/ci.yml` runs it and a concurrent session
-// holds that file. That is a sequencing constraint, not a fallback: there is one copy of the
-// assertions, and the compose half is deleted the moment the CI job can move here.
-func (m *Rask) AuthChain(
-	ctx context.Context,
-	// +defaultPath="/"
-	// +optional
-	src *dagger.Directory,
-) (string, error) {
-	stack, err := m.governedStack(ctx, src)
-	if err != nil {
-		return "", err
-	}
-	catalog, err := m.catalogService(src, stack, true, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return m.base(src).
-		WithServiceBinding("catalog", catalog).
-		WithServiceBinding("dex", stack.Dex).
-		WithServiceBinding("openfga", stack.OpenFGA).
-		WithEnvVariable("LANCE_E2E_AUTH_SERVER", "http://catalog:2333").
-		WithEnvVariable("LANCE_E2E_DEX", "http://dex:5556/dex").
-		// The narrated demo reads a different trio of names for the same three endpoints; the retired
-		// script exported both sets side by side and so does this.
-		WithEnvVariable("CATALOG_URL", "http://catalog:2333").
-		WithEnvVariable("LINEAGE_URL", "http://lineage-api:8000").
-		WithEnvVariable("DEX_URL", "http://dex:5556/dex").
-		// EMPTY, and it must be set rather than left unset. `test_governance_e2e.py` DEFAULTS
-		// `LANCE_E2E_DEX_SECRET` to "lance-catalog-secret", and both Dex configs in this repo declare
-		// `rask-web` as `public: true` — a public client, which rejects a client_secret with
-		// `401 invalid_client`. Its own comment names the fix (`LANCE_E2E_DEX_SECRET="" for a
-		// public-client Dex`), and `scripts/governance_e2e.sh` never set it: it exported
-		// LANCE_E2E_AUTH_SERVER, LANCE_E2E_LINEAGE_URL and LANCE_E2E_DEX and stopped. So that script
-		// could not have passed as written against the stack it stood up — the same "exists but cannot
-		// run" shape this estate's test audit kept finding.
-		WithEnvVariable("LANCE_E2E_DEX_SECRET", "").
-		WithEnvVariable("LANCE_E2E_FGA", "http://openfga:8080").
-		WithExec([]string{"sh", "-c", "command -v curl >/dev/null || (apt-get update -qq && apt-get install -y -qq curl)"}).
-		// WAIT FOR THE APP, not just the port. Dagger's service binding waits for the socket to
-		// ACCEPT, and uvicorn accepts before the catalog's lifespan has built its namespace — so the
-		// first request raced it and the script reported `got , want 401`, an empty curl reading as an
-		// assertion failure rather than as "nothing was listening yet".
-		//
-		// The old script had this wait; it lived inside the compose block that was removed with the
-		// orchestration, which is how a readiness check gets lost in a migration that looks purely
-		// mechanical.
-		WithExec([]string{"sh", "-c", `command -v curl || echo "NO CURL"; for i in $(seq 1 45); do echo "try $i: $(curl -s -o /dev/null -w '%{http_code}' http://catalog:2333/livez 2>&1)"; curl -fsS http://catalog:2333/livez >/dev/null 2>&1 && exit 0; sleep 2; done; echo "catalog never became ready"; exit 1`}).
-		WithExec([]string{"bash", "scripts/auth_chain.sh"}).
-		Stdout(ctx)
-}
-
 // GovernanceChain proves the dataops loop end to end: authorization, provenance AUTHORSHIP, and
 // medallion lineage — with real Dex id_tokens and not one hand-written tuple.
 //
@@ -372,9 +298,8 @@ func (m *Rask) AuthChain(
 // governance) to assemble the same thing. Everything it needs beyond the auth stack is the lineage
 // service, which keeps its tables in the catalog it is wired to, so it is the auth stack plus one service.
 //
-// The catalog runs with emission ON. That is the distinction from `AuthChain`: authorization alone
-// passes with emission off, so a run that forgot it would prove the authz half and silently skip the
-// provenance half — which is the shape of every finding in this estate's test audit.
+// The catalog runs with emission ON, as the chart renders it (`catalogService`): authorization alone passes with
+// emission off, so a run without it would prove the authz half and skip the provenance half.
 func (m *Rask) GovernanceChain(
 	ctx context.Context,
 	// +defaultPath="/"
@@ -395,7 +320,7 @@ func (m *Rask) GovernanceChain(
 	if err != nil {
 		return "", err
 	}
-	catalog, err := m.catalogService(src, stack, true, &provenanceWiring{LineageHost: "lineage-api", Writers: []string{lineageSub}})
+	catalog, err := m.catalogService(src, stack, provenanceWiring{LineageHost: "lineage-api", Writers: []string{lineageSub}})
 	if err != nil {
 		return "", err
 	}

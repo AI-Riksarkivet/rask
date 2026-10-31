@@ -1,4 +1,4 @@
-.PHONY: k3s-clients fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle rustfs-provisioning auth-chain governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: k3s-clients fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -623,15 +623,6 @@ rustfs-lifecycle: ## Catalog lifecycle e2e with the bytes on RustFS (proves S3-a
 # from files): a policy the store refuses fails the run before it binds anyone (XC-163).
 rustfs-provisioning: ## Scoped-users provisioning vs a REAL RustFS (a refused policy fails the hook, binds nobody)
 	dagger call rustfs-provisioning
-
-# The app-side-seeding authorization chain against a REAL Dex and a REAL OpenFGA: seven steps proving
-# the app seeds ownership tuples on create (no tuple is written by hand), that owner cascades to
-# reader and writer, and that a second identity holding no grant gets 403 on both.
-#
-# `scripts/auth_e2e.sh` is GONE. It existed only to bring up a compose stack for the CI job, and that
-# job now calls this target's function directly; the assertions live on in `scripts/auth_chain.sh`.
-auth-chain: ## Dex + OpenFGA authorization chain e2e (app-side tuple seeding)
-	dagger call auth-chain
 
 # The dataops loop: authorization + provenance AUTHORSHIP + medallion lineage, with real Dex tokens
 # and not one hand-written tuple. Replaced `scripts/governance_e2e.sh`, which layered FOUR compose

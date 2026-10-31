@@ -83,6 +83,7 @@ from lance_namespace_urllib3_client import ApiClient, Configuration
 from lance_namespace_urllib3_client.api import TableApi
 from lance_namespace_urllib3_client.exceptions import ApiException
 from pydantic import BaseModel, ConfigDict, Field
+from refusals import body_of, names_in, problem_code
 
 
 #: The spec the catalog serves: the doors this module drives, and the oracle for each one's request and answer.
@@ -158,15 +159,6 @@ class Answer(BaseModel):
     text: str = ""
 
 
-def _problem_code(text: str) -> int | None:
-    """The spec code a problem+json body carries."""
-    try:
-        body = json.loads(text)
-    except ValueError:
-        return None
-    return body.get("code") if isinstance(body, dict) else None
-
-
 def attempt(call: Callable[[], Any]) -> Answer:
     """Call a door. pylance's client raises the spec's typed error, the generated client an ApiException carrying the
     problem+json body, and a management door answers HTTP."""
@@ -176,12 +168,13 @@ def attempt(call: Callable[[], Any]) -> Answer:
         return Answer(code=error.code, text=str(error))
     except ApiException as error:
         body = str(error.body or "")
-        return Answer(status=error.status, code=_problem_code(body), text=body)
+        return Answer(status=error.status, code=problem_code(body), text=body)
     if not isinstance(value, requests.Response):
         return Answer(value=value)
     if value.ok:
         return Answer(value=value.json() if value.content else None, status=value.status_code)
-    return Answer(status=value.status_code, code=_problem_code(value.text), text=value.text)
+    body = body_of(value)
+    return Answer(status=value.status_code, code=problem_code(body), text=body)
 
 
 def eventually(holds: Callable[[], bool], failure: str) -> None:
@@ -1323,7 +1316,7 @@ def test_each_door_answers_each_principal_what_its_rung_owes(scene: Scene, opera
     if not allowed:
         assert (answer.status, answer.code) == door.refused, answer.text
         assert door.watch(scene, target) == before, f"a refused {operation} changed what it acts on"
-        assert not {name for name in scene.foreign(role, names_tenant=door.names_tenant) if name and name in answer.text}, answer.text
+        assert not names_in(answer.text, scene.foreign(role, names_tenant=door.names_tenant)), answer.text
     elif door.declined:
         assert answer.code == UNSUPPORTED, answer.text
         assert door.watch(scene, target) == before, f"a declined {operation} changed what it acts on"

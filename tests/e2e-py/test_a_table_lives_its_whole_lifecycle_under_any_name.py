@@ -12,7 +12,8 @@ the whole lifecycle through the doors:
 - the table's own policy, set under the old name to keep one version, expires the versions written under it: the
   estate's default keeps every version for 7 days (`MAINTENANCE_OLDER_THAN_DAYS`), so nothing else expires one this
   young;
-- a drop is recoverable, the undrop restores its rows, and a purge leaves no table and nothing to undrop.
+- a drop is recoverable, the undrop restores its rows, and a purge leaves no table and nothing to undrop: the undrop is
+  refused, restores nothing, writes no grant and names no record of the purged table ([[LH-255]]).
 
 Driven as the estate's admin in a scratch tenant of its own, removed at the end. Run with
 `bash scripts/e2e_live.sh tests/e2e-py/test_a_table_lives_its_whole_lifecycle_under_any_name.py`.
@@ -30,8 +31,12 @@ import lance_namespace
 import pyarrow as pa
 import pytest
 import requests
+from fga_store import tuples_on
+from lance_namespace import ErrorCode
+from refusals import assert_refused, namespace_uuid
 from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
 
+from service_kit.governed import fga
 from service_kit.lakehouse.naming import CATALOG_DELIMITER, uuid_of
 
 
@@ -156,4 +161,10 @@ def test_a_table_lives_its_whole_lifecycle_under_any_name(tenant: Tenant, name: 
     ok(admin.http.post(f"{CATALOG}/v1/table/{_path(renamed)}/drop", params={"purge": "true"}, json={}))
     tenant.tables.remove(CATALOG_DELIMITER.join(renamed))
     assert _described(admin, renamed).status_code == 404
-    assert admin.http.post(f"{CATALOG}/management/v1/table/{_path(renamed)}/undrop", json={}).status_code == 403
+    assert_refused(
+        lambda: admin.http.post(f"{CATALOG}/management/v1/table/{_path(renamed)}/undrop", json={}),
+        status=403,
+        code=ErrorCode.PERMISSION_DENIED,
+        unchanged=lambda: (_described(admin, renamed).status_code, tuples_on(fga.table_object(table_uuid))),
+        foreign={table_uuid, namespace_uuid(CATALOG, tenant.bronze, {"authorization": f"Bearer {admin.bearer}"}), tenant.job.principal},
+    )

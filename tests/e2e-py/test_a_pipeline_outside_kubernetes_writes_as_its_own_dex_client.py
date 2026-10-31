@@ -4,8 +4,9 @@ The pipeline signs in with Dex's client-credentials grant as the confidential cl
 (`machineClients`, `rask-pipeline`), asking for the lakehouse's audience, which the audience client issues only to a
 client it trusts. The catalog names that bearer `dex-client~<client id>`, a machine: granted `writer` on a scratch tenant's
 bronze namespace, it creates a table, the commit Lance holds names it as the author, and since a machine never owns what
-it creates (LH-433) its own drop of that table is refused while the tenant's admin, who owns it through the namespace,
-drops it at teardown.
+it creates (LH-433) its own drop of that table is refused, leaving the table where its owner describes it and naming
+nothing the client did not send ([[LH-255]]), while the tenant's admin, who owns it through the namespace, drops it at
+teardown.
 """
 
 from __future__ import annotations
@@ -19,9 +20,13 @@ import pyarrow as pa
 import pytest
 import requests
 from byo_scenario import CLOSE_EACH_REQUEST
+from fga_store import tuples_on
+from lance_namespace import ErrorCode
 from principals import DEX_AUDIENCE, principal_of
+from refusals import assert_refused, described, namespace_uuid
 from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned
 
+from service_kit.governed import fga
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
@@ -65,5 +70,13 @@ def test_a_pipeline_signed_in_as_its_own_dex_client_writes_as_that_client_and_do
     transaction = written.read_transaction(written.version)
     assert transaction is not None, f"{table} version {written.version} has no transaction to read"
     assert (transaction.transaction_properties or {}).get("rask.author") == principal, transaction.transaction_properties
-    dropped = requests.post(f"{CATALOG}/v1/table/{table}/drop", json={}, headers=headers, timeout=60)
-    assert dropped.status_code == 403, f"a machine dropped the table it created: {dropped.status_code} {dropped.text[:300]}"
+    owner = {"authorization": f"Bearer {tenant.admin.bearer}"}
+    standing = described(CATALOG, table, owner)
+    table_uuid = str(standing["properties"]["rask.uuid"])
+    assert_refused(
+        lambda: requests.post(f"{CATALOG}/v1/table/{table}/drop", json={}, headers=headers, timeout=60),
+        status=403,
+        code=ErrorCode.PERMISSION_DENIED,
+        unchanged=lambda: (described(CATALOG, table, owner), tuples_on(fga.table_object(table_uuid))),
+        foreign={tenant.admin.principal, tenant.job.principal, standing["location"], table_uuid, namespace_uuid(CATALOG, tenant.bronze, owner)},
+    )
