@@ -113,7 +113,14 @@ Two contracts stack here, and confusing them is how bugs happen:
   top-level namespace's parent is its warehouse. Every door stays addressed by name and resolves it ONCE per request
   (`catalog.api.dependencies.Resolver`, `ResolverDep`, which `authorize`, the tier judge and `ResolvedTableDep` share),
   so a door acts on the table it authorized. An absent name is refused 403, audited and refused by the name, and only a
-  READ door converts it to 404: for a caller holding `can_get_metadata` on its nearest ancestor namespace that stands, or on an object a recoverable drop trashed at the name or an ancestor's, on the chain hanging off what stands ([[LH-536]]: a cascade leaves children whose parent went too). A top-level name is never answered from its warehouse, since upward visibility makes every holder of one namespace a reader of it. A rename writes no tuple, except
+  READ door converts a refusal to 404, answering a name the caller cannot see exactly as an absent one, so the answer never
+  depends on whether the name holds an object ([[LH-236]], `fga_deps._refused_read_as_absent`): seeing a namespace is not
+  seeing its children, since the model grants `can_get_metadata` upward from any one child. It converts for a caller
+  holding `can_get_metadata` on ANY ancestor namespace that stands, a hidden one between them never ending the walk, or on
+  an object a recoverable drop trashed at the name or an ancestor's, whatever stands there now ([[LH-536]]: a cascade
+  leaves children whose parent went too). A top-level name is never answered from its warehouse, since upward
+  visibility makes every holder of one namespace a reader of it. Pinned by
+  `services/catalog/tests/test_an_absent_object_is_not_found_rather_than_forbidden.py` on a real OpenFGA. A rename writes no tuple, except
   that a rename into another namespace moves the parent edge (`fga_deps.move_parent_edge`); a table created again
   under a dropped name is another uuid and inherits nothing; a name holding a space never reaches OpenFGA. Every
   listing batch-checks its own candidates on their uuids and fills its page (`fga_deps.authorized_page`, [[LH-223]]);

@@ -1,4 +1,4 @@
-"""A caller who can read the PARENT learns an absent child is absent, not that it is forbidden.
+"""A caller who can see above a name is told it is not found, whether it is absent or only hidden from them.
 
 `authorize` is a router-wide dependency, so it answers before any endpoint runs: an object with no
 tuples fails the FGA check and the request is refused 403 `PermissionDenied`, whether the object is
@@ -11,17 +11,20 @@ THE OWNER'S RULE (2026-09-11): **404 on READ doors, 403 kept on destructive ones
 no-existence-oracle property is deliberate and documented for `delete_warehouse` / `delete_project` /
 `_set_warehouse_status`, which collapse PermissionDenied into NotFound precisely so a destructive door
 cannot enumerate ids. That stays: a destructive door is a write door, refused by the tier judge, and the probe never
-sees it. A read door is different: a caller holding the parent's read rung can already LIST the parent, so
-"does this child exist" is not information the 403 was protecting.
+sees it.
 
-THE SAFETY PROPERTY, which is the half worth more than the feature: an object that EXISTS and is
-forbidden must still answer 403. Turning that into 404 would tell an unauthorized caller which names
-are real — the oracle this estate refuses — so the probe converts only an absence, and only for a
-caller who already holds the parent rung.
+THE SAFETY PROPERTY, which is the half worth more than the feature ([[LH-236]], the owner's word of 2026-10-31): a READ
+door answers a name the caller cannot see exactly as it answers an absent one, at every depth, so the answer depends
+only on what the caller already sees above the name. Seeing a namespace does not mean seeing its children: the model
+grants `can_get_metadata` on a namespace upward from any one child (`model.fga`, `can_get_metadata from child`), and the
+listing shows each child only to a caller who holds it. Converting an absence alone would answer 404 for a ghost and 403
+for a hidden sibling, and so name every table and namespace the listing hides. A caller who sees nothing above the
+name is answered 403 either way.
 
-Every decision is the real model's, on a store of this test's own ([[LH-235]]): alice creates `db1` and two tables in
-it through the doors, which seed the tuples, and grants bob `reader` on one of them, which lights `can_get_metadata` on
-`db1` through its `child` edge and nothing on the other table. Carol holds nothing.
+Every decision is the real model's, on a store of this test's own ([[LH-235]]): alice creates `db1`, two tables and a
+namespace `private` in it through the doors, which seed the tuples, and grants bob `reader` on one of the tables, which
+lights `can_get_metadata` on `db1` through its `child` edge and nothing on the other table or on `private`. Carol holds
+nothing.
 """
 
 from __future__ import annotations
@@ -35,15 +38,16 @@ from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`lance_docs/ns_catalog/spec.yaml`).
-TABLE_NOT_FOUND, PERMISSION_DENIED = 4, 15
+NAMESPACE_NOT_FOUND, TABLE_NOT_FOUND, PERMISSION_DENIED = 1, 4, 15
 
 
 @pytest.fixture
 def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the catalog conftest's GovernedCatalog
-    """`db1` with `db1$shared`, which bob reads, and `db1$real`, which he does not; alice owns all three."""
+    """`db1` with `db1$shared`, which bob reads, and `db1$real` and `db1$private`, which he does not; alice owns them all."""
     alice = governed_catalog.bearer("alice")
     client = governed_catalog.client
-    assert client.post("/v1/namespace/db1/create", json={}, headers=alice).status_code == 200
+    for namespace in ("db1", "db1$private"):
+        assert client.post(f"/v1/namespace/{namespace}/create", json={}, headers=alice).status_code == 200
     rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
     for table in ("shared", "real"):
         created = client.post(f"/v1/table/db1${table}/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
@@ -57,20 +61,20 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the catalog confte
     ("caller", "door", "status", "code"),
     [
         pytest.param("bob", "/v1/table/db1$ghost/describe", 404, TABLE_NOT_FOUND, id="an-absent-table-under-a-readable-parent-is-not-found"),
-        pytest.param("bob", "/v1/table/db1$real/describe", 403, PERMISSION_DENIED, id="an-existing-forbidden-table-stays-forbidden"),
+        pytest.param("bob", "/v1/table/db1$real/describe", 404, TABLE_NOT_FOUND, id="a-table-the-caller-cannot-see-answers-as-an-absent-one"),
+        pytest.param(
+            "bob", "/v1/table/db1$private$ghost/describe", 404, TABLE_NOT_FOUND, id="a-name-under-a-hidden-namespace-answers-as-one-under-an-absent-one"
+        ),
         pytest.param("bob", "/v1/table/db1$ghost/drop", 403, PERMISSION_DENIED, id="a-destructive-door-keeps-its-403-for-an-absent-table"),
         pytest.param("carol", "/v1/table/db1$ghost/describe", 403, PERMISSION_DENIED, id="no-parent-rung-no-answer"),
     ],
 )
-def test_a_denied_door_answers_not_found_only_for_an_absent_table_a_reader_of_its_parent_asks_after(
+def test_a_refused_read_answers_not_found_alike_for_an_absent_and_a_hidden_name_to_a_caller_who_sees_above_it(
     estate: Any, caller: str, door: str, status: int, code: int
 ) -> None:
     answered = estate.client.post(door, json={}, headers=estate.bearer(caller))
 
     assert (answered.status_code, answered.json()["code"]) == (status, code), answered.text
-
-
-NAMESPACE_NOT_FOUND = 1
 
 
 @pytest.fixture
@@ -103,7 +107,9 @@ def cascaded(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) ->
         pytest.param("destroyed", "bob", "db1$sub$leaf", 404, NAMESPACE_NOT_FOUND, id="a-destroyed-child-is-not-found-to-a-reader-of-what-still-stands"),
         pytest.param("recoverable", "carol", "tree$kids", 403, PERMISSION_DENIED, id="a-caller-who-held-nothing-learns-nothing"),
         pytest.param("destroyed", "bob", "nosuch", 403, PERMISSION_DENIED, id="a-top-level-name-is-never-answered-from-its-warehouse"),
-        pytest.param("recreated", "alice", "tree$kids", 403, PERMISSION_DENIED, id="a-trashed-grant-says-nothing-under-a-name-recreated-since"),
+        pytest.param(
+            "recreated", "alice", "tree$kids", 404, NAMESPACE_NOT_FOUND, id="a-trashed-grant-answers-alike-whether-or-not-its-name-was-recreated-since"
+        ),
     ],
     indirect=["cascaded"],
 )

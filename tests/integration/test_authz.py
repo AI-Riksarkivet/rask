@@ -237,6 +237,7 @@ def test_blob_read_checks_data_reader_and_denies(client: TestClient, fake_ns: Ma
     _wire(client)
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
+    monkeypatch.setattr(fga_module, "batch_check", _fake_batch_check(captured, allow=False))
 
     resp = client.get(
         "/management/v1/table/db1$users/blobs",
@@ -245,9 +246,9 @@ def test_blob_read_checks_data_reader_and_denies(client: TestClient, fake_ns: Ma
     )
     assert resp.status_code == 403
     # The OBJECT check is the contract; asserting it as the WHOLE list made position incidental to
-    # meaning. A denied read now also asks whether the caller holds the parent's read rung, because an
-    # absent object under a readable parent answers 404 rather than 403 — that second check is a
-    # different question and must not be able to change what this one pins.
+    # meaning. A refused read also asks whether the caller sees above the name, because it answers 404
+    # rather than 403 to a caller who does ([[LH-236]]) — that second check is a different question and
+    # must not be able to change what this one pins.
     assert {"user": "dex~alice", "relation": "can_read_data", "obj": _table("db1$users")} in captured
     assert captured[0] == {"user": "dex~alice", "relation": "can_read_data", "obj": _table("db1$users")}
 
@@ -842,11 +843,12 @@ def test_a_trash_door_asks_the_rung_of_the_drop_it_answers(
     _wire(client)
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
+    monkeypatch.setattr(fga_module, "batch_check", _fake_batch_check(captured, allow=False))
 
     resp = getattr(client, method)(path, headers={"Authorization": "Bearer t"})
 
-    # The door's own rung is its first check; a read door then asks the parent's, to tell an absent child from a
-    # forbidden one.
+    # The door's own rung is its first check; a read door then asks whether the caller sees above the name, which
+    # decides between the 403 and the not-found an absent name gets.
     assert resp.status_code == 403, resp.text
     assert captured[0] == {"user": "dex~alice", "relation": relation, "obj": obj}
 

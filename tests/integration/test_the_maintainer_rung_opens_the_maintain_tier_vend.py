@@ -121,13 +121,22 @@ def _grant(
 
     granted_at_router = {_ROUTER_RUNG} if router_grants is None else router_grants
 
-    async def _check(_client: object, *, user: str, relation: str, obj: str, **_: object) -> bool:
+    def _allowed(relation: str) -> bool:
         if relation in granted_at_router:
             return True
         checked.append(relation)
         return relation in allow
 
+    async def _check(_client: object, *, user: str, relation: str, obj: str, **_: object) -> bool:
+        return _allowed(relation)
+
+    async def _batch_check(_client: object, *, user: str, relation: str, objects: list[str], **_: object) -> dict[str, bool]:
+        """The same model asked of several objects at once, recorded once per object: a refused read asks it of the
+        namespaces above the name."""
+        return {obj: _allowed(relation) for obj in objects}
+
     monkeypatch.setattr(door.fga, "check", _check)
+    monkeypatch.setattr(door.fga, "batch_check", _batch_check)
 
 
 def test_the_maintenance_identity_gets_the_maintain_tier_credential(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:

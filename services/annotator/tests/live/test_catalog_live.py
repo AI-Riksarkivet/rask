@@ -210,18 +210,16 @@ def test_catalog_errors_translate_to_domain_errors() -> None:
     generated client's raw ApiException → opaque 500.
 
     NotFoundError IN BOTH PROFILES, and the governed one is a RULING rather than a gap. Owner ruling
-    2026-09-11 (`catalog/api/fga_deps.py::_absent_to_a_reader_of_the_parent`): a READ door refusing an
-    object that is not there answers the spec's 404 — but ONLY to a caller who already holds the
-    parent's read rung, because someone who can read the parent can already list it, so "does this
-    child exist" is not information the 403 was protecting. This suite's identity holds
-    `reader` on the parent namespace (verified against the live store 2026-09-14), so 404 is the
-    correct governed answer here.
+    2026-09-11 (`catalog/api/fga_deps.py::_refused_read_as_absent`, [[LH-236]]): a READ door refusing a
+    name the caller cannot see answers the spec's 404 to a caller who sees above it, whether the name
+    holds an object or not. This suite's identity holds `reader` on the parent namespace (verified
+    against the live store 2026-09-14), so 404 is the correct governed answer here.
 
     THE NO-ORACLE PROPERTY IS NOT TESTED HERE, and must not be re-added here either: it needs two
     identities and an object that really exists, which this leg has neither of. It is pinned where it
     can be stated exactly — `services/catalog/tests/test_an_absent_object_is_not_found_rather_than_forbidden.py`
-    holds all three conditions on a real OpenFGA, including `an-existing-forbidden-table-stays-forbidden` (an object
-    that exists and is forbidden never converts) and `no-parent-rung-no-answer` (no probe from outside the hierarchy).
+    holds it on a real OpenFGA, including `a-table-the-caller-cannot-see-answers-as-an-absent-one` (a hidden object
+    answers as an absent one does) and `no-parent-rung-no-answer` (no probe from outside the hierarchy).
     """
     missing = CatalogTableReader(RestCatalogTransport(CATALOG_URL, token=CATALOG_TOKEN or None), [NAMESPACE, "no_such_table"])
     with pytest.raises(NotFoundError):

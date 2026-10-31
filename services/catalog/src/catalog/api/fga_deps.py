@@ -646,7 +646,7 @@ async def _authorize_transaction(client: OpenFgaClient, resolver: Resolver, segm
 
     Describing a transaction reads the table's metadata (``can_get_metadata``) and altering one would write the table
     (``can_write_data``), asked on the object the table's name resolves to, as every table door asks. A describe naming
-    an absent table answers the spec's not-found to a reader of its namespace, as every read door does.
+    a table the caller cannot see, absent or hidden, answers as every read door does (:func:`_refused_read_as_absent`).
 
     A recoverable drop's transaction is ``<table id>$<the trashed table's uuid>`` (ADR 0146): its describe is asked on
     that trashed table's own grants, which another table holding the name since does not share.
@@ -654,7 +654,7 @@ async def _authorize_transaction(client: OpenFgaClient, resolver: Resolver, segm
     Raises:
         InvalidInputError: The id names no table.
         PermissionDeniedError: The caller does not hold the door's rung on the table.
-        TableNotFoundError: A reader of the namespace described a transaction of a table that does not exist.
+        TableNotFoundError: A caller who sees above the table described a transaction of a table it cannot see.
     """
     table = transaction_table(segments)
     relation = "can_get_metadata" if suffix == "describe" else "can_write_data"
@@ -667,7 +667,7 @@ async def _authorize_transaction(client: OpenFgaClient, resolver: Resolver, segm
             client, resolver, user=token.subject, rung=tier_policy.Rung(relation=relation, on=tier_policy.Named(kind="table", segments=tuple(table)))
         )
     except PermissionDeniedError:
-        await _absent_to_a_reader_of_the_parent(client, resolver, token=token, fga_type="table", denied=relation, segments=table)
+        await _refused_read_as_absent(client, resolver, token=token, fga_type="table", denied=relation, segments=table)
         raise
 
 
@@ -1464,13 +1464,13 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     try:
         await _require_rung(client, resolver, user=token.subject, rung=rung)
     except PermissionDeniedError:
-        # A READ door refusing an object that is not there answers the spec's 404 instead, but only to
-        # a caller who already holds the parent's read rung. Owner ruling 2026-09-11.
-        await _absent_to_a_reader_of_the_parent(client, resolver, token=token, fga_type=fga_type, denied=relation, segments=segments)
+        # A READ door answers a name the caller cannot see as one that is not there: the spec's 404 to a caller who
+        # sees above it, the 403 to anyone else. Owner ruling 2026-09-11, [[LH-236]].
+        await _refused_read_as_absent(client, resolver, token=token, fga_type=fga_type, denied=relation, segments=segments)
         raise
 
 
-async def _absent_to_a_reader_of_the_parent(
+async def _refused_read_as_absent(
     client: OpenFgaClient,
     resolver: Resolver,
     token: Caller,
@@ -1478,7 +1478,8 @@ async def _absent_to_a_reader_of_the_parent(
     denied: str,
     segments: list[str],
 ) -> None:
-    """Raise the spec's NOT-FOUND when a denied READ names an object that does not exist.
+    """Raise the spec's NOT-FOUND for a refused READ, whether its name holds no object or one the caller cannot see, to a
+    caller who sees above the name.
 
     Returns — never raises — in every other case, so the caller's `raise` re-throws the 403 unchanged.
 
@@ -1498,74 +1499,74 @@ async def _absent_to_a_reader_of_the_parent(
       the destructive doors — `delete_warehouse`, `delete_project` and `_set_warehouse_status` collapse
       PermissionDenied into NotFound precisely so a delete cannot enumerate ids — and keying on the rung
       keeps every one of them out of this path by construction.
-    * THE CALLER MUST HOLD THE PARENT'S READ RUNG. Someone who can read the parent can already LIST
-      it, so "does this child exist" is not information the 403 was protecting. Without the parent
-      rung the answer is today's 403 — so this cannot be used to walk the id space from outside the
-      hierarchy.
-    * ONLY AN ABSENCE CONVERTS. An object that EXISTS and is forbidden still answers 403. Converting
-      that would tell an unauthorized caller which names are real — the oracle this estate refuses —
-      and it is the property worth more than the feature.
+    * THE CALLER MUST SEE ABOVE THE NAME: ``can_get_metadata`` on a namespace standing above it, at any depth, or on an
+      object a recoverable drop trashed at the name or an ancestor's (below). Without that the answer is today's 403, so
+      this cannot be used to walk the id space from outside the hierarchy.
+    * WHETHER THE NAME HOLDS AN OBJECT IS NEVER ASKED ([[LH-236]]). On a table and a namespace every read rung is the
+      caller's sight of the object (a table's ``can_read_data`` is ``reader``, as its ``can_get_metadata`` is, and a
+      namespace's read doors all ask ``can_get_metadata``), so a refused read names an object the caller cannot see,
+      and what it is told must not depend on whether that object exists. Seeing a namespace is not seeing its children:
+      the model grants ``can_get_metadata`` on a namespace upward from any one child, and a listing shows each child
+      only to a caller who holds it. An absence converted alone would answer 404 for a ghost and 403 for a hidden
+      sibling, and so name every object the listing hides.
 
-    A PARENT THAT IS GONE TOO IS READ AT THE NEAREST ANCESTOR THAT STANDS ([[LH-536]]). A cascade leaves a child whose
-    parent went with it; a reader of the nearest standing ancestor asking about it is told no more than asking about
-    that ancestor's absent child would tell them. A top-level name has no ancestor to read, and is never asked of its
-    warehouse: upward visibility (``can_get_metadata from child``) makes a reader of one namespace a reader of its
-    warehouse, so a warehouse's readers would learn which of every tenant's names exist from 403 against 404. What a
-    RECOVERABLE drop leaves is answered by its trash: the drop keeps its objects' grants for the undrop, so a caller
-    holding ``can_get_metadata`` on an object trashed at the name or an ancestor's, on the chain hanging off what
-    stands, already sees it through the trash doors and is answered the absence rather than a refusal that hides it. A
-    trash it cannot read leaves the 403.
+    EVERY ANCESTOR THAT STANDS IS ASKED, not only the nearest. A hidden namespace between the name and a namespace the
+    caller sees must not end the walk, or a name probed beneath it would answer 403 where one beneath an absent
+    namespace answers 404. A cascade leaves a child whose parent went with it ([[LH-536]]); its standing ancestors are
+    read the same way. A top-level name has no ancestor to read, and is never asked of its warehouse: upward visibility
+    (``can_get_metadata from child``) makes a reader of one namespace a reader of its warehouse, so a warehouse's readers
+    would learn which of every tenant's names exist from 403 against 404. What a RECOVERABLE drop leaves is answered by
+    its trash: the drop keeps its objects' grants for the undrop, so a caller holding ``can_get_metadata`` on an object
+    trashed at the name or an ancestor's, whatever stands there now, already sees it through the trash doors and is
+    answered the absence rather than a refusal that hides it (:func:`_trashed_at_or_above`). A trash it cannot read leaves
+    the 403.
 
-    Whether the name holds an object is the resolution ``authorize`` already read, so the answer is the one the door
-    would act on. The request never reaches the endpoint either way: this raises, and its caller re-raises. Nothing
-    is read, and no grant is implied by the 404.
+    The refusal is audited as the denial it is before this runs; only the answer is an absent name's. The request never
+    reaches the endpoint either way: this raises, and its caller re-raises. Nothing is read, and no grant is implied by
+    the 404.
     """
     if denied not in _READ_RELATIONS or fga_type not in _UUID_KEYED:
         return
-    if await resolver.object(fga_type, segments) is not None:
-        return
     try:
-        standing, ancestor = await _nearest_standing_ancestor(resolver, segments)
         # The trash is listed only when no standing ancestor admits the caller: it is one read of every record.
-        if not await _reads_any(client, user=token.subject, objects=[ancestor] if ancestor is not None else []) and not await _reads_any(
-            client, user=token.subject, objects=await _trashed_below(resolver, fga_type, segments, standing=standing)
+        if not await _reads_any(client, user=token.subject, objects=await _standing_ancestors(resolver, segments)) and not await _reads_any(
+            client, user=token.subject, objects=await _trashed_at_or_above(resolver, fga_type, segments)
         ):
             return
     except ServiceUnavailableError:
         return  # the authz layer is down; the 403 the caller already has is the fail-closed answer
     except (OSError, ValueError):
-        log.warning("absent_object_trash_unreadable", extra={"sub": token.subject, "object": fga.canonical_object_id(segments)}, exc_info=True)
+        log.warning("refused_read_trash_unreadable", extra={"sub": token.subject, "object": fga.canonical_object_id(segments)}, exc_info=True)
         return
     ident = fga.canonical_object_id(segments)
     absent = TableNotFoundError if fga_type == "table" else NamespaceNotFoundError
-    raise absent(f"{fga_type} {ident!r} does not exist")
+    raise absent(f"{fga_type} {ident!r} not found")
 
 
-async def _nearest_standing_ancestor(resolver: Resolver, segments: list[str]) -> tuple[int, str | None]:
-    """The depth and object of the nearest ancestor namespace of ``segments`` that stands, ``(0, None)`` where none does."""
-    for depth in range(len(segments) - 1, 0, -1):
-        if (ancestor := await resolver.object("namespace", segments[:depth])) is not None:
-            return depth, ancestor
-    return 0, None
+async def _standing_ancestors(resolver: Resolver, segments: list[str]) -> list[str]:
+    """The object of every ancestor namespace of ``segments`` that stands.
 
-
-async def _trashed_below(resolver: Resolver, fga_type: str, segments: list[str], *, standing: int) -> list[str]:
-    """The objects trashed at ``segments`` or an ancestor's name deeper than the ``standing`` one, on the chain that hangs
-    off what stands.
-
-    Each depth admits a record only where its namespace at the drop is the standing ancestor or a record admitted one
-    depth up: a grant kept on a trashed ``tree$kids`` says nothing about what a ``tree`` created since holds.
+    An ancestor no uuid identifies raises, as it does at every door that resolves it ([[LH-534]]).
     """
-    parents = {await resolver.namespace_uuid(segments[:standing])} if standing else None
+    standing: list[str] = []
+    for depth in range(1, len(segments)):
+        if (ancestor := await resolver.object("namespace", segments[:depth])) is not None:
+            standing.append(ancestor)
+    return standing
+
+
+async def _trashed_at_or_above(resolver: Resolver, fga_type: str, segments: list[str]) -> list[str]:
+    """The objects a recoverable drop trashed at ``segments`` or at an ancestor's name, whatever stands there now.
+
+    What stands is not asked: a walk anchored at a standing namespace the caller cannot see would admit a trashed grant
+    where none stands and refuse it under a namespace created there since, and so tell that namespace from an absent one
+    ([[LH-236]]). The trash doors list a name's records the same way.
+    """
     objects: list[str] = []
-    for depth in range(standing + 1, len(segments) + 1):
+    for depth in range(1, len(segments) + 1):
         kind = fga_type if depth == len(segments) else "namespace"
-        records = await resolver.trashed(kind, segments[:depth])
-        admitted = {
-            uuid for record in records if (uuid := trash.object_uuid(record)) is not None and (parents is None or record.get("namespace_uuid") in parents)
-        }
-        objects += [fga.object_of(kind, uuid) for uuid in sorted(admitted)]
-        parents = admitted
+        trashed = {uuid for record in await resolver.trashed(kind, segments[:depth]) if (uuid := trash.object_uuid(record)) is not None}
+        objects += [fga.object_of(kind, uuid) for uuid in sorted(trashed)]
     return objects
 
 
