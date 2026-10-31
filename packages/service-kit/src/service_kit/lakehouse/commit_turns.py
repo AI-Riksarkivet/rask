@@ -236,14 +236,16 @@ class TableTurns(BaseModel):
 
     def _take(self, ref: str | None, *, token: str, hold: timedelta, deadline: float, handed_to: str | None) -> str:
         for _ in range(_ATTEMPTS):
-            self.wait(ref, mine=token, until=deadline)
+            if time.monotonic() < deadline:
+                # A hand's deadline is now: it is handed the turn only when no other commit holds it, and waits for none.
+                self.wait(ref, mine=token, until=deadline)
             read, turns = self._read()
             live = [turn for turn in turns if turn.ref == ref and turn.expires_at > read.at]
             if any(turn.token == token for turn in live):
                 return token
             if live:
                 if time.monotonic() >= deadline:
-                    raise CommitTurnBusyError(f"another commit held the turn on table {self.table_uuid} past the wait")
+                    raise CommitTurnBusyError(f"another commit holds the turn on table {self.table_uuid}")
                 continue
             mine = Turn(token=token, ref=ref, taken_at=read.at, expires_at=read.at + hold, handed_to=handed_to)
             held = CommitTurns(uuid=self.table_uuid, turns=[*turns, mine]).model_dump(mode="json")
