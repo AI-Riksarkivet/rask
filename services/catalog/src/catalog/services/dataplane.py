@@ -2541,7 +2541,7 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, re
     2026-08-31: after deleting two of three rows on `work`, `/query` returned 3 rows for `branch=work`
     AND 3 for a branch that had never been created — main's answer, twice, with a 200.
 
-    A 501 rather than a wrong 200, and that IS the fix at this door rather than a deferral of it. The
+    An Unsupported answer (406) rather than a wrong 200, and that IS the fix at this door rather than a deferral of it. The
     defect is not "branch queries are missing"; it is that the parameter is accepted and disregarded, so
     a caller staging work on a branch reads main and is told nothing. Answering "this backend does not
     do that" is correct, complete and spec-shaped — error code 0, `Unsupported` — where answering with
@@ -3590,7 +3590,7 @@ def _branch_reference(req: CreateTableBranchRequest) -> int | tuple[str | None, 
 def list_branches(table: table_claims.DoorTable, so: StorageOptions, req: ListTableBranchesRequest) -> ListTableBranchesResponse:
     """List the table's branches as ``{name: BranchContents}``, read from pylance ``ds.branches`` and paged by name.
 
-    The native ``DirectoryNamespace`` 501s branch ops, but ``lance.LanceDataset`` implements them, so we
+    The native ``DirectoryNamespace`` answers Unsupported to branch ops, but ``lance.LanceDataset`` implements them, so we
     back them in-process here exactly like tags. A ``Branch`` is a TypedDict (plain dict at runtime).
     """
     listed = table.open_unchecked(so).branches.list()

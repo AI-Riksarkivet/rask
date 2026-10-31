@@ -45,7 +45,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 # of which carries the numeric `code` a Lance-Namespace client parses.
 #
 # The 503 stays on the fleet taxonomy, and that is not drift left standing. `ns_errors.problem_detail`
-# REDACTS every 5xx detail except 501, so a lance `ServiceUnavailableError` here would answer
+# REDACTS every 5xx detail (`_UNREDACTED_5XX` is empty), so a lance `ServiceUnavailableError` here would answer
 # "Internal Server Error" and delete "Authentication is enabled but unavailable" — the one string that
 # tells an operator WHICH knob is unwired, and the thing
 # `services/notifications/tests/test_inbox_door_contract.py` asserts. That is a capability statement,

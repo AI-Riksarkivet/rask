@@ -199,7 +199,7 @@ _BRANCH_SEGMENT = "/tree/"
 def containment_of(location: str, root: str) -> str:
     """How ``location`` sits against the protected ``root``: ``is`` | ``branch`` | ``under`` | ``ancestor``.
 
-    IT DECIDES GC BEHAVIOUR, and one of the four is PERMITTED. `maintenance.services.optimize` reclaims
+    IT DECIDES GC BEHAVIOUR, and one of the four is PERMITTED. `maintenance.services.expiry` (through :func:`rewrite_refusal`) reclaims
     a location whose relation to the protected root is ``branch`` and refuses the other three, because a
     branch is Lance's own business inside one root while an external clone is not — `lance_docs/lance/format/table/layout.md:176`
     disclaims exactly that case ("Source dataset remains immutable and can be garbage collected

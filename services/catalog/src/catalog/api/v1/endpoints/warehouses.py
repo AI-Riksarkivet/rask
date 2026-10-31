@@ -120,7 +120,7 @@ _ID_RE = CONTROL_ID_RE
 def _require_enabled(settings: Settings) -> None:
     # A DOMAIN error, not a raw HTTPException: this module was the only endpoint module bypassing the
     # RFC 9457 problem+json handler, so its errors came back shaped differently from every other route in
-    # the API (audit 2026-07-14). UnsupportedOperationError maps to the spec-correct 501.
+    # the API (audit 2026-07-14). UnsupportedOperationError maps to the spec's 406.
     if not settings.warehouses_enabled:
         raise UnsupportedOperationError("warehouses are disabled (set LANCE_WAREHOUSES_ENABLED)")
 

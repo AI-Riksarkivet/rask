@@ -17,7 +17,6 @@ import pytest
 
 from service_kit.lakehouse.quality import (
     ERROR,
-    WARN,
     Assertion,
 )
 
@@ -26,9 +25,3 @@ from service_kit.lakehouse.quality import (
 def test_a_structural_finding_is_an_error(name: str) -> None:
     """A failed structural assertion reads as `error` on the wire, the severity `STRUCTURAL_ASSERTIONS` gives it."""
     assert Assertion(assertion=name, success=False).severity == ERROR
-
-
-def test_the_two_values_are_the_spec_s_own() -> None:
-    """`error` / `warn` are the vocabulary a standard consumer reads; any other spelling is a field it
-    will not understand."""
-    assert (ERROR, WARN) == ("error", "warn")

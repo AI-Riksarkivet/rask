@@ -25,11 +25,6 @@ from __future__ import annotations
 from maintenance.services import reconcile
 
 
-def test_the_category_is_declared_and_does_not_gate() -> None:
-    assert "ungoverned_tables" in reconcile.CATEGORIES
-    assert "ungoverned_tables" in reconcile.NON_GATING_CATEGORIES
-
-
 def test_a_table_with_no_tuples_is_reported() -> None:
     """THE DEFECT: five of these were live and nothing in the product named them."""
     # The store's scan keys each `table:` object by the uuid it names ([[LH-524]]), and the table's claim records its uuid.

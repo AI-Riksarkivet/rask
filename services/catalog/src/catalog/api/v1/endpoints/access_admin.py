@@ -7,7 +7,7 @@ therefore observing (or mutating) it is a PLATFORM privilege, ``can_observe_even
 object (``settings.fga_root_object``), decided explicitly per handler because ``/management/v1/access`` matches no
 resource prefix in ``fga_deps.authorize`` (the router gate only sets the 401/503 floor).
 
-Fail-closed and model-true throughout: FGA off → 501 (nothing to administer), an unwired client → 503,
+Fail-closed and model-true throughout: FGA off → 406 Unsupported (nothing to administer), an unwired client → 503,
 and every relation/type named by a caller is validated against the COMPILED model first, so a phantom
 relation or a non-assignable (derived ``can_*``) tuple write is a clean 400 here — never an OpenFGA 400
 that fails closed to a 503, and never a write the idempotent-duplicate handling could swallow as success.
@@ -229,7 +229,7 @@ async def estate_gate(client: FgaClientDep, settings: SettingsDep, token: Curren
     It returns None now rather than the client. Handlers that need the client object take `FgaClientDep`
     instead, so the gate does one job and the injection does the other.
 
-    FGA off → 501 (there is no store to administer, unlike the events feed which still serves its buffer);
+    FGA off → 406 Unsupported (there is no store to administer, unlike the events feed which still serves its buffer);
     enabled-but-unwired → 503 fail-closed; then ``can_observe_events`` on the fixed root object — a
     platform privilege, NOT per-project, because the tuple store is the whole estate's authorization state
     (authz scope == data scope, the #12 events fix). The gate itself audits the allow/deny.

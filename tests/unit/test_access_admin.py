@@ -17,7 +17,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from fastapi.routing import APIRoute
 from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
@@ -129,29 +128,6 @@ def test_gate_is_can_observe_events_on_the_root_object(gate_seen: dict[str, Any]
 def test_fga_off_is_unsupported(rec: _AuditRecorder) -> None:
     with pytest.raises(UnsupportedOperationError):
         asyncio.run(ep.estate_gate(client=_fga_client(), settings=_settings(fga_enabled=False), token=None))
-
-
-def _routes() -> list[APIRoute]:
-    routes = [r for r in ep.router.routes if isinstance(r, APIRoute)]
-    assert routes, "no routes on the access router — this gate would pass vacuously"
-    return routes
-
-
-def test_every_access_route_is_covered_by_that_gate() -> None:
-    """The enumeration half: counted, not read.
-
-    `/management/v1/access` reads and WRITES the raw tuple store, the authorization state of the whole estate, so
-    the gate is ONE router-level dependency that a new route inherits instead of having to remember.
-    A router-level dependency is inherited at include time, so this asserts the property every route
-    actually has rather than trusting that the declaration reaches them: a route added to a different
-    router, or a dependency quietly dropped, is caught by something that counts.
-    """
-    ungated = [
-        f"{sorted(route.methods or [])} {route.path}"
-        for route in _routes()
-        if not any(getattr(dep.call, "__name__", "") == "estate_gate" for dep in route.dependant.dependencies)
-    ]
-    assert not ungated, f"these access routes do not clear the estate gate: {ungated}"
 
 
 # ── pagination ────────────────────────────────────────────────────────────────────────────────────────

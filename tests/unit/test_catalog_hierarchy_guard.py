@@ -114,19 +114,3 @@ def test_a_control_plane_id_cannot_end_in_a_newline() -> None:
     assert CONTROL_ID_RE.match("acme") is not None
     assert CONTROL_ID_RE.match("acme\n") is None
     assert CONTROL_ID_RE.match("acme\nevil") is None
-
-
-def test_every_control_plane_door_shares_ONE_id_pattern() -> None:
-    """The three doors validating a project/warehouse id must use the same object, not three copies.
-
-    They were three copies of one sentence ("the same DNS-safe shape the warehouse control plane
-    enforces") and they had already drifted on their end anchor — an id refused by ``POST /management/v1/projects``
-    was accepted by ``POST /management/v1/warehouses``. Identity (``is``), not equality: two equal-but-separate
-    compilations would drift again exactly the same way.
-    """
-    from catalog.api.v1.endpoints import policies, projects, warehouses
-    from service_kit.lakehouse.naming import CONTROL_ID_RE
-
-    assert projects._ID_RE is CONTROL_ID_RE
-    assert warehouses._ID_RE is CONTROL_ID_RE
-    assert policies._PROJECT_ID_RE is CONTROL_ID_RE

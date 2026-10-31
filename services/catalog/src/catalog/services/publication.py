@@ -18,11 +18,12 @@ Lance's change-data-feed diffs two versions, so a pre-commit gate has nothing to
 ready?" durably, so a consumer that was down for a week can simply ask. An event is a wake-up to
 avoid polling, and one missed while a consumer was offline costs nothing.
 
-**This lives in the CATALOG, not in any writer.** The ingest plane, a Ray job, a backfill script and
+**This lives in the CATALOG, not in any writer.** A user's pipeline, a Ray job, a backfill script and
 a person with catalog credentials must all publish the same way, or each reimplements the contract
-and they drift. It is also the only correct home mechanically: a tag file carries no format-level
-CAS, while the namespace spec's `UpdateTableTag` does return `ConcurrentModification`, so the
-catalog is the one door where a concurrent advance can be detected.
+and they drift. It is also the one home for the race: a tag file carries no format-level CAS, and
+`UpdateTableTag` declares no conflict (`lance_docs/ns_catalog/spec.yaml` lists no 409 for it, though
+the error prose's table names code 14), so `set_tag` converges a first publication's create race on
+Lance's create refusal, and a later move of the tag is last-writer-wins.
 
 Deliberately shaped after `services/models.py::promote`, which has run this exact pattern for the
 model registry since it was written — gate first, fail-closed, then create-or-update the tag. Models

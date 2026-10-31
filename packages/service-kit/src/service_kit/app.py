@@ -39,7 +39,7 @@ def setup_logging() -> None:
 
     This used to attach the handler to two logger names, ``core`` and ``backends``, and its docstring
     said why: it "mirrors core.main". That monolith is gone. Every module in every service now uses
-    ``logging.getLogger(__name__)`` — ``lineage.services.consumer``, ``maintenance.services.optimize``,
+    ``logging.getLogger(__name__)`` — ``lineage.services.consumer``, ``maintenance.services.sweep``,
     ``catalog.api.v1.endpoints.tables`` — and NONE of those names sit under ``core.*`` or
     ``backends.*``. So the handler decorated two trees nobody logs to, every record propagated to a
     root logger with no handlers, and was discarded. Only uvicorn's own logs (which carry their own
@@ -236,11 +236,9 @@ def make_service_app(
     # from this service being broken, and `notifications/api/visibility.py` answered the same class of
     # failure two different ways inside ONE function.
     #
-    # `ingest/__init__.py` already did exactly this on top of the factory, with the reason in a
-    # comment ("A DENIAL MUST BE A 403, NOT A 500"). Doing it HERE instead of per app also settles the
-    # divergence docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" X11 files — ingest's 422 body differing from its three
-    # fleet
-    # siblings — by making all of them one shape rather than by removing what made ingest right.
+    # Installed HERE rather than per app, so every service answers a denial as a 403 rather than a 500 and every
+    # error body has one shape: the divergence docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
+    # "The Python estate audit" X11 files, one service's 422 body differing from its siblings'.
     _install_ns_problem_handlers(app)
     register_middleware(app, settings)
 

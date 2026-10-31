@@ -37,8 +37,8 @@ from service_kit.problem import problem_body
 #: failure into a request-time one, on the exact request that is already going wrong.
 #:
 #: A hard-coded wire constant is only honest if something proves it still matches, so
-#: `test_body_limit_code_matches_the_lance_namespace_enum` pins it against the real enum in an
-#: environment that has it.
+#: `test_problem_is_lance_free.py::test_the_body_limit_code_still_matches_the_lance_namespace_enum` pins it
+#: against the real enum in an environment that has it.
 _INVALID_INPUT = 13
 
 

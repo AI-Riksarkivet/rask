@@ -9,7 +9,7 @@ description: How a feature gets a person told — the targeted inbox behind the 
 inbox behind the bell — one Dapr `InboxActor` per subject holding claim-check pointers with durable
 read state — precisely so the badge counts *your* work rather than the estate's. That makes coverage a
 **targeting** problem, not a transport one: the ingresses already carry everything the estate does, and
-the plane's whole job is to discard all of it except rows that name a subject under one of four reasons.
+the plane's whole job is to discard all of it except rows that name a subject under one of six reasons.
 
 **The corollary, and the thing to internalise: a state change that names nobody is not
 under-delivered, it is UNDELIVERABLE.** No amount of subscribing fixes it. Coverage is decided at the
@@ -64,7 +64,7 @@ is the job's own copy, for the events it emits itself. Put it in only one and yo
 self-emitted lane or the post-mortem one.
 
 `AUTHOR` needs no registry and no opt-in — you may always be told about your own run
-(`fanout.py:87`). `WATCH` is an explicit `project#member`-gated opt-in: **membership gates watching and
+(`api/fanout.py:102`, in `audience_for`). `WATCH` is an explicit `project#member`-gated opt-in: **membership gates watching and
 never implies it**, so no audience widens by default. **A watch covers what happens after it began.** The
 `WatchIndexActor` records when each watch began, and the fan-out asks who was watching at the run's
 `occurred_at`, never at delivery. Every run arrives twice, on the bus and again on the reconciler's tick, so an
@@ -78,11 +78,11 @@ the one event they most need. **Being named IS the targeting.**
 
 ## Lane 1 — lineage (`lineage.events.v1`)
 
-Four things must ALL hold. `notifiable()` (`notifications/api/lineage_events.py:154-203`) returns
+Four things must ALL hold. `notifiable()` (`notifications/api/lineage_events.py:232`) returns
 `None` — "ack it, tell nobody" — on any miss, and **that ack is a SUCCESS**, so nothing anywhere
 reports the loss. This is the estate's most expensive silent failure mode.
 
-1. **Terminal state** — `COMPLETE` / `FAIL` / `ABORT` (`TERMINAL_STATES`, `lineage_events.py:32`).
+1. **Terminal state** — `COMPLETE` / `FAIL` / `ABORT` (`TERMINAL_STATES`, `lineage_events.py:35`).
    `START`/`RUNNING` notify nobody by product decision. `RECONCILED` is excluded on purpose: it is
    lineage's REPAIR marker for a run whose real terminal event was lost, not an outcome anyone chose.
 2. **A VERIFIED `rask_author.sub`** — see the trap below. This is the one that keeps biting.
@@ -155,8 +155,9 @@ act ends or moves the object reads them first and passes them.
 `extra.subject` is the entire targeting, and it is the OpenFGA user the change names (`fga.user_object`: `user:` and the
 principal key percent-encoded, or a userset). `named_subjects` decodes a `user:` id back to the principal key
 (`fga.subject_of`), so a key carrying an encoded character addresses the inbox its owner's token reaches, and keeps only
-a person (`is_person_subject`): a missing subject, a bare `user:`, the `*` wildcard and a service account's principal
-address nobody, and the event is then filed IGNORED with a `SUCCESS` ack. A raw `f"user:{key}"` in `extra.subject` is the
+a person (`is_person_subject`): a userset is expanded to its person members through `list_users` (`userset_expander`),
+and a missing subject, a bare `user:`, the `*` wildcard, a userset with authorization off or unwired, and a service
+account's principal address nobody, and the event is then filed IGNORED with a `SUCCESS` ack. A raw `f"user:{key}"` in `extra.subject` is the
 defect, though the `actor` keeps that form: it addresses another inbox whenever the key carries a character the encoding
 escapes.
 
@@ -262,10 +263,10 @@ so it must read as a reason a person would accept; and `notification-center.stor
    that verified the caller: a `ServicePrincipal` (a projected service-account token, [[LH-220]]) is a
    service, and an IdP token is a person whatever claims it carries.
 2. **A service token SUBSTITUTES the author.** If your emit runs behind a service bearer,
-   `enforce_author` (`lineage/api/fga_deps.py:96-103`) **overwrites** the facet with that service's
+   `enforce_author` (`lineage/api/fga_deps.py:295`) **overwrites** the facet with that service's
    sub — "never trust the request body" is doing its job, and your human is gone. Carrying the human's
    sub through your own call graph is the only fix.
-3. **No `rask_lance.project` disables WATCH silently.** `fanout.py:88` skips the watcher loop entirely when
+3. **No `rask_lance.project` disables WATCH silently.** `api/fanout.py:108` skips the watcher loop entirely when
    `project` is `None`. The catalog was the estate-wide instance of this — it stamped
    `lance = {operation, version}` and no project, so no catalog write reached a watcher anywhere.
    **Closed:** `emit_write_event` now resolves the tenant centrally via `emitter.project_for(segments[0])`
@@ -277,8 +278,9 @@ so it must read as a reason a person would accept; and `notification-center.stor
    The residue: `project_for` is best-effort and returns `None` on any failure, so a write whose top
    segment is not registry-bound still reaches zero watchers, silently and with a SUCCESS ack.
 4. **A non-personal principal is not an address.** `user:*` (managed access) strips to a truthy `*`
-   and used to write into an inbox actor literally named `*`; usersets (`team:acme#member`) still do.
-   An address must identify a person.
+   and used to write into an inbox actor literally named `*`. A userset (`team:acme#member`) on the control
+   lane is expanded to the persons it holds through OpenFGA's `list_users` (`api/control_events.py`
+   `userset_expander`), and names nobody with authorization off or unwired. An address must identify a person.
 5. **An unsigned event, or one from a publisher lineage does not list, is recorded by nobody, and it rings the bell
    unless notifications' door enforces.**
    Lineage verifies every bus and outbox event against the keys its signer publishes and refuses one with no
@@ -315,7 +317,7 @@ directly assignable.
 
 Both audience seams are **callables, not imports**, precisely so this needs no sidecar:
 `InboxOpener = Callable[[str], TypedActorProxy]` and
-`WatcherLookup = Callable[[str], Awaitable[Sequence[str]]]` (`fanout.py:37-69`).
+`WatcherLookup = Callable[[str, datetime], Awaitable[Sequence[str]]]` (`api/fanout.py:41,66`).
 `Visibility(client=None, enabled=False)` is the FGA-off value. Drive the whole ingress through
 `ingest_run_event` (`api/ingest.py`) — the identical function both lanes run, which is what makes "the
 same event arriving twice lands one pointer" a property of the projection rather than a coincidence.
@@ -332,7 +334,8 @@ Rules with reasons, so they are not "fixed" back into defects:
 - **Output-less runs** — a pointer names the object it is about, and there is no honest value for that
   field. Refused under FGA on AND off; one rule everywhere.
 - **Unverified authors** — see trap 1. Attribution and targeting are different questions.
-- **Wildcards and usersets** — a statement about everyone addresses no one.
+- **Wildcards** — a statement about everyone addresses no one. A userset is not a wildcard: it is expanded to its
+  person members, or addresses no one when authorization cannot expand it.
 - **Actions naming no party** — delivering every catalog mutation recreates the estate-wide feed this
   plane exists to replace.
 - **Synchronous HTTP failures** — the caller already has the 4xx; an inbox row is a second copy.

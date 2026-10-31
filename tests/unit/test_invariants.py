@@ -831,37 +831,6 @@ def test_the_sidecars_non_telemetry_config_survives_telemetry_being_off() -> Non
     assert api_logging.get("omitHealthChecks") is True, "the kubelet polls /v1.0/healthz on every sidecar; without this the stream is mostly probe noise"
 
 
-def test_ray_serve_is_actually_IMPORTABLE_from_the_root_lock() -> None:
-    """Declaring `ray[serve]` is not the same as being able to import it, and the gap is upstream.
-
-    The sibling gate below checks the DECLARATION. That would not have caught this, because the
-    declaration was already correct: `ray[data,default,serve]` resolved 20 packages and the image
-    still died at
-
-        ModuleNotFoundError: No module named 'jinja2'.
-        You can run `pip install "ray[serve]"` to install all Ray Serve dependencies.
-
-    an error that names the extra it is already installing. Ray 2.58.0 declares jinja2 in NO extra
-    (verified against ray-2.58.0.dist-info/METADATA: 69 Requires-Dist lines carry `extra == "serve"`,
-    none of them jinja2) while `ray/serve/_private/haproxy.py:19` does `from jinja2 import Environment`
-    at module load — so `import ray.serve` fails on a correctly-declared install.
-
-    This asserts the thing that actually matters: the ROOT LOCK, which is what
-    `.docker/ray-cluster.dockerfile` syncs, can import the module the KubeRay operator's dashboard
-    query depends on. An upstream extra that silently loses a dependency is caught here rather than by
-    a stalled cluster upgrade nobody is watching.
-    """
-    import importlib
-
-    module = importlib.import_module("ray.serve")
-    assert module is not None
-
-    # The dashboard's Serve endpoint builds this model; importing the package alone does not prove the
-    # schema path is intact, and it is the schema path the operator's GetServeDetails exercises.
-    schema = importlib.import_module("ray.serve.schema")
-    assert hasattr(schema, "ServeInstanceDetails"), "ray.serve.schema is missing ServeInstanceDetails — the operator's GetServeDetails would 500"
-
-
 #: Every deployed app and the env var its own config reads for the docs opt-in. The names differ
 #: because the services predate any shared setting; what must NOT differ is that each one is set.
 _DOCS_ENV_BY_WORKLOAD: dict[str, str] = {

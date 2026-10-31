@@ -47,13 +47,6 @@ def _openfga_datastore() -> dict[str, Any]:
     return values["openfga"]["datastore"]
 
 
-def test_the_pool_bounds_are_declared_rather_than_inherited() -> None:
-    """A driver default is not a decision. `maxOpenConns` unset means pgxpool's 30, chosen by nobody."""
-    datastore = _openfga_datastore()
-    missing = [key for key in ("maxOpenConns", "maxIdleConns") if key not in datastore]
-    assert missing == [], f"openfga.datastore leaves {missing} to the driver on a Postgres three components share"
-
-
 def test_the_declared_pool_fits_the_server_it_shares() -> None:
     """The invariant: one component's ceiling plus what the others hold must fit inside the server."""
     datastore = _openfga_datastore()

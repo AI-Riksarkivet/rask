@@ -9,8 +9,10 @@ was refused the lesser `tags/delete`, and `tags/delete` letting a plain writer r
 
 WHY THE SUFFIXES COME OFF THE APP RATHER THAN A LIST. A test naming the doors it knows about cannot
 fail for the door somebody adds next — which is the only failure that matters here, since every hole
-so far was a NEW verb rather than a changed one. So the routes are read from the mounted application:
-a `/maintenance/<verb>` added without a mapping fails here at the moment it is added.
+so far was a NEW verb rather than a changed one. So the routes are read off the composed application
+through `router_walk.mounted()`, which sees through the included routers a walk of `router.routes` finds
+nothing in: a `/maintenance/<verb>` added without a mapping fails here at the moment it is added, and a
+walk that finds no verb fails collection (`empty_parameter_set_mark` in the root `pyproject.toml`).
 
 `/maintenance/` specifically, rather than every table suffix, because this sub-path is where the
 catalog's non-spec composite verbs live. They share one property that makes the rule stateable: each
@@ -21,6 +23,7 @@ for all of them and a cheaper answer is always wrong.
 from __future__ import annotations
 
 import pytest
+import router_walk
 
 from catalog.api.fga_deps import _action_relation
 
@@ -30,19 +33,9 @@ OWNER_RELATION = "can_drop"
 
 def _maintenance_suffixes() -> list[str]:
     """Every `/v1/table/{id}/maintenance/<verb>` POST the catalog mounts, as `_action_relation` sees it."""
-    from catalog.api.v1.endpoints import maintenance
-
-    suffixes = []
-    for route in maintenance.router.routes:
-        path = getattr(route, "path", "")
-        methods = getattr(route, "methods", set())
-        marker = "/{id}/"
-        if "POST" not in methods or marker not in path:
-            continue
-        suffix = path.split(marker, 1)[1]
-        if suffix.startswith("maintenance/"):
-            suffixes.append(suffix)
-    return sorted(set(suffixes))
+    marker = "/{id}/"
+    suffixes = {path.split(marker, 1)[1] for path, route in router_walk.mounted() if "POST" in (route.methods or ()) and marker in path}
+    return sorted(suffix for suffix in suffixes if suffix.startswith("maintenance/"))
 
 
 @pytest.mark.parametrize("suffix", _maintenance_suffixes())

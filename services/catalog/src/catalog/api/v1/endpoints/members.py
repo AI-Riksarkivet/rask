@@ -77,7 +77,7 @@ def _client_or_conflict(client: OpenFgaClient | None, settings: Settings) -> Ope
     write, and pretending otherwise would report a grant that never happened.
 
     Its own message rather than ``fga_deps.require_fga``'s pair: this door answers 503 for BOTH legs
-    (off and unwired) on purpose — see the note below — where the access surface answers 501 for off.
+    (off and unwired) on purpose — see the note below — where the access surface answers 406 Unsupported for off.
     """
     if not settings.fga_enabled or client is None:
         # 503, not the 409 this used to be: membership IS tuples, so authz-off is the service being

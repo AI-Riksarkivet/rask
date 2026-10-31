@@ -365,7 +365,7 @@ def is_lance_dataset_root(uri: str, storage_options: StorageOptions) -> bool:
     """Does a Lance DATASET live at ``uri``, as the object store sees it?
 
     The estate's one definition of the marker, shared rather than re-spelled: a directory IS a
-    dataset iff it has a ``_versions/`` child (``maintenance.services.optimize.discover_datasets``
+    dataset iff it has a ``_versions/`` child (``maintenance.services.discovery.discover_datasets``
     walks on exactly this, and ``purge`` / ``reconcile`` probe the same path). Cheap — one
     ``get_file_info`` per call, no listing.
 

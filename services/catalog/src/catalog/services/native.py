@@ -2,7 +2,7 @@
 
 Thin pass-through used by endpoints for every operation the native backend
 implements. Absent methods and backend stubs are translated to
-``UnsupportedOperationError`` (HTTP 501).
+``UnsupportedOperationError`` (HTTP 406, code 0).
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from service_kit.lakehouse.ns_errors import as_unsupported_if_stub
 # ``describe_table_version`` on the native ``DirectoryNamespace`` is typed ``request: dict`` and forwards to
 # Rust WITHOUT calling ``request.model_dump()`` — unlike its siblings, which take the pydantic model and dump
 # it internally. Passing the model raises ``TypeError: ... is not an instance of 'Mapping'``, which a broad
-# stub hint would launder into a fake 501, so ``call`` dumps pydantic args to a dict for the methods named
+# stub hint would launder into a fake Unsupported, so ``call`` dumps pydantic args to a dict for the methods named
 # here. (Confirmed against lance_namespace.)
 _DICT_REQUEST_METHODS = frozenset({"describe_table_version", "create_table_version"})
 
@@ -35,7 +35,7 @@ tracer = trace.get_tracer(__name__)
 
 
 def call(ns: LanceNamespace, method_name: str, *args: object) -> Any:
-    """Invoke ``method_name`` on the backend, mapping absent/stub methods to 501.
+    """Invoke ``method_name`` on the backend, mapping absent/stub methods to Unsupported (406).
 
     Returns the backend's response model verbatim (typed ``Any`` so endpoints can
     annotate the concrete response model for OpenAPI + serialization).

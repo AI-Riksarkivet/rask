@@ -636,3 +636,15 @@ def test_adopted_namespace_is_never_compensated_away(client: TestClient, tmp_pat
     # NO drop was issued, and the pre-existing namespace survived.
     assert "drop:migrated" not in fake.calls, "an adopted namespace was compensated away — migrated data is at risk"
     assert "migrated" in fake.existing
+
+
+def test_a_namespace_already_at_the_root_is_refused_unless_adoption_is_asked(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Silent adoption is the hazard the flag exists to keep opt-in: a create naming a namespace already at the
+    warehouse's root, without `adopt_existing`, answers NamespaceAlreadyExists and binds nothing, so a typo'd create
+    cannot inherit a stranger's data."""
+    _wh_with_fake_backend(client, tmp_path, monkeypatch, "wh-plain", existing={"theirs"})
+
+    refused = client.post("/management/v1/warehouses/wh-plain/namespaces", json={"namespace": "theirs"}, headers=_BEARER)
+
+    assert (refused.status_code, refused.json()["code"]) == (409, 2), refused.text
+    assert wh_svc.binding_for_namespace(f"file://{tmp_path}", StorageOptions(), "theirs") is None

@@ -188,8 +188,10 @@ provisioned by its operator and attested by `signing.provisioned`).
   not a switch: every first-party pod runs as its own SA from `templates/security-sa.yaml`, tokenless
   on the SA object; a first-party pod mounts a token only where a binding gives its SA work: the pods
   whose templates carry their own RBAC (§8).
-- **`values.schema.json`** — validates the MERGED values at install and upgrade, so a mistyped key fails
-  before any pod starts. rask's is generated from `values.yaml`'s types and `# --` comments by helm-values-schema-json
+- **`values.schema.json`** — validates the MERGED values at install and upgrade, so a value of the wrong type fails
+  before any pod starts. A misspelled or missing key does not: the generated schema carries no `required` and no
+  `additionalProperties: false` (measured 2026-10-31 on the dev overlay: `--set age.enabled=notabool` is refused, while
+  `--set catalogg.replicas=1` renders byte-identical; XC-086 #289). rask's is generated from `values.yaml`'s types and `# --` comments by helm-values-schema-json
   (`make chart-docs`, beside the README; `make chart-docs-check` fails on a stale one). It caught a live `--set-string`
   float on its first deploy (2026-10-12: `recycleAtMemoryFraction: "0.70"`, re-imposed every `make k3s-up` by `-f
   <live values>`); `--set` keeps a float a string, so set one with `--set-json`. It costs ~49 KB of the release.

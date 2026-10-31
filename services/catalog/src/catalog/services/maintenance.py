@@ -115,7 +115,7 @@ def require_reclaimable(ds: ManifestCarrier, protected: BaseRefs | None = None) 
     """#121 + #114 for the GC door: refuse a dataset whose versions this button must not reclaim.
 
     **THE GATE IS THE SWEEP'S, per verb** — :func:`~service_kit.lakehouse.features.describe_gc_unsupported_flags`,
-    which is what ``maintenance.services.optimize`` asks before its own ``cleanup_old_versions``.
+    which is what ``maintenance.services.expiry`` asks before its own ``cleanup_old_versions``.
     Version reclamation and index maintenance are ROOT-SCOPED, so ``base_paths`` (16) does not
     endanger them: measured on pylance 9.0.0 across six cleanup shapes and ten repeat cycles, one
     ``cleanup_old_versions`` on a clone with dead fragments on both sides removed the 2 clone-owned

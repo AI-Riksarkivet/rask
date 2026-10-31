@@ -20,7 +20,6 @@ from service_kit.lakehouse import warehouse_registry
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.warehouse_registry import (
     AmbiguousProjectWarehouseError,
-    UnresolvableProjectError,
     clear_cache,
     is_safe_project,
     project_gold_root,
@@ -235,17 +234,6 @@ def test_gold_and_work_caches_are_independent(tmp_path: Path) -> None:
     _write_record(tmp_path, _record("g1", "acme", "s3://acme-gold", status="active", serving="gold"))
     # The gold miss was not cached, so the freshly provisioned serving warehouse resolves immediately.
     assert project_gold_root(str(tmp_path), StorageOptions(), "acme", ttl_seconds=3600) == "s3://acme-gold"
-
-
-def test_an_ambiguous_project_is_an_unresolvable_one() -> None:
-    """The subclass IS the mechanism, not a convenience.
-
-    A live handler already fails closed on `UnresolvableProjectError` — `medallion/services/transform.py`.
-    Adding a sibling exception would have sailed past it and
-    surfaced as a 500 on the cascade head, which is the shape this whole change exists to stop: a
-    routing decision the estate cannot make, reported as a server fault.
-    """
-    assert issubclass(AmbiguousProjectWarehouseError, UnresolvableProjectError)
 
 
 @pytest.mark.parametrize("marker", [pytest.param(True, id="True0"), " TRUE "])

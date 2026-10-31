@@ -1,8 +1,8 @@
 """Table branch endpoints — backed in-process via the pylance data plane.
 
-The native ``DirectoryNamespace`` 501s branch ops, but ``lance.LanceDataset`` implements Git-like branches
-(``ds.branches`` / ``ds.create_branch``), so we back them in-process here exactly like tags — turning the
-former spec-correct 501 into a real, working operation.
+The native ``DirectoryNamespace`` answers Unsupported to branch ops, but ``lance.LanceDataset`` implements Git-like
+branches (``ds.branches`` / ``ds.create_branch``), so we back them in-process here exactly like tags, as real, working
+operations.
 """
 
 from __future__ import annotations

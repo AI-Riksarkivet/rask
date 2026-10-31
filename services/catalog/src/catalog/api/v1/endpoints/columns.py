@@ -224,7 +224,7 @@ async def drop_columns(
     return response
 
 
-# The spec's success status, declared on the decorator. All three answer a spec-correct 501 today
+# The spec's success status, declared on the decorator. All three answer the spec's 406 Unsupported today
 # (the `dir` backend stubs them), so nothing exercises the success path — which is exactly why a
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
 @router.post("/{id}/backfill_column", response_model_exclude_none=True, status_code=202)

@@ -173,7 +173,6 @@ extend-select = ["TID251", "FAST001"]
 "services/viewer/src/viewer/services/clips.py" = ["S603"]
 "services/viewer/src/viewer/services/audio_prep.py" = ["S603"]
 "scripts/harvest_ead.py" = ["ANN", "RET503", "B007"]
-"scripts/index_catalog.py" = ["ANN", "RET503", "PERF401", "C901", "F841"]
 # ---- TID251: the sanctioned sites of the banned-api rules ---------------------------------------
 # A dedicated seam module IS the sanctioned site, so it takes a per-file ignore. Every other sanctioned
 # use takes a LINE-level `# noqa: TID251` at its call site, never a per-file ignore: a per-file ignore
@@ -324,6 +323,10 @@ testpaths = ["packages/*/tests", "services/*/tests", "tests/unit", "tests/integr
 # measurement was pure cost on the merge path and on every local run. `make coverage` computes it when
 # somebody wants it, against a denominator that is now correct (see [tool.coverage.run] below).
 addopts = "--import-mode=importlib"
+# A parametrize over an empty list is a collection error, never a skip: a test whose cases come off a walk (the routes,
+# the rendered chart) that finds nothing asserts nothing, and as a skip it reads as one more line in the summary. Measured
+# 2026-10-31 over all 5,083 collected tests: one module hit it, the maintenance-verb owner gate, whose walk found no route.
+empty_parameter_set_mark = "fail_at_collect"
 markers = [
     "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",
     "e2e: live end-to-end suites needing a running/deployed stack (deselect with '-m \"not e2e\"'; run via make e2e-ci / the per-suite targets)",

@@ -103,7 +103,11 @@ consequences it does not spell out.
   means a live stack: `tests/e2e-py/conftest.py` applies it to everything collected there, and each
   per-suite selector (`cas`, `nats_auth`, ...) rides on top of it. Neither `strict_markers` nor
   `--strict-markers` is configured, so pass `--strict-markers` when you add or use a marker (the whole
-  suite, 6,040 tests, collects cleanly under it, measured 2026-09-29).
+  suite, 5,077 tests, collects cleanly under it, measured 2026-10-31).
+- **An empty parametrize is a collection error.** `empty_parameter_set_mark = "fail_at_collect"`, so a test whose
+  cases come off a walk (the routes, the rendered chart) fails collection when the walk finds nothing, instead of
+  skipping and asserting nothing. Walk a FastAPI app's routes with `services/catalog/tests/router_walk.py`'s
+  `mounted()`: `router.routes` holds included routers as opaque wrappers in this FastAPI.
 - **Async is strict.** No `asyncio_mode` is set, so pytest-asyncio runs in strict mode. The `anyio`
   plugin is loaded too; most async tests use `@pytest.mark.asyncio`, so write new ones that way.
 - **Code-shape rules live in ruff and import-linter.** A banned name is a `TID251` entry in the root
@@ -174,9 +178,9 @@ tuples as the chart's bootstrap hook does).
 - **Skips not to copy**: `pytest.skip("helm not available")` in `chart_render.render_text` and every
   file `git grep -l 'helm not available'` lists. CI provides helm,
   so the skip only hides the test on a developer box.
-- **Shapes not to copy**: some `tests/unit` files still read the Makefile, `pyproject.toml`, source or
-  prose instead of running code (4 of 371 parse an AST, measured 2026-09-29). Don't write a new test in
-  their shape: a code-shape rule goes to ruff or an import-linter contract, and a behaviour claim
+- **Shapes not to copy**: a test that reads the Makefile, `pyproject.toml`, source or prose instead of running
+  code (measured 2026-10-31: no root-suite test imports `ast`, and none of the 96 tests in the lakehouse suites that
+  execute no production line reads source or file names). Don't write a new test in that shape: a code-shape rule goes to ruff or an import-linter contract, and a behaviour claim
   drives the code.
 - **Test docstrings and comments follow CLAUDE.md's comment rule**: rationale and provenance, never
   history. The `comment-history-gate` prek hook checks staged lines; `make comment-gate` checks the

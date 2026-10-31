@@ -3302,7 +3302,7 @@ export interface paths {
          * @description Rename the table at ``id`` by moving its POINTER, and emit lineage; its grants stay on its uuid.
          *
          *     Lance has no format-level rename (table rename is a namespace-layer remap, not a data-plane commit) and
-         *     the ``dir`` backend's ``rename_table`` is a hard 501, which is also off-spec — the Namespace REST spec
+         *     the ``dir`` backend's ``rename_table`` answers only Unsupported, which is also off-spec — the Namespace REST spec
          *     makes rename a first-class Metadata op. It is served here as what the spec describes: the destination id
          *     is registered at the SOURCE's existing location and the source id is deregistered. **No data byte is
          *     read, written or deleted**, so the cost is O(1) rather than the dataset's size — see

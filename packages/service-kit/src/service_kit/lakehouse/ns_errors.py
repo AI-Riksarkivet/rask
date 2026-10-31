@@ -4,7 +4,7 @@ Domain exceptions are the ``lance_namespace`` error hierarchy
 (``LanceNamespaceError`` with a numeric ``.code``). This module maps those codes
 to HTTP statuses and RFC 9457 Problem Details, and translates the native
 backend's plain "not implemented" errors into ``UnsupportedOperationError`` so
-unsupported operations surface as a spec-correct 501.
+unsupported operations surface as the spec's 406 (code 0).
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ _STATUS: dict[ErrorCode, int] = {
 
 # The native dir backend raises plain (untyped) errors when an op is a genuine stub. We deliberately do
 # NOT include marshalling hints like "is not an instance" here: that phrase is raised by a pydantic-vs-dict
-# TypeError on a backed op, and laundering it into a 501 hides a real bug (the audit caught exactly this —
+# TypeError on a backed op, and laundering it into an Unsupported answer hides a real bug (the audit caught exactly this —
 # create/describe/batch-delete versions were backed but appeared unsupported). Such errors now surface as 500.
 _UNSUPPORTED_HINTS = ("not implemented", "not supported")
 
