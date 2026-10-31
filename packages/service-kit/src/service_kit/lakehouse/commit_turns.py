@@ -34,7 +34,10 @@ commits take the turn one after another, then races as it would with no turn.
 
 A WAITER HOLDS NO REQUEST THREAD WHERE IT CAN AVOID IT. A door that awaits :meth:`TableTurns.wait_in_loop` holds none while
 it waits; one that waits from a thread (:meth:`TableTurns.wait`) holds its thread while it sleeps, so at most
-:data:`THREAD_WAITERS` sleep at once in a process and a wait past them is refused, as a bulkhead refuses.
+:data:`THREAD_WAITERS` sleep at once in a process and a wait past them is refused, as a bulkhead refuses. A table's waiters
+in one process share one read of its record (:data:`_SHARED_READ_SECONDS`), so a waiter costs the same however many wait.
+Only waiting takes that shared view; whether the record keeps a writer's own turn, which decides its release, is read from
+the store (:meth:`TableTurns.keeps`), as Lance decides a commit it lost the answer to by reading the version back.
 
 Every method but :meth:`TableTurns.wait_in_loop` is BLOCKING IO; callers threadpool it.
 """
@@ -47,7 +50,7 @@ import random
 import threading
 import time
 import uuid
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Final
@@ -87,6 +90,18 @@ _POLL_CAP_SECONDS: Final = 0.25
 
 #: How many read-and-write rounds a take or a release runs against other writers of the record.
 _ATTEMPTS: Final = 8
+
+#: How long one read of a table's record answers every waiter of that table in the process (:meth:`TableTurns.poll`),
+#: counted from when the store answered it. Read per waiter, the record's reads and the catalog's CPU grew with the
+#: waiters: measured on the estate 2026-10-31, 53 writers waiting on one held turn pegged the catalog's 1-CPU limit, and a
+#: describe of another table slowed from 0.07 s to 1-2 s. An object store wakes no waiter, as etcd's lock wakes each of
+#: its waiters through a watch (etcd ``client/v3/concurrency/mutex.go:89``), so the process keeps one view of the record
+#: for all of them, as a client-go shared informer keeps one cache for every consumer in its process
+#: (``tools/cache/shared_informer.go:48-70``).
+_SHARED_READ_SECONDS: Final = 0.1
+
+#: The most tables the process keeps a shared read for at once; one more starts them all over.
+_SHARED_READ_TABLES: Final = 1024
 
 
 def backoff(attempt: int, *, first: float, cap: float) -> float:
@@ -130,16 +145,6 @@ class CommitTurns(BaseModel):
     turns: list[Turn] = Field(default_factory=list)
 
 
-class Poll(BaseModel):
-    """One read of a table's turns for a writer of one ref: whether another commit holds the ref's turn now, and whether
-    the record keeps one under the writer's own token."""
-
-    model_config = ConfigDict(frozen=True)
-
-    held: bool
-    kept: bool
-
-
 class CommitTurnBusyError(Exception):
     """A take found another commit still holding the turn at its deadline, a wait found :data:`THREAD_WAITERS` threads of
     the process already sleeping, or every round lost to another writer of the record."""
@@ -150,6 +155,110 @@ def _kept(record: dict[str, object] | None, now: datetime) -> list[Turn]:
     if record is None:
         return []
     return [turn for turn in CommitTurns.model_validate(record).turns if turn.expires_at > now]
+
+
+class _SharedRead(BaseModel):
+    """Which answer a waiter may take: a read of one table's record, on one store, signed as one identity. A waiter
+    reaching another store or signing as another identity is answered only by a read of its own, so the store judges every
+    credential a record is read under."""
+
+    model_config = ConfigDict(frozen=True)
+
+    control_root: str
+    table_uuid: str
+    #: The store's non-credential options (endpoint, region, path style) the read is made with.
+    options: tuple[tuple[str, str], ...]
+    #: The access key id the read is signed with, the credential's identity as the store names it; ``None`` for the
+    #: ambient chain. Never the secret, which no key holds.
+    signer: str | None
+
+
+class _Answer(BaseModel):
+    """What one read of a table's record found, and when the store answered it (``time.monotonic``)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    turns: list[Turn]
+    answered_at: float
+
+
+class _SharedReads:
+    """Each table's live turns as the last read of its record found them, for every waiter of the table in the process,
+    in the shape of :class:`service_kit.governed.secret_cache.SecretCache`: one waiter reads, the waiters queued behind
+    its read take its answer, and so does every waiter until :data:`_SHARED_READ_SECONDS` after the store answered. The
+    process's write of a table's record clears that table's view, and a read of it in flight across the write keeps
+    nothing, so no waiter of the process acts on a view from before the process's own write, and a write of another
+    table's record touches none of it; another process's write is seen once this view is renewed. Only waiting takes it
+    (:meth:`TableTurns.poll`).
+
+    Thread-safe: one lock per read orders its loads; a load's answer is kept, and a clearing counted, under the guard that
+    hands out the locks; a held answer is taken without a lock, since CPython reads a dict key atomically. Past
+    :data:`_SHARED_READ_TABLES` the locks start over, and two loads of one read may then run at once.
+    """
+
+    def __init__(self) -> None:
+        self._held: dict[_SharedRead, _Answer] = {}
+        self._locks: dict[_SharedRead, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+        #: How often each read's view was cleared (:meth:`forget`) since the locks last started over, counted only for a
+        #: read that has a lock, the only kind a load can be in flight for; a load during which its count moved keeps no
+        #: answer.
+        self._clearings: dict[_SharedRead, int] = {}
+        #: How often the locks started over: a load in flight across a start keeps no answer either.
+        self._starts = 0
+
+    def get(self, read: _SharedRead, load: Callable[[], list[Turn]]) -> list[Turn]:
+        """``read``'s live turns: the held ones while under :data:`_SHARED_READ_SECONDS` since the store answered them,
+        else what ``load`` returns.
+
+        Blocking: a caller that misses waits for the one load in flight for ``read``, and takes its answer.
+
+        Raises:
+            Exception: Whatever ``load`` raises. Nothing is held then.
+        """
+        if (held := self._fresh(read)) is not None:
+            return held
+        with self._lock_for(read):
+            if (held := self._fresh(read)) is not None:
+                return held
+            with self._locks_guard:
+                before = self._cleared(read)
+            turns = load()
+            with self._locks_guard:
+                if self._cleared(read) == before:
+                    self._held[read] = _Answer(turns=turns, answered_at=time.monotonic())
+            return turns
+
+    def forget(self, read: _SharedRead) -> None:
+        """Drop what is held for ``read``, once the process wrote its record or found the store holding a turn the view did
+        not show: its next waiter reads the record again, and a load of it in flight keeps nothing."""
+        with self._locks_guard:
+            if read in self._locks:
+                self._clearings[read] = self._clearings.get(read, 0) + 1
+            self._held.pop(read, None)
+
+    def _cleared(self, read: _SharedRead) -> tuple[int, int]:
+        """Where ``read``'s clearings stand: the locks' starts and its own count. Called under the guard."""
+        return self._starts, self._clearings.get(read, 0)
+
+    def _fresh(self, read: _SharedRead) -> list[Turn] | None:
+        held = self._held.get(read)
+        if held is None or time.monotonic() - held.answered_at >= _SHARED_READ_SECONDS:
+            return None
+        return held.turns
+
+    def _lock_for(self, read: _SharedRead) -> threading.Lock:
+        with self._locks_guard:
+            if read not in self._locks and len(self._locks) >= _SHARED_READ_TABLES:
+                self._locks.clear()
+                self._held.clear()
+                self._clearings.clear()
+                self._starts += 1
+            return self._locks.setdefault(read, threading.Lock())
+
+
+#: This process's shared reads of the tables' turn records.
+_SHARED_READS: Final = _SharedReads()
 
 
 class TableTurns(BaseModel):
@@ -166,28 +275,50 @@ class TableTurns(BaseModel):
         """The record's key on the control root."""
         return record_key(PREFIX, "table", self.table_uuid)
 
+    @property
+    def _shared(self) -> _SharedRead:
+        """The shared read this table's waiters in the process take their answers from."""
+        options = self.storage_options
+        return _SharedRead(
+            control_root=self.control_root,
+            table_uuid=self.table_uuid,
+            options=tuple(sorted(options.options.items())),
+            signer=options.key_pair.access_key_id if options.key_pair is not None else None,
+        )
+
     def _read(self) -> tuple[records.StoreRead, list[Turn]]:
         read = records.read_json_at(self.control_root, self.storage_options, self.key)
         return read, _kept(read.stored.record if read.stored else None, read.at)
 
-    def poll(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> Poll:
-        """Read the record once: whether a commit but the one holding ``mine`` holds ``ref``'s turn now, counting a turn
-        handed to a stock writer only with ``handed`` (a stock writer's peers race it), and whether a turn under ``mine``
-        is kept.
+    def _live_turns(self) -> list[Turn]:
+        return self._read()[1]
+
+    def poll(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
+        """Whether a commit but the one holding ``mine`` holds ``ref``'s turn now, as the table's shared read finds it
+        (:data:`_SHARED_READS`), counting a turn handed to a stock writer only with ``handed`` (a stock writer's peers race
+        it).
 
         Raises:
             botocore.exceptions.ClientError: The store refused a read.
         """
-        _, turns = self._read()
-        held = any(turn.ref == ref and turn.token != mine and (handed or turn.handed_to is None) for turn in turns)
-        return Poll(held=held, kept=mine is not None and any(turn.token == mine for turn in turns))
+        turns = _SHARED_READS.get(self._shared, self._live_turns)
+        return any(turn.ref == ref and turn.token != mine and (handed or turn.handed_to is None) for turn in turns)
 
-    def wait(self, ref: str | None, *, mine: str | None = None, until: float | None = None, handed: bool = True) -> bool:
+    def keeps(self, token: str) -> bool:
+        """Whether the record keeps a live turn under ``token`` now, read from the store and never from the shared read: a
+        writer decides by it whether to release the turn it was handed, and an answer from before the hand would leave that
+        turn held to its lapse, with the catalog's own writers of the ref waiting on it.
+
+        Raises:
+            botocore.exceptions.ClientError: The store refused the read.
+        """
+        return any(turn.token == token for turn in self._live_turns())
+
+    def wait(self, ref: str | None, *, mine: str | None = None, until: float | None = None, handed: bool = True) -> None:
         """Return once no commit but the one holding ``mine`` holds ``ref``'s turn (:meth:`poll`), or at ``until`` (a
         ``time.monotonic`` deadline, :data:`HOLD` from now when ``None``), whichever comes first: a waiter outlasts no
-        single hold, however many commits take the turn one after another. Answer whether the record keeps a turn under
-        ``mine`` then, which the commit releases once it lands. The calling thread sleeps between reads in one of
-        :data:`THREAD_WAITERS` seats.
+        single hold, however many commits take the turn one after another. The calling thread sleeps between reads in one
+        of :data:`THREAD_WAITERS` seats.
 
         Raises:
             CommitTurnBusyError: The wait would sleep while every seat is taken.
@@ -196,14 +327,11 @@ class TableTurns(BaseModel):
         deadline = time.monotonic() + HOLD.total_seconds() if until is None else until
         attempt, seated = 0, False
         try:
-            while True:
-                poll = self.poll(ref, mine=mine, handed=handed)
-                if not poll.held:
-                    return poll.kept
+            while self.poll(ref, mine=mine, handed=handed):
                 left = deadline - time.monotonic()
                 if left <= 0:
                     log.warning("commit_turn_wait_outlasted", extra={"table_uuid": self.table_uuid, "ref": ref})
-                    return False
+                    return
                 if not seated and not _THREAD_WAITER_SEATS.acquire(blocking=False):
                     raise CommitTurnBusyError(f"{THREAD_WAITERS} threads of this process already wait for a commit turn")
                 seated = True
@@ -216,23 +344,22 @@ class TableTurns(BaseModel):
     async def wait_in_loop(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
         """:meth:`wait` from the event loop, holding no request thread: each read runs on the loop's own executor for as
         long as the read takes, and the pauses between reads are the loop's, so a door awaiting this costs the same however
-        many writers wait, and stops waiting when its request is cancelled.
+        many writers wait, and stops waiting when its request is cancelled. Then answer whether the record keeps a turn
+        under ``mine`` (:meth:`keeps`), which the commit releases once it lands.
 
         Raises:
             botocore.exceptions.ClientError: The store refused a read.
         """
         deadline = time.monotonic() + HOLD.total_seconds()
         attempt = 0
-        while True:
-            poll = await asyncio.to_thread(self.poll, ref, mine=mine, handed=handed)
-            if not poll.held:
-                return poll.kept
+        while await asyncio.to_thread(self.poll, ref, mine=mine, handed=handed):
             left = deadline - time.monotonic()
             if left <= 0:
                 log.warning("commit_turn_wait_outlasted", extra={"table_uuid": self.table_uuid, "ref": ref})
-                return False
+                break
             await asyncio.sleep(min(backoff(attempt, first=_POLL_SECONDS, cap=_POLL_CAP_SECONDS), left))
             attempt += 1
+        return mine is not None and await asyncio.to_thread(self.keeps, mine)
 
     def _take(self, ref: str | None, *, token: str, hold: timedelta, deadline: float, handed_to: str | None) -> str:
         for _ in range(_ATTEMPTS):
@@ -246,6 +373,9 @@ class TableTurns(BaseModel):
             if live:
                 if time.monotonic() >= deadline:
                     raise CommitTurnBusyError(f"another commit holds the turn on table {self.table_uuid}")
+                # The store holds a turn the view let the wait past (another replica's, or one read under another
+                # signer): the next wait reads the record itself, rather than spending this take's rounds on that view.
+                _SHARED_READS.forget(self._shared)
                 continue
             mine = Turn(token=token, ref=ref, taken_at=read.at, expires_at=read.at + hold, handed_to=handed_to)
             held = CommitTurns(uuid=self.table_uuid, turns=[*turns, mine]).model_dump(mode="json")
@@ -256,6 +386,7 @@ class TableTurns(BaseModel):
                     records.replace_json(self.control_root, self.storage_options, self.key, held, etag=read.stored.etag)
             except (records.RecordExistsError, records.RecordChangedError):
                 continue
+            _SHARED_READS.forget(self._shared)
             return token
         raise CommitTurnBusyError(f"{_ATTEMPTS} attempts to take a commit turn on table {self.table_uuid} each lost to another writer of its record")
 
@@ -294,6 +425,7 @@ class TableTurns(BaseModel):
                     records.replace_json(self.control_root, self.storage_options, self.key, kept, etag=read.stored.etag)
                 except records.RecordChangedError:
                     continue
+                _SHARED_READS.forget(self._shared)
                 return
             log.warning("commit_turn_not_released", extra={"table_uuid": self.table_uuid, "reason": "every attempt lost to another writer"})
         except Exception as exc:  # noqa: BLE001 — a release runs in a `finally`, and must not replace the commit's own outcome

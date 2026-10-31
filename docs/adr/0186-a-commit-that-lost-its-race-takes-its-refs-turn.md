@@ -54,6 +54,27 @@ its target failed its commit as of unknown outcome, after one call.
   process, past which its commit is refused at once with the retryable code 14 (`TurnWaitRefusedError`), as a bulkhead
   rejects when full (resilience4j's `SemaphoreBulkhead`, Polly's `ConcurrencyLimiter`) and as Lakekeeper answers a lock it
   will not wait for with a retriable conflict rather than a 503 (`crates/lakekeeper-storage-postgres/src/grant.rs:126-136`).
+- **A table's waiters in one process share one read of its record**, each answer for a tenth of a second after the store
+  gave it (`commit_turns._SHARED_READ_SECONDS`): one waiter reads, and the waiters queued behind its read take its answer
+  however long the store took. The process's own writes of the table's record clear it, and a read of it in flight across
+  one keeps nothing, so no waiter acts on a view from before its own process's write (the waiters queued behind such a read
+  read the record again); a write of another table's record touches none of it. Read per waiter, 53 writers waiting on one
+  held turn pegged the estate's catalog at its 1-CPU limit and slowed a describe of another table from 0.07 s to 1-2 s
+  (measured on helm rev 23). Lakekeeper's view-commit waiters queue in Postgres on a row lock
+  (`crates/lakekeeper-storage-postgres/src/tabular/view/mod.rs:114-126`) and etcd's lock waiters on a watch
+  (`client/v3/concurrency/mutex.go:89`); an object store offers neither, so a process keeps one eventually consistent view
+  of the record for all its waiters, as a client-go shared informer keeps one local cache for every consumer in a process
+  (`tools/cache/shared_informer.go:48-70`), and as Lance's guide asks an application to share one table, or one session,
+  so that a metadata cache serves every user of it (`lance_docs/lance/guide/performance.md:132-134`). An answer is shared
+  only among waiters reading the same store as the same signing identity (the access key id, never the secret), so the
+  store judges every credential the record is read under.
+- **Only waiting takes the shared view; a writer's own turn is read from the store.** Whether the record keeps the turn a
+  stock writer was handed decides whether its commit releases that turn (`TableTurns.keeps`). An answer from before the
+  hand, such as a read in flight across it or another replica's view, would leave the turn held to its lapse, with the
+  catalog's own writers of the ref waiting the 30 s on it. Lance's own cache holds only what cannot change under its key
+  (a manifest by version and etag, `lance_docs/lance/guide/performance.md:136-140`), and Lance decides a commit whose
+  answer it lost by reading the version back from the store ([[LH-491]]); a view kept for waiting likewise decides no
+  ownership.
 - **A stock writer that lost its race is handed the ref's next turn** (`DoorTable.hand_turn`, `TableTurns.hand`), whether
   `version/create` found the version it staged already taken (the spec's 409 for a version that exists, code 14, where a
   version beyond the next stays a 400) or its finalize lost. Measured with the catalog's `/insert` appending in a tight
@@ -96,8 +117,14 @@ its target failed its commit as of unknown outcome, after one call.
   that loses the turn's protection.
 - A table's other refs are not held: a turn is per ref.
 - A writer waiting in the event loop holds a connection and a task, not a thread, and stops waiting when its request is
-  cancelled. Past the 20 seats a thread waits in, a door's commit on a contended ref is refused 409 code 14 for its caller
-  to retry, so a fan-out of door commits on one table can see refusals it would not with no turn.
+  cancelled. A turn taken by another process (another catalog replica), or recorded under another signing identity (a
+  view of its own, as across a renewal of the catalog's store session), reaches this process's waiters once their view
+  is renewed: up to 0.1 s after the store answered, plus that read's own latency, which ran 1-2 s on the overloaded
+  estate. Every waiter polling in that window passes its wait, and each meets the holder's next attempt, which plans
+  again under the turn it keeps. A door's take that finds such a turn in the store clears its view and waits on the
+  record itself. The chart runs one catalog replica by default. Past the 20 seats a thread waits in, a door's commit on a
+  contended ref is refused 409 code 14 for its caller to retry, so a fan-out of door commits on one table can see refusals
+  it would not with no turn.
 - One commit knowingly does not wait: the config-only commit a door's own attempt makes to disarm Lance's commit-path
   cleanup on an armed table, before it plans. It lands at most once inside a holder's window, which the holder's next
   attempt absorbs.

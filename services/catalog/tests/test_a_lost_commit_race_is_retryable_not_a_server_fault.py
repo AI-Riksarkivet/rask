@@ -161,7 +161,10 @@ def test_a_commit_lands_while_insert_appends_in_a_tight_loop_and_every_append_la
     rounds, and a drop, an update and a delete held their request 214-302 s first. Lance cannot rebase the add's ``Merge``
     over an Append at all (``lance_docs/lance/format/table/transaction.md`` § Merge Compatibility), and the drop, the update
     and the delete each lose another way: at the finalize, and inside Lance's own retries. Each takes its ref's turn after
-    its first lost race, the appends wait it out, and every append still lands."""
+    its first lost race, the appends wait it out, and every append still lands. The change lands within 10 s: shown the
+    versions committed since its plan, Lance spends its own retries on them even with the turn (measured on pylance 13.0.0,
+    a drop and a delete each took 30.4-30.5 s), so the namespace a change is planned through (``dataplane.captured``)
+    answers none after the one planned on."""
     seeded = pa.table({"id": pa.array([0], pa.int64()), "v": pa.array([0], pa.int64()), "w": pa.array([0], pa.int64())})
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
     create_table(ns, StorageOptions(), APPENDED_TO, seeded, root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(APPENDED_TO))
@@ -195,7 +198,9 @@ def test_a_commit_lands_while_insert_appends_in_a_tight_loop_and_every_append_la
         time.sleep(0.01)
 
     try:
+        began = time.monotonic()
         version = change(_resolved(ns, tmp_path))
+        took = time.monotonic() - began
     finally:
         stop.set()
         thread.join(timeout=60)
@@ -204,6 +209,7 @@ def test_a_commit_lands_while_insert_appends_in_a_tight_loop_and_every_append_la
     ids = table.open(StorageOptions()).to_table(columns=["id"]).column("id").to_pylist()
     assert (failed, sorted(ids)) == ([], sorted([0, *appended] if kept_first_row else appended))
     assert version is not None and made(table.open(StorageOptions(), version=version))
+    assert took < 10, f"the change landed after {took:.1f} s"
 
 
 def test_a_column_named_concurrent_is_still_a_MISSING_COLUMN(table: DoorTable) -> None:

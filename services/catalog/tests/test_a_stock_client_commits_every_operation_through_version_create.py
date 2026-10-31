@@ -49,7 +49,7 @@ from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse import base_refs, commit_turns, maintenance_due
+from service_kit.lakehouse import base_refs, commit_turns, maintenance_due, records
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -936,13 +936,15 @@ def test_a_stock_writer_commits_while_a_turn_handed_to_another_stock_writer_is_h
     ],
 )
 def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other_tables(
-    served: Served, tmp_path: Path, door: str, may_fail_with: tuple[type[Exception], ...]
+    served: Served, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, door: str, may_fail_with: tuple[type[Exception], ...]
 ) -> None:
     """[[LH-259]] A writer that finds its ref's commit turn held waits it out, up to 30 s, and the catalog serves every sync
     door from one pool of request threads (anyio's default limiter: 40): measured, 50 writers waiting in threads made a
     describe of another table wait 26.8 s. ``/insert`` and ``version/create`` wait in the event loop, holding no thread, and
     a door's commit waits in one of a bounded number of threads, past which it is refused as the retryable conflict a lost
-    race is. Either way no write lands while the turn is held, and the catalog keeps answering."""
+    race is. Either way no write lands while the turn is held, and the catalog keeps answering. The waiters share one read
+    of the turn record a tenth of a second at a time: read per waiter, 53 writers waiting on one held turn pegged the
+    estate's catalog at its 1-CPU limit (measured 2026-10-31)."""
     stock = served.stock()
     stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
     seeded = pa.table({"id": pa.array(range(51), pa.int64()), "v": pa.array(range(51), pa.int64())})
@@ -963,8 +965,18 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
         else:
             finished.append((time.monotonic(), None))
 
+    reads: list[float] = []
+    read_json_at = records.read_json_at
+
+    def counted(root_uri: str, storage_options: StorageOptions, key: str) -> records.StoreRead:
+        if key.startswith(commit_turns.PREFIX):
+            reads.append(time.monotonic())
+        return read_json_at(root_uri, storage_options, key)
+
+    monkeypatch.setattr(records, "read_json_at", counted)
     turns = _turns(stock, tmp_path)
     token = turns.take(None)
+    held_from = time.monotonic()
     writers = [threading.Thread(target=run, args=(row,), daemon=True) for row in range(1, 51)]
     try:
         for writer in writers:
@@ -981,7 +993,9 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
     for writer in writers:
         writer.join(timeout=120)
 
+    held_reads = [at for at in reads if held_from <= at < released]
     assert slowest < 2, f"a describe of another table took {slowest:.1f} s while 50 writers waited on a held turn"
+    assert len(held_reads) <= 20 * (released - held_from), f"50 waiters read the turn record {len(held_reads)} times in {released - held_from:.1f} s"
     assert [at for at, exc in finished if exc is None and at < released] == []
     assert [exc for _, exc in finished if exc is not None and not isinstance(exc, may_fail_with)] == []
 

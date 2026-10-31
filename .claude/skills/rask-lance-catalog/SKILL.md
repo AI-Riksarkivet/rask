@@ -300,8 +300,11 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   and a turn handed to a stock writer holds the catalog's own writers, not that writer's peers. `/insert` and
   `version/create` wait in the event loop (`DoorTable.wait_for_turn_in_loop`), holding no request thread; a wait only a
   thread can make takes one of 20 seats per process (`commit_turns.THREAD_WAITERS`), past which its commit is refused 409
-  code 14 (`TurnWaitRefusedError`). Without the turn a writer committing in a tight loop won
-  every version: measured, a `cast(NULL)` add lost all ten plans and a stock writer landed 0 appends beside 639. The
+  code 14 (`TurnWaitRefusedError`). A table's waiters in one process share one read of its turn record, each answer
+  for 0.1 s after the store gave it, keyed by the store and the signing access key id (`commit_turns._SharedReads`; read
+  per waiter, 53 waiters pegged the catalog's CPU on the estate); only waiting takes that view, and who holds a turn is
+  read from the store (`TableTurns.keeps` for a handed turn's release, a take's own read). Without the turn a writer
+  committing in a tight loop won every version: measured, a `cast(NULL)` add lost all ten plans and a stock writer landed 0 appends beside 639. The
   capturing namespace answers no version after the one planned on, so Lance stages the next one rather than spending its
   own retries on a version committed since. Most pylance operations take no transaction properties (13.0.0: `update`,
   `delete`, `add_columns`, `alter_columns`, `drop_columns`, both metadata updates, `drop_index`,
