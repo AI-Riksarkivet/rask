@@ -49,7 +49,7 @@ from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse import base_refs, maintenance_due
+from service_kit.lakehouse import base_refs, commit_turns, maintenance_due
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -898,6 +898,92 @@ def test_a_stock_schema_change_that_loses_to_a_writer_appending_through_insert_h
     finally:
         writer.stop()
     assert writer.failed == []
+
+
+def _turns(stock: lance_namespace.LanceNamespace, tmp_path: Path) -> commit_turns.TableTurns:
+    """The commit turns of ``_APPENDED_TO`` on the served catalog's control root, where a door's commit or a lost race takes
+    them."""
+    described = stock.describe_table(lance_namespace.DescribeTableRequest(id=_APPENDED_TO))
+    return commit_turns.TableTurns(
+        control_root=str(tmp_path / "control"), storage_options=StorageOptions(), table_uuid=(described.properties or {})["rask.uuid"]
+    )
+
+
+def test_a_stock_writer_commits_while_a_turn_handed_to_another_stock_writer_is_held(served: Served, tmp_path: Path) -> None:
+    """[[LH-259]] A turn handed to a stock writer holds the catalog's own writers, which commit in-process far faster than a
+    stock writer's round trip, and not that writer's peers, which race it as Lance's own backoff spreads them: measured with
+    the peers waiting, 16 stock writers on one table at the estate's round trip landed 4 of 32 appends, and racing it 10 of
+    32, as many as with no turn. The turn here is handed to a writer that never stages its commit again."""
+    stock = served.stock()
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    _turns(stock, tmp_path).hand(None, commit_turns.Writer(caller="a-peer", transaction="a-commit-it-never-stages-again"))
+
+    began = time.monotonic()
+    lance.write_dataset(_row(1), namespace_client=served.stock(), table_id=_APPENDED_TO, mode="append")
+
+    assert time.monotonic() - began < 5
+
+
+@pytest.mark.parametrize(
+    ("door", "may_fail_with"),
+    [
+        pytest.param("insert", (), id="writers-through-insert"),
+        # Fifty stock writers then contend, each first attempt having lasted the hold, so Lance's own 30 s of retries can
+        # run out for some ("Too many concurrent writers"): Lance's answer, not a catalog refusal.
+        pytest.param("version-create", (OSError,), id="stock-writers-through-version-create"),
+        pytest.param("delete", (lance_namespace.ConcurrentModificationError,), id="door-commits"),
+    ],
+)
+def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other_tables(
+    served: Served, tmp_path: Path, door: str, may_fail_with: tuple[type[Exception], ...]
+) -> None:
+    """[[LH-259]] A writer that finds its ref's commit turn held waits it out, up to 30 s, and the catalog serves every sync
+    door from one pool of request threads (anyio's default limiter: 40): measured, 50 writers waiting in threads made a
+    describe of another table wait 26.8 s. ``/insert`` and ``version/create`` wait in the event loop, holding no thread, and
+    a door's commit waits in one of a bounded number of threads, past which it is refused as the retryable conflict a lost
+    race is. Either way no write lands while the turn is held, and the catalog keeps answering."""
+    stock = served.stock()
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    seeded = pa.table({"id": pa.array(range(51), pa.int64()), "v": pa.array(range(51), pa.int64())})
+    for table_id in (_APPENDED_TO, ["db", "other"]):
+        lance.write_dataset(seeded, namespace_client=stock, table_id=table_id, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    write = {
+        "insert": lambda row: served.stock().insert_into_table(lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(100 + row))),
+        "version-create": lambda row: lance.write_dataset(_row(100 + row), namespace_client=served.stock(), table_id=_APPENDED_TO, mode="append"),
+        "delete": lambda row: served.stock().delete_from_table(lance_namespace.DeleteFromTableRequest(id=_APPENDED_TO, predicate=f"id = {row}")),
+    }[door]
+    finished: list[tuple[float, BaseException | None]] = []
+
+    def run(row: int) -> None:
+        try:
+            write(row)
+        except Exception as exc:  # noqa: BLE001 — every writer's outcome is half of the claim
+            finished.append((time.monotonic(), exc))
+        else:
+            finished.append((time.monotonic(), None))
+
+    turns = _turns(stock, tmp_path)
+    token = turns.take(None)
+    writers = [threading.Thread(target=run, args=(row,), daemon=True) for row in range(1, 51)]
+    try:
+        for writer in writers:
+            writer.start()
+        slowest, until = 0.0, time.monotonic() + 4
+        while time.monotonic() < until:
+            began = time.monotonic()
+            stock.describe_table(lance_namespace.DescribeTableRequest(id=["db", "other"]))
+            slowest = max(slowest, time.monotonic() - began)
+            time.sleep(0.2)
+    finally:
+        released = time.monotonic()
+        turns.release(token)
+    for writer in writers:
+        writer.join(timeout=120)
+
+    assert slowest < 2, f"a describe of another table took {slowest:.1f} s while 50 writers waited on a held turn"
+    assert [at for at, exc in finished if exc is None and at < released] == []
+    assert [exc for _, exc in finished if exc is not None and not isinstance(exc, may_fail_with)] == []
 
 
 #: The provenance a pipeline names on a governed write (ADR 0156 C2): its run, its job, and each input at a version.

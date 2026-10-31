@@ -1134,49 +1134,6 @@ def holds_a_version(location: str, so: StorageOptions) -> bool:
     return any(info.type == pafs.FileType.File and _COMMITTED_MANIFEST.fullmatch(info.base_name) for info in listed)
 
 
-#: What an append with nothing to append onto is told, by the commit classifier and the file-version guard alike.
-_NO_BASE_DETAIL = "append target has no committed base version — create or overwrite the table first"
-
-#: The default non-retryable remedy — the client-direct append's. Its fragments describe data the table
-#: no longer accepts, so the data must be written again, not the metadata re-sent.
-_APPEND_REMEDY = "Discard them, re-read the current version, and re-WRITE the data"
-
-
-def _classify_commit_error(exc: OSError, *, remedy: str = _APPEND_REMEDY) -> Exception:
-    """Map a raised ``LanceDataset.commit`` ``OSError`` to the right catalog error (audit 2026-07-14).
-
-    THE VERDICT IS SHARED, THE ERROR TYPE IS NOT. `service_kit.lancekit.commit_verdict` owns the
-    vocabulary — which phrases mean which outcome, and crucially the ORDER they are tested in — because
-    two planes were classifying the same condition and had drifted: this one carried the full taxonomy
-    while `lancekit/writer.py` carried two markers and could not see the non-retryable case at all,
-    answering it `409 re-read and re-send`, which is the advice below explains you must never give.
-    Each plane still raises its own errors (`lance_namespace` here, `DomainError` there), so what
-    crosses is the verdict.
-
-    ``remedy`` is the sentence the non-retryable branch gives the caller — the work it must redo. It is
-    per-door because the doors hold different things: an append holds fragments it must re-write, a
-    compaction holds a result whose plan is void.
-    """
-    match classify_commit_failure(exc):
-        case CommitVerdict.NO_BASE:
-            return InvalidInputError(f"{_NO_BASE_DETAIL}: {exc}")
-        case CommitVerdict.CLIENT_ERROR:
-            return InvalidInputError(f"fragments are incompatible with the table: {exc}")
-        case CommitVerdict.INCOMPATIBLE:
-            # NON-RETRYABLE (spec). Do NOT tell the caller to re-commit: the table changed underneath them
-            # (e.g. a concurrent Overwrite), so what they hold describes data that no longer belongs. Advising
-            # a re-commit here is how you corrupt a table. The REMEDY differs by door — an append re-writes its
-            # fragments, a compaction re-plans and re-executes — so the caller names the work it must redo.
-            return InvalidInputError(
-                "commit is incompatible with the table's current transaction — this is NOT retryable: the "
-                f"table changed underneath it (e.g. a concurrent overwrite). {remedy}; do not re-commit: {exc}"
-            )
-        case CommitVerdict.RETRYABLE_CONFLICT:
-            return ConcurrentModificationError(f"commit conflict — re-read the table version and re-commit the fragments: {exc}")
-        case CommitVerdict.STORE_UNAVAILABLE:
-            return ServiceUnavailableError(f"object store unavailable during commit: {exc}")
-
-
 def verify_fragment_data_files(location: str, so: StorageOptions, fragments: list[dict[str, Any]]) -> None:
     """Reject a commit that references data files ABSENT under ``<location>/data/`` (audit HIGH fix).
 
@@ -1363,7 +1320,7 @@ def commit_stamped[T](
                 )
                 try:
                     table.finalize_version(request, turn=turn)
-                except table_claims.TableChangedError:
+                except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError):
                     raise
                 except ConcurrentModificationError:
                     discard_detached_manifest(location, so, finalize_id)
@@ -3318,8 +3275,8 @@ def table_history(table: table_claims.DoorTable, so: StorageOptions, limit: int 
 _REF_VERSION_MISSING_MARKERS = ("version not found", ".manifest was not found")
 
 #: The ref failure's own noun. pylance flattens every tag and branch failure into a bare
-#: `ValueError` whose only discriminator is its text — the same constraint `_classify_commit_error`
-#: works under, because the Rust layer's typed variants do not cross the pyo3 boundary.
+#: `ValueError` whose only discriminator is its text, because the Rust layer's typed variants do not
+#: cross the pyo3 boundary.
 #:
 #: It captures the NOUN rather than testing `"branch" in message`, and that precision is load-bearing:
 #: a tag literally named `branch` would make the substring test report code 22 for a missing tag. The

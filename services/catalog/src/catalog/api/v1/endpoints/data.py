@@ -253,6 +253,9 @@ async def insert_into_table(
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
     await lineage_deps.record_declared_inputs(settings, resolver, run, table=table.resolved, segments=segments)
+    # A held commit turn is waited out here, in the event loop, so a writer waiting on it holds no request thread
+    # ([[LH-259]]); the insert asks again right before Lance commits it.
+    await table.wait_for_turn_in_loop(dataplane.recorded_branch(branch))
     response: InsertIntoTableResponse = await run_in_threadpool(
         partial(
             dataplane.insert_into_table,

@@ -273,9 +273,11 @@ async def create_table_version(
         await run_in_threadpool(
             partial(table_inputs.record, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), name=canonical, declared=declared)
         )
-    response = await run_in_threadpool(
-        partial(managed_versions.finalize, writer=managed_versions.writer_turn(caller, staged.transaction_uuid, staged.operation)), table, staged, body, so
-    )
+    writer = managed_versions.writer_turn(caller, staged.transaction_uuid, staged.operation)
+    # Waited out here, in the event loop, so a stock writer waiting holds no request thread; a turn handed to another stock
+    # writer is not waited out, since this writer races it as Lance's own backoff spreads them ([[LH-259]]).
+    kept = await table.wait_for_turn_in_loop(ref.branch, mine=writer.token if writer is not None else None, handed=False)
+    response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), table, staged, body, so)
     audit(
         AuditAction.COMMIT_VERSION,
         AuditOutcome.SUCCESS,

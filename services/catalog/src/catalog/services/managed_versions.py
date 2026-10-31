@@ -881,7 +881,13 @@ def refuse(staged: StagedVersion, so: StorageOptions) -> None:
 
 
 def finalize(
-    table: table_claims.DoorTable, staged: StagedVersion, request: CreateTableVersionRequest, so: StorageOptions, *, writer: commit_turns.Writer | None
+    table: table_claims.DoorTable,
+    staged: StagedVersion,
+    request: CreateTableVersionRequest,
+    so: StorageOptions,
+    *,
+    writer: commit_turns.Writer | None,
+    kept: bool,
 ) -> CreateTableVersionResponse:
     """Finalize the judged bytes through the backend's put-if-not-exists; a lost race is the backend's 409.
 
@@ -889,15 +895,16 @@ def finalize(
     the version that lands is the one judged whatever the writer puts over its staged key meanwhile. The copy carries the
     writer's transaction byte for byte, and a client whose answer was lost relies on that: Lance reads the version back
     and keeps the commit as its own only when the transaction there is the one it staged ([[LH-491]]). The finalize names
-    the table and no location, so it is the door's guarded native write ([[LH-530]]), made once no other commit holds the
-    ref's commit turn, and ``writer`` (:func:`writer_turn`) is handed the next one when it loses the race ([[LH-259]],
-    :meth:`table_claims.DoorTable.finalize_staged_version`). The writer waits rather than being refused, since pylance fails
-    a commit whose finalize answered 409 with no version at its target as of unknown outcome (measured on pylance 13.0.0).
+    the table and no location, so it is the door's guarded native write ([[LH-530]]), made once its door waited out a door's
+    commit turn, which answered whether the record ``kept`` a turn under ``writer`` (:func:`writer_turn`); the writer is
+    handed the next one when it loses the race ([[LH-259]], :meth:`table_claims.DoorTable.finalize_staged_version`). The
+    writer waits rather than being refused, since pylance fails a commit whose finalize answered 409 with no version at its
+    target as of unknown outcome (measured on pylance 13.0.0).
     """
     path = f"{dataplane.object_store_path(staged.location.rstrip('/'))}/_versions/d{staged.finalize_id}.manifest"
     judged = request.model_copy(update={"manifest_path": path})
     try:
-        response = CreateTableVersionResponse.model_validate(table.finalize_staged_version(judged, writer=writer))
+        response = CreateTableVersionResponse.model_validate(table.finalize_staged_version(judged, writer=writer, kept=kept))
     except BaseException:
         refuse(staged, so)
         raise

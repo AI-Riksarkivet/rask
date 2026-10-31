@@ -18,24 +18,33 @@ that ref waits while a turn is held (:meth:`TableTurns.wait`), so the holder mee
 wait. A writer waits rather than being refused: measured on pylance 13.0.0, a stock writer whose finalize answered 409 with
 no version at its target failed its commit as of unknown outcome.
 
-A LOST RACE IS NO LICENCE TO HOLD THE REF. A stock writer can lose on purpose, by staging a version another writer already
-took, so a writer whose handed turn lapsed unused, its retry never finalizing in it, is handed no other on that ref for
-:data:`COOLDOWN`; a writer whose retry finalizes releases its turn and is never held back.
+A HANDED TURN HOLDS THE CATALOG'S OWN WRITERS, NOT A STOCK WRITER'S PEERS. The catalog's doors and its ``/insert`` commit
+in-process, far faster than a stock writer's round trip, so they wait out a turn handed to one; other stock writers race it
+as Lance's own backoff spreads them (``handed`` on :meth:`TableTurns.wait`). Measured 2026-10-31 with 16 stock writers on
+one table at the estate's round trip: waiting on each other's handed turns they landed 4 of 32 appends, racing them 10 of
+32, as many as with no turn. A handed turn that lapses unused simply lapses, as a Kubernetes Lease or an etcd lease does,
+and nothing is held against the identity of its writer, which a pipeline's workers share.
 
 ONE RECORD PER TABLE on the control root, keyed by the table's uuid (ADR 0173 §8), listing the turns held now, at most one
-per ref, and the handed turns that lapsed unused while their cooldown runs. The store picks the winner: a take is a
-create-if-absent or a replace under the ETag it read (:mod:`service_kit.lakehouse.records`), as a history fence's is. A
-TURN LAPSES at the hold its take named, timed on the store's clock (:attr:`service_kit.lakehouse.records.StoreRead.at`), so
-a holder that crashed, or a writer that never retried, stalls the ref's writers for at most that long; and a waiter waits
-:data:`HOLD` at most in all, however many commits take the turn one after another, then races as it would with no turn.
+per ref. The store picks the winner: a take is a create-if-absent or a replace under the ETag it read
+(:mod:`service_kit.lakehouse.records`), as a history fence's is. A TURN LAPSES at the hold its take named, timed on the
+store's clock (:attr:`service_kit.lakehouse.records.StoreRead.at`), so a holder that crashed, or a writer that never
+retried, stalls the ref's writers for at most that long; and a waiter waits :data:`HOLD` at most in all, however many
+commits take the turn one after another, then races as it would with no turn.
 
-Every method is BLOCKING IO; callers threadpool it.
+A WAITER HOLDS NO REQUEST THREAD WHERE IT CAN AVOID IT. A door that awaits :meth:`TableTurns.wait_in_loop` holds none while
+it waits; one that waits from a thread (:meth:`TableTurns.wait`) holds its thread while it sleeps, so at most
+:data:`THREAD_WAITERS` sleep at once in a process and a wait past them is refused, as a bulkhead refuses.
+
+Every method but :meth:`TableTurns.wait_in_loop` is BLOCKING IO; callers threadpool it.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
+import threading
 import time
 import uuid
 from collections.abc import Generator
@@ -62,10 +71,13 @@ PREFIX: Final = "_commit_turns"
 #: after its 409s, and a turn held 5 s lapsed before each.
 HOLD: Final = timedelta(seconds=30)
 
-#: How long a writer whose handed turn lapsed unused is handed no other on that ref: one that keeps losing without retrying,
-#: on purpose or with its retries switched off, then holds the ref's other writers for at most :data:`HOLD` of every
-#: :data:`HOLD` plus this (30 s of every 3.5 min), and one whose turn lapsed by accident races as a writer with no turn does.
-COOLDOWN: Final = timedelta(minutes=3)
+#: How many threads of one process may sleep waiting for a turn at once. A sleeping waiter holds one of the request threads
+#: the process serves its sync doors with (anyio's default limiter has 40, ``anyio/_backends/_asyncio.py:3097`` at 4.14.2),
+#: so a wait past these is refused rather than queued, as a bulkhead refuses when full (resilience4j's
+#: ``SemaphoreBulkhead``, Polly's ``ConcurrencyLimiter``): measured 2026-10-31, 20 waiting threads left a describe of
+#: another table answering in 0.02 s, and 50 made it wait 26.8 s.
+THREAD_WAITERS: Final = 20
+_THREAD_WAITER_SEATS: Final = threading.BoundedSemaphore(THREAD_WAITERS)
 
 #: How long a waiting finalize sleeps between two reads of the record (:func:`backoff`): 20 ms at first, so a turn of one
 #: quick commit hands over at once, doubling to 250 ms, so a writer waiting out a whole hold reads the record about 130 times
@@ -112,25 +124,32 @@ class Turn(BaseModel):
 
 
 class CommitTurns(BaseModel):
-    """The turns of the table ``uuid``: at most one live per ref, and the handed ones that lapsed unused, while their
-    cooldown runs."""
+    """The turns of the table ``uuid``: at most one live per ref."""
 
     uuid: str
     turns: list[Turn] = Field(default_factory=list)
 
 
+class Poll(BaseModel):
+    """One read of a table's turns for a writer of one ref: whether another commit holds the ref's turn now, and whether
+    the record keeps one under the writer's own token."""
+
+    model_config = ConfigDict(frozen=True)
+
+    held: bool
+    kept: bool
+
+
 class CommitTurnBusyError(Exception):
-    """A take found another commit still holding the turn at its deadline, a handed turn found its writer cooling down, or
-    every round lost to another writer of the record."""
+    """A take found another commit still holding the turn at its deadline, a wait found :data:`THREAD_WAITERS` threads of
+    the process already sleeping, or every round lost to another writer of the record."""
 
 
 def _kept(record: dict[str, object] | None, now: datetime) -> list[Turn]:
-    """The turns a record keeps at ``now``: the live ones, and the handed ones that lapsed unused, while their cooldown runs."""
+    """The turns a record keeps at ``now``: the live ones."""
     if record is None:
         return []
-    return [
-        turn for turn in CommitTurns.model_validate(record).turns if turn.expires_at > now or (turn.handed_to is not None and turn.expires_at + COOLDOWN > now)
-    ]
+    return [turn for turn in CommitTurns.model_validate(record).turns if turn.expires_at > now]
 
 
 class TableTurns(BaseModel):
@@ -151,26 +170,68 @@ class TableTurns(BaseModel):
         read = records.read_json_at(self.control_root, self.storage_options, self.key)
         return read, _kept(read.stored.record if read.stored else None, read.at)
 
-    def wait(self, ref: str | None, *, mine: str | None = None, until: float | None = None) -> bool:
-        """Return once no commit but the one holding ``mine`` holds ``ref``'s turn, or at ``until`` (a ``time.monotonic``
-        deadline, :data:`HOLD` from now when ``None``), whichever comes first: a waiter outlasts no single hold, however many
-        commits take the turn one after another. Answer whether the record keeps a turn under ``mine`` then, held or handed
-        and lapsed, which the commit releases once it lands.
+    def poll(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> Poll:
+        """Read the record once: whether a commit but the one holding ``mine`` holds ``ref``'s turn now, counting a turn
+        handed to a stock writer only with ``handed`` (a stock writer's peers race it), and whether a turn under ``mine``
+        is kept.
 
         Raises:
             botocore.exceptions.ClientError: The store refused a read.
         """
+        _, turns = self._read()
+        held = any(turn.ref == ref and turn.token != mine and (handed or turn.handed_to is None) for turn in turns)
+        return Poll(held=held, kept=mine is not None and any(turn.token == mine for turn in turns))
+
+    def wait(self, ref: str | None, *, mine: str | None = None, until: float | None = None, handed: bool = True) -> bool:
+        """Return once no commit but the one holding ``mine`` holds ``ref``'s turn (:meth:`poll`), or at ``until`` (a
+        ``time.monotonic`` deadline, :data:`HOLD` from now when ``None``), whichever comes first: a waiter outlasts no
+        single hold, however many commits take the turn one after another. Answer whether the record keeps a turn under
+        ``mine`` then, which the commit releases once it lands. The calling thread sleeps between reads in one of
+        :data:`THREAD_WAITERS` seats.
+
+        Raises:
+            CommitTurnBusyError: The wait would sleep while every seat is taken.
+            botocore.exceptions.ClientError: The store refused a read.
+        """
         deadline = time.monotonic() + HOLD.total_seconds() if until is None else until
+        attempt, seated = 0, False
+        try:
+            while True:
+                poll = self.poll(ref, mine=mine, handed=handed)
+                if not poll.held:
+                    return poll.kept
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    log.warning("commit_turn_wait_outlasted", extra={"table_uuid": self.table_uuid, "ref": ref})
+                    return False
+                if not seated and not _THREAD_WAITER_SEATS.acquire(blocking=False):
+                    raise CommitTurnBusyError(f"{THREAD_WAITERS} threads of this process already wait for a commit turn")
+                seated = True
+                time.sleep(min(backoff(attempt, first=_POLL_SECONDS, cap=_POLL_CAP_SECONDS), left))
+                attempt += 1
+        finally:
+            if seated:
+                _THREAD_WAITER_SEATS.release()
+
+    async def wait_in_loop(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
+        """:meth:`wait` from the event loop, holding no request thread: each read runs on the loop's own executor for as
+        long as the read takes, and the pauses between reads are the loop's, so a door awaiting this costs the same however
+        many writers wait, and stops waiting when its request is cancelled.
+
+        Raises:
+            botocore.exceptions.ClientError: The store refused a read.
+        """
+        deadline = time.monotonic() + HOLD.total_seconds()
         attempt = 0
         while True:
-            read, turns = self._read()
-            if not any(turn.ref == ref and turn.expires_at > read.at and turn.token != mine for turn in turns):
-                return mine is not None and any(turn.token == mine for turn in turns)
+            poll = await asyncio.to_thread(self.poll, ref, mine=mine, handed=handed)
+            if not poll.held:
+                return poll.kept
             left = deadline - time.monotonic()
             if left <= 0:
                 log.warning("commit_turn_wait_outlasted", extra={"table_uuid": self.table_uuid, "ref": ref})
                 return False
-            time.sleep(min(backoff(attempt, first=_POLL_SECONDS, cap=_POLL_CAP_SECONDS), left))
+            await asyncio.sleep(min(backoff(attempt, first=_POLL_SECONDS, cap=_POLL_CAP_SECONDS), left))
             attempt += 1
 
     def _take(self, ref: str | None, *, token: str, hold: timedelta, deadline: float, handed_to: str | None) -> str:
@@ -184,8 +245,6 @@ class TableTurns(BaseModel):
                 if time.monotonic() >= deadline:
                     raise CommitTurnBusyError(f"another commit held the turn on table {self.table_uuid} past the wait")
                 continue
-            if handed_to is not None and any(turn.handed_to == handed_to and turn.ref == ref for turn in turns):
-                raise CommitTurnBusyError(f"a turn handed to this writer on table {self.table_uuid} lapsed unused, so none is handed for {COOLDOWN}")
             mine = Turn(token=token, ref=ref, taken_at=read.at, expires_at=read.at + hold, handed_to=handed_to)
             held = CommitTurns(uuid=self.table_uuid, turns=[*turns, mine]).model_dump(mode="json")
             try:
@@ -203,8 +262,8 @@ class TableTurns(BaseModel):
         at most; the token :meth:`release` ends it with.
 
         Raises:
-            CommitTurnBusyError: Another commit still held the turn after the wait, or every round lost to another writer of
-                the record.
+            CommitTurnBusyError: Another commit still held the turn after the wait, the wait found every seat taken, or
+                every round lost to another writer of the record.
             botocore.exceptions.ClientError: The store refused a read or a write.
         """
         return self._take(ref, token=uuid.uuid4().hex, hold=HOLD, deadline=time.monotonic() + HOLD.total_seconds(), handed_to=None)
@@ -214,8 +273,7 @@ class TableTurns(BaseModel):
         already is kept as it is.
 
         Raises:
-            CommitTurnBusyError: Another commit holds the turn, a turn handed to ``writer``'s caller lapsed unused within
-                :data:`COOLDOWN`, or every round lost to another writer of the record.
+            CommitTurnBusyError: Another commit holds the turn, or every round lost to another writer of the record.
             botocore.exceptions.ClientError: The store refused a read or a write.
         """
         self._take(ref, token=writer.token, hold=HOLD, deadline=time.monotonic(), handed_to=writer.caller)

@@ -235,19 +235,21 @@ class DoorTable:
         Raises:
             ConcurrentModificationError: Another writer took the version first.
             TableChangedError: The table changed since the request's resolution.
+            TurnWaitRefusedError: Every seat a thread waits in was taken.
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
         self.wait_for_turn(recorded_branch(request.branch), mine=turn)
         return self.write_natively("create_table_version", request)
 
-    def finalize_staged_version(self, request: CreateTableVersionRequest, *, writer: commit_turns.Writer | None) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
-        """Finalize a stock writer's staged version as :meth:`finalize_version` does, under the turn ``writer`` was handed if
-        it lost a race before ([[LH-259]]).
+    def finalize_staged_version(self, request: CreateTableVersionRequest, *, writer: commit_turns.Writer | None, kept: bool) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
+        """Finalize a stock writer's staged version through the backend's put-if-not-exists (:meth:`write_natively`), once
+        its door waited out a door's commit turn in the event loop (:meth:`wait_for_turn_in_loop`), which answered whether
+        the record ``kept`` the turn ``writer`` was handed when it lost a race before ([[LH-259]]).
 
         A writer that loses the race is handed the ref's next turn (:meth:`hand_turn`), so its retry, staged again under the
-        same transaction, finalizes before any other writer of the ref. A retry that reaches its finalize releases it; one
-        refused before its finalize, or a writer that never retries, leaves it to lapse at its hold. ``None``, a staged
-        transaction naming no uuid, holds no turn and is handed none.
+        same transaction, finalizes before the catalog's own writers of the ref. A retry that reaches its finalize releases
+        it; one refused before its finalize, or a writer that never retries, leaves it to lapse at its hold. ``None``, a
+        staged transaction naming no uuid, holds no turn and is handed none.
 
         Raises:
             ConcurrentModificationError: Another writer took the version first.
@@ -255,9 +257,7 @@ class DoorTable:
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
         ref = recorded_branch(request.branch)
-        turns = self._turns()
         token = writer.token if writer is not None else None
-        kept = turns.wait(ref, mine=token)
         handed = False
         try:
             return self.write_natively("create_table_version", request)
@@ -268,7 +268,7 @@ class DoorTable:
             raise
         finally:
             if kept and not handed and token is not None:
-                turns.release(token)
+                self._turns().release(token)
 
     def hand_turn(self, ref: str | None, writer: commit_turns.Writer | None) -> bool:
         """Hand ``ref``'s next turn to the stock writer whose commit just lost its race, unless another commit holds the turn
@@ -289,12 +289,28 @@ class DoorTable:
 
     def wait_for_turn(self, ref: str | None, *, mine: str | None = None) -> None:
         """Return once no commit but the one holding ``mine`` holds ``ref``'s commit turn: a write Lance commits itself asks
-        this right before it, and every finalize does (:meth:`finalize_version`).
+        this right before it, and every finalize of a door's commit does (:meth:`finalize_version`). The calling thread
+        sleeps while it waits, in one of a bounded number of seats.
+
+        Raises:
+            TurnWaitRefusedError: Every seat a thread waits in was taken ([[LH-259]]).
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
+        try:
+            self._turns().wait(ref, mine=mine)
+        except commit_turns.CommitTurnBusyError as exc:
+            raise TurnWaitRefusedError(f"commit refused: {exc}; retry it") from exc
+
+    async def wait_for_turn_in_loop(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
+        """:meth:`wait_for_turn` from the event loop, holding no request thread while it waits, so a door awaits it before
+        it enters the thread pool ([[LH-259]]; measured 2026-10-31: 50 writers waiting in threads made a describe of another
+        table wait 26.8 s); whether the record keeps a turn under ``mine``. ``handed=False`` waits out only a catalog door's
+        turn, never one handed to a stock writer, which a stock writer's peers race.
 
         Raises:
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
-        self._turns().wait(ref, mine=mine)
+        return await self._turns().wait_in_loop(ref, mine=mine, handed=handed)
 
     @contextmanager
     def commit_turn(self, ref: str | None) -> Generator[str]:
@@ -374,6 +390,12 @@ class TableChangedError(ConcurrentModificationError):
     Apart from a commit's lost race, which its writer retries by planning again on the new version: a table that
     changed is retried by its caller, who describes it first.
     """
+
+
+class TurnWaitRefusedError(ConcurrentModificationError):
+    """A commit refused before it waited for its ref's commit turn, every seat a thread waits in being taken (the spec's
+    code 14, [[LH-259]]). Apart from a lost race, its commit does not plan again: its caller retries, as a bulkhead's
+    refused caller does, so a refused writer frees its request thread at once."""
 
 
 def _checked[T](act: Callable[[], T], check: Callable[[], None]) -> T:
