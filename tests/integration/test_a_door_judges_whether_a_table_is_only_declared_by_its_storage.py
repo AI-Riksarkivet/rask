@@ -48,6 +48,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
 from lineage.services.provenance import ProvenanceStore
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from tests.integration import store_requests
 from tests.integration.lineage_app import ensure_tables, serve
@@ -157,9 +158,9 @@ def held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Held]:
 
     with TestClient(app) as client:
         # The warehouse and its top-level namespace, as the warehouse door leaves them: the namespace lives in its root.
-        warehouses.put_warehouse(f"file://{registry}", {}, {"id": "wh", "bucket": "wh", "root_uri": str(root), "project": "acme"})
+        warehouses.put_warehouse(f"file://{registry}", StorageOptions(), {"id": "wh", "bucket": "wh", "root_uri": str(root), "project": "acme"})
         connect("dir", {"root": str(root)}).create_namespace(CreateNamespaceRequest(id=["db"], properties=with_minted_uuid(None)))
-        warehouses.bind_namespace(f"file://{registry}", {}, "db", "wh", str(root))
+        warehouses.bind_namespace(f"file://{registry}", StorageOptions(), "db", "wh", str(root))
         for location in (_NESTED, "twin"):
             lance.write_dataset(_every_stored_type(), str(root / location), data_storage_version="2.2", enable_stable_row_ids=True)
         _ok(client, "/v1/table/db$held/register", json={"location": _NESTED})

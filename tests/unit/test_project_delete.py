@@ -35,6 +35,7 @@ from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 class _Emitter:
@@ -54,7 +55,7 @@ def _settings(*, fga_enabled: bool = False) -> Any:
         fga_enabled=fga_enabled,
         fga_root_object="warehouse:lance_catalog",
         registry_root="file:///unused",
-        storage_options=lambda: {},
+        storage_options=lambda: StorageOptions(),
     )
 
 

@@ -31,6 +31,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from service_kit.control_emit import CatalogControlEvent
 from service_kit.lakehouse import maintenance_policies
+from service_kit.lakehouse.objectfs import StorageOptions
 from tests.integration.openfga_grants import act_as
 
 
@@ -106,7 +107,7 @@ def governed(real_ns_client: TestClient, tmp_path: Path) -> Iterator[_TupleStore
     store = _TupleStore()
     real_ns_client.app.state.fga = store
     record = {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": "acme", "status": "active", "created_at": "t"}
-    warehouses.put_warehouse(root, {}, record)
+    warehouses.put_warehouse(root, StorageOptions(), record)
     yield store
 
 
@@ -138,7 +139,7 @@ def test_skip_over_a_half_dropped_namespace_is_refused_as_any_destructive_door_o
     resp = real_ns_client.post("/v1/namespace/ghost/drop?force=true", json={"mode": "Skip"}, headers=AUTH)
 
     assert (resp.status_code, resp.json()["code"]) == (403, 15), resp.text
-    assert warehouses.binding_for_namespace(root, {}, "ghost") is not None, "a refused retry changed the binding"
+    assert warehouses.binding_for_namespace(root, StorageOptions(), "ghost") is not None, "a refused retry changed the binding"
 
 
 def _properties(client: TestClient, namespace: str) -> dict[str, str]:
@@ -172,8 +173,8 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership_and_a_new_uu
     new = f"namespace:{properties['rask.uuid']}"
     assert governed.naming(old) == set(), "a grant on the replaced namespace survived it"
     assert governed.naming(new) == {("user:dex~bob", "owner", new), *{tuple(new if part == old else part for part in edge) for edge in edges}}
-    assert maintenance_policies.get_policy(str(tmp_path), {}, "namespace", replaced) is None
-    assert (warehouses.binding_for_namespace(str(tmp_path), {}, "ghost") or {}).get("warehouse_id") == WAREHOUSE
+    assert maintenance_policies.get_policy(str(tmp_path), StorageOptions(), "namespace", replaced) is None
+    assert (warehouses.binding_for_namespace(str(tmp_path), StorageOptions(), "ghost") or {}).get("warehouse_id") == WAREHOUSE
 
 
 def test_existok_keeps_an_existing_top_level_namespace(real_ns_client: TestClient, governed: _TupleStore) -> None:

@@ -23,6 +23,7 @@ from catalog.services import dataplane, table_claims
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -40,7 +41,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     dataplane.create_table(
         namespace,
-        {},
+        StorageOptions(),
         TABLE_ID,
         pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA),
         root=str(tmp_path / "data"),
@@ -49,7 +50,10 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
         holder="$".join(TABLE_ID),
     )
     dataplane.update_schema_metadata(
-        table_claims.door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID), {}, {INTERNAL: "r-123"}, transaction_properties=STAMP
+        table_claims.door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID),
+        StorageOptions(),
+        {INTERNAL: "r-123"},
+        transaction_properties=STAMP,
     )
     return namespace
 
@@ -61,6 +65,6 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 
 
 def test_the_write_answers_the_map_without_the_internal_key(table: DoorTable) -> None:
-    answer, _ = dataplane.update_schema_metadata(table, {}, {"owner": "bob"}, transaction_properties=STAMP)
+    answer, _ = dataplane.update_schema_metadata(table, StorageOptions(), {"owner": "bob"}, transaction_properties=STAMP)
 
     assert answer == {"owner": "bob"}, f"the write answered the internal key, or lost the caller's: {answer}"

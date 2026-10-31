@@ -11,6 +11,7 @@ import pyarrow.fs as pafs
 import pytest
 
 from catalog.services import dataplane
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 class _CountingFS:
@@ -40,7 +41,7 @@ def test_all_data_files_are_verified_in_one_batched_call(monkeypatch: pytest.Mon
     fs = _CountingFS(missing=set())
     monkeypatch.setattr(dataplane, "dataset_fs", lambda location, so: (fs, "root"))
 
-    dataplane.verify_fragment_data_files("s3://b/t", {}, _fragments(["a.lance", "b.lance", "c.lance"]))
+    dataplane.verify_fragment_data_files("s3://b/t", StorageOptions(), _fragments(["a.lance", "b.lance", "c.lance"]))
 
     # One batched lookup covering all three files — not three serial single-path HEADs.
     assert len(fs.calls) == 1, f"expected one batched get_file_info, got {len(fs.calls)} serial calls"

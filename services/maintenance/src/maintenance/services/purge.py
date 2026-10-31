@@ -341,7 +341,7 @@ def manifest_rows(root: str, storage_options: StorageOptions) -> list[dict[str, 
         if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
             return []
         manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
-        dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
+        dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
         return dataset.to_table(columns=["object_id", "object_type", "location", "metadata"]).to_pylist()
     except Exception:  # noqa: BLE001 — ANY failure here must read as unreadable, never as a partial set
         log.warning("trash_purge_manifest_unreadable", extra={"root": root}, exc_info=True)
@@ -1117,7 +1117,7 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, setti
         uris,
         storage_options,
         configured=settings.external_blob_base_list,
-        record_of=base_record_reader(settings, dict(storage_options)),
+        record_of=base_record_reader(settings, storage_options),
         session=shared_lance_session(),
     )
 

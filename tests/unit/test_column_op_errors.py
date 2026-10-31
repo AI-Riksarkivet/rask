@@ -28,6 +28,7 @@ from catalog.services import table_claims
 from catalog.services.dataplane import create_table, drop_columns
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 #: The stamp a door commits with ([[LH-497]]).
@@ -38,7 +39,7 @@ STAMP = {"rask.author": "alice", "rask.operation": "update"}
 def table(tmp_path: Path) -> DoorTable:
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
-    create_table(ns, {}, ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
     return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
 
 
@@ -55,5 +56,5 @@ def test_a_storage_failure_on_a_column_op_is_not_blamed_on_the_caller(table: Doo
 
     monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", boom)
     with pytest.raises(OSError, match="unreachable") as caught:
-        drop_columns(table, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]), transaction_properties=STAMP)
+        drop_columns(table, StorageOptions(), AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]), transaction_properties=STAMP)
     assert not isinstance(caught.value, LanceNamespaceError), "a storage outage was minted into a domain error"

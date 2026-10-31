@@ -17,6 +17,8 @@ from fastapi.testclient import TestClient
 from lance import blob_array, blob_field
 from lance_namespace import CreateNamespaceRequest, connect
 
+from service_kit.lakehouse.objectfs import StorageOptions
+
 
 def _blob_table(payloads: list[bytes | None]) -> pa.Table:
     schema = pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("src", pa.string())])
@@ -45,10 +47,10 @@ def blob_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
 
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
-    create_table(ns, {}, ["db", "clips"], _blob_table([b"hello-world", b"X" * 100, b""]), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "clips"], _blob_table([b"hello-world", b"X" * 100, b""]), root=str(tmp_path), mode="create", registry=None)
 
     app.dependency_overrides[get_namespace] = lambda: ns
-    app.dependency_overrides[get_storage_options] = lambda: {}
+    app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -163,7 +165,7 @@ def test_get_blob_version_param_over_http(blob_client: TestClient, tmp_path: Pat
     from catalog.services.dataplane import create_table as recreate
 
     ns = blob_client.app.dependency_overrides[get_namespace]()
-    recreate(ns, {}, ["db", "clips"], _blob_table([b"replacement"]), root=str(tmp_path), mode="overwrite", registry=None)
+    recreate(ns, StorageOptions(), ["db", "clips"], _blob_table([b"replacement"]), root=str(tmp_path), mode="overwrite", registry=None)
 
     head = blob_client.get("/management/v1/table/db$clips/blobs", params={"column": "payload", "row": 0})
     assert head.status_code == 200 and head.content == b"replacement"

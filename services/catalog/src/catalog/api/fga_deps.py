@@ -64,6 +64,7 @@ from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.lakehouse import location_claims, object_records, protection, trash
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.subjects import is_person_subject
 
 
@@ -2445,7 +2446,7 @@ async def require_classifier_to_copy_a_label(
     token: Caller | None,
     *,
     table: table_claims.DoorTable,
-    so: dict[str, str],
+    so: StorageOptions,
     branch: str | None,
     expressions: Sequence[str],
 ) -> None:

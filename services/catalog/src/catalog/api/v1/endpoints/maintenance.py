@@ -32,6 +32,7 @@ from catalog.services import maintenance, table_claims
 from service_kit.governed import fga
 from service_kit.lakehouse import maintenance_due
 from service_kit.lakehouse.history_fences import HistoryWork
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -42,7 +43,7 @@ table_router = APIRouter(prefix="/management/v1/table", tags=["maintenance"])
 due_router = APIRouter(prefix="/management/v1/maintenance", tags=["maintenance"])
 
 
-async def _base_refs(ds: object, so: dict[str, str], settings: Settings) -> maintenance.BaseRefs:
+async def _base_refs(ds: object, so: StorageOptions, settings: Settings) -> maintenance.BaseRefs:
     """The #114 pre-pass, run BEFORE either destructive verb.
 
     It has to happen out here rather than inside the service function because the evidence is not on

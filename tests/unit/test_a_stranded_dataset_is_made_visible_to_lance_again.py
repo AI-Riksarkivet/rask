@@ -36,6 +36,7 @@ from maintenance.services.floor import FLOOR_KEY, FloorReport, raise_listing_flo
 from maintenance.services.orphans import OrphanFile
 from service_kit.lakehouse import trash
 from service_kit.lakehouse.base_refs import normalise
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.versions import committed_at
 
 
@@ -95,7 +96,7 @@ def test_lance_reclaims_a_stranded_file_only_after_the_floor_is_raised(tmp_path:
             dataset=uri, path="_transactions/9-dead.txn", kind="transactions", size_bytes=64, reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime
         )
     ]
-    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options={})
+    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
     assert [r.dataset for r in report.raised] == [uri], report
 
     lance.dataset(uri).cleanup_old_versions(older_than=dt.timedelta(seconds=0), delete_unverified=True)
@@ -124,12 +125,12 @@ def readable_floor(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _plan(control_root: Path, orphans: list[OrphanFile], **kwargs: Any) -> FloorReport:
-    return raise_listing_floors(_settings(control_root, dry_run=True, **kwargs), orphans=orphans, names=_named(orphans), storage_options={})
+    return raise_listing_floors(_settings(control_root, dry_run=True, **kwargs), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
 
 
 def test_a_disabled_pass_selects_nothing(readable_floor: None, tmp_path: Path) -> None:
     orphans = [_orphan("s3://wh/a", False)]
-    report = raise_listing_floors(_settings(tmp_path, enabled=False), orphans=orphans, names=_named(orphans), storage_options={})
+    report = raise_listing_floors(_settings(tmp_path, enabled=False), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
 
     assert report.enabled is False
     assert report.raised == [] and report.refused == []
@@ -156,7 +157,7 @@ def test_a_dry_run_writes_no_version(tmp_path: Path) -> None:
     before = lance.dataset(uri).version
 
     orphans = [OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
-    report = raise_listing_floors(_settings(tmp_path, dry_run=True), orphans=orphans, names=_named(orphans), storage_options={})
+    report = raise_listing_floors(_settings(tmp_path, dry_run=True), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
 
     assert [r.dataset for r in report.raised] == [uri], "a dry run must still report the plan"
     assert report.raised[0].version is None
@@ -171,7 +172,7 @@ def test_a_floor_that_already_covers_its_orphans_is_refused(tmp_path: Path) -> N
     lance.dataset(uri).update_config({"unrelated": "commit"})
 
     orphans = [OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=1.0)]
-    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options={})
+    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
 
     assert report.raised == []
     assert [r.refused for r in report.refused] == ["floor already covers these orphans"]
@@ -195,7 +196,7 @@ def test_an_unreadable_dataset_is_refused_and_does_not_stop_the_others(tmp_path:
         _orphan("s3://wh/does-not-exist", False),
         OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime),
     ]
-    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options={})
+    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
 
     assert [r.dataset for r in report.raised] == [uri]
     assert [r.refused for r in report.refused] == ["floor unreadable"]
@@ -224,11 +225,11 @@ def test_the_commit_is_signed_by_the_vended_credential(monkeypatch: pytest.Monke
     the very same dataset, refused for want of a vended credential.
     """
     uri, orphan, _ = _stranded_dataset(tmp_path)
-    seen: list[dict[str, str]] = []
+    seen: list[StorageOptions] = []
 
-    def _vended(dataset_uri: str, settings: Any, *, table_id: str, fallback: dict[str, str]) -> dict[str, str]:
+    def _vended(dataset_uri: str, settings: Any, *, table_id: str, fallback: StorageOptions) -> StorageOptions:
         seen.append(fallback)
-        return {"scoped": "yes"}
+        return StorageOptions(options={"scoped": "yes"})
 
     monkeypatch.setattr("maintenance.services.floor.write_options_for", _vended)
     opened: list[dict[str, str]] = []
@@ -241,9 +242,9 @@ def test_the_commit_is_signed_by_the_vended_credential(monkeypatch: pytest.Monke
     monkeypatch.setattr(lance, "dataset", _record)
 
     orphans = [OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
-    raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options={"ambient": "yes"})
+    raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions(options={"ambient": "yes"}))
 
-    assert seen == [{"ambient": "yes"}], "the ambient options must be offered only as the vend's fallback"
+    assert seen == [StorageOptions(options={"ambient": "yes"})], "the ambient options must be offered only as the vend's fallback"
     assert {"scoped": "yes"} in opened, "the commit was opened with something other than the vended credential"
 
 
@@ -256,7 +257,7 @@ def test_a_catalog_denial_refuses_the_raise(monkeypatch: pytest.MonkeyPatch, rea
     monkeypatch.setattr("maintenance.services.floor.write_options_for", _denied)
 
     orphans = [_orphan("s3://wh/denied", False)]
-    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options={})
+    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
 
     assert report.raised == []
     assert "REFUSED a write credential" in (report.refused[0].refused or "")
@@ -274,7 +275,7 @@ def test_a_table_the_catalog_does_not_govern_refuses_the_raise(monkeypatch: pyte
             return_value=httpx.Response(404, json={"code": 4, "detail": "Table not found"})
         )
         names = TableIds(by_location={normalise(named.dataset): "acme-bronze$events"})
-        report = raise_listing_floors(settings, orphans=[named, unnamed], names=names, storage_options={})
+        report = raise_listing_floors(settings, orphans=[named, unnamed], names=names, storage_options=StorageOptions())
 
     assert report.raised == []
     assert {r.dataset: r.refused for r in report.refused} == {
@@ -300,7 +301,7 @@ def test_a_location_the_catalog_governs_elsewhere_refuses_the_raise(monkeypatch:
         )
         orphans = [_orphan("s3://wh/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f", False)]
         names = TableIds(by_location={normalise(orphans[0].dataset): "acme-bronze$events"})
-        report = raise_listing_floors(settings, orphans=orphans, names=names, storage_options={})
+        report = raise_listing_floors(settings, orphans=orphans, names=names, storage_options=StorageOptions())
 
     assert report.raised == []
     assert elsewhere in (report.refused[0].refused or ""), report.refused
@@ -317,9 +318,9 @@ def test_a_dataset_already_raised_is_not_raised_again(tmp_path: Path) -> None:
     uri, orphan, _ = _stranded_dataset(tmp_path)
     orphans = [OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
 
-    first = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options={})
+    first = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
     version_after_first = lance.dataset(uri).version
-    second = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options={})
+    second = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
 
     assert [r.dataset for r in first.raised] == [uri]
     assert second.raised == []
@@ -338,14 +339,14 @@ def test_a_trashed_dataset_is_refused_before_the_cap_and_gains_no_version(tmp_pa
     trashed, trashed_orphan, _ = _stranded_dataset(tmp_path / "a")
     live, live_orphan, _ = _stranded_dataset(tmp_path / "b")
     record = trash.make_record("acme$frozen", uuid=str(uuid4()), location=str(tmp_path / recorded), dropped_by="owner", grace_days=7)
-    trash.put(str(tmp_path), {}, record)
+    trash.put(str(tmp_path), StorageOptions(), record)
     before = lance.dataset(trashed).version
 
     orphans = [
         OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)
         for uri, orphan in ((trashed, trashed_orphan), (live, live_orphan))
     ]
-    report = raise_listing_floors(_settings(tmp_path, max_per_tick=1), orphans=orphans, names=_named(orphans), storage_options={})
+    report = raise_listing_floors(_settings(tmp_path, max_per_tick=1), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
 
     assert [r.dataset for r in report.raised] == [live], "the trashed dataset was taken, or took the only slot"
     assert [(r.dataset, r.refused) for r in report.refused] == [(trashed, f"in trash as acme$frozen (expires_at={record['expires_at']})")]
@@ -362,7 +363,7 @@ def test_an_unreadable_trash_index_writes_and_plans_nothing(tmp_path: Path) -> N
     before = lance.dataset(uri).version
 
     orphans = [OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
-    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options={})
+    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
 
     assert (report.raised, report.refused, lance.dataset(uri).version) == ([], [], before)
     assert (report.error or "").startswith("the trash index could not be read"), report

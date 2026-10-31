@@ -16,17 +16,22 @@ from uuid import uuid4
 
 from catalog.services import warehouses
 from service_kit.lakehouse import trash
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _trash(control: str, canonical_id: str, location: str = "", *, kind: str = "table", warehouse: str | None = None) -> None:
     binding = {"warehouse_id": warehouse, "root_uri": "s3://acme-bkt"} if warehouse else None
-    trash.put(control, {}, trash.make_record(canonical_id, uuid=str(uuid4()), location=location, dropped_by="tester", grace_days=7, kind=kind, binding=binding))
+    trash.put(
+        control,
+        StorageOptions(),
+        trash.make_record(canonical_id, uuid=str(uuid4()), location=location, dropped_by="tester", grace_days=7, kind=kind, binding=binding),
+    )
 
 
 def test_the_trash_a_warehouse_ends_is_its_own_and_each_child_comes_before_its_parent(tmp_path: Path) -> None:
     control = str(tmp_path / "control")
-    warehouses.bind_namespace(control, {}, "bronze", "acme-work", "s3://acme-bkt")
-    warehouses.bind_namespace(control, {}, "gold", "acme-gold", "s3://acme-bkt")
+    warehouses.bind_namespace(control, StorageOptions(), "bronze", "acme-work", "s3://acme-bkt")
+    warehouses.bind_namespace(control, StorageOptions(), "gold", "acme-gold", "s3://acme-bkt")
     _trash(control, "bronze$trashed", "s3://acme-bkt/a_bronze$trashed")
     _trash(control, "silver", kind="namespace", warehouse="acme-work")
     _trash(control, "silver$inner", kind="namespace")
@@ -38,7 +43,7 @@ def test_the_trash_a_warehouse_ends_is_its_own_and_each_child_comes_before_its_p
     _trash(control, "platinum$p", "s3://acme-bkt/e_platinum$p")
     _trash(control, "beta$t", "s3://beta-bkt/f_beta$t")
 
-    owned = warehouses.trash_owned_by(control, {}, "acme-work", bucket="acme-bkt")
+    owned = warehouses.trash_owned_by(control, StorageOptions(), "acme-work", bucket="acme-bkt")
 
     ended = [(str(record["kind"]), str(record["id"])) for record in owned]
     assert sorted(ended) == [

@@ -29,6 +29,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
 from service_kit.lakehouse import trash
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_path: Path) -> None:
@@ -44,7 +45,7 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
     ns.deregister_table(DeregisterTableRequest(id=["team", "orders"]))
     trash.put(
         control_root,
-        {},
+        StorageOptions(),
         trash.make_record(
             "team$orders", uuid=str(uuid4()), location=location, dropped_by="user:alice", grace_days=7, now=datetime.now(UTC) - timedelta(days=30)
         ),
@@ -63,7 +64,7 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
     assert out.purged == [], f"the purge deleted bytes table team$renamed resolves to: {out.purged}"
     assert [(refused.id, "still registered" in refused.reason) for refused in out.refused] == [("team$orders", True)], out.refused
     assert Path(location.removeprefix("file://"), "_versions").is_dir()
-    assert [record["id"] for record in trash.named(control_root, {}, "team$orders")] == ["team$orders"]
+    assert [record["id"] for record in trash.named(control_root, StorageOptions(), "team$orders")] == ["team$orders"]
 
 
 @pytest.mark.parametrize(

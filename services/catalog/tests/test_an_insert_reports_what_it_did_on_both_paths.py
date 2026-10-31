@@ -31,6 +31,7 @@ from catalog.services.dataplane import create_table, insert_into_table
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -60,8 +61,8 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    create_table(namespace, {}, TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(TABLE_ID))
-    open_by_name(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
+    create_table(namespace, StorageOptions(), TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(TABLE_ID))
+    open_by_name(namespace, StorageOptions(), TABLE_ID).create_branch(BRANCH, None)
     return namespace
 
 
@@ -78,9 +79,16 @@ def test_both_paths_report_the_same_shape_for_the_same_payload(table: DoorTable)
     field, one fewer comparison — so it could only ever fail when this one already had. The messages
     below carry which side was wrong, which is the only thing the extra test bought.
     """
-    main = insert_into_table(table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append"), _ipc(_rows(20)), max_bytes=_BODY_LIMIT, transaction_properties={})
+    main = insert_into_table(
+        table, StorageOptions(), InsertIntoTableRequest(id=TABLE_ID, mode="append"), _ipc(_rows(20)), max_bytes=_BODY_LIMIT, transaction_properties={}
+    )
     branched = insert_into_table(
-        table, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), _ipc(_rows(30)), max_bytes=_BODY_LIMIT, transaction_properties={}
+        table,
+        StorageOptions(),
+        InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH),
+        _ipc(_rows(30)),
+        max_bytes=_BODY_LIMIT,
+        transaction_properties={},
     )
 
     assert main.num_inserted_rows == 2, f"the MAIN path did not report the rows it wrote: {main}"

@@ -468,9 +468,10 @@ def protected_roots(
         session = lance_session(DEFAULT_METADATA_CACHE_MB << 20, DEFAULT_INDEX_CACHE_MB << 20)
     declared: dict[str, list[BasePathRef]] = {}
     unreadable: list[tuple[str, str]] = []
+    in_clear = None if storage_options is None else (storage_options.in_clear() or None)
     for uri in dataset_uris:
         try:
-            declared[uri] = manifest_base_path_refs(lance.dataset(uri, storage_options=storage_options, session=session))
+            declared[uri] = manifest_base_path_refs(lance.dataset(uri, storage_options=in_clear, session=session))
         except Exception as exc:
             unreadable.append((uri, f"{type(exc).__name__}: {exc}"))
     refs = classify_base_refs(declared, configured=configured, record_of=record_of)

@@ -94,7 +94,7 @@ def announced_commits(feed_location: str, so: StorageOptions, table_uuid: str, *
     The ref key is :func:`commit_records.ref_key`'s. A row naming the table among its outputs (a run) or as its dataset
     (a static change) at a version counts, whatever the name it used.
     """
-    feed = lance.dataset(feed_location, storage_options=dict(so) if so else None)
+    feed = lance.dataset(feed_location, storage_options=so.in_clear() or None)
     rows = feed.to_table(
         columns=["event"],
         filter=f"array_has(table_uuids, {sql_literal(table_uuid)}) AND received_at >= TIMESTAMP {sql_literal(since.strftime('%Y-%m-%d %H:%M:%S'))}",
@@ -139,7 +139,7 @@ def _commits_named(event: dict[str, Any], table_uuid: str) -> Iterator[tuple[str
 
 def refs_of(location: str, so: StorageOptions, segments: list[str]) -> list[tuple[str | None, str | None]]:
     """Main and every branch of the table, each with its incarnation (pylance's ``branch_identifier``)."""
-    dataset = lance.dataset(location, storage_options=dict(so) if so else None)
+    dataset = lance.dataset(location, storage_options=so.in_clear() or None)
     refs: list[tuple[str | None, str | None]] = [(None, None)]
     for name in sorted(dataset.branches.list() or {}):
         refs.append((name, dataplane.branch_identifier(location, so, segments, name)))
@@ -222,7 +222,7 @@ def _versions_after(location: str, so: StorageOptions, branch: str | None, mark:
     Raises:
         ReconcileReadError: A retained version could not be opened.
     """
-    root = lance.dataset(location, storage_options=dict(so) if so else None)
+    root = lance.dataset(location, storage_options=so.in_clear() or None)
     latest = root.checkout_version((branch, None)) if branch is not None else root
     retained = sorted(int(entry["version"]) for entry in latest.versions())
     for version in (v for v in retained if mark is None or v > mark):

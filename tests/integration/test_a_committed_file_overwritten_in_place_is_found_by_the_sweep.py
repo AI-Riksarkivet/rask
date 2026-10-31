@@ -33,11 +33,13 @@ import pyarrow as pa
 import pytest
 import uvicorn
 from lance import blob_array
+from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.due import TableIds
 from maintenance.services.plan import PlanContext
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import file_identities
 from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.maintenance_due import CloneList
@@ -65,7 +67,7 @@ class _Estate:
         self.client = client
         self.bucket = bucket
         self.stock = lance_namespace.connect("rest", {"uri": str(client.base_url)})
-        self.key = lance_storage_options(url, "test", "test", "us-east-1")
+        self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
 
@@ -185,12 +187,12 @@ def _added_by(estate: _Estate, location: str, commit: Callable[[], None], patter
 
 def _stock_append(estate: _Estate, location: str) -> None:
     """A stock client's append, which it stages itself and asks ``version/create`` to finalize."""
-    written = lance.fragment.write_fragments(_rows("bob", 3), location, storage_options=estate.key)
+    written = lance.fragment.write_fragments(_rows("bob", 3), location, storage_options=estate.key.in_clear())
     lance.LanceDataset.commit(
         location,
         lance.LanceOperation.Append(written),
-        read_version=lance.dataset(location, storage_options=estate.key).version,
-        storage_options=estate.key,
+        read_version=lance.dataset(location, storage_options=estate.key.in_clear()).version,
+        storage_options=estate.key.in_clear(),
         namespace_client=estate.stock,
         table_id=_TABLE_ID,
         namespace_client_managed_versioning=True,
@@ -245,7 +247,7 @@ def _the_transaction_file_of_a_stock_clients_version_create(estate: _Estate) -> 
 
 def _an_index_file_of_a_stock_clients_version_create(estate: _Estate) -> tuple[str, str]:
     location = estate.create(_rows("bob"))
-    opened = lance.dataset(namespace_client=estate.stock, table_id=_TABLE_ID, storage_options=estate.key)
+    opened = lance.dataset(namespace_client=estate.stock, table_id=_TABLE_ID, storage_options=estate.key.in_clear())
     return location, _added_by(estate, location, lambda: opened.create_scalar_index("id", "BTREE"), r"_indices/[^/]+/[^/]+")
 
 
@@ -294,7 +296,7 @@ def test_a_file_a_commit_added_is_named_by_the_sweep_once_it_is_not_as_committed
 def test_a_record_is_forgotten_once_no_retained_version_names_its_files(estate: _Estate) -> None:
     location = estate.create(_rows("bob"))
     estate.write("create?mode=Overwrite", _rows("eve"))
-    overwrite = lance.dataset(location, storage_options=estate.key).read_transaction(2)
+    overwrite = lance.dataset(location, storage_options=estate.key.in_clear()).read_transaction(2)
     assert overwrite is not None, "precondition: the overwrite's version names its transaction"
 
     assert (estate.swept(location, reclaiming=True), estate.recorded()) == ([], [overwrite.uuid])

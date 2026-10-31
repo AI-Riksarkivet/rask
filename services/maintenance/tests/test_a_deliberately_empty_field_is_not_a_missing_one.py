@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 
 from maintenance.services.reconcile import _list_json_records
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _write(tmp_path: Path, name: str, payload: dict[str, object]) -> None:
@@ -47,7 +48,7 @@ def _read(tmp_path: Path) -> tuple[list[dict[str, str]], list[str]]:
     configuration the estate never uses, and would have reported an identity-less record as accepted
     while production rejected it.
     """
-    return _list_json_records(f"file://{tmp_path}", {}, prefix="_trash", required=("id", "location"), non_empty=("id",))
+    return _list_json_records(f"file://{tmp_path}", StorageOptions(), prefix="_trash", required=("id", "location"), non_empty=("id",))
 
 
 @pytest.mark.parametrize(

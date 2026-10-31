@@ -52,6 +52,7 @@ from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga as fga_module
 from service_kit.lakehouse import location_claims, trash
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 _NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
@@ -165,12 +166,12 @@ class _Estate:
             properties=properties,
             namespace_uuid=namespace_uuid,
         )
-        trash.put(self.control_root, {}, record)
+        trash.put(self.control_root, StorageOptions(), record)
         return record
 
     def record(self, canonical: str, *, kind: str = "table") -> dict[str, Any] | None:
         """The one trash record dropped under ``canonical``, or ``None``: each test drops a name once."""
-        held = trash.named(self.control_root, {}, canonical, kind=kind)
+        held = trash.named(self.control_root, StorageOptions(), canonical, kind=kind)
         assert len(held) <= 1, held
         return held[0] if held else None
 
@@ -470,15 +471,17 @@ def test_a_deactivated_warehouses_bucket_is_outside_the_maintained_estate(tmp_pa
     from catalog.services import warehouses as wh_svc
 
     control_root = f"file://{tmp_path / 'control'}"
-    wh_svc.put_warehouse(control_root, {}, {"id": "wh-live", "bucket": "bkt-live", "root_uri": "s3://bkt-live", "project": "acme", "created_at": "t"})
+    wh_svc.put_warehouse(
+        control_root, StorageOptions(), {"id": "wh-live", "bucket": "bkt-live", "root_uri": "s3://bkt-live", "project": "acme", "created_at": "t"}
+    )
     wh_svc.put_warehouse(
         control_root,
-        {},
+        StorageOptions(),
         {"id": "wh-gone", "bucket": "bkt-quarantined", "root_uri": "s3://bkt-quarantined", "project": "acme", "created_at": "t", "status": "deactivated"},
     )
     settings = _settings(tmp_path)
 
-    roots = mod.maintained_roots(settings, {})
+    roots = mod.maintained_roots(settings, StorageOptions())
 
     assert "s3://bkt-live" in roots
     assert "s3://bkt-quarantined" not in roots, "a quarantined tenant's bucket entered the reclaimable estate"
@@ -820,7 +823,7 @@ def test_the_protection_prepass_scans_AS_DEEP_AS_the_thing_it_protects_against(m
     monkeypatch.setattr(discovery_mod, "discover_datasets", _fake_discover)
     monkeypatch.setattr(base_refs_mod, "protected_roots", lambda *_a, **_kw: BaseRefs())
 
-    mod._estate_base_refs({"file:///nowhere"}, {}, settings=_settings(tmp_path, discovery_max_depth=7))
+    mod._estate_base_refs({"file:///nowhere"}, StorageOptions(), settings=_settings(tmp_path, discovery_max_depth=7))
 
     assert seen["max_depth"] == 7, f"the protection pre-pass walked to {seen['max_depth']} while the purge reaches 7"
 
@@ -956,7 +959,7 @@ def test_a_table_recovered_AFTER_the_liveness_snapshot_is_still_refused(tmp_path
 
     # THE TEST'S OWN PRECONDITION. If the mid-tick re-register had failed, the id would not be live and
     # purging it would be CORRECT — the assertions below would then be demanding the wrong behaviour.
-    live_now = mod.live_object_ids(estate.data_root, {})
+    live_now = mod.live_object_ids(estate.data_root, StorageOptions())
     assert live_now is not None and canonical in live_now, f"the mid-tick undrop did not land; this test proves nothing: {live_now}"
 
     assert out.purged == [], f"purge reclaimed a table that was re-registered during the tick: {out.purged}"

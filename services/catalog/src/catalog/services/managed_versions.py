@@ -96,7 +96,7 @@ def _listed_branches(table_location: str, so: StorageOptions) -> set[str]:
     bare error as an absent dataset.
     """
     try:
-        return set(lance.dataset(table_location, storage_options=dict(so) if so else None).branches.list())
+        return set(lance.dataset(table_location, storage_options=so.in_clear() or None).branches.list())
     except (OSError, ValueError) as exc:
         if reads_as_store_outage(exc):
             raise ServiceUnavailableError("the object store did not answer listing the table's branches") from exc
@@ -152,7 +152,7 @@ def _staged_uri(location: str, manifest_path: str) -> str:
 def _latest_version(location: str, so: StorageOptions) -> int:
     """The table's latest committed version, 0 for a declared table with none."""
     try:
-        return int(lance.dataset(location, storage_options=dict(so) if so else None).version)
+        return int(lance.dataset(location, storage_options=so.in_clear() or None).version)
     except (OSError, ValueError):
         return 0
 
@@ -191,7 +191,7 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     _write(location, so, f"d{detached_id}.manifest", manifest_bytes.with_manifest_version(manifest, detached_id))
     _write(location, so, f"d{finalize_id}.manifest", manifest)
     try:
-        transaction = lance.dataset(location, version=detached_id, storage_options=dict(so) if so else None).read_transaction(detached_id)
+        transaction = lance.dataset(location, version=detached_id, storage_options=so.in_clear() or None).read_transaction(detached_id)
     except (OSError, ValueError) as exc:
         _discard(location, so, detached_id, finalize_id)
         # A version Lance itself cannot open (an overlay on an appended fragment set reader flags 66, measured on
@@ -234,7 +234,7 @@ def _unmodelled_operation(manifest: bytes) -> str | None:
 
 
 def _open(staged: StagedVersion, so: StorageOptions) -> lance.LanceDataset:
-    return lance.dataset(staged.location, version=staged.detached_id, storage_options=dict(so) if so else None)
+    return lance.dataset(staged.location, version=staged.detached_id, storage_options=so.in_clear() or None)
 
 
 #: The file version and row ids every table is created with (CLAUDE.md, "A Lance APPEND never names a file version").
@@ -773,7 +773,7 @@ def judge(
             another dataset resolves its files through.
     """
     proposed = _open(staged, so)
-    current = None if staged.creates else lance.dataset(staged.location, version=staged.version - 1, storage_options=dict(so) if so else None)
+    current = None if staged.creates else lance.dataset(staged.location, version=staged.version - 1, storage_options=so.in_clear() or None)
     _refuse_changed_invariants(proposed, current)
     _refuse_changed_schema_governance(proposed, current)
     encoding.require_no_new_invalid_encoding(current, proposed)

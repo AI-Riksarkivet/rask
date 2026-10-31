@@ -40,6 +40,7 @@ from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
 from catalog.core.modes import DropMode
 from service_kit.lakehouse.naming import UUID_PROPERTY
+from service_kit.lakehouse.objectfs import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -52,8 +53,8 @@ class _Settings:
     trash_grace_days = 0
     registry_root = "file:///tmp/does-not-matter"
 
-    def storage_options(self) -> dict[str, str]:
-        return {}
+    def storage_options(self) -> StorageOptions:
+        return StorageOptions()
 
 
 async def _drop(

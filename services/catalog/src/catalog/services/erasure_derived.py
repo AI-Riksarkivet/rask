@@ -236,7 +236,7 @@ def _edge_list(settings: Settings, ns: LanceNamespace | None, so: StorageOptions
         described = native.call(ns, "describe_table", DescribeTableRequest(id=[settings.provenance_namespace, derived_tables.EDGES]))
     except (NamespaceNotFoundError, TableNotFoundError):
         return None
-    return lance.dataset(str(described.location), storage_options=dict(so) if so else None)
+    return lance.dataset(str(described.location), storage_options=so.in_clear() or None)
 
 
 def _claimed(settings: Settings) -> tuple[frozenset[str], Mapping[str, str]]:

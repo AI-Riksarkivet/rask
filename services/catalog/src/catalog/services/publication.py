@@ -58,6 +58,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core.config import shared_lance_session
 from catalog.services import dataplane
 from service_kit.lakehouse import gate_specs
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, tier_contract_violations
 
 
@@ -231,7 +232,7 @@ class EffectiveGate(BaseModel):
         return gate_source_for(self.declared_by)
 
 
-def declared_gate(registry_root: str, storage_options: dict[str, str], project: str) -> GateSpec | None:
+def declared_gate(registry_root: str, storage_options: StorageOptions, project: str) -> GateSpec | None:
     """This project's declared gate settings, or `None` when nobody declared any.
 
     NEVER RAISES, and the stance is held deliberately: an unresolvable declaration
@@ -263,7 +264,7 @@ def effective_gate(spec: GateSpec | None, *, key_column: str, required_columns: 
     return EffectiveGate(key_column=spec.key_column, required_columns=union, declared_by=spec.project, review=review)
 
 
-def _open_for_contract(uri: str, storage_options: dict[str, str], version: int) -> tuple[Any, bool | None, int]:
+def _open_for_contract(uri: str, storage_options: StorageOptions, version: int) -> tuple[Any, bool | None, int]:
     """The schema, stable-row-id property and row count of ``version`` at ``uri`` — the gate's reads off the data.
 
     `publish` already holds an opened dataset and reads them off it; `gate` is handed a URI and has to
@@ -273,7 +274,7 @@ def _open_for_contract(uri: str, storage_options: dict[str, str], version: int) 
     """
     import lance
 
-    dataset = lance.dataset(uri, storage_options=storage_options, version=version, session=shared_lance_session())
+    dataset = lance.dataset(uri, storage_options=storage_options.in_clear(), version=version, session=shared_lance_session())
     # EVERY READING FROM ONE OPEN. The schema answers the column half of the contract,
     # `has_stable_row_ids` answers the half the columns cannot show, and the row count is the band's;
     # opening twice would let a concurrent commit put them on different versions.
@@ -362,7 +363,7 @@ class PublicationResult(BaseModel):
         return self.published and self.to_version != self.from_version
 
 
-def _main_version_of_tag(table: DoorTable, so: dict[str, str], tag: str) -> int | None:
+def _main_version_of_tag(table: DoorTable, so: StorageOptions, tag: str) -> int | None:
     """The main version a tag points at, or None when unset.
 
     Resolved where `GetTableTagVersion` resolves a tag (`dataplane.tag_reference`), so there is ONE resolution path,
@@ -377,12 +378,12 @@ def _main_version_of_tag(table: DoorTable, so: dict[str, str], tag: str) -> int 
     )
 
 
-def published_version(table: DoorTable, so: dict[str, str]) -> int | None:
+def published_version(table: DoorTable, so: StorageOptions) -> int | None:
     """The version `published` points at, or None when nothing has been published yet."""
     return _main_version_of_tag(table, so, PUBLISHED_TAG)
 
 
-def set_tag(table: DoorTable, so: dict[str, str], tag: str, version: int) -> None:
+def set_tag(table: DoorTable, so: StorageOptions, tag: str, version: int) -> None:
     """Create the tag, or move it if it already exists.
 
     The spec splits create and update into two operations and refuses the wrong one, so which to call
@@ -410,7 +411,7 @@ def set_tag(table: DoorTable, so: dict[str, str], tag: str, version: int) -> Non
     dataplane.update_tag(table, so, UpdateTableTagRequest(id=table.segments, tag=tag, version=version))
 
 
-def advance(table: DoorTable, so: dict[str, str], version: int, *, tag: str = PUBLISHED_TAG) -> tuple[bool, int | None]:
+def advance(table: DoorTable, so: StorageOptions, version: int, *, tag: str = PUBLISHED_TAG) -> tuple[bool, int | None]:
     """Move ``tag`` forward to ``version``: whether it moved, and the version it named before.
 
     Read again right before the move, so a publication that landed after the caller's own read is never moved back
@@ -424,13 +425,13 @@ def advance(table: DoorTable, so: dict[str, str], version: int, *, tag: str = PU
     return True, current
 
 
-def drop_tag(table: DoorTable, so: dict[str, str], tag: str) -> None:
+def drop_tag(table: DoorTable, so: StorageOptions, tag: str) -> None:
     """Delete the tag; one that is already gone is the outcome asked for, not an error."""
     with contextlib.suppress(TableTagNotFoundError):
         dataplane.delete_tag(table, so, DeleteTableTagRequest(id=table.segments, tag=tag))
 
 
-def rows_at(table: DoorTable, so: dict[str, str], version: int | None) -> int | None:
+def rows_at(table: DoorTable, so: StorageOptions, version: int | None) -> int | None:
     """The row count of ``version`` on main, or ``None`` for no version. Read off the manifest, not a scan."""
     return None if version is None else int(table.open(so, version=version).count_rows())
 
@@ -441,7 +442,7 @@ def gate(
     key_column: str,
     version: int,
     required_columns: Sequence[str] = (),
-    storage_options: dict[str, str] | None = None,
+    storage_options: StorageOptions | None = None,
     declared_by: str = "",
     review: ReviewPolicy | None = None,
     published_rows: int | None = None,
@@ -470,7 +471,7 @@ def gate(
     """
     assertions = assert_quality(
         uri,
-        storage_options or {},
+        storage_options or StorageOptions(),
         key_column=key_column,
         required_columns=tuple(required_columns),
         version=version,
@@ -482,7 +483,7 @@ def gate(
     # the reviewer has no way to see it coming. Opening the dataset a second time is the cost of
     # answering the same question — `assert_quality` above opened it for the assertions, and the
     # contract is a schema read, not a scan.
-    contract_schema, stable_ids, rows = _open_for_contract(uri, storage_options or {}, version)
+    contract_schema, stable_ids, rows = _open_for_contract(uri, storage_options or StorageOptions(), version)
     refuse_a_tier_without_provenance(contract_schema, version=version, has_stable_row_ids=stable_ids)
     band = review_reasons(rows=rows, published_rows=published_rows, band=review.band) if review is not None else []
     verdict = judge_findings(assertions, band_reasons=band, review=review is not None)
@@ -501,7 +502,7 @@ def gate(
 
 def publish(
     table: DoorTable,
-    storage_options: dict[str, str],
+    storage_options: StorageOptions,
     *,
     version: int,
     key_column: str,

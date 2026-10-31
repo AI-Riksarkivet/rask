@@ -16,6 +16,7 @@ import pytest
 
 from service_kit.lakehouse import history_fences, records
 from service_kit.lakehouse.history_fences import HistoryFence, HistoryWork, TableHistory
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 @pytest.mark.parametrize(
@@ -36,6 +37,6 @@ def test_a_take_is_refused_only_by_a_live_hold_of_the_other_kind(
 
     history.take(then)
 
-    fence = records.read_json(history.control_root, {}, history.key)
+    fence = records.read_json(history.control_root, StorageOptions(), history.key)
     assert fence is not None
     assert [holder.work for holder in HistoryFence.model_validate(fence[0]).holders] == held_by

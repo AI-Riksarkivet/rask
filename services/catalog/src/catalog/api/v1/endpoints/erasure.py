@@ -54,6 +54,7 @@ from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.lakehouse import derived_tables
 from service_kit.lakehouse.history_fences import TableHistory
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.records import RecordExistsError
 
 
@@ -432,11 +433,11 @@ def _pin_release(record: erasure_release.ReleaseRecord, settings: Settings) -> P
     )
 
 
-def _open_cold(location: str, storage_options: dict[str, str]) -> lance.LanceDataset:
+def _open_cold(location: str, storage_options: StorageOptions) -> lance.LanceDataset:
     """The verification's handle: the LOCATION the obligation was recorded on, not the id resolved again, so the
     evidence cannot come from anywhere else; on a session no request has read through, because the shared one can
     answer a version whose files the reclaim just deleted (see `erasure.verify`)."""
-    return lance.dataset(location, storage_options=storage_options, session=fresh_lance_session())
+    return lance.dataset(location, storage_options=storage_options.in_clear(), session=fresh_lance_session())
 
 
 # One exported router, as `router.py` mounts `_module.router` for every endpoint module.

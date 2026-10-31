@@ -26,6 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.services import projects, warehouses
+from service_kit.lakehouse.objectfs import StorageOptions
 from storage import s3_client
 
 
@@ -105,7 +106,7 @@ def _control(tmp_path: Path) -> str:
 
 
 def _seed_project(tmp_path: Path) -> None:
-    projects.put_project(_control(tmp_path), {}, {"id": "acme", "created_at": "t", "created_by": "x", "protected": "false"})
+    projects.put_project(_control(tmp_path), StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x", "protected": "false"})
 
 
 def _estate_buckets(moto_url: str) -> set[str]:
@@ -143,7 +144,7 @@ def test_create_refuses_an_endpoint_that_is_not_the_estates(
 
     response = catalog.post("/management/v1/warehouses", json={"id": warehouse, "project": "acme", "endpoint": named})
 
-    recorded = warehouses.get_warehouse(_control(tmp_path), {}, warehouse) is not None
+    recorded = warehouses.get_warehouse(_control(tmp_path), StorageOptions(), warehouse) is not None
     created = _estate_buckets(moto_url) - before
     outcome = (response.status_code, response.json().get("code"), recorded, created, foreign_store.seen)
     assert outcome == (status, code, provisioned, {warehouse} if provisioned else set(), []), response.text
@@ -177,7 +178,7 @@ def test_a_record_naming_another_store_is_refused_at_every_door(
     _seed_project(tmp_path)
     warehouses.put_warehouse(
         control,
-        {},
+        StorageOptions(),
         {
             "id": warehouse,
             "bucket": warehouse,
@@ -188,7 +189,7 @@ def test_a_record_naming_another_store_is_refused_at_every_door(
             "endpoint": foreign_store.url,
         },
     )
-    warehouses.bind_namespace(control, {}, "fns", warehouse, f"s3://{warehouse}")
+    warehouses.bind_namespace(control, StorageOptions(), "fns", warehouse, f"s3://{warehouse}")
     before = _estate_buckets(moto_url)
 
     response = catalog.request(

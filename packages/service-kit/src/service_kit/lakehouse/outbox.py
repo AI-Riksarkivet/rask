@@ -65,25 +65,20 @@ def _object_key(run_id: str, event_json: str) -> str:
 
 
 def _outbox_s3_client(storage_options: StorageOptions) -> S3Client:
-    """The storage seam's client for an outbox, reading the credential under BOTH spellings.
-
-    The estate spells one credential two ways and a reader that knows one signs as nobody.
-    ``lance_storage_options`` emits ``aws_``-prefixed keys deliberately — the bare ones do not displace
-    a pod's ambient ``AWS_*`` environment and object_store blends the two sources — while the catalog's
-    own ``storage_options()`` returns the BARE form (measured 2026-09-10 against the running pod), and
-    the vending door returns the prefixed one. All three reach this module.
+    """The storage seam's client for an outbox, signed by the options' whole key pair (``StorageOptions.credential_in_clear``).
 
     The SESSION TOKEN is not optional to forward. A vended STS credential without it is not a weaker
     credential, it is an invalid one, and dropping it falls back to whatever ambient chain boto3 finds —
     broader rights than the vend scoped, not narrower. Shared by the stage and the drop so the pair
-    cannot drift: one of them reading a spelling the other does not is a silent half-fix.
+    cannot drift.
     """
+    access_key, secret_key, session_token = storage_options.credential_in_clear()
     return s3_client(
-        storage_options.get("endpoint"),
-        access_key=storage_options.get("aws_access_key_id") or storage_options.get("access_key_id"),
-        secret_key=storage_options.get("aws_secret_access_key") or storage_options.get("secret_access_key"),
-        session_token=storage_options.get("aws_session_token") or storage_options.get("session_token"),
-        region=storage_options.get("region"),
+        storage_options.options.get("endpoint"),
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+        region=storage_options.options.get("region"),
     )
 
 
@@ -108,7 +103,7 @@ def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, e
     S3 goes through the estate's CLIENT seam (``packages/storage``), a plain PutObject. Everything else
     keeps the filesystem path: a local outbox is a real directory and genuinely needs its parent made.
     """
-    if outbox_uri.startswith("s3://") and storage_options.get("endpoint"):
+    if storage_options.reaches_by_endpoint(outbox_uri):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
         key = f"{_object_key(run_id, event_json)}.json"
         _outbox_s3_client(storage_options).put_object(
@@ -146,14 +141,11 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     and writes nothing. Everything else keeps the filesystem path: a local outbox is a real directory,
     and `delete_file` there needs no object-store permissions at all.
     """
-    if outbox_uri.startswith("s3://") and storage_options.get("endpoint"):
+    if storage_options.reaches_by_endpoint(outbox_uri):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
-        # BOTH SPELLINGS, through the shared reader — see :func:`_outbox_s3_client`. Reading one leaves
-        # the other `None` and boto3 falls back to its default chain; the lineage pod carries no ambient
-        # `AWS_*` (measured 2026-09-10), so that is not a delete signed as the wrong identity but a
-        # delete with no credential at all, leaving the drain exactly as broken while looking fixed. No
-        # test process has an ambient `AWS_*` either, so the spelling that fails in a pod passes every
-        # unit test; the pair is pinned in `test_the_outbox_drain_needs_no_write_permission.py`.
+        # The stage's own client (:func:`_outbox_s3_client`): a delete signed with less than the whole key pair falls back
+        # to boto3's default chain, and the lineage pod carries no ambient `AWS_*` (measured 2026-09-10), so that would be
+        # a delete with no credential at all; pinned in `test_the_outbox_drain_needs_no_write_permission.py`.
         client = _outbox_s3_client(storage_options)
         # An absent object already satisfies the post-condition, and S3's DeleteObject is idempotent for
         # a missing key (204, no error) — so this suppression is for a NON-S3 double or backend that

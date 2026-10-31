@@ -2,22 +2,27 @@
 
 One home for the ``storage_options`` → ``pyarrow.fs`` translation that the outbox, the warehouse registry,
 the model registry, the dataset-relocation path and the compaction sweep all need — and
-for building the lance-style ``storage_options`` dict itself, so the path-style/allow-http keys can never
+for building the lance-style ``storage_options`` itself, so the path-style/allow-http keys can never
 drift per-service (audit 2026-07-15: compaction's hand-rolled copy had already dropped
 ``virtual_hosted_style_request``). An ``s3://`` root builds an ``S3FileSystem`` from the lance-style
 options (endpoint/keys/region, path-style, scheme derived from the endpoint); anything else (a ``file://``
 or bare local path — dev/tests) resolves via the local filesystem, so every consumer round-trips without
 object storage in unit tests.
+
+The options travel as :class:`StorageOptions`, whose key pair is ``SecretStr`` ([[LH-543]]), and become the flat map
+only at the call that signs with them.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
 import pyarrow.fs as pafs
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.endpoint_scheme import allow_http_for, endpoint_scheme
 
 
@@ -25,22 +30,128 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-StorageOptions = dict[str, str]
+#: The two spellings of each credential field. :meth:`StorageOptions.in_clear` emits the ``aws_``-prefixed form (see
+#: :func:`lance_storage_options` for why the bare one loses to the ambient environment), but maps also arrive from the
+#: wire (a vending response, a client's own options), so :meth:`StorageOptions.from_flat` reads both: a reader of one
+#: spelling would not error, it would fall back to the default credential chain, which is the pod's own broader role
+#: rather than the scoped credential it was handed. Failing OPEN, silently.
+_CREDENTIAL_ALIASES: tuple[tuple[str, str], ...] = (
+    ("aws_access_key_id", "access_key_id"),
+    ("aws_secret_access_key", "secret_access_key"),
+    ("aws_session_token", "session_token"),
+)
+
+#: Every key a credential may be spelled under. None is ever an option beside the key pair: object_store reads either
+#: spelling, so options carrying ``access_key_id`` beside a key pair would name two identities, and which one signs is
+#: not defined.
+CREDENTIAL_KEYS: frozenset[str] = frozenset(alias for aliases in _CREDENTIAL_ALIASES for alias in aliases)
+
+
+class StorageOptions(BaseModel):
+    """How a service reaches the object store: the key pair it signs with, and every other ``storage_options`` key ([[LH-543]]).
+
+    The secret access key and the session token are ``SecretStr`` (:class:`S3KeyPair`), so a repr, a str, a model dump, a
+    log line or an error that echoes these options, or any model holding them (a history fence, a claim store, a base
+    registry, an expiry target), carries neither, as a vend carries neither ([[LH-072]]). They leave only at the call
+    that signs: :meth:`in_clear` builds the flat map Lance and the ``dir`` namespace take, and
+    :meth:`credential_in_clear` hands boto3 and pyarrow the pair.
+    """
+
+    #: ``hide_input_in_errors``: a refusal of these options echoes none of their values.
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+    #: ``None`` signs with the ambient credential chain: a local root, or a store sharing the deployment's identity.
+    key_pair: S3KeyPair | None = None
+    #: Every other key, as `lance_docs/lance/guide/object_store.md` names it (endpoint, region, path-style, timeouts,
+    #: encryption); never a credential's.
+    options: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _parse_a_flat_map(cls, data: object) -> object:
+        """A flat ``storage_options`` map handed where these options are expected is parsed as :meth:`from_flat` parses it,
+        and a credential that cannot be signed with reaches :meth:`_holds_no_credential` masked.
+
+        Measured 2026-10-31 on a holder given one: under pydantic's default its keys were unknown fields and dropped, the
+        credential with them, so the holder signed with the ambient chain; refused as extra fields, the holder's error
+        printed the map's secret and token, since the outermost model decides what an error echoes. So no refusal of these
+        options is raised over a credential's value.
+        """
+        if not isinstance(data, Mapping):
+            return data
+        if data.keys() <= cls.model_fields.keys():
+            options = data.get("options")
+            return {**data, "options": _masked(options)} if isinstance(options, Mapping) else data
+        try:
+            key_pair, options = _split(data)
+        except ValueError:
+            return {"options": _masked(data)}
+        return {"key_pair": key_pair, "options": options}
+
+    @field_validator("options")
+    @classmethod
+    def _holds_no_credential(cls, options: dict[str, str]) -> dict[str, str]:
+        if held := sorted(CREDENTIAL_KEYS & options.keys()):
+            raise ValueError(f"{', '.join(held)}: a credential is one whole key pair, and only the key pair holds it")
+        return options
+
+    @classmethod
+    def from_flat(cls, flat: Mapping[str, str]) -> StorageOptions:
+        """The options a flat ``storage_options`` map names, its credential, under either spelling, lifted into the key pair.
+
+        Raises:
+            ValueError: The map names part of a credential, or one of its fields under two spellings that disagree.
+        """
+        key_pair, options = _split(flat)
+        return cls(key_pair=key_pair, options=options)
+
+    def reaches_by_endpoint(self, uri: str) -> bool:
+        """Whether ``uri`` is an ``s3://`` location these options name an endpoint for, reached through an S3 client there;
+        any other location resolves through pyarrow's own filesystem for its scheme."""
+        return uri.startswith("s3://") and bool(self.options.get("endpoint"))
+
+    def with_options(self, extra: Mapping[str, str]) -> StorageOptions:
+        """These options with ``extra``'s keys set over them, under the same key pair."""
+        return StorageOptions(key_pair=self.key_pair, options={**self.options, **extra})
+
+    def in_clear(self) -> dict[str, str]:
+        """The flat ``storage_options`` map Lance takes, the key pair in clear at the ``aws_`` spelling.
+
+        Called only at the call that signs: a Lance open, write or commit, and the ``dir`` namespace's ``storage.``
+        properties (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:21`). A session token is omitted
+        rather than set empty: object_store treats a present-but-empty token as a token and the request is refused.
+        """
+        if (pair := self.key_pair) is None:
+            return dict(self.options)
+        credential = {"aws_access_key_id": pair.access_key_id, "aws_secret_access_key": pair.secret_access_key.get_secret_value()}
+        if pair.session_token is not None and (token := pair.session_token.get_secret_value()):
+            credential["aws_session_token"] = token
+        return {**self.options, **credential}
+
+    def credential_in_clear(self) -> tuple[str | None, str | None, str | None]:
+        """The (access key, secret, session token) these options sign with, in clear for the boto3 or pyarrow client being
+        built with them.
+
+        ``None`` for a field the options carry no value for — meaning "use the ambient chain for this one", which is what a
+        store sharing the deployment's credentials deliberately wants.
+        """
+        if (pair := self.key_pair) is None:
+            return None, None, None
+        session_token = pair.session_token.get_secret_value() if pair.session_token is not None else None
+        return pair.access_key_id or None, pair.secret_access_key.get_secret_value() or None, session_token or None
 
 
 def lance_storage_options(
     endpoint: str,
-    access_key_id: str,
-    secret_access_key: str,
+    key_pair: S3KeyPair,
     region: str,
     *,
     virtual_hosted: bool = False,
-    session_token: str | None = None,
     server_side_encryption: str | None = None,
     sse_kms_key_id: str | None = None,
     sse_bucket_key_enabled: bool | None = None,
 ) -> StorageOptions:
-    """The lance-style ``storage_options`` dict every service opens datasets with.
+    """The lance-style ``storage_options`` every service opens datasets with, signed by ``key_pair``.
 
     Path-style addressing is the default (``virtual_hosted=False``): RustFS rejects virtual-hosted
     signing with 403 ``SignatureDoesNotMatch``, and one omitted key in a hand-rolled copy is exactly the
@@ -63,13 +174,12 @@ def lance_storage_options(
     direction, and the ``aws_allow_http`` spelling wins or loses to it per process. No spelling displaces
     it; only its absence does ([[LH-238]]).
 
-    ``session_token`` completes a VENDED credential. An STS credential is a triple and the token is the
+    The key pair's session token completes a VENDED credential. An STS credential is a triple and the token is the
     half that carries the scoping, so a builder that cannot express one forces every vended-credential
-    caller to hand-roll the dict — the drift above — or to sign as a different identity. It is omitted
-    entirely when absent rather than set empty: object_store treats a present-but-empty token as a
-    token and the request is refused.
+    caller to hand-roll the map — the drift above — or to sign as a different identity.
 
-    THE CREDENTIAL KEYS ARE ``aws_``-PREFIXED BECAUSE THE BARE ONES DO NOT DISPLACE THE ENVIRONMENT.
+    :meth:`StorageOptions.in_clear` SPELLS THE CREDENTIAL KEYS ``aws_``-PREFIXED BECAUSE THE BARE ONES DO NOT DISPLACE
+    THE ENVIRONMENT.
     Every fleet pod exports ``AWS_ACCESS_KEY_ID``/``AWS_SECRET_ACCESS_KEY`` (the root key), and with the
     bare spellings object_store BLENDS the two sources — one half from the environment, one from here —
     and signs with a pair belonging to neither identity. Measured in-cluster 2026-09-03: the ingest
@@ -86,20 +196,16 @@ def lance_storage_options(
     notice. Pinned on the wire by ``test_a_vended_credential_survives_the_storage_seam.py`` and by
     ``test_explicit_credentials_beat_the_ambient_environment.py``.
     """
-    options: StorageOptions = {
+    options = {
         "endpoint": endpoint,
-        "aws_access_key_id": access_key_id,
-        "aws_secret_access_key": secret_access_key,
         "region": region,
         "allow_http": allow_http_for(endpoint),
         # An ambient AWS_VIRTUAL_HOSTED_STYLE_REQUEST races this bare spelling per process; the
         # `aws_`-prefixed one beat it 5 of 5 on pylance 12.0.0 ([[LH-238]]).
         "virtual_hosted_style_request": str(virtual_hosted).lower(),
+        **_encryption_options(server_side_encryption, sse_kms_key_id, sse_bucket_key_enabled),
     }
-    if session_token:
-        options["aws_session_token"] = session_token
-    options.update(_encryption_options(server_side_encryption, sse_kms_key_id, sse_bucket_key_enabled))
-    return options
+    return StorageOptions(key_pair=key_pair, options=options)
 
 
 class StoreTimeouts(BaseModel):
@@ -133,8 +239,9 @@ class StoreTimeouts(BaseModel):
     max_retries: int = Field(ge=0)
     retry_window_s: int = Field(ge=0)
 
-    def storage_options(self) -> StorageOptions:
-        """The four keys, in the spelling object_store honours (milliseconds, so a fraction survives)."""
+    def storage_options(self) -> dict[str, str]:
+        """The four keys, in the spelling object_store honours (milliseconds, so a fraction survives), to set over a plane's
+        :class:`StorageOptions` (:meth:`StorageOptions.with_options`)."""
         return {
             "connect_timeout": f"{round(self.connect_s * 1000)}ms",
             "timeout": f"{round(self.request_s * 1000)}ms",
@@ -151,7 +258,7 @@ _SSE_ALGORITHMS: Final = ("AES256", "aws:kms", "aws:kms:dsse")
 SSE_KMS_ALGORITHMS: Final = ("aws:kms", "aws:kms:dsse")
 
 
-def _encryption_options(algorithm: str | None, kms_key_id: str | None, bucket_key_enabled: bool | None) -> StorageOptions:
+def _encryption_options(algorithm: str | None, kms_key_id: str | None, bucket_key_enabled: bool | None) -> dict[str, str]:
     """Encryption-at-rest options, REFUSING the combinations the store would silently ignore (§ J5).
 
     Validated here rather than trusted, because this module's whole reason for existing is that
@@ -169,7 +276,7 @@ def _encryption_options(algorithm: str | None, kms_key_id: str | None, bucket_ke
         raise ValueError(
             f"aws_server_side_encryption must be one of {_SSE_ALGORITHMS} (got {algorithm!r}) — any other value is dropped and the data lands unencrypted"
         )
-    options: StorageOptions = {}
+    options: dict[str, str] = {}
     if algorithm:
         options["aws_server_side_encryption"] = algorithm
     if kms_key_id:
@@ -179,62 +286,40 @@ def _encryption_options(algorithm: str | None, kms_key_id: str | None, bucket_ke
     return options
 
 
-#: The two spellings of each credential field. `lance_storage_options` emits the `aws_`-prefixed form
-#: (see there for why the bare one loses to the ambient environment), but dicts also arrive from the
-#: wire — a vending response, a stored store descriptor, a hand-built test fixture — so every READER
-#: must accept both. One tuple rather than an `or` chain at each call site: a site that read only one
-#: spelling would not error, it would fall back to the default credential chain, which is the pod's own
-#: broader role rather than the scoped credential it was handed. Failing OPEN, silently.
-_CREDENTIAL_ALIASES: tuple[tuple[str, str], ...] = (
-    ("aws_access_key_id", "access_key_id"),
-    ("aws_secret_access_key", "secret_access_key"),
-    ("aws_session_token", "session_token"),
-)
+def _split(flat: Mapping[str, str]) -> tuple[S3KeyPair | None, dict[str, str]]:
+    """``flat``'s credential, under either spelling, as a key pair, and every other key.
 
-#: Every key a credential may be spelled under. A caller REPLACING the credential in a dict removes all
-#: of them first: object_store reads either spelling, so a dict carrying the estate's ``access_key_id``
-#: beside another store's ``aws_access_key_id`` names two identities and which one signs is not defined.
-CREDENTIAL_KEYS: frozenset[str] = frozenset(alias for aliases in _CREDENTIAL_ALIASES for alias in aliases)
-
-
-def credential_of(storage_options: StorageOptions) -> tuple[str | None, str | None, str | None]:
-    """The (access key, secret, session token) a storage-options dict carries, under either spelling.
-
-    ``None`` for a field the dict does not carry — meaning "use the ambient chain for this one", which
-    is what a store sharing the deployment's credentials deliberately wants.
+    Raises:
+        ValueError: ``flat`` names part of a credential, or one field under two spellings that disagree. Half a pair
+            signs nothing, and read as no credential the ambient chain, the pod's own broader role, would sign in its
+            place; two spellings name two identities. The message names keys, never their values.
     """
-    access_key, secret_key, session_token = (_first_present(storage_options, aliases) for aliases in _CREDENTIAL_ALIASES)
-    return access_key, secret_key, session_token
+    access_key, secret_key, session_token = (_one_field(flat, aliases) for aliases in _CREDENTIAL_ALIASES)
+    options = {key: value for key, value in flat.items() if key not in CREDENTIAL_KEYS}
+    if access_key is None and secret_key is None and session_token is None:
+        return None, options
+    if access_key is None or secret_key is None:
+        named = ", ".join(sorted(key for key in CREDENTIAL_KEYS if flat.get(key)))
+        raise ValueError(f"{named} name part of a credential: a key id and its secret sign only together")
+    token = None if session_token is None else SecretStr(session_token)
+    return S3KeyPair(access_key_id=access_key, secret_access_key=SecretStr(secret_key), session_token=token), options
 
 
-def _first_present(storage_options: StorageOptions, aliases: tuple[str, str]) -> str | None:
-    return next((storage_options[key] for key in aliases if storage_options.get(key)), None)
+def _one_field(flat: Mapping[str, str], aliases: tuple[str, str]) -> str | None:
+    """The value ``flat`` names for one credential field under either of its ``aliases``, ``None`` for none.
 
-
-def without_credentials(storage_options: StorageOptions) -> StorageOptions:
-    """The same options with every credential field removed, under BOTH spellings.
-
-    For a registered store that declares no secret: it shares the deployment's credentials, so the
-    fields are REMOVED rather than left empty — an empty string is a credential pyarrow will sign with.
-    Popping one spelling and leaving the other is the same silent half-credential.
+    Raises:
+        ValueError: The two spellings name different values.
     """
-    dropped = {key for aliases in _CREDENTIAL_ALIASES for key in aliases}
-    return {key: value for key, value in storage_options.items() if key not in dropped}
+    values = {flat[key] for key in aliases if flat.get(key)}
+    if len(values) > 1:
+        raise ValueError(f"{' and '.join(aliases)} name different values: two identities, and which one signs is not defined")
+    return next(iter(values), None)
 
 
-def normalise_credential_keys(storage_options: StorageOptions) -> StorageOptions:
-    """The same options with every credential field moved to the ``aws_``-prefixed spelling.
-
-    For options that arrive already built — a secret store's payload, a hand-written store descriptor —
-    where the spelling was whoever wrote them's choice. ``lance_storage_options`` explains why only one
-    spelling works in a pod. Non-credential keys are untouched, and an already-prefixed dict is
-    returned unchanged rather than double-prefixed.
-    """
-    normalised: StorageOptions = {}
-    bare_to_prefixed = {bare: prefixed for prefixed, bare in _CREDENTIAL_ALIASES}
-    for key, value in storage_options.items():
-        normalised[bare_to_prefixed.get(key, key)] = value
-    return normalised
+def _masked(options: Mapping[str, str]) -> dict[str, str]:
+    """``options`` with every credential key's value masked, for a refusal that must not echo it."""
+    return {key: "**********" if key in CREDENTIAL_KEYS else value for key, value in options.items()}
 
 
 def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: bool = False) -> pafs.S3FileSystem:
@@ -253,23 +338,23 @@ def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: boo
     given, so a half-forwarded vended credential can sign with the POD's own role — broader rights than
     the catalog scoped, not narrower. Dropping it fails open.
     """
-    endpoint = storage_options["endpoint"]
+    endpoint = storage_options.options["endpoint"]
     parts = urlsplit(endpoint)
-    access_key, secret_key, session_token = credential_of(storage_options)
+    access_key, secret_key, session_token = storage_options.credential_in_clear()
     return pafs.S3FileSystem(
         access_key=access_key,
         secret_key=secret_key,
         session_token=session_token,
         endpoint_override=(parts.netloc + parts.path).rstrip("/"),
         scheme=endpoint_scheme(endpoint),
-        region=storage_options.get("region", ""),
+        region=storage_options.options.get("region", ""),
         allow_bucket_creation=allow_bucket_creation,
     )
 
 
 def fs_and_base(root_uri: str, storage_options: StorageOptions) -> tuple[pafs.FileSystem, str]:
     """Resolve ``(filesystem, base_path)`` for ``root_uri`` (base has no scheme and no trailing slash)."""
-    if root_uri.startswith("s3://") and storage_options.get("endpoint"):
+    if storage_options.reaches_by_endpoint(root_uri):
         fs = s3_filesystem(storage_options, allow_bucket_creation=True)
         return fs, root_uri[len("s3://") :].rstrip("/")
     resolved, path = pafs.FileSystem.from_uri(root_uri)

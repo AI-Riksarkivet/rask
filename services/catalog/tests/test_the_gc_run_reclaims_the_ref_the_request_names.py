@@ -42,6 +42,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.services.dataplane import create_table
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -66,11 +67,11 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    create_table(ns, {}, TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="db$rows")
-    open_by_name(ns, {}, TABLE_ID).insert(_rows(1, start=1))
-    lance.write_dataset(_rows(1, start=2), str(open_by_name(ns, {}, TABLE_ID).uri), mode="overwrite")
-    open_by_name(ns, {}, TABLE_ID).create_branch(BRANCH, None)
-    branch = open_by_name(ns, {}, TABLE_ID, branch=BRANCH)
+    create_table(ns, StorageOptions(), TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="db$rows")
+    open_by_name(ns, StorageOptions(), TABLE_ID).insert(_rows(1, start=1))
+    lance.write_dataset(_rows(1, start=2), str(open_by_name(ns, StorageOptions(), TABLE_ID).uri), mode="overwrite")
+    open_by_name(ns, StorageOptions(), TABLE_ID).create_branch(BRANCH, None)
+    branch = open_by_name(ns, StorageOptions(), TABLE_ID, branch=BRANCH)
     for i in range(3, 9):
         branch.insert(_rows(1, start=i))
     return ns
@@ -84,7 +85,7 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     application.include_router(door.router)
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
-    application.dependency_overrides[get_storage_options] = lambda: {}
+    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     with TestClient(application) as test_client:
         yield test_client
 
@@ -97,7 +98,7 @@ def _run(client: TestClient, *, branch: str | None) -> dict[str, Any]:
 
 
 def _parent_data_files(namespace: LanceNamespace) -> list[str]:
-    root = Path(urlparse(open_by_name(namespace, {}, TABLE_ID).uri).path) / "data"
+    root = Path(urlparse(open_by_name(namespace, StorageOptions(), TABLE_ID).uri).path) / "data"
     return sorted(entry.name for entry in root.iterdir())
 
 
@@ -108,4 +109,4 @@ def test_a_branch_reclaim_leaves_the_PARENTS_data_files_alone(client: TestClient
     _run(client, branch=BRANCH)
 
     assert _parent_data_files(namespace) == before, f"a branch reclaim deleted parent data files: {set(before) - set(_parent_data_files(namespace))}"
-    assert open_by_name(namespace, {}, TABLE_ID, version=1).count_rows() == 1, "main no longer time-travels to v1"
+    assert open_by_name(namespace, StorageOptions(), TABLE_ID, version=1).count_rows() == 1, "main no longer time-travels to v1"

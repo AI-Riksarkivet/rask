@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 
 from service_kit.lakehouse import records
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 class _RecordingClient:
@@ -56,13 +57,15 @@ def seam(monkeypatch: pytest.MonkeyPatch) -> tuple[_RecordingClient, list[tuple[
     return client, built
 
 
-_SO = {
-    "endpoint": "http://rf:9000",
-    "access_key_id": "ak",
-    "secret_access_key": "sk",
-    "region": "eu-north-1",
-    "session_token": "tok",
-}
+_SO = StorageOptions.from_flat(
+    {
+        "endpoint": "http://rf:9000",
+        "access_key_id": "ak",
+        "secret_access_key": "sk",
+        "region": "eu-north-1",
+        "session_token": "tok",
+    }
+)
 
 
 def test_create_json_builds_its_client_through_the_storage_seam(seam: tuple[_RecordingClient, list[tuple[Any, dict[str, Any]]]]) -> None:
@@ -92,7 +95,7 @@ def test_a_storage_options_without_a_region_still_reaches_the_seam(seam: tuple[_
     handed it explicitly rather than left to resolve `AWS_REGION`, which is a different value."""
     _client, built = seam
 
-    records.create_json("s3://ctrl", {"endpoint": "http://rf:9000"}, "_projects/acme.json", {"id": "acme"})
+    records.create_json("s3://ctrl", StorageOptions(options={"endpoint": "http://rf:9000"}), "_projects/acme.json", {"id": "acme"})
 
     assert built[0][1]["region"] == "us-east-1"
     assert built[0][1]["session_token"] is None

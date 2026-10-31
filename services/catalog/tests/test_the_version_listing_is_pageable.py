@@ -40,6 +40,7 @@ from catalog.api import pagination
 from catalog.api.v1.endpoints import versions as versions_ep
 from catalog.services import table_claims
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _table_with(version_count: int) -> table_claims.DoorTable:
@@ -53,7 +54,7 @@ def _table_with(version_count: int) -> table_claims.DoorTable:
 
 
 def _list(table: table_claims.DoorTable, **kwargs: Any) -> Any:
-    return versions_ep.list_table_versions("t", table, {}, **kwargs)
+    return versions_ep.list_table_versions("t", table, StorageOptions(), **kwargs)
 
 
 def test_descending_pages_downward_and_its_cursor_follows() -> None:

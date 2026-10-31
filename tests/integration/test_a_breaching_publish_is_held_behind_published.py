@@ -39,6 +39,7 @@ from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
 from service_kit.governed import fga
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 from tests.integration.openfga_grants import Grants, act_as
 
 
@@ -138,7 +139,9 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Estate]:
     client.app.state.oidc = MagicMock()
     grants = Grants()
     client.app.state.fga = grants
-    warehouses.put_warehouse(root, {}, {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"})
+    warehouses.put_warehouse(
+        root, StorageOptions(), {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"}
+    )
     grants.grant("alice", ("can_create_namespace", f"warehouse:{WAREHOUSE}"), ("can_administer", f"project:{PROJECT}"))
     act_as(client, "alice")
     declared = client.post(
@@ -184,7 +187,7 @@ def lineage(estate: Estate, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, A
         return httpx.Response(200)
 
     async def _project(top_ns: str) -> str | None:
-        return warehouses.project_for_namespace(estate.root, {}, top_ns)
+        return warehouses.project_for_namespace(estate.root, StorageOptions(), top_ns)
 
     emitter = make_emitter(
         enabled=True,

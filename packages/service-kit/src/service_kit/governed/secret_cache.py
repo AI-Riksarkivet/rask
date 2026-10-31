@@ -25,7 +25,7 @@ import time
 from collections.abc import Callable, Mapping
 from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SecretStr
 
 
 #: The longest a value read from the store is served before it is read again.
@@ -48,11 +48,18 @@ class StoreRead(BaseModel):
 
 
 class _Entry(BaseModel):
+    """What one read returned, each value ``SecretStr`` so a repr, a log line or an error that echoes the entry carries
+    none of them ([[LH-543]]): the store's fields are a service's own key pair and the Dapr app tokens. Only
+    :meth:`SecretCache.peek` and a load hand them out, to the caller that asked."""
+
     model_config = ConfigDict(frozen=True)
 
-    values: dict[str, str]
+    values: dict[str, SecretStr]
     loaded_at: float
     ttl: float
+
+    def in_clear(self) -> dict[str, str]:
+        return {field: value.get_secret_value() for field, value in self.values.items()}
 
 
 class SecretCache:
@@ -85,7 +92,7 @@ class SecretCache:
         entry = self._entries.get(read)
         if entry is None or self._clock() - entry.loaded_at >= entry.ttl:
             return None
-        return dict(entry.values)
+        return entry.in_clear()
 
     def get(self, read: StoreRead, load: Callable[[], Mapping[str, str]]) -> dict[str, str]:
         """``read``'s values: the held ones while under their TTL, else what ``load`` returns.
@@ -123,8 +130,8 @@ class SecretCache:
     def _load(self, read: StoreRead, load: Callable[[], Mapping[str, str]]) -> dict[str, str]:
         values = dict(load())
         ttl = self._ttl * (1 - _JITTER.random() * self._jitter)
-        self._entries[read] = _Entry(values=values, loaded_at=self._clock(), ttl=ttl)
-        return dict(values)
+        self._entries[read] = _Entry(values={field: SecretStr(value) for field, value in values.items()}, loaded_at=self._clock(), ttl=ttl)
+        return values
 
     def _lock_for(self, read: StoreRead) -> threading.Lock:
         with self._locks_guard:

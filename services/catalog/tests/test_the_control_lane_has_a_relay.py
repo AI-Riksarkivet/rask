@@ -43,6 +43,7 @@ from service_kit.control_emit import DaprControlEmitter
 from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
 from service_kit.governed.signing_key import SigningKeyHolder, attach_signing
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 BINDING = "catalog-control-relay-cron"
@@ -153,7 +154,7 @@ async def _stage(uri: str, event: CatalogControlEvent, *, signing: SigningKeyHol
     sign = None if signing is None else control_sign(signing)
     emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=1.0, service="catalog", sign=sign, outbox_uri=uri)
     await emitter.emit(event)
-    staged = outbox.read_event(uri, {}, event.event_id)
+    staged = outbox.read_event(uri, StorageOptions(), event.event_id)
     assert staged is not None, "precondition: the blip must leave the event staged"
     return staged
 
@@ -198,7 +199,7 @@ async def test_the_relay_REPUBLISHES_a_staged_table_published(tmp_path: Path) ->
     uri = f"file://{tmp_path}/control-outbox"
     event = _published_event()
     await _stage(uri, event)
-    assert list(outbox.list_events(uri, {})), "precondition: the blip must leave the event staged"
+    assert list(outbox.list_events(uri, StorageOptions())), "precondition: the blip must leave the event staged"
 
     recorder = _Recorder()
     with TestClient(_relay_app(_settings(uri), recorder)) as client:
@@ -209,7 +210,7 @@ async def test_the_relay_REPUBLISHES_a_staged_table_published(tmp_path: Path) ->
     assert [p["topic_name"] for p in recorder.published] == [CONTROL_TOPIC], (
         "the staged control event was not re-published onto the control topic — silver->gold is still asleep"
     )
-    assert list(outbox.list_events(uri, {})) == [], "a delivered event must be dropped, or the relay republishes it forever"
+    assert list(outbox.list_events(uri, StorageOptions())) == [], "a delivered event must be dropped, or the relay republishes it forever"
 
 
 @pytest.mark.asyncio
@@ -237,7 +238,7 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_byte_fo
     uri = f"file://{tmp_path}/control-outbox"
     pair = event_signer(CATALOG)
     signing = _catalog_key(pair)
-    outbox.stage_event(uri, {}, "forged", json.dumps(forge(pair, event_signer)))
+    outbox.stage_event(uri, StorageOptions(), "forged", json.dumps(forge(pair, event_signer)))
     _staged_before_everything_else(tmp_path, "forged")
     genuine = await _stage(uri, _published_event(), signing=signing)
     recorder = _Recorder()
@@ -245,7 +246,7 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_byte_fo
     with _sidecar_serving_the_catalogs_keys(200, pair), TestClient(_relay_app(_settings(uri), recorder, signing=signing)) as client:
         report = client.post(f"/{BINDING}").json()
         assert [published["data"] for published in recorder.published] == [genuine], "the relay published an object this catalog never signed"
-        assert (report["republished"], report["poison_dropped"], list(outbox.list_events(uri, {}))) == (1, 1, []), report
+        assert (report["republished"], report["poison_dropped"], list(outbox.list_events(uri, StorageOptions()))) == (1, 1, []), report
 
 
 @pytest.mark.asyncio
@@ -271,14 +272,14 @@ async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
     with _sidecar_serving_the_catalogs_keys(keys), TestClient(_relay_app(_settings(uri), publisher, signing=signing)) as client:
         response = client.post(f"/{BINDING}")
         assert (response.json()["republished"], publisher.published) == (0, []), "the relay delivered an event it may not deliver yet"
-        assert list(outbox.list_events(uri, {})), "the relay dropped a staged event it never delivered"
+        assert list(outbox.list_events(uri, StorageOptions())), "the relay dropped a staged event it never delivered"
 
 
 @pytest.mark.asyncio
 async def test_a_poison_object_is_dropped_rather_than_wedging_the_drain(tmp_path: Path) -> None:
     """One unparseable object must not stop every real event behind it — the bounded drain is oldest-first."""
     uri = f"file://{tmp_path}/control-outbox"
-    outbox.stage_event(uri, {}, "not-a-control-event", "{'this': not json}")
+    outbox.stage_event(uri, StorageOptions(), "not-a-control-event", "{'this': not json}")
     await _stage(uri, _published_event())
 
     recorder = _Recorder()
@@ -287,7 +288,7 @@ async def test_a_poison_object_is_dropped_rather_than_wedging_the_drain(tmp_path
 
     assert report["poison_dropped"] == 1
     assert report["republished"] == 1, "a poison object blocked the real event behind it"
-    assert list(outbox.list_events(uri, {})) == []
+    assert list(outbox.list_events(uri, StorageOptions())) == []
 
 
 def test_pointing_the_control_outbox_at_the_LINEAGE_prefix_is_REFUSED_at_boot() -> None:

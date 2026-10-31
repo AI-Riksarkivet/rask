@@ -46,6 +46,7 @@ import pytest
 import respx
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 import storage
 from maintenance.core.config import MaintenanceSettings
@@ -53,6 +54,7 @@ from maintenance.services import purge, sweep
 from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
 from maintenance.services.plan import PlanContext
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.features import manifest_base_path_refs
@@ -85,7 +87,7 @@ class _Estate:
         self.bucket = bucket
         self.root = f"s3://{bucket}"
         self.models = f"{self.root}/models/"
-        self.key = lance_storage_options(url, "test", "test", "us-east-1")
+        self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3 = _s3(url)
         self.registry = base_registry.BaseRegistry(control_root=self.root, storage_options=self.key)
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
@@ -106,7 +108,7 @@ class _Estate:
         return location
 
     def open(self, uri: str) -> lance.LanceDataset:
-        return lance.dataset(uri, storage_options=self.key)
+        return lance.dataset(uri, storage_options=self.key.in_clear())
 
     def namespace_uuid(self, namespace: str) -> str:
         resp = self.client.post(f"/v1/namespace/{namespace}/describe", json={})
@@ -188,7 +190,7 @@ def _splice(estate: _Estate, base: str) -> None:
         return
     fragment = lance.FragmentMetadata.from_json(json.dumps(_spliced_fragment(estate, base)))
     attacker = estate.open(estate.attacker)
-    lance.LanceDataset.commit(estate.attacker, lance.LanceOperation.Append([fragment]), read_version=attacker.version, storage_options=estate.key)
+    lance.LanceDataset.commit(estate.attacker, lance.LanceOperation.Append([fragment]), read_version=attacker.version, storage_options=estate.key.in_clear())
     rows = estate.open(estate.attacker).to_table().column("ssn").to_pylist()
     assert "222-victim" in rows, f"precondition: the splice makes the victim's rows readable through the attacker, got {rows}"
 
@@ -257,7 +259,7 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
 
     # The table's own path in another store is not its own: a `file://` base reads the catalog pod's disk. On a
     # table declaring no other base, so nothing but that base's standing decides whether it is judged at all.
-    lance.write_dataset(_MINE, f"{estate.root}/plain", storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(_MINE, f"{estate.root}/plain", storage_options=estate.key.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
     assert estate.client.post("/v1/table/db$plain/register", json={"location": "plain"}).status_code == 200
     estate.open(f"{estate.root}/plain").add_bases([lance.DatasetBasePath(f"file:///{estate.bucket}/plain", name="local", is_dataset_root=True)])
     _refused(estate.client.post("/v1/table/db$plain/query", json=_QUERY), _INVALID_TABLE_STATE)
@@ -278,7 +280,10 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
     for meta_key in ("row_id_meta", "created_at_version_meta", "last_updated_at_version_meta"):
         fragment.pop(meta_key, None)
     lance.LanceDataset.commit(
-        escape, lance.LanceOperation.Append([lance.FragmentMetadata.from_json(json.dumps(fragment))]), read_version=handle.version, storage_options=estate.key
+        escape,
+        lance.LanceOperation.Append([lance.FragmentMetadata.from_json(json.dumps(fragment))]),
+        read_version=handle.version,
+        storage_options=estate.key.in_clear(),
     )
     assert "222-victim" in estate.open(escape).to_table().column("ssn").to_pylist(), "precondition: the encoded-dot base reads the victim through db$escape"
     _refused(estate.client.post("/management/v1/table/db$escape/credentials"), _INVALID_TABLE_STATE)
@@ -374,7 +379,7 @@ def test_a_recorded_clone_source_is_still_protected(estate: _Estate) -> None:
     source = estate.open(bronze)
     source.tags.create("silver-src", source.version)
     silver = f"{estate.root}/4e5f6a7b_db$silver%20tier"
-    source.shallow_clone(silver, "silver-src", storage_options=estate.key)
+    source.shallow_clone(silver, "silver-src", storage_options=estate.key.in_clear())
     base_registry.claim_bases(
         estate.registry,
         silver,
@@ -404,7 +409,7 @@ def test_a_recorded_clone_source_is_still_protected(estate: _Estate) -> None:
     expired = _expire(estate=estate, uri=bronze, older_than=timedelta(0), refs=refs)
     assert expired.refused_by is None, expired.refused
     assert expired.old_versions_removed > 0, "precondition: bronze was reclaimed"
-    assert _reads_cold(silver, estate.key) == sorted([1, 2, 3] * 3), "the pinned relation did not keep silver readable"
+    assert _reads_cold(silver, estate.key.in_clear()) == sorted([1, 2, 3] * 3), "the pinned relation did not keep silver readable"
 
     estate.open(bronze).tags.delete("silver-src")
 
@@ -423,7 +428,7 @@ def _registered(estate: _Estate, table: str, location: str) -> str:
         _MINE,
         uri,
         initial_bases=[lance.DatasetBasePath(f"{estate.root}/second/data/{location}", name="second", is_dataset_root=False)],
-        storage_options=estate.key,
+        storage_options=estate.key.in_clear(),
         data_storage_version="2.2",
         enable_stable_row_ids=True,
     )
@@ -509,7 +514,7 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
         assert resp.json()["detail"] == detail, resp.text
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
         assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"
-    lance.write_dataset(_MINE, f"{estate.root}/outer/inner", storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(_MINE, f"{estate.root}/outer/inner", storage_options=estate.key.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
     assert estate.client.post("/v1/table/db$inner/register", json={"location": "outer/inner"}).status_code == 200, (
         "the control: a location of its own registers"
     )
@@ -520,7 +525,7 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
         assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, f"{location!r}: a refused registration must be detached"
         assert estate.client.post("/v1/table/db$squatter/query", json=_QUERY).status_code == 404, f"{location!r}: the victim reads through the refused id"
     planted = str(uuid.uuid4())
-    lance.write_dataset(_MINE, f"{estate.root}/{planted}", storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(_MINE, f"{estate.root}/{planted}", storage_options=estate.key.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
     resp = estate.client.post("/v1/table/db$squatter/register", json={"location": planted})
     _refused(resp, _INVALID_INPUT)
     assert resp.json()["detail"] == (
@@ -529,7 +534,9 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     assert estate.client.post("/v1/table/db$squatter/exists").status_code == 404, "a refused registration must attach nothing"
     for name in ("räksmörgås", "growth%"):
         named = f"db${name}"
-        lance.write_dataset(_ROWS, f"{estate.root}/spelled/{quote(name)}", storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True)
+        lance.write_dataset(
+            _ROWS, f"{estate.root}/spelled/{quote(name)}", storage_options=estate.key.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True
+        )
         assert estate.client.post(f"/v1/table/{quote(named, safe='$')}/register", json={"location": f"spelled/{name}"}).status_code == 200
         location = str(estate.client.post(f"/v1/table/{quote(named, safe='$')}/describe", json={}).json()["location"])
         estate.open(location).create_branch("work")

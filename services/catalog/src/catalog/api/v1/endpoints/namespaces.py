@@ -78,6 +78,7 @@ from service_kit.control_events import ControlUuids
 from service_kit.governed import fga
 from service_kit.lakehouse import base_registry, location_claims, protection, trash
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.openlineage import DatasetUuids
 
 
@@ -657,7 +658,7 @@ async def _destroy_subtree(
     root_uuid: str,
     registry: base_registry.BaseRegistry,
     claims: location_claims.ClaimStore,
-    storage_options: dict[str, str],
+    storage_options: StorageOptions,
     estate_roots: tuple[str, ...],
     dropped_by: str | None = None,
 ) -> AsyncIterator[list[str]]:

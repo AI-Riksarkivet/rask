@@ -22,6 +22,8 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, DropNamespaceRequest, connect
 from pydantic import BaseModel, ConfigDict
 
+from service_kit.lakehouse.objectfs import StorageOptions
+
 
 BINDING = "catalog-manifest-reclaim-cron"
 
@@ -57,7 +59,7 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Catalog
 
     routes = list(app.router.routes)
     mount_manifest_reclaim(app, BINDING)
-    warehouses.put_warehouse(str(estate), {}, {"id": "wh", "bucket": "wh", "project": "p", "root_uri": str(warehouse)})
+    warehouses.put_warehouse(str(estate), StorageOptions(), {"id": "wh", "bucket": "wh", "project": "p", "root_uri": str(warehouse)})
     with TestClient(app) as client:
         yield Catalog(client=client, estate=str(estate), warehouse=str(warehouse))
     app.router.routes[:] = routes
@@ -139,7 +141,7 @@ def test_a_root_the_reclaim_cannot_read_is_counted_and_leaves_the_others(catalog
     broken = tmp_path / "broken"
     (broken / "__manifest" / "_versions").mkdir(parents=True)
     (broken / "__manifest" / "_versions" / "1.manifest").write_bytes(b"not a Lance manifest")
-    warehouses.put_warehouse(catalog.estate, {}, {"id": "broken", "bucket": "broken", "project": "p", "root_uri": str(broken)})
+    warehouses.put_warehouse(catalog.estate, StorageOptions(), {"id": "broken", "bucket": "broken", "project": "p", "root_uri": str(broken)})
     tenant = connect("dir", {"root": catalog.warehouse})
     for name in ("one", "two"):
         tenant.create_namespace(CreateNamespaceRequest(id=[name]))

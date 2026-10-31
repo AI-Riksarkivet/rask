@@ -56,7 +56,7 @@ def test_a_table_registered_at_a_nested_location_is_judged_and_destroyed_by_its_
     lance.write_dataset(
         pa.table({"id": pa.array([1, 2], pa.int64())}),
         f"s3://{bucket}/{location}",
-        storage_options=correctness.store_options(),
+        storage_options=correctness.store_options().in_clear(),
         data_storage_version="2.2",
         enable_stable_row_ids=True,
     )

@@ -23,6 +23,7 @@ from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.maintenance_due import CloneList
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 @pytest.fixture(scope="module")
@@ -57,7 +58,7 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestCli
     get_settings.cache_clear()
     ns = connect("dir", {"root": root})
     app.dependency_overrides[get_namespace] = lambda: ns
-    app.dependency_overrides[get_storage_options] = lambda: {}
+    app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     with TestClient(app) as client:
         yield client
     app.dependency_overrides.clear()

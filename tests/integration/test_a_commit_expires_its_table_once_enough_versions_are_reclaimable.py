@@ -28,11 +28,13 @@ from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, DescribeTableRequest, RegisterTableRequest
 from moto.server import ThreadedMotoServer
+from pydantic import SecretStr
 
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import location_claims, maintenance_policies
 from service_kit.lakehouse.maintenance_due import CloneList, write_clone_list
 from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
 
 
 TABLE = "db$räksmörgås"
@@ -58,20 +60,25 @@ def bucket(moto_url: str) -> str:
 
 
 @pytest.fixture
-def store(moto_url: str) -> dict[str, str]:
-    return lance_storage_options(moto_url, "test", "test", "us-east-1")
+def store(moto_url: str) -> StorageOptions:
+    return lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
 
 
-def _table_with(versions: int, *, bucket: str, options: dict[str, str], clone_list_age: timedelta) -> str:
+def _table_with(versions: int, *, bucket: str, options: StorageOptions, clone_list_age: timedelta) -> str:
     """The table at ``versions`` versions, registered, under a policy keeping one, beside a clone list ``clone_list_age``
     old; the location the catalog describes it at."""
     root = f"s3://{bucket}"
     for i in range(versions):
         rows = pa.table({"id": pa.array([i], pa.int64())})
         lance.write_dataset(
-            rows, f"{root}/{LOCATION}", mode="create" if i == 0 else "append", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True
+            rows,
+            f"{root}/{LOCATION}",
+            mode="create" if i == 0 else "append",
+            storage_options=options.in_clear(),
+            data_storage_version="2.2",
+            enable_stable_row_ids=True,
         )
-    namespace = connect("dir", {"root": root, **{f"storage.{key}": value for key, value in options.items()}})
+    namespace = connect("dir", {"root": root, **{f"storage.{key}": value for key, value in options.in_clear().items()}})
     namespace.create_namespace(CreateNamespaceRequest(id=["db"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
     namespace.register_table(RegisterTableRequest(id=TABLE.split("$"), location=LOCATION))
     described = str(namespace.describe_table(DescribeTableRequest(id=TABLE.split("$"))).location)
@@ -127,14 +134,14 @@ def _written(uri: str, version: int) -> dict[str, object]:
     ],
 )
 def test_a_commit_expires_its_table_only_at_the_threshold(
-    *, bucket: str, store: dict[str, str], maintenance: TestClient, versions: int, clone_list_age: timedelta, kept: int
+    *, bucket: str, store: StorageOptions, maintenance: TestClient, versions: int, clone_list_age: timedelta, kept: int
 ) -> None:
     uri = _table_with(versions, bucket=bucket, options=store, clone_list_age=clone_list_age)
 
     answered = maintenance.post("/maintenance-arrival", json=_written(uri, versions))
 
     assert answered.status_code == 200 and answered.json() == {"status": "SUCCESS"}, answered.text
-    assert len(lance.dataset(uri, storage_options=store).versions()) == kept
+    assert len(lance.dataset(uri, storage_options=store.in_clear()).versions()) == kept
 
 
 def _staged(bucket: str, moto_url: str, location: str, version: int) -> str:
@@ -153,7 +160,7 @@ def _staged(bucket: str, moto_url: str, location: str, version: int) -> str:
     ],
 )
 def test_a_commits_expiry_removes_the_staged_manifests_no_version_will_take(
-    *, bucket: str, moto_url: str, store: dict[str, str], maintenance: TestClient, monkeypatch: pytest.MonkeyPatch, grace_seconds: str, lost_stays: bool
+    *, bucket: str, moto_url: str, store: StorageOptions, maintenance: TestClient, monkeypatch: pytest.MonkeyPatch, grace_seconds: str, lost_stays: bool
 ) -> None:
     """A commit that lost its version to another leaves the manifest it staged, which Lance's listing skips and so
     ``cleanup_old_versions`` never reclaims ([[LH-529]]); the expiry after a commit removes it once past its grace. One
@@ -172,4 +179,4 @@ def test_a_commits_expiry_removes_the_staged_manifests_no_version_will_take(
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     held = {entry["Key"].rsplit("/", 1)[-1] for entry in s3.list_objects_v2(Bucket=bucket, Prefix=f"{LOCATION}/_versions/").get("Contents", [])}
     assert {name for name in (lost, in_flight) if name in held} == ({lost, in_flight} if lost_stays else {in_flight})
-    assert lance.dataset(uri, storage_options=store).version == THRESHOLD + 1
+    assert lance.dataset(uri, storage_options=store.in_clear()).version == THRESHOLD + 1

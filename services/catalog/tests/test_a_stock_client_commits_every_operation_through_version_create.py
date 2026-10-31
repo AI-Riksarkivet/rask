@@ -49,6 +49,7 @@ from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse import base_refs, maintenance_due
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 _TOKEN = {"Authorization": "Bearer t"}
@@ -721,7 +722,7 @@ def test_what_lands_is_what_was_judged_whatever_the_writer_puts_over_its_staged_
 
     judged_then = managed_versions.discard
 
-    def swap_after_judging(staged: managed_versions.StagedVersion, so: dict[str, str]) -> None:
+    def swap_after_judging(staged: managed_versions.StagedVersion, so: StorageOptions) -> None:
         Path(staged.staged_uri.removeprefix("file://")).write_bytes(b"not the manifest that was judged")
         judged_then(staged, so)
 

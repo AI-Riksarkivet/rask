@@ -32,6 +32,7 @@ from catalog.services.dataplane import create_table, delete_from_table, update_t
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -57,8 +58,8 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": root})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3], "main"), root=root, mode="create", registry=registry, holder="$".join(TABLE_ID))
-    dataset = open_by_name(namespace, {}, TABLE_ID)
+    create_table(namespace, StorageOptions(), TABLE_ID, _table([1, 2, 3], "main"), root=root, mode="create", registry=registry, holder="$".join(TABLE_ID))
+    dataset = open_by_name(namespace, StorageOptions(), TABLE_ID)
     dataset.create_branch(BRANCH) if hasattr(dataset, "create_branch") else pytest.skip("pylance has no branch API here")
     return namespace
 
@@ -71,15 +72,15 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 
 def test_an_update_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001
     """The headline: a branch-scoped update must not rewrite main's rows."""
-    update_table(table, {}, UpdateTableRequest(id=TABLE_ID, branch=BRANCH, updates=[["label", "'edited'"]]), transaction_properties=STAMP)
+    update_table(table, StorageOptions(), UpdateTableRequest(id=TABLE_ID, branch=BRANCH, updates=[["label", "'edited'"]]), transaction_properties=STAMP)
 
-    main = open_by_name(ns, {}, TABLE_ID).to_table().column("label").to_pylist()
+    main = open_by_name(ns, StorageOptions(), TABLE_ID).to_table().column("label").to_pylist()
     assert main == ["main", "main", "main"], f"a branch-scoped update rewrote MAIN: {main}"
 
 
 def test_a_delete_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001
     """Same defect, the destructive half — and the one where a silent wrong target loses data."""
-    delete_from_table(table, {}, DeleteFromTableRequest(id=TABLE_ID, branch=BRANCH, predicate="id = 1"), transaction_properties=STAMP)
+    delete_from_table(table, StorageOptions(), DeleteFromTableRequest(id=TABLE_ID, branch=BRANCH, predicate="id = 1"), transaction_properties=STAMP)
 
-    main = open_by_name(ns, {}, TABLE_ID)
+    main = open_by_name(ns, StorageOptions(), TABLE_ID)
     assert main.count_rows() == 3, f"a branch-scoped delete removed rows from MAIN: {main.count_rows()} left"

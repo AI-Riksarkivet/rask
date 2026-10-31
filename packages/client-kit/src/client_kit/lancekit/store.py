@@ -43,11 +43,11 @@ def _s3fs(storage_options: dict[str, str]) -> tuple[pafs.S3FileSystem, str]:
 def _s3fs_for(options: frozenset[tuple[str, str]]) -> tuple[pafs.S3FileSystem, str]:
     """THE SHARED CONSTRUCTOR, not a third copy of it.
 
-    This built its own ``S3FileSystem`` and dropped the SESSION TOKEN — ``credential_of`` returns a
-    triple and the third field went into ``_``. That is the fail-open `objectfs.s3_filesystem`'s
-    docstring names: pyarrow falls back to the default credential chain for anything it was not given,
-    so a vended, table-scoped credential arriving here signed with the POD's own role instead —
-    BROADER rights than the catalog scoped, not narrower, and nothing refuses it.
+    A copy that builds its own ``S3FileSystem`` can drop the SESSION TOKEN of the credential triple, the
+    fail-open `objectfs.s3_filesystem`'s docstring names: pyarrow falls back to the default credential
+    chain for anything it was not given, so a vended, table-scoped credential arriving here would sign
+    with the POD's own role instead — BROADER rights than the catalog scoped, not narrower, and nothing
+    refuses it.
 
     Every dataset resolution goes through here (`list_lance_stems`, `exists`), so the seam is hot as
     well as wrong. Pinned by
@@ -56,7 +56,7 @@ def _s3fs_for(options: frozenset[tuple[str, str]]) -> tuple[pafs.S3FileSystem, s
     """
     storage_options = dict(options)
     host = storage_options.get("endpoint", "").split("://", 1)[-1]
-    return objectfs.s3_filesystem(storage_options), host
+    return objectfs.s3_filesystem(objectfs.StorageOptions.from_flat(storage_options)), host
 
 
 def list_lance_stems(root: str | Path, storage_options: dict[str, str] | None) -> list[str]:

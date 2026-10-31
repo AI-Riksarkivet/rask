@@ -36,6 +36,7 @@ from catalog.services.dataplane import create_table, create_tag
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -56,7 +57,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(
         namespace,
-        {},
+        StorageOptions(),
         TABLE_ID,
         pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA),
         root=root,
@@ -76,7 +77,7 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 def _create(table: DoorTable, tag: str) -> int | None:
     """Create the tag and return the spec code it answered, or None if it succeeded."""
     try:
-        create_tag(table, {}, CreateTableTagRequest(id=TABLE_ID, tag=tag, version=1))
+        create_tag(table, StorageOptions(), CreateTableTagRequest(id=TABLE_ID, tag=tag, version=1))
     except Exception as exc:  # noqa: BLE001 — the CODE is the subject
         return getattr(exc, "code", None)
     return None

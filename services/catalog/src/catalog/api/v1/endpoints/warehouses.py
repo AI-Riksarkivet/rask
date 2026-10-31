@@ -1321,13 +1321,8 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         ]
         return checks
 
-    s3 = s3_client(
-        store_endpoint or None,
-        access_key=options["aws_access_key_id"],
-        secret_key=options["aws_secret_access_key"],
-        session_token=options.get("aws_session_token"),
-        region=options["region"],
-    )
+    access_key, secret_key, session_token = options.credential_in_clear()
+    s3 = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.options["region"])
 
     def _step(name: str, fn: Callable[[], object], *, expect_refusal: bool = False) -> bool:
         try:
@@ -1349,7 +1344,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         # As the credential tells its writer to encrypt, after a plain write the store took: a store whose role holds no grant
         # on the vended KMS key fails here, a verdict on the store, not the first write to the warehouse's first table
         # ([[LH-262]]). The read back asks the key's decrypt as a reader would.
-        if encrypted := _encryption_put_args(options):
+        if encrypted := _encryption_put_args(options.options):
 
             def _round_trip() -> None:
                 s3.put_object(Bucket=bucket, Key=sealed, Body=b"scope-probe", **encrypted)

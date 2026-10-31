@@ -25,6 +25,7 @@ import respx
 from lineage.api import relay_cron
 from lineage.core.config import LineageSettings, Signing
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 IDENTITY = "service-medallion"
@@ -61,13 +62,13 @@ def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_stag
     uri = f"file://{tmp_path}/outbox"
     signer = event_signer(IDENTITY)
     respx.get(f"{SECRETS}/signing-public-{IDENTITY}").mock(return_value=httpx.Response(200, json={"keys": signer.public}))
-    outbox.stage_event(uri, {}, RUN_ID, json.dumps(signer.sign(_wire())))
+    outbox.stage_event(uri, StorageOptions(), RUN_ID, json.dumps(signer.sign(_wire())))
     settings = LineageSettings.model_validate({"outbox_uri": uri, "signing": Signing(signers=frozenset({IDENTITY}), delegators=frozenset())})
     repo = _Repo()
     request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
 
-    outcome = asyncio.run(relay_cron._drain_outbox(request, cast("Any", repo), settings, {}, None))
+    outcome = asyncio.run(relay_cron._drain_outbox(request, cast("Any", repo), settings, StorageOptions(), None))
 
     assert (outcome.drained, outcome.refused) == (1, 0), f"the staged event never drained: {outcome}, refused for {repo.refusals}"
     assert repo.ingested == [RUN_ID]
-    assert list(outbox.list_events(uri, {})) == [], "a drained event must not stay staged"
+    assert list(outbox.list_events(uri, StorageOptions())) == [], "a drained event must not stay staged"

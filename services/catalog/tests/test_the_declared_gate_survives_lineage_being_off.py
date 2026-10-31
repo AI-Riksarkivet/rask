@@ -30,6 +30,7 @@ import pytest
 from catalog.api.v1.endpoints.publication import resolve_effective_gate
 from service_kit.lakehouse import gate_specs
 from service_kit.lakehouse.gate_specs import GateSpec
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 PROJECT = "acme"
@@ -54,7 +55,7 @@ def registry_root(tmp_path: Path) -> str:
     root.mkdir()
     gate_specs.put_spec(
         str(root),
-        {},
+        StorageOptions(),
         GateSpec(project=PROJECT, key_column="declared_id", required_columns=["must_have"]),
     )
     return str(root)
@@ -69,8 +70,8 @@ async def test_the_declared_gate_applies_with_lineage_emission_OFF(registry_root
 
     monkeypatch.setattr(door.warehouses, "project_for_namespace", lambda *_a, **_k: PROJECT, raising=False)
 
-    settings = SimpleNamespace(registry_root=registry_root, storage_options=lambda: {})
-    effective = await resolve_effective_gate(cast("Any", settings), {}, cast("Any", _NoopLineage()), [TOP_NS], cast("Any", _Body()))
+    settings = SimpleNamespace(registry_root=registry_root, storage_options=lambda: StorageOptions())
+    effective = await resolve_effective_gate(cast("Any", settings), StorageOptions(), cast("Any", _NoopLineage()), [TOP_NS], cast("Any", _Body()))
 
     assert effective.key_column == "declared_id", (
         "the declared gate was not applied with lineage emission off — a project's quality policy must not depend on an observability switch"

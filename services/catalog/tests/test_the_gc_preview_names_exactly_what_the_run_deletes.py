@@ -45,6 +45,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.services.dataplane import create_table
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -68,14 +69,14 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at v1..v6 and ``work`` at v2..v6, with one tag and one child branch pinning each ref."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(ns, {}, TABLE_ID, _rows(0), root=str(tmp_path / "data"), mode="create", registry=_registry(tmp_path), holder="db$rows")
-    open_by_name(ns, {}, TABLE_ID).insert(_rows(1))
-    open_by_name(ns, {}, TABLE_ID).create_branch(BRANCH, 2)
+    create_table(ns, StorageOptions(), TABLE_ID, _rows(0), root=str(tmp_path / "data"), mode="create", registry=_registry(tmp_path), holder="db$rows")
+    open_by_name(ns, StorageOptions(), TABLE_ID).insert(_rows(1))
+    open_by_name(ns, StorageOptions(), TABLE_ID).create_branch(BRANCH, 2)
     for i in range(2, 6):
-        open_by_name(ns, {}, TABLE_ID).insert(_rows(i))
+        open_by_name(ns, StorageOptions(), TABLE_ID).insert(_rows(i))
     for i in range(10, 14):
-        open_by_name(ns, {}, TABLE_ID, branch=BRANCH).insert(_rows(i))
-    root = open_by_name(ns, {}, TABLE_ID)
+        open_by_name(ns, StorageOptions(), TABLE_ID, branch=BRANCH).insert(_rows(i))
+    root = open_by_name(ns, StorageOptions(), TABLE_ID)
     root.tags.create("pinned", (BRANCH, 3))
     root.tags.create("release", (None, 4))
     root.create_branch(NESTED, (BRANCH, 5))
@@ -90,7 +91,7 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     application.include_router(door.router)
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
-    application.dependency_overrides[get_storage_options] = lambda: {}
+    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     with TestClient(application) as test_client:
         yield test_client
 
@@ -103,7 +104,7 @@ def _call(client: TestClient, verb: str, *, branch: str | None, retain_versions:
 
 
 def _versions(namespace: LanceNamespace, *, branch: str | None) -> set[int]:
-    return {int(v["version"]) for v in open_by_name(namespace, {}, TABLE_ID, branch=branch).versions()}
+    return {int(v["version"]) for v in open_by_name(namespace, StorageOptions(), TABLE_ID, branch=branch).versions()}
 
 
 @pytest.mark.parametrize("retain_versions", [1])

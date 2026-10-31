@@ -38,6 +38,7 @@ from catalog.services import dataplane, table_claims
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 @pytest.fixture
@@ -47,7 +48,7 @@ def table(tmp_path: Path) -> DoorTable:
     backend.create_namespace(CreateNamespaceRequest(id=["db"]))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
     rows = pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]})
-    dataplane.create_table(backend, {}, ["db", "t"], rows, root=str(tmp_path), mode="create", registry=registry, holder="db$t")
+    dataplane.create_table(backend, StorageOptions(), ["db", "t"], rows, root=str(tmp_path), mode="create", registry=registry, holder="db$t")
     return table_claims.door_table(backend, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
 
 
@@ -72,14 +73,23 @@ STAMP = {"rask.author": "alice", "rask.operation": "update"}
 def _ops(table: DoorTable) -> dict[str, Any]:
     return {
         "delete_from_table": lambda: dataplane.delete_from_table(
-            table, {}, DeleteFromTableRequest(id=["db", "t"], predicate="id = 1"), transaction_properties=STAMP
+            table, StorageOptions(), DeleteFromTableRequest(id=["db", "t"], predicate="id = 1"), transaction_properties=STAMP
         ),
-        "update_table": lambda: dataplane.update_table(table, {}, UpdateTableRequest(id=["db", "t"], updates=[["v", "'z'"]]), transaction_properties=STAMP),
+        "update_table": lambda: dataplane.update_table(
+            table, StorageOptions(), UpdateTableRequest(id=["db", "t"], updates=[["v", "'z'"]]), transaction_properties=STAMP
+        ),
         "add_columns": lambda: dataplane.add_columns(
-            table, {}, AlterTableAddColumnsRequest(id=["db", "t"], new_columns=[{"name": "doubled", "expression": "id * 2"}]), transaction_properties=STAMP
+            table,
+            StorageOptions(),
+            AlterTableAddColumnsRequest(id=["db", "t"], new_columns=[{"name": "doubled", "expression": "id * 2"}]),
+            transaction_properties=STAMP,
         ),
-        "drop_columns": lambda: dataplane.drop_columns(table, {}, AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]), transaction_properties=STAMP),
-        "update_field_metadata": lambda: dataplane.update_field_metadata(table, {}, [{"path": "id", "metadata": {"unit": "px"}}], transaction_properties=STAMP),
+        "drop_columns": lambda: dataplane.drop_columns(
+            table, StorageOptions(), AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]), transaction_properties=STAMP
+        ),
+        "update_field_metadata": lambda: dataplane.update_field_metadata(
+            table, StorageOptions(), [{"path": "id", "metadata": {"unit": "px"}}], transaction_properties=STAMP
+        ),
     }
 
 

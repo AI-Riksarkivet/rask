@@ -68,6 +68,7 @@ from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.lakehouse.naming import CONTROL_ID_RE
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
 
 
@@ -150,7 +151,7 @@ async def _load_grouped(settings: Settings) -> dict[str, list[ProjectWarehouse]]
     return grouped
 
 
-async def _converge_project(settings: Settings, so: dict[str, str], record: dict[str, str]) -> dict[str, str]:
+async def _converge_project(settings: Settings, so: StorageOptions, record: dict[str, str]) -> dict[str, str]:
     """The conditional re-POST write (diff2 F1 leg c) — shared by the sequential and lost-race paths.
 
     Both used to end in an unconditional `put_project` of a record assembled from a read taken earlier

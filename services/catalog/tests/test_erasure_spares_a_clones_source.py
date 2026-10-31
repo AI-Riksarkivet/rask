@@ -37,6 +37,7 @@ from catalog.services.erasure import ErasureReport, ref_heads, verify
 from service_kit.lakehouse import base_registry, location_claims
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -66,7 +67,7 @@ def _erase_protected(tmp_path: Path, erasure_job: Any) -> tuple[str, ErasureRepo
     report = verify(
         lance.dataset(uri),
         reopen=lambda: lance.dataset(uri),
-        storage_options={},
+        storage_options=StorageOptions(),
         protected=BaseRefs(protected={normalise(uri)}),
         table="t",
         predicate=_PREDICATE,
@@ -98,7 +99,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     ns.create_namespace(CreateNamespaceRequest(id=["db"], properties=with_minted_uuid(None)))
     create_table(
         ns,
-        {},
+        StorageOptions(),
         ["db", "subjects"],
         read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
         root=str(tmp_path / "data"),
@@ -106,8 +107,8 @@ def namespace(tmp_path: Path) -> LanceNamespace:
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control")),
         holder="db$subjects",
     )
-    open_by_name(ns, {}, ["db", "subjects"]).insert(_rows("carol"))
-    source = open_by_name(ns, {}, ["db", "subjects"])
+    open_by_name(ns, StorageOptions(), ["db", "subjects"]).insert(_rows("carol"))
+    source = open_by_name(ns, StorageOptions(), ["db", "subjects"])
     clone = str(tmp_path / "data" / "clone.lance")
     source.shallow_clone(clone, (None, None))
     # RECORDED, as the catalog records a clone it made ([[LH-279]]): an unrecorded clone's base is a claim
@@ -132,7 +133,7 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     application.include_router(door.router)
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
-    application.dependency_overrides[get_storage_options] = lambda: {}
+    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     with TestClient(application) as test_client:
         yield test_client
 
@@ -140,7 +141,7 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
 def test_the_door_leaves_a_clones_source_readable_through_the_clone(client: TestClient, namespace: LanceNamespace, tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
     recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE})
     assert recorded.status_code == 202, recorded.text
-    erasure_job(open_by_name(namespace, {}, ["db", "subjects"]).uri, _PREDICATE).run()
+    erasure_job(open_by_name(namespace, StorageOptions(), ["db", "subjects"]).uri, _PREDICATE).run()
 
     response = client.post(f"/management/v1/table/db$subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": _PREDICATE})
 

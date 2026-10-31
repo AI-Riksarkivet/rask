@@ -27,6 +27,7 @@ from typing import Any
 import pytest
 
 from catalog.services import warehouses
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 @pytest.mark.parametrize(
@@ -48,8 +49,10 @@ def test_a_role_is_granted_on_a_namespace_only_inside_its_own_tenant(
 ) -> None:
     catalog, alice = governed_catalog, governed_catalog.bearer("alice")
     if namespace_project is not None:
-        warehouses.put_warehouse(str(tmp_path), {}, {"id": "wh", "project": namespace_project, "bucket": namespace_project, "root_uri": str(tmp_path)})
-        warehouses.bind_namespace(str(tmp_path), {}, "beta_bronze", "wh", str(tmp_path))
+        warehouses.put_warehouse(
+            str(tmp_path), StorageOptions(), {"id": "wh", "project": namespace_project, "bucket": namespace_project, "root_uri": str(tmp_path)}
+        )
+        warehouses.bind_namespace(str(tmp_path), StorageOptions(), "beta_bronze", "wh", str(tmp_path))
     assert catalog.client.post("/v1/namespace/beta_bronze/create", json={}, headers=alice).status_code == 200
     catalog.store.write(
         (catalog.person("dave"), "assignee", "role:analyst"),

@@ -35,6 +35,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from pydantic import SecretStr
+
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
 
 
@@ -65,7 +68,7 @@ def _blessed_version(ds: Any) -> int | None:
     return int(version) if version is not None else None
 
 
-def referenced_tokens(registry_uri: str, storage_options: dict[str, str] | None) -> set[str] | None:
+def referenced_tokens(registry_uri: str, storage_options: StorageOptions | None) -> set[str] | None:
     """Every token any registry row references, read at the latest version PLUS the blessed version.
 
     Returns ``None`` when the registry cannot be read or ANY row's meta cannot be parsed — the
@@ -78,14 +81,15 @@ def referenced_tokens(registry_uri: str, storage_options: dict[str, str] | None)
     """
     import lance
 
+    in_clear = None if storage_options is None else storage_options.in_clear()
     try:
-        ds = lance.dataset(registry_uri, storage_options=storage_options)
+        ds = lance.dataset(registry_uri, storage_options=in_clear)
         latest = int(ds.version)
-        pinned = lance.dataset(registry_uri, version=latest, storage_options=storage_options)
+        pinned = lance.dataset(registry_uri, version=latest, storage_options=in_clear)
         metas = pinned.to_table(columns=["meta"]).column("meta").to_pylist()
         blessed = _blessed_version(ds)
         if blessed is not None and blessed != latest:
-            blessed_ds = lance.dataset(registry_uri, version=blessed, storage_options=storage_options)
+            blessed_ds = lance.dataset(registry_uri, version=blessed, storage_options=in_clear)
             metas = metas + blessed_ds.to_table(columns=["meta"]).column("meta").to_pylist()
     except Exception as exc:
         print(f"registry read failed ({exc}); refusing to delete anything", file=sys.stderr)
@@ -112,11 +116,12 @@ def _filesystem(base: str, storage_options: StorageOptions | None) -> tuple[Any,
     import pyarrow.fs as pafs
 
     if base.startswith("s3://"):
-        return s3_filesystem(storage_options or {"endpoint": ""}), base.removeprefix("s3://").rstrip("/")
+        reached = storage_options if storage_options is not None else StorageOptions(options={"endpoint": ""})
+        return s3_filesystem(reached), base.removeprefix("s3://").rstrip("/")
     return pafs.LocalFileSystem(), base.rstrip("/")
 
 
-def token_ages(base: str, storage_options: dict[str, str] | None) -> dict[str, datetime | None]:
+def token_ages(base: str, storage_options: StorageOptions | None) -> dict[str, datetime | None]:
     """First-level ``<token>/`` prefixes under the base → the mtime of their NEWEST object.
 
     ``None`` age = the token's objects could not be statted (the caller keeps it — fail-safe).
@@ -151,7 +156,7 @@ def sweep(
     artifact_base: str,
     ttl_hours: float,
     delete: bool = False,
-    storage_options: dict[str, str] | None = None,
+    storage_options: StorageOptions | None = None,
     now: datetime | None = None,
 ) -> JanitorReport:
     """One janitor pass. Dry-run (report-only) unless ``delete=True`` AND nothing forced keep-all."""
@@ -207,7 +212,7 @@ def main() -> None:
 
     so = None
     if args.registry_uri.startswith("s3://") or args.artifact_base.startswith("s3://"):
-        so = lance_storage_options(args.s3_endpoint, args.s3_key, args.s3_secret, args.s3_region)
+        so = lance_storage_options(args.s3_endpoint, S3KeyPair(access_key_id=args.s3_key, secret_access_key=SecretStr(args.s3_secret)), args.s3_region)
     report = sweep(
         registry_uri=args.registry_uri,
         artifact_base=args.artifact_base,

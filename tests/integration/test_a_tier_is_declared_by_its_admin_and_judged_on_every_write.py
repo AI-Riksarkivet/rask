@@ -24,6 +24,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims, warehouses
 from service_kit.governed import fga
 from service_kit.governed.audit import AUDIT_LOGGER
+from service_kit.lakehouse.objectfs import StorageOptions
 from tests.integration.openfga_grants import Grants, act_as
 
 
@@ -59,7 +60,9 @@ def grants(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
     real_ns_client.app.state.oidc = MagicMock()
     store = Grants()
     real_ns_client.app.state.fga = store
-    warehouses.put_warehouse(root, {}, {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"})
+    warehouses.put_warehouse(
+        root, StorageOptions(), {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"}
+    )
     for user in ("alice", "bob"):
         store.grant(user, ("can_create_namespace", f"warehouse:{WAREHOUSE}"))
     store.grant("alice", ("can_administer", f"project:{PROJECT}"))

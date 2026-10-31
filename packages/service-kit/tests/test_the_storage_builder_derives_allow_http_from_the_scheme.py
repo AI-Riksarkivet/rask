@@ -16,7 +16,9 @@ builder offers no knob: one fact cannot disagree with itself.
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -30,4 +32,4 @@ from service_kit.lakehouse.objectfs import lance_storage_options
     ],
 )
 def test_allow_http_follows_the_endpoint_scheme(endpoint: str, expected: str) -> None:
-    assert lance_storage_options(endpoint, "AK", "SK", "us-east-1")["allow_http"] == expected
+    assert lance_storage_options(endpoint, S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), "us-east-1").options["allow_http"] == expected

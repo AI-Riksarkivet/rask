@@ -96,7 +96,7 @@ def _indices_due(ds: lance.LanceDataset, question: DueQuestion) -> list[IndexDue
 def evaluate_due(question: DueQuestion, storage_options: StorageOptions, *, now: datetime) -> DueRecord | None:
     """The table's due record as of now, or ``None`` when neither a compaction nor an index optimize is due. Raises when
     the dataset cannot be read."""
-    ds = lance.dataset(question.location, storage_options=storage_options, session=shared_lance_session())
+    ds = lance.dataset(question.location, storage_options=storage_options.in_clear(), session=shared_lance_session())
     compaction = compaction_due(ds, question, storage_options)
     indices = _indices_due(ds, question)
     if compaction is None and not indices:

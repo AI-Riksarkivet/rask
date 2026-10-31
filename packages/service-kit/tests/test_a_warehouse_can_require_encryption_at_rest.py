@@ -31,11 +31,18 @@ from pydantic import SecretStr
 
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.governed.store_session import IssuedSession, WebIdentity
-from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
 
 
-def _opts(**kw: object) -> dict[str, str]:
-    return lance_storage_options("http://s3:9000", "key", "secret", "us-east-1", **kw)  # ty: ignore[invalid-argument-type]
+def _opts(*, server_side_encryption: str, sse_kms_key_id: str | None = None, sse_bucket_key_enabled: bool | None = None) -> StorageOptions:
+    return lance_storage_options(
+        "http://s3:9000",
+        S3KeyPair(access_key_id="key", secret_access_key=SecretStr("secret")),
+        "us-east-1",
+        server_side_encryption=server_side_encryption,
+        sse_kms_key_id=sse_kms_key_id,
+        sse_bucket_key_enabled=sse_bucket_key_enabled,
+    )
 
 
 def test_a_KMS_key_WITHOUT_a_kms_algorithm_is_REFUSED() -> None:
@@ -55,7 +62,7 @@ def test_an_UNKNOWN_algorithm_is_REFUSED() -> None:
 
 def test_bucket_keys_ride_along_when_asked() -> None:
     opts = _opts(server_side_encryption="aws:kms", sse_kms_key_id="k", sse_bucket_key_enabled=True)
-    assert opts["aws_sse_bucket_key_enabled"] == "true", "bucket-key enablement did not reach the writer"
+    assert opts.options["aws_sse_bucket_key_enabled"] == "true", "bucket-key enablement did not reach the writer"
 
 
 def _identity() -> WebIdentity:
@@ -87,7 +94,7 @@ def test_the_VENDED_credential_carries_it_to_a_direct_writer() -> None:
     # vendor declined, which is a different failure from the one under test and must not read as it.
     assert vended is not None, "the vendor vended nothing at all"
     options = vended.as_storage_options()
-    assert options.get("aws_server_side_encryption") == "aws:kms", (
+    assert options.options.get("aws_server_side_encryption") == "aws:kms", (
         "the vended credential does not tell the writer to encrypt — the catalog is out of the path, so nothing else can"
     )
-    assert options.get("aws_sse_kms_key_id") == "arn:aws:kms:eu-north-1:1:key/abc"
+    assert options.options.get("aws_sse_kms_key_id") == "arn:aws:kms:eu-north-1:1:key/abc"

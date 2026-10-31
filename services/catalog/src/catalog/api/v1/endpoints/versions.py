@@ -52,6 +52,7 @@ from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.lakehouse import commit_records, maintenance_due
 from service_kit.lakehouse.history_fences import HistoryWork
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -359,7 +360,7 @@ async def batch_delete_table_versions(
         raise await fga_deps.refusal_naming_referrers(settings, token, client, exc) from exc
 
 
-def _delete_versions(table: DoorTable, so: dict[str, str], settings: Settings, body: BatchDeleteTableVersionsRequest) -> BatchDeleteTableVersionsResponse:
+def _delete_versions(table: DoorTable, so: StorageOptions, settings: Settings, body: BatchDeleteTableVersionsRequest) -> BatchDeleteTableVersionsResponse:
     ds = table.open_unchecked(so, branch=body.branch)
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
     # Judged before the sibling scan, which opens every dataset beside this one, so a refused request

@@ -20,7 +20,7 @@ from typing import Any, Final
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.lakehouse.objectfs import credential_of, fs_and_base
+from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from storage import s3_client
 
 
@@ -45,20 +45,20 @@ class StoredObject(BaseModel):
     modified: datetime
 
 
-def _on_object_client(uri: str, storage_options: dict[str, str]) -> bool:
-    return uri.startswith("s3://") and bool(storage_options.get("endpoint"))
-
-
-def _object_client(storage_options: dict[str, str]) -> Any:  # noqa: ANN401 — a boto3 S3 client
-    access_key, secret_key, session_token = credential_of(storage_options)
+def _object_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — a boto3 S3 client
+    access_key, secret_key, session_token = storage_options.credential_in_clear()
     return s3_client(
-        storage_options.get("endpoint"), access_key=access_key, secret_key=secret_key, session_token=session_token, region=storage_options.get("region")
+        storage_options.options.get("endpoint"),
+        access_key=access_key,
+        secret_key=secret_key,
+        session_token=session_token,
+        region=storage_options.options.get("region"),
     )
 
 
-def list_under(uri: str, storage_options: dict[str, str]) -> list[StoredObject]:
+def list_under(uri: str, storage_options: StorageOptions) -> list[StoredObject]:
     """Every object beneath ``uri``, at any depth; ``[]`` when nothing is there."""
-    if _on_object_client(uri, storage_options):
+    if storage_options.reaches_by_endpoint(uri):
         bucket, _, key = uri.removeprefix("s3://").partition("/")
         pages = _object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
         return [
@@ -86,7 +86,7 @@ class ObjectIdentity(BaseModel):
     size: int
 
 
-def identities(uri: str, storage_options: dict[str, str], keys: Sequence[str]) -> dict[str, ObjectIdentity]:
+def identities(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -> dict[str, ObjectIdentity]:
     """Each object at ``<uri>/<key>`` the store holds, by key, as it holds it now; an absent one is left out.
 
     ``uri`` is the store's own spelling of a root (``s3://<bucket>/<key>`` or a local path), never decoded here. An S3
@@ -103,7 +103,7 @@ def identities(uri: str, storage_options: dict[str, str], keys: Sequence[str]) -
     return {key: identity for key, identity in zip(keys, found, strict=True) if identity is not None}
 
 
-def _s3_identity(uri: str, storage_options: dict[str, str]) -> Callable[[str], ObjectIdentity | None]:
+def _s3_identity(uri: str, storage_options: StorageOptions) -> Callable[[str], ObjectIdentity | None]:
     from botocore.exceptions import BotoCoreError, ClientError
 
     bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
@@ -124,7 +124,7 @@ def _s3_identity(uri: str, storage_options: dict[str, str]) -> Callable[[str], O
     return read
 
 
-def _local_identity(uri: str, storage_options: dict[str, str]) -> Callable[[str], ObjectIdentity | None]:
+def _local_identity(uri: str, storage_options: StorageOptions) -> Callable[[str], ObjectIdentity | None]:
     fs, base = fs_and_base(uri, storage_options)
 
     def read(key: str) -> ObjectIdentity | None:
@@ -141,7 +141,7 @@ def _local_identity(uri: str, storage_options: dict[str, str]) -> Callable[[str]
     return read
 
 
-def delete_object(uri: str, storage_options: dict[str, str], key: str) -> bool:
+def delete_object(uri: str, storage_options: StorageOptions, key: str) -> bool:
     """Delete the object at ``<uri>/<key>``; ``False`` when there was none.
 
     Any ``s3://`` root takes the object client, endpoint or none: a vend naming no endpoint is AWS proper, the store whose
@@ -174,7 +174,7 @@ def delete_object(uri: str, storage_options: dict[str, str], key: str) -> bool:
     return True
 
 
-def delete_objects(uri: str, storage_options: dict[str, str], paths: list[str]) -> None:
+def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) -> None:
     """Delete the store ``paths``, every one beneath ``uri``'s bucket or root.
 
     Raises:
@@ -182,7 +182,7 @@ def delete_objects(uri: str, storage_options: dict[str, str], paths: list[str]) 
     """
     if not paths:
         return
-    if not _on_object_client(uri, storage_options):
+    if not storage_options.reaches_by_endpoint(uri):
         fs, _ = fs_and_base(uri, storage_options)
         for path in paths:
             fs.delete_file(path)

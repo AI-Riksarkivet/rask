@@ -17,7 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.settings import GovernedAuthSettings
 from service_kit.governed.store_credential import S3KeyPair, store_key_pair
-from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
 
 
 class Signing(BaseSettings):
@@ -199,12 +199,11 @@ def get_settings() -> LineageSettings:
     return LineageSettings()
 
 
-def storage_options(settings: LineageSettings) -> dict[str, str]:
+def storage_options(settings: LineageSettings) -> StorageOptions:
     """Object-store options for the outbox the relay drains.
 
     The same S3-compatible config the producers stage with, under the key pair in force. Empty strings let
     the object-store client fall back to its default credential chain (e.g. real AWS) when the secret store
     is off and the ``LINEAGE_S3_*`` env vars are unset.
     """
-    pair = settings.s3_key_pair()
-    return lance_storage_options(settings.s3_endpoint or "", pair.access_key_id, pair.secret_access_key.get_secret_value(), settings.s3_region)
+    return lance_storage_options(settings.s3_endpoint or "", settings.s3_key_pair(), settings.s3_region)

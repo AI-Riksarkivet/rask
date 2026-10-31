@@ -35,6 +35,7 @@ from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -50,8 +51,8 @@ class ErasureReleaseTick(BaseModel):
     changed: int = 0
 
 
-def _open(location: str, storage_options: dict[str, str]) -> lance.LanceDataset:
-    return lance.dataset(location, storage_options=storage_options, session=fresh_lance_session())
+def _open(location: str, storage_options: StorageOptions) -> lance.LanceDataset:
+    return lance.dataset(location, storage_options=storage_options.in_clear(), session=fresh_lance_session())
 
 
 async def _on_cron(

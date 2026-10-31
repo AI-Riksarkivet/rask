@@ -32,10 +32,11 @@ from pydantic import SecretStr
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from service_kit.governed.store_credential import S3KeyPair
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
-AMBIENT = {"aws_access_key_id": "rustfsadmin"}
-SCOPED = {"aws_access_key_id": "SCOPED", "aws_secret_access_key": "scoped-secret"}
+AMBIENT = StorageOptions.from_flat({"aws_access_key_id": "rustfsadmin", "aws_secret_access_key": "rustfsadmin"})
+SCOPED = StorageOptions(key_pair=S3KeyPair(access_key_id="SCOPED", secret_access_key=SecretStr("scoped-secret")))
 
 
 def _settings() -> MaintenanceSettings:
@@ -44,7 +45,7 @@ def _settings() -> MaintenanceSettings:
 
 def _vends(location: str | None) -> object:
     def _vend(table_id: str, settings: MaintenanceSettings) -> credentials.Vended:
-        return credentials.Vended(options={}, key_pair=S3KeyPair(access_key_id="SCOPED", secret_access_key=SecretStr("scoped-secret")), location=location)
+        return credentials.Vended(storage_options=SCOPED, location=location)
 
     return _vend
 

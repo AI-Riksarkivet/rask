@@ -315,7 +315,7 @@ class DaprMaintenanceEmitter:
             await outbox.publish_lineage_with_outbox(
                 self._client,
                 outbox_uri=self._outbox_uri,
-                storage_options=self._storage_options() if self._storage_options is not None else {},
+                storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
                 run_id=str((event.get("run") or {}).get("runId") or ""),
                 event_json=json.dumps(event),
                 pubsub_name=self._pubsub,

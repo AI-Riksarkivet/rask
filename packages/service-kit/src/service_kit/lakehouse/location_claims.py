@@ -87,7 +87,7 @@ class ClaimStore(BaseModel):
     """Where the claims live: the control root and the credential that writes it."""
 
     control_root: str
-    storage_options: StorageOptions = Field(default_factory=dict)
+    storage_options: StorageOptions = Field(default_factory=StorageOptions)
 
 
 class ClaimFence(BaseModel):

@@ -40,6 +40,7 @@ from catalog.services import dataplane
 from lineage.models import parse_event
 from lineage.services.provenance import edges_of
 from service_kit.control_emit import CatalogControlEvent
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -278,7 +279,7 @@ def test_a_branch_lookup_that_walks_past_the_branch_point_finds_nothing_and_rais
     from catalog.services import table_claims
 
     table = table_claims.door_table(ns, table_claims.claim_store(get_settings()), ["lh214", "t"])
-    assert dataplane.committed_version(table, {}, "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
+    assert dataplane.committed_version(table, StorageOptions(), "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
 
 
 def test_every_event_names_the_table_and_its_namespace_by_their_uuids(

@@ -25,6 +25,9 @@ every unit test passes on the spelling that fails in every pod.
 
 from __future__ import annotations
 
+from pydantic import SecretStr
+
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -35,6 +38,8 @@ _MUST_BE_AWS_PREFIXED = ("aws_access_key_id", "aws_secret_access_key", "aws_sess
 
 
 def test_the_credential_is_emitted_under_the_spellings_that_displace_the_environment() -> None:
-    options = lance_storage_options("http://rustfs:9000", "AK", "SK", "us-east-1", session_token="TOK")
+    options = lance_storage_options(
+        "http://rustfs:9000", S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("TOK")), "us-east-1"
+    ).in_clear()
     for key in _MUST_BE_AWS_PREFIXED:
         assert key in options, f"{key} missing — the ambient AWS_* environment wins and the write signs as the pod"

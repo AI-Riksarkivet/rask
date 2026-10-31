@@ -10,6 +10,7 @@ from typing import Any, cast
 
 from lineage.core.config import Signing
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _uri(tmp_path: Any) -> str:
@@ -17,7 +18,7 @@ def _uri(tmp_path: Any) -> str:
 
 
 def test_drop_absent_is_idempotent(tmp_path: Any) -> None:
-    outbox.drop_event(_uri(tmp_path), {}, "ghost")  # no raise on a missing object
+    outbox.drop_event(_uri(tmp_path), StorageOptions(), "ghost")  # no raise on a missing object
 
 
 class _Dapr:
@@ -39,7 +40,7 @@ def test_publish_with_outbox_stages_then_drops_on_ack(tmp_path: Any) -> None:
         outbox.publish_lineage_with_outbox(
             dapr,
             outbox_uri=uri,
-            storage_options={},
+            storage_options=StorageOptions(),
             run_id="r1",
             event_json=event,
             pubsub_name="p",
@@ -48,7 +49,7 @@ def test_publish_with_outbox_stages_then_drops_on_ack(tmp_path: Any) -> None:
         )
     )
     assert dapr.published == [event]
-    assert list(outbox.list_events(uri, {})) == []  # dropped after the publish acked
+    assert list(outbox.list_events(uri, StorageOptions())) == []  # dropped after the publish acked
 
 
 def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: Any) -> None:
@@ -66,7 +67,7 @@ def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: A
         outbox.publish_lineage_with_outbox(
             dapr,
             outbox_uri=_uri(tmp_path),
-            storage_options={},
+            storage_options=StorageOptions(),
             run_id="r1",
             event_json=event,
             pubsub_name="p",
@@ -131,10 +132,10 @@ def test_backlog_reports_depth_and_oldest_age(tmp_path: Any) -> None:
     # The alertable pair. An outbox that silently stops draining — the one failure that loses lineage
     # forever — used to look exactly like a healthy one, because NOTHING was measured.
     uri = _uri(tmp_path)
-    assert outbox.backlog(uri, {}) == (0, 0.0)  # empty must report 0, not go stale
+    assert outbox.backlog(uri, StorageOptions()) == (0, 0.0)  # empty must report 0, not go stale
     for i in range(3):
-        outbox.stage_event(uri, {}, f"run-{i}", "{}")
-    depth, age = outbox.backlog(uri, {})
+        outbox.stage_event(uri, StorageOptions(), f"run-{i}", "{}")
+    depth, age = outbox.backlog(uri, StorageOptions())
     assert depth == 3
     assert age >= 0.0  # a real, non-negative age for the OLDEST staged event
 
@@ -144,13 +145,13 @@ def test_list_events_is_bounded_and_oldest_first(tmp_path: Any) -> None:
     # what the outbox exists to survive — could OOM/stall the tick. Cap it, oldest-first so nothing starves.
     uri = _uri(tmp_path)
     for i in range(5):
-        outbox.stage_event(uri, {}, f"run-{i}", "{}")
+        outbox.stage_event(uri, StorageOptions(), f"run-{i}", "{}")
         time.sleep(0.01)  # distinct mtimes so "oldest first" is actually assertable
 
-    first_two = [rid for rid, _ in outbox.list_events(uri, {}, limit=2)]
+    first_two = [rid for rid, _ in outbox.list_events(uri, StorageOptions(), limit=2)]
     assert first_two == ["run-0", "run-1"]  # bounded AND oldest-first (not arbitrary order)
 
-    assert len({rid for rid, _ in outbox.list_events(uri, {})}) == 5  # no limit => everything
+    assert len({rid for rid, _ in outbox.list_events(uri, StorageOptions())}) == 5  # no limit => everything
 
 
 # --- one run, MANY events: the staged object must not collide ------------------------------------
@@ -175,24 +176,24 @@ def _event(run_id: str, event_type: str) -> str:
 def test_a_complete_and_a_fail_for_one_run_are_both_staged(tmp_path: Any) -> None:
     uri = _uri(tmp_path)
 
-    outbox.stage_event(uri, {}, "run-1", _event("run-1", "COMPLETE"))
-    outbox.stage_event(uri, {}, "run-1", _event("run-1", "FAIL"))
+    outbox.stage_event(uri, StorageOptions(), "run-1", _event("run-1", "COMPLETE"))
+    outbox.stage_event(uri, StorageOptions(), "run-1", _event("run-1", "FAIL"))
 
-    staged = {json.loads(payload)["eventType"] for _key, payload in outbox.list_events(uri, {})}
+    staged = {json.loads(payload)["eventType"] for _key, payload in outbox.list_events(uri, StorageOptions())}
     assert staged == {"COMPLETE", "FAIL"}, f"the second event truncated the first — one run's events share an object: {staged}"
 
 
 def test_each_staged_event_drops_independently(tmp_path: Any) -> None:
     """Dropping the FAIL after its publish must not take the still-unpublished COMPLETE with it."""
     uri = _uri(tmp_path)
-    outbox.stage_event(uri, {}, "run-1", _event("run-1", "COMPLETE"))
-    outbox.stage_event(uri, {}, "run-1", _event("run-1", "FAIL"))
+    outbox.stage_event(uri, StorageOptions(), "run-1", _event("run-1", "COMPLETE"))
+    outbox.stage_event(uri, StorageOptions(), "run-1", _event("run-1", "FAIL"))
 
-    for key, payload in list(outbox.list_events(uri, {})):
+    for key, payload in list(outbox.list_events(uri, StorageOptions())):
         if json.loads(payload)["eventType"] == "FAIL":
-            outbox.drop_event(uri, {}, key)
+            outbox.drop_event(uri, StorageOptions(), key)
 
-    left = [json.loads(payload)["eventType"] for _key, payload in outbox.list_events(uri, {})]
+    left = [json.loads(payload)["eventType"] for _key, payload in outbox.list_events(uri, StorageOptions())]
     assert left == ["COMPLETE"], f"dropping one event disturbed the other: {left}"
 
 
@@ -224,7 +225,7 @@ def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_
         job_namespace="lance-catalog",
     )
     run_id = event["run"]["runId"]
-    outbox.stage_event(uri, {}, run_id, json.dumps(event))
+    outbox.stage_event(uri, StorageOptions(), run_id, json.dumps(event))
 
     published: list[dict[str, Any]] = []
     still_staged_at_publish: list[int] = []
@@ -233,11 +234,11 @@ def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_
         published.append(kwargs)
         # The staged object must still exist HERE. If the drop came first, a failed publish would have
         # destroyed the event's only durable copy -- the exact loss the outbox exists to prevent.
-        still_staged_at_publish.append(len(list(outbox.list_events(uri, {}))))
+        still_staged_at_publish.append(len(list(outbox.list_events(uri, StorageOptions()))))
 
     monkeypatch.setattr(staged.dapr_publish, "publish_event", _fake_publish)
 
-    outcome = asyncio.run(relay_cron._drain_outbox(_authorized_request(), cast("Any", _Repo()), cast("Any", _Settings(uri)), {}, object()))
+    outcome = asyncio.run(relay_cron._drain_outbox(_authorized_request(), cast("Any", _Repo()), cast("Any", _Settings(uri)), StorageOptions(), object()))
 
     assert outcome.drained == 1
     assert len(published) == 1, "a recovered event was ingested but never re-published -- the cascade stays halted"
@@ -245,7 +246,7 @@ def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_
     assert published[0]["pubsub_name"] == "lineage-pubsub"
     assert json.loads(published[0]["data"])["run"]["runId"] == run_id
     assert still_staged_at_publish == [1], "the staged object was dropped before the publish succeeded"
-    assert list(outbox.list_events(uri, {})) == []  # ...and dropped once it did
+    assert list(outbox.list_events(uri, StorageOptions())) == []  # ...and dropped once it did
 
 
 def _authorized_request() -> Any:

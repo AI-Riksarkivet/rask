@@ -27,6 +27,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.records import RecordChangedError, RecordExistsError, create_json, mutate_json, read_json, replace_json
 
 
@@ -89,7 +90,7 @@ def _record_key(scope: str, key: str) -> str:
 
 def claim(
     root_uri: str,
-    storage_options: dict[str, str],
+    storage_options: StorageOptions,
     *,
     scope: str,
     key: str,
@@ -136,7 +137,7 @@ def claim(
     return None
 
 
-def release(root_uri: str, storage_options: dict[str, str], *, scope: str, key: str, claimed_at: float) -> None:
+def release(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, claimed_at: float) -> None:
     """Give back the claim an attempt made at ``claimed_at``, for an attempt refused before it wrote anything.
 
     Its caller's corrected retry under the same key then runs at once instead of meeting :class:`InFlightError` for
@@ -158,7 +159,7 @@ def release(root_uri: str, storage_options: dict[str, str], *, scope: str, key: 
         return
 
 
-def record_outcome(root_uri: str, storage_options: dict[str, str], *, scope: str, key: str, status: int, body: Any) -> None:  # noqa: ANN401 — the door's own response model
+def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, status: int, body: Any) -> None:  # noqa: ANN401 — the door's own response model
     """Store what this attempt answered, so a replay returns it rather than re-executing.
 
     A MERGE onto the claim rather than a fresh write: the record already carries the endpoint the key

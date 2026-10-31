@@ -26,6 +26,7 @@ import pytest
 
 from service_kit.control_emit import DaprControlEmitter
 from service_kit.control_events import CatalogControlEvent
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _event() -> CatalogControlEvent:
@@ -46,4 +47,4 @@ async def test_a_SUCCESSFUL_publish_drops_the_staged_copy(tmp_path: Any) -> None
 
     await emitter.emit(_event())
 
-    assert list(outbox.list_events(uri, {})) == [], "the delivered event stayed staged"
+    assert list(outbox.list_events(uri, StorageOptions())) == [], "the delivered event stayed staged"

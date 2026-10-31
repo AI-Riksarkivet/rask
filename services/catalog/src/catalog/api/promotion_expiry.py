@@ -34,6 +34,7 @@ from catalog.services import promotions, table_claims
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.records import RecordChangedError
 
 
@@ -106,7 +107,7 @@ async def _named_now(settings: Settings, hold: promotions.Hold) -> str | None:
     return table
 
 
-async def _unpin(request: Request, settings: Settings, so: dict[str, str], table: str, table_uuid: str) -> None:
+async def _unpin(request: Request, settings: Settings, so: StorageOptions, table: str, table_uuid: str) -> None:
     """Sync the hold pin of an expired hold's table, named ``table`` now, to its record, which an expiry leaves without one.
 
     A pin that cannot be removed now stays on its version until the table is held or decided again, which syncs the

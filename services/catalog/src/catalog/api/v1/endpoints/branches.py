@@ -29,6 +29,7 @@ from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ async def create_table_branch(
     return response
 
 
-def _recorded_parent(table: DoorTable, so: dict[str, str], body: CreateTableBranchRequest) -> dict[str, Any]:
+def _recorded_parent(table: DoorTable, so: StorageOptions, body: CreateTableBranchRequest) -> dict[str, Any]:
     """The parent the dataset recorded for a just-created branch, or nothing.
 
     ONE EXTRA READ PER CREATE, which is a rare operation and a permanent announcement: a console that

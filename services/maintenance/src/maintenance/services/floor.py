@@ -69,6 +69,7 @@ from maintenance.services.due import TableIds
 from maintenance.services.orphans import OrphanFile, listed_at_or_below
 from maintenance.services.sweep import trashed_locations, why_in_trash
 from service_kit.lakehouse import trash
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.versions import committed_at
 
 
@@ -171,21 +172,21 @@ def _outcome(uri: str, found: list[OrphanFile]) -> FloorRaise:
     )
 
 
-def _current_floor(uri: str, storage_options: dict[str, str]) -> float | None:
+def _current_floor(uri: str, storage_options: StorageOptions) -> float | None:
     """This dataset's earliest retained manifest timestamp, as an epoch, or ``None`` if unreadable.
 
     An epoch because it is compared with `FileInfo.mtime` epochs; `committed_at` reads the naive-local
     manifest time in the right zone (see `orphans._classify_against_floor`).
     """
     try:
-        dataset = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
+        dataset = lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
         return min(committed_at(version).timestamp() for version in dataset.versions())
     except Exception as exc:  # noqa: BLE001 — an unreadable dataset refuses this raise, never the tick
         log.warning("floor_read_failed", extra={"dataset": uri, "error": str(exc)})
         return None
 
 
-def _already_raised(uri: str, storage_options: dict[str, str]) -> str | None:
+def _already_raised(uri: str, storage_options: StorageOptions) -> str | None:
     """The epoch of a previous raise on this dataset, or ``None`` if there has not been one.
 
     Read from the dataset's own config rather than from any state this service keeps, so it survives a
@@ -193,12 +194,12 @@ def _already_raised(uri: str, storage_options: dict[str, str]) -> str | None:
     reading the dataset.
     """
     try:
-        return lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).config().get(FLOOR_KEY)
+        return lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session()).config().get(FLOOR_KEY)
     except Exception:  # noqa: BLE001 — an unreadable config is handled by the floor read above
         return None
 
 
-def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: MaintenanceSettings, storage_options: dict[str, str]) -> FloorRaise:
+def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: MaintenanceSettings, storage_options: StorageOptions) -> FloorRaise:
     """One dataset's raise, or why it was refused: the floor re-read, the stamp, the vend for ``table``, then the commit."""
     outcome = _outcome(uri, found)
     floor = _current_floor(uri, storage_options)
@@ -224,14 +225,14 @@ def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: Maint
         # THE SHARED SESSION, like every other dataset open in this service. This pod runs against
         # a 512Mi limit it has already been OOMKilled against, and a store rebuild strands datasets
         # in bulk — a per-dataset session here is the shape that turns a recovery into an eviction.
-        lance.dataset(uri, storage_options=write_options, session=shared_lance_session()).update_config({FLOOR_KEY: str(int(time.time()))})
-        outcome.version = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).version
+        lance.dataset(uri, storage_options=write_options.in_clear(), session=shared_lance_session()).update_config({FLOOR_KEY: str(int(time.time()))})
+        outcome.version = lance.dataset(uri, storage_options=storage_options.in_clear(), session=shared_lance_session()).version
     except Exception as exc:  # noqa: BLE001 — one dataset's failure must not stop the others
         return outcome.model_copy(update={"refused": f"commit failed: {exc}"})
     return outcome
 
 
-def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanFile], names: TableIds, storage_options: dict[str, str]) -> FloorReport:
+def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanFile], names: TableIds, storage_options: StorageOptions) -> FloorReport:
     """Write one metadata commit per stranded dataset, so the next sweep can see its residue.
 
     OFF BY DEFAULT and DRY-RUN BY DEFAULT — two separate switches, because they answer different

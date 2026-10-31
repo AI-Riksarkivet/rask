@@ -30,6 +30,7 @@ from catalog.services.publication import publish
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
@@ -52,7 +53,7 @@ def _registry(tmp_path: Path) -> base_registry.BaseRegistry:
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, runtime-only
     namespace = connect("dir", {"root": str(tmp_path)})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=_registry(tmp_path), holder="db$pages")
+    create_table(namespace, StorageOptions(), TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=_registry(tmp_path), holder="db$pages")
     return namespace
 
 
@@ -65,7 +66,7 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 def _uri(ns) -> str:  # noqa: ANN001
     from tables_by_name import open_by_name
 
-    return open_by_name(ns, {}, TABLE_ID).uri
+    return open_by_name(ns, StorageOptions(), TABLE_ID).uri
 
 
 def _write(ns, ids: list[int | None]) -> int:  # noqa: ANN001
@@ -84,10 +85,10 @@ class TestAnAcceptedFindingPublishes:
         shipped zero rows is not broken, and a service cannot tell that from a bug — a person can."""
         version = _empty(ns)
 
-        refused = publish(table, {}, version=version, key_column="id")
+        refused = publish(table, StorageOptions(), version=version, key_column="id")
         assert refused.published is False
 
-        accepted = publish(table, {}, version=version, key_column="id", accept_assertions=["row_count_positive"])
+        accepted = publish(table, StorageOptions(), version=version, key_column="id", accept_assertions=["row_count_positive"])
         assert accepted.published is True
         assert accepted.accepted == ["row_count_positive"]
 
@@ -97,7 +98,7 @@ class TestAnAcceptedFindingPublishes:
 
         accepted = publish(
             table,
-            {},
+            StorageOptions(),
             version=version,
             key_column="id",
             required_columns=["id", "thumbnail"],
@@ -113,7 +114,7 @@ class TestStructuralFindingsAreNeverAcceptable:
         act on it either, so bypassing the workflow buys nothing."""
         version = _write(ns, [1, None, 3])
 
-        result = publish(table, {}, version=version, key_column="id", accept_assertions=["not_null"])
+        result = publish(table, StorageOptions(), version=version, key_column="id", accept_assertions=["not_null"])
 
         assert result.published is False
         assert result.accepted == []
@@ -128,7 +129,7 @@ class TestAnOverrideIsNotABlanketForce:
 
         result = publish(
             table,
-            {},
+            StorageOptions(),
             version=version,
             key_column="id",
             required_columns=["thumbnail"],
@@ -143,7 +144,7 @@ class TestAnOverrideIsNotABlanketForce:
         never "was asked for"."""
         version = _write(ns, [1, 2, 3])
 
-        result = publish(table, {}, version=version, key_column="id", accept_assertions=["row_count_positive"])
+        result = publish(table, StorageOptions(), version=version, key_column="id", accept_assertions=["row_count_positive"])
 
         assert result.published is True
         assert result.accepted == []

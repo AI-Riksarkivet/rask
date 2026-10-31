@@ -18,6 +18,7 @@ from lance_namespace import (
 )
 
 from catalog.services import models as registry
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _publish(uri: str, metrics: dict[str, Any], token: str, *, first: bool) -> int:
@@ -47,26 +48,26 @@ def registry_uri(tmp_path: Any) -> str:
 
 
 def test_promote_moves_the_blessed_tag(registry_uri: str) -> None:
-    assert registry.blessed_version(registry_uri, {}) is None  # nothing blessed yet
-    assert registry.promote(registry_uri, {}, version=2) == 2
-    assert registry.blessed_version(registry_uri, {}) == 2
+    assert registry.blessed_version(registry_uri, StorageOptions()) is None  # nothing blessed yet
+    assert registry.promote(registry_uri, StorageOptions(), version=2) == 2
+    assert registry.blessed_version(registry_uri, StorageOptions()) == 2
     # Re-bless an OLDER version — the pointer moves (a tag move mints no new Lance version).
     assert lance.dataset(registry_uri).version == 2
-    assert registry.promote(registry_uri, {}, version=1) == 1
-    assert registry.blessed_version(registry_uri, {}) == 1
+    assert registry.promote(registry_uri, StorageOptions(), version=1) == 1
+    assert registry.blessed_version(registry_uri, StorageOptions()) == 1
     assert lance.dataset(registry_uri).version == 2  # unchanged — metadata-only move
 
 
 def test_metrics_gate_passes_when_metrics_meet_threshold(registry_uri: str) -> None:
-    assert registry.promote(registry_uri, {}, version=2, min_metrics={"rows_seen": 8}) == 2
-    assert registry.blessed_version(registry_uri, {}) == 2
+    assert registry.promote(registry_uri, StorageOptions(), version=2, min_metrics={"rows_seen": 8}) == 2
+    assert registry.blessed_version(registry_uri, StorageOptions()) == 2
 
 
 def test_metrics_gate_refuses_an_absent_metric(registry_uri: str) -> None:
     # A gate keyed on a metric the run never recorded must REFUSE, never vacuously pass.
     with pytest.raises(InvalidTableStateError, match="absent, non-numeric"):
-        registry.promote(registry_uri, {}, version=2, min_metrics={"accuracy": 0.9})
-    assert registry.blessed_version(registry_uri, {}) is None
+        registry.promote(registry_uri, StorageOptions(), version=2, min_metrics={"accuracy": 0.9})
+    assert registry.blessed_version(registry_uri, StorageOptions()) is None
 
 
 def test_metrics_gate_refuses_a_nan_or_inf_metric(tmp_path: Any) -> None:
@@ -79,13 +80,13 @@ def test_metrics_gate_refuses_a_nan_or_inf_metric(tmp_path: Any) -> None:
         table = pa.table({"artifact": pa.array(["weights"]), "meta": pa.array([meta])})
         lance.write_dataset(table, uri, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
         with pytest.raises(InvalidTableStateError):
-            registry.promote(uri, {}, version=1, min_metrics={"accuracy": 0.8})
-        assert registry.blessed_version(uri, {}) is None  # never blessed a non-finite model
+            registry.promote(uri, StorageOptions(), version=1, min_metrics={"accuracy": 0.8})
+        assert registry.blessed_version(uri, StorageOptions()) is None  # never blessed a non-finite model
 
 
 def test_promote_unknown_version_is_404(registry_uri: str) -> None:
     with pytest.raises(TableVersionNotFoundError):
-        registry.promote(registry_uri, {}, version=99)
+        registry.promote(registry_uri, StorageOptions(), version=99)
 
 
 def test_list_models_enumerates_registry_directories_only(tmp_path: Any) -> None:
@@ -97,5 +98,5 @@ def test_list_models_enumerates_registry_directories_only(tmp_path: Any) -> None
     (root / "not-a-dataset").mkdir()
     (root / "stray.txt").write_text("x")
 
-    assert registry.list_models(str(root), {}) == ["alpha", "bravo", "not-a-dataset"]
-    assert registry.list_models(str(tmp_path / "never-created"), {}) == []
+    assert registry.list_models(str(root), StorageOptions()) == ["alpha", "bravo", "not-a-dataset"]
+    assert registry.list_models(str(tmp_path / "never-created"), StorageOptions()) == []

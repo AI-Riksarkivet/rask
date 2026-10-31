@@ -32,6 +32,7 @@ from service_kit.control_emit import ControlEmitter, NoopControlEmitter
 from service_kit.control_events import CatalogControlEvent, ControlUuids
 from service_kit.governed import fga
 from service_kit.lakehouse import trash
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.openlineage import DatasetUuids
 
 
@@ -460,7 +461,7 @@ def get_fga_client(request: Request) -> OpenFgaClient | None:
 FgaClientDep = Annotated[OpenFgaClient | None, Depends(get_fga_client)]
 
 
-def get_storage_options(settings: SettingsDep) -> dict[str, str]:
+def get_storage_options(settings: SettingsDep) -> StorageOptions:
     """Object-store options (S3 credentials, region) for direct pylance access, under the DATA plane's bounds.
 
     Every door opens its pylance handle with these and reads or writes rows through it, and a handle's
@@ -470,7 +471,7 @@ def get_storage_options(settings: SettingsDep) -> dict[str, str]:
     return settings.storage_options(plane="data")
 
 
-StorageOptionsDep = Annotated[dict[str, str], Depends(get_storage_options)]
+StorageOptionsDep = Annotated[StorageOptions, Depends(get_storage_options)]
 
 
 #: The longest an originator claim may be. It becomes an inbox actor id, so an unbounded header would

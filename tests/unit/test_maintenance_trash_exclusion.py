@@ -35,6 +35,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services.discovery import Discovery
 from service_kit.lakehouse import location_claims, trash
 from service_kit.lakehouse.base_refs import normalise
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _dataset(path: Path) -> str:
@@ -105,7 +106,7 @@ def test_a_trashed_dataset_is_not_expired_and_says_so(tmp_path: Path, settings: 
     # under the control root points at them by the URL the catalog describes the table at.
     location = f"file://{tmp_path}/r%C3%A4ksm%C3%B6rg%C3%A5s%25.lance"
     record = trash.make_record("silver$räksmörgås%", kind="table", uuid=str(uuid4()), location=location, dropped_by="user:karin", grace_days=7)
-    trash.put(str(settings.resolved_control_root), {}, record)
+    trash.put(str(settings.resolved_control_root), StorageOptions(), record)
 
     results, expired = _run(monkeypatch, settings, [live, dropped, branch])
 
@@ -133,7 +134,7 @@ def test_an_expired_but_unpurged_record_still_freezes_its_dataset(tmp_path: Path
     dropped = _dataset(tmp_path / "long_expired.lance")
     record = trash.make_record("silver$old", kind="table", uuid=str(uuid4()), location=dropped, dropped_by="user:karin", grace_days=7)
     record["expires_at"] = "2020-01-01T00:00:00+00:00"
-    trash.put(str(settings.resolved_control_root), {}, record)
+    trash.put(str(settings.resolved_control_root), StorageOptions(), record)
 
     results, expired = _run(monkeypatch, settings, [dropped])
 
@@ -161,7 +162,7 @@ def test_a_trashed_clone_still_protects_its_live_source(tmp_path: Path, settings
     clone = _dataset(tmp_path / "clone.lance")
     trash.put(
         str(settings.resolved_control_root),
-        {},
+        StorageOptions(),
         trash.make_record("silver$clone", kind="table", uuid=str(uuid4()), location=clone, dropped_by="user:karin", grace_days=7),
     )
 
@@ -214,7 +215,7 @@ def test_a_namespace_record_carrying_no_location_excludes_nothing(tmp_path: Path
     live = _dataset(tmp_path / "live.lance")
     trash.put(
         str(settings.resolved_control_root),
-        {},
+        StorageOptions(),
         trash.make_record("silver", kind="namespace", uuid=str(uuid4()), location="", dropped_by="user:karin", grace_days=7),
     )
 

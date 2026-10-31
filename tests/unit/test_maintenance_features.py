@@ -25,7 +25,7 @@ import pytest
 from lance.dataset import DatasetBasePath
 
 from service_kit.lakehouse import features
-from service_kit.lakehouse.objectfs import dataset_root_probe, is_lance_dataset_root, same_store_uri
+from service_kit.lakehouse.objectfs import StorageOptions, dataset_root_probe, is_lance_dataset_root, same_store_uri
 
 
 def _table(n: int = 20) -> pa.Table:
@@ -303,7 +303,7 @@ def test_compaction_is_PERMITTED_on_an_external_blob_base_and_still_refused_on_a
     ds = lance.dataset(based)
     assert features.manifest_feature_flags(ds) == (16, 16), "fixture must really set flag 16"
 
-    probe = dataset_root_probe(based, {})
+    probe = dataset_root_probe(based, StorageOptions())
 
     reader, writer = features.manifest_feature_flags(ds)
     assert features.describe_compaction_unsupported_flags(reader, writer, features.gather_compaction_bases(ds, probe)) is None
@@ -314,7 +314,7 @@ def test_compaction_is_PERMITTED_on_an_external_blob_base_and_still_refused_on_a
     src.shallow_clone(clone, reference=src.version)
     cds = lance.dataset(clone)
     refusal = features.describe_compaction_unsupported_flags(
-        *features.manifest_feature_flags(cds), features.gather_compaction_bases(cds, dataset_root_probe(clone, {}))
+        *features.manifest_feature_flags(cds), features.gather_compaction_bases(cds, dataset_root_probe(clone, StorageOptions()))
     )
     assert refusal is not None and "16" in refusal, f"the clone refusal must survive, got: {refusal}"
 
@@ -335,10 +335,10 @@ def test_the_OBJECT_STORE_probe_is_what_separates_a_clone_from_a_blob_prefix(tmp
 
     refs = features.manifest_base_path_refs(ds)
     assert [ref.is_dataset_root for ref in refs] == [False], "the manifest bit would have been enough after all — this test's premise is gone"
-    assert is_lance_dataset_root(source, {}) is True
-    assert is_lance_dataset_root(str(tmp_path), {}) is False
+    assert is_lance_dataset_root(source, StorageOptions()) is True
+    assert is_lance_dataset_root(str(tmp_path), StorageOptions()) is False
 
-    gathered = features.gather_compaction_bases(ds, dataset_root_probe(str(ds.uri), {}))
+    gathered = features.gather_compaction_bases(ds, dataset_root_probe(str(ds.uri), StorageOptions()))
     assert [base.probed_dataset_root for base in gathered.bases] == [True]
     assert features.describe_compaction_unsupported_flags(*features.manifest_feature_flags(ds), gathered) is not None
 
@@ -358,7 +358,7 @@ def test_DATA_LIVING_UNDER_A_BASE_refuses_even_when_the_base_is_no_dataset_root(
     lance.write_dataset(_table(), uri, mode="append", target_bases=["alt"])
     ds = lance.dataset(uri)
 
-    gathered = features.gather_compaction_bases(ds, dataset_root_probe(str(ds.uri), {}))
+    gathered = features.gather_compaction_bases(ds, dataset_root_probe(str(ds.uri), StorageOptions()))
     assert gathered.bases == [features.BaseEvidence(path=str(alt), declares_dataset_root=False, probed_dataset_root=False)], (
         "neither the manifest bit nor the listing calls this base a dataset root — that is the premise"
     )
@@ -497,7 +497,7 @@ def test_a_base_in_another_store_is_UNKNOWN_and_therefore_refused(tmp_path: path
     filesystem is touched, which is the behaviour that matters: no store is consulted about a path
     that does not belong to it.
     """
-    probe = dataset_root_probe("s3://bucket/ns/t.lance", {})
+    probe = dataset_root_probe("s3://bucket/ns/t.lance", StorageOptions())
     with pytest.raises(ValueError):
         probe("gs://elsewhere/blobs")
 
@@ -511,8 +511,8 @@ def test_a_base_in_another_store_is_UNKNOWN_and_therefore_refused(tmp_path: path
     # And the probe DOES answer, offline, for a base that really is in the dataset's own store.
     source = str(tmp_path / "src.lance")
     lance.write_dataset(_table(), source)
-    assert dataset_root_probe(str(tmp_path / "clone.lance"), {})(source) is True
-    assert dataset_root_probe(str(tmp_path / "clone.lance"), {})(str(tmp_path)) is False
+    assert dataset_root_probe(str(tmp_path / "clone.lance"), StorageOptions())(source) is True
+    assert dataset_root_probe(str(tmp_path / "clone.lance"), StorageOptions())(str(tmp_path)) is False
 
 
 def test_a_base_the_CREDENTIAL_may_not_read_says_so_rather_than_blaming_the_store() -> None:

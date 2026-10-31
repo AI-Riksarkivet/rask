@@ -32,6 +32,7 @@ from lineage.services.forward import forward
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse import outbox, outbox_metrics
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ async def _on_cron(
 
 
 async def _drain_outbox(
-    request: Request, provenance: ProvenanceDep, settings: SettingsDep, opts: dict[str, str], publisher: object | None = None
+    request: Request, provenance: ProvenanceDep, settings: SettingsDep, opts: StorageOptions, publisher: object | None = None
 ) -> DrainOutcome:
     """Re-ingest + delete every staged lineage event (#4) — the full-event recovery half of the outbox.
 

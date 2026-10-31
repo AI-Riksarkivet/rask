@@ -22,8 +22,7 @@ from service_kit.governed.principal import PrincipalKey
 from service_kit.governed.settings import GovernedAuthSettings, SignatureDoorSettings
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.governed.store_session import WebIdentity, held_session
-from service_kit.lakehouse.endpoint_scheme import allow_http_for
-from service_kit.lakehouse.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts
+from service_kit.lakehouse.objectfs import SSE_KMS_ALGORITHMS, StorageOptions, StoreTimeouts, lance_storage_options
 
 
 if TYPE_CHECKING:
@@ -733,14 +732,12 @@ class Settings(
         (``catalog.core.store_endpoint``); its credential would belong behind the Dapr secret store
         with the record naming a reference, and no door consumes one yet.
 
-        ``allow_http`` is derived from the endpoint's scheme, never set on its own, so a TLS endpoint
-        cannot keep permission to fall back to plaintext.
-
-        The credential is the one in force when this is called (:meth:`s3_key_pair`), so a caller holding the result
-        past a renewal holds a session the store will expire.
+        The ``storage.`` properties are :meth:`storage_options` in clear, at the call that connects: the ``dir`` namespace
+        hands each to Lance's object store with the prefix removed
+        (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:21`). The credential is the one in force when
+        this is called (:meth:`s3_key_pair`), so a caller holding the result past a renewal holds a session the store will
+        expire.
         """
-        pair = self.s3_key_pair()
-        session = {f"{_STORAGE_PREFIX}session_token": pair.session_token.get_secret_value()} if pair.session_token is not None else {}
         return {
             "root": root or self.root,
             # The `__manifest` rewrite builds no index of its own ([[LH-251]]). Measured over moto at 100 and 1,000
@@ -748,14 +745,7 @@ class Settings(
             # describe 6 instead of 3: the unindexed table is one data file, read in one GET. Set, not left to the
             # backend's default, so a default that changes does not change this.
             "inline_optimization_enabled": "false",
-            f"{_STORAGE_PREFIX}endpoint": self.s3_endpoint,
-            f"{_STORAGE_PREFIX}access_key_id": pair.access_key_id,
-            f"{_STORAGE_PREFIX}secret_access_key": pair.secret_access_key.get_secret_value(),
-            **session,
-            f"{_STORAGE_PREFIX}region": self.s3_region,
-            f"{_STORAGE_PREFIX}allow_http": allow_http_for(self.s3_endpoint),
-            f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),
-            **{f"{_STORAGE_PREFIX}{key}": value for key, value in self.timeouts_for(plane).storage_options().items()},
+            **{f"{_STORAGE_PREFIX}{key}": value for key, value in self.storage_options(plane=plane).in_clear().items()},
         }
 
     def timeouts_for(self, plane: StorePlane) -> StoreTimeouts:
@@ -781,10 +771,14 @@ class Settings(
             )
         return self
 
-    def storage_options(self, *, plane: StorePlane = "metadata") -> dict[str, str]:
-        """Return the ``storage.*`` properties with the prefix stripped, for pylance, bounded for ``plane``."""
-        properties = self.namespace_properties(plane=plane)
-        return {key[len(_STORAGE_PREFIX) :]: value for key, value in properties.items() if key.startswith(_STORAGE_PREFIX)}
+    def storage_options(self, *, plane: StorePlane = "metadata") -> StorageOptions:
+        """The catalog's own object-store options, under the credential in force (:meth:`s3_key_pair`), bounded for ``plane``.
+
+        ``allow_http`` is derived from the endpoint's scheme (:func:`lance_storage_options`), never set on its own, so a TLS
+        endpoint cannot keep permission to fall back to plaintext.
+        """
+        options = lance_storage_options(self.s3_endpoint, self.s3_key_pair(), self.s3_region, virtual_hosted=self.s3_virtual_hosted)
+        return options.with_options(self.timeouts_for(plane).storage_options())
 
 
 @lru_cache

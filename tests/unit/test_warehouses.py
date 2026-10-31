@@ -26,6 +26,7 @@ from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _root(tmp_path: Any) -> str:
@@ -41,7 +42,7 @@ def _root(tmp_path: Any) -> str:
 # provisioning (idempotent: an owned bucket is a no-op)
 # --------------------------------------------------------------------------- #
 
-_SO = {"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"}
+_SO = StorageOptions.from_flat({"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"})
 
 
 def test_provision_creates_bucket() -> None:
@@ -55,7 +56,7 @@ def test_provision_adds_location_constraint_off_us_east_1() -> None:
     # Real AWS S3 rejects create_bucket without a LocationConstraint outside us-east-1 (RustFS ignores it).
     fake = MagicMock()
     with patch("boto3.client", return_value=fake):
-        warehouses.provision_bucket("bkt-a", {**_SO, "region": "eu-west-1"})
+        warehouses.provision_bucket("bkt-a", _SO.with_options({"region": "eu-west-1"}))
     fake.create_bucket.assert_called_once_with(Bucket="bkt-a", CreateBucketConfiguration={"LocationConstraint": "eu-west-1"})
 
 
@@ -303,7 +304,7 @@ def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> Non
         asyncio.run(fga_deps.require_project_exists(settings, "ghost"))
     assert "POST /management/v1/projects" in str(exc.value)
     # …and an existing record passes untouched.
-    proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "x", "protected": "false"})
+    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x", "protected": "false"})
     asyncio.run(fga_deps.require_project_exists(settings, "acme"))
 
 
@@ -357,7 +358,7 @@ def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing
     for unnamed in (None, "kubernetes~system:serviceaccount:rask:rask-sa-web", provisioner):
         with pytest.raises(InvalidInputError):
             create(unnamed)
-        assert proj_svc.list_projects(settings.registry_root, {}) == [], f"a refused create ({unnamed!r}) wrote the tenant anyway"
+        assert proj_svc.list_projects(settings.registry_root, StorageOptions()) == [], f"a refused create ({unnamed!r}) wrote the tenant anyway"
 
     minted = create("dex~alice")
 
@@ -384,8 +385,8 @@ def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, m
     with pytest.raises(TableNotFoundError):
         _create_as(settings, "dex~mallory", CreateWarehouseRequest(id="evil-wh", project="evil"))
     assert provisioned == []
-    assert proj_svc.list_projects(settings.registry_root, {}) == []
-    assert warehouses.list_warehouses(settings.registry_root, {}) == []
+    assert proj_svc.list_projects(settings.registry_root, StorageOptions()) == []
+    assert warehouses.list_warehouses(settings.registry_root, StorageOptions()) == []
     assert not any(t[2] == "project:evil" for t in store.tuples)
 
 
@@ -405,7 +406,7 @@ def test_a_second_warehouse_in_a_live_tenant_still_needs_that_tenants_admin(tmp_
     with pytest.raises(PermissionDeniedError):
         _create_as(settings, "dex~carol", CreateWarehouseRequest(id="acme-two", project="acme"))
     assert ("user:dex~carol", "admin", "project:acme") not in store.tuples
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-two") is None
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-two") is None
 
 
 # --------------------------------------------------------------------------- #
@@ -513,7 +514,7 @@ def test_create_warehouse_rejects_models_and_multibase_buckets(tmp_path: Any, mo
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: provisioned.append(bucket))
     # The project EXISTS (seeded in the registry) so the refusal below is the reserved-bucket guard
     # itself, not require_project_exists' 404 firing first.
-    proj_svc.put_project(_root(tmp_path), {}, {"id": "evil", "created_at": "t", "created_by": "x", "protected": "false"})
+    proj_svc.put_project(_root(tmp_path), StorageOptions(), {"id": "evil", "created_at": "t", "created_by": "x", "protected": "false"})
     for bucket in ("lance-models", "lance-data-1", "lance-data-2", "lance-catalog"):
         with pytest.raises(InvalidInputError):
             asyncio.run(
@@ -596,8 +597,8 @@ def test_create_serving_gold_round_trips(tmp_path: Any, monkeypatch: pytest.Monk
     assert gold.serving == "gold"
     work = _create(settings, CreateWarehouseRequest(id="acme-work", project="acme"))
     assert work.serving is None
-    gold_rec = warehouses.get_warehouse(settings.registry_root, {}, "acme-gold")
-    work_rec = warehouses.get_warehouse(settings.registry_root, {}, "acme-work")
+    gold_rec = warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-gold")
+    work_rec = warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-work")
     assert gold_rec is not None and gold_rec["serving"] == "gold"
     assert work_rec is not None and "serving" not in work_rec
 
@@ -613,7 +614,7 @@ def test_recreate_without_serving_does_not_demote_gold(tmp_path: Any, monkeypatc
     _create(settings, CreateWarehouseRequest(id="acme-gold", project="acme", serving="gold"))
     again = _create(settings, CreateWarehouseRequest(id="acme-gold", project="acme"))
     assert again.serving == "gold"
-    rec = warehouses.get_warehouse(settings.registry_root, {}, "acme-gold")
+    rec = warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-gold")
     assert rec is not None and rec["serving"] == "gold"
 
 
@@ -625,7 +626,7 @@ def test_an_unreadable_binding_refuses_rather_than_reporting_an_empty_warehouse(
     "this warehouse holds nothing" into a guess — and `DELETE ?purge_bucket=true` acts on that guess
     by destroying the tables of a namespace nobody could enumerate.
     """
-    root, so = _root(tmp_path), {}
+    root, so = _root(tmp_path), StorageOptions()
     warehouses.bind_namespace(root, so, "bronze", "wh-a", "s3://bkt-a")
     assert warehouses.namespaces_bound_to(root, so, "wh-a") == ["bronze"]
 

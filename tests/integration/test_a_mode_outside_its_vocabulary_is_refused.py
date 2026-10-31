@@ -38,6 +38,7 @@ from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, Inva
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table, insert_into_table
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -197,14 +198,19 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
     having parsed first: handed the raw value, pylance's `insert` answers a bare ValueError, which is a 500."""
     ns = connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
-    create_table(ns, {}, ["db", "t"], _id_table(), root=str(tmp_path / "data"), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "t"], _id_table(), root=str(tmp_path / "data"), mode="create", registry=None)
     table = table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
     if branch is not None:
-        table.open({}).create_branch(branch, None)
+        table.open(StorageOptions()).create_branch(branch, None)
 
     with pytest.raises(InvalidInputError):
         insert_into_table(
-            table, {}, InsertIntoTableRequest(id=["db", "t"], mode="Appnd", branch=branch), _rows(5), max_bytes=_BODY_LIMIT, transaction_properties={}
+            table,
+            StorageOptions(),
+            InsertIntoTableRequest(id=["db", "t"], mode="Appnd", branch=branch),
+            _rows(5),
+            max_bytes=_BODY_LIMIT,
+            transaction_properties={},
         )
 
-    assert table.open({}, branch=branch).count_rows() == 3, "a refused insert must write no rows"
+    assert table.open(StorageOptions(), branch=branch).count_rows() == 3, "a refused insert must write no rows"

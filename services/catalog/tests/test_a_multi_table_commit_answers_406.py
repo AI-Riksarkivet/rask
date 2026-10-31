@@ -30,6 +30,7 @@ from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -42,7 +43,7 @@ def _app(ns: object, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, list[lis
     settings = SimpleNamespace(storage_options=dict, warehouses_enabled=False, fga_enabled=False, root="")
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
-    application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}
+    application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: StorageOptions()
     application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: PersonPrincipal(
         principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
     )

@@ -34,6 +34,7 @@ from catalog.api.v1.endpoints import namespaces as n_ep
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
 from service_kit.control_events import ControlUuids
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 class _Tracker:
@@ -146,7 +147,7 @@ def test_the_estate_listing_lists_every_bound_seed_concurrently(tmp_path: Path, 
             request=request,
             ns=cast("LanceNamespace", object()),
             settings=_settings(tmp_path),
-            so={},
+            so=StorageOptions(),
             token=None,
             client=None,
             # With no caller and no OpenFGA the listing authorizes no candidate, so no name is resolved.

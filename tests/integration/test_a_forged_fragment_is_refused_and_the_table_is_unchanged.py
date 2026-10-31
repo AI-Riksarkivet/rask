@@ -38,7 +38,9 @@ import pytest
 import uvicorn
 from lance import blob_array, blob_field
 from lance.blob import Blob
+from pydantic import SecretStr
 
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.objectfs import lance_storage_options
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
@@ -112,7 +114,7 @@ class _Estate:
         self.monkeypatch = monkeypatch
         #: The external blob base a bronze create names, inside the approved corpus bucket ([[LH-209]]).
         self.external_base = f"s3://{bucket}-corpus/media/pages/"
-        self.key = lance_storage_options(url, "test", "test", "us-east-1")
+        self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
 
@@ -128,7 +130,7 @@ class _Estate:
         return str(resp.json()["location"])
 
     def open(self, location: str) -> lance.LanceDataset:
-        return lance.dataset(location, storage_options=self.key)
+        return lance.dataset(location, storage_options=self.key.in_clear())
 
     def put_uri(self, uri: str, body: bytes) -> None:
         bucket, _, key = uri.removeprefix("s3://").partition("/")
@@ -212,7 +214,7 @@ class _Staged:
 def _plain(estate: _Estate, **write: Any) -> _Staged:  # noqa: ANN401 — write_fragments' own keyword arguments
     table = f"db$t{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _ROWS)
-    written = lance.fragment.write_fragments(_STAGED, location, storage_options=estate.key, **write)
+    written = lance.fragment.write_fragments(_STAGED, location, storage_options=estate.key.in_clear(), **write)
     return _Staged(estate, table, location, json.loads(json.dumps(written[0].to_json())))
 
 
@@ -221,7 +223,7 @@ def _bronze(estate: _Estate, *, external_base: str | None = None, nested: bool =
     table = f"db$b{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _no_rows(nested=nested), external_base)
     units = [(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]
-    written = _write(location, _blob_rows(units, nested=nested), estate.key)
+    written = _write(location, _blob_rows(units, nested=nested), estate.key.in_clear())
     return _Staged(estate, table, location, written[0])
 
 
@@ -264,7 +266,7 @@ def _commit(staged: _Staged, fragments: list[dict[str, Any]], read_version: int)
             staged.location,
             operation,
             read_version=read_version,
-            storage_options=staged.estate.key,
+            storage_options=staged.estate.key.in_clear(),
             namespace_client=staged.estate.stock,
             table_id=table_id,
             namespace_client_managed_versioning=True,
@@ -293,7 +295,7 @@ def _external(uri: str, *, nested: bool = False) -> Callable[[_Staged], list[dic
             page = batch.column("page").combine_chunks()
             null_page = pa.StructArray.from_arrays(page.flatten(), fields=list(page.type), mask=pa.array([True]))
             batch = batch.set_column(batch.schema.get_field_index("page"), _NESTED_BLOB_SCHEMA.field("page"), null_page)
-        written = lance.fragment.write_fragments(batch, staged.location, storage_options=staged.estate.key, allow_external_blob_outside_bases=True)
+        written = lance.fragment.write_fragments(batch, staged.location, storage_options=staged.estate.key.in_clear(), allow_external_blob_outside_bases=True)
         return [json.loads(json.dumps(written[0].to_json()))]
 
     return forge
@@ -434,8 +436,8 @@ def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate
     source = f"{estate.external_base}page-external.tif"
     estate.put_uri(source, b"external-page")
     units = [(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]
-    managed = _write(location, _blob_rows(units, nested=True), estate.key)
-    external = _write(location, _blob_rows([(source, b"external-page")], external_base=estate.external_base, nested=True), estate.key)
+    managed = _write(location, _blob_rows(units, nested=True), estate.key.in_clear())
+    external = _write(location, _blob_rows([(source, b"external-page")], external_base=estate.external_base, nested=True), estate.key.in_clear())
     before = estate.open(location).version
 
     refused = _commit(_Staged(estate, table, location, managed[0]), [*managed, *external], before)
@@ -468,7 +470,7 @@ def test_a_writers_own_fragment_of_a_packed_struct_commits(estate: _Estate) -> N
     rows = pa.Table.from_pylist(
         [{"id": i, "p": {"x": float(i), "label": f"l{i}"}, "q": {"y": float(i), "inner": {"a": i, "b": f"b{i}"}}} for i in (1, 2)], schema=schema
     )
-    staged = _write(location, rows, estate.key)
+    staged = _write(location, rows, estate.key.in_clear())
     before = estate.open(location).version
 
     refused = _commit(_Staged(estate, table, location, staged[0]), staged, before)
@@ -484,13 +486,13 @@ def test_a_writers_own_fragment_of_a_struct_a_2_0_file_packs_commits(estate: _Es
     schema = pa.schema([pa.field("id", pa.int64()), pa.field("p", point, metadata={"lance-encoding:packed": "false"})])
     rows = pa.Table.from_pylist([{"id": i, "p": {"x": float(i), "y": i}} for i in (1, 2)], schema=schema)
     location = f"s3://{estate.bucket}/legacy20"
-    lance.write_dataset(rows.slice(0, 1), location, data_storage_version="2.0", enable_stable_row_ids=True, storage_options=estate.key)
+    lance.write_dataset(rows.slice(0, 1), location, data_storage_version="2.0", enable_stable_row_ids=True, storage_options=estate.key.in_clear())
     table = "db$legacy20"
     registered = estate.client.post(f"/v1/table/{quote(table, safe='$')}/register", json={"location": "legacy20"})
     assert registered.status_code == 200, registered.text
     staged = [
         json.loads(json.dumps(fragment.to_json()))
-        for fragment in lance.fragment.write_fragments(rows.slice(1, 1), location, storage_options=estate.key, data_storage_version="2.0")
+        for fragment in lance.fragment.write_fragments(rows.slice(1, 1), location, storage_options=estate.key.in_clear(), data_storage_version="2.0")
     ]
     before = estate.open(location).version
 

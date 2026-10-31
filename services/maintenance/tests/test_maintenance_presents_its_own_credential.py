@@ -19,13 +19,14 @@ import respx
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceUnauthenticated
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 _CATALOG = "http://catalog:2333"
 _URI = "s3://acme-bucket/db$t"
 _VEND = f"{_CATALOG}/management/v1/table/db$t/credentials"
 _SCOPED = {"aws_access_key_id": "VENDEDKEY", "aws_secret_access_key": "vended-secret-9f3a"}
-_AMBIENT = {"aws_access_key_id": "ambient"}
+_AMBIENT = StorageOptions.from_flat({"aws_access_key_id": "ambient", "aws_secret_access_key": "ambient"})
 
 
 def _settings() -> MaintenanceSettings:

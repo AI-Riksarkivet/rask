@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from service_kit.lakehouse.objectfs import StorageOptions
+
 
 def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch) -> None:
     """CONTRACT (LH-041): `set_tag` treats "the tag already exists" as convergence, not as failure.
@@ -54,6 +56,6 @@ def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch)
     monkeypatch.setattr(publication.dataplane, "update_tag", _update)
 
     table = DoorTable(cast("Any", None), ClaimStore(control_root="/unread"), ResolvedTable(segments=["acme", "silver", "features"]))
-    publication.set_tag(table, {}, "published", 7)
+    publication.set_tag(table, StorageOptions(), "published", 7)
 
     assert calls == ["create", "update"], f"the lost race was not converged: {calls}"

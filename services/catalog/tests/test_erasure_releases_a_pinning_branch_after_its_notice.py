@@ -49,6 +49,7 @@ from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.history_fences import HistoryWork, TableHistory
 from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 _PREDICATE = "pii = 'alice'"
@@ -70,7 +71,7 @@ def _created(root: Path) -> LanceNamespace:
     ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1], properties=with_minted_uuid(None)))
     body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20)
     registry = BaseRegistry(control_root=str(root.parent / "control"), storage_options={})
-    create_table(ns, {}, _TABLE_ID, body, root=str(root), mode="create", registry=registry, holder="db$subjects")
+    create_table(ns, StorageOptions(), _TABLE_ID, body, root=str(root), mode="create", registry=registry, holder="db$subjects")
     return ns
 
 
@@ -82,19 +83,19 @@ def _table_uuid(ns: LanceNamespace, tmp_path: Path) -> str:
 def _tagged_over_a_plain_delete(root: Path) -> LanceNamespace:
     """A writer's plain delete hides alice at v2, which a run's tag ``trained`` names; v3 adds carol."""
     ns = _created(root)
-    open_by_name(ns, {}, _TABLE_ID).delete(_PREDICATE)
-    open_by_name(ns, {}, _TABLE_ID).tags.create("trained", 2)
-    open_by_name(ns, {}, _TABLE_ID).insert(_rows("carol"))
+    open_by_name(ns, StorageOptions(), _TABLE_ID).delete(_PREDICATE)
+    open_by_name(ns, StorageOptions(), _TABLE_ID).tags.create("trained", 2)
+    open_by_name(ns, StorageOptions(), _TABLE_ID).insert(_rows("carol"))
     return ns
 
 
 def _pinned_subtree(root: Path) -> LanceNamespace:
     """main v2 adds carol; ``work`` cut from main v2 gains eve at v3; ``deeper`` cut from (work, 3), tagged ``t1``."""
     ns = _created(root)
-    open_by_name(ns, {}, _TABLE_ID).insert(_rows("carol"))
-    lance.write_dataset(_rows("eve"), open_by_name(ns, {}, _TABLE_ID).create_branch("work", 2), mode="append")
-    open_by_name(ns, {}, _TABLE_ID).create_branch("deeper", ("work", 3))
-    open_by_name(ns, {}, _TABLE_ID).tags.create("t1", ("deeper", 3))
+    open_by_name(ns, StorageOptions(), _TABLE_ID).insert(_rows("carol"))
+    lance.write_dataset(_rows("eve"), open_by_name(ns, StorageOptions(), _TABLE_ID).create_branch("work", 2), mode="append")
+    open_by_name(ns, StorageOptions(), _TABLE_ID).create_branch("deeper", ("work", 3))
+    open_by_name(ns, StorageOptions(), _TABLE_ID).tags.create("t1", ("deeper", 3))
     return ns
 
 
@@ -136,7 +137,7 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
 
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
-    application.dependency_overrides[get_storage_options] = lambda: {}
+    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     application.dependency_overrides[authenticate] = lambda: PersonPrincipal(
         principal=Principal(idp_id="dex", subject="alice@corp"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
     )
@@ -148,7 +149,7 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
 
 
 def _branches(ns: LanceNamespace) -> dict[str, tuple[str | None, int]]:
-    return {name: (meta["parent_branch"], meta["parent_version"]) for name, meta in open_by_name(ns, {}, _TABLE_ID).branches.list().items()}
+    return {name: (meta["parent_branch"], meta["parent_version"]) for name, meta in open_by_name(ns, StorageOptions(), _TABLE_ID).branches.list().items()}
 
 
 def _record(client: TestClient) -> str:
@@ -169,7 +170,7 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
 
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as client:
         obligation = _record(client)
-        erasure_job(open_by_name(ns, {}, _TABLE_ID).uri, _PREDICATE).run()
+        erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
         verified = _verify(client, obligation)
         refs = ["tag:trained"]
         assert ([pin["ref"] for pin in verified["report"]["pinned_by"]], verified["obligation"]["state"]) == (refs, "released")
@@ -184,14 +185,14 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
 
         clock.now = due - timedelta(seconds=1)
         assert client.post(f"/{_BINDING}").status_code == 200
-        assert "trained" in open_by_name(ns, {}, _TABLE_ID).tags.list(), "nothing is released before the deadline"
+        assert "trained" in open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list(), "nothing is released before the deadline"
 
         clock.now = due + timedelta(seconds=1)
         assert client.post(f"/{_BINDING}").status_code == 200
         again = _verify(client, _record(client))
 
     assert (again["report"]["complete"], again["report"]["residual_versions"], again["report"]["release"]) == (True, [], None), again["report"]["surfaces"]
-    assert "trained" not in open_by_name(ns, {}, _TABLE_ID).tags.list()
+    assert "trained" not in open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list()
 
 
 @pytest.mark.parametrize(
@@ -211,18 +212,18 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
     emitter, clock = _Recorder(), _Clock()
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as client:
         obligation = _record(client)
-        erasure_job(open_by_name(ns, {}, _TABLE_ID).uri, _PREDICATE).run()
+        erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
         earlier = erasure_release.new_release(
             [Pin(ref=scheduled, holds="main@2")],
             release_id=obligation,
             table="db$subjects",
             table_uuid=_table_uuid(ns, tmp_path),
-            location=open_by_name(ns, {}, _TABLE_ID).uri,
+            location=open_by_name(ns, StorageOptions(), _TABLE_ID).uri,
             requested_by="user:dex~alice",
             notified=["user:dex~alice", "user:dex~olivia"],
             due_at=clock.now + timedelta(days=7),
         )
-        erasure_release.schedule(str(tmp_path / "control"), {}, earlier)
+        erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), earlier)
         verified = _verify(client, obligation)
 
     release = [s["detail"] for s in verified["report"]["surfaces"] if s["surface"] == "release"]
@@ -256,28 +257,28 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
         release_id="0" * 32,
         table="db$subjects",
         table_uuid=_table_uuid(ns, tmp_path),
-        location=open_by_name(ns, {}, _TABLE_ID).uri,
+        location=open_by_name(ns, StorageOptions(), _TABLE_ID).uri,
         requested_by="user:dex~alice",
         notified=["user:dex~alice"],
         due_at=clock.now,
     )
-    erasure_release.schedule(str(tmp_path / "control"), {}, release)
+    erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), release)
 
     with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as client:
-        recorded = open_by_name(ns, {}, _TABLE_ID).version
+        recorded = open_by_name(ns, StorageOptions(), _TABLE_ID).version
         if dies_in == "recreate":
             _dies_once(monkeypatch, lance.LanceDataset, "create_branch", after=0)
         else:
-            _dies_once(monkeypatch, type(open_by_name(ns, {}, _TABLE_ID).branches), "delete", after=1)
+            _dies_once(monkeypatch, type(open_by_name(ns, StorageOptions(), _TABLE_ID).branches), "delete", after=1)
         client.post(f"/{_BINDING}")
         expected = {"work": (None, recorded), "deeper": ("work", recorded)}
         if dies_in == "deletes":
             assert set(_branches(ns)) == {"work"}, "the first tick deleted the leaf and died before its parent"
-            open_by_name(ns, {}, _TABLE_ID).create_branch("late", ("work", None))
+            open_by_name(ns, StorageOptions(), _TABLE_ID).create_branch("late", ("work", None))
             expected["late"] = ("work", recorded)
         else:
             assert _branches(ns) == {}, "the first tick deleted the subtree and died before recreating it"
-        open_by_name(ns, {}, _TABLE_ID).insert(_rows("zed"))
+        open_by_name(ns, StorageOptions(), _TABLE_ID).insert(_rows("zed"))
         assert client.post(f"/{_BINDING}").status_code == 200
 
     assert _branches(ns) == expected
@@ -296,18 +297,20 @@ def test_a_release_waits_while_a_reclaim_holds_the_tables_history(tmp_path: Path
         release_id="1" * 32,
         table="db$subjects",
         table_uuid=table_uuid,
-        location=open_by_name(ns, {}, _TABLE_ID).uri,
+        location=open_by_name(ns, StorageOptions(), _TABLE_ID).uri,
         requested_by="user:dex~alice",
         notified=["user:dex~alice"],
         due_at=clock.now,
     )
-    erasure_release.schedule(str(tmp_path / "control"), {}, release)
-    branches, tags = _branches(ns), open_by_name(ns, {}, _TABLE_ID).tags.list()
+    erasure_release.schedule(str(tmp_path / "control"), StorageOptions(), release)
+    branches, tags = _branches(ns), open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list()
     TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid=table_uuid).take(HistoryWork.RECLAIM)
 
     with _catalog(ns, tmp_path, grace_days=0, emitter=emitter, clock=clock) as client:
         tick = client.post(f"/{_BINDING}")
 
     assert tick.status_code == 200, tick.text
-    assert (_branches(ns), open_by_name(ns, {}, _TABLE_ID).tags.list()) == (branches, tags), "the release changed refs while a reclaim held the history"
-    assert erasure_release.scheduled(str(tmp_path / "control"), {}, release.release_id) is not None, "the release did not wait for a later tick"
+    assert (_branches(ns), open_by_name(ns, StorageOptions(), _TABLE_ID).tags.list()) == (branches, tags), (
+        "the release changed refs while a reclaim held the history"
+    )
+    assert erasure_release.scheduled(str(tmp_path / "control"), StorageOptions(), release.release_id) is not None, "the release did not wait for a later tick"

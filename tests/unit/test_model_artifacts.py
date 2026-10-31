@@ -19,6 +19,7 @@ import pyarrow as pa
 
 from catalog.api.v1.endpoints import models as ep
 from catalog.core.config import Settings
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _tree(root: Path) -> Path:
@@ -71,7 +72,7 @@ def test_describe_endpoint_carries_the_artifact_list(tmp_path: Path) -> None:
         model_uri=lambda m: str(tmp_path / "registry" / m),
         model_artifacts_uri=lambda m: str(tmp_path / "artifacts" / m),
     )
-    response = asyncio.run(ep.describe_model(model="demo", settings=settings, so={}, token=None, client=None))
+    response = asyncio.run(ep.describe_model(model="demo", settings=settings, so=StorageOptions(), token=None, client=None))
     assert response.latest_version == 1
     assert [a.path for a in response.artifacts] == [
         "tok1/config.json",
@@ -90,5 +91,5 @@ def test_describe_endpoint_reports_no_artifacts_as_empty(tmp_path: Path) -> None
         model_uri=lambda m: str(tmp_path / "registry" / m),
         model_artifacts_uri=lambda m: str(tmp_path / "artifacts" / m),  # never created
     )
-    response = asyncio.run(ep.describe_model(model="demo", settings=settings, so={}, token=None, client=None))
+    response = asyncio.run(ep.describe_model(model="demo", settings=settings, so=StorageOptions(), token=None, client=None))
     assert response.artifacts == []

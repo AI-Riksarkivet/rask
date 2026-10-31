@@ -11,10 +11,11 @@ import lance
 from lance_namespace import DescribeTableRequest, LanceNamespace, TableNotFoundError
 
 from catalog.core.namespace import open_resolved_dataset
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def open_by_name(
-    ns: LanceNamespace, storage_options: dict[str, str], table_id: list[str], *, version: int | None = None, branch: str | None = None
+    ns: LanceNamespace, storage_options: StorageOptions, table_id: list[str], *, version: int | None = None, branch: str | None = None
 ) -> lance.LanceDataset:
     """``namespace.open_resolved_dataset`` on the ref named, at the location ``table_id`` describes to now.
 

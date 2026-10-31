@@ -54,7 +54,7 @@ def _vendor(endpoint: str | None) -> WebIdentityVendor:
 def _vend(endpoint: str | None) -> dict[str, str]:
     vended = _vendor(endpoint).vend(table_location="s3://bucket/tbl", tier="read", session_name="reader")
     assert vended is not None
-    return vended.as_storage_options()
+    return vended.as_storage_options().in_clear()
 
 
 def test_a_vended_credential_carries_what_a_lance_client_needs_to_build() -> None:

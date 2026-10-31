@@ -23,6 +23,7 @@ from pydantic import SecretStr
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans as orphans_mod
 from maintenance.services import reconcile as mod
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 class _NoBuckets:
@@ -65,7 +66,7 @@ def _assert_degraded(report: mod.ReconcileReport, needle: str) -> None:
 def test_a_filesystem_that_cannot_be_built_degrades_the_category(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     real = mod.fs_and_base
 
-    def _boom(uri: str, storage_options: dict[str, str]) -> tuple[pafs.FileSystem, str]:
+    def _boom(uri: str, storage_options: StorageOptions) -> tuple[pafs.FileSystem, str]:
         # ONLY the orphan scan's own s3:// construction — the registry readers share this helper, and
         # failing those too would prove nothing about the category under test.
         if uri.startswith("s3://"):

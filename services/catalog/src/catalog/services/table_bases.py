@@ -194,7 +194,7 @@ def _manifest_table_locations(root: str, storage_options: StorageOptions) -> lis
     fs, base = fs_and_base(root, storage_options)
     if fs.get_file_info(f"{base}/{_MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
-    manifest = lance.dataset(f"{root.rstrip('/')}/{_MANIFEST_DIR}", storage_options=storage_options, session=shared_lance_session())
+    manifest = lance.dataset(f"{root.rstrip('/')}/{_MANIFEST_DIR}", storage_options=storage_options.in_clear(), session=shared_lance_session())
     rows = manifest.to_table(columns=["object_type", "location"])
     locations: list[str] = []
     for kind, stored in zip(rows.column("object_type").to_pylist(), rows.column("location").to_pylist(), strict=True):
@@ -347,7 +347,7 @@ class RegistrationVerdict(BaseModel):
     directories: list[str] = Field(default_factory=list)
 
 
-def judge_registered_table(ns: LanceNamespace, so: dict[str, str], segments: list[str], relative: str, context: RegistrationContext) -> RegistrationVerdict:
+def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], relative: str, context: RegistrationContext) -> RegistrationVerdict:
     """Judge the dataset a registration just attached, and record the bases it is admitted with ([[LH-279]]).
 
     In order: the location the backend RESOLVED, which is right for a warehouse-bound table too; no other

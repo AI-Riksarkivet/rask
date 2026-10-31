@@ -48,7 +48,7 @@ from service_kit.lakehouse.base_refs import decoded_path, location_within
 from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from service_kit.lakehouse.features import BasePathRef
-from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
 from service_kit.lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, WRITER_PUT_GLOBS
 
 
@@ -89,8 +89,8 @@ class VendedSession(BaseModel):
 
     The secret access key and the session token are ``SecretStr`` (:class:`S3KeyPair`), so a repr, a str, a model dump, a
     log line or an error that echoes a vend carries neither; Lakekeeper derives ``Redact`` on its credential structs for
-    the same reason. They leave the catalog only through :meth:`as_storage_options`, called where the vend is handed
-    over or used.
+    the same reason. They leave the catalog only through :meth:`as_storage_options`' ``in_clear``, called where the vend
+    is handed over or used.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -104,12 +104,13 @@ class VendedSession(BaseModel):
     #: When the client must refresh: every vend is a session STS issued, and every such session expires.
     expires_at_millis: int
 
-    def as_storage_options(self) -> dict[str, str]:
-        """The flat ``storage_options`` a client signs with, the secret and the session token in clear.
+    def as_storage_options(self) -> StorageOptions:
+        """The ``storage_options`` a client signs with, which only the call that hands the vend over or signs with it
+        puts in clear (:meth:`StorageOptions.in_clear`).
 
-        The spec's one map (`lance_docs/ns_catalog/spec.yaml:2883-2892`), at the keys
-        `lance_docs/lance/guide/object_store.md:127-136` names. Called only where the vend leaves the catalog: the body
-        that hands it to its caller, or the client the catalog signs with it.
+        In clear, the spec's one map (`lance_docs/ns_catalog/spec.yaml:2883-2892`), at the keys
+        `lance_docs/lance/guide/object_store.md:127-136` names: the body that hands it to its caller, or the client the
+        catalog signs with it.
 
         BUILT THROUGH THE SHARED BUILDER, not hand-rolled. A hand-rolled dict carried the bare credential spellings, which
         do not displace a pod's ambient AWS_* environment — object_store blends the two and signs as neither identity
@@ -120,22 +121,19 @@ class VendedSession(BaseModel):
         Raises:
             ValueError: The encryption names a combination the store would ignore (`lance_storage_options`).
         """
-        session_token = self.key_pair.session_token
         options = lance_storage_options(
             self.endpoint or "",
-            self.key_pair.access_key_id,
-            self.key_pair.secret_access_key.get_secret_value(),
+            self.key_pair,
             self.region,
-            session_token=session_token.get_secret_value() if session_token is not None else None,
             server_side_encryption=self.encryption.algorithm,
             sse_kms_key_id=self.encryption.kms_key_id,
             sse_bucket_key_enabled=self.encryption.bucket_key_enabled,
         )
-        if not self.endpoint:
-            # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the client to
-            # nothing. The builder always emits the key, so it is removed rather than skipped.
-            options.pop("endpoint", None)
-        return options
+        if self.endpoint:
+            return options
+        # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the client to nothing. The
+        # builder always emits the key, so it is removed rather than skipped.
+        return StorageOptions(key_pair=options.key_pair, options={key: value for key, value in options.options.items() if key != "endpoint"})
 
 
 @runtime_checkable
@@ -486,7 +484,7 @@ class VendFacts(BaseModel):
     classified: tuple[str, ...] = ()
 
 
-def dataset_facts(location: str, storage_options: dict[str, str], *, branch: str = "") -> VendFacts:
+def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str = "") -> VendFacts:
     """The version and declared bases of the REF being vended, and the classified columns of every ref of its table, read
     under the catalog's own credential.
 
@@ -596,7 +594,7 @@ def _is_pointer_base(judgement: BaseJudgement) -> bool:
     return judgement.entry is not None and judgement.entry.role is BaseRole.EXTERNAL_BLOB
 
 
-def table_has_branch(location: str, storage_options: dict[str, str], branch: str) -> bool:
+def table_has_branch(location: str, storage_options: StorageOptions, branch: str) -> bool:
     """Does this table have that branch? ([[LH-056]])
 
     A SEPARATE OPEN, and deliberately not a fourth fact on :func:`dataset_facts`. That function's own

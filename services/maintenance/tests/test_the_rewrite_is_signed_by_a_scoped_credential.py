@@ -33,6 +33,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned
 from service_kit.context import DiagnosticFormatter
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 pytestmark = pytest.mark.usefixtures("catalog_identity_token")
@@ -47,7 +48,7 @@ _SCOPED = {
     "endpoint": "https://s3.public.example",
     "allow_http": "false",
 }
-_AMBIENT = {"aws_access_key_id": "rustfsadmin", "aws_secret_access_key": "rustfsadmin", "endpoint": "http://rustfs:9000"}
+_AMBIENT = StorageOptions.from_flat({"aws_access_key_id": "rustfsadmin", "aws_secret_access_key": "rustfsadmin", "endpoint": "http://rustfs:9000"})
 
 
 class _Response:
@@ -84,8 +85,8 @@ def test_the_pass_is_signed_by_the_vended_credential(door: list[dict[str, Any]])
     settings = _settings()
     options = credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", settings, table_id="acme-bronze$events", fallback=_AMBIENT)
     assert settings.s3_endpoint.startswith("http://")
-    assert options == {**_SCOPED, "endpoint": settings.s3_endpoint, "allow_http": "true"}
-    assert options["aws_access_key_id"] != "rustfsadmin"
+    assert options.in_clear() == {**_SCOPED, "endpoint": settings.s3_endpoint, "allow_http": "true"}
+    assert options.in_clear()["aws_access_key_id"] != "rustfsadmin"
 
 
 def test_the_vend_maintenance_holds_renders_neither_its_secret_nor_its_session_token(door: list[dict[str, Any]], caplog: pytest.LogCaptureFixture) -> None:
@@ -125,6 +126,8 @@ def test_a_deployment_with_no_vending_door_is_still_maintained(door: list[dict[s
     [
         _Response(200, {"mode": "server_mediated"}),
         _Response(200, {"mode": "direct", "credentials": {}}),
+        _Response(200, {"mode": "direct", "credentials": {"storage_options": {**_SCOPED, "aws_secret_access_key": ""}}}),
+        _Response(200, {"mode": "direct", "credentials": {"storage_options": {**_SCOPED, "access_key_id": "ANOTHERKEY"}}}),
         httpx.Response(404, json={"code": 0, "detail": "Not Found"}),
         httpx.Response(404, text="not found"),
     ],
@@ -132,8 +135,9 @@ def test_a_deployment_with_no_vending_door_is_still_maintained(door: list[dict[s
 def test_a_door_that_could_not_ANSWER_degrades_rather_than_failing_the_run(monkeypatch: pytest.MonkeyPatch, answer: _Response | httpx.Response) -> None:
     """Shapes of "no credential is on offer", and none of them is a refusal.
 
-    `server_mediated` is a supported posture, and a `direct` answer carrying no options offered nothing.
-    A 404 that names no absent table or namespace (code 0 is a path no door serves) is the door missing,
+    `server_mediated` is a supported posture, and a `direct` answer carrying no options offered nothing, as does one
+    carrying half a credential or a key id under two spellings that name two identities: read as no credential, its
+    pass would sign with the pod's own chain while reported as scoped ([[LH-543]]). A 404 that names no absent table or namespace (code 0 is a path no door serves) is the door missing,
     not an answer about the id. Reclaiming disk through any of these is why the ambient fallback exists.
     A 5xx is not among them: the door was asked and could not decide, which stops the dataset ([[LH-279]]).
     """

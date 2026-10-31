@@ -18,6 +18,7 @@ from lance_namespace import NamespaceNotFoundError
 from catalog.api.fga_deps import GovernedObject
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 #: A registry and claim store the cascade's record-forget and claim release may be pointed at; nothing is kept there.
@@ -87,7 +88,9 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to() -> None:
     ]
     asyncio.run(
         _drain(
-            _destroy_subtree(ns, ["bronze"], descendants, root_uuid="uuid-bronze", registry=_NO_RECORDS, claims=_NO_CLAIMS, storage_options={}, estate_roots=())
+            _destroy_subtree(
+                ns, ["bronze"], descendants, root_uuid="uuid-bronze", registry=_NO_RECORDS, claims=_NO_CLAIMS, storage_options=StorageOptions(), estate_roots=()
+            )
         )
     )
 
@@ -124,6 +127,10 @@ def test_an_already_absent_child_is_DRIFT_not_an_error() -> None:
     ns: Any = _Vanishing()
     ghost = [_governed("table", ["bronze", "ghost"])]
     asyncio.run(
-        _drain(_destroy_subtree(ns, ["bronze"], ghost, root_uuid="uuid-bronze", registry=_NO_RECORDS, claims=_NO_CLAIMS, storage_options={}, estate_roots=()))
+        _drain(
+            _destroy_subtree(
+                ns, ["bronze"], ghost, root_uuid="uuid-bronze", registry=_NO_RECORDS, claims=_NO_CLAIMS, storage_options=StorageOptions(), estate_roots=()
+            )
+        )
     )
     assert "drop_namespace:bronze:restrict" in ns.calls, "one absent child blocked the whole cascade"

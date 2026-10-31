@@ -44,6 +44,7 @@ from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import location_claims
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -76,7 +77,7 @@ def _settings() -> SimpleNamespace:
     return SimpleNamespace(
         fga_enabled=False,
         multibase_data_base_list=[],
-        storage_options=lambda: {},
+        storage_options=lambda: StorageOptions(),
         # The base judge's two inputs ([[LH-279]]). These tables declare no base outside their own root,
         # so the record is never read and the control root is never reached.
         registry_root="/nonexistent/control",

@@ -34,6 +34,7 @@ from maintenance.services.naming import policy_owners
 from maintenance.services.plan import PlanContext, load_policies, resolve_plan
 from service_kit.lakehouse import location_claims, maintenance_due, object_records
 from service_kit.lakehouse.maintenance_due import CompactionDue, DueRecord
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from tests.integration.openfga_grants import TupleStore, act_as
 
@@ -109,10 +110,10 @@ def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(re
     assert _protected(real_ns_client, "db$dst"), "the renamed table arrived unprotected"
     assert _ok(real_ns_client, "/management/v1/table/db$dst/policy/describe")["retention_days"] == 7
     settings = MaintenanceSettings.model_validate({"MAINTENANCE_POLICY_ROOT": str(tmp_path), "MAINTENANCE_CONTROL_ROOT": str(tmp_path)})
-    named = table_ids({str(tmp_path)}, {})
+    named = table_ids({str(tmp_path)}, StorageOptions())
     owners = policy_owners(named, "db$dst", claims=location_claims.ClaimStore(control_root=str(tmp_path)))
     assert owners is not None, "maintenance reads no uuid for the renamed table"
-    context = PlanContext(policies=load_policies(settings, {}), now=datetime.now(UTC), older_than=timedelta(days=30))
+    context = PlanContext(policies=load_policies(settings, StorageOptions()), now=datetime.now(UTC), older_than=timedelta(days=30))
     plan = resolve_plan(location, context=context, owners=owners)
     assert (plan.policy or {}).get("uuid") == minted, f"maintenance resolves another policy for the renamed table: {plan.policy}"
     assert plan.older_than == timedelta(days=7)
@@ -134,11 +135,11 @@ def test_a_hold_a_due_record_and_an_erasure_obligation_are_listed_under_the_tabl
         opened_at=now,
         expires_at=now + timedelta(days=1),
     )
-    promotions.open_hold(root, {}, held)
+    promotions.open_hold(root, StorageOptions(), held)
     due = DueRecord(
         table="db$src", uuid=minted, location=location, version=1, compaction=CompactionDue(fragments=4, candidate_fragments=4, tasks=1), evaluated_at=now
     )
-    maintenance_due.write_due(root, {}, due)
+    maintenance_due.write_due(root, StorageOptions(), due)
     recorded = real_ns_client.post("/management/v1/table/db$src/erasure", json={"predicate": "id = 1", "retain_days": 0})
     assert recorded.status_code == 202, recorded.text
 

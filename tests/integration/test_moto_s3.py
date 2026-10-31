@@ -18,7 +18,9 @@ import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 from moto.server import ThreadedMotoServer
+from pydantic import SecretStr
 
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.base_refs import decoded_path, normalise
 from service_kit.lakehouse.objectfs import lance_storage_options
 
@@ -360,8 +362,8 @@ def test_register_undo_deregisters_and_never_deletes_the_bytes(moto_client: Test
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
     assert moto_client.post("/v1/namespace/f3r/create", json={}).status_code == 200
     relative = f"f3r-outside/{uuid.uuid4().hex[:8]}"
-    options = lance_storage_options(moto_endpoint, "test", "test", "us-east-1")
-    lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True)
+    options = lance_storage_options(moto_endpoint, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
+    lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
 
     with pytest.MonkeyPatch.context() as mp:
         _failing_seed_ctx(mp)
@@ -540,9 +542,9 @@ def test_a_destructive_drop_leaves_no_byte_of_the_table_at_its_location(
         made = moto_client.post(f"/v1/table/{namespace}$t/declare", json={})
     else:
         relative = f"{prefix}-outside/held" if shape == "nested" else f"{prefix}-räksmörgås"
-        options = lance_storage_options(moto_endpoint, "test", "test", "us-east-1")
+        options = lance_storage_options(moto_endpoint, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-        lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True)
+        lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
         made = moto_client.post(f"/v1/table/{namespace}$t/register", json={"location": relative})
     assert made.status_code == 200, made.text
     described = moto_client.post(f"/v1/table/{namespace}$t/describe", json={})
@@ -588,9 +590,9 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
     namespace = f"lh532r{prefix}"
     assert moto_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
     relative = f"{prefix}-residue/held"
-    options = lance_storage_options(moto_endpoint, "test", "test", "us-east-1")
+    options = lance_storage_options(moto_endpoint, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(rows, f"s3://{BUCKET}/{relative}", storage_options=options.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
     registered = moto_client.post(f"/v1/table/{namespace}$t/register", json={"location": relative})
     assert registered.status_code == 200, registered.text
     table_uuid = _uuid(moto_client, f"{namespace}$t")

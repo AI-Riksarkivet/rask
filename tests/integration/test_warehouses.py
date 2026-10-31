@@ -29,6 +29,7 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.naming import UUID_PROPERTY
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _settings(tmp_path: Any, *, enabled: bool = True, fga: bool = False, reserved: str = "") -> Settings:
@@ -184,7 +185,7 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
 
     resp = client.post("/management/v1/warehouses", json={"id": "wh-p", "project": "acme"})
 
-    registered = wh_svc.get_warehouse(f"file://{tmp_path}", {}, "wh-p") is not None
+    registered = wh_svc.get_warehouse(f"file://{tmp_path}", StorageOptions(), "wh-p") is not None
     assert (resp.status_code, registered) == (status, status == 200), resp.text
     if code is not None:
         assert (resp.headers["content-type"], resp.json()["code"]) == ("application/problem+json", code), resp.text
@@ -340,7 +341,7 @@ def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_p
     client.app.dependency_overrides[get_settings] = lambda: s
     # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
     # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
-    proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
+    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
     wh_svc.put_warehouse(
         s.registry_root,
         s.storage_options(),
@@ -371,7 +372,7 @@ def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, monk
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, fga=True)
     # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
     # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
-    proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
+    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(
         principal=Principal(idp_id="dex", subject="mallory"), claims=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
@@ -407,7 +408,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     real_get = wh_svc.get_warehouse
     reads = {"n": 0}
 
-    def racy_get(root: str, so: dict[str, str], wid: str) -> dict[str, str] | None:
+    def racy_get(root: str, so: StorageOptions, wid: str) -> dict[str, str] | None:
         reads["n"] += 1
         if reads["n"] == 1:  # the guard's read: the rival's write is "not yet visible"
             return None
@@ -422,7 +423,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     real_read_json = rec.read_json
     conditional_reads = {"n": 0}
 
-    def counting_read_json(root: str, so: dict[str, str], key: str) -> Any:
+    def counting_read_json(root: str, so: StorageOptions, key: str) -> Any:
         conditional_reads["n"] += 1
         return real_read_json(root, so, key)
 
@@ -435,7 +436,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     assert conditional_reads["n"] >= 1, "the conditional write never re-read — the guard refused, not the store"
     assert reads["n"] == 1, "the guard read more than once; the blinding no longer models the race"
     monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
-    assert wh_svc.get_warehouse(f"file://{tmp_path}", {}, "wh-race")["project"] == "acme"
+    assert wh_svc.get_warehouse(f"file://{tmp_path}", StorageOptions(), "wh-race")["project"] == "acme"
 
 
 def test_create_warehouse_lost_race_same_project_converges(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -448,12 +449,12 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     _mk_projects(client, "acme")
     assert client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"}).status_code == 200
     root = f"file://{tmp_path}"
-    wh_svc.set_warehouse_status(root, {}, "wh-conv", "deactivated")
+    wh_svc.set_warehouse_status(root, StorageOptions(), "wh-conv", "deactivated")
 
     real_get = wh_svc.get_warehouse
     reads = {"n": 0}
 
-    def racy_get(rt: str, so: dict[str, str], wid: str) -> dict[str, str] | None:
+    def racy_get(rt: str, so: StorageOptions, wid: str) -> dict[str, str] | None:
         reads["n"] += 1
         if reads["n"] == 1:
             return None
@@ -463,7 +464,7 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     r = client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"})
     assert r.status_code == 200, r.text
     monkeypatch.setattr(wh_svc, "get_warehouse", real_get)
-    surviving = wh_svc.get_warehouse(root, {}, "wh-conv")
+    surviving = wh_svc.get_warehouse(root, StorageOptions(), "wh-conv")
     assert surviving is not None, "the loser's rebuild must not have DELETED the record it lost the race for"
     assert surviving["status"] == "deactivated"
 
@@ -565,7 +566,7 @@ def _wh_with_fake_backend(client: TestClient, tmp_path: Any, monkeypatch: pytest
     monkeypatch.setattr(wh_ep, "estate_namespace", estate_root)
     s = _settings(tmp_path, fga=True)
     client.app.dependency_overrides[get_settings] = lambda: s
-    proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
+    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
     wh_svc.put_warehouse(
         s.registry_root,
         s.storage_options(),
@@ -607,12 +608,12 @@ def test_warehouse_namespace_create_converges_after_a_failed_grant(client: TestC
     assert "f3ns" not in fake.existing
     # The binding went with it: a binding naming a namespace that no longer exists is drift the
     # reconciler would later report as a mystery.
-    assert wh_svc.binding_for_namespace(f"file://{tmp_path}", {}, "f3ns") is None
+    assert wh_svc.binding_for_namespace(f"file://{tmp_path}", StorageOptions(), "f3ns") is None
 
     # …and the PLAIN retry converges, with no `adopt_existing` anywhere near it.
     retried = client.post("/management/v1/warehouses/wh-f3/namespaces", json={"namespace": "f3ns"}, headers=_BEARER)
     assert retried.status_code == 200, retried.text
-    binding = wh_svc.binding_for_namespace(f"file://{tmp_path}", {}, "f3ns")
+    binding = wh_svc.binding_for_namespace(f"file://{tmp_path}", StorageOptions(), "f3ns")
     assert binding is not None and binding["warehouse_id"] == "wh-f3"
 
 

@@ -23,6 +23,7 @@ from lance_namespace import LanceNamespace, ListNamespacesRequest, ListNamespace
 
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
+from service_kit.lakehouse.objectfs import StorageOptions
 from tests.unit.named_resolver import NamedResolver
 
 
@@ -85,7 +86,7 @@ def _list(
             request=cast(Request, SimpleNamespace()),
             ns=cast(LanceNamespace, root),
             settings=_settings(tmp_path),
-            so={},
+            so=StorageOptions(),
             token=None,
             client=None,
             resolver=NamedResolver(),

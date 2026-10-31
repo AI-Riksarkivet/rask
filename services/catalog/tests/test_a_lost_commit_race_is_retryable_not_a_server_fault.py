@@ -24,6 +24,7 @@ from catalog.services.dataplane import add_columns, create_table
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -48,7 +49,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(
         namespace,
-        {},
+        StorageOptions(),
         TABLE_ID,
         pa.table({"id": pa.array([1, 2, 3], pa.int64())}, schema=SCHEMA),
         root=str(tmp_path / "data"),
@@ -69,7 +70,7 @@ def test_concurrent_add_columns_each_land_in_a_version_of_its_own(table: DoorTab
     def add(i: int) -> int | BaseException:
         request = AlterTableAddColumnsRequest(id=TABLE_ID, new_columns=[AddColumnsEntry(name=f"c{i}", expression="id + 1")])
         try:
-            return add_columns(table, {}, request, transaction_properties=STAMP).version
+            return add_columns(table, StorageOptions(), request, transaction_properties=STAMP).version
         except BaseException as exc:  # noqa: BLE001 — every writer's outcome is inspected
             return exc
 
@@ -81,7 +82,7 @@ def test_concurrent_add_columns_each_land_in_a_version_of_its_own(table: DoorTab
     landed = sorted(o for o in outcomes if isinstance(o, int))
     assert landed == list(range(2, 2 + len(landed))), landed
     assert len(landed) == WRITERS, f"{len(failed)} of {WRITERS} writers lost all their attempts: {failed!r}"
-    names = set(table.open({}).schema.names)
+    names = set(table.open(StorageOptions()).schema.names)
     assert {f"c{i}" for i in range(WRITERS)} <= names, names
 
 
@@ -98,5 +99,5 @@ def test_a_column_named_concurrent_is_still_a_MISSING_COLUMN(table: DoorTable) -
     from catalog.services.dataplane import drop_columns
 
     with pytest.raises(TableColumnNotFoundError) as caught:
-        drop_columns(table, {}, AlterTableDropColumnsRequest(id=TABLE_ID, columns=["concurrent"]), transaction_properties=STAMP)
+        drop_columns(table, StorageOptions(), AlterTableDropColumnsRequest(id=TABLE_ID, columns=["concurrent"]), transaction_properties=STAMP)
     assert caught.value.code == 12, f"a column named 'concurrent' minted code {caught.value.code}, not 12"

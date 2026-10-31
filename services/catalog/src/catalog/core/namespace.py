@@ -32,6 +32,7 @@ from catalog.core.store_endpoint import require_estate_store
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import auto_cleanup
 from service_kit.lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.outage import reads_as_store_outage
 
@@ -183,7 +184,7 @@ def _branch_checkout_error(
 
 
 def open_resolved_dataset(
-    location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None = None, branch: str | None = None
+    location: str, storage_options: StorageOptions, table_id: list[str], *, version: int | None = None, branch: str | None = None
 ) -> lance.LanceDataset:
     """Open the table at the location a door resolved ``table_id`` to (ADR 0173 §7), on the ref named, refusing a base nothing sanctioned.
 
@@ -206,7 +207,7 @@ def open_resolved_dataset(
 
 
 def open_resolved_dataset_unchecked(
-    location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None = None, branch: str | None = None
+    location: str, storage_options: StorageOptions, table_id: list[str], *, version: int | None = None, branch: str | None = None
 ) -> lance.LanceDataset:
     """:func:`open_resolved_dataset` WITHOUT the base judge — for a door that reads no row through the handle.
 
@@ -254,7 +255,7 @@ def disarm_every_ref(dataset: lance.LanceDataset, table_id: list[str]) -> lance.
     return disarm_commit_path_cleanup(dataset, table_id)
 
 
-def open_location(location: str, storage_options: dict[str, str], *, version: int | None = None, branch: str | None = None) -> lance.LanceDataset:
+def open_location(location: str, storage_options: StorageOptions, *, version: int | None = None, branch: str | None = None) -> lance.LanceDataset:
     """Open the dataset at ``location`` on the ref named, on the shared session.
 
     Every base a manifest declares opens under the same options as its root, Lance's default (``lance_docs/lance/guide/object_store.md``
@@ -264,11 +265,11 @@ def open_location(location: str, storage_options: dict[str, str], *, version: in
     Raises whatever pylance raises — a caller translates it (:func:`_open_ref`) or degrades on it
     (:func:`catalog.core.vending.dataset_facts`).
     """
-    first = lance.dataset(location, storage_options=storage_options, version=None if branch else version, session=shared_lance_session())
+    first = lance.dataset(location, storage_options=storage_options.in_clear(), version=None if branch else version, session=shared_lance_session())
     return first.checkout_version((branch, version)) if branch else first
 
 
-def _open_ref(location: str, storage_options: dict[str, str], table_id: list[str], *, version: int | None, branch: str | None) -> lance.LanceDataset:
+def _open_ref(location: str, storage_options: StorageOptions, table_id: list[str], *, version: int | None, branch: str | None) -> lance.LanceDataset:
     """:func:`open_location`, with pylance's bare failures translated into the spec's codes.
 
     A named branch is a whole parallel dataset under ``tree/{branch}/`` with its own version history, and
@@ -300,7 +301,7 @@ def _open_ref(location: str, storage_options: dict[str, str], table_id: list[str
             if version is not None and "_versions/" in message and ".manifest" in message:
                 raise TableVersionNotFoundError(f"table version {version} was not found") from exc
             raise TableNotFoundError(f"table has no readable dataset at its declared location ({location!r})") from exc
-    main = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
+    main = lance.dataset(location, storage_options=storage_options.in_clear(), session=shared_lance_session())
     try:
         return open_location(location, storage_options, version=version, branch=branch)
     except (ValueError, OSError) as exc:
@@ -326,7 +327,7 @@ class RegisteredDataset(BaseModel):
     compaction_config: list[str] = Field(default_factory=list)
 
 
-def registered_dataset_facts(location: str, storage_options: dict[str, str]) -> RegisteredDataset | None:
+def registered_dataset_facts(location: str, storage_options: StorageOptions) -> RegisteredDataset | None:
     """The flags and declared bases of the dataset at ``location``; ``None`` when no dataset is there.
 
     A pylance that refuses the open over flag 256 answers ``mixed=True``, because 11 and older cannot
@@ -334,7 +335,7 @@ def registered_dataset_facts(location: str, storage_options: dict[str, str]) -> 
     unchanged, so a caller that has to fail closed can.
     """
     try:
-        dataset = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
+        dataset = lance.dataset(location, storage_options=storage_options.in_clear(), session=shared_lance_session())
     except (ValueError, OSError) as exc:
         refused = flags_from_open_error(exc)
         if refused is not None and mixes_data_file_versions(refused):
@@ -351,7 +352,7 @@ def registered_dataset_facts(location: str, storage_options: dict[str, str]) -> 
     )
 
 
-def warn_if_mixed_file_versions(location: str, storage_options: dict[str, str], *, table: str) -> None:
+def warn_if_mixed_file_versions(location: str, storage_options: StorageOptions, *, table: str) -> None:
     """Log a WARN when a table the catalog re-registers carries reader flag 256. Never raises.
 
     An undrop restores a table the catalog already governed, so refusing it would strand the table in

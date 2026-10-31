@@ -45,6 +45,7 @@ from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.naming import UUID_PROPERTY
+from service_kit.lakehouse.objectfs import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -235,8 +236,8 @@ def test_a_warehouse_that_still_holds_namespaces_refuses_and_names_every_one_of_
     message = str(exc.value)
     assert "bronze" in message and "silver" in message
     assert "cascade=true" in message
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-wh") is not None
-    assert warehouses.namespaces_bound_to(settings.registry_root, {}, "acme-wh") == ["bronze", "silver"]
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is not None
+    assert warehouses.namespaces_bound_to(settings.registry_root, StorageOptions(), "acme-wh") == ["bronze", "silver"]
 
 
 def test_a_cascade_survives_a_binding_whose_namespace_is_already_gone(tmp_path: Any) -> None:
@@ -248,7 +249,7 @@ def test_a_cascade_survives_a_binding_whose_namespace_is_already_gone(tmp_path: 
     result = _delete(settings, _request(ns=ns), cascade=True)
     assert ns.dropped == []
     assert result.namespaces_dropped == ["bronze"]
-    assert warehouses.namespaces_bound_to(settings.registry_root, {}, "acme-wh") == []
+    assert warehouses.namespaces_bound_to(settings.registry_root, StorageOptions(), "acme-wh") == []
 
 
 # --------------------------------------------------------------------------- #
@@ -306,7 +307,7 @@ def test_a_purge_refuses_while_a_sibling_warehouse_still_claims_the_same_bucket(
     assert "acme-gold" in str(exc.value)
     assert purged == []
     # The refusal lands before ANY step: the warehouse the caller named is still registered.
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-work") is not None
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-work") is not None
 
 
 def test_the_same_warehouse_deletes_fine_without_the_purge_flag(tmp_path: Any) -> None:
@@ -317,8 +318,8 @@ def test_the_same_warehouse_deletes_fine_without_the_purge_flag(tmp_path: Any) -
     _seed(settings, warehouse_id="acme-gold", bucket="acme-bkt")
     result = _delete(settings, _request(), warehouse_id="acme-work")
     assert result.bucket_purged is False
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-work") is None
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-gold") is not None
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-work") is None
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-gold") is not None
 
 
 def test_a_purge_refuses_a_bucket_that_is_reserved_platform_storage(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -336,7 +337,7 @@ def test_a_purge_refuses_a_bucket_that_is_reserved_platform_storage(tmp_path: An
 
     assert "reserved platform storage" in str(exc.value)
     assert purged == []
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-wh") is not None
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is not None
 
 
 # --------------------------------------------------------------------------- #
@@ -354,7 +355,7 @@ def test_a_protected_warehouse_refuses_the_delete(tmp_path: Any, monkeypatch: py
         _delete(settings, _request(), purge_bucket=True)
 
     assert "force=true" in str(exc.value)
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-wh") is not None
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is not None
     assert purged == []  # the refusal lands BEFORE the irreversible half
 
 
@@ -362,7 +363,7 @@ def test_force_true_overrides_the_protection_flag(tmp_path: Any) -> None:
     settings = _settings(tmp_path)
     _seed(settings, protected=True)
     _delete(settings, _request(), force=True)
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-wh") is None
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is None
 
 
 def test_an_idempotent_re_create_does_not_silently_disarm_the_protection_flag(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -395,7 +396,7 @@ def test_an_idempotent_re_create_does_not_silently_disarm_the_protection_flag(tm
 
     asyncio.run(_recreate())
 
-    record = warehouses.get_warehouse(settings.registry_root, {}, "acme-wh")
+    record = warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh")
     assert record is not None and record.get("protected") == "true"
     with pytest.raises(NamespaceNotEmptyError):
         _delete(settings, _request())
@@ -430,7 +431,7 @@ def test_force_true_without_authorization_is_still_refused(tmp_path: Any, monkey
             purge_bucket=True,
         )
 
-    assert warehouses.get_warehouse(settings.registry_root, {}, "acme-wh") is not None
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is not None
     assert purged == []
     assert store.revoked == []
 

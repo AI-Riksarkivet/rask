@@ -38,6 +38,7 @@ from catalog.api.dependencies import SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
 from service_kit.lakehouse import idempotency
 from service_kit.lakehouse.ns_errors import status_for
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 #: The header: a UUID, in any case, because the key becomes part of an object key and a UUID is a segment no spelling
@@ -76,7 +77,7 @@ class Converge(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     registry_root: str
-    storage_options: dict[str, str]
+    storage_options: StorageOptions
     scope: str
     key: str | None
     claimed_at: float = 0.0
@@ -120,7 +121,7 @@ class Converge(BaseModel):
         )
 
 
-async def begin(registry_root: str, storage_options: dict[str, str], scope: str, key: str | None, *, endpoint: str) -> Converge:
+async def begin(registry_root: str, storage_options: StorageOptions, scope: str, key: str | None, *, endpoint: str) -> Converge:
     """Claim `key` for `endpoint`, or return the no-op when the caller sent none.
 
     The two failures are translated to the spec's own vocabulary rather than a hand-picked status, per
@@ -159,7 +160,7 @@ class KeyedDoor(BaseModel):
 
     #: Where the claims are kept: the control root.
     registry_root: str
-    storage_options: dict[str, str]
+    storage_options: StorageOptions
     #: The caller the key belongs to (:func:`_scope`).
     scope: str
     key: str | None

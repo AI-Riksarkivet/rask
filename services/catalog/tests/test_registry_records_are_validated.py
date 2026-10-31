@@ -25,6 +25,7 @@ from pathlib import Path
 
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _root(tmp_path: Path) -> str:
@@ -39,26 +40,26 @@ def _write(tmp_path: Path, prefix: str, name: str, payload: object) -> None:
 
 def test_a_warehouse_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_path: Path) -> None:
     good = {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"}
-    wh_svc.put_warehouse(_root(tmp_path), {}, good)
+    wh_svc.put_warehouse(_root(tmp_path), StorageOptions(), good)
     # Present and truthy on every identity field, and structurally useless: `bucket` can never equal
     # the string a claim guard compares it to, and `project` reaches `str(...)` as a dict repr.
     _write(tmp_path, "_warehouses", "zz-typed", {"id": 5, "bucket": ["bkt-a"], "project": {"name": "acme"}})
-    assert wh_svc.list_warehouses(_root(tmp_path), {}) == [good]
+    assert wh_svc.list_warehouses(_root(tmp_path), StorageOptions()) == [good]
 
 
 def test_a_binding_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_path: Path) -> None:
-    wh_svc.bind_namespace(_root(tmp_path), {}, "bronze", "wh-a", "s3://bkt-a")
+    wh_svc.bind_namespace(_root(tmp_path), StorageOptions(), "bronze", "wh-a", "s3://bkt-a")
     _write(tmp_path, "_warehouses/bindings", "zz-typed", {"top_ns": ["bronze"], "warehouse_id": 7, "root_uri": None})
-    readable, skipped = wh_svc.read_bindings(_root(tmp_path), {})
+    readable, skipped = wh_svc.read_bindings(_root(tmp_path), StorageOptions())
     assert [b["top_ns"] for b in readable] == ["bronze"]
     assert len(skipped) == 1, "an unusable binding must be REPORTED as skipped — the delete door fails closed on it"
 
 
 def test_a_project_record_with_a_WRONG_TYPED_id_is_skipped(tmp_path: Path) -> None:
     good = {"id": "acme", "created_at": "t", "created_by": "root"}
-    proj_svc.put_project(_root(tmp_path), {}, good)
+    proj_svc.put_project(_root(tmp_path), StorageOptions(), good)
     _write(tmp_path, "_projects", "zz-typed", {"id": ["acme"]})
-    assert proj_svc.list_projects(_root(tmp_path), {}) == [good]
+    assert proj_svc.list_projects(_root(tmp_path), StorageOptions()) == [good]
 
 
 def test_an_UNREADABLE_binding_refuses_as_unreadable_rather_than_as_already_bound(tmp_path: Path) -> None:
@@ -76,4 +77,4 @@ def test_an_UNREADABLE_binding_refuses_as_unreadable_rather_than_as_already_boun
     _write(tmp_path, "_warehouses/bindings", "bronze", {"top_ns": "bronze", "warehouse_id": ["not", "a", "string"], "root_uri": "s3://bkt"})
 
     with pytest.raises(ServiceUnavailableError):
-        wh_svc.bind_namespace(_root(tmp_path), {}, "bronze", "wh-a", "s3://bkt-a")
+        wh_svc.bind_namespace(_root(tmp_path), StorageOptions(), "bronze", "wh-a", "s3://bkt-a")

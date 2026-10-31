@@ -63,6 +63,6 @@ def reclaim(root: str, storage_options: StorageOptions, *, older_than: timedelta
     fs, base = fs_and_base(root, storage_options)
     if fs.get_file_info(f"{base}/{MANIFEST_TABLE}/_versions").type != pafs.FileType.Directory:
         return None
-    index = lance.dataset(f"{root}/{MANIFEST_TABLE}", storage_options=storage_options, session=shared_lance_session())
+    index = lance.dataset(f"{root}/{MANIFEST_TABLE}", storage_options=storage_options.in_clear(), session=shared_lance_session())
     stats = index.cleanup_old_versions(older_than=older_than, error_if_tagged_old_versions=False)
     return RootReclaim(root=root, versions_removed=stats.old_versions, bytes_removed=stats.bytes_removed, versions_kept=len(index.versions()))

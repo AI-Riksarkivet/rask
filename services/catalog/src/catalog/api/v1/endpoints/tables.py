@@ -102,6 +102,7 @@ from service_kit.governed.deps import ANONYMOUS_SUBJECT
 from service_kit.lakehouse import base_registry, location_claims, object_records, protection, trash
 from service_kit.lakehouse.naming import uuid_of
 from service_kit.lakehouse.ns_errors import PartiallyApplied
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -255,7 +256,7 @@ async def list_all_tables(
     return response
 
 
-def _vendable_bases(location: str, settings: Settings, so: dict[str, str]) -> VendableBases | None:
+def _vendable_bases(location: str, settings: Settings, so: StorageOptions) -> VendableBases | None:
     """The bases a credential for the table at ``location`` grants, or ``None`` where only the catalog may read it.
 
     ``None`` is the management vend door's ``server_mediated``, off the same read ([[LH-057]]):
@@ -286,7 +287,7 @@ def _mint(location: str, *, tier: Tier, bases: VendableBases, vendor: Credential
     if vended is None:
         return None
     # The secret and the session token leave the catalog in the door's answer and nowhere else ([[LH-072]]).
-    return {**vended.as_storage_options(), "expires_at_millis": str(vended.expires_at_millis)}
+    return {**vended.as_storage_options().in_clear(), "expires_at_millis": str(vended.expires_at_millis)}
 
 
 async def _vend_on_spec_door(
@@ -297,7 +298,7 @@ async def _vend_on_spec_door(
     table_uuid: str,
     location: str,
     settings: Settings,
-    so: dict[str, str],
+    so: StorageOptions,
     vendor: CredentialVendor,
     token: Caller | None,
     client: OpenFgaClient | None,
@@ -597,7 +598,7 @@ async def describe_table(
 
 def _describe(
     table: DoorTable,
-    so: dict[str, str],
+    so: StorageOptions,
     *,
     with_table_uri: bool | None,
     load_detailed_metadata: bool | None,
@@ -650,7 +651,7 @@ def _describe(
     return response
 
 
-def _load_or_judge_declared(response: DescribeTableResponse, table: DoorTable, so: dict[str, str], *, pinned: lance.LanceDataset | None) -> None:
+def _load_or_judge_declared(response: DescribeTableResponse, table: DoorTable, so: StorageOptions, *, pinned: lance.LanceDataset | None) -> None:
     """Load the table's detailed metadata onto ``response`` from one open, and judge whether it is only declared by it.
 
     Lance finds a table's latest version by listing its ``_versions/`` on every open, and the store answers that listing

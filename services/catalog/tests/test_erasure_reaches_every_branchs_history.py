@@ -30,6 +30,7 @@ import pyarrow as pa
 import pytest
 
 from catalog.services.erasure import ErasureReport, ref_heads, verify
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 _SUBJECT = "alice"
@@ -48,7 +49,7 @@ def _verify(uri: str, retention: timedelta = _NOW, trusted: dict[str, int] | Non
     """The verification of an obligation recorded at ``trusted``'s heads, by default the table's heads now."""
     return verify(
         lance.dataset(uri),
-        storage_options={},
+        storage_options=StorageOptions(),
         protected=None,
         reopen=lambda: lance.dataset(uri),
         table="acme-bronze$subjects",

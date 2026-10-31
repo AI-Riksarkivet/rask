@@ -34,6 +34,7 @@ from pathlib import Path
 import pytest
 
 from maintenance.services.purge import NotADatasetRootError, delete_location
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _dataset(root: Path) -> str:
@@ -49,7 +50,7 @@ def test_a_real_dataset_is_deleted(tmp_path: Path) -> None:
     """The happy path must be untouched — this guard is worthless if it refuses ordinary purges."""
     location = _dataset(tmp_path / "table.lance")
 
-    deleted_bytes, deleted_files = delete_location(location, {})
+    deleted_bytes, deleted_files = delete_location(location, StorageOptions())
 
     assert deleted_files == 2, f"expected the manifest and the data file to be reclaimed, got {deleted_files}"
     assert deleted_bytes == 96, f"expected 32 + 64 bytes reclaimed, got {deleted_bytes}"
@@ -74,7 +75,7 @@ def test_a_directory_that_is_NOT_a_dataset_is_refused(tmp_path: Path, spelled: s
         (stray / "someones-real-file.txt").write_bytes(b"z" * 128)
 
     with pytest.raises(NotADatasetRootError) as caught:
-        delete_location(f"file://{tmp_path}/{spelled}", {})
+        delete_location(f"file://{tmp_path}/{spelled}", StorageOptions())
 
     assert spelled in str(caught.value), f"the refusal does not name the location: {caught.value}"
     kept = [tmp_path / "not-a-dataset" / "someones-real-file.txt", tmp_path / "t%20x" / "someones-real-file.txt", tmp_path / "t x" / "data" / "a.lance"]
@@ -87,7 +88,7 @@ def test_an_absent_location_is_still_idempotent_success(tmp_path: Path) -> None:
     A crash between the delete and the record clear re-runs the whole record, so an already-gone path
     has to succeed. Refusing it — it has no `_versions/` either — would strand every interrupted purge.
     """
-    deleted_bytes, deleted_files = delete_location(f"file://{tmp_path / 'gone'}", {})
+    deleted_bytes, deleted_files = delete_location(f"file://{tmp_path / 'gone'}", StorageOptions())
 
     assert (deleted_bytes, deleted_files) == (0, 0), "an absent location should reclaim nothing and raise nothing"
 
@@ -98,7 +99,7 @@ def test_an_empty_directory_is_deleted_rather_than_refused(tmp_path: Path) -> No
     empty = tmp_path / "empty.lance"
     empty.mkdir()
 
-    deleted_bytes, deleted_files = delete_location(f"file://{empty}", {})
+    deleted_bytes, deleted_files = delete_location(f"file://{empty}", StorageOptions())
 
     assert (deleted_bytes, deleted_files) == (0, 0)
     assert not empty.exists(), "an empty leftover directory was not reclaimed"

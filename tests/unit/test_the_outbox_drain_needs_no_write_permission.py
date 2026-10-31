@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 class _RecordingS3:
@@ -51,7 +52,7 @@ def test_dropping_an_s3_event_issues_ONLY_a_delete(monkeypatch: pytest.MonkeyPat
     client = _RecordingS3()
     monkeypatch.setattr(outbox, "s3_client", lambda *_a, **_kw: client)
 
-    outbox.drop_event("s3://lance-catalog/_lineage_outbox", {"endpoint": "http://rustfs:9000"}, "run-1@COMPLETE")
+    outbox.drop_event("s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "run-1@COMPLETE")
 
     assert [name for name, _ in client.calls] == ["delete_object"], f"the delete path made {client.calls}"
     _, kw = client.calls[0]
@@ -73,7 +74,7 @@ def test_an_absent_object_is_idempotent_success(monkeypatch: pytest.MonkeyPatch)
             raise FileNotFoundError("NoSuchKey")
 
     monkeypatch.setattr(outbox, "s3_client", lambda *_a, **_kw: _Missing())
-    outbox.drop_event("s3://lance-catalog/_lineage_outbox", {"endpoint": "http://rustfs:9000"}, "gone@COMPLETE")
+    outbox.drop_event("s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "gone@COMPLETE")
 
 
 def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,7 +99,7 @@ def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) 
     client = _RecordingS3()
     monkeypatch.setattr(outbox, "s3_client", lambda *_a, **_kw: client)
 
-    outbox.stage_event("s3://lance-catalog/_lineage_outbox", {"endpoint": "http://rustfs:9000"}, "run-9", '{"eventType": "COMPLETE"}')
+    outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "run-9", '{"eventType": "COMPLETE"}')
 
     assert [name for name, _ in client.calls] == ["put_object"], f"the stage path made {client.calls}"
     _, kw = client.calls[0]
@@ -114,14 +115,13 @@ def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) 
         ({"endpoint": "http://rustfs:9000", "access_key_id": "K", "secret_access_key": "S", "session_token": "T"}, "bare"),
     ],
 )
-def test_the_stage_reads_BOTH_credential_spellings(monkeypatch: pytest.MonkeyPatch, options: dict[str, str], spelling: str) -> None:
-    """The same two spellings the delete faces, and the stage faces them from MORE directions.
+def test_the_stage_signs_with_the_whole_key_pair_in_either_spelling(monkeypatch: pytest.MonkeyPatch, options: dict[str, str], spelling: str) -> None:
+    """A flat map in either spelling reaches the stage's client whole: `StorageOptions.from_flat` reads both, and the stage
+    forwards every half of the key pair.
 
-    The catalog's vending door returns the `aws_`-prefixed form while a service staging with its own
-    configured store passes the bare one, so both genuinely arrive here. The SESSION TOKEN is asserted
-    too and is the half with the sharper failure: a vended STS credential without it is not a weaker
-    credential, it is an invalid one, and dropping it fails open onto whatever ambient chain boto3
-    finds.
+    A vend arrives `aws_`-prefixed and a hand-written store descriptor may be bare. The SESSION TOKEN is asserted too and
+    is the half with the sharper failure: a vended STS credential without it is not a weaker credential, it is an invalid
+    one, and dropping it fails open onto whatever ambient chain boto3 finds.
     """
     seen: dict[str, object] = {}
 
@@ -130,7 +130,7 @@ def test_the_stage_reads_BOTH_credential_spellings(monkeypatch: pytest.MonkeyPat
         return _RecordingS3()
 
     monkeypatch.setattr(outbox, "s3_client", _factory)
-    outbox.stage_event("s3://lance-catalog/_lineage_outbox", options, "run-8", '{"eventType": "FAIL"}')
+    outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(options), "run-8", '{"eventType": "FAIL"}')
 
     assert seen.get("access_key") == "K", f"the {spelling} access key never reached the client: {seen}"
     assert seen.get("secret_key") == "S", f"the {spelling} secret key never reached the client: {seen}"

@@ -190,17 +190,17 @@ def estate(s3: Any) -> Iterator[Estate]:
     # would make the due evaluation a no-op and every assertion below vacuous. The namespace and the table carry the
     # uuids a catalog door mints (ADR 0173): the namespace's in its `__manifest` row, the table's in its location's
     # claim, since maintenance refuses a table whose policy owners it cannot identify ([[LH-523]]).
-    lance.write_dataset(_rows(), built.plain_uri, storage_options=options)
-    lance.write_dataset(_rows(offset=10), built.plain_uri, mode="append", storage_options=options)
-    lance.write_dataset(_rows(offset=20), built.plain_uri, mode="append", storage_options=options)
-    namespace = connect("dir", {"root": f"s3://{built.ctl}", **{f"storage.{key}": value for key, value in options.items()}})
+    lance.write_dataset(_rows(), built.plain_uri, storage_options=options.in_clear())
+    lance.write_dataset(_rows(offset=10), built.plain_uri, mode="append", storage_options=options.in_clear())
+    lance.write_dataset(_rows(offset=20), built.plain_uri, mode="append", storage_options=options.in_clear())
+    namespace = connect("dir", {"root": f"s3://{built.ctl}", **{f"storage.{key}": value for key, value in options.in_clear().items()}})
     namespace.create_namespace(CreateNamespaceRequest(id=["e2e"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
     namespace.register_table(RegisterTableRequest(id=["e2e", "plain"], location="plain"))
     claims = location_claims.ClaimStore(control_root=f"s3://{built.ctl}", storage_options=options)
     location_claims.take(claims, normalise(built.plain_uri), "e2e$plain", ["e2e", "plain"], is_gone=lambda _claim: False, uuid=str(uuid.uuid4()))
     # A TAG — `_refs/tags/blessed.json`, a live version pointer. The first live run of this pass named
     # every promotion tag in the estate as an orphan.
-    lance.dataset(built.plain_uri, storage_options=options).tags.create("blessed", 1)
+    lance.dataset(built.plain_uri, storage_options=options.in_clear()).tags.create("blessed", 1)
 
     # A REAL blob sidecar: blob-v2 at data_storage_version 2.2 writes the bytes to
     # `data/<data-file-stem>/*.blob`, which `data_files()` does not name. Payloads are ~120 KB — big
@@ -211,15 +211,15 @@ def estate(s3: Any) -> Iterator[Estate]:
         built.blob_uri,
         mode="overwrite",
         data_storage_version="2.2",
-        storage_options=options,
+        storage_options=options.in_clear(),
     )
 
     # A BRANCH — a whole parallel dataset under `tree/feature-a/`, invisible to the main branch's manifest.
-    branch = lance.write_dataset(_rows(), built.branch_uri, storage_options=options).create_branch("feature-a")
-    lance.write_dataset(_rows(2), branch, mode="append", storage_options=options)
+    branch = lance.write_dataset(_rows(), built.branch_uri, storage_options=options.in_clear()).create_branch("feature-a")
+    lance.write_dataset(_rows(2), branch, mode="append", storage_options=options.in_clear())
 
     for uri in (built.extra_uri, built.reg_uri, built.deact_uri):
-        lance.write_dataset(_rows(), uri, storage_options=options)
+        lance.write_dataset(_rows(), uri, storage_options=options.in_clear())
 
     # The warehouse REGISTRY, on the control root — the record shape `catalog/services/warehouses.py`
     # writes and `warehouse_records.list_warehouse_records` reads. `reg` is active, `deact` quarantined.
@@ -318,7 +318,7 @@ def test_the_sweep_lists_the_compaction_it_does_not_run_on_object_storage(estate
     record = next((due for due in list_due(settings.resolved_control_root, settings.storage_options()) if due.table == "e2e$plain"), None)
     assert plain.due == "due", f"three appends should have been listed for compaction, got {plain.model_dump()}"
     assert record is not None and record.compaction is not None and record.compaction.fragments == 3, record
-    assert len(lance.dataset(estate.plain_uri, storage_options=settings.storage_options()).get_fragments()) == 3, "the sweep rewrote the table"
+    assert len(lance.dataset(estate.plain_uri, storage_options=settings.storage_options().in_clear()).get_fragments()) == 3, "the sweep rewrote the table"
 
 
 def test_a_registry_only_bucket_is_swept_and_a_deactivated_one_is_not(estate: Estate, swept: list[DatasetResult]) -> None:

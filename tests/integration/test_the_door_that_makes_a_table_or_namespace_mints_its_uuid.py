@@ -26,6 +26,7 @@ from catalog.api.dependencies import get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
@@ -42,7 +43,9 @@ def estate(real_ns_client: TestClient, tmp_path: Path) -> tuple[TestClient, Sett
     settings = Settings.model_validate({"root": str(tmp_path), "warehouses_enabled": True, "s3_access_key_id": "x", "s3_secret_access_key": "x"})
     real_ns_client.app.dependency_overrides[get_settings] = lambda: settings
     warehouses.put_warehouse(
-        str(tmp_path), {}, {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": str(tmp_path), "project": "acme", "status": "active", "created_at": "t"}
+        str(tmp_path),
+        StorageOptions(),
+        {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": str(tmp_path), "project": "acme", "status": "active", "created_at": "t"},
     )
     made = real_ns_client.post(f"/management/v1/warehouses/{WAREHOUSE}/namespaces", json={"namespace": "acme"})
     assert made.status_code == 200, made.text

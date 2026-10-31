@@ -146,7 +146,7 @@ class BaseRegistry(BaseModel):
     """Where the records live: the control root, and the options that reach it."""
 
     control_root: str
-    storage_options: StorageOptions = Field(default_factory=dict)
+    storage_options: StorageOptions = Field(default_factory=StorageOptions)
 
 
 class BaseClaim(BaseModel):

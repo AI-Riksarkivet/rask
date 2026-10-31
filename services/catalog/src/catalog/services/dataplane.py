@@ -124,7 +124,7 @@ from service_kit.lakehouse.features import manifest_base_path_refs
 from service_kit.lakehouse.history_fences import HistoryWork
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.ns_errors import PartiallyApplied
-from service_kit.lakehouse.objectfs import StorageOptions, credential_of, s3_filesystem
+from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lakehouse.stage_stamp import declare_dataset_id
 from service_kit.lakehouse.version_retention import MAIN_BRANCH, recorded_branch
@@ -434,7 +434,7 @@ def _write_blob(
             table,
             uri,
             mode=mode,
-            storage_options=so,
+            storage_options=so.in_clear(),
             data_storage_version="2.2",
             # #5a: durable row identity — ``_rowid`` stays constant across compaction (which rewrites
             # fragments and invalidates row ADDRESSES), gating the row-id index + row-version tracking
@@ -570,7 +570,7 @@ def _namespace_holds(ns: LanceNamespace, segments: list[str]) -> bool:
 
 def _reserve(location: str, so: StorageOptions) -> None:
     """Write the `.lance-reserved` marker at ``location``, as :func:`delete_table_object` deletes: no directory object beside it."""
-    if location.startswith("s3://") and so.get("endpoint"):
+    if so.reaches_by_endpoint(location):
         bucket, prefix = split_s3_uri(location.rstrip("/"))
         _object_client(so).put_object(Bucket=bucket, Key=f"{prefix}/{RESERVED_MARKER}", Body=b"")
         return
@@ -683,7 +683,11 @@ def create_table(
         if normalized is CreateMode.OVERWRITE:
             # A new version of the same table, so the table's provenance rides onto it ([[LH-242]]).
             # Disarmed first ([[LH-245]]): an overwrite carries the table's config forward, keys included.
-            opened = overwriting.open_unchecked(so) if overwriting is not None else lance.dataset(existing, storage_options=so, session=shared_lance_session())
+            opened = (
+                overwriting.open_unchecked(so)
+                if overwriting is not None
+                else lance.dataset(existing, storage_options=so.in_clear(), session=shared_lance_session())
+            )
             current = disarm_commit_path_cleanup(opened, segments)
             # The table's key, not the payload's: a key is fixed once set (`lance_docs/lance/format/table/index.md:87`).
             primary_keys.refuse_repeats_within(table, primary_keys.key_columns(current.lance_schema), door="create")
@@ -895,7 +899,7 @@ def kept_table(ns: LanceNamespace, so: StorageOptions, segments: list[str]) -> C
 
 
 def _kept_at(location: str, so: StorageOptions) -> CreateTableResponse:
-    return CreateTableResponse(location=location, version=lance.dataset(location, storage_options=so, session=shared_lance_session()).version)
+    return CreateTableResponse(location=location, version=lance.dataset(location, storage_options=so.in_clear(), session=shared_lance_session()).version)
 
 
 def _existing_location(ns: LanceNamespace, segments: list[str]) -> str | None:
@@ -1097,7 +1101,7 @@ def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
     (``base_refs.decoded_path``), and pyarrow's S3 filesystem takes a path literally ([[LH-520]]). A local URI pyarrow
     decodes itself.
     """
-    if uri.startswith("s3://") and so.get("endpoint"):
+    if so.reaches_by_endpoint(uri):
         return s3_filesystem(so), decoded_path(uri)
     resolved, path = pafs.FileSystem.from_uri(uri)
     return resolved, path
@@ -1208,7 +1212,7 @@ def verify_fragment_data_files(location: str, so: StorageOptions, fragments: lis
 
 def object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]:
     """Each object's size, ``None`` for one that is absent: one batched lookup per filesystem, as :func:`verify_fragment_data_files` does."""
-    if so.get("endpoint") and all(uri.startswith("s3://") for uri in uris):
+    if so.options.get("endpoint") and all(uri.startswith("s3://") for uri in uris):
         infos = s3_filesystem(so).get_file_info([uri.removeprefix("s3://") for uri in uris])
     else:
         infos = [fs.get_file_info(path) for fs, path in (dataset_fs(uri, so) for uri in uris)]
@@ -1444,13 +1448,13 @@ class _CapturingNamespace(LanceNamespace):
         """The version planned on for the ref planned on; any other ref's own latest (pylance opens main first)."""
         if branch == self._ref:
             return self._planned
-        return int(lance.dataset(self.ref_location(branch), storage_options=dict(self._so) if self._so else None).version)
+        return int(lance.dataset(self.ref_location(branch), storage_options=self._so.in_clear() or None).version)
 
     def namespace_id(self) -> str:
         return "rask-stamped-commit"
 
     def describe_table(self, request: DescribeTableRequest) -> DescribeTableResponse:
-        return DescribeTableResponse(location=self._table.location, managed_versioning=True, storage_options=dict(self._so) if self._so else None)
+        return DescribeTableResponse(location=self._table.location, managed_versioning=True, storage_options=self._so.in_clear() or None)
 
     def _version(self, branch: str | None, version: int) -> TableVersion:
         location = self.ref_location(branch)
@@ -1571,7 +1575,7 @@ def _staged_transaction(location: str, so: StorageOptions, manifest_path: str) -
             body = manifest_bytes.with_manifest_version(source.read(), detached)
         with fs.open_output_stream(f"{versions}/d{detached}.manifest") as sink:
             sink.write(body)
-        transaction = lance.dataset(location, version=detached, storage_options=dict(so) if so else None).read_transaction(detached)
+        transaction = lance.dataset(location, version=detached, storage_options=so.in_clear() or None).read_transaction(detached)
     finally:
         discard_detached_manifest(location, so, detached)
         delete_table_object(location, so, f"_versions/{name}")
@@ -1594,7 +1598,7 @@ def delete_table_object(location: str, so: StorageOptions, relative: str) -> Non
     moto). A delete that fails leaves an inert object, never a wrong table, so it is logged rather than raised.
     """
     try:
-        if location.startswith("s3://") and so.get("endpoint"):
+        if so.reaches_by_endpoint(location):
             bucket, prefix = split_s3_uri(location.rstrip("/"))
             _object_client(so).delete_object(Bucket=bucket, Key=f"{prefix}/{relative}")
         else:
@@ -1606,8 +1610,8 @@ def delete_table_object(location: str, so: StorageOptions, relative: str) -> Non
 
 def _object_client(so: StorageOptions) -> Any:  # noqa: ANN401 — a boto3 S3 client
     """The storage seam's S3 client on the catalog's own options, for an object no Lance write puts or deletes."""
-    access_key, secret_key, session_token = credential_of(so)
-    return s3_client(so["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=so.get("region"))
+    access_key, secret_key, session_token = so.credential_in_clear()
+    return s3_client(so.options["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=so.options.get("region"))
 
 
 #: The Lance table-layout directory a dataset holds; a location holding objects and none under it is no dataset.
@@ -1772,10 +1776,6 @@ def _bytes_left(table: str, location: str, cause: Exception, *, held: bool) -> T
     )
 
 
-def _on_object_client(location: str, so: StorageOptions) -> bool:
-    return location.startswith("s3://") and bool(so.get("endpoint"))
-
-
 def _table_paths(location: str) -> tuple[str, str]:
     """The two paths a table recorded at ``location`` keeps objects under: its decoded key and its spelling.
 
@@ -1787,7 +1787,7 @@ def _table_paths(location: str) -> tuple[str, str]:
 
 def _objects_under(location: str, so: StorageOptions, path: str) -> list[str]:
     """Every object under ``path/``, as a store path; on S3 a directory marker is one."""
-    if _on_object_client(location, so):
+    if so.reaches_by_endpoint(location):
         bucket, _, key = path.partition("/")
         pages = _object_client(so).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
         return [f"{bucket}/{entry['Key']}" for page in pages for entry in page.get("Contents", [])]
@@ -1852,7 +1852,7 @@ def _delete_everything_under(location: str, so: StorageOptions, stored: str, spe
             return
         rest = [obj for obj in held if not obj.startswith(versions)]
         last = [obj for obj in held if obj.startswith(versions)]
-        if _on_object_client(location, so):
+        if so.reaches_by_endpoint(location):
             _delete_objects(so, rest)
             _delete_objects(so, last)
         else:

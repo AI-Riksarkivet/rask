@@ -27,6 +27,7 @@ from tables_by_name import open_by_name
 
 from catalog.core.namespace import open_resolved_dataset
 from catalog.services.dataplane import create_table
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 TABLE_ID = ["db", "pages"]
@@ -40,17 +41,17 @@ def _table() -> pa.Table:
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, runtime-only
     namespace = connect("dir", {"root": str(tmp_path)})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, {}, TABLE_ID, _table(), root=str(tmp_path), mode="create", registry=None)
+    create_table(namespace, StorageOptions(), TABLE_ID, _table(), root=str(tmp_path), mode="create", registry=None)
     return namespace
 
 
 def test_a_registration_whose_bytes_are_GONE_is_a_404(ns, tmp_path: Path) -> None:  # noqa: ANN001
     """The live shape: the table is registered, the location resolves, and nothing is there."""
-    uri = open_by_name(ns, {}, TABLE_ID).uri
+    uri = open_by_name(ns, StorageOptions(), TABLE_ID).uri
     versions = Path(urlparse(uri).path) / "_versions"
     for f in versions.iterdir():
         f.unlink()
     versions.rmdir()
 
     with pytest.raises(TableNotFoundError, match=Path(urlparse(uri).path).name):
-        open_resolved_dataset(uri, {}, TABLE_ID)
+        open_resolved_dataset(uri, StorageOptions(), TABLE_ID)

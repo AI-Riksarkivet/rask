@@ -171,9 +171,12 @@ def main() -> None:
         record("denied" in str(exc).lower() or "403" in str(exc), "Lance is refused a dataset outside the vended prefix", f"{type(exc).__name__}: {str(exc)[:120]}")
     # The record store is pyarrow's S3FileSystem, and rask writes it with a service's own scoped pair (the catalog's,
     # maintenance's), never a vended session: `service_kit.lakehouse.record_store.put_record`.
+    from service_kit.lakehouse.objectfs import StorageOptions
     from service_kit.lakehouse.record_store import get_record, put_record
 
-    own = {"endpoint": ENDPOINT, "aws_access_key_id": "catalog", "aws_secret_access_key": "catalog-secret-1", "region": REGION, "allow_http": "true"}
+    own = StorageOptions.from_flat(
+        {"endpoint": ENDPOINT, "aws_access_key_id": "catalog", "aws_secret_access_key": "catalog-secret-1", "region": REGION, "allow_http": "true"}
+    )
     try:
         put_record("s3://tenant-a", own, "_protection/x.json", {"k": "v"})
         back = get_record("s3://tenant-a", own, "_protection/x.json", event="measure")
@@ -184,7 +187,7 @@ def main() -> None:
     # s3:ListBucket (`rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960`), so a prefix-scoped session is refused it:
     # a vended credential writes through Lance's object_store, which never asks.
     try:
-        put_record("s3://tenant-a/t1", options, "_protection/x.json", {"k": "v"})
+        put_record("s3://tenant-a/t1", StorageOptions.from_flat(options), "_protection/x.json", {"k": "v"})
         record(False, "a prefix-scoped write session is refused pyarrow's HeadBucket on the bucket root", "the write succeeded")
     except OSError as exc:
         record("ACCESS_DENIED" in str(exc), "a prefix-scoped write session is refused pyarrow's HeadBucket on the bucket root", f"{str(exc)[:120]}")

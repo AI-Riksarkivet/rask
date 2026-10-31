@@ -32,6 +32,7 @@ from catalog.services.erasure import ErasureReport, ref_heads, verify
 from service_kit.lakehouse import base_refs, base_registry
 from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.history_fences import HistoryWork, TableHistory
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -57,7 +58,7 @@ def test_a_table_mixing_file_versions_is_not_reclaimed_on_any_ref(tmp_path: Path
 
     report = verify(
         lance.dataset(uri),
-        storage_options={},
+        storage_options=StorageOptions(),
         protected=None,
         reopen=lambda: lance.dataset(uri),
         table="t",
@@ -93,7 +94,7 @@ def test_no_ref_is_reclaimed_while_a_ref_write_holds_the_tables_history(tmp_path
 
     report = verify(
         lance.dataset(uri),
-        storage_options={},
+        storage_options=StorageOptions(),
         protected=None,
         reopen=lambda: lance.dataset(uri),
         table="t",
@@ -121,7 +122,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     ns.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"], properties=with_minted_uuid(None)))
     create_table(
         ns,
-        {},
+        StorageOptions(),
         ["db", "subjects"],
         read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
         root=str(tmp_path / "data"),
@@ -129,16 +130,16 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
         holder="db$subjects",
     )
-    so = {"aws_region": "eu-north-1"}
+    so = StorageOptions(options={"aws_region": "eu-north-1"})
     seen: dict[str, Any] = {}
-    listed: list[dict[str, str]] = []
+    listed: list[StorageOptions] = []
     siblings = base_refs.sibling_base_refs
 
     def _record(dataset: Any, **kwargs: Any) -> ErasureReport:
         seen.update(kwargs)
         return ErasureReport(table="db$subjects", predicate=_PREDICATE)
 
-    def _listing(location: str, storage_options: dict[str, str], *, configured: list[str], record_of: Any) -> BaseRefs:
+    def _listing(location: str, storage_options: StorageOptions, *, configured: list[str], record_of: Any) -> BaseRefs:
         listed.append(storage_options)
         return siblings(location, storage_options, configured=configured, record_of=record_of)
 
@@ -158,7 +159,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     assert response.status_code == 200, response.text
     assert seen["storage_options"] == so
     assert listed == [so]
-    assert _options_the_reopen_passes(seen["reopen"], monkeypatch) == [so]
+    assert _options_the_reopen_passes(seen["reopen"], monkeypatch) == [so.in_clear()]
 
 
 def _options_the_reopen_passes(reopen: Callable[[], Any], monkeypatch: pytest.MonkeyPatch) -> list[Any]:

@@ -47,6 +47,7 @@ from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.gate_specs import GateSpec
 from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -86,7 +87,7 @@ def ns(tmp_path: Path, registry_root: str):  # noqa: ANN201 — LanceNamespace, 
     namespace = connect("dir", {"root": root})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1], properties=with_minted_uuid(None)))
     registry = BaseRegistry(control_root=registry_root, storage_options={})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=root, mode="create", registry=registry, holder="db$pages")
+    create_table(namespace, StorageOptions(), TABLE_ID, _table([1, 2, 3]), root=root, mode="create", registry=registry, holder="db$pages")
     return namespace
 
 
@@ -101,10 +102,10 @@ def app(ns, registry_root: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Fas
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.router)
 
-    settings = SimpleNamespace(registry_root=registry_root, storage_options=lambda: {})
+    settings = SimpleNamespace(registry_root=registry_root, storage_options=lambda: StorageOptions())
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
-    application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}
+    application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: StorageOptions()
     application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: _CALLER
     application.dependency_overrides[FgaClientDep.__metadata__[0].dependency] = lambda: object()
     application.dependency_overrides[ControlEmitterDep.__metadata__[0].dependency] = lambda: None
@@ -146,7 +147,7 @@ def test_the_REFUSED_publish_moves_nothing(client: TestClient, ns, registry_root
     """A refusal is fail-closed: the pointer stays where it was, so no consumer sees the version."""
     _publish(client, key_column="nope")
 
-    assert published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID), {}) is None
+    assert published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID), StorageOptions()) is None
 
 
 def test_the_same_refusal_applies_to_the_gate_only_QUESTION(client: TestClient) -> None:
@@ -166,7 +167,7 @@ def test_the_DECLARED_key_column_governs_over_the_callers(client: TestClient, re
     The caller names a column that exists — this is not the refusal above — and the declaration still
     wins, because a project's declared gate is policy and a request field is a request.
     """
-    gate_specs.put_spec(registry_root, {}, GateSpec(project=PROJECT, key_column="id"))
+    gate_specs.put_spec(registry_root, StorageOptions(), GateSpec(project=PROJECT, key_column="id"))
 
     payload = _publish(client, key_column="payload").json()
 
@@ -176,7 +177,7 @@ def test_the_DECLARED_key_column_governs_over_the_callers(client: TestClient, re
 
 def test_the_DECLARED_required_columns_are_enforced_on_a_caller_that_named_none(client: TestClient, registry_root: str) -> None:
     """A caller cannot drop a declared column dependency by simply not mentioning it."""
-    gate_specs.put_spec(registry_root, {}, GateSpec(project=PROJECT, key_column="id", required_columns=["payload"]))
+    gate_specs.put_spec(registry_root, StorageOptions(), GateSpec(project=PROJECT, key_column="id", required_columns=["payload"]))
 
     payload = _publish(client, key_column="id").json()
 
@@ -186,13 +187,13 @@ def test_the_DECLARED_required_columns_are_enforced_on_a_caller_that_named_none(
 
 def test_a_DECLARED_column_the_table_lost_BLOCKS_the_publish(client: TestClient, registry_root: str, ns) -> None:  # noqa: ANN001
     """The point of enforcing it: the gate refuses the promotion, not merely reports it."""
-    gate_specs.put_spec(registry_root, {}, GateSpec(project=PROJECT, key_column="id", required_columns=["thumbnail"]))
+    gate_specs.put_spec(registry_root, StorageOptions(), GateSpec(project=PROJECT, key_column="id", required_columns=["thumbnail"]))
 
     payload = _publish(client, key_column="id").json()
 
     assert payload["published"] is False
     assert "column_declared" in (payload["reason"] or "")
-    assert published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID), {}) is None
+    assert published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID), StorageOptions()) is None
 
 
 def test_the_RESULT_NAMES_WHICH_GATE_RAN(client: TestClient, registry_root: str) -> None:
@@ -201,7 +202,7 @@ def test_the_RESULT_NAMES_WHICH_GATE_RAN(client: TestClient, registry_root: str)
     their data — and here the two disagree about which column the identity check ran on."""
     assert _publish(client, key_column="id").json()["gate_source"] == "request"
 
-    gate_specs.put_spec(registry_root, {}, GateSpec(project=PROJECT, key_column="id"))
+    gate_specs.put_spec(registry_root, StorageOptions(), GateSpec(project=PROJECT, key_column="id"))
 
     assert _publish(client, key_column="id").json()["gate_source"] == "declared"
 
@@ -209,7 +210,7 @@ def test_the_RESULT_NAMES_WHICH_GATE_RAN(client: TestClient, registry_root: str)
 def test_a_DECLARED_key_column_the_table_lacks_is_REFUSED_and_NAMES_the_declaration(client: TestClient, registry_root: str) -> None:
     """Fail-closed in the other direction, and the message must send the operator to the right lever:
     the column is not in the request they sent, so an error naming only the column reads as a bug."""
-    gate_specs.put_spec(registry_root, {}, GateSpec(project=PROJECT, key_column="absent"))
+    gate_specs.put_spec(registry_root, StorageOptions(), GateSpec(project=PROJECT, key_column="absent"))
 
     response = _publish(client, key_column="id")
 

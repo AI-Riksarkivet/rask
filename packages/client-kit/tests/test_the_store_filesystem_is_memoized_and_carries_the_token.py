@@ -7,7 +7,10 @@ so a per-option-set memo is safe and the steady state reuses one connection pool
 
 from __future__ import annotations
 
+from pydantic import SecretStr
+
 from client_kit.lancekit.store import _s3fs
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
@@ -32,6 +35,8 @@ def test_the_store_filesystem_carries_the_session_token() -> None:
     signs with the pod's own role, broader than the credential the catalog scoped: the fail-open `s3_filesystem`'s
     docstring warns about.
     """
-    options = lance_storage_options("http://127.0.0.1:1", "AKIA", "secret", "us-east-1", session_token="TOKEN")
-    filesystem, _host = _s3fs(options)
+    options = lance_storage_options(
+        "http://127.0.0.1:1", S3KeyPair(access_key_id="AKIA", secret_access_key=SecretStr("secret"), session_token=SecretStr("TOKEN")), "us-east-1"
+    )
+    filesystem, _host = _s3fs(options.in_clear())
     assert "TOKEN" in str(filesystem.__reduce__()), "the session token was dropped at the store seam"

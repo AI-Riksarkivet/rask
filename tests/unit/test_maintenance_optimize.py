@@ -21,6 +21,7 @@ from lance.blob import Blob
 from maintenance.services.due import DueQuestion, compaction_due
 from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
 from service_kit.lakehouse.maintenance_due import CompactionDue
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _expire(uri: str, *, older_than: timedelta | None = None, retain_versions: int | None = None) -> DatasetResult:
@@ -28,7 +29,7 @@ def _expire(uri: str, *, older_than: timedelta | None = None, retain_versions: i
 
 
 def _compaction_due(uri: str) -> CompactionDue | None:
-    return compaction_due(lance.dataset(uri), DueQuestion(table="ns$t", uuid=str(uuid4()), location=uri), {})
+    return compaction_due(lance.dataset(uri), DueQuestion(table="ns$t", uuid=str(uuid4()), location=uri), StorageOptions())
 
 
 def _fragmented_indexed_dataset(root: Path) -> str:

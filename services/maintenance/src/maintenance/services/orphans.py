@@ -54,6 +54,7 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
 from service_kit.lakehouse.features import unsupported_features, unsupported_features_from_open_error
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.versions import committed_at
 
 
@@ -217,13 +218,13 @@ def _kind_of(rel_path: str) -> str:
     }.get(head, "other")
 
 
-def open_dataset(dataset_uri: str, storage_options: dict[str, str] | None = None) -> lance.LanceDataset:
+def open_dataset(dataset_uri: str, storage_options: StorageOptions | None = None) -> lance.LanceDataset:
     """The scan's ONE open per dataset — threading the shared bounded session (#102).
 
     :func:`scan_dataset` holds the handle and hands it to :func:`referenced_paths_of` and to the layout gate
     (which reads the manifest's feature flags), so neither opens the dataset again.
     """
-    return lance.dataset(dataset_uri, storage_options=storage_options, session=shared_lance_session())
+    return lance.dataset(dataset_uri, storage_options=None if storage_options is None else storage_options.in_clear(), session=shared_lance_session())
 
 
 def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[str], int, str | None]:
@@ -509,7 +510,7 @@ def listed_at_or_below(mtime_epoch: float, floor: float) -> bool:
     return latest <= floor
 
 
-def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_options: dict[str, str] | None = None) -> DatasetOrphanScan:
+def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_options: StorageOptions | None = None) -> DatasetOrphanScan:
     """List one dataset's files and subtract what any live version references.
 
     ``prefix`` is the dataset's path as the filesystem sees it (no scheme), because pyarrow lists by
@@ -605,7 +606,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     return DatasetOrphanScan(dataset=dataset_uri, checked=True, orphans=orphans, versions_scanned=versions, total_bytes=total_bytes, total_files=total_files)
 
 
-def scan_datasets(fs: pafs.FileSystem, datasets: list[tuple[str, str]], storage_options: dict[str, str] | None = None) -> OrphanReport:
+def scan_datasets(fs: pafs.FileSystem, datasets: list[tuple[str, str]], storage_options: StorageOptions | None = None) -> OrphanReport:
     """Run :func:`scan_dataset` over ``(dataset_uri, prefix)`` pairs and aggregate.
 
     Three outcomes, and the reason they are three rather than two is that only ``incomplete`` blocks

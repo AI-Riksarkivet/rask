@@ -871,7 +871,7 @@ class DaprEmitter(_BaseLineageEmitter):
             await outbox.publish_lineage_with_outbox(
                 self._client,
                 outbox_uri=self._outbox_uri,
-                storage_options=self._storage_options() if self._storage_options is not None else {},
+                storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
                 # WHICHEVER SHAPE THIS IS. A static metadata change has no run id, and staging one
                 # under "" puts it beyond the relay — the exact loss the outbox exists to prevent.
                 run_id=event_identity(event),

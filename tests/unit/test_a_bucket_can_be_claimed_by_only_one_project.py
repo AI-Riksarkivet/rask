@@ -26,6 +26,7 @@ import pytest
 from lance_namespace import NamespaceAlreadyExistsError
 
 from catalog.services import warehouses
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 @pytest.fixture
@@ -34,9 +35,9 @@ def control_root(tmp_path: Path) -> str:
 
 
 def test_the_first_project_to_claim_a_bucket_gets_it(control_root: str) -> None:
-    warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="acme", warehouse_id="wh-acme")
+    warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="acme", warehouse_id="wh-acme")
 
-    assert warehouses.bucket_claim(control_root, {}, bucket="acme-wh") == {
+    assert warehouses.bucket_claim(control_root, StorageOptions(), bucket="acme-wh") == {
         "bucket": "acme-wh",
         "project": "acme",
         "warehouse_id": "wh-acme",
@@ -50,10 +51,10 @@ def test_a_rival_project_is_refused_even_when_it_read_the_listing_first(control_
     scan cannot see a record that does not exist yet, so its verdict carries no information about who
     writes next.
     """
-    warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="acme", warehouse_id="wh-acme")
+    warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="acme", warehouse_id="wh-acme")
 
     with pytest.raises(NamespaceAlreadyExistsError, match="acme-wh"):
-        warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="mallory", warehouse_id="wh-evil")
+        warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="mallory", warehouse_id="wh-evil")
 
 
 def test_one_project_may_back_two_warehouses_with_one_bucket(control_root: str) -> None:
@@ -62,6 +63,6 @@ def test_one_project_may_back_two_warehouses_with_one_bucket(control_root: str) 
     `projects_claiming_bucket` already subtracts the caller's own project on purpose; a claim keyed by
     warehouse id would refuse the second warehouse of a legitimate pair.
     """
-    warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="acme", warehouse_id="wh-work")
+    warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="acme", warehouse_id="wh-work")
 
-    warehouses.claim_bucket(control_root, {}, bucket="acme-wh", project="acme", warehouse_id="wh-gold")
+    warehouses.claim_bucket(control_root, StorageOptions(), bucket="acme-wh", project="acme", warehouse_id="wh-gold")

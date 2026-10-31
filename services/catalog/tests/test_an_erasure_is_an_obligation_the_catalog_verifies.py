@@ -40,6 +40,7 @@ from service_kit.governed.principal import Principal
 from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.derived_tables import EDGES
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
@@ -72,8 +73,8 @@ def _create(ns: LanceNamespace, root: str, table_id: list[str]) -> None:
         writer.write_table(rows)
     body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20)
     registry = BaseRegistry(control_root=str(_control(root)), storage_options={})
-    create_table(ns, {}, table_id, body, root=root, mode="create", registry=registry, holder="$".join(table_id))
-    open_by_name(ns, {}, table_id).create_scalar_index("pii", "BTREE")
+    create_table(ns, StorageOptions(), table_id, body, root=root, mode="create", registry=registry, holder="$".join(table_id))
+    open_by_name(ns, StorageOptions(), table_id).create_scalar_index("pii", "BTREE")
 
 
 def _subjects(root: Path) -> LanceNamespace:
@@ -102,7 +103,7 @@ def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: _Control
     application.include_router(door.router)
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
-    application.dependency_overrides[get_storage_options] = lambda: {}
+    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     application.dependency_overrides[authenticate] = lambda: PersonPrincipal(
         principal=Principal(idp_id="dex", subject="olivia"), claims=IDToken(iss="i", sub="olivia", aud="lance", exp=1, iat=1)
     )
@@ -132,7 +133,7 @@ def _view(client: TestClient, obligation_id: str) -> dict[str, Any]:
 def test_the_door_records_an_obligation_and_commits_nothing(tmp_path: Path) -> None:
     """The door is the requester's act; every rewrite is the job's. Its record keeps no trace of the subject."""
     ns = _subjects(tmp_path / "data")
-    location = open_by_name(ns, {}, _TABLE_ID).uri
+    location = open_by_name(ns, StorageOptions(), _TABLE_ID).uri
     history = [entry["version"] for entry in lance.dataset(location).versions()]
 
     with _catalog(ns, tmp_path / "control", _Clock()) as client:
@@ -159,7 +160,7 @@ def test_a_job_that_skips_a_surface_leaves_the_obligation_open_naming_it(tmp_pat
     """Each step the job owes is judged on the head's bytes, never taken on the job's word: an index it rebuilt is a
     segment committed since the obligation was recorded, whose provenance is the job's own claim, so it proves nothing."""
     ns = _subjects(tmp_path / "data")
-    location = open_by_name(ns, {}, _TABLE_ID).uri
+    location = open_by_name(ns, StorageOptions(), _TABLE_ID).uri
     with _catalog(ns, tmp_path / "control", _Clock()) as client:
         obligation = _record(client)
         job = erasure_job(location, _PREDICATE)
@@ -184,7 +185,7 @@ def _another_predicate(client: TestClient, ns: LanceNamespace, erasure_job: Any)
 
 def _another_tables(client: TestClient, ns: LanceNamespace, erasure_job: Any) -> tuple[str, _Refused]:  # noqa: ANN401 — conftest.ErasureJob
     """An obligation is verified on the table it was recorded on, whatever table the caller may maintain."""
-    root = open_by_name(ns, {}, _TABLE_ID).uri.rsplit("/", 1)[0]  # the root `subjects` was declared under
+    root = open_by_name(ns, StorageOptions(), _TABLE_ID).uri.rsplit("/", 1)[0]  # the root `subjects` was declared under
     _create(ns, root, ["db", "others"])
     obligation = _record(client, "db$others")["obligation_id"]
     return obligation, lambda: _verify(client, obligation)
@@ -193,7 +194,7 @@ def _another_tables(client: TestClient, ns: LanceNamespace, erasure_job: Any) ->
 def _a_released_one(client: TestClient, ns: LanceNamespace, erasure_job: Any) -> tuple[str, _Refused]:  # noqa: ANN401 — conftest.ErasureJob
     """A released obligation's digest is gone, and nothing reopens it."""
     obligation = _record(client)["obligation_id"]
-    erasure_job(open_by_name(ns, {}, _TABLE_ID).uri, _PREDICATE).run()
+    erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
     assert _verify(client, obligation).json()["obligation"]["state"] == "released"
     return obligation, lambda: _verify(client, obligation)
 
@@ -228,7 +229,7 @@ def test_each_tag_the_verification_drops_is_announced_on_the_control_lane(tmp_pa
     """[[LH-332]] Once every head is clean the verification drops each tag pinning the subject, and announces each one as
     the tag door announces a deletion: untargeted, naming the tag and the ref it pinned, beside the obligation."""
     ns = _subjects(tmp_path / "data")
-    location = open_by_name(ns, {}, _TABLE_ID).uri
+    location = open_by_name(ns, StorageOptions(), _TABLE_ID).uri
     lance.dataset(location).tags.create("trained", 2)
     lance.dataset(location).create_branch("work", 2)
     lance.dataset(location).tags.create("trained-on-work", ("work", 2))
@@ -294,7 +295,7 @@ def _record_edge(root: Path, source: str, derived: str) -> None:
         }
     )
     registry = BaseRegistry(control_root=str(root), storage_options={})
-    create_table(ns, {}, [_PROVENANCE, EDGES], edge, root=str(root), mode="create", registry=registry, holder=f"{_PROVENANCE}${EDGES}")
+    create_table(ns, StorageOptions(), [_PROVENANCE, EDGES], edge, root=str(root), mode="create", registry=registry, holder=f"{_PROVENANCE}${EDGES}")
 
 
 @pytest.fixture
@@ -368,7 +369,7 @@ def test_a_derived_table_is_named_only_to_a_reader_who_may_see_it(
 def test_an_obligation_open_past_its_deadline_is_listed_overdue_and_nothing_acts_on_it(tmp_path: Path) -> None:
     """A missed deadline is visible on the obligation; the catalog never does the job's work itself."""
     ns = _subjects(tmp_path / "data")
-    location = open_by_name(ns, {}, _TABLE_ID).uri
+    location = open_by_name(ns, StorageOptions(), _TABLE_ID).uri
     clock = _Clock()
     with _catalog(ns, tmp_path / "control", clock) as client:
         _record(client)

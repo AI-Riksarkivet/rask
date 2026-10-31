@@ -36,8 +36,10 @@ from urllib.parse import urlsplit
 import lance
 import pyarrow.fs as pafs
 import pytest
+from pydantic import SecretStr
 
 from catalog.core.config import Settings as CatalogSettings
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
 
 
@@ -58,7 +60,7 @@ janitor = _load_script("model_artifact_janitor")
 
 
 def _lance(endpoint: str) -> str:
-    return lance_storage_options(endpoint, "AK", "SK", "us-east-1")["allow_http"]
+    return lance_storage_options(endpoint, S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), "us-east-1").options["allow_http"]
 
 
 def _catalog(endpoint: str) -> str:
@@ -71,7 +73,7 @@ def _janitor_options(endpoint: str) -> StorageOptions:
 
     def recording_sweep(**kwargs: object) -> object:
         options = kwargs["storage_options"]
-        assert options is None or isinstance(options, dict)
+        assert options is None or isinstance(options, StorageOptions)
         handed.append(options)
         return janitor.JanitorReport()
 
@@ -113,7 +115,7 @@ _PYARROW_CASES = [
 
 @pytest.mark.parametrize(("endpoint", "scheme", "host"), _PYARROW_CASES)
 def test_the_pyarrow_filesystem_reads_the_scheme_by_the_same_rule(endpoint: str, scheme: str, host: str) -> None:
-    built = s3_filesystem(lance_storage_options(endpoint, "AK", "SK", "us-east-1"))
+    built = s3_filesystem(lance_storage_options(endpoint, S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), "us-east-1"))
 
     assert built == pafs.S3FileSystem(access_key="AK", secret_key="SK", endpoint_override=host, scheme=scheme, region="us-east-1")
     assert (scheme == "http") == (_lance(endpoint) == "true"), "pyarrow and Lance disagree on whether this endpoint is plaintext"
@@ -130,7 +132,9 @@ def test_the_janitor_filesystem_reads_the_scheme_by_the_same_rule(endpoint: str,
 def test_a_script_opens_lance_with_the_estate_builders_options() -> None:
     """The builder's whole option set, not only `allow_http`: its `aws_`-prefixed credential keys are
     the ones that displace an ambient AWS_* environment (see `lance_storage_options`)."""
-    assert _janitor_options("https://s3.example.com") == lance_storage_options("https://s3.example.com", "AK", "SK", "us-east-1")
+    assert _janitor_options("https://s3.example.com") == lance_storage_options(
+        "https://s3.example.com", S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), "us-east-1"
+    )
 
 
 _EMPTY_LISTING = (
@@ -198,11 +202,11 @@ def s3_stub(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[str, list[str]]]:
 def test_pyarrow_addresses_the_root_lance_addresses(s3_stub: tuple[str, list[str]], path: str) -> None:
     """The request that reaches the store, not the override string: both halves see one root."""
     url, received = s3_stub
-    options = lance_storage_options(f"{url}{path}", "AK", "SK", "us-east-1")
+    options = lance_storage_options(f"{url}{path}", S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), "us-east-1")
     root = path.rstrip("/")
 
     with pytest.raises(ValueError, match="not found"):
-        lance.dataset("s3://bucket/key", storage_options=options)
+        lance.dataset("s3://bucket/key", storage_options=options.in_clear())
     assert received[0].startswith(f"GET {root}/bucket?"), received
 
     received.clear()

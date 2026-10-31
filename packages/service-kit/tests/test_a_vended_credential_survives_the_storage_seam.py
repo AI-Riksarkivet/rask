@@ -28,12 +28,14 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import pytest
+from pydantic import SecretStr
 
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.objectfs import lance_storage_options
 
 
 @pytest.mark.parametrize("absent", [""])
-def test_the_builder_emits_no_token_key_when_the_credential_is_static(absent: str | None) -> None:
+def test_the_builder_emits_no_token_key_when_the_credential_is_static(absent: str) -> None:
     """A root-key caller must not grow an empty ``session_token``.
 
     object_store treats a present-but-empty token as a token, so an empty string signs a request with
@@ -41,7 +43,9 @@ def test_the_builder_emits_no_token_key_when_the_credential_is_static(absent: st
     one driven because a config read is far likelier to yield ``""`` than ``None``: an env var that
     exists and is blank is exactly what a half-configured vending mode produces.
     """
-    built = lance_storage_options("http://s3:9000", "AKIA", "secret", "us-east-1", session_token=absent)
+    built = lance_storage_options(
+        "http://s3:9000", S3KeyPair(access_key_id="AKIA", secret_access_key=SecretStr("secret"), session_token=SecretStr(absent)), "us-east-1"
+    ).in_clear()
     assert "aws_session_token" not in built
     assert "session_token" not in built
 
@@ -71,11 +75,15 @@ def test_a_built_option_set_actually_signs_with_the_token(token: str) -> None:
     server = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
-        options = lance_storage_options(f"http://127.0.0.1:{server.server_address[1]}", "AKIA", "secret", "us-east-1", session_token=token)
+        options = lance_storage_options(
+            f"http://127.0.0.1:{server.server_address[1]}",
+            S3KeyPair(access_key_id="AKIA", secret_access_key=SecretStr("secret"), session_token=SecretStr(token)),
+            "us-east-1",
+        )
         # The listener answers 404, so the open always fails — what is under test is the SIGNED
         # REQUEST it made on the way, captured above, not the outcome.
         with contextlib.suppress(OSError, ValueError):
-            lance.dataset("s3://bucket/t", storage_options=options)
+            lance.dataset("s3://bucket/t", storage_options=options.in_clear())
     finally:
         server.shutdown()
 

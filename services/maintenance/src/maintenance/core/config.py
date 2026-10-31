@@ -19,7 +19,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.settings import FgaSettings, SignatureDoorSettings
 from service_kit.governed.store_credential import S3KeyPair, store_key_pair
-from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
 
 
 if TYPE_CHECKING:
@@ -429,12 +429,11 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
             return store_key_pair(self)
         return S3KeyPair(access_key_id=self.s3_access_key_id, secret_access_key=self.s3_secret_access_key)
 
-    def storage_options(self) -> dict[str, str]:
+    def storage_options(self) -> StorageOptions:
         """The Lance ``storage_options`` for opening datasets on the (HTTP) S3 endpoint, under the key pair in force."""
         # Via the shared builder — which also stamps path-style addressing; the hand-rolled copy here had
         # silently dropped it (audit 2026-07-15), leaving the sweep one object-store default away from 403s.
-        pair = self.s3_key_pair()
-        return lance_storage_options(self.s3_endpoint, pair.access_key_id, pair.secret_access_key.get_secret_value(), self.s3_region)
+        return lance_storage_options(self.s3_endpoint, self.s3_key_pair(), self.s3_region)
 
 
 def shared_lance_session() -> lance.Session:

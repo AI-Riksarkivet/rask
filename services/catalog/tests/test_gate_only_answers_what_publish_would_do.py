@@ -32,6 +32,7 @@ from tables_by_name import open_by_name
 
 from catalog.services.dataplane import create_table
 from catalog.services.publication import gate
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -53,8 +54,8 @@ CONFORMING = pa.schema(
 def _make(tmp_path: Path, schema: pa.Schema, **cols: object):  # noqa: ANN201
     ns = connect("dir", {"root": str(tmp_path / "d")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(ns, {}, TABLE_ID, pa.table(dict(cols), schema=schema), root=str(tmp_path / "d"), mode="create", registry=None)
-    return open_by_name(ns, {}, TABLE_ID).uri
+    create_table(ns, StorageOptions(), TABLE_ID, pa.table(dict(cols), schema=schema), root=str(tmp_path / "d"), mode="create", registry=None)
+    return open_by_name(ns, StorageOptions(), TABLE_ID).uri
 
 
 def test_gate_refuses_a_nonconforming_tier_exactly_as_publish_does(tmp_path: Path) -> None:

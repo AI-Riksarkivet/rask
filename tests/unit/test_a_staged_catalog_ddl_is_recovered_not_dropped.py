@@ -42,6 +42,7 @@ from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse import outbox, outbox_metrics
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.openlineage import DatasetUuids, event_identity, run_id_for
 
 
@@ -153,8 +154,8 @@ def _create_event(catalog: Any, author: str = _AUTHOR) -> dict[str, Any]:  # noq
 def _stage_a_create(settings: LineageSettings, catalog: Any) -> tuple[str, str]:  # noqa: ANN401 - the conftest's EventSigner
     """What the catalog leaves in the outbox when its publish fails: its create event, signed."""
     doc = _create_event(catalog)
-    outbox.stage_event(settings.outbox_uri, {}, event_identity(doc), json.dumps(doc))
-    staged = list(outbox.list_events(settings.outbox_uri, {}))
+    outbox.stage_event(settings.outbox_uri, StorageOptions(), event_identity(doc), json.dumps(doc))
+    staged = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
     assert len(staged) == 1, f"staging left {len(staged)} objects, not one"
     key, event_json = staged[0]
     # ANTI-VACUITY: a run-shaped or unsigned fixture would pass every assertion below for the wrong reason.
@@ -210,7 +211,7 @@ def _restamped(catalog: Any, author: str) -> dict[str, Any]:  # noqa: ANN401 - t
 
 
 def _drain(settings: LineageSettings, repo: _Repo, publisher: _Publisher) -> relay_cron.DrainOutcome:
-    return asyncio.run(relay_cron._drain_outbox(_request(), cast("Any", repo), settings, {}, publisher))
+    return asyncio.run(relay_cron._drain_outbox(_request(), cast("Any", repo), settings, StorageOptions(), publisher))
 
 
 def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
@@ -227,7 +228,7 @@ def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
         job_namespace="lance-catalog",
     )
     run_id = event["run"]["runId"]
-    outbox.stage_event(settings.outbox_uri, {}, run_id, json.dumps(event))
+    outbox.stage_event(settings.outbox_uri, StorageOptions(), run_id, json.dumps(event))
     os.utime(Path(settings.outbox_uri) / f"{create_key}.json", ns=(1, 1))
     return run_id
 
@@ -267,7 +268,7 @@ def test_the_drain_re_ingests_a_staged_create_through_the_dataset_door(tmp_path:
     assert [e.dataset.name for e in repo.datasets] == [_TABLE] and repo.runs == [], "the create did not reach the dataset door"
     assert repo.datasets[0].operation == "create_table"
     assert publisher.published == [staged_json], "subscribers never hear of the create; the re-publish must carry the staged bytes"
-    assert not list(outbox.list_events(settings.outbox_uri, {})), "a recovered event must not stay staged"
+    assert not list(outbox.list_events(settings.outbox_uri, StorageOptions())), "a recovered event must not stay staged"
 
 
 @pytest.mark.parametrize(
@@ -298,7 +299,7 @@ def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(
     [refusal] = repo.refusals
     assert reason_names in str(refusal["reason"]), f"the recorded reason does not say what was refused: {refusal['reason']}"
     assert refusal == {"outbox_key": key, "run_id": None, "author": _AUTHOR, "reason": refusal["reason"], "event_json": staged_json}
-    assert not list(outbox.list_events(settings.outbox_uri, {})), "a recorded refusal must retire the staged object"
+    assert not list(outbox.list_events(settings.outbox_uri, StorageOptions())), "a recorded refusal must retire the staged object"
 
 
 @pytest.mark.parametrize(
@@ -331,7 +332,7 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_nothing_else(
         job_namespace="lance",
     )
     signed = catalog.sign(event, on_behalf_of=author) if by_the_catalog else other.sign(event)
-    outbox.stage_event(settings.outbox_uri, {}, event_identity(signed), json.dumps(signed))
+    outbox.stage_event(settings.outbox_uri, StorageOptions(), event_identity(signed), json.dumps(signed))
     _arm_gate(monkeypatch, writer=None)
     repo = _Repo()
 
@@ -358,7 +359,7 @@ def test_bytes_no_parser_accepts_are_poison_and_do_not_wedge_the_create_behind_t
 
     assert (outcome.drained, len(poison)) == (1, 1), f"the hostile object was not handled as poison: {outcome}, poison={len(poison)}"
     assert [e.dataset.name for e in repo.datasets] == [_TABLE], "the create staged behind the hostile object was not recovered"
-    assert outbox.resolve_event(settings.outbox_uri, {}, hostile) is None, "the poison object stays staged to wedge the next tick"
+    assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is None, "the poison object stays staged to wedge the next tick"
 
 
 def test_a_create_whose_ingest_fails_is_stranded_and_the_run_behind_it_still_drains(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
@@ -375,7 +376,7 @@ def test_a_create_whose_ingest_fails_is_stranded_and_the_run_behind_it_still_dra
 
     assert (outcome.drained, outcome.stranded, outcome.refused) == (1, 1, 0), f"one failed create aborted or misreported the tick: {outcome}"
     assert [event.run.run_id for event in repo.runs] == [run_id], "the run staged behind the failed create was not recovered"
-    assert outbox.resolve_event(settings.outbox_uri, {}, key) is not None, "a transient failure destroyed the create's only durable copy"
+    assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "a transient failure destroyed the create's only durable copy"
 
 
 def _stage_a_refusable_first(settings: LineageSettings, kind: str, catalog: Any) -> tuple[str, str]:  # noqa: ANN401 - the conftest's EventSigner
@@ -394,14 +395,14 @@ def _stage_a_refusable_first(settings: LineageSettings, kind: str, catalog: Any)
         event_time="2026-10-12T00:00:00+00:00",
         job_namespace="lance-catalog",
     )
-    outbox.stage_event(settings.outbox_uri, {}, event["run"]["runId"], json.dumps(event))
-    [(key, _)] = list(outbox.list_events(settings.outbox_uri, {}))
+    outbox.stage_event(settings.outbox_uri, StorageOptions(), event["run"]["runId"], json.dumps(event))
+    [(key, _)] = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
     return key, _stage_a_run_behind(settings, key)
 
 
 def _refusing(key: str, settings: LineageSettings) -> Any:  # noqa: ANN401 — the gate's own signature
     """A gate that refuses exactly the event staged under `key` and admits the rest."""
-    refused_json = outbox.resolve_event(settings.outbox_uri, {}, key)
+    refused_json = outbox.resolve_event(settings.outbox_uri, StorageOptions(), key)
     assert refused_json is not None
     refused_doc = json.loads(refused_json[1])
 
@@ -428,7 +429,7 @@ def test_a_refusal_whose_record_fails_stays_staged_and_the_tick_goes_on(tmp_path
         f"the tick misreported a refusal it could not record: {outcome}"
     )
     assert [event.run.run_id for event in repo.runs] == [run_id], "a refusal whose record failed aborted the tick"
-    assert outbox.resolve_event(settings.outbox_uri, {}, key) is not None, "a refusal was retired before its record landed"
+    assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "a refusal was retired before its record landed"
 
 
 def test_a_refusal_whose_retirement_fails_is_recorded_and_the_tick_goes_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
@@ -438,7 +439,7 @@ def test_a_refusal_whose_retirement_fails_is_recorded_and_the_tick_goes_on(tmp_p
     monkeypatch.setattr(relay_cron, "enforce_bus_authz", _refusing(key, settings))
     real_drop = outbox.drop_event
 
-    def drop(uri: str, opts: dict[str, str], dropped: str) -> None:
+    def drop(uri: str, opts: StorageOptions, dropped: str) -> None:
         if dropped == key:
             raise TimeoutError("store timed out")
         real_drop(uri, opts, dropped)
@@ -450,7 +451,7 @@ def test_a_refusal_whose_retirement_fails_is_recorded_and_the_tick_goes_on(tmp_p
 
     assert (outcome.drained, outcome.refused, outcome.recorded) == (1, 1, 1), f"a failed retirement misreported the tick: {outcome}"
     assert [event.run.run_id for event in repo.runs] == [run_id], "a refusal whose delete failed aborted the tick"
-    assert outbox.resolve_event(settings.outbox_uri, {}, key) is not None, "the undeleted object should wait for the next tick"
+    assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "the undeleted object should wait for the next tick"
 
 
 def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
@@ -461,7 +462,7 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
     monkeypatch.setattr(relay_cron, "enforce_bus_authz", _admit)
     real_drop = outbox.drop_event
 
-    def drop(uri: str, opts: dict[str, str], key: str) -> None:
+    def drop(uri: str, opts: StorageOptions, key: str) -> None:
         if key == hostile:
             raise TimeoutError("store timed out")
         real_drop(uri, opts, key)
@@ -472,7 +473,7 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
     outcome = _drain(settings, repo, _Publisher())
 
     assert outcome.drained == 1 and [e.dataset.name for e in repo.datasets] == [_TABLE], f"a failed poison delete aborted the tick: {outcome}"
-    assert outbox.resolve_event(settings.outbox_uri, {}, hostile) is not None, "the undeletable poison should wait for the next tick"
+    assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "the undeletable poison should wait for the next tick"
 
 
 def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
@@ -491,7 +492,7 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Pa
     repo = _FeedHoldsIt()
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), provenance=repo)))
 
-    outcome = asyncio.run(relay_cron._drain_outbox(cast("Any", request), cast("Any", repo), settings, {}, _Publisher()))
+    outcome = asyncio.run(relay_cron._drain_outbox(cast("Any", request), cast("Any", repo), settings, StorageOptions(), _Publisher()))
 
     assert (outcome.drained, outcome.refused) == (1, 0), f"a redelivered create was filed as lost provenance: {outcome}"
     assert repo.refusals == []
@@ -523,7 +524,7 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
 
     assert isinstance(refused.value, UnverifiedEventError) is unsigned, f"the refusal came from the wrong gate: {refused.value!r}"
     assert repo.datasets == [] and repo.runs == [] and publisher.published == [], "a refused replay reached the feed or the bus"
-    assert outbox.resolve_event(settings.outbox_uri, {}, key) is not None, "a refused replay must leave the object staged"
+    assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "a refused replay must leave the object staged"
 
 
 def test_the_dlq_replay_re_publishes_the_staged_bytes_to_the_lineage_topic(tmp_path: Path, catalog: Any) -> None:
@@ -537,7 +538,7 @@ def test_the_dlq_replay_re_publishes_the_staged_bytes_to_the_lineage_topic(tmp_p
     assert out.status == "replayed"
     assert publisher.published == [staged_json], "subscribers never hear of a replayed create; the re-publish must carry the staged bytes"
     assert publisher.topics == [(settings.dapr_pubsub, settings.dapr_topic)], "the replay announced the create somewhere other than the lineage topic"
-    assert outbox.resolve_event(settings.outbox_uri, {}, key) is None, "a replayed event must be dropped"
+    assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is None, "a replayed event must be dropped"
 
 
 def test_a_replay_whose_publish_fails_leaves_the_object_for_the_relay(tmp_path: Path, catalog: Any) -> None:
@@ -547,7 +548,7 @@ def test_a_replay_whose_publish_fails_leaves_the_object_for_the_relay(tmp_path: 
     with pytest.raises(ServiceUnavailableError, match="re-announcing it failed"):
         asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), _SidecarDown()))
 
-    assert outbox.resolve_event(settings.outbox_uri, {}, key) is not None, "the drop destroyed the copy the relay would still have re-published"
+    assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "the drop destroyed the copy the relay would still have re-published"
 
 
 @pytest.mark.parametrize("body", [_HOSTILE["bigint"]], ids=["bigint"])
@@ -573,7 +574,7 @@ def test_the_dlq_replay_answers_bytes_no_parser_accepts_as_poison(tmp_path: Path
     with pytest.raises(answer):
         asyncio.run(dlq.replay_dlq(hostile, _request(), cast("Any", _Repo()), settings, None, flt, _Publisher()))
 
-    assert outbox.resolve_event(settings.outbox_uri, {}, hostile) is not None, "a poison replay must leave the object for the relay"
+    assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "a poison replay must leave the object for the relay"
 
 
 def test_the_dlq_replay_refuses_a_signed_create_its_stamped_author_may_not_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
@@ -627,8 +628,8 @@ def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -
     )
     event = catalog.sign(event, on_behalf_of=_AUTHOR)
     staged_json = json.dumps(event)
-    outbox.stage_event(settings.outbox_uri, {}, event["run"]["runId"], staged_json)
-    [(key, _)] = list(outbox.list_events(settings.outbox_uri, {}))
+    outbox.stage_event(settings.outbox_uri, StorageOptions(), event["run"]["runId"], staged_json)
+    [(key, _)] = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
     publisher = _Publisher()
 
     out = asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), publisher))

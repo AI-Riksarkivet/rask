@@ -37,11 +37,12 @@ from lance_namespace import connect
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.core.config import get_settings
 from catalog.main import app
+from service_kit.lakehouse.objectfs import StorageOptions
 
 get_settings.cache_clear()
 ns = connect("dir", {"root": root})
 app.dependency_overrides[get_namespace] = lambda: ns
-app.dependency_overrides[get_storage_options] = lambda: {}
+app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
 
 def arrow(table):
     sink = io.BytesIO()

@@ -58,6 +58,7 @@ from catalog.services.table_claims import DoorTable
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.records import RecordChangedError
 
 
@@ -207,7 +208,7 @@ async def publication_extra(
 log = logging.getLogger(__name__)
 
 
-async def _project_from_binding(settings: Settings, so: dict[str, str], top_ns: str) -> str | None:
+async def _project_from_binding(settings: Settings, so: StorageOptions, top_ns: str) -> str | None:
     """The tenant from the warehouse binding, SWALLOWING failure — the emitter's own contract.
 
     Swallowing is not defensive padding here, it is the property this fallback has to preserve. The
@@ -227,7 +228,7 @@ async def _project_from_binding(settings: Settings, so: dict[str, str], top_ns: 
 
 async def resolve_effective_gate(
     settings: Settings,
-    so: dict[str, str],
+    so: StorageOptions,
     lineage: ProjectSource,
     segments: list[str],
     body: PublishRequest,
@@ -424,7 +425,7 @@ async def _published_uuid(settings: Settings, result: publication.PublicationRes
     return await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), result.table, segments)
 
 
-def _published_rows(table: DoorTable, so: dict[str, str]) -> int | None:
+def _published_rows(table: DoorTable, so: StorageOptions) -> int | None:
     """The row count readers of `published` read now, or `None` when nothing is published."""
     return publication.rows_at(table, so, publication.published_version(table, so))
 
@@ -438,7 +439,7 @@ async def _hold(
     *,
     settings: Settings,
     table: DoorTable,
-    so: dict[str, str],
+    so: StorageOptions,
     segments: list[str],
     table_uuid: str,
     result: publication.PublicationResult,
@@ -467,13 +468,13 @@ async def _hold(
     return standing
 
 
-async def _repin(settings: Settings, table: DoorTable, so: dict[str, str], table_uuid: str) -> None:
+async def _repin(settings: Settings, table: DoorTable, so: StorageOptions, table_uuid: str) -> None:
     """Point the hold pin at the table's open hold as its record stands now, or remove it when none is open."""
     current = await run_in_threadpool(promotions.hold_of, settings.registry_root, settings.storage_options(), table_uuid)
     await run_in_threadpool(promotions.sync_pin, table, so, current)
 
 
-async def _close_what_published_reached(*, settings: Settings, table: DoorTable, so: dict[str, str], location: str, published: int, at: datetime) -> None:
+async def _close_what_published_reached(*, settings: Settings, table: DoorTable, so: StorageOptions, location: str, published: int, at: datetime) -> None:
     """Close the open hold of the table at ``location`` when `published` moved to or past its version: readers already
     read it.
 
@@ -552,7 +553,7 @@ async def _announce_publication(
 async def _decision(
     settings: Settings,
     table: DoorTable,
-    so: dict[str, str],
+    so: StorageOptions,
     *,
     version: int,
     state: Literal["approved", "rejected"],

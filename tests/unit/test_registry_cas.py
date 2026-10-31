@@ -27,6 +27,7 @@ from lance_namespace import NamespaceAlreadyExistsError
 import storage
 from catalog.services import warehouses
 from service_kit.lakehouse import records
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _root(tmp_path: Any) -> str:
@@ -40,16 +41,16 @@ def _root(tmp_path: Any) -> str:
 
 def test_create_json_local_bare_path_root(tmp_path: Any) -> None:
     # control_root may be a bare local path (no file:// scheme) in dev — same exclusivity.
-    records.create_json(str(tmp_path), {}, "_projects/acme.json", {"id": "acme"})
+    records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", {"id": "acme"})
     with pytest.raises(records.RecordExistsError):
-        records.create_json(str(tmp_path), {}, "_projects/acme.json", {"id": "acme"})
+        records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", {"id": "acme"})
 
 
 # --------------------------------------------------------------------------- #
 # the seam: create_json (S3 branch — store-arbitrated If-None-Match)
 # --------------------------------------------------------------------------- #
 
-_SO = {"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"}
+_SO = StorageOptions.from_flat({"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"})
 
 
 def _client_error(code: str, status: int) -> ClientError:
@@ -99,7 +100,7 @@ def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.Monkey
 
 
 def test_create_warehouse_record_second_mint_refused(tmp_path: Any) -> None:
-    root, so = _root(tmp_path), {}
+    root, so = _root(tmp_path), StorageOptions()
     warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b", "root_uri": "s3://b", "project": "acme", "created_at": "t"})
     with pytest.raises(records.RecordExistsError):
         warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b2", "root_uri": "s3://b2", "project": "evil", "created_at": "t"})
@@ -112,7 +113,7 @@ def test_bind_namespace_is_write_once(tmp_path: Any) -> None:
     # The binding write-once guard used to be check-then-act (endpoint reads, then service
     # overwrites): a concurrent bind of one top_ns to two warehouses re-routed tenant A's tables to
     # tenant B's bucket. The service itself now refuses at the store, whatever the caller read.
-    root, so = _root(tmp_path), {}
+    root, so = _root(tmp_path), StorageOptions()
     warehouses.bind_namespace(root, so, "team_ns", "wh-a", "s3://bkt-a")
     with pytest.raises(NamespaceAlreadyExistsError):
         warehouses.bind_namespace(root, so, "team_ns", "wh-b", "s3://bkt-b")
@@ -122,7 +123,7 @@ def test_bind_namespace_is_write_once(tmp_path: Any) -> None:
 def test_bind_namespace_same_binding_is_idempotent(tmp_path: Any) -> None:
     # The partial-failure retry path (binding written, a later step failed, caller retries) must
     # converge — same (warehouse_id, root_uri) re-bind is a no-op, not a 409.
-    root, so = _root(tmp_path), {}
+    root, so = _root(tmp_path), StorageOptions()
     warehouses.bind_namespace(root, so, "team_ns", "wh-a", "s3://bkt-a")
     warehouses.bind_namespace(root, so, "team_ns", "wh-a", "s3://bkt-a")  # no raise
     assert warehouses.warehouse_for_namespace(root, so, "team_ns") == "s3://bkt-a"

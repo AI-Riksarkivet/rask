@@ -14,6 +14,7 @@ import pytest
 from lance_namespace import ServiceUnavailableError, TableNotFoundError, TableVersionNotFoundError
 
 from catalog.services import models
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def test_a_store_outage_is_a_503_not_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -23,9 +24,9 @@ def test_a_store_outage_is_a_503_not_a_404(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(lance, "dataset", _boom)
 
     with pytest.raises(ServiceUnavailableError):
-        models.describe("s3://b/models/asr", {})
+        models.describe("s3://b/models/asr", StorageOptions())
     with pytest.raises(ServiceUnavailableError):
-        models.metrics_at("s3://b/models/asr", {}, version=3)
+        models.metrics_at("s3://b/models/asr", StorageOptions(), version=3)
 
 
 def test_a_missing_registry_is_still_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -35,7 +36,7 @@ def test_a_missing_registry_is_still_a_404(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(lance, "dataset", _missing)
 
     with pytest.raises(TableNotFoundError):
-        models.describe("s3://b/models/asr", {})
+        models.describe("s3://b/models/asr", StorageOptions())
 
 
 def test_a_bad_version_is_still_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,4 +46,4 @@ def test_a_bad_version_is_still_a_404(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(lance, "dataset", _bad)
 
     with pytest.raises(TableVersionNotFoundError):
-        models.metrics_at("s3://b/models/asr", {}, version=99)
+        models.metrics_at("s3://b/models/asr", StorageOptions(), version=99)

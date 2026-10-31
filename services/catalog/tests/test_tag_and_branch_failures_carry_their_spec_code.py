@@ -74,6 +74,7 @@ from catalog.services.dataplane import (
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse.history_fences import HistoryWork, TableHistory
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -108,8 +109,8 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     root = str(tmp_path / "data")
     namespace = connect("dir", {"root": root})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=root, mode="create", registry=None)
-    dataset = open_by_name(namespace, {}, TABLE_ID)
+    create_table(namespace, StorageOptions(), TABLE_ID, _table([1, 2, 3]), root=root, mode="create", registry=None)
+    dataset = open_by_name(namespace, StorageOptions(), TABLE_ID)
     dataset.tags.create(LIVE_TAG, 1)
     dataset.create_branch(LIVE_BRANCH, None)
     return namespace
@@ -128,9 +129,9 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 @pytest.mark.parametrize(
     ("door", "call"),
     [
-        ("tags/update", lambda table, tag: update_tag(table, {}, UpdateTableTagRequest(id=TABLE_ID, tag=tag, version=1))),
-        ("tags/delete", lambda table, tag: delete_tag(table, {}, DeleteTableTagRequest(id=TABLE_ID, tag=tag))),
-        ("tags/version", lambda table, tag: get_tag_version(table, {}, GetTableTagVersionRequest(id=TABLE_ID, tag=tag))),
+        ("tags/update", lambda table, tag: update_tag(table, StorageOptions(), UpdateTableTagRequest(id=TABLE_ID, tag=tag, version=1))),
+        ("tags/delete", lambda table, tag: delete_tag(table, StorageOptions(), DeleteTableTagRequest(id=TABLE_ID, tag=tag))),
+        ("tags/version", lambda table, tag: get_tag_version(table, StorageOptions(), GetTableTagVersionRequest(id=TABLE_ID, tag=tag))),
     ],
 )
 def test_a_missing_tag_mints_TAG_NOT_FOUND(table: DoorTable, door: str, call: Callable[[DoorTable, str], object], tag: str) -> None:
@@ -146,11 +147,14 @@ def test_a_missing_tag_mints_TAG_NOT_FOUND(table: DoorTable, door: str, call: Ca
     [
         # The tag here EXISTS, so only the version can be the complaint — this is the case that proves
         # the classifier does not report 8 when the ref is fine and the version is not.
-        ("tags/update", lambda table: update_tag(table, {}, UpdateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=MISSING_VERSION))),
-        ("tags/create", lambda table: create_tag(table, {}, CreateTableTagRequest(id=TABLE_ID, tag="fresh", version=MISSING_VERSION))),
+        ("tags/update", lambda table: update_tag(table, StorageOptions(), UpdateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=MISSING_VERSION))),
+        ("tags/create", lambda table: create_tag(table, StorageOptions(), CreateTableTagRequest(id=TABLE_ID, tag="fresh", version=MISSING_VERSION))),
         # Reaches the object store rather than the ref API, so it raises OSError where the two above
         # raise ValueError — one classifier, two exception types, which is why both are driven.
-        ("branches/create", lambda table: create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_version=MISSING_VERSION))),
+        (
+            "branches/create",
+            lambda table: create_branch(table, StorageOptions(), CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_version=MISSING_VERSION)),
+        ),
     ],
 )
 def test_a_missing_version_mints_VERSION_NOT_FOUND(table: DoorTable, door: str, call: _Call) -> None:
@@ -165,24 +169,30 @@ def test_a_missing_version_mints_VERSION_NOT_FOUND(table: DoorTable, door: str, 
 def test_creating_a_tag_that_already_exists_mints_TAG_ALREADY_EXISTS(table: DoorTable) -> None:
     """Spec code 9 — a name collision the caller can fix, not a server fault."""
     with pytest.raises(TableTagAlreadyExistsError) as caught:
-        create_tag(table, {}, CreateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=1))
+        create_tag(table, StorageOptions(), CreateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=1))
     assert caught.value.code == 9, f"a tag collision minted code {caught.value.code}, not 9"
 
 
 @pytest.mark.parametrize(
     ("door", "call"),
     [
-        ("branches/delete", lambda table: delete_branch(table, {}, DeleteTableBranchRequest(id=TABLE_ID, name=ABSENT))),
+        ("branches/delete", lambda table: delete_branch(table, StorageOptions(), DeleteTableBranchRequest(id=TABLE_ID, name=ABSENT))),
         # THE SOURCE branch, not the one being created. With a `from_version`, pylance renders a missing source branch
         # as a missing VERSION (11), so the door reads the branch list before it creates; without one, the same read
         # answers first.
         (
             "branches/create from a missing source",
-            lambda table: create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=ABSENT, from_version=1)),
+            lambda table: create_branch(table, StorageOptions(), CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=ABSENT, from_version=1)),
         ),
         # [[LH-406]] pylance resolves `(branch, version)` as one reference and reports a missing branch as a missing version.
-        ("tags/create on a missing branch", lambda table: create_tag(table, {}, CreateTableTagRequest(id=TABLE_ID, tag="fresh", version=1, branch=ABSENT))),
-        ("tags/update on a missing branch", lambda table: update_tag(table, {}, UpdateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=1, branch=ABSENT))),
+        (
+            "tags/create on a missing branch",
+            lambda table: create_tag(table, StorageOptions(), CreateTableTagRequest(id=TABLE_ID, tag="fresh", version=1, branch=ABSENT)),
+        ),
+        (
+            "tags/update on a missing branch",
+            lambda table: update_tag(table, StorageOptions(), UpdateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=1, branch=ABSENT)),
+        ),
     ],
 )
 def test_a_missing_branch_mints_BRANCH_NOT_FOUND(table: DoorTable, door: str, call: _Call) -> None:
@@ -195,28 +205,32 @@ def test_a_missing_branch_mints_BRANCH_NOT_FOUND(table: DoorTable, door: str, ca
 def test_a_branch_a_tag_names_is_refused_INVALID_TABLE_STATE_naming_the_tag(table: DoorTable) -> None:
     """Spec code 19, naming the tag, and nothing deleted: a tag pins its branch ("Ref conflict error: Branch staging is
     referenced by tags", measured on pylance 13.0.0), which the door asks before its first delete."""
-    table.open_unchecked({}).tags.create("pin", (LIVE_BRANCH, None))
+    table.open_unchecked(StorageOptions()).tags.create("pin", (LIVE_BRANCH, None))
 
     with pytest.raises(InvalidTableStateError, match="tag 'pin'") as caught:
-        delete_branch(table, {}, DeleteTableBranchRequest(id=TABLE_ID, name=LIVE_BRANCH))
+        delete_branch(table, StorageOptions(), DeleteTableBranchRequest(id=TABLE_ID, name=LIVE_BRANCH))
 
     assert caught.value.code == 19
-    assert LIVE_BRANCH in table.open_unchecked({}).branches.list()
+    assert LIVE_BRANCH in table.open_unchecked(StorageOptions()).branches.list()
 
 
 def test_a_branch_cut_from_main_by_name_is_created(table: DoorTable) -> None:
     """`main` is a ref every table has and no branch list names, so a source spelled `main` is main itself."""
-    create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch="main"))
+    create_branch(table, StorageOptions(), CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch="main"))
 
-    assert table.open_unchecked({}).branches.list()["fresh"].get("parent_branch") is None
+    assert table.open_unchecked(StorageOptions()).branches.list()["fresh"].get("parent_branch") is None
 
 
 @pytest.mark.parametrize(
     ("listing", "names"),
     [
-        pytest.param(lambda table, token: list_tags(table, {}, ListTableTagsRequest(id=TABLE_ID, limit=1, page_token=token)), ["a", "b", LIVE_TAG], id="tags"),
         pytest.param(
-            lambda table, token: list_branches(table, {}, ListTableBranchesRequest(id=TABLE_ID, limit=1, page_token=token)),
+            lambda table, token: list_tags(table, StorageOptions(), ListTableTagsRequest(id=TABLE_ID, limit=1, page_token=token)),
+            ["a", "b", LIVE_TAG],
+            id="tags",
+        ),
+        pytest.param(
+            lambda table, token: list_branches(table, StorageOptions(), ListTableBranchesRequest(id=TABLE_ID, limit=1, page_token=token)),
             ["a", "b", LIVE_BRANCH],
             id="branches",
         ),
@@ -224,7 +238,7 @@ def test_a_branch_cut_from_main_by_name_is_created(table: DoorTable) -> None:
 )
 def test_a_ref_listing_pages_by_its_limit(table: DoorTable, listing: Callable[[DoorTable, str | None], object], names: list[str]) -> None:
     """``limit`` bounds the page and ``page_token`` resumes after it, so a caller paging one at a time reads every ref once."""
-    dataset = table.open_unchecked({})
+    dataset = table.open_unchecked(StorageOptions())
     for name in ("a", "b"):
         dataset.tags.create(name, 1)
         dataset.create_branch(name, None)
@@ -251,7 +265,7 @@ def test_a_version_error_names_the_SOURCE_branch_not_the_one_being_created(table
     yet and telling the caller nothing about which history lacked the version.
     """
     with pytest.raises(TableVersionNotFoundError) as caught:
-        create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=LIVE_BRANCH, from_version=MISSING_VERSION))
+        create_branch(table, StorageOptions(), CreateTableBranchRequest(id=TABLE_ID, name="fresh", from_branch=LIVE_BRANCH, from_version=MISSING_VERSION))
     assert LIVE_BRANCH in str(caught.value), f"the version error named the wrong branch: {caught.value}"
 
 
@@ -264,22 +278,22 @@ def test_creating_a_branch_that_already_exists_mints_BRANCH_ALREADY_EXISTS(table
     an honest thing to pattern-match. The door establishes the collision by READING instead.
     """
     with pytest.raises(TableBranchAlreadyExistsError) as caught:
-        create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name=LIVE_BRANCH))
+        create_branch(table, StorageOptions(), CreateTableBranchRequest(id=TABLE_ID, name=LIVE_BRANCH))
     assert caught.value.code == 23, f"a branch collision minted code {caught.value.code}, not 23"
 
 
 @pytest.mark.parametrize(
     ("door", "call"),
     [
-        ("tags/create", lambda table: create_tag(table, {}, CreateTableTagRequest(id=TABLE_ID, tag="fresh", version=1))),
-        ("tags/update", lambda table: update_tag(table, {}, UpdateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=1))),
-        ("branches/create", lambda table: create_branch(table, {}, CreateTableBranchRequest(id=TABLE_ID, name="fresh"))),
+        ("tags/create", lambda table: create_tag(table, StorageOptions(), CreateTableTagRequest(id=TABLE_ID, tag="fresh", version=1))),
+        ("tags/update", lambda table: update_tag(table, StorageOptions(), UpdateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=1))),
+        ("branches/create", lambda table: create_branch(table, StorageOptions(), CreateTableBranchRequest(id=TABLE_ID, name="fresh"))),
     ],
 )
 def test_a_ref_write_while_a_reclaim_holds_the_tables_history_mints_CONCURRENT_MODIFICATION(table: DoorTable, tmp_path: Path, door: str, call: _Call) -> None:
     """Spec code 14, and no ref written: Lance's reclaim reads the refs once, so a ref written while it runs can name a
     version it then deletes ([[LH-308]]). The caller retries once the reclaim ends."""
-    dataset = table.open_unchecked({})
+    dataset = table.open_unchecked(StorageOptions())
     refs = (dataset.tags.list(), dataset.branches.list())
     TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid=table.resolved.require_uuid()).take(HistoryWork.RECLAIM)
 
@@ -287,5 +301,5 @@ def test_a_ref_write_while_a_reclaim_holds_the_tables_history_mints_CONCURRENT_M
         call(table)
 
     assert caught.value.code == 14, f"{door} minted code {caught.value.code} while a reclaim held the history, not 14"
-    reopened = table.open_unchecked({})
+    reopened = table.open_unchecked(StorageOptions())
     assert (reopened.tags.list(), reopened.branches.list()) == refs, f"{door} wrote a ref while a reclaim held the history"

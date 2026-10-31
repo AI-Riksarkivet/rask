@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from maintenance.services import credentials
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 if TYPE_CHECKING:
@@ -52,7 +53,7 @@ def _settings() -> MaintenanceSettings:
     return cast("MaintenanceSettings", _Settings())
 
 
-_FALLBACK = {"aws_access_key_id": "root", "aws_secret_access_key": "root"}
+_FALLBACK = StorageOptions.from_flat({"aws_access_key_id": "root", "aws_secret_access_key": "root"})
 
 
 @pytest.fixture(autouse=True)

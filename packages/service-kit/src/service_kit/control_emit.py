@@ -171,7 +171,7 @@ class DaprControlEmitter:
             await outbox.publish_with_outbox(
                 self._client,
                 outbox_uri=self._outbox_uri,
-                storage_options=self._storage_options() if self._storage_options is not None else {},
+                storage_options=self._storage_options() if self._storage_options is not None else StorageOptions(),
                 key=event.event_id,
                 event_json=event_json,
                 pubsub_name=self._pubsub,

@@ -36,6 +36,7 @@ from pydantic import BaseModel, ConfigDict
 from service_kit.lakehouse.base_refs import decoded_path, store_of
 from service_kit.lakehouse.base_registry import RecordedBase
 from service_kit.lakehouse.data_directories import directory_uri
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.stored_objects import StoredObject, delete_objects, list_under
 
 
@@ -121,7 +122,7 @@ def _unheld(candidates: dict[str, list[StoredObject]], prefixes: dict[str, str],
 
 
 def unreferenced(
-    ds: lance.LanceDataset, directories: Sequence[RecordedBase], storage_options: dict[str, str], *, now: datetime
+    ds: lance.LanceDataset, directories: Sequence[RecordedBase], storage_options: StorageOptions, *, now: datetime
 ) -> dict[str, list[StoredObject]]:
     """The objects in ``directories`` no retained version references and older than :data:`UNVERIFIED_AGE`, by directory path.
 
@@ -141,7 +142,7 @@ def unreferenced(
     return _unheld(candidates, prefixes, referenced)
 
 
-def reclaim(ds: lance.LanceDataset, directories: Sequence[RecordedBase], storage_options: dict[str, str], *, now: datetime) -> Reclaimed:
+def reclaim(ds: lance.LanceDataset, directories: Sequence[RecordedBase], storage_options: StorageOptions, *, now: datetime) -> Reclaimed:
     """Delete what :func:`unreferenced` finds in the table's data directories, signed by ``storage_options``.
 
     Raises:

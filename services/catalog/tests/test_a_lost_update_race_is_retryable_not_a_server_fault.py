@@ -21,6 +21,7 @@ from catalog.services.dataplane import captured, commit_stamped, create_table, d
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 TABLE_ID = ["db", "rows"]
@@ -35,7 +36,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     create_table(
         namespace,
-        {},
+        StorageOptions(),
         TABLE_ID,
         pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": pa.array([0, 0, 0], pa.int64())}, schema=SCHEMA),
         root=str(tmp_path / "data"),
@@ -53,9 +54,9 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 
 
 def test_the_doors_still_answer_and_advance_the_version(table: DoorTable) -> None:
-    updated = update_table(table, {}, UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]), transaction_properties=STAMP)
+    updated = update_table(table, StorageOptions(), UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]), transaction_properties=STAMP)
     assert updated.updated_rows == 3, f"update reported {updated.updated_rows} rows, not 3"
-    deleted = delete_from_table(table, {}, DeleteFromTableRequest(id=TABLE_ID, predicate="id = 1"), transaction_properties=STAMP)
+    deleted = delete_from_table(table, StorageOptions(), DeleteFromTableRequest(id=TABLE_ID, predicate="id = 1"), transaction_properties=STAMP)
     # `version` is Optional on the response model; a door that answers None reported no version at all,
     # which is the same defect as reporting a stale one and is asserted rather than narrowed away.
     assert deleted.version is not None, "delete answered no version"
@@ -63,12 +64,16 @@ def test_the_doors_still_answer_and_advance_the_version(table: DoorTable) -> Non
 
 
 def test_a_delete_planned_on_a_version_another_writer_passed_plans_again_and_lands(table: DoorTable) -> None:
-    opened = table.open({})
-    update_table(table, {}, UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]), transaction_properties=STAMP)
+    opened = table.open(StorageOptions())
+    update_table(table, StorageOptions(), UpdateTableRequest(id=TABLE_ID, updates=[["v", "7"]]), transaction_properties=STAMP)
 
     version, _ = commit_stamped(
-        table, {}, {**STAMP, "rask.operation": "delete"}, captured(table, {}, lambda handle: handle.delete("id = 1"), branch=None), opened=opened
+        table,
+        StorageOptions(),
+        {**STAMP, "rask.operation": "delete"},
+        captured(table, StorageOptions(), lambda handle: handle.delete("id = 1"), branch=None),
+        opened=opened,
     )
 
-    landed = table.open({}).to_table()
+    landed = table.open(StorageOptions()).to_table()
     assert (version, sorted(landed.column("id").to_pylist()), set(landed.column("v").to_pylist())) == (3, [2, 3], {7})

@@ -33,10 +33,12 @@ from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
 from moto.server import ThreadedMotoServer
+from pydantic import SecretStr
 
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import location_claims, maintenance_policies
 from service_kit.lakehouse.maintenance_due import read_due
-from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
 from service_kit.openlineage import DatasetUuids, dataset_uuids
 
 
@@ -72,18 +74,18 @@ def moto_url() -> Iterator[str]:
 
 
 @pytest.fixture
-def estate(moto_url: str) -> dict[str, str]:
+def estate(moto_url: str) -> StorageOptions:
     """Four small fragments in four versions registered as `db$t`, under its own policy keeping two versions; `db$b` with a
     branch; three versions nothing names, under the bucket's project policy keeping one; and two in a declared platform root."""
-    options = lance_storage_options(moto_url, "test", "test", "us-east-1")
+    options = lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
     for uri, versions in ((URI, 4), (BRANCHED, 1), (UNNAMED, 3), (PLATFORM, 2)):
         for i in range(versions):
             rows = pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())})
             lance.write_dataset(
-                rows, uri, mode="create" if i == 0 else "append", storage_options=options, data_storage_version="2.2", enable_stable_row_ids=True
+                rows, uri, mode="create" if i == 0 else "append", storage_options=options.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True
             )
-    lance.dataset(BRANCHED, storage_options=options).create_branch("work")
-    namespace = connect("dir", {"root": ROOT, **{f"storage.{key}": value for key, value in options.items()}})
+    lance.dataset(BRANCHED, storage_options=options.in_clear()).create_branch("work")
+    namespace = connect("dir", {"root": ROOT, **{f"storage.{key}": value for key, value in options.in_clear().items()}})
     namespace.create_namespace(CreateNamespaceRequest(id=["db"], properties={"rask.uuid": NAMESPACE_UUID}))
     namespace.register_table(RegisterTableRequest(id=["db", "t"], location=LOCATION))
     claims = location_claims.ClaimStore(control_root=ROOT, storage_options=options)
@@ -148,15 +150,15 @@ def _vends_for(asked: list[str], options: dict[str, str]) -> respx.MockRouter:
     return router
 
 
-def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(estate: dict[str, str], maintenance: TestClient) -> None:
-    before = lance.dataset(URI, storage_options=estate)
+def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(estate: StorageOptions, maintenance: TestClient) -> None:
+    before = lance.dataset(URI, storage_options=estate.in_clear())
     fragments = [fragment.fragment_id for fragment in before.get_fragments()]
     asked: list[str] = []
 
-    with _vends_for(asked, estate):
+    with _vends_for(asked, estate.in_clear()):
         answered = maintenance.post("/maintenance-cron")
 
-    after = lance.dataset(URI, storage_options=estate)
+    after = lance.dataset(URI, storage_options=estate.in_clear())
     assert answered.status_code == 200, answered.text
     assert (after.version, [fragment.fragment_id for fragment in after.get_fragments()]) == (before.version, fragments), "the tick rewrote the table"
     assert [version["version"] for version in after.versions()] == [before.version - 1, before.version], answered.text
@@ -164,8 +166,8 @@ def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(estate
     assert (answered.json()["refused_by"].get("unnamed"), UNNAMED in refusals, BRANCH in refusals, PLATFORM in refusals) == (1, True, False, False), json.dumps(
         answered.json()
     )
-    assert len(lance.dataset(PLATFORM, storage_options=estate).versions()) == 2, "a declared platform root was expired"
-    assert len(lance.dataset(UNNAMED, storage_options=estate).versions()) == 3, "a dataset no manifest names was expired"
+    assert len(lance.dataset(PLATFORM, storage_options=estate.in_clear()).versions()) == 2, "a declared platform root was expired"
+    assert len(lance.dataset(UNNAMED, storage_options=estate.in_clear()).versions()) == 3, "a dataset no manifest names was expired"
     assert set(asked) <= {TABLE, "db$b"} and TABLE in asked, f"the vend door was asked about {asked}"
     record = read_due(ROOT, estate, LOCATION)
     assert record is not None, f"no due record for {TABLE}: {answered.json()}"

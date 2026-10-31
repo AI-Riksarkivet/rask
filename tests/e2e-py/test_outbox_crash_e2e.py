@@ -46,6 +46,7 @@ from catalog.core.lineage_emit import INSERT, InputRef, build_write_event
 from lineage_kit.signing import SigningKey, attach_signature
 from service_kit.governed.signing_key import signing_key_secret
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
@@ -121,15 +122,17 @@ def _signing_key() -> SigningKey | None:
     return SigningKey.from_seed(seed) if seed else None
 
 
-def _so() -> dict[str, str]:
-    return {
-        "endpoint": S3,
-        "access_key_id": S3_ACCESS_KEY,
-        "secret_access_key": S3_SECRET_KEY,
-        "region": "us-east-1",
-        "allow_http": "true",
-        "virtual_hosted_style_request": "false",
-    }
+def _so() -> StorageOptions:
+    return StorageOptions.from_flat(
+        {
+            "endpoint": S3,
+            "access_key_id": S3_ACCESS_KEY,
+            "secret_access_key": S3_SECRET_KEY,
+            "region": "us-east-1",
+            "allow_http": "true",
+            "virtual_hosted_style_request": "false",
+        }
+    )
 
 
 @pytest.fixture(scope="module")

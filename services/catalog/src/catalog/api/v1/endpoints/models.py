@@ -41,6 +41,7 @@ from catalog.schemas import (
 )
 from catalog.services import models as registry
 from service_kit.governed import fga
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -69,7 +70,7 @@ def _model_object(model: str) -> str:
     return f"table:{fga.canonical_object_id(_segments(model))}"
 
 
-def _summaries(settings: Settings, so: dict[str, str], names: list[str]) -> list[ModelSummary]:
+def _summaries(settings: Settings, so: StorageOptions, names: list[str]) -> list[ModelSummary]:
     """Per-model list summaries, one blocking pass (callers threadpool the whole loop). A directory that is
     not a readable Lance dataset yet (interrupted first publish) reports null versions instead of failing
     or hiding the whole listing."""

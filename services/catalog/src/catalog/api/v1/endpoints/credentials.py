@@ -149,7 +149,7 @@ async def vend_credentials(
     )
     # The secret and the session token leave the catalog in this body and nowhere else ([[LH-072]]), built before the
     # issuance is recorded: a vend whose options the builder refuses was never handed over.
-    creds = None if vended is None else VendedCredentials(storage_options=vended.as_storage_options(), expires_at_millis=vended.expires_at_millis)
+    creds = None if vended is None else VendedCredentials(storage_options=vended.as_storage_options().in_clear(), expires_at_millis=vended.expires_at_millis)
     mode = "server_mediated" if creds is None else "direct"
     if mode == "direct":  # #41 audit the actual issuance of direct object-store credentials (who, what, tier)
         obj = fga.table_object(table.resolved.require_uuid())

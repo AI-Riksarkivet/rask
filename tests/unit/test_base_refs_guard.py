@@ -29,6 +29,7 @@ import pytest
 
 from service_kit.lakehouse import base_registry, location_claims
 from service_kit.lakehouse.base_refs import containment_of, normalise, protected_roots
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _registry(tmp_path: Path) -> base_registry.BaseRegistry:
@@ -65,7 +66,7 @@ def test_a_dataset_that_references_only_ITSELF_does_not_protect_itself(tmp_path:
     compaction and purge of itself, which is not the hazard and would break ordinary maintenance."""
     src, clone = _source_and_clone(tmp_path)
 
-    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
+    refs = protected_roots([src, clone], StorageOptions(), **_judged(tmp_path))
 
     assert refs.is_protected(clone) is None, "a dataset protected itself and can now never be maintained"
 
@@ -85,7 +86,7 @@ def test_a_base_inside_a_datasets_own_root_does_not_protect_it(tmp_path: Path) -
     entry = base_registry.RecordedBase(path=inner, role=base_registry.BaseRole.DATA, origin=base_registry.BaseOrigin.REGISTER)
     base_registry.claim_bases(_registry(tmp_path), src, [entry])
 
-    refs = protected_roots([src], {}, **_judged(tmp_path))
+    refs = protected_roots([src], StorageOptions(), **_judged(tmp_path))
 
     assert (refs.is_protected(src), refs.findings) == (None, [])
 
@@ -111,7 +112,7 @@ def test_a_BRANCH_is_refused_as_a_REFERRER_rather_than_as_a_referenced_root(tmp_
     spec does not state and which this file's own subprocess reproduction is the way to settle.
     """
     src, clone = _source_and_clone(tmp_path)
-    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
+    refs = protected_roots([src, clone], StorageOptions(), **_judged(tmp_path))
     branch = f"{src}/tree/mb"
 
     assert refs.is_protected(branch) is not None, "a branch inside a referenced root must still be refused"
@@ -154,7 +155,7 @@ def test_a_scheme_difference_does_not_defeat_the_guard(tmp_path: Path) -> None:
     would only show up in production against real object storage.
     """
     src, clone = _source_and_clone(tmp_path)
-    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
+    refs = protected_roots([src, clone], StorageOptions(), **_judged(tmp_path))
 
     assert refs.is_protected(f"s3:/{src}") is not None
 
@@ -167,7 +168,7 @@ def test_an_UNREADABLE_dataset_is_recorded_not_silently_skipped(tmp_path: Path) 
     """
     src, _clone = _source_and_clone(tmp_path)
 
-    refs = protected_roots([src, str(tmp_path / "does-not-exist.lance")], {}, **_judged(tmp_path))
+    refs = protected_roots([src, str(tmp_path / "does-not-exist.lance")], StorageOptions(), **_judged(tmp_path))
 
     assert len(refs.unreadable) == 1
     assert "does-not-exist" in refs.unreadable[0][0]
@@ -336,11 +337,12 @@ def test_the_pre_pass_actually_USES_the_credentials_it_is_given(monkeypatch: pyt
         raise RuntimeError("stop here — the call itself is the assertion")
 
     monkeypatch.setattr("lance.dataset", _fake_dataset)
-    creds = {"access_key_id": "k", "secret_access_key": "s", "endpoint": "http://rustfs:9000"}
+    creds = StorageOptions.from_flat({"access_key_id": "k", "secret_access_key": "s", "endpoint": "http://rustfs:9000"})
     protected_roots(["s3://bucket/a.lance"], creds, configured=[], record_of=lambda _location: None)
 
     assert seen, "protected_roots never opened the dataset at all"
-    assert seen[0].get("storage_options") == creds, f"the credentials were not threaded into the open — the guard is inert against s3://. got {seen[0]}"
+    handed = {"endpoint": "http://rustfs:9000", "aws_access_key_id": "k", "aws_secret_access_key": "s"}
+    assert seen[0].get("storage_options") == handed, f"the credentials were not threaded into the open — the guard is inert against s3://. got {seen[0]}"
     # The #102 bounded session, for the same reason every other maintenance open threads it: without it
     # each dataset mints Lance's default 1 GiB metadata + 6 GiB index caches against a 512Mi pod.
     assert seen[0].get("session") is not None, "the bounded Lance session was not threaded into the open"

@@ -37,6 +37,7 @@ import boto3
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
@@ -45,12 +46,13 @@ from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import PlanContext
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import base_registry, data_directories, location_claims, trash
 from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
 from service_kit.lakehouse.maintenance_due import CloneList
 from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lakehouse.objectfs import lance_storage_options
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
 
@@ -69,7 +71,7 @@ class _Estate:
         self.second = second
         self.root = f"s3://{bucket}"
         self.data_base = f"s3://{second}/data"
-        self.key = lance_storage_options(url, "test", "test", "us-east-1")
+        self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         self.registry = base_registry.BaseRegistry(control_root=self.root, storage_options=self.key)
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
@@ -267,7 +269,7 @@ class _Warehoused(_Estate):
         self.second = second
         self.root = f"s3://{bucket}"
         self.data_base = f"s3://{second}/data"
-        self.key = lance_storage_options(url, "test", "test", "us-east-1")
+        self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3 = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         self.registry = base_registry.BaseRegistry(control_root=self.root, storage_options=self.key)
         suffix = uuid.uuid4().hex[:8]
@@ -352,7 +354,7 @@ def test_a_purging_warehouse_cascade_whose_directory_delete_fails_finishes_it_wh
     refusals = iter([OSError("the store refused the delete")])
     delete_objects = data_directories.delete_objects
 
-    def _refused_once(uri: str, storage_options: dict[str, str], paths: list[str]) -> None:
+    def _refused_once(uri: str, storage_options: StorageOptions, paths: list[str]) -> None:
         if (refusal := next(refusals, None)) is not None:
             raise refusal
         delete_objects(uri, storage_options, paths)

@@ -37,6 +37,7 @@ import pytest
 from maintenance.services.expiry import ExpiryPolicy
 from maintenance.services.sweep import _probe_before_vending
 from service_kit.lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 #: Keep the newest version, so every superseded one is reclaimable.
@@ -59,7 +60,7 @@ def test_cleanup_enabled_on_a_dataset_with_history_may_reclaim_so_it_vends(tmp_p
     """Reclamation is a write, and a dataset with superseded versions has something to reclaim."""
     uri = _dataset(tmp_path, "versioned", fragments=2)
 
-    assert _probe_before_vending(uri, {}, policy=KEEP_ONE, directories=[], now=datetime.now(UTC)).may_write is True
+    assert _probe_before_vending(uri, StorageOptions(), policy=KEEP_ONE, directories=[], now=datetime.now(UTC)).may_write is True
 
 
 def test_an_unreadable_dataset_says_MAY_WRITE(tmp_path: Path) -> None:
@@ -68,7 +69,7 @@ def test_an_unreadable_dataset_says_MAY_WRITE(tmp_path: Path) -> None:
     A wasted credential is a cost; a dataset that quietly stops being compacted and reclaimed is the
     failure this whole service exists to prevent.
     """
-    assert _probe_before_vending(str(tmp_path / "does-not-exist"), {}, policy=KEEP_ONE, directories=[], now=datetime.now(UTC)).may_write is True
+    assert _probe_before_vending(str(tmp_path / "does-not-exist"), StorageOptions(), policy=KEEP_ONE, directories=[], now=datetime.now(UTC)).may_write is True
 
 
 @pytest.mark.parametrize(("days", "vends"), [pytest.param(0, False, id="younger-than-the-age"), pytest.param(8, True, id="past-the-age")])
@@ -84,6 +85,6 @@ def test_a_base_file_no_version_references_vends_once_it_is_past_the_age(tmp_pat
     assert len(lance.dataset(uri).versions()) == 1, "precondition: no version is left to reclaim, only the base file the overwrite stranded"
     recorded = RecordedBase(path=directory, role=BaseRole.DATA, origin=BaseOrigin.CREATE)
 
-    probe = _probe_before_vending(uri, {}, policy=KEEP_ONE, directories=[recorded], now=datetime.now(UTC) + timedelta(days=days))
+    probe = _probe_before_vending(uri, StorageOptions(), policy=KEEP_ONE, directories=[recorded], now=datetime.now(UTC) + timedelta(days=days))
 
     assert probe.may_write is vends

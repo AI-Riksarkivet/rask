@@ -25,6 +25,7 @@ from catalog.api.v1.endpoints import data as door
 from catalog.core.config import Settings
 from catalog.services.dataplane import create_table
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 _ROWS = 10
@@ -35,7 +36,9 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     """``db$t``, ten rows, on a real ``dir`` namespace."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
-    create_table(ns, {}, ["db", "t"], pa.table({"id": pa.array(range(_ROWS), pa.int64())}), root=str(tmp_path / "data"), mode="create", registry=None)
+    create_table(
+        ns, StorageOptions(), ["db", "t"], pa.table({"id": pa.array(range(_ROWS), pa.int64())}), root=str(tmp_path / "data"), mode="create", registry=None
+    )
     return ns
 
 
@@ -49,7 +52,7 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
 
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
-    application.dependency_overrides[get_storage_options] = lambda: {}
+    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     with TestClient(application) as test_client:
         yield test_client
 

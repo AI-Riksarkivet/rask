@@ -41,6 +41,7 @@ from catalog.services.publication import (
 from catalog.services.table_claims import DoorTable
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.quality import Assertion
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -70,7 +71,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1], properties=with_minted_uuid(None)))
     # With its location's claim recording the table's uuid, as the create door takes it (ADR 0173 §2).
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=registry, holder="db$pages")
+    create_table(namespace, StorageOptions(), TABLE_ID, _table([1, 2, 3]), root=str(tmp_path), mode="create", registry=registry, holder="db$pages")
     return namespace
 
 
@@ -95,7 +96,7 @@ def _write(ns, ids: list[int | None], *, mode: str = "overwrite") -> int:  # noq
 
 
 def _publish(table: DoorTable, version: int):  # noqa: ANN202
-    return publish(table, {}, version=version, key_column="id")
+    return publish(table, StorageOptions(), version=version, key_column="id")
 
 
 def test_a_PASSING_gate_advances_the_pointer_and_names_the_range(ns, table: DoorTable) -> None:  # noqa: ANN001
@@ -107,7 +108,7 @@ def test_a_PASSING_gate_advances_the_pointer_and_names_the_range(ns, table: Door
 
     assert result.published is True
     assert (result.from_version, result.to_version) == (None, version)
-    assert published_version(table, {}) == version
+    assert published_version(table, StorageOptions()) == version
 
 
 def test_a_FAILING_gate_leaves_CONSUMERS_ON_LAST_GOOD(ns, table: DoorTable) -> None:  # noqa: ANN001
@@ -127,7 +128,7 @@ def test_a_FAILING_gate_leaves_CONSUMERS_ON_LAST_GOOD(ns, table: DoorTable) -> N
     assert result.reason is not None and "not_null" in result.reason
     assert result.to_version == bad, "the rejected version is still NAMED — a blocked batch must be auditable"
 
-    assert published_version(table, {}) == good
+    assert published_version(table, StorageOptions()) == good
 
     # The rejected version is committed and visible to anyone NOT using the pointer, which is exactly
     # why the pointer has to exist: Lance cannot hide it.
@@ -158,7 +159,7 @@ def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.Mon
     # and it would keep passing the day the gate grows one.
     def observing(
         uri: str,
-        storage_options: dict[str, str],
+        storage_options: StorageOptions,
         *,
         key_column: str,
         required_columns: tuple[str, ...] | list[str] = (),
@@ -168,7 +169,7 @@ def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.Mon
         # parameters keeps passing on the day the gate grows one, which is the whole point of this shape.
         session: object | None = None,
     ) -> list[Assertion]:
-        tags = publication.dataplane.list_tags(table, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
+        tags = publication.dataplane.list_tags(table, StorageOptions(), ListTableTagsRequest(id=TABLE_ID)).tags or {}
         entry = tags.get(PUBLISHING_TAG)
         seen.append(getattr(entry, "version", None) if entry is not None else None)
         return real(uri, storage_options, key_column=key_column, required_columns=required_columns, version=version)
@@ -178,7 +179,7 @@ def test_the_candidate_is_PINNED_while_the_gate_runs(ns, monkeypatch: pytest.Mon
 
     assert seen == [version], f"the candidate was not pinned while the gate ran: {seen}"
 
-    after = publication.dataplane.list_tags(table, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
+    after = publication.dataplane.list_tags(table, StorageOptions(), ListTableTagsRequest(id=TABLE_ID)).tags or {}
     assert PUBLISHING_TAG not in after, "the pin outlived the publish — that version can never be collected"
     assert PUBLISHED_TAG in after
 
@@ -192,7 +193,7 @@ def test_the_pin_is_dropped_even_when_the_gate_REJECTS(ns, table: DoorTable) -> 
     assert result.published is False
     import catalog.services.publication as publication
 
-    tags = publication.dataplane.list_tags(table, {}, ListTableTagsRequest(id=TABLE_ID)).tags or {}
+    tags = publication.dataplane.list_tags(table, StorageOptions(), ListTableTagsRequest(id=TABLE_ID)).tags or {}
     assert PUBLISHING_TAG not in tags
 
 
@@ -206,7 +207,7 @@ def test_a_SECOND_publication_carries_the_PREVIOUS_version_as_from(ns, table: Do
     result = _publish(table, second)
 
     assert (result.from_version, result.to_version) == (first, second)
-    assert published_version(table, {}) == second
+    assert published_version(table, StorageOptions()) == second
 
 
 def test_publishing_BACKWARDS_is_refused(ns, table: DoorTable) -> None:  # noqa: ANN001
@@ -219,7 +220,7 @@ def test_publishing_BACKWARDS_is_refused(ns, table: DoorTable) -> None:  # noqa:
     with pytest.raises(InvalidTableStateError, match="backwards"):
         _publish(table, first)
 
-    assert published_version(table, {}) == second
+    assert published_version(table, StorageOptions()) == second
 
 
 def test_a_published_tag_on_a_branch_is_refused_rather_than_read_as_main(ns, table: DoorTable) -> None:  # noqa: ANN001
@@ -303,7 +304,7 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
         PublishRequest(version=good, key_column="id"),
         table,
         settings,
-        {},
+        StorageOptions(),
         _Emitter(),
         _Tenant(),
         uuids=NO_OBJECT_UUIDS,
@@ -318,7 +319,7 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
         PublishRequest(version=bad, key_column="id"),
         table,
         settings,
-        {},
+        StorageOptions(),
         _Emitter(),
         _Tenant(),
         uuids=NO_OBJECT_UUIDS,
@@ -349,11 +350,11 @@ def test_the_gate_scans_the_version_being_PUBLISHED_not_latest(ns, table: DoorTa
     dirty = _write(ns, [1, None, 3])
     clean = _write(ns, [4, 5, 6])
 
-    refused = publication.publish(table, {}, version=dirty, key_column="id")
+    refused = publication.publish(table, StorageOptions(), version=dirty, key_column="id")
     assert refused.published is False, "a dirty version was published because latest happened to be clean"
     assert "not_null" in (refused.reason or "")
 
-    ok = publication.publish(table, {}, version=clean, key_column="id")
+    ok = publication.publish(table, StorageOptions(), version=clean, key_column="id")
     assert ok.published is True
     assert ok.to_version == clean
 
@@ -376,8 +377,8 @@ def test_a_REPUBLISH_at_the_same_version_announces_nothing(ns, table: DoorTable)
     """
     first = _write(ns, [1, 2, 3])
 
-    r1 = publish(table, {}, version=first, key_column="id")
-    r2 = publish(table, {}, version=first, key_column="id")
+    r1 = publish(table, StorageOptions(), version=first, key_column="id")
+    r2 = publish(table, StorageOptions(), version=first, key_column="id")
 
     assert r1.published is True and r1.advanced is True
     assert r2.published is True, "the version IS published; re-asking is not an error"

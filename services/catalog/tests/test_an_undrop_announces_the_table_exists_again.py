@@ -35,6 +35,7 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 pytest.importorskip("lance")
@@ -68,7 +69,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
     registry = BaseRegistry(control_root=str(control), storage_options={})
     for table_id in TABLES:
         rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-        create_table(ns, {}, table_id, rows, root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
+        create_table(ns, StorageOptions(), table_id, rows, root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
 
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
@@ -76,7 +77,9 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
         application.include_router(door.router)
         application.include_router(door.management_router)
     control.mkdir(exist_ok=True)
-    settings = SimpleNamespace(registry_root=str(control), storage_options=lambda **_: {}, trash_grace_days=7, fga_enabled=False, warehouses_enabled=False)
+    settings = SimpleNamespace(
+        registry_root=str(control), storage_options=lambda **_: StorageOptions(), trash_grace_days=7, fga_enabled=False, warehouses_enabled=False
+    )
     for dependency, value in (
         (SettingsDep, settings),
         (NamespaceDep, ns),

@@ -55,6 +55,7 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.governed.signing_key import signing_key_name
 from service_kit.lakehouse import location_claims, outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 #: The catalog's own service account, whose principal it signs as on the estate (`lance.saSubject`).
@@ -178,7 +179,7 @@ def boot(tmp_path: Path, control_outbox: str, two_stores: Any, monkeypatch: pyte
             respx.get(f"{SECRETS}/commit-id-key").mock(return_value=httpx.Response(200, json={"key": "ab" * 32}))
             namespace = connect("dir", {"root": str(tmp_path / "warehouse")})
             main.app.dependency_overrides[get_namespace] = lambda: namespace
-            main.app.dependency_overrides[get_storage_options] = lambda: {}
+            main.app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
             main.app.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: token
             stack.callback(main.app.dependency_overrides.clear)
             return stack.enter_context(TestClient(main.app))
@@ -300,6 +301,6 @@ def test_a_catalog_without_its_key_takes_only_the_writes_it_never_announces(
     assert (written.status_code, written.json().get("code") if written.status_code != 200 else None) == answer, written.text
     assert _version(tmp_path / "warehouse", table) == version
     assert _Sidecar.published == [], f"a catalog without its key announced {len(_Sidecar.published)} events"
-    staged = [json.loads(body)["action"] for _key, body in outbox.list_events(control_outbox, {})]
+    staged = [json.loads(body)["action"] for _key, body in outbox.list_events(control_outbox, StorageOptions())]
     assert staged == [], f"a catalog without its key staged {staged} unsigned, and a staged object proves nothing about who wrote it"
     assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["namespace", "signing"])

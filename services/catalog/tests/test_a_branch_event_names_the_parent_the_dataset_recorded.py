@@ -47,6 +47,7 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -73,7 +74,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     # With its location's claim recording the table's uuid on the control root, as the create door takes it: the
     # event names the table by that uuid (ADR 0173 §8).
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    created = create_table(namespace, {}, TABLE, _table(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder=TABLE_PATH)
+    created = create_table(namespace, StorageOptions(), TABLE, _table(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder=TABLE_PATH)
     # A SECOND VERSION, so "the parent is main's current version" is a number the request could not
     # have guessed and a null could not stand in for. With one version, 1 and "unset" are too close
     # to tell apart in a failure message.
@@ -92,10 +93,10 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(branch_door.router)
 
-    settings = SimpleNamespace(storage_options=lambda: {}, fga_enabled=False, registry_root=str(tmp_path / "control"))
+    settings = SimpleNamespace(storage_options=lambda: StorageOptions(), fga_enabled=False, registry_root=str(tmp_path / "control"))
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
-    application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}
+    application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: StorageOptions()
     application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: _CALLER
     application.dependency_overrides[ControlEmitterDep.__metadata__[0].dependency] = lambda: None
 

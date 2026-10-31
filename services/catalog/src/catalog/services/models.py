@@ -34,7 +34,7 @@ from lance_namespace import (
 
 from catalog.core.config import shared_lance_session
 from catalog.services import dataplane
-from service_kit.lakehouse.objectfs import fs_and_base
+from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 
 
 log = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ def _reject_nonfinite(token: str) -> float:
     raise ValueError(f"non-finite JSON constant {token!r} in model metadata")
 
 
-def _open(model_uri: str, storage_options: dict[str, str], *, version: int | None = None) -> lance.LanceDataset:
+def _open(model_uri: str, storage_options: StorageOptions, *, version: int | None = None) -> lance.LanceDataset:
     """Open the registry Lance dataset by explicit URI (missing → 404, bad version → 404, store outage → 503).
 
     A store outage (connection refused, an S3 timeout) is NOT a missing model: collapsing it to 404 reports
@@ -60,7 +60,7 @@ def _open(model_uri: str, storage_options: dict[str, str], *, version: int | Non
     subclass, so it must be caught on the 404 arm first.
     """
     try:
-        return lance.dataset(model_uri, storage_options=storage_options, version=version, session=shared_lance_session())
+        return lance.dataset(model_uri, storage_options=storage_options.in_clear(), version=version, session=shared_lance_session())
     except (ValueError, FileNotFoundError) as exc:
         if version is not None:
             raise TableVersionNotFoundError(f"model version {version} not found") from exc
@@ -69,7 +69,7 @@ def _open(model_uri: str, storage_options: dict[str, str], *, version: int | Non
         raise ServiceUnavailableError(f"model registry storage is unavailable: {exc}") from exc
 
 
-def metrics_at(model_uri: str, storage_options: dict[str, str], version: int) -> dict[str, Any]:
+def metrics_at(model_uri: str, storage_options: StorageOptions, version: int) -> dict[str, Any]:
     """The training metrics recorded for model version ``version`` (``meta['metrics']``).
 
     The registry appends each publish's rows, so at Lance version N the rows added LAST are version N's
@@ -93,7 +93,7 @@ def metrics_at(model_uri: str, storage_options: dict[str, str], version: int) ->
     return metrics
 
 
-def _safe_metrics(model_uri: str, storage_options: dict[str, str], version: int) -> dict[str, Any] | None:
+def _safe_metrics(model_uri: str, storage_options: StorageOptions, version: int) -> dict[str, Any] | None:
     """``metrics_at`` for the describe read path: a version with no / unreadable metrics returns ``None``
     (metrics: null) rather than failing the whole describe — describe is a report, not the gate."""
     try:
@@ -127,12 +127,12 @@ def _main_version_of_tag(ds: lance.LanceDataset, tag: str) -> int | None:
     return dataplane.main_version_of_tag(ds, tag, remedy="promote a version to move it there")
 
 
-def blessed_version(model_uri: str, storage_options: dict[str, str], *, tag: str = BLESSED_TAG) -> int | None:
+def blessed_version(model_uri: str, storage_options: StorageOptions, *, tag: str = BLESSED_TAG) -> int | None:
     """The version the ``blessed`` tag points at, or ``None`` if no version is blessed yet."""
     return _main_version_of_tag(_open(model_uri, storage_options), tag)
 
 
-def describe(model_uri: str, storage_options: dict[str, str], *, tag: str = BLESSED_TAG) -> dict[str, Any]:
+def describe(model_uri: str, storage_options: StorageOptions, *, tag: str = BLESSED_TAG) -> dict[str, Any]:
     """Registry summary: the latest (candidate) version, the blessed version (or None), and both metrics."""
     ds = _open(model_uri, storage_options)  # proves the registry exists (404 otherwise)
     latest = int(ds.version)
@@ -145,7 +145,7 @@ def describe(model_uri: str, storage_options: dict[str, str], *, tag: str = BLES
     }
 
 
-def summarize(model_uri: str, storage_options: dict[str, str], *, tag: str = BLESSED_TAG) -> dict[str, Any]:
+def summarize(model_uri: str, storage_options: StorageOptions, *, tag: str = BLESSED_TAG) -> dict[str, Any]:
     """The list-view summary — latest (candidate) + blessed versions only, no metric reads.
 
     Deliberately lighter than :func:`describe`: metrics live in each version's ``meta`` rows, so reading
@@ -164,7 +164,7 @@ def summarize(model_uri: str, storage_options: dict[str, str], *, tag: str = BLE
     return {"latest_version": int(ds.version), "blessed_version": blessed}
 
 
-def list_models(models_root: str, storage_options: dict[str, str]) -> list[str]:
+def list_models(models_root: str, storage_options: StorageOptions) -> list[str]:
     """Every model name under the registry root (one Lance dataset directory per model), sorted.
 
     A pure storage LIST (no dataset opens) — the caller filters names (shape + authz) before paying for
@@ -175,7 +175,7 @@ def list_models(models_root: str, storage_options: dict[str, str]) -> list[str]:
     return sorted(info.base_name for info in infos if info.type == pafs.FileType.Directory)
 
 
-def list_artifacts(artifacts_uri: str, storage_options: dict[str, str]) -> list[dict[str, Any]]:
+def list_artifacts(artifacts_uri: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
     """Every artifact object under one model's plain-path tree (``<artifacts_root>/<model>/<token>/…``,
     the #17/#92 layout), sorted by path.
 
@@ -199,7 +199,7 @@ def list_artifacts(artifacts_uri: str, storage_options: dict[str, str]) -> list[
 
 def promote(
     model_uri: str,
-    storage_options: dict[str, str],
+    storage_options: StorageOptions,
     *,
     version: int,
     min_metrics: dict[str, float] | None = None,

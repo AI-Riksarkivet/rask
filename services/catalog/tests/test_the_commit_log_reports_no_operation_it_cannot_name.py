@@ -33,6 +33,7 @@ import pytest
 from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 @pytest.fixture
@@ -51,7 +52,7 @@ def compacted(tmp_path: Path) -> DoorTable:
 
 
 def _history(table: DoorTable) -> dict[int, Any]:
-    rows = dataplane.table_history(table, cast(Any, {}))
+    rows = dataplane.table_history(table, StorageOptions())
     return {int(row["version"]): row["operation"] for row in rows}
 
 

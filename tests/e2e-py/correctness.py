@@ -49,6 +49,7 @@ from pydantic import BaseModel, ConfigDict
 
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.naming import uuid_of
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.openlineage import event_identity
 
 
@@ -260,17 +261,19 @@ def settled_outbox_depth(reader: Identity, *, within: float = scenario.SETTLE_SE
     return _settled(lambda: int(scenario.ok(reader.http.get(f"{scenario.LINEAGE}/admin/dlq", params={"limit": 1}, timeout=30))["depth"]), within)
 
 
-def store_options() -> dict[str, str]:
+def store_options() -> StorageOptions:
     """The store's own pair, as a client outside the catalog's doors reaches the store: the outbox reader, a pipeline."""
     assert STORE and STORE_KEY and STORE_SECRET, "set LANCE_E2E_S3, LANCE_E2E_S3_ACCESS_KEY and LANCE_E2E_S3_SECRET_KEY: this reads or writes the store itself"
-    return {
-        "endpoint": STORE,
-        "access_key_id": STORE_KEY,
-        "secret_access_key": STORE_SECRET,
-        "region": "us-east-1",
-        "allow_http": str(STORE.startswith("http://")).lower(),
-        "virtual_hosted_style_request": "false",
-    }
+    return StorageOptions.from_flat(
+        {
+            "endpoint": STORE,
+            "access_key_id": STORE_KEY,
+            "secret_access_key": STORE_SECRET,
+            "region": "us-east-1",
+            "allow_http": str(STORE.startswith("http://")).lower(),
+            "virtual_hosted_style_request": "false",
+        }
+    )
 
 
 def settled_control_outbox_depth(*, within: float = scenario.SETTLE_SECONDS) -> int:

@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from catalog.services import warehouses
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.records import RecordChangedError, RecordMissingError
 
 
@@ -45,7 +46,7 @@ def _seed(control_root: str, **overrides: str) -> dict[str, str]:
         "status": "active",
         "created_at": "t0",
     } | overrides
-    warehouses.put_warehouse(control_root, {}, record)
+    warehouses.put_warehouse(control_root, StorageOptions(), record)
     return record
 
 
@@ -67,7 +68,7 @@ def test_a_deactivate_that_lands_INSIDE_the_write_window_is_not_overwritten(cont
     real_replace = rec._replace_json
     fired = {"n": 0}
 
-    def racing_replace(root: str, so: dict, key: str, record: dict, *, etag: str) -> None:
+    def racing_replace(root: str, so: StorageOptions, key: str, record: dict, *, etag: str) -> None:
         if fired["n"] == 0:
             fired["n"] = 1
             # t1 — the operator quarantines the warehouse, in the window this request opened.
@@ -78,13 +79,13 @@ def test_a_deactivate_that_lands_INSIDE_the_write_window_is_not_overwritten(cont
 
     written = warehouses.upsert_warehouse(
         control_root,
-        {},
+        StorageOptions(),
         {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "created_at": "t2"},
     )
 
     assert fired["n"] == 1, "the conditional write seam was never reached — the race was not exercised"
     assert written["status"] == "deactivated", "the re-create lifted a quarantine nobody asked to lift"
-    live = warehouses.get_warehouse(control_root, {}, "acme-wh")
+    live = warehouses.get_warehouse(control_root, StorageOptions(), "acme-wh")
     assert live is not None
     assert live["status"] == "deactivated"
     # created_at is the RECORD's, never the re-POST's: a re-create must not reset the age either.
@@ -102,13 +103,13 @@ def test_the_same_hazard_on_protected_and_serving(control_root: str) -> None:
 
     # An operator arms protection and designates the warehouse gold AFTER the re-POST's read.
     armed = warehouses.upsert_warehouse(
-        control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, serving="gold", protect=True
+        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, serving="gold", protect=True
     )
     assert armed["protected"] == "true"
     assert armed["serving"] == "gold"
 
     # A later re-POST that names NEITHER must not disarm or demote — a request may arm, never disarm.
-    plain = warehouses.upsert_warehouse(control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"})
+    plain = warehouses.upsert_warehouse(control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"})
     assert plain["protected"] == "true", "a re-create disarmed deletion protection"
     assert plain["serving"] == "gold", "a re-create demoted a gold warehouse to a work warehouse"
 
@@ -121,7 +122,7 @@ def test_a_record_that_vanished_is_a_conflict_not_a_resurrection(control_root: s
     had just deleted.
     """
     with pytest.raises(RecordMissingError):
-        warehouses.upsert_warehouse(control_root, {}, {"id": "gone", "bucket": "b", "root_uri": "s3://b", "project": "acme"})
+        warehouses.upsert_warehouse(control_root, StorageOptions(), {"id": "gone", "bucket": "b", "root_uri": "s3://b", "project": "acme"})
 
 
 def test_sustained_contention_surfaces_as_an_error_rather_than_a_silent_last_write(control_root: str) -> None:
@@ -133,11 +134,11 @@ def test_sustained_contention_surfaces_as_an_error_rather_than_a_silent_last_wri
     def always_moves(record: dict[str, str]) -> dict[str, str]:
         # Write a different record behind our own back on every attempt, so the ETag never matches.
         calls["n"] += 1
-        warehouses.put_warehouse(control_root, {}, {**record, "bucket": f"moved-{calls['n']}"})
+        warehouses.put_warehouse(control_root, StorageOptions(), {**record, "bucket": f"moved-{calls['n']}"})
         return {**record, "status": "active"}
 
     with pytest.raises(RecordChangedError):
-        warehouses.mutate_json(control_root, {}, "_warehouses/acme-wh.json", always_moves, attempts=3)
+        warehouses.mutate_json(control_root, StorageOptions(), "_warehouses/acme-wh.json", always_moves, attempts=3)
     assert calls["n"] == 3, "the retry bound is not being honoured"
 
 
@@ -150,7 +151,7 @@ def _seed_project(control_root: str, **overrides: str) -> dict[str, str]:
     from catalog.services import projects
 
     record = {"id": "acme", "created_at": "t0", "created_by": "user:anna", "protected": "false"} | overrides
-    projects.put_project(control_root, {}, record)
+    projects.put_project(control_root, StorageOptions(), record)
     return record
 
 
@@ -173,7 +174,7 @@ def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: 
     real_replace = rec._replace_json
     fired = {"n": 0}
 
-    def racing_replace(root: str, so: dict, key: str, record: dict, *, etag: str) -> None:
+    def racing_replace(root: str, so: StorageOptions, key: str, record: dict, *, etag: str) -> None:
         if fired["n"] == 0:
             fired["n"] = 1
             # An admin arms deletion protection, inside the window this request opened.
@@ -182,11 +183,11 @@ def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: 
 
     monkeypatch.setattr(rec, "_replace_json", racing_replace)
 
-    written = projects.upsert_project(control_root, {}, {"id": "acme", "created_at": "t2", "created_by": "user:bob"})
+    written = projects.upsert_project(control_root, StorageOptions(), {"id": "acme", "created_at": "t2", "created_by": "user:bob"})
 
     assert fired["n"] == 1, "the conditional write seam was never reached — the race was not exercised"
     assert written["protected"] == "true", "the re-POST disarmed deletion protection nobody asked to disarm"
-    live = projects.get_project(control_root, {}, "acme")
+    live = projects.get_project(control_root, StorageOptions(), "acme")
     assert live is not None
     assert live["protected"] == "true"
     # Identity belongs to the ORIGINAL create — a re-POST never resets a tenant's age or author.
@@ -198,7 +199,7 @@ def test_a_project_that_vanished_is_a_conflict_not_a_resurrection(control_root: 
     from catalog.services import projects
 
     with pytest.raises(RecordMissingError):
-        projects.upsert_project(control_root, {}, {"id": "gone", "created_at": "t", "created_by": "user:x"})
+        projects.upsert_project(control_root, StorageOptions(), {"id": "gone", "created_at": "t", "created_by": "user:x"})
 
 
 def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_root: str) -> None:
@@ -216,10 +217,12 @@ def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_roo
     """
     _seed(control_root)
 
-    armed = warehouses.upsert_warehouse(control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, primary=True)
+    armed = warehouses.upsert_warehouse(
+        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, primary=True
+    )
     assert armed.get("primary") == "true", f"the primary marker did not survive the conditional write: {armed}"
 
     # A later re-POST naming neither must carry it forward — same rule as serving/protected. A GitOps
     # re-apply that silently demoted the primary would stop the tenant's cascade, not misroute it.
-    plain = warehouses.upsert_warehouse(control_root, {}, {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"})
+    plain = warehouses.upsert_warehouse(control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"})
     assert plain.get("primary") == "true", f"a plain re-POST demoted the primary warehouse: {plain}"

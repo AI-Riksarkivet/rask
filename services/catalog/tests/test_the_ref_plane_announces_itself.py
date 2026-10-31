@@ -51,6 +51,7 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -77,7 +78,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": root})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1], properties=with_minted_uuid(None)))
     registry = BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    create_table(namespace, {}, TABLE, _table(), root=root, mode="create", registry=registry, holder=TABLE_PATH)
+    create_table(namespace, StorageOptions(), TABLE, _table(), root=root, mode="create", registry=registry, holder=TABLE_PATH)
     return namespace
 
 
@@ -95,10 +96,10 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
 
     # `registry_root` is not decoration: every ref door resolves the table's claim and holds its history fence on the
     # control root ([[LH-308]]), and a double without it fails inside the handler rather than at the assertion.
-    settings = SimpleNamespace(storage_options=lambda: {}, fga_enabled=False, registry_root=str(tmp_path / "control"))
+    settings = SimpleNamespace(storage_options=lambda: StorageOptions(), fga_enabled=False, registry_root=str(tmp_path / "control"))
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
-    application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: {}
+    application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: StorageOptions()
     application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: _CALLER
     application.dependency_overrides[ControlEmitterDep.__metadata__[0].dependency] = lambda: None
 

@@ -453,7 +453,7 @@ class Scene:
         relative = f"{self.namespace}-outside/{name}"
         rows = scenario.rows_of(range(3))
         lance.write_dataset(
-            rows, f"s3://{bucket}/{relative}", storage_options=correctness.store_options(), data_storage_version="2.2", enable_stable_row_ids=True
+            rows, f"s3://{bucket}/{relative}", storage_options=correctness.store_options().in_clear(), data_storage_version="2.2", enable_stable_row_ids=True
         )
         return relative
 

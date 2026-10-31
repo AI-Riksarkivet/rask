@@ -34,6 +34,7 @@ from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, protection
 from service_kit.lakehouse.naming import UUID_PROPERTY
+from service_kit.lakehouse.objectfs import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -213,7 +214,7 @@ def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
             emitter=_NoopLineage(),
             control=NoopControlEmitter(),
             token=None,
-            so={},
+            so=StorageOptions(),
             authorization=None,
             force=force,
             uuids=NO_OBJECT_UUIDS,
@@ -260,7 +261,7 @@ def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
                 emitter=_NoopLineage(),
                 control=NoopControlEmitter(),
                 token=None,
-                so={},
+                so=StorageOptions(),
                 authorization=None,
                 uuids=NO_OBJECT_UUIDS,
             )
@@ -401,7 +402,7 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
             emitter=_NoopLineage(),
             control=NoopControlEmitter(),
             token=None,
-            so={},
+            so=StorageOptions(),
             authorization=None,
             force=False,
             purge=True,

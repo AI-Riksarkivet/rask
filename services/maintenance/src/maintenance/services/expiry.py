@@ -33,6 +33,7 @@ from service_kit.lakehouse.features import (
     unsupported_features_from_open_error,
 )
 from service_kit.lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.stored_objects import delete_objects, list_under
 from service_kit.lakehouse.version_retention import Retention, reclaimable_versions
 from service_kit.openlineage import DatasetUuids
@@ -141,7 +142,7 @@ class ExpiryTarget(BaseModel):
 
     uri: str
     #: The credential the pass signs with: vended and table-scoped where the catalog offers one.
-    storage_options: dict[str, str]
+    storage_options: StorageOptions
     #: The whole-estate base references this tick's pre-pass took.
     protected: BaseRefs = Field(default_factory=BaseRefs)
     #: The id the caller resolved, and vended the credential under.
@@ -303,7 +304,7 @@ def _open(target: ExpiryTarget) -> _Opened | DatasetResult:
     and the lineage layer drops it.
     """
     try:
-        ds = lance.dataset(target.uri, storage_options=target.storage_options, session=shared_lance_session())
+        ds = lance.dataset(target.uri, storage_options=target.storage_options.in_clear(), session=shared_lance_session())
         reader_flags, writer_flags = manifest_feature_flags(ds)
         return _Opened(
             ds=ds,
@@ -340,7 +341,7 @@ _STAGED_MANIFEST: Final = re.compile(r"^(?P<inverted>\d{20})\.manifest-[0-9a-f]{
 _U64_MAX: Final = (1 << 64) - 1
 
 
-def _staged_manifests(uri: str, storage_options: dict[str, str]) -> list[tuple[str, int, datetime]]:
+def _staged_manifests(uri: str, storage_options: StorageOptions) -> list[tuple[str, int, datetime]]:
     """Each manifest staged under the ref's ``_versions/``: its store path, the version it was staged for, when it was put."""
     staged: list[tuple[str, int, datetime]] = []
     for listed in list_under(f"{uri.rstrip('/')}/_versions", storage_options):

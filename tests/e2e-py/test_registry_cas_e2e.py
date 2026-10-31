@@ -22,6 +22,7 @@ import pytest
 from botocore.exceptions import BotoCoreError, ClientError
 
 from service_kit.lakehouse import records
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
@@ -32,12 +33,14 @@ PREFIX = "__cas_stress/registry"
 
 pytestmark = [pytest.mark.e2e, pytest.mark.cas]
 
-_SO = {
-    "endpoint": ENDPOINT,
-    "access_key_id": ACCESS_KEY,
-    "secret_access_key": SECRET_KEY,
-    "region": "us-east-1",
-}
+_SO = StorageOptions.from_flat(
+    {
+        "endpoint": ENDPOINT,
+        "access_key_id": ACCESS_KEY,
+        "secret_access_key": SECRET_KEY,
+        "region": "us-east-1",
+    }
+)
 
 
 @pytest.fixture(scope="module")

@@ -24,6 +24,7 @@ import pyarrow as pa
 from pydantic import BaseModel, model_validator
 
 from service_kit.lakehouse import blobs
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.stage_stamp import SOURCE_ROWID_COLUMN
 
 
@@ -114,7 +115,7 @@ class Assertion(BaseModel):
 
 def assert_quality(
     uri: str,
-    storage_options: dict[str, str],
+    storage_options: StorageOptions,
     *,
     key_column: str,
     required_columns: tuple[str, ...] | list[str] = (),
@@ -142,7 +143,7 @@ def assert_quality(
     The tabular checks use ``count_rows`` (with a filter for the null check) so the table is never
     materialised; the blob check reads ONE byte from the first and last rows' payloads per column.
     """
-    ds = lance.dataset(uri, version=version, storage_options=storage_options, session=session)
+    ds = lance.dataset(uri, version=version, storage_options=storage_options.in_clear(), session=session)
     assertions = [Assertion(assertion=ROW_COUNT_POSITIVE, success=ds.count_rows() > 0)]
     if key_column and key_column in ds.schema.names:
         nulls = ds.count_rows(f"{key_column} IS NULL")

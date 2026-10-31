@@ -17,13 +17,14 @@ import pytest
 from lance_namespace import InvalidInputError
 
 from catalog.services import dataplane
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _table() -> pa.Table:
     return pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
-_SO = {"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"}
+_SO = StorageOptions.from_flat({"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"})
 
 
 def _capture_write() -> tuple[dict[str, Any], Any]:
@@ -116,7 +117,7 @@ def test_the_vend_door_reads_a_real_multibase_manifest_and_decides_on_its_bases(
 
     single = str(tmp_path / "single")
     lance.write_dataset(_table(), single, data_storage_version="2.2")
-    facts = dataset_facts(single, {})
+    facts = dataset_facts(single, StorageOptions())
     assert facts.read_version >= 1 and facts.base_uris == (), f"a single-location table declared bases: {facts.base_uris}"
     assert unsanctioned_bases(single, facts.base_uris) == ()
 
@@ -129,7 +130,7 @@ def test_the_vend_door_reads_a_real_multibase_manifest_and_decides_on_its_bases(
         target_bases=["b1"],
         data_storage_version="2.2",
     )
-    mb_bases = dataset_facts(mb, {}).base_uris
+    mb_bases = dataset_facts(mb, StorageOptions()).base_uris
     assert mb_bases, "the registered base is absent from the manifest read, so the policy would be scoped to less than the table"
 
     # Nobody sanctioned it → the door must proxy, exactly as it always did for this shape.

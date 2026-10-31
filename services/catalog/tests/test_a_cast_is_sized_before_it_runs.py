@@ -18,6 +18,7 @@ from catalog.services import table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.dataplane import coerce_insert_arrow, create_table
 from service_kit.lakehouse.location_claims import ClaimStore
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
@@ -80,7 +81,7 @@ def test_the_coerced_body_is_held_to_the_cap_where_the_estimate_leaves_off(tmp_p
     branch arm, which reads the coerced body again, would refuse what main accepts."""
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
-    create_table(ns, {}, ["db", "w"], pa.table({"id": pa.array([0], pa.int64())}), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "w"], pa.table({"id": pa.array([0], pa.int64())}), root=str(tmp_path), mode="create", registry=None)
     rows = pa.table({"id": pa.array(range(100), pa.int32())})
     body, estimate = encode_arrow_stream(rows), bytes_after_cast(rows.column("id"), pa.int64())
     encoded = len(encode_arrow_stream(rows.cast(pa.schema([("id", pa.int64())]))))
@@ -90,4 +91,4 @@ def test_the_coerced_body_is_held_to_the_cap_where_the_estimate_leaves_off(tmp_p
     table = table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "w"])
 
     with pytest.raises(InvalidInputError, match="as the table's column types"):
-        coerce_insert_arrow(table, {}, body, max_bytes=cap)
+        coerce_insert_arrow(table, StorageOptions(), body, max_bytes=cap)

@@ -50,7 +50,7 @@ class _Estate:
         self.bucket = bucket
         self.corpus = corpus
         #: The estate key a writer's write vend stands in for.
-        self.key = lance_storage_options(url, "test", "test", "us-east-1")
+        self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         self.victim = f"s3://{bucket}/models/victim/tok/weights.bin"
         self.policies: list[dict[str, Any]] = []
@@ -157,16 +157,16 @@ def test_a_derived_tier_takes_its_upstreams_carried_pointers(estate: _Estate) ->
     bronze = estate.create("db$bronze", rows.schema.empty_table(), base)
     assert bronze.status_code == 200, bronze.text
     bronze_uri = str(bronze.json()["location"])
-    lance.write_dataset(rows, bronze_uri, mode="append", storage_options=estate.key)
+    lance.write_dataset(rows, bronze_uri, mode="append", storage_options=estate.key.in_clear())
 
     silver = estate.create("db$silver", rows.schema.empty_table(), base)
     assert silver.status_code == 200, silver.text
     silver_uri = str(silver.json()["location"])
 
-    [descriptor] = lance.dataset(bronze_uri, storage_options=estate.key).to_table(columns=["payload"]).column("payload").to_pylist()
+    [descriptor] = lance.dataset(bronze_uri, storage_options=estate.key.in_clear()).to_table(columns=["payload"]).column("payload").to_pylist()
     carried = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([blobs.carry_external_descriptor(descriptor, base)])})
-    lance.dataset(silver_uri, storage_options=estate.key).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(carried)
-    assert [payload for _, payload in lance.dataset(silver_uri, storage_options=estate.key).read_blobs("payload", indices=[0])] == [b"PAGE-ONE"]
+    lance.dataset(silver_uri, storage_options=estate.key.in_clear()).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(carried)
+    assert [payload for _, payload in lance.dataset(silver_uri, storage_options=estate.key.in_clear()).read_blobs("payload", indices=[0])] == [b"PAGE-ONE"]
 
 
 def test_a_base_over_the_model_tree_is_sanctioned_by_nothing_but_a_record(estate: _Estate) -> None:
@@ -176,11 +176,16 @@ def test_a_base_over_the_model_tree_is_sanctioned_by_nothing_but_a_record(estate
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     planted = lance.DatasetBasePath(f"s3://{estate.bucket}/models/victim/", name="planted", is_dataset_root=False)
-    lance.dataset(location, storage_options=estate.key).add_bases([planted])
+    lance.dataset(location, storage_options=estate.key.in_clear()).add_bases([planted])
     stolen = pa.table({"id": pa.array([2], pa.int64()), "payload": blob_array([Blob.from_uri(estate.victim)])})
-    lance.write_dataset(stolen, location, mode="append", storage_options=estate.key)
+    lance.write_dataset(stolen, location, mode="append", storage_options=estate.key.in_clear())
     lance.write_dataset(
-        stolen, f"s3://{estate.bucket}/registered", initial_bases=[planted], storage_options=estate.key, data_storage_version="2.2", enable_stable_row_ids=True
+        stolen,
+        f"s3://{estate.bucket}/registered",
+        initial_bases=[planted],
+        storage_options=estate.key.in_clear(),
+        data_storage_version="2.2",
+        enable_stable_row_ids=True,
     )
 
     served = estate.client.get("/management/v1/table/db$plant/blobs", params={"column": "payload", "row": 1})

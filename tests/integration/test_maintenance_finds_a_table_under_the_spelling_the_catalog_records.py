@@ -38,10 +38,12 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import objects_held, purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import base_registry, maintenance_policies, trash
 from service_kit.lakehouse.objectfs import dataset_root_probe, lance_storage_options
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
@@ -62,7 +64,7 @@ class _Estate:
         self.client = client
         self.bucket = bucket
         self.root = f"s3://{bucket}"
-        self.key = lance_storage_options(url, "test", "test", "us-east-1")
+        self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
         #: The uuid each table's maintenance policy is kept under, as the policy door answered it (ADR 0173 §8).
         self.policy_uuids: dict[str, str] = {}
@@ -88,7 +90,9 @@ class _Estate:
 
     def registered(self, table: str, name: str) -> str:
         """A dataset written at the key ``spelled/<name>``, registered as ``table`` by that raw name; the location described."""
-        lance.write_dataset(_ROWS, f"{self.root}/spelled/{quote(name)}", storage_options=self.key, data_storage_version="2.2", enable_stable_row_ids=True)
+        lance.write_dataset(
+            _ROWS, f"{self.root}/spelled/{quote(name)}", storage_options=self.key.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True
+        )
         assert self.client.post(f"/v1/table/{quote(table, safe='$')}/register", json={"location": f"spelled/{name}"}).status_code == 200
         return str(json.loads(self.door(table, "describe"))["location"])
 

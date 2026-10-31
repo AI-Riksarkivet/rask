@@ -27,6 +27,7 @@ from typing import Any, cast
 
 import pytest
 
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.openlineage import DatasetUuids
 
 
@@ -80,7 +81,7 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
                 cast(Any, recorder),
                 ["db", "t"],
                 location="s3://bucket/abc12345_db$t",
-                so={},
+                so=StorageOptions(),
                 token=None,
                 operation="insert",
                 authorization=None,
@@ -117,7 +118,7 @@ def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri() -> None:
                 cast(Any, recorder),
                 ["db", "t"],
                 location="s3://bucket/abc12345_db$t",
-                so={},
+                so=StorageOptions(),
                 token=None,
                 operation="insert",
                 authorization=None,

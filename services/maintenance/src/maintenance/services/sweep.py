@@ -64,7 +64,7 @@ from service_kit.lakehouse.features import flags_from_open_error, manifest_base_
 from service_kit.lakehouse.history_fences import TableHistory
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
 from service_kit.lakehouse.maintenance_due import CloneList, DueRecord, delete_due, list_due, write_clone_list
-from service_kit.lakehouse.objectfs import s3_filesystem
+from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.openlineage import DatasetUuids
 
 
@@ -112,7 +112,7 @@ def _discover_all(fs: pafs.FileSystem, buckets: list[str], *, max_depth: int) ->
     return uris
 
 
-def _trash_exclusions(settings: MaintenanceSettings, options: dict[str, str]) -> dict[str, str]:
+def _trash_exclusions(settings: MaintenanceSettings, options: StorageOptions) -> dict[str, str]:
     """``{decoded path: why}`` for every dataset in the trash — the datasets this tick may NOT touch.
 
     #75 trash expiry is REPORT ONLY in the sweep; #79's purge lives on the reconcile tick, whose drift report gates it.
@@ -167,7 +167,7 @@ def why_in_trash(uri: str, trashed_by_path: dict[str, str]) -> str | None:
     return next((why for end in range(len(segments), 0, -1) if (why := trashed_by_path.get("/".join(segments[:end]))) is not None), None)
 
 
-def base_record_reader(settings: MaintenanceSettings, options: dict[str, str]) -> Callable[[str], base_registry.BaseRecord | None]:
+def base_record_reader(settings: MaintenanceSettings, options: StorageOptions) -> Callable[[str], base_registry.BaseRecord | None]:
     """How this service reads the catalog's base record for a table root ([[LH-279]]).
 
     The reader RAISES on a record it cannot read: answering "no record" would demote a recorded clone source to a
@@ -177,7 +177,7 @@ def base_record_reader(settings: MaintenanceSettings, options: dict[str, str]) -
     return partial(base_registry.read_base_record, registry)
 
 
-def _protected_roots(uris: list[str], options: dict[str, str], settings: MaintenanceSettings) -> base_refs.BaseRefs:
+def _protected_roots(uris: list[str], options: StorageOptions, settings: MaintenanceSettings) -> base_refs.BaseRefs:
     """#128d/#114 THE PRE-PASS — over every discovered dataset in EVERY bucket, before one is touched.
 
     Whole-estate and first: a shallow clone in bucket B is the only thing that knows bucket A's dataset is referenced,
@@ -293,7 +293,7 @@ class WriteProbe(BaseModel):
 
 
 def _probe_before_vending(
-    uri: str, options: dict[str, str], *, policy: ExpiryPolicy, directories: list[base_registry.RecordedBase], now: datetime
+    uri: str, options: StorageOptions, *, policy: ExpiryPolicy, directories: list[base_registry.RecordedBase], now: datetime
 ) -> WriteProbe:
     """Could expiry write anything at all on this dataset?
 
@@ -308,7 +308,7 @@ def _probe_before_vending(
     silent: the conservative answer otherwise hides a real fault as an extra credential.
     """
     try:
-        ds = lance.dataset(uri, storage_options=options, session=shared_lance_session())
+        ds = lance.dataset(uri, storage_options=options.in_clear(), session=shared_lance_session())
         armed = bool(auto_cleanup.armed_keys(ds.config()))
         reclaimable = policy.cleanup_enabled and count_reclaimable(ds, uri, policy) >= policy.min_reclaimable
         stranded = policy.cleanup_enabled and bool(directories) and bool(base_reclaim.unreferenced(ds, directories, options, now=now))
@@ -363,7 +363,7 @@ def _stopped_by_vend(probe: WriteProbe, target: ExpiryTarget, exc: Exception) ->
     return stopped
 
 
-def _data_directories(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings, options: dict[str, str]) -> list[base_registry.RecordedBase]:
+def _data_directories(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings, options: StorageOptions) -> list[base_registry.RecordedBase]:
     """The data directories the table at ``uri`` holds, as its base record names them ([[LH-286]]).
 
     None for a branch, whose files are its table's, and none for a table whose manifest declares no plain base outside
@@ -375,7 +375,7 @@ def _data_directories(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettin
     if (table := sweep.table_ids.of(uri)) is None:
         return []
     try:
-        declared = manifest_base_path_refs(lance.dataset(uri, storage_options=options, session=shared_lance_session()))
+        declared = manifest_base_path_refs(lance.dataset(uri, storage_options=options.in_clear(), session=shared_lance_session()))
     except Exception as exc:  # noqa: BLE001 — the pass opens the dataset again and reports its own failure
         log.debug("maintenance_data_directories_unopened", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return []
@@ -505,7 +505,7 @@ def _check_committed_files(result: DatasetResult, named: NamedDataset, *, sweep:
         found = committed_files.check(
             result.uri,
             named.owners.table_uuid,
-            open_table=lambda: lance.dataset(result.uri, storage_options=options, session=shared_lance_session()),
+            open_table=lambda: lance.dataset(result.uri, storage_options=options.in_clear(), session=shared_lance_session()),
             data_options=options,
             control_root=settings.resolved_control_root,
             control_options=options,

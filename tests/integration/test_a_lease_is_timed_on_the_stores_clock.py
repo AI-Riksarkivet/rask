@@ -20,6 +20,7 @@ import pytest
 from service_kit.lakehouse import history_fences, location_claims, records
 from service_kit.lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from service_kit.lakehouse.location_claims import ClaimStore, LocationClaim, LocationHeldError
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 BUCKET = "lh413-control"
@@ -37,10 +38,10 @@ class _AnHourAhead(datetime):
 
 
 @pytest.fixture
-def store(moto_url: str) -> Iterator[dict[str, str]]:
+def store(moto_url: str) -> Iterator[StorageOptions]:
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     s3.create_bucket(Bucket=BUCKET)
-    yield {"endpoint": moto_url, "aws_access_key_id": "test", "aws_secret_access_key": "test", "region": "us-east-1"}
+    yield StorageOptions.from_flat({"endpoint": moto_url, "aws_access_key_id": "test", "aws_secret_access_key": "test", "region": "us-east-1"})
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET):
         for item in page.get("Contents", []):
             s3.delete_object(Bucket=BUCKET, Key=item["Key"])
@@ -52,13 +53,13 @@ def _gone(_claim: LocationClaim) -> bool:
     return True
 
 
-def _claim_taken_then_taken_over(storage_options: dict[str, str]) -> Callable[[], object]:
+def _claim_taken_then_taken_over(storage_options: StorageOptions) -> Callable[[], object]:
     claims = ClaimStore(control_root=f"s3://{BUCKET}/control", storage_options=storage_options)
     location_claims.take(claims, LOCATION, "ns$first", ["ns", "first"], is_gone=_gone, uuid=TABLE_UUID)
     return lambda: location_claims.take(claims, LOCATION, "ns$second", ["ns", "second"], is_gone=_gone)
 
 
-def _hold_taken_then_another_kind(storage_options: dict[str, str]) -> Callable[[], object]:
+def _hold_taken_then_another_kind(storage_options: StorageOptions) -> Callable[[], object]:
     history = TableHistory(control_root=f"s3://{BUCKET}/control", storage_options=storage_options, table_uuid=TABLE_UUID)
     history.take(HistoryWork.RECLAIM)
     return lambda: history.take(HistoryWork.REFS)
@@ -72,9 +73,9 @@ def _hold_taken_then_another_kind(storage_options: dict[str, str]) -> Callable[[
     ],
 )
 def test_a_pod_an_hour_ahead_still_finds_a_fresh_lease_live(
-    store: dict[str, str],
+    store: StorageOptions,
     monkeypatch: pytest.MonkeyPatch,
-    arrange: Callable[[dict[str, str]], Callable[[], object]],
+    arrange: Callable[[StorageOptions], Callable[[], object]],
     refusal: type[Exception],
 ) -> None:
     second_pod = arrange(store)

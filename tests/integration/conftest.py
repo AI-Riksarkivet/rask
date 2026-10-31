@@ -21,6 +21,7 @@ from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, La
 from moto.server import ThreadedMotoServer
 
 from service_kit.lakehouse.naming import UUID_PROPERTY
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 @pytest.fixture(scope="module")
@@ -65,7 +66,7 @@ def real_ns_client(tmp_path: object, monkeypatch: pytest.MonkeyPatch) -> Iterato
     from catalog.main import app
 
     app.dependency_overrides[get_namespace] = lambda: ns
-    app.dependency_overrides[get_storage_options] = lambda: {}
+    app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
@@ -97,7 +98,7 @@ def client(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     from catalog.main import app
 
     app.dependency_overrides[get_namespace] = lambda: fake_ns
-    app.dependency_overrides[get_storage_options] = lambda: {}
+    app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     # THE DOUBLE DESCRIBES A REAL LOCATION, as the backend it stands in for does. A data door judges the
     # table's declared bases on the dataset it describes before handing the op to the backend
     # ([[LH-279]]), so a location that opens nothing would answer 404 where the backend is under test.

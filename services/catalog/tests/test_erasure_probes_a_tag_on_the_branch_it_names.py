@@ -33,6 +33,7 @@ import pytest
 from lance.dataset import Tags
 
 from catalog.services.erasure import ErasureReport, ref_heads, verify
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 _SUBJECT = "alice"
@@ -56,7 +57,7 @@ def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
         erasure_job(uri, _PREDICATE).run()
         return verify(
             lance.dataset(uri),
-            storage_options={},
+            storage_options=StorageOptions(),
             protected=None,
             reopen=lambda: lance.dataset(uri),
             table="acme-bronze$subjects",

@@ -36,6 +36,7 @@ from botocore.exceptions import ClientError
 import storage
 from catalog.services import warehouses
 from service_kit.lakehouse import records
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 def _root(tmp_path: Any) -> str:
@@ -71,7 +72,7 @@ def _client_error(code: str, status: int) -> ClientError:
 
 def _seed(tmp_path: Path, warehouse_id: str = "acme-wh", **fields: str) -> dict[str, str]:
     record = {"id": warehouse_id, "bucket": "b-acme", "project": "acme", "status": "active", **fields}
-    records.create_json(_root(tmp_path), {}, f"_warehouses/{warehouse_id}.json", record)
+    records.create_json(_root(tmp_path), StorageOptions(), f"_warehouses/{warehouse_id}.json", record)
     return record
 
 
@@ -94,10 +95,10 @@ def test_mutate_reapplies_against_the_winner_when_the_record_moves_mid_flight(tm
         seen.append(str(record.get("note", "")))
         if len(seen) == 1:
             # The interleave: a rival writes a DIFFERENT field, after our read, before our write.
-            records.mutate_json(_root(tmp_path), {}, key, lambda r: {**r, "note": "quarantined by ops"})
+            records.mutate_json(_root(tmp_path), StorageOptions(), key, lambda r: {**r, "note": "quarantined by ops"})
         return {**record, "status": "deactivated"}
 
-    out = records.mutate_json(_root(tmp_path), {}, key, mutate)
+    out = records.mutate_json(_root(tmp_path), StorageOptions(), key, mutate)
 
     assert len(seen) == 2, "the first attempt must LOSE and be retried against the winner's record"
     assert seen == ["", "quarantined by ops"], "the retry must re-read, not replay its own stale copy"
@@ -120,7 +121,7 @@ def test_mutate_gives_up_after_bounded_attempts(tmp_path: Path) -> None:
         return {**record, "status": "deactivated"}
 
     with pytest.raises(records.RecordChangedError):
-        records.mutate_json(_root(tmp_path), {}, key, always_lose, attempts=3)
+        records.mutate_json(_root(tmp_path), StorageOptions(), key, always_lose, attempts=3)
     assert rounds["n"] == 3
 
 
@@ -139,7 +140,7 @@ def test_s3_replace_sends_if_match_and_maps_412_to_a_lost_race(monkeypatch: pyte
     monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
 
     with pytest.raises(records.RecordChangedError):
-        records.mutate_json("s3://ctl/root", {}, "_warehouses/w.json", lambda r: {**r, "status": "deactivated"}, attempts=1)
+        records.mutate_json("s3://ctl/root", StorageOptions(), "_warehouses/w.json", lambda r: {**r, "status": "deactivated"}, attempts=1)
 
     assert client.put_object.call_args.kwargs["IfMatch"] == "abc123"
     assert client.put_object.call_args.kwargs["Key"] == "root/_warehouses/w.json"
@@ -152,7 +153,7 @@ def test_s3_read_surfaces_a_non_404_error_instead_of_reporting_absent(monkeypatc
     client.get_object.side_effect = _client_error("AccessDenied", 403)
     monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(Exception, match="AccessDenied"):
-        records.read_json("s3://ctl/root", {}, "_warehouses/w.json")
+        records.read_json("s3://ctl/root", StorageOptions(), "_warehouses/w.json")
 
 
 # --------------------------------------------------------------------------- #
@@ -162,14 +163,14 @@ def test_s3_read_surfaces_a_non_404_error_instead_of_reporting_absent(monkeypatc
 
 def test_set_warehouse_status_flips_and_preserves_other_fields(tmp_path: Path) -> None:
     _seed(tmp_path)
-    out = warehouses.set_warehouse_status(_root(tmp_path), {}, "acme-wh", "deactivated")
+    out = warehouses.set_warehouse_status(_root(tmp_path), StorageOptions(), "acme-wh", "deactivated")
     assert out is not None
     assert out["status"] == "deactivated"
     assert out["bucket"] == "b-acme"
-    assert warehouses.warehouse_status(_root(tmp_path), {}, "acme-wh") == "deactivated"
+    assert warehouses.warehouse_status(_root(tmp_path), StorageOptions(), "acme-wh") == "deactivated"
 
 
 def test_set_warehouse_status_returns_none_for_an_unknown_warehouse(tmp_path: Path) -> None:
     """RecordMissingError is translated at the door, so the endpoint's existing 404 path is unchanged
     — the seam swap must not become an API change."""
-    assert warehouses.set_warehouse_status(_root(tmp_path), {}, "ghost", "deactivated") is None
+    assert warehouses.set_warehouse_status(_root(tmp_path), StorageOptions(), "ghost", "deactivated") is None

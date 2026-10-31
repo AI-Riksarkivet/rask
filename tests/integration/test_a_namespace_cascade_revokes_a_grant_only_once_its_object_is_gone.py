@@ -28,6 +28,7 @@ from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
 from maintenance.services.purge import objects_held
 from service_kit.lakehouse import maintenance_policies
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from tests.integration.openfga_grants import TupleStore, act_as
 
@@ -101,7 +102,7 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
         _ok(real_ns_client, f"/management/v1/table/{table}/policy/set", json={"retention_days": 7})
     uuids = {table: _uuid(real_ns_client, "table", table) for table in [*tables, "db$t"]}
     locations = {table: str(real_ns_client.post(f"/v1/table/{table}/describe", json={}).json()["location"]) for table in tables}
-    assert all(objects_held(location, {}) for location in locations.values()), "a table holds no object, so the delete would prove nothing"
+    assert all(objects_held(location, StorageOptions()) for location in locations.values()), "a table holds no object, so the delete would prove nothing"
     trashed = f"table:{uuids['db$t']}"
     _ok(real_ns_client, "/v1/table/db$t/drop", json={})
     governed_objects = [f"namespace:{_uuid(real_ns_client, 'namespace', 'db')}", *(f"table:{uuids[table]}" for table in tables)]
@@ -120,7 +121,9 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
 
     assert finished.status_code == 200, finished.text
     assert failing.deregisters == deregisters, "the failure was never injected where the case puts it, so the case would pass vacuously"
-    assert {table: objects_held(location, {}) for table, location in locations.items()} == dict.fromkeys(tables, 0), "a destroyed table left bytes"
+    assert {table: objects_held(location, StorageOptions()) for table, location in locations.items()} == dict.fromkeys(tables, 0), (
+        "a destroyed table left bytes"
+    )
     assert {obj: held - kept for obj, held in governed.naming(governed_objects).items() if held - kept} == {}, "a grant outlived the object it was on"
     settings = get_settings()
     left = [table for table in tables if maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "table", uuids[table]) is not None]

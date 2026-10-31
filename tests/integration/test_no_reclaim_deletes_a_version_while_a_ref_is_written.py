@@ -24,11 +24,13 @@ import lance
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.due import TableIds
 from maintenance.services.plan import PlanContext
+from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.base_refs import normalise
 from service_kit.lakehouse.history_fences import HistoryWork, TableHistory
 from service_kit.lakehouse.maintenance_due import CloneList
@@ -47,7 +49,7 @@ class _Estate:
         self.url = url
         self.client = client
         self.root = f"s3://{bucket}"
-        self.key = lance_storage_options(url, "test", "test", "us-east-1")
+        self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
         for start, mode in ((0, None), (3, "overwrite"), (6, "overwrite")):
             params = {"mode": mode} if mode else {}
@@ -60,7 +62,7 @@ class _Estate:
         self.table_uuid = str(described.json()["properties"][UUID_PROPERTY])
 
     def versions(self) -> list[int]:
-        return [int(version["version"]) for version in lance.dataset(self.location, storage_options=self.key).versions()]
+        return [int(version["version"]) for version in lance.dataset(self.location, storage_options=self.key.in_clear()).versions()]
 
     def swept(self) -> sweep.DatasetResult:
         """Maintenance's own pass over the table, every version but the current one reclaimable."""

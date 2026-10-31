@@ -264,7 +264,7 @@ def deadline(opened_at: datetime, hours: float) -> datetime:
     return opened_at + timedelta(hours=hours)
 
 
-def sync_pin(table: DoorTable, so: dict[str, str], hold: Hold | None) -> None:
+def sync_pin(table: DoorTable, so: StorageOptions, hold: Hold | None) -> None:
     """Point :data:`HOLD_TAG` at the hold's version while it is open, and remove it otherwise."""
     if hold is not None and hold.state == "open":
         publication.set_tag(table, so, HOLD_TAG, hold.version)

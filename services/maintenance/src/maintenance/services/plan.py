@@ -19,6 +19,7 @@ from maintenance.services.due import DueQuestion
 from maintenance.services.expiry import ExpiryPolicy
 from maintenance.services.naming import PolicyOwners
 from service_kit.lakehouse import maintenance_policies, warehouse_records
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -68,7 +69,7 @@ class DatasetPlan(BaseModel):
         return str(self.policy.get("id") or "") or None
 
 
-def load_policies(settings: MaintenanceSettings, options: dict[str, str]) -> list[dict[str, Any]]:
+def load_policies(settings: MaintenanceSettings, options: StorageOptions) -> list[dict[str, Any]]:
     """The maintenance policies, loaded once per tick.
 
     A registry that cannot be read at all RAISES (fail toward not deleting, audit 2026-07-16): policies are the
@@ -86,7 +87,7 @@ def load_policies(settings: MaintenanceSettings, options: dict[str, str]) -> lis
     return policy_records
 
 
-def buckets_to_sweep(settings: MaintenanceSettings, options: dict[str, str]) -> list[str]:
+def buckets_to_sweep(settings: MaintenanceSettings, options: StorageOptions) -> list[str]:
     """#81 EVERY warehouse bucket the registry knows, beside the configured ones.
 
     A warehouse bucket is created by an API CALL at runtime, so a config-time list goes stale by construction. An

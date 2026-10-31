@@ -34,6 +34,7 @@ from maintenance.core.lineage_emit import (
 )
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_lineage
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.openlineage import DatasetUuids
 
 
@@ -422,12 +423,12 @@ def test_the_maintenance_emitter_STAGES_the_event_rather_than_publishing_it_bare
         job_namespace="compaction",
         timeout_seconds=5.0,
         outbox_uri="s3://staging/outbox",
-        storage_options=lambda: {"region": "eu-north-1"},
+        storage_options=lambda: StorageOptions(options={"region": "eu-north-1"}),
     )
     _asyncio.run(emitter._publish({"run": {"runId": "r-sweep"}}, "gold$catalog"))
 
     assert len(calls) == 1, "the maintenance emit did not reach the outbox"
     assert calls[0]["outbox_uri"] == "s3://staging/outbox"
-    assert calls[0]["storage_options"] == {"region": "eu-north-1"}
+    assert calls[0]["storage_options"] == StorageOptions(options={"region": "eu-north-1"})
     assert calls[0]["topic_name"] == "lineage.events.v1"
     assert calls[0]["run_id"] == "r-sweep"

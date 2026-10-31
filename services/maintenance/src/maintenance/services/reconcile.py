@@ -457,7 +457,7 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions) -> list[st
     if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
     manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
-    dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
+    dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
     table = dataset.to_table(columns=["object_id", "object_type"])
     return sorted(
         {
@@ -483,7 +483,7 @@ def _tables(root: str, storage_options: StorageOptions) -> list[tuple[str, str |
     if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
         return []
     manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
-    dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
+    dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
     # `location` is TOLERATED ABSENT, not required: the spec's "Schema Extensibility" clause guarantees
     # no column on a manifest an older writer produced. Missing it yields no locations and [[LH-192]]
     # reports nothing — the fail-quiet direction for a detector.

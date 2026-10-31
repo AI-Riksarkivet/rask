@@ -21,6 +21,7 @@ import lance
 import pyarrow as pa
 import pytest
 
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.quality import assert_quality, passed
 
 
@@ -46,7 +47,7 @@ class TestItScansTheVersionItIsAsked_About:
     def test_a_DIRTY_version_is_refused_even_when_LATEST_is_clean(self, dirty_then_clean: str) -> None:
         """The silent one. Without the pin the gate scans the good latest version and moves the
         `published` tag onto data that has a null key."""
-        assertions = assert_quality(dirty_then_clean, {}, key_column="id", version=1)
+        assertions = assert_quality(dirty_then_clean, StorageOptions(), key_column="id", version=1)
 
         assert not passed(assertions)
         assert [a.assertion for a in assertions if not a.success] == ["not_null"]
@@ -57,17 +58,17 @@ class TestItScansTheVersionItIsAsked_About:
         lance.write_dataset(pa.table({"id": pa.array([], type=pa.int64())}), uri)
         lance.write_dataset(pa.table({"id": [1, 2]}), uri, mode="append")
 
-        assert not passed(assert_quality(uri, {}, key_column="id", version=1))
-        assert passed(assert_quality(uri, {}, key_column="id", version=2))
+        assert not passed(assert_quality(uri, StorageOptions(), key_column="id", version=1))
+        assert passed(assert_quality(uri, StorageOptions(), key_column="id", version=2))
 
 
 class TestTheDefaultIsUnchanged:
     def test_no_version_still_means_latest(self, clean_then_dirty: str) -> None:
         """The stage runner calls this right after writing, where latest IS its write. Changing that default
         would move a caller this fix is not about."""
-        assert not passed(assert_quality(clean_then_dirty, {}, key_column="id"))
+        assert not passed(assert_quality(clean_then_dirty, StorageOptions(), key_column="id"))
 
     def test_an_unknown_version_raises_rather_than_scanning_something_else(self, clean_then_dirty: str) -> None:
         """Silently falling back to latest is how the original defect reads from the outside."""
         with pytest.raises(ValueError, match=r"99\.manifest"):
-            assert_quality(clean_then_dirty, {}, key_column="id", version=99)
+            assert_quality(clean_then_dirty, StorageOptions(), key_column="id", version=99)

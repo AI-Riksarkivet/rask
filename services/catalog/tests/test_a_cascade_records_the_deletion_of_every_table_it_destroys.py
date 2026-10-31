@@ -42,6 +42,7 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse.base_registry import BaseRegistry
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -67,7 +68,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace.create_namespace(CreateNamespaceRequest(id=[NS], properties=with_minted_uuid(None)))
     registry = BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
     for table_id in TABLES:
-        create_table(namespace, {}, table_id, _table(), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
+        create_table(namespace, StorageOptions(), table_id, _table(), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
     return namespace
 
 
@@ -87,7 +88,7 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
     settings = SimpleNamespace(
         registry_root=str(control),
         root=str(tmp_path / "data"),
-        storage_options=lambda: {},
+        storage_options=lambda: StorageOptions(),
         trash_grace_days=0,
         fga_enabled=False,
         warehouses_enabled=False,

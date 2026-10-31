@@ -30,6 +30,7 @@ import pytest
 
 from service_kit.lakehouse import warehouse_registry
 from service_kit.lakehouse.maintenance_policies import get_policy, put_policy
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.warehouse_registry import clear_cache, project_root
 
 
@@ -44,11 +45,11 @@ _NAMESPACE_UUID = "3f9d1c2e-8a4b-4c6d-b5e7-1a2b3c4d5e6f"
 
 def test_a_malformed_policy_record_is_refused_like_its_two_siblings(tmp_path: Path) -> None:
     """`get_protection` and `trash.get` both return None on a non-dict record. `get_policy` did not."""
-    put_policy(str(tmp_path), {}, {"kind": "table", "id": "db$t", "uuid": _TABLE_UUID})
+    put_policy(str(tmp_path), StorageOptions(), {"kind": "table", "id": "db$t", "uuid": _TABLE_UUID})
     key = next(p for p in (tmp_path / "_policies").iterdir() if p.suffix == ".json")
     key.write_text(json.dumps(["not", "a", "record"]))
 
-    assert get_policy(str(tmp_path), {}, "table", _TABLE_UUID) is None
+    assert get_policy(str(tmp_path), StorageOptions(), "table", _TABLE_UUID) is None
 
 
 def test_the_record_key_shape_is_unchanged_by_the_de_duplication() -> None:
@@ -107,7 +108,7 @@ def test_the_warehouse_resolution_cache_is_bounded(tmp_path: Path) -> None:
     """One entry per (control root, project, serving) ever resolved, retained forever, no ceiling."""
     for index in range(_EXPECTED_CEILING + 40):
         control_root = _control_root_with_warehouse(tmp_path, f"root{index}")
-        assert project_root(control_root, {}, "acme", ttl_seconds=300) == f"s3://root{index}-wh"
+        assert project_root(control_root, StorageOptions(), "acme", ttl_seconds=300) == f"s3://root{index}-wh"
 
     held = len(warehouse_registry._cache)
     assert held <= _EXPECTED_CEILING, f"the resolver cache grew to {held} entries with no ceiling"
@@ -117,7 +118,7 @@ def test_an_expired_entry_is_not_retained(tmp_path: Path) -> None:
     """A non-positive TTL is documented as "re-read the registry on every call" — it still cached."""
     for index in range(20):
         control_root = _control_root_with_warehouse(tmp_path, f"ghost{index}")
-        assert project_root(control_root, {}, "acme", ttl_seconds=0.0) == f"s3://ghost{index}-wh"
+        assert project_root(control_root, StorageOptions(), "acme", ttl_seconds=0.0) == f"s3://ghost{index}-wh"
 
     held = len(warehouse_registry._cache)
     assert held == 0, f"{held} entries that expire the instant they are written are still resident"

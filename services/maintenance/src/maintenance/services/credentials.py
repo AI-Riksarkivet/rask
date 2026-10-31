@@ -33,14 +33,13 @@ from typing import TYPE_CHECKING, Final
 
 import httpx
 from lance_namespace.errors import ErrorCode
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict
 
 from maintenance.core.metrics import record_credential_tier
 from service_kit.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
-from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse.base_refs import decoded_path, normalise
 from service_kit.lakehouse.endpoint_scheme import allow_http_for
-from service_kit.lakehouse.objectfs import credential_of, without_credentials
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 if TYPE_CHECKING:
@@ -194,32 +193,19 @@ class Vended(BaseModel):
 
     ``None`` where the door named none. A catalog that does not say is not a catalog that disagrees.
 
-    The key pair is held apart from the rest of the options, its secret and session token ``SecretStr`` ([[LH-072]]), so a
-    repr, a log line or an error that echoes a vend carries neither; :meth:`as_storage_options` puts it back beside the
-    rest for the call that signs.
+    The options hold the key pair as ``S3KeyPair``, its secret and session token ``SecretStr`` ([[LH-072]], [[LH-543]]), so a
+    repr, a log line or an error that echoes a vend carries neither; only the call that signs puts them in clear.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    #: The storage options the door answered, less its credential (``objectfs.without_credentials``).
-    options: dict[str, str]
-    #: The key pair the door answered; ``None`` where the answer carried no key id and secret to sign with.
-    key_pair: S3KeyPair | None
+    #: The storage options the door answered; their key pair is ``None`` where the answer carried no key id and secret
+    #: to sign with (``StorageOptions.from_flat``).
+    storage_options: StorageOptions
     location: str | None
 
-    def as_storage_options(self) -> dict[str, str]:
-        """The storage options the pass signs with, the key pair in clear and in the ``aws_`` spelling, which a pod's
-        ambient AWS_* environment cannot displace (``objectfs.lance_storage_options``)."""
-        if self.key_pair is None:
-            return dict(self.options)
-        pair = self.key_pair
-        credential = {"aws_access_key_id": pair.access_key_id, "aws_secret_access_key": pair.secret_access_key.get_secret_value()}
-        if pair.session_token is not None:
-            credential["aws_session_token"] = pair.session_token.get_secret_value()
-        return {**self.options, **credential}
 
-
-def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str, fallback: dict[str, str]) -> dict[str, str]:
+def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str, fallback: StorageOptions) -> StorageOptions:
     """The storage options this dataset's REWRITE should be signed with.
 
     ``table_id`` is the table the catalog's ``__manifest`` names the dataset as, or whose branch it is: maintenance names
@@ -247,7 +233,7 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str,
         # identity, so the line reported a posture the estate had already left — and an operator
         # reading it went looking for a hardening that was in place. Emptying the chart value is still
         # a documented way back to the tenant root, which is exactly why the identity has to be read
-        # rather than guessed. Matches `vended_credentials.py`'s own wording.
+        # rather than guessed.
         logger.info(
             "write credential AMBIENT for %s — nothing vended; this pass is signed by the process credential %s",
             table_id,
@@ -263,19 +249,19 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, table_id: str,
     _refuse_a_credential_that_does_not_cover(uri=uri, table_id=table_id, location=vended.location)
     logger.info("write credential SCOPED for %s — this pass is signed by a table-scoped credential", table_id)
     record_credential_tier(tier="scoped")
-    return _at_own_store(vended.as_storage_options(), settings.s3_endpoint)
+    return _at_own_store(vended.storage_options, settings.s3_endpoint)
 
 
-def _at_own_store(options: dict[str, str], endpoint: str) -> dict[str, str]:
+def _at_own_store(options: StorageOptions, endpoint: str) -> StorageOptions:
     """The vended credential, used at maintenance's own store address ([[LH-489]]).
 
     The catalog vends the address a client off the cluster reaches the store at, which may be the store's
     public edge; maintenance runs in the cluster and reaches the store where its own settings say. The key, the
     scope and the encryption stay the vend's. A vend naming no endpoint is AWS proper and is used as vended.
     """
-    if "endpoint" not in options:
+    if "endpoint" not in options.options:
         return options
-    return {**options, "endpoint": endpoint, "allow_http": allow_http_for(endpoint)}
+    return options.with_options({"endpoint": endpoint, "allow_http": allow_http_for(endpoint)})
 
 
 def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, location: str | None) -> None:
@@ -408,15 +394,13 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
     if not isinstance(options, dict):
         return None
     answered = {str(key): str(value) for key, value in options.items()}
-    location = payload.get("location")
-    return Vended(options=without_credentials(answered), key_pair=_key_pair(answered), location=str(location) if location else None)
-
-
-def _key_pair(answered: dict[str, str]) -> S3KeyPair | None:
-    """The key pair the door's answer carries under either spelling (``objectfs.credential_of``), or ``None`` without a key id and secret."""
-    access_key, secret_key, session_token = credential_of(answered)
-    if access_key is None or secret_key is None:
+    try:
+        storage_options = StorageOptions.from_flat(answered)
+    except ValueError as exc:
+        # Half a credential, or two spellings naming two identities: read as no credential, the pass would sign with the
+        # pod's own chain while reported as scoped. Like an unparseable body, it is no vend, and the deployment's own
+        # credential signs and is named for it.
+        logger.info("credential vending answered a credential that cannot be signed with for %s: %s", table_id, exc)
         return None
-    return S3KeyPair(
-        access_key_id=access_key, secret_access_key=SecretStr(secret_key), session_token=None if session_token is None else SecretStr(session_token)
-    )
+    location = payload.get("location")
+    return Vended(storage_options=storage_options, location=str(location) if location else None)

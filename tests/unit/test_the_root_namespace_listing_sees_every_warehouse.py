@@ -35,6 +35,7 @@ from lance_namespace import ListNamespacesResponse
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
+from service_kit.lakehouse.objectfs import StorageOptions
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -45,8 +46,8 @@ class _Settings:
         self.warehouses_enabled = warehouses_enabled
         self.fga_enabled = fga_enabled
 
-    def storage_options(self) -> dict[str, str]:
-        return {}
+    def storage_options(self) -> StorageOptions:
+        return StorageOptions()
 
 
 async def _list(

@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from catalog.services import maintenance
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 class _Index:
@@ -136,7 +137,7 @@ def test_the_flag_16_refusal_is_FAIL_CLOSED_when_the_bases_cannot_be_read() -> N
 
     ds = _FakeDs(version=1, versions=[], tags={}, feature_flags=(16, 16))
     with pytest.raises(UnsupportedOperationError, match="base_paths .shallow clone"):
-        maintenance.require_compactable(ds, table_location="", storage_options={})
+        maintenance.require_compactable(ds, table_location="", storage_options=StorageOptions())
 
 
 def test_run_gc_REFUSES_an_unknown_flag() -> None:
@@ -223,7 +224,7 @@ def test_sibling_base_refs_FINDS_a_real_clone_reference(tmp_path: Any) -> None:
     entry = base_registry.RecordedBase(path=source, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER)
     base_registry.claim_bases(registry, clone, [entry])
 
-    refs = base_refs.sibling_base_refs(source, {}, configured=[], record_of=lambda location: base_registry.read_base_record(registry, location))
+    refs = base_refs.sibling_base_refs(source, StorageOptions(), configured=[], record_of=lambda location: base_registry.read_base_record(registry, location))
 
     assert refs.is_protected(source) is not None, f"the clone's reference to its source was not found: {refs}"
     assert refs.is_protected(str(tmp_path / "cc33_ns$unrelated.lance")) is None

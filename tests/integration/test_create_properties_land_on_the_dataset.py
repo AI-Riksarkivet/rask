@@ -21,6 +21,7 @@ import pytest
 from lance_namespace import CreateNamespaceRequest, LanceNamespace, connect
 
 from catalog.services import dataplane
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 @pytest.fixture
@@ -59,7 +60,7 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
     run = {"rask.run_id": "run-7", "rask.author": "dex~ana"}
     created = dataplane.create_table(
         real_ns,
-        {},
+        StorageOptions(),
         ["db", "props_at_create"],
         _table(),
         root=str(tmp_path),
@@ -83,6 +84,6 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
 
 def test_creating_without_properties_writes_no_metadata(real_ns: LanceNamespace, tmp_path: Path) -> None:
     """A create that names nothing must not invent a key — the boundary the merge could get wrong."""
-    created = dataplane.create_table(real_ns, {}, ["db", "no_props"], _table(), root=str(tmp_path), registry=None)
+    created = dataplane.create_table(real_ns, StorageOptions(), ["db", "no_props"], _table(), root=str(tmp_path), registry=None)
 
     assert dataplane.user_schema_metadata(lance.dataset(str(created.location)).schema) == {}

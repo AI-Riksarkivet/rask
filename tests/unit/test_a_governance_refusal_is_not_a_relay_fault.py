@@ -44,6 +44,7 @@ from catalog.core.lineage_emit import INSERT, build_write_event
 from lineage.api import relay_cron
 from lineage.core.config import LineageSettings
 from service_kit.lakehouse import outbox
+from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.openlineage import run_id_for
 
 
@@ -62,7 +63,7 @@ def _staged(uri: str, *, author: str, run: str, token: str) -> None:
         event_time="2026-10-12T00:00:00+00:00",
         job_namespace="lance-catalog",
     )
-    outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
+    outbox.stage_event(uri, StorageOptions(), event["run"]["runId"], json.dumps(event))
 
 
 class _Repo:
@@ -95,7 +96,7 @@ def _settings(uri: str) -> Any:  # noqa: ANN401 — a stand-in for the drain's s
 
 def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
     request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
-    return asyncio.run(relay_cron._drain_outbox(request, cast("Any", _Repo()), _settings(uri), {}))
+    return asyncio.run(relay_cron._drain_outbox(request, cast("Any", _Repo()), _settings(uri), StorageOptions()))
 
 
 def _governed_settings(outbox_uri: str) -> LineageSettings:
@@ -144,7 +145,7 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
             steps.append("record")
 
     request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
-    outcome = asyncio.run(relay_cron._drain_outbox(request, cast("Any", _OrderRepo()), _governed_settings(uri), {}))
+    outcome = asyncio.run(relay_cron._drain_outbox(request, cast("Any", _OrderRepo()), _governed_settings(uri), StorageOptions()))
 
     assert (outcome.refused, outcome.stranded, outcome.drained) == (1, 0, 0), (
         f"a refusal must land on its OWN counter; folding it into `stranded` reports a relay fault that is not happening: {outcome}"

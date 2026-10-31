@@ -199,7 +199,7 @@ def _format_version(version: str) -> tuple[int, int]:
 def _read_footers(location: str, so: StorageOptions, paths: Sequence[str]) -> list[_FooterMetadata | Exception]:
     """Each file's footer, read concurrently: one or two ranged reads from the end of each file."""
     root = location.rstrip("/") + "/data/"
-    options = dict(so) if so else None
+    options = so.in_clear() or None
 
     def _read(path: str) -> _FooterMetadata | Exception:
         try:

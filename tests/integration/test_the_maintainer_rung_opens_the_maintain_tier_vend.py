@@ -39,6 +39,7 @@ from catalog.services import table_claims
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lakehouse import location_claims
+from service_kit.lakehouse.objectfs import StorageOptions
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -80,7 +81,7 @@ def governed(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     app.dependency_overrides[get_resolver] = lambda: NamedResolver()
     app.dependency_overrides[get_resolved_table] = lambda: table_claims.resolve(fake_ns, claims, ["db", "t"])
     app.dependency_overrides[get_namespace] = lambda: fake_ns
-    app.dependency_overrides[get_storage_options] = lambda: {}
+    app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     app.dependency_overrides[get_vendor] = lambda: _Vendor()
     app.dependency_overrides[get_fga_client] = lambda: object()
     app.dependency_overrides[settings_dep] = lambda: governed_settings

@@ -24,6 +24,7 @@ import pytest
 
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceDenied, MaintenanceUnauthenticated, denial_remedy
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 class _Settings:
@@ -37,7 +38,7 @@ def _settings() -> Any:
     return _Settings()
 
 
-_FALLBACK = {"aws_access_key_id": "root", "aws_secret_access_key": "root"}
+_FALLBACK = StorageOptions.from_flat({"aws_access_key_id": "root", "aws_secret_access_key": "root"})
 
 
 def _respond(monkeypatch: pytest.MonkeyPatch, status: int) -> None:

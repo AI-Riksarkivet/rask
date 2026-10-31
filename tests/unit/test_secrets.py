@@ -67,7 +67,7 @@ def test_lineage_takes_the_outbox_pair_from_the_store_alone(monkeypatch: pytest.
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "s3_access_key_id": "id-from-env", "s3_secret_access_key": "from-env"})
     StoreCredential(settings).read_at_boot()
     options = storage_options(settings)
-    assert (options["aws_access_key_id"], options["aws_secret_access_key"]) == ("id-from-store", "from-store")
+    assert (options.in_clear()["aws_access_key_id"], options.in_clear()["aws_secret_access_key"]) == ("id-from-store", "from-store")
 
 
 @pytest.mark.parametrize("bundle", [{}, {"secret_key": "only-the-secret"}], ids=["store-empty", "secret-without-its-key-id"])

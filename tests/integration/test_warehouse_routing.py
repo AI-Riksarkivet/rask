@@ -24,6 +24,7 @@ from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses as wh_svc
+from service_kit.lakehouse.objectfs import StorageOptions
 
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -74,11 +75,11 @@ def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-
     """Register a warehouse whose root is a LOCAL dir (not s3://) so the resolver can open it in-process,
     and pre-create its top-level namespace, mirroring what create_warehouse_namespace does on a real stack."""
     control = f"file://{registry}"
-    wh_svc.put_warehouse(control, {}, {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
+    wh_svc.put_warehouse(control, StorageOptions(), {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
     # The tenant namespace lives IN the warehouse bucket — create it there, then bind.
     wh_ns = connect("dir", {"root": str(warehouse_root)})
     wh_ns.create_namespace(CreateNamespaceRequest(id=["tenantns"], properties=with_minted_uuid(None)))
-    wh_svc.bind_namespace(control, {}, "tenantns", wid, str(warehouse_root))
+    wh_svc.bind_namespace(control, StorageOptions(), "tenantns", wid, str(warehouse_root))
 
 
 def _created(client: TestClient) -> int:
@@ -155,7 +156,7 @@ def test_binding_collides_with_existing_default_namespace_409(
     # A warehouse exists, but the name we will try to bind ALREADY exists unbound in the default root.
     wh_svc.put_warehouse(
         f"file://{registry}",
-        {},
+        StorageOptions(),
         {"id": "wh-a", "bucket": "wh-a", "root_uri": str(warehouse_root), "project": "acme"},
     )
     # A LEGACY unbound namespace in the default root. Created through the app's OWN native connection
@@ -224,9 +225,9 @@ def test_a_recoverable_cascade_unbinds_and_undrop_rebinds_the_same_warehouse(
     assert dropped.status_code == 200, dropped.text
 
     # NO LEAK: the binding is gone the moment the namespace is.
-    assert wh_svc.binding_for_namespace(control, {}, "tenantns") is None, "the drop left the warehouse binding behind"
+    assert wh_svc.binding_for_namespace(control, StorageOptions(), "tenantns") is None, "the drop left the warehouse binding behind"
     # …and the root record is the only place it now lives.
-    filed = trash.named(control, {}, "tenantns", kind="namespace")
+    filed = trash.named(control, StorageOptions(), "tenantns", kind="namespace")
     assert len(filed) == 1, f"one recoverable drop is filed for the root: {filed}"
     assert filed[0].get("binding") == {"warehouse_id": "wh-a", "root_uri": str(warehouse_root)}
 
@@ -241,7 +242,7 @@ def test_a_recoverable_cascade_unbinds_and_undrop_rebinds_the_same_warehouse(
     assert recovered.status_code == 200, recovered.text
 
     # The binding is restored…
-    assert wh_svc.binding_for_namespace(control, {}, "tenantns") == {
+    assert wh_svc.binding_for_namespace(control, StorageOptions(), "tenantns") == {
         "top_ns": "tenantns",
         "warehouse_id": "wh-a",
         "root_uri": str(warehouse_root),
@@ -273,13 +274,13 @@ def test_undrop_refuses_when_the_id_was_bound_elsewhere_during_the_grace_window(
     # Somebody else claims the freed name against another warehouse.
     other = registry.parent / "wh-other"
     other.mkdir(exist_ok=True)
-    wh_svc.put_warehouse(control, {}, {"id": "wh-b", "bucket": "wh-b", "root_uri": str(other), "project": "rival"})
-    wh_svc.bind_namespace(control, {}, "tenantns", "wh-b", str(other))
+    wh_svc.put_warehouse(control, StorageOptions(), {"id": "wh-b", "bucket": "wh-b", "root_uri": str(other), "project": "rival"})
+    wh_svc.bind_namespace(control, StorageOptions(), "tenantns", "wh-b", str(other))
 
     refused = client.post("/management/v1/namespace/tenantns/undrop", json={})
     assert refused.status_code == 409, refused.text
     # And the rival's binding is untouched — the refusal changed nothing.
-    assert wh_svc.binding_for_namespace(control, {}, "tenantns") == {
+    assert wh_svc.binding_for_namespace(control, StorageOptions(), "tenantns") == {
         "top_ns": "tenantns",
         "warehouse_id": "wh-b",
         "root_uri": str(other),
@@ -321,9 +322,9 @@ def test_a_stale_binding_cache_entry_expires_instead_of_lasting_until_restart(
     # A mutation lands whose control event is LOST: the binding is rewritten behind the replica's back.
     other = registry.parent / "wh-moved"
     other.mkdir(exist_ok=True)
-    wh_svc.unbind_namespace(f"file://{registry}", {}, "tenantns")
-    wh_svc.put_warehouse(f"file://{registry}", {}, {"id": "wh-m", "bucket": "wh-m", "root_uri": str(other), "project": "acme"})
-    wh_svc.bind_namespace(f"file://{registry}", {}, "tenantns", "wh-m", str(other))
+    wh_svc.unbind_namespace(f"file://{registry}", StorageOptions(), "tenantns")
+    wh_svc.put_warehouse(f"file://{registry}", StorageOptions(), {"id": "wh-m", "bucket": "wh-m", "root_uri": str(other), "project": "acme"})
+    wh_svc.bind_namespace(f"file://{registry}", StorageOptions(), "tenantns", "wh-m", str(other))
 
     # Without a TTL the replica keeps the old entry forever. Advance past the window.
     real_monotonic = time.monotonic
