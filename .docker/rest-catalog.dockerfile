@@ -71,6 +71,13 @@ RUN apt-get update \
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+# ONE THREAD FOR THE POOLS THAT SIZE THEMSELVES TO THE HOST, NOT TO THE QUOTA ([[LH-250]]): numpy's OpenBLAS and
+# pyarrow's CPU pool both read OMP_NUM_THREADS, so it alone bounds both (OpenBLAS reads its own OPENBLAS_NUM_THREADS
+# first, which nothing sets). Without it, each lakehouse process holds 19 idle threads that OpenBLAS starts at import,
+# under a 1-CPU quota with 20 visible CPUs: read from the host's /proc on helm rev 18, 2026-10-31. Lance sizes its own
+# pools to the quota and needs no variable (lance_docs/PROVENANCE.md § The thread pools). The pool gate below measures
+# both pools.
+ENV OMP_NUM_THREADS=1
 
 WORKDIR /srv
 # The venv is root-owned and the app runs as 10001, so it is immutable to the account running it.
@@ -101,6 +108,12 @@ COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 # `--absent`: the client kit and lancedb (a client's dataset reader) never ship in the lakehouse image ([[XC-178]]).
 COPY .docker/import-gate.py /tmp/import-gate.py
 RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance --absent client_kit lancedb && rm /tmp/import-gate.py
+
+# ── the pool gate ────────────────────────────────────────────────────────────
+# Measure the pools OMP_NUM_THREADS bounds, under the environment this stage ships: a pool wider than it fails the build.
+# Bind-mounted rather than copied, so the script ships in no layer. See the script.
+RUN --network=none --mount=type=bind,source=.docker/pool-gate.py,target=/tmp/pool-gate.py \
+    /opt/venv/bin/python /tmp/pool-gate.py
 
 # Strip setuid/setgid bits from the whole shipped filesystem (base account tools passwd/chsh/... +
 # anything in the venv) — no use in a container, residual privesc surface. Own RUN so its `|| true`

@@ -14,12 +14,14 @@
 Dockerfile
 *.dockerfile
 .dockerignore
-# …except the build-time import gate, which by definition has to be IN the build. It is COPYd to
-# /tmp, run, and removed in the same layer, so it never reaches the shipped filesystem: the rule
-# above is about what the IMAGE carries, and this is the one file that must cross the context
-# boundary to enforce it. The negation must FOLLOW `.docker/` — .dockerignore is last-match-wins,
-# and placed above it the pattern is silently overridden with no error anywhere.
+# …except the build-time gates, which by definition have to be IN the build. The import gate is
+# COPYd to /tmp and removed by the RUN that executes it, so the shipped filesystem lacks it while its
+# COPY layer still holds it; the pool gate is bind-mounted into the RUN that executes it, so no layer
+# holds it. The rule above is about what the IMAGE carries, and these are the files that must cross
+# the context boundary to enforce it. The negations must FOLLOW `.docker/` — .dockerignore is
+# last-match-wins, and placed above it a pattern is silently overridden with no error anywhere.
 !.docker/import-gate.py
+!.docker/pool-gate.py
 
 # Local k8s tooling (downloaded binaries) + cluster state
 .localbin/

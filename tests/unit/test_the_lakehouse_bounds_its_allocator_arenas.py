@@ -18,20 +18,20 @@ named the remainder:
 Those 60-68 MB reservations are glibc secondary arenas -- `HEAP_MAX_SIZE` is 64 MB on 64-bit. glibc
 sizes its arena cap from `sysconf(_SC_NPROCESSORS_ONLN)`, the HOST's core count, and a cgroup CPU
 *quota* does not reduce visible CPUs: measured in these containers, `nproc` reads **64** while
-`cpu.max` reads `100000 100000`, one CPU. The 64-wide thread pools in such a process are not Lance's,
-which sizes both its pools to the quota: reproducing that condition on the host with pylance 12.0.0
-(`lance_docs/PROVENANCE.md`), numpy's OpenBLAS starts 63 threads and pyarrow's CPU pool is 64 wide.
-Arenas are how those threads become resident bytes.
+`cpu.max` reads `100000 100000`, one CPU. Lance sizes its own pools to the quota, while numpy's OpenBLAS
+and pyarrow's CPU pool size to the visible CPUs, which the image bounds with `OMP_NUM_THREADS`
+(`lance_docs/PROVENANCE.md` § The thread pools). Arenas are how threads become resident bytes, and with
+both bounded a lakehouse process still runs dozens: gRPC's event engine alone held 16 in each (read from
+the host's /proc on helm rev 18, 2026-10-31).
 
 IT IS FRAGMENTATION, NOT A LEAK, which is why no retaining object was ever found. Each arena keeps its
 own free lists and is trimmed independently, and memory freed in one is never handed to another, so RSS
 settles at the SUM of per-arena high-water marks: it climbs monotonically and plateaus only once every
 arena has seen its worst case.
 
-THE LEVER IS PROVEN, NOT ASSUMED, and that distinction is this estate's own: LH-172 removed a
-`LANCE_CPU_THREADS` control after measuring that it moved nothing, because "a control that provably
-does nothing is the failure this estate keeps finding". So `MALLOC_ARENA_MAX` was measured before it
-was shipped -- 64 threads each forcing arena growth, counting 64MB mappings in `/proc/self/maps`:
+THE LEVER IS PROVEN, NOT ASSUMED: a control ships once it is measured moving what it names, in the
+process it bounds. So `MALLOC_ARENA_MAX` was measured before it was shipped -- 64 threads each forcing
+arena growth, counting 64MB mappings in `/proc/self/maps`:
 
     Ubuntu glibc 2.39 (host)          unset -> 64 arenas    =2 -> 1    =1 -> 0
     Debian glibc 2.41 (THE IMAGE)     unset -> 65 arenas    =2 -> 1

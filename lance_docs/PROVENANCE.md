@@ -128,35 +128,54 @@ ids:
 
 ### The thread pools
 
-`lance/guide/performance.md:112-114` holds for the pool named `lance-cpu`. The pool that tracks the CPU count is
-`lance_background`, and neither variable sizes its base. Measured on pylance 12.0.0, 2026-09-25, counting a fresh
-process's threads by name (`/proc/self/task/*/comm`) after it writes a 200,000-row local table and scans it once; each
-row is the range over 5 fresh processes. `taskset -c` sets affinity, `systemd-run --user --scope -p CPUQuota=<n>%` sets a
-cgroup quota, and `cpu.max` is read from inside the process:
+`lance/guide/performance.md:100-118` names two pools, and both hold as written. The IO pool's width is the object store's
+(8 on a local store, 64 on a cloud one, `LANCE_IO_THREADS` to override), and the compute pool is the tokio runtime
+`lance-cpu`, which `LANCE_CPU_THREADS` sizes. Every pool Lance sizes by CPU count counts the cgroup quota, so the
+lakehouse sets no Lance thread variable ([[LH-250]]). The pools in a lakehouse process that size themselves to the
+visible CPUs instead are numpy's OpenBLAS and pyarrow's CPU pool, which the image runs one thread wide
+(`OMP_NUM_THREADS=1` in `.docker/rest-catalog.dockerfile`, measured at build by `.docker/pool-gate.py`). The CPU-sized
+pools, from the pylance 13.0.0 source (tag `v13.0.0`):
 
-| Visible CPUs | `cpu.max` | `lance_background` | `lance-cpu` |
-| --- | --- | --- | --- |
-| 4 | `max 100000` | 6-7 | 3 |
-| 16 | `max 100000` | 18-19 | 3 |
-| 64 | `max 100000` | 66-67 | 3 |
-| 64 | `400000 100000` (4 CPUs) | 6-9 | 3 |
-| 64 | `100000 100000` (1 CPU) | 3-4 | 2 |
+- **`lance-cpu`** (`rust/lance-core/src/utils/tokio.rs:78-87`): one worker and up to N blocking threads, kept for the
+  life of the process. N is `LANCE_CPU_THREADS`, otherwise `num_cpus::get()` less `LANCE_IO_CORE_RESERVATION` (2), and 1
+  on two CPUs or fewer (`:19-43`); `num_cpus::get()` counts the cgroup quota.
+- **`lance_background_thread`**, pylance's executor (`python/src/executor.rs:44-48`; `lance_backgroun` in
+  `/proc/*/task/*/comm`, which keeps 15 characters): a default tokio runtime, one worker per available CPU, plus blocking
+  threads started on demand that end after 10 s idle. Under load its count follows the work's concurrency, not the CPUs.
+- **rayon's global pool**, on unnamed threads, which carry the process name: an index build's compute runs there, not on
+  `lance-cpu`. With `RAYON_NUM_THREADS=1`, an IVF_PQ build that took 6 s ran on one thread for 48 s.
 
-- **`lance_background` is the available CPUs plus 2 to 5, and "available" counts the cgroup quota as well as
-  affinity.** Neither `LANCE_CPU_THREADS` (1, 8, 64) nor `LANCE_IO_THREADS` (2, 64) moves that base: 65-67 after the
-  write at 64 CPUs, over 3 runs of each. The pool also spawns threads on demand, and `LANCE_IO_THREADS` scales that
-  growth: scanning a 3,000,000-row, 15-file local table added 10-16 threads by default, 1-3 at `LANCE_IO_THREADS=2` and
-  13-37 at `=64` (3 runs each).
-- **`lance-cpu` is the pool `LANCE_CPU_THREADS` governs, in both directions.** It spawns on demand, so a light workload
-  shows 2-3 threads at any size and a heavy one varies widely between runs. Over 3 runs each of an IVF_PQ build over
-  200,000 x 128 float32 vectors, it reached 3-27 threads at 64 CPUs unset, 2 at `LANCE_CPU_THREADS=1`, 5-9 at `=8`, and
-  3-31 at `=32` on 4 CPUs: the variable, not the CPU count, sets the ceiling. Under the 1-CPU quota it stayed at 2 unset
-  and reached 7-9 at `=8`. This is LD36 of `docs/audits/2026-09-25/03-lance-docs-full-audit.md` ([[LH-250]]); the thread
-  counts [[LH-172]] reads as the compute pool are `lance_background`'s.
-- **A cgroup quota bounds both Lance pools; the 64-wide pools in a 64-CPU, 1-CPU-quota process are not Lance's.** Under
-  that quota, in 3 of 3 runs, `import lance` (which loads numpy and pyarrow) adds 64 threads before Lance spawns any, and
-  numpy's OpenBLAS starts 63 of them, sized to the visible CPUs with `OMP_NUM_THREADS` unset. pyarrow's CPU pool reports
-  `pa.cpu_count() == 64`, and importing pyarrow and running a threaded Parquet read added 68 threads.
+Measured on pylance 13.0.0, numpy 2.4.6 and pyarrow 25.0.0, 2026-10-31, on a 20-CPU aarch64 host. Each row is one fresh
+process per run that writes a 200,000 x 128 float32 local table, scans it, builds an IVF_PQ index (16 partitions) and idles
+12 s, its threads counted by name (`/proc/self/task/*/comm`) every 20 ms; each cell is the range over 3 runs. The quota is
+`systemd-run --user --scope -p CPUQuota=<n>%`:
+
+| Quota | Variable set | `lance-cpu` peak | `lance_background` after the scan / during the build / idle | OpenBLAS workers started by `import numpy` | `pa.cpu_count()` | Build CPU/wall |
+| --- | --- | --- | --- | --- | --- | --- |
+| none (20 CPUs) | none | 12-14 | 21 / 29-31 / 20 | 19 | 20 | 12.7-12.8 |
+| 1 CPU | none | 2 | 2 / 11-16 / 1 | 19 | 20 | 1.0 |
+| 1 CPU | `OMP_NUM_THREADS=1` | 2 | 2 / 10-13 / 1 | 0 | 1 | 1.0 |
+| 4 CPUs | none | 3 | 5 / 15-19 / 4 | 19 | 20 | 3.6 |
+| none | `LANCE_CPU_THREADS=1` | 2 | 21 / 30 / 20 | 19 | 20 | 10.8-11.0 |
+| 1 CPU | `LANCE_CPU_THREADS=8` | 9 | 2 / 10-12 / 1 | 19 | 20 | 1.0 |
+
+- **`LANCE_CPU_THREADS` moves `lance-cpu` in both directions, and the work that runs there with it.** Compacting 64
+  fragments of 4,000 rows into one took 0.2-0.3 s at 2.0-2.1 CPU/wall unset and 1.5 at `LANCE_CPU_THREADS=1`, its CPU
+  split between `lance-cpu` and `lance_background` (no quota, 2 runs each). It bounds no other pool: at 1 the IVF_PQ
+  build still ran at 10.8-11.0 CPU/wall, on rayon's threads. A quota bounds all three Lance pools: rayon's ran the build
+  on 20, 1 and 4 threads with no quota, a 1-CPU and a 4-CPU quota (1 run each). The lakehouse builds no index and
+  compacts no table (ADR 0162); a bring-your-own job's process runs those pools.
+- **An idle `lance_background` is its workers, one per CPU of the quota.** The 10-19 during the build are blocking
+  threads, so a count of a process under load includes them, whatever its quota.
+- **OpenBLAS and pyarrow ignore the quota**: 19 workers and a 20-wide pool under a 1-CPU quota, as with none. Both read
+  `OMP_NUM_THREADS`.
+
+Measured on pylance 12.0.0, 2026-09-25, on a 64-CPU host, by thread name after a fresh process writes a 200,000-row
+local table and scans it once (5 runs each): with no quota, `lance_background` held 6-7, 18-19 and 66-67 threads at 4,
+16 and 64 visible CPUs (`taskset -c`), and neither `LANCE_CPU_THREADS` (1, 8, 64) nor `LANCE_IO_THREADS` (2, 64) moved
+that base. Its threads started on demand follow the IO pool: scanning a 3,000,000-row, 15-file local table added 10-16
+of them by default, 1-3 at `LANCE_IO_THREADS=2` and 13-37 at `=64` (3 runs each). On the estate's S3 store the IO pool
+is 64 wide by default; how that shows in `lance_background` there is not measured.
 
 ### Transaction properties (pylance 13.0.0, 2026-10-14)
 
