@@ -294,9 +294,11 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   remaining attempts ([[LH-259]], ADR 0186, `service_kit.lakehouse.commit_turns`, `_commit_turns/` per table uuid), and a
   stock writer that lost its race, its staged version found taken by `version/create` (409 code 14) or its finalize lost,
   is handed the ref's next turn under its verified caller and its transaction's uuid, which pylance keeps when it stages
-  again; a writer that let a handed turn lapse unused is handed none for 30 s. Every other finalize of the ref, and the
-  unkeyed `/insert` and the create door's Overwrite right before Lance commits them, waits while a turn is held (30 s, 5 s
-  when handed, and `HOLD` at most in all), so no writer is refused. Without it a writer committing in a tight loop won
+  again, unless it staged a Merge, which Lance never retries (`transaction.md` § Merge Compatibility); a writer that let a
+  handed turn lapse unused is handed none on that ref for 3 min. Every other finalize of the ref, and the unkeyed `/insert`
+  and the create door's Overwrite right before Lance commits them, waits while a turn is held (`HOLD`, 30 s, Lance's own
+  commit-retry budget, which pylance's backoff needs on the estate: 6.2-11.7 s between attempts, measured), so no writer
+  is refused. Without it a writer committing in a tight loop won
   every version: measured, a `cast(NULL)` add lost all ten plans and a stock writer landed 0 appends beside 639. The
   capturing namespace answers no version after the one planned on, so Lance stages the next one rather than spending its
   own retries on a version committed since. Most pylance operations take no transaction properties (13.0.0: `update`,

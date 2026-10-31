@@ -224,7 +224,7 @@ async def create_table_version(
         staged = await run_in_threadpool(managed_versions.stage, ref, so, body)
     except managed_versions.VersionTakenError as exc:
         # Another writer took the version since this one staged it: a lost race, so its retry gets the ref's next turn ([[LH-259]]).
-        await run_in_threadpool(table.hand_turn, ref.branch, managed_versions.writer_turn(caller, exc.transaction_uuid))
+        await run_in_threadpool(table.hand_turn, ref.branch, managed_versions.writer_turn(caller, exc.transaction_uuid, exc.operation))
         raise
     try:
         await fga_deps.require_staged_operation(
@@ -274,7 +274,7 @@ async def create_table_version(
             partial(table_inputs.record, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), name=canonical, declared=declared)
         )
     response = await run_in_threadpool(
-        partial(managed_versions.finalize, writer=managed_versions.writer_turn(caller, staged.transaction_uuid)), table, staged, body, so
+        partial(managed_versions.finalize, writer=managed_versions.writer_turn(caller, staged.transaction_uuid, staged.operation)), table, staged, body, so
     )
     audit(
         AuditAction.COMMIT_VERSION,

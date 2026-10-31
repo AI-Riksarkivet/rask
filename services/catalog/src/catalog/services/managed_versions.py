@@ -169,16 +169,20 @@ class VersionTakenError(ConcurrentModificationError):
     exists (``lance_docs/ns_catalog/spec.yaml`` CreateTableVersion), and a lost race whose writer is handed the ref's next
     turn ([[LH-259]])."""
 
-    def __init__(self, message: str, *, transaction_uuid: str) -> None:
+    def __init__(self, message: str, *, transaction_uuid: str, operation: str) -> None:
         super().__init__(message)
         self.transaction_uuid = transaction_uuid
+        self.operation = operation
 
 
-def writer_turn(caller: str | None, transaction_uuid: str) -> commit_turns.Writer | None:
+def writer_turn(caller: str | None, transaction_uuid: str, operation: str) -> commit_turns.Writer | None:
     """The stock writer a staged commit's turn is handed to: its verified caller and the uuid of the transaction it staged,
     which pylance keeps when it stages the commit again ([[LH-259]]). ``None`` for a transaction naming no uuid, whose retry
-    could not be told from any other writer's."""
-    if not transaction_uuid:
+    could not be told from any other writer's, and for a ``Merge``, which pylance never stages again: Lance answers a Merge
+    that lost to any write of data as a conflict its application re-runs (``lance_docs/lance/format/table/transaction.md``
+    § Merge Compatibility), so a turn handed to it only holds the ref's other writers (measured on pylance 13.0.0 beside the
+    catalog's ``/insert`` appending in a tight loop: 30 s)."""
+    if not transaction_uuid or operation == "Merge":
         return None
     return commit_turns.Writer(caller=caller or "", transaction=transaction_uuid)
 
@@ -219,6 +223,9 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     except BaseException:
         _discard(location, so, detached_id, finalize_id)
         raise
+    operation = type(transaction.operation).__name__ if transaction is not None else "Unknown"
+    if operation == lance.LanceOperation.BaseOperation.__name__:
+        operation = _unmodelled_operation(manifest) or operation
     # Taken first: the version a writer staged went to another writer whatever the manifest states, and the handed turn
     # names the transaction the writer will stage again ([[LH-259]]).
     if request.version <= latest:
@@ -226,13 +233,11 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         raise VersionTakenError(
             f"commit refused: version {request.version} is taken, the latest version is {latest}; stage the commit again on it",
             transaction_uuid=transaction.uuid if transaction is not None else "",
+            operation=operation,
         )
     if stated != request.version:
         _discard(location, so, detached_id, finalize_id)
         raise InvalidInputError(f"commit refused: the staged manifest is version {stated}, the request names {request.version}")
-    operation = type(transaction.operation).__name__ if transaction is not None else "Unknown"
-    if operation == lance.LanceOperation.BaseOperation.__name__:
-        operation = _unmodelled_operation(manifest) or operation
     properties = dict(transaction.transaction_properties or {}) if transaction is not None else {}
     return StagedVersion(
         location=location,

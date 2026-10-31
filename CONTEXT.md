@@ -76,9 +76,9 @@ _Avoid_: ref lock, reclaim lease, GC lock
 
 **Commit turn**:
 Which commit a table's ref finalizes next once a commit has lost its race: a catalog door's commit takes it for its
-remaining attempts, a stock writer that lost its race is handed it for its retry, and every other writer of the ref
-waits while it is held. A turn lapses after 30 s, or 5 s when handed to a writer, and a writer that let a handed turn
-lapse unused is handed none for 30 s.
+remaining attempts, a stock writer that lost its race is handed it for its retry (a schema change, which Lance never
+retries, is handed none), and every other writer of the ref waits while it is held. A turn lapses after 30 s, Lance's own
+retry budget, and a writer that let a handed turn lapse unused is handed none on that ref for 3 min.
 _Avoid_: commit lock, write lease, schema lock
 
 ### Governance

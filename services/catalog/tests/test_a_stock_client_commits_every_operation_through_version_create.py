@@ -38,6 +38,7 @@ import pyarrow as pa
 import pytest
 import uvicorn
 from lance.bitmap import Bitmap
+from lance.commit import CommitConflictError
 from lance.dataset import Index
 from lance.optimize import Compaction
 from moto.server import ThreadedMotoServer
@@ -799,30 +800,104 @@ def _row(row: int) -> pa.Table:
     return pa.table({"id": pa.array([row], pa.int64()), "v": pa.array([row], pa.int64())})
 
 
-def test_a_stock_writer_beside_a_writer_appending_through_insert_in_a_tight_loop_lands_every_append(served: Served) -> None:
+#: How late a stock writer's commit reaches the catalog on the estate: measured 2026-10-31, a ``version/create`` took 0.8 to
+#: 2.4 s inside the catalog alone, and pylance waits 0 to 3 slots of 1.1 times that first attempt before its next.
+_ESTATE_ROUND_TRIP_SECONDS = 2.5
+
+
+class _SlowRoundTrip(lance_namespace.LanceNamespace):
+    """pylance's REST namespace with each commit reaching the catalog ``delay`` seconds late; the other calls pylance makes
+    for a commit pass straight through."""
+
+    def __init__(self, inner: lance_namespace.LanceNamespace, delay: float) -> None:
+        self._inner, self._delay = inner, delay
+
+    def namespace_id(self) -> str:
+        return self._inner.namespace_id()
+
+    def describe_table(self, request: lance_namespace.DescribeTableRequest) -> lance_namespace.DescribeTableResponse:
+        return self._inner.describe_table(request)
+
+    def list_table_versions(self, request: lance_namespace.ListTableVersionsRequest) -> lance_namespace.ListTableVersionsResponse:
+        return self._inner.list_table_versions(request)
+
+    def describe_table_version(self, request: lance_namespace.DescribeTableVersionRequest) -> lance_namespace.DescribeTableVersionResponse:
+        return self._inner.describe_table_version(request)
+
+    def create_table_version(self, request: lance_namespace.CreateTableVersionRequest) -> lance_namespace.CreateTableVersionResponse:
+        time.sleep(self._delay)
+        return self._inner.create_table_version(request)
+
+
+@pytest.mark.parametrize(
+    ("round_trip_seconds", "appends", "within_seconds"),
+    [
+        pytest.param(0.0, 30, 60, id="next-to-the-catalog"),
+        pytest.param(_ESTATE_ROUND_TRIP_SECONDS, 3, 120, id="as-far-as-on-the-estate"),
+    ],
+)
+def test_a_stock_writer_beside_a_writer_appending_through_insert_in_a_tight_loop_lands_every_append(
+    served: Served, round_trip_seconds: float, appends: int, within_seconds: int
+) -> None:
     """[[LH-259]] The catalog finalizes exactly the version a writer staged, so beside a writer the catalog's ``/insert``
     commits in-process in a tight loop, a stock writer, whose every retry is a round trip through ``version/create``, wins no
     version: measured without the turn, it landed 0 appends beside 639 and failed its commit once Lance's 30 s of retries
-    ran out. Most of its losses are found before the finalize, its staged version already taken (measured: 26 of 41), so a
-    loss found either way hands the writer the ref's next turn under its transaction's uuid, which pylance keeps when it
-    stages the commit again (measured on pylance 13.0.0); its retry lands while ``/insert`` waits, and neither fails."""
+    ran out. A loss found either way, its staged version already taken (26 of 41 measured next to the catalog) or its
+    finalize beaten, hands the writer the ref's next turn under its transaction's uuid, which pylance keeps when it stages
+    the commit again (measured on pylance 13.0.0), for as long as Lance itself retries: as far from the catalog as on the
+    estate, its retries came 6.2 to 11.7 s after each 409. Its retry lands while ``/insert`` waits, and neither fails."""
     stock = served.stock()
     stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
     lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
-    through_version_create, through_insert = served.stock(), served.stock()
+    through_version_create = _SlowRoundTrip(served.stock(), round_trip_seconds) if round_trip_seconds else served.stock()
+    through_insert = served.stock()
     writers = [
         _Appender(lambda row: lance.write_dataset(_row(row), namespace_client=through_version_create, table_id=_APPENDED_TO, mode="append"), 1),
         _Appender(lambda row: through_insert.insert_into_table(lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(row))), 10**6),
     ]
-    deadline = time.monotonic() + 60
-    while len(writers[0].landed) < 30 and not any(writer.failed for writer in writers):
-        assert time.monotonic() < deadline, "the stock writer landed fewer than 30 appends in 60 s"
+    deadline = time.monotonic() + within_seconds
+    while len(writers[0].landed) < appends and not any(writer.failed for writer in writers):
+        assert time.monotonic() < deadline, f"the stock writer landed fewer than {appends} appends in {within_seconds} s"
         time.sleep(0.01)
     for writer in writers:
         writer.stop()
 
     ids = lance.dataset(namespace_client=stock, table_id=_APPENDED_TO).to_table(columns=["id"]).column("id").to_pylist()
     assert ([writer.failed for writer in writers], sorted(ids)) == ([[], []], sorted([0, *writers[0].landed, *writers[1].landed]))
+
+
+def test_a_stock_schema_change_that_loses_to_a_writer_appending_through_insert_holds_that_writer_no_turn(served: Served) -> None:
+    """[[LH-259]] A stock writer's ``add_columns`` commits a Merge, which Lance never retries itself: a Merge that lost to an
+    append is a conflict its application re-runs (``lance_docs/lance/format/table/transaction.md`` § Merge Compatibility), so
+    pylance never stages it again, and the catalog hands it no turn. Measured with one handed: the writer appending through
+    ``/insert`` waited 30 s for a retry that never came."""
+    stock = served.stock()
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    through_insert = served.stock()
+    landed_at: list[float] = []
+
+    def append(row: int) -> None:
+        through_insert.insert_into_table(lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(row)))
+        landed_at.append(time.monotonic())
+
+    writer = _Appender(append, 10**6)
+    try:
+        deadline = time.monotonic() + 60
+        while len(landed_at) < 3 and not writer.failed:
+            assert time.monotonic() < deadline, "the writer appending through /insert never got going"
+            time.sleep(0.01)
+        with pytest.raises(CommitConflictError, match="Merge transaction was preempted by concurrent transaction Append"):
+            lance.dataset(namespace_client=_SlowRoundTrip(served.stock(), _ESTATE_ROUND_TRIP_SECONDS), table_id=_APPENDED_TO).add_columns(
+                {"n": "cast(NULL as string)"}
+            )
+        refused = time.monotonic()
+        while sum(at > refused for at in landed_at) < 3 and not writer.failed:
+            assert time.monotonic() < refused + 5, "the writer appending through /insert landed fewer than 3 appends in the 5 s after the change lost"
+            time.sleep(0.01)
+    finally:
+        writer.stop()
+    assert writer.failed == []
 
 
 #: The provenance a pipeline names on a governed write (ADR 0156 C2): its run, its job, and each input at a version.

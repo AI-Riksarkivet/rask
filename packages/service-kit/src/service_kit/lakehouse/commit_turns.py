@@ -54,18 +54,18 @@ log = logging.getLogger(__name__)
 
 PREFIX: Final = "_commit_turns"
 
-#: How long a catalog door's commit holds the turn it took: its own loop releases it at the end, and Lance's own commit
-#: retries give up after 30 s (``DEFAULT_COMMIT_RETRY_TIMEOUT``, ``rust/lance/src/io/commit.rs:88`` at v13.0.0).
+#: How long a turn is held: a catalog door's commit holds it for its remaining attempts and releases it at the end, and a
+#: stock writer is handed it for its retries. Lance's own commit retries give up after 30 s (``DEFAULT_COMMIT_RETRY_TIMEOUT``,
+#: ``rust/lance/src/io/commit.rs:88`` at v13.0.0), and each follows its conflict by a random 0 to 3 slots of 1.1 times the
+#: first attempt's duration, then 0 to 7 (``SlotBackoff``, ``rust/lance-core/src/utils/backoff.rs``), so only this budget
+#: covers every retry a writer makes: measured on the estate 2026-10-31, a stock writer's retries came 6.2, 6.7 and 11.7 s
+#: after its 409s, and a turn held 5 s lapsed before each.
 HOLD: Final = timedelta(seconds=30)
 
-#: How long a turn handed to a stock writer's retry is held. The retry follows its 409 by one rebase and one round trip
-#: (measured on pylance 13.0.0: a stock writer appending alone lands 14 one-row appends a second), and a writer that never
-#: retries, after a conflict Lance cannot rebase or a crash, holds the ref's other writers no longer than this.
-HANDED_HOLD: Final = timedelta(seconds=5)
-
-#: How long a writer whose handed turn lapsed unused is handed no other on that ref: one that loses races on purpose then
-#: holds the ref's other writers for :data:`HANDED_HOLD` of every :data:`HANDED_HOLD` plus this, rather than throughout.
-COOLDOWN: Final = timedelta(seconds=30)
+#: How long a writer whose handed turn lapsed unused is handed no other on that ref: one that keeps losing without retrying,
+#: on purpose or with its retries switched off, then holds the ref's other writers for at most :data:`HOLD` of every
+#: :data:`HOLD` plus this (30 s of every 3.5 min), and one whose turn lapsed by accident races as a writer with no turn does.
+COOLDOWN: Final = timedelta(minutes=3)
 
 #: How long a waiting finalize sleeps between two reads of the record (:func:`backoff`): 20 ms at first, so a turn of one
 #: quick commit hands over at once, doubling to 250 ms, so a writer waiting out a whole hold reads the record about 130 times
@@ -210,15 +210,15 @@ class TableTurns(BaseModel):
         return self._take(ref, token=uuid.uuid4().hex, hold=HOLD, deadline=time.monotonic() + HOLD.total_seconds(), handed_to=None)
 
     def hand(self, ref: str | None, writer: Writer) -> None:
-        """Hand ``ref``'s turn to ``writer`` for :data:`HANDED_HOLD`, unless another commit holds it now; a turn ``writer``
-        holds already is kept as it is.
+        """Hand ``ref``'s turn to ``writer`` for :data:`HOLD`, unless another commit holds it now; a turn ``writer`` holds
+        already is kept as it is.
 
         Raises:
             CommitTurnBusyError: Another commit holds the turn, a turn handed to ``writer``'s caller lapsed unused within
                 :data:`COOLDOWN`, or every round lost to another writer of the record.
             botocore.exceptions.ClientError: The store refused a read or a write.
         """
-        self._take(ref, token=writer.token, hold=HANDED_HOLD, deadline=time.monotonic(), handed_to=writer.caller)
+        self._take(ref, token=writer.token, hold=HOLD, deadline=time.monotonic(), handed_to=writer.caller)
 
     def release(self, token: str) -> None:
         """End the turn ``token`` names, held or handed and lapsed. Never raises: a turn this cannot end lapses at the hold
