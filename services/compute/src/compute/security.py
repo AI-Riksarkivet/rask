@@ -1,10 +1,10 @@
 """Who may look at the estate's compute.
 
 Every route in this service reads the Ray plane: `{prefix}/ray/*` (jobs, actors, tasks, cluster,
-logs, overview) and the root-mounted `/api/serve/*` proxy, which is a `{path:path}` catch-all onto
-the Ray dashboard. The dashboard is itself token-protected — the chart turns `ray.auth.enabled` on and
-injects `RAY_AUTH_TOKEN` — and this service holds that token and forwarded it on behalf of anyone who
-could reach the port.
+logs, overview) and the root-mounted `/api/serve/applications` proxy onto the Ray dashboard. The
+dashboard is itself token-protected — the chart turns `ray.auth.enabled` on and injects
+`RAY_AUTH_TOKEN` — and this service holds that token and forwarded it on behalf of anyone who could
+reach the port.
 
 It shipped ungated under the "localhost / trusted network" posture `CLAUDE.md` documented until
 2026-08-26. That posture was already false (the chart defaults auth ON, `ingress.yaml` publishes
@@ -42,9 +42,9 @@ READ = "can_observe_events"
 async def require_read(subject: CurrentSubject, checker: CheckerDep, settings: ComputeSettingsDep) -> None:
     """Refuse a caller who may not look at the estate's compute.
 
-    Mounted as a ROUTER dependency on both routers. Per route would not be enough: `proxy.py`
-    registers a `{path:path}` catch-all, so anything the Ray dashboard serves is reachable through it
-    and a per-route list could pass while the catch-all stayed open.
+    Mounted as a ROUTER dependency on both routers, so it gates every route they register, the
+    `/api/serve/applications` proxy included. Per route would not be enough for the Ray routes: a
+    router-level gate cannot be skipped by a route added later without the dependency.
     """
     obj = settings.fga_root_object
     allowed = await checker(user=subject, relation=READ, obj=obj)
