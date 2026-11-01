@@ -10,7 +10,8 @@ the name inherits neither (ADR 0173 §8):
   made it. Keyed by the transaction's uuid, never the version number, because a commit that loses its race leaves its
   record for a version another writer then holds.
 - **The reconciler's mark** (``_commit_marks/table-<digest>.json``): for each ref of the table, the highest version up
-  to which every version is known announced, so a pass reads only the versions after it.
+  to which no version is left to announce, so a pass reads only the versions after it. A registered table's first mark
+  is its register's, at each ref's head: the versions a register attaches were committed past every door ([[LH-550]]).
 
 Every function is BLOCKING IO; callers threadpool it.
 """
@@ -76,7 +77,8 @@ def end_authors(control_root: str, storage_options: StorageOptions, table_uuid: 
 
 
 class CommitMarks(BaseModel):
-    """For each ref of one table, the highest version up to which every version's announcement is known recorded.
+    """For each ref of one table, the highest version up to which no version is left to announce: each is on the feed, is
+    one no door announces, was counted unauthored, is past the horizon, or was committed before the table's register.
 
     A ref is keyed by its name and its incarnation, ``""`` for main: a deleted and recreated branch restarts its
     numbering, so a mark kept for its earlier incarnation says nothing about the new one.

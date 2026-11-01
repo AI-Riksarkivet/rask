@@ -7,6 +7,7 @@ import logging
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated
+from uuid import uuid4
 
 import lance
 from fastapi import APIRouter, Header, Query, Request, Response
@@ -93,7 +94,7 @@ from catalog.core.vending import (
     vend_or_refuse,
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import dataplane, native, table_bases, table_claims, trash_doors, warehouses
+from catalog.services import commit_reconcile, dataplane, native, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
@@ -1213,24 +1214,33 @@ async def register_table(
     # the body is stored re-encoded, so the body's spelling can decode to another key.
     stated_location = f"{root.rstrip('/')}/{body.location}"
     claimed_location = await run_in_threadpool(absolute_table_location, ns, segments, stated_location) or stated_location
+    # A new uuid for this table ([[LH-519]]), even where an earlier table's claim was released, minted before the claim
+    # records it so that the table's commit marks are kept under it first.
+    table_uuid = str(uuid4())
 
     async def _detach() -> None:
         # DEREGISTER, never drop. Register ATTACHES bytes that already existed and are not ours to
         # destroy — the whole point of the door. Deregister is the exact inverse: it removes the
         # catalog object this request created and leaves the data exactly where it was found. The
         # location's claim goes with it; one another table holds is not this registration's to free.
+        # The records kept under this request's uuid go last, once no table holds it.
         await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
         await run_in_threadpool(location_claims.release, claims, claimed_location, canonical)
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
 
     # AFTER THE REGISTER, because only the backend knows which root a relative location resolves
     # against and the overlap check must see this registration's own row; BEFORE THE SEED, so a refused
-    # dataset never gains an owner, a record entry, a lineage node or an event. The location's claim
-    # first ([[LH-204]]): a rename holding it, or a table a recoverable drop is keeping it for, refuses
-    # this registration even when the manifest shows no other row at the location. The claim records the
-    # uuid minted for this table ([[LH-519]]), a new one even where an earlier table's claim was released.
+    # dataset never gains an owner, a record entry, a lineage node or an event. The commit marks first, at
+    # each ref's head ([[LH-550]]): every version the dataset holds now was committed past every door, and
+    # the claim is what makes the table one the commit reconciler reads. Then the location's claim
+    # ([[LH-204]]): a rename holding it, or a table a recoverable drop is keeping it for, refuses
+    # this registration even when the manifest shows no other row at the location.
     try:
+        await run_in_threadpool(partial(commit_reconcile.mark_registered_heads, settings, so, location=claimed_location, table_uuid=table_uuid))
         try:
-            minted = await run_in_threadpool(table_claims.claim_new_table, ns, claims, claimed_location, table=canonical, segments=segments)
+            await run_in_threadpool(
+                partial(table_claims.claim_new_table, ns, claims, claimed_location, table=canonical, segments=segments, table_uuid=table_uuid)
+            )
         except location_claims.LocationHeldError as held:
             log.warning("register_refused_held_location", extra={"table": id, "location": held.claim.location, "holder": held.claim.table})
             raise table_bases.occupied_location_refusal(body.location) from None
@@ -1251,9 +1261,6 @@ async def register_table(
             ) from undo_exc
         raise
     location = verdict.location
-    table_uuid = minted.uuid
-    if table_uuid is None:
-        raise InternalError(f"the claim taken for {id} records no uuid")
 
     async def _undo_register() -> None:
         # Detach first: while the table is attached its record must stay, because its manifest still

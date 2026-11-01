@@ -9,6 +9,12 @@ re-announcement says so (`rask_lance.reannounced`) and a write's own announcemen
 own announcement on its signature, and checks a re-announcement, whose author only the version log names, as it checks any
 producer's event ([[LH-551]]).
 
+A registered table's versions before its register were committed past every door, so none is the catalog's to announce,
+whatever ``rask.author`` it carries: the register's own marker is its announcement, and only a commit made through the
+catalog after the register is looked for ([[LH-550]]). Here the history is a stock create, an append naming another
+estate's person and an append on a branch; on this catalog, which authenticates nobody, each would be announced if it were
+looked for, and on one that authenticates the first would be counted unauthored.
+
 Driven over real sockets against the real catalog and lineage apps on a real ``dir`` namespace, as
 `test_the_commit_feed_is_a_lance_table_followed_forward.py` drives them: the claim is about what a pipeline following
 ``/events?since=`` reads. What stands in is the gate, a recording hop in front of lineage, and the paging counter, recorded by a double of its
@@ -56,13 +62,13 @@ def _follow(client: httpx.Client) -> list[dict[str, Any]]:
     raise AssertionError(f"the walk did not settle: {seen}")
 
 
-def _commits(rows: list[dict[str, Any]]) -> list[tuple[str, str, str, bool]]:
-    """``(table, operation, version, re-announced)`` of each feed row announcing a write of ``db$t``."""
+def _commits(rows: list[dict[str, Any]], table: str) -> list[tuple[str, str, str, bool]]:
+    """``(table, operation, version, re-announced)`` of each feed row announcing a write of ``table``."""
     found = []
     for row in rows:
         event: Mapping[str, Any] = row["event"]
         for output in event.get("outputs") or []:
-            if output["name"] == "db$t":
+            if output["name"] == table:
                 lance = event["run"]["facets"]["rask_lance"]
                 found.append((output["name"], lance["operation"], output["facets"]["version"]["datasetVersion"], lance.get("reannounced") is True))
     return found
@@ -130,7 +136,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(tmp_path
 
             with live_lineage(catalog_url, monkeypatch, port=free_port()) as lineage_url, httpx.Client(base_url=lineage_url, timeout=60) as lineage:
                 gate.lineage = lineage_url
-                assert _commits(_follow(lineage)) == [], "the writes' own announcements reached the feed, so none was lost"
+                assert _commits(_follow(lineage), "db$t") == [], "the writes' own announcements reached the feed, so none was lost"
 
                 # A retained version the store fails to open once: the tick keeps the ref's mark, and skips nothing for it.
                 real_checkout = lance.LanceDataset.checkout_version
@@ -149,7 +155,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(tmp_path
                 tick = catalog.post(f"/{_TICK}")
                 assert tick.status_code == 200, tick.text
                 assert tick.json()["reannounced"] == 2, tick.json()
-                assert _commits(_follow(lineage)) == [("db$t", "create_table", "1", True), ("db$t", "insert", "2", True)]
+                assert _commits(_follow(lineage), "db$t") == [("db$t", "create_table", "1", True), ("db$t", "insert", "2", True)]
 
                 # Each write's own announcement arriving late, as the outbox relay delivers one it had staged.
                 for original in originals:
@@ -157,10 +163,30 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(tmp_path
                     assert late.status_code == 201, late.text
                 again = catalog.post(f"/{_TICK}")
                 assert (again.json()["reannounced"], again.json()["unreadable"]) == (0, 0), again.json()
-                assert _commits(_follow(lineage)) == [("db$t", "create_table", "1", True), ("db$t", "insert", "2", True)]
+                assert _commits(_follow(lineage), "db$t") == [("db$t", "create_table", "1", True), ("db$t", "insert", "2", True)]
 
-    assert [amount for amount, _ in counted.added] == [1, 1]
+                # A dataset written outside the catalog, registered, then written through the catalog while the gate is
+                # down again: only that last write's announcement is the catalog's, and lost.
+                gate.lineage = None
+                outside = str(tmp_path / "catalog" / "outside" / "registered")
+                stock = lance.write_dataset(pa.table({"id": pa.array([0, 1], pa.int64())}), outside, data_storage_version="2.2", enable_stable_row_ids=True)
+                stock = lance.write_dataset(
+                    pa.table({"id": pa.array([2], pa.int64())}), stock, mode="append", transaction_properties={"rask.author": "dex~mallory"}
+                )
+                stock.create_branch("work")
+                lance.dataset(outside).checkout_version(("work", None)).insert(pa.table({"id": pa.array([3], pa.int64())}))
+                registered = catalog.post("/v1/table/db$registered/register", json={"location": "outside/registered"})
+                assert registered.status_code == 200, registered.text
+                assert catalog.post("/v1/table/db$registered/insert", content=_rows(4, 5), headers=_ARROW).status_code == 200
+                gate.lineage = lineage_url
+
+                after_register = catalog.post(f"/{_TICK}")
+                assert (after_register.json()["reannounced"], after_register.json()["unreadable"]) == (1, 0), after_register.json()
+                assert _commits(_follow(lineage), "db$registered") == [("db$registered", "insert", "3", True)]
+
+    assert [amount for amount, _ in counted.added] == [1, 1, 1]
     assert [dict(attributes or {}) for _, attributes in counted.added] == [
         {"lance.catalog.operation": "create_table"},
+        {"lance.catalog.operation": "insert"},
         {"lance.catalog.operation": "insert"},
     ]

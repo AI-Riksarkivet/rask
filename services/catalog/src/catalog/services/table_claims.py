@@ -584,11 +584,12 @@ def take(
     return location_claims.take(store, location, table, segments, previous=previous, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim))
 
 
-def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str], table_uuid: str | None = None) -> LocationClaim:
-    """Make a table this request brings into being the holder of ``location``, under its uuid (ADR 0173 §2).
+def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str], table_uuid: str) -> LocationClaim:
+    """Make a table this request brings into being the holder of ``location``, under the uuid its door minted (ADR 0173 §2).
 
-    ``table_uuid`` is the uuid a declaration minted, because the location it declares is named after it
-    ([[LH-520]]); a registration's location is its registrar's, so its uuid is minted here. A claim the location
+    The door mints ``table_uuid`` before the claim: a declaration because the location it declares is named after it
+    ([[LH-520]]), a registration because the table's commit marks are kept under it before the claim makes the table one
+    the commit reconciler reads ([[LH-550]]). A claim the location
     still holds under ``table``'s name is an ended table's, since the door brings a table of that name into being:
     it is replaced, as a released claim and a gone holder's are, unless the trash keeps it for that table's undrop: its
     name is free again, its location is not ([[LH-525]]). A table attached where an earlier one was
@@ -597,9 +598,14 @@ def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, tab
     Raises:
         LocationHeldError: Another table holds the location.
     """
-    minted = table_uuid or str(uuid4())
     return location_claims.take(
-        store, location, table, segments, uuid=minted, is_gone=lambda claim: holder_is_gone(ns, store, claim), is_kept=lambda claim: kept_in_trash(store, claim)
+        store,
+        location,
+        table,
+        segments,
+        uuid=table_uuid,
+        is_gone=lambda claim: holder_is_gone(ns, store, claim),
+        is_kept=lambda claim: kept_in_trash(store, claim),
     )
 
 

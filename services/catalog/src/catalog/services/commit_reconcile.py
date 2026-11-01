@@ -16,6 +16,11 @@ A version is looked for only once it is older than the grace (``LANCE_COMMIT_REC
 publish and the outbox relay deliver a commit's own announcement well within it, and announcing one they are still
 delivering would only be a duplicate, which the derived run id lands once anyway.
 
+A REGISTERED table is looked at only after its register ([[LH-550]]). The versions a register attaches were committed
+past every door, so the catalog announced none of them and vouches for no ``rask.author`` they carry; the register's own
+``register_table`` marker is their announcement. The register door marks each ref at the head it found
+(:func:`mark_registered_heads`) before the table's claim makes it one a pass reads.
+
 Every function is BLOCKING IO; callers threadpool it.
 """
 
@@ -29,7 +34,7 @@ from functools import partial
 from typing import Any, Final
 
 import lance
-from lance_namespace import InvalidInputError
+from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core import lineage_emit, run_context
@@ -37,6 +42,7 @@ from catalog.core.config import Settings
 from catalog.services import dataplane, managed_versions, provenance_namespace
 from service_kit.governed import fga
 from service_kit.lakehouse import commit_records
+from service_kit.lakehouse.features import flags_from_open_error
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.filters import sql_literal
 from service_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, dataset_uuids
@@ -137,13 +143,56 @@ def _commits_named(event: dict[str, Any], table_uuid: str) -> Iterator[tuple[str
         yield commit_records.ref_key(ref, identifier), version
 
 
-def refs_of(location: str, so: StorageOptions, segments: list[str]) -> list[tuple[str | None, str | None]]:
+def refs_of(location: str, so: StorageOptions) -> list[tuple[str | None, str | None]]:
     """Main and every branch of the table, each with its incarnation (pylance's ``branch_identifier``)."""
-    dataset = lance.dataset(location, storage_options=so.in_clear() or None)
-    refs: list[tuple[str | None, str | None]] = [(None, None)]
-    for name in sorted(dataset.branches.list() or {}):
-        refs.append((name, dataplane.branch_identifier(location, so, segments, name)))
-    return refs
+    return _listed_refs(lance.dataset(location, storage_options=so.in_clear() or None))
+
+
+def _listed_refs(dataset: lance.LanceDataset) -> list[tuple[str | None, str | None]]:
+    """Main, then each branch ``dataset`` lists, with the incarnation the same listing records: the one key a pass and a
+    register's marks both read a ref by."""
+    listed = dataset.branches.list() or {}
+    return [(None, None), *((name, dataplane.identifier_of(listed[name])) for name in sorted(listed))]
+
+
+def mark_registered_heads(settings: Settings, so: StorageOptions, *, location: str, table_uuid: str) -> None:
+    """Mark every ref of the dataset at ``location`` at its head, under ``table_uuid``: a pass then looks only for the
+    commits made after the register that attaches it ([[LH-550]]).
+
+    Each ref is keyed as :func:`reconcile_table` keys it, main and each branch by its incarnation. A location holding no
+    committed version has no head to mark, and a pass finds nothing there until a commit lands.
+
+    Raises:
+        ServiceUnavailableError: A ref's head could not be read or the mark could not be written; no mark was written.
+    """
+    try:
+        heads = _registered_heads(location, so)
+        if heads:
+            commit_records.write_marks(settings.registry_root, settings.storage_options(), table_uuid, commit_records.CommitMarks(refs=heads))
+    except (OSError, ValueError) as exc:
+        log.warning("registered_heads_unmarked", extra={"location": location, "error": str(exc)[:300]})
+        raise ServiceUnavailableError(f"the heads of the dataset at {location!r} could not be read and marked, so it was not registered") from exc
+
+
+def _registered_heads(location: str, so: StorageOptions) -> dict[str, int]:
+    """Each ref's head version, keyed as a mark keys it.
+
+    None when the location holds no committed version, or when pylance refuses to open the dataset over its feature
+    flags: the register's judge refuses such a dataset, 400 for mixed data file versions and 503 for any other flag
+    (`table_bases.judge_registered_table`).
+    """
+    if not dataplane.holds_a_version(location, so):
+        return {}
+    try:
+        dataset = lance.dataset(location, storage_options=so.in_clear() or None)
+    except (OSError, ValueError) as exc:
+        if flags_from_open_error(exc) is not None:
+            return {}
+        raise
+    return {
+        commit_records.ref_key(branch, identifier): (dataset if branch is None else dataset.checkout_version((branch, None))).version
+        for branch, identifier in _listed_refs(dataset)
+    }
 
 
 class ReconcileReadError(Exception):
@@ -339,7 +388,7 @@ def reconcile_table(
     parent = fga.parent_namespace_id(segments) or ""
     scans: list[RefScan] = []
     unreadable: list[str] = []
-    for branch, identifier in refs_of(location, so, segments):
+    for branch, identifier in refs_of(location, so):
         try:
             scans.append(
                 scan_ref(

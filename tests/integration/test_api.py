@@ -311,15 +311,17 @@ def _capture_emit(monkeypatch, module: str) -> dict[str, object]:
 
 
 def _judge_as_single_version(monkeypatch) -> None:
-    """The register door opens the dataset it attached; a MagicMock backend attaches none.
+    """The register door opens the dataset it attached, to mark its heads and to judge it; a MagicMock backend attaches none.
 
-    Only the dataset read is replaced — a single-version dataset with stable row ids declaring no base — so the describe that
-    resolves the location still runs. What the door does with a real mixed dataset is pinned in
-    `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`, and its location-exclusivity in
-    `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py`.
+    Only the dataset reads are replaced — no heads to mark, and a single-version dataset with stable row ids declaring no
+    base to judge — so the describe that resolves the location still runs. What the door does with a real mixed dataset is
+    pinned in `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`, its location-exclusivity in
+    `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py`, and its heads in
+    `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
     """
     from catalog.core.namespace import RegisteredDataset
 
+    monkeypatch.setattr("catalog.services.commit_reconcile.mark_registered_heads", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         "catalog.services.table_bases.registered_dataset_facts", lambda _location, _storage_options: RegisteredDataset(mixed=False, stable_row_ids=True)
     )

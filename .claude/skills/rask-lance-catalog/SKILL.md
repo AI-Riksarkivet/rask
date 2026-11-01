@@ -334,6 +334,12 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   `catalog.commit_reconcile.reannounced`, and a version of an announced operation with no author counts
   `catalog.commit_reconcile.unauthored` (both page, `deploy/alerting/rules.yml`). A mark moves only past versions
   confirmed on the feed, unannounced by design (a `Clone`, a config-only disarm, a provenance row write) or unauthored.
+  A registered table's first mark is its register's ([[LH-550]]): the register door mints the table's uuid, marks each
+  ref at its head (`commit_reconcile.mark_registered_heads`, 503 code 17 when a head cannot be read; a dataset pylance
+  refuses over its feature flags is left to the judge, which refuses it, 400 for flag 256 and 503 for any other) and
+  only then takes the location's claim, which is what makes a table one the tick reads. The versions a register attaches
+  were committed past every door, so none is announced or counted, whatever `rask.author` it carries; its
+  `register_table` marker is their announcement. A refused or undone register ends the records under that uuid.
   The catalog refuses an announced write while it holds no commit id key (`api/signing_gate.py`). Pinned by
   `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
 
