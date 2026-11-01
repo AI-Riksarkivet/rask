@@ -3,7 +3,9 @@
 A committed version is announced as a run whose id the catalog derives from the commit's own coordinates: the table's
 uuid, the ref it landed on, that ref's incarnation and the version. The original announcement and a re-announcement the
 reconciler makes from the version log (`catalog.services.commit_reconcile`) carry the same id, so lineage's feed, which
-keys a run's terminal state on ``<runId>@COMPLETE``, lands one row however many arrive.
+keys a run's terminal state on ``<runId>@COMPLETE``, lands one row however many arrive. A publication, which moves a tag
+and commits nothing, is announced under an id derived the same way from the table's uuid, the operation, the version the
+tag moved to and the time the tag file records the move at ([[LH-552]]).
 
 THE DERIVATION IS KEYED (owner, 2026-10-25). Lineage binds a run id to the author of its first recorded event and never
 lets another extend it ([[LIN-5]]), and any producer holding ``can_write_data`` on some table may post a RunEvent with any
@@ -57,8 +59,24 @@ def commit_run_id(key: bytes, *, table_uuid: str, branch: str | None, branch_ide
     The incarnation is part of it because a deleted and recreated branch restarts its numbering, so ``(branch, version)``
     alone names two commits (pylance 12 records a fresh ``branch_identifier`` per create).
     """
-    message = "\x1f".join((table_uuid, branch or "", branch_identifier or "", str(version))).encode()
-    value = int.from_bytes(hmac.new(key, message, hashlib.sha256).digest()[:16])
+    return _keyed_uuid(key, (table_uuid, branch or "", branch_identifier or "", str(version)))
+
+
+def tag_move_run_id(key: bytes, *, table_uuid: str, operation: str, version: int, moved_at: str) -> str:
+    """The run id of the announcement that ``operation`` moved its tag on ``table_uuid`` to ``version`` of main at
+    ``moved_at`` ([[LH-552]]): every announcement of one move is one run.
+
+    ``moved_at`` is the tag file's own ``updatedAt`` (`lance_docs/lance/format/table/branch_tag.md` § Tag File Format), as
+    the door reads it right after the move and the reconciler reads it later: the version alone does not name a move,
+    since a tag an erasure dropped can be moved to a version it named before. The first field is a word no uuid spells,
+    so no move's id is a commit's.
+    """
+    return _keyed_uuid(key, ("tag", table_uuid, operation, str(version), moved_at))
+
+
+def _keyed_uuid(key: bytes, fields: tuple[str, ...]) -> str:
+    """A UUIDv8 carrying 122 bits of HMAC-SHA256 under ``key`` over ``fields``, separated by a unit separator."""
+    value = int.from_bytes(hmac.new(key, "\x1f".join(fields).encode(), hashlib.sha256).digest()[:16])
     # Version 8 and the RFC 9562 variant, set by hand: Python 3.13's `uuid.UUID(version=...)` takes 1 to 5 only.
     value = (value & ~(0xF << 76)) | (8 << 76)
     value = (value & ~(0x3 << 62)) | (0x2 << 62)

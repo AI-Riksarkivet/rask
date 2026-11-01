@@ -20,6 +20,12 @@ count, whatever ``rask.author`` it carries: the register's own marker is its ann
 the catalog after the register is looked for. Here the history is a stock create, an append naming another estate's person
 and an append on a branch, each of which would be counted unauthored or announced if it were looked for.
 
+A publication commits no version, so the tick reads it off the table's ``published`` tag ([[LH-552]]): one whose
+announcement was lost is announced for the caller the catalog recorded moving the tag, under the run id derived from the
+move, so the original arriving late lands no second row. A ``published`` moved straight at the store names no mover the
+catalog recorded: it is counted unauthored once and announced for nobody. A version published again after an erasure
+dropped the tag is a move of its own, announced as a second publication.
+
 Driven over real sockets against the real catalog and lineage apps on a real ``dir`` namespace, as
 `test_the_commit_feed_is_a_lance_table_followed_forward.py` drives them: the claim is about what a pipeline following
 ``/events?since=`` reads. The catalog authenticates every caller, alice through the loopback Dex and lineage's catalog
@@ -80,10 +86,21 @@ def _commits(rows: list[dict[str, Any]], table: str) -> list[tuple[str, str, str
     for row in rows:
         event: Mapping[str, Any] = row["event"]
         for output in event.get("outputs") or []:
-            if output["name"] == table:
+            if output["name"] == table and event["run"]["facets"]["rask_lance"]["operation"] != "publish_table":
                 facets = event["run"]["facets"]
                 author = (facets.get("rask_author") or {}).get("sub")
                 found.append((output["name"], facets["rask_lance"]["operation"], output["facets"]["version"]["datasetVersion"], author))
+    return found
+
+
+def _publications(rows: list[dict[str, Any]], table: str) -> list[tuple[int, str | None]]:
+    """``(version, author)`` of each feed row announcing that ``published`` moved on ``table``."""
+    found = []
+    for row in rows:
+        event: Mapping[str, Any] = row["event"]
+        facets = (event.get("run") or {}).get("facets") or {}
+        if (facets.get("rask_lance") or {}).get("operation") == "publish_table" and any(output["name"] == table for output in event.get("outputs") or []):
+            found.append((facets["rask_lance"]["version"], (facets.get("rask_author") or {}).get("sub")))
     return found
 
 
@@ -311,7 +328,55 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
                 uuid_of_registered = catalog.post("/v1/table/db$registered/describe", json={}).json()["properties"]["rask.uuid"]
                 assert {path.name for path in (Path(control) / commit_records.AUTHORS_PREFIX).iterdir()} == {uuid_of_t, uuid_of_registered}
 
-    assert [amount for amount, _ in counted.added] == [1, 1, 1, 1]
+                # A version published while the gate is down: the tag moves, and its announcement is lost after the move.
+                gate.lineage = None
+                published = catalog.post("/management/v1/table/db$t/publish", json={"version": 3, "key_column": "id"})
+                assert (published.status_code, published.json()["published"]) == (200, True), published.text
+                lost = [event for event in gate.refused if _publications([{"event": event}], "db$t")]
+                assert len(lost) == 1, gate.refused
+                gate.lineage = lineage_url
+                republished = catalog.post(f"/{_TICK}")
+                assert (republished.json()["reannounced"], republished.json()["unauthored"]) == (1, 0), republished.json()
+                assert _publications(_follow(lineage), "db$t") == [(3, author)]
+                late = lineage.post("/api/v1/lineage", json=lost[0], headers=alice)
+                assert late.status_code == 201, late.text
+                assert _publications(_follow(lineage), "db$t") == [(3, author)]
+                # A publication the feed holds is not announced again, nor is a retry of it, which moves nothing.
+                assert catalog.post(f"/{_TICK}").json()["reannounced"] == 0
+                retried = catalog.post("/management/v1/table/db$t/publish", json={"version": 3, "key_column": "id"})
+                assert (retried.status_code, retried.json()["published"]) == (200, True), retried.text
+                after_the_retry = catalog.post(f"/{_TICK}").json()
+                assert (after_the_retry["reannounced"], after_the_retry["unauthored"]) == (0, 0), after_the_retry
+
+                # `published` moved straight at the store, past every door: counted unauthored once, announced for nobody,
+                # and the record of the publication before it forgotten.
+                lance.dataset(location).tags.update("published", 4)
+                # A mover record that cannot be read stops the judgement rather than reading as no record.
+                unreadable_mover = Path(control) / commit_records.AUTHORS_PREFIX / uuid_of_t / "tags" / "published" / "9.json"
+                unreadable_mover.parent.mkdir(parents=True, exist_ok=True)
+                unreadable_mover.write_text("not a record")
+                held_back = catalog.post(f"/{_TICK}").json()
+                unreadable_mover.unlink()
+                assert (held_back["unauthored"], held_back["unreadable"]) == (0, 1), held_back
+                past_the_tag_door = catalog.post(f"/{_TICK}")
+                assert (past_the_tag_door.json()["reannounced"], past_the_tag_door.json()["unauthored"]) == (0, 1), past_the_tag_door.json()
+                assert catalog.post(f"/{_TICK}").json()["unauthored"] == 0
+                assert _publications(_follow(lineage), "db$t") == [(3, author)]
+                assert commit_records.tag_movers(control, control_so, uuid_of_t, tag="published") == []
+
+                # An erasure drops `published`, and the version it named before is published again while the gate is down: a
+                # move of its own, so the tick announces it as a run of its own, and its original arriving late is that run.
+                lance.dataset(location).tags.delete("published")
+                gate.lineage = None
+                again = catalog.post("/management/v1/table/db$t/publish", json={"version": 3, "key_column": "id"})
+                assert (again.status_code, again.json()["published"]) == (200, True), again.text
+                lost_again = [event for event in gate.refused if _publications([{"event": event}], "db$t")][1:]
+                gate.lineage = lineage_url
+                assert catalog.post(f"/{_TICK}").json()["reannounced"] == 1
+                assert lineage.post("/api/v1/lineage", json=lost_again[0], headers=alice).status_code == 201
+                assert _publications(_follow(lineage), "db$t") == [(3, author), (3, author)]
+
+    assert [amount for amount, _ in counted.added] == [1, 1, 1, 1, 1, 1]
     # The create, both inserts the catalog recorded, the refused one, and the registered table's insert.
     assert [amount for amount, _ in unrecorded.added] == [0, 0, 1, 0, 0]
     assert [dict(attributes or {}) for _, attributes in counted.added] == [
@@ -319,4 +384,6 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
         {"lance.catalog.operation": "insert"},
         {"lance.catalog.operation": "delete"},
         {"lance.catalog.operation": "insert"},
+        {"lance.catalog.operation": "publish_table"},
+        {"lance.catalog.operation": "publish_table"},
     ]

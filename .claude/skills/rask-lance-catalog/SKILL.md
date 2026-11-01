@@ -356,7 +356,14 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   only then takes the location's claim, which is what makes a table one the tick reads. The versions a register attaches
   were committed past every door, so none is announced or counted, whatever `rask.author` it carries; its
   `register_table` marker is their announcement. A refused or undone register ends the records under that uuid.
-  The catalog refuses an announced write while it holds no commit id key (`api/signing_gate.py`). Pinned by
+  The catalog refuses an announced write while it holds no commit id key (`api/signing_gate.py`). A publication commits
+  no version, so the same tick reads it off the table's `published` tag ([[LH-552]], ADR 0188): the publish and approve
+  doors record the mover right before an advancing move (`commit_records.record_tag_move`, under the table's
+  `_commit_authors/<uuid>/tags/published/`), the run id is derived from the table's uuid, the version and the tag
+  file's `updatedAt` (`commit_ids.tag_move_run_id`, since an erasure can drop the tag and a version be published again),
+  and a move the feed holds no run for is announced for that mover; one with no recorded mover is counted unauthored once
+  (the `tag:published` mark, keyed by the move). A table's lifecycle markers (declare, register, rename,
+  drop, deregister) stay best-effort, as in Lakekeeper and Polaris. Pinned by
   `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
 
 ## Storage — what state lives where (and why there is NO app database)

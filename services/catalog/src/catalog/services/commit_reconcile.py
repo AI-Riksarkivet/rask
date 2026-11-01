@@ -17,6 +17,14 @@ A version is looked for only once it is older than the grace (``LANCE_COMMIT_REC
 publish and the outbox relay deliver a commit's own announcement well within it, and announcing one they are still
 delivering would only be a duplicate, which the derived run id lands once anyway.
 
+A PUBLICATION is looked for too ([[LH-552]]). Moving a table's ``published`` tag commits no version, so its
+announcement is in no version log; the tag itself is the outbox. A pass reads the version the tag names now, and when
+the feed holds no ``publish_table`` naming it, the tag moved before the grace and the catalog recorded the caller its
+door authorized the move for (:func:`commit_records.record_tag_move`), it hands that publication to the caller to
+announce under the run id derived from the move. A publication the catalog recorded no mover for was made past every
+door, and is counted as a version is. Only the version the tag names now is looked for: the tag only ever advances, so a
+publication moved past before a pass reads it is superseded by the one readers now read.
+
 A REGISTERED table is looked at only after its register ([[LH-550]]). The versions a register attaches were committed
 past every door, so the catalog announced none of them and vouches for no ``rask.author`` they carry; the register's own
 ``register_table`` marker is their announcement. The register door marks each ref at the head it found
@@ -30,7 +38,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final
 
 import lance
@@ -40,6 +48,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core import lineage_emit, run_context
 from catalog.core.config import Settings
 from catalog.services import dataplane, managed_versions, provenance_namespace
+from catalog.services.publication import PUBLISHED_TAG
 from service_kit.governed import fga
 from service_kit.lakehouse import commit_records
 from service_kit.lakehouse.features import flags_from_open_error
@@ -95,25 +104,39 @@ class RefScan(BaseModel):
     mark: int | None = None
 
 
-def announced_commits(feed_location: str, so: StorageOptions, table_uuid: str, *, since: datetime) -> set[tuple[str, int]]:
-    """The ``(ref key, version)`` of every commit of ``table_uuid`` the feed holds a row for, received at ``since`` or after.
+class Announced(BaseModel):
+    """What the feed holds of one table."""
 
-    The ref key is :func:`commit_records.ref_key`'s. A row naming the table among its outputs (a run) or as its dataset
-    (a static change) at a version counts, whatever the name it used.
+    model_config = ConfigDict(frozen=True)
+
+    #: The ``(ref key, version)`` of every commit announced; the ref key is :func:`commit_records.ref_key`'s.
+    commits: frozenset[tuple[str, int]] = frozenset()
+    #: The run id of every ``publish_table`` naming the table: a publication's names its move ([[LH-552]]).
+    publications: frozenset[str] = frozenset()
+
+
+def announced(feed_location: str, so: StorageOptions, table_uuid: str, *, since: datetime) -> Announced:
+    """Every commit of ``table_uuid`` and every publication of it the feed holds a row for, received at ``since`` or after.
+
+    A row naming the table among its outputs (a run) or as its dataset (a static change) at a version counts, whatever
+    the name it used.
     """
     feed = lance.dataset(feed_location, storage_options=so.in_clear() or None)
     rows = feed.to_table(
         columns=["event"],
         filter=f"array_has(table_uuids, {sql_literal(table_uuid)}) AND received_at >= TIMESTAMP {sql_literal(since.strftime('%Y-%m-%d %H:%M:%S'))}",
     )
-    found: set[tuple[str, int]] = set()
+    commits: set[tuple[str, int]] = set()
+    publications: set[str] = set()
     for text in rows.column("event").to_pylist():
         try:
             event = json.loads(text)
         except (TypeError, ValueError):
             continue
-        found |= set(_commits_named(event, table_uuid))
-    return found
+        commits |= set(_commits_named(event, table_uuid))
+        if _names_a_publication(event, table_uuid):
+            publications.add(str(_mapping(event.get("run")).get("runId")))
+    return Announced(commits=frozenset(commits), publications=frozenset(publications))
 
 
 def _mapping(value: object) -> dict[str, Any]:
@@ -142,6 +165,14 @@ def _commits_named(event: dict[str, Any], table_uuid: str) -> Iterator[tuple[str
         ref = named.get("ref") if isinstance(named.get("ref"), str) else None
         identifier = named.get(BRANCH_IDENTIFIER) if isinstance(named.get(BRANCH_IDENTIFIER), str) else None
         yield commit_records.ref_key(ref, identifier), version
+
+
+def _names_a_publication(event: dict[str, Any], table_uuid: str) -> bool:
+    """Whether ``event`` is a ``publish_table`` run naming the table among its outputs."""
+    run_lance = _mapping(_mapping(_mapping(event.get("run")).get("facets")).get(LANCE_FACET))
+    outputs = event.get("outputs")
+    named = [dataset for dataset in outputs if isinstance(dataset, dict)] if isinstance(outputs, list) else []
+    return run_lance.get("operation") == lineage_emit.PUBLISH_TABLE and any(dataset_uuids(dataset).table_uuid == table_uuid for dataset in named)
 
 
 def refs_of(location: str, so: StorageOptions) -> list[tuple[str | None, str | None]]:
@@ -382,14 +413,37 @@ def grace_bound(now: datetime, grace_seconds: int) -> datetime:
     return now - timedelta(seconds=grace_seconds)
 
 
+class Publication(BaseModel):
+    """A publication whose announcement the feed lacks: the version ``published`` names, who moved it there, and when."""
+
+    model_config = ConfigDict(frozen=True)
+
+    version: int
+    #: The caller the catalog recorded authorizing the move; ``None`` where the catalog authenticates nobody.
+    author: str | None
+    moved_at: str
+
+
 class TableReconcile(BaseModel):
-    """What a pass found on one table: each ref it read, and the refs it could not read past a point."""
+    """What a pass found on one table: each ref it read, the publication to announce, and what it could not read."""
 
     model_config = ConfigDict(frozen=True)
 
     scans: tuple[RefScan, ...] = ()
     unreadable: tuple[str, ...] = ()
+    publication: Publication | None = None
+    #: The version ``published`` names when the catalog recorded no caller moving it there: moved past every door.
+    unauthored_publication: int | None = None
 
+
+#: The mark a table's publication is kept under beside its refs': the move of ``published`` the reconciler settled
+#: (confirmed on the feed, past the horizon, or counted unauthored), as its ``updatedAt`` in microseconds since the
+#: epoch. A move, not a version, since ``published`` can name one version twice once an erasure dropped it. No ref key
+#: holds a colon, since no branch name may.
+PUBLICATION_MARK: Final = f"tag:{PUBLISHED_TAG}"
+
+
+_EPOCH: Final = datetime(1970, 1, 1, tzinfo=UTC)
 
 #: How much earlier than the horizon the feed is read: a row is received after its commit, never before, but the store's
 #: clock and the catalog's may disagree.
@@ -405,9 +459,11 @@ def reconcile_table(
     table_uuid: str,
     feed: str,
     now: datetime,
+    publication_run_id: Callable[[int, str], str],
 ) -> TableReconcile:
     """Scan every ref of the table at ``location`` against the feed at ``feed``, forget the recorded author of every commit
-    the scan confirmed, and keep each mark it confirmed.
+    the scan confirmed, and keep each mark it confirmed; then judge the table's publication, whose announcement's run id
+    ``publication_run_id`` derives from the version and the time the tag moved ([[LH-552]]).
 
     The window is the grace (``LANCE_COMMIT_RECONCILE_GRACE_SECONDS``) at the young end and the horizon
     (``LANCE_COMMIT_RECONCILE_HORIZON_SECONDS``, inside the feed's retention) at the old end. A ref whose log cannot be
@@ -419,7 +475,8 @@ def reconcile_table(
     control, control_so = settings.registry_root, settings.storage_options()
     marks = commit_records.read_marks(control, control_so, table_uuid)
     after = now - timedelta(seconds=settings.commit_reconcile_horizon_seconds)
-    announced = announced_commits(feed, so, table_uuid, since=after - _FEED_SLACK)
+    before = grace_bound(now, settings.commit_reconcile_grace_seconds)
+    on_feed = announced(feed, so, table_uuid, since=after - _FEED_SLACK)
     parent = fga.parent_namespace_id(segments) or ""
     scans: list[RefScan] = []
     unreadable: list[str] = []
@@ -432,9 +489,9 @@ def reconcile_table(
                     branch=branch,
                     branch_identifier=identifier,
                     mark=marks.refs.get(commit_records.ref_key(branch, identifier)),
-                    announced=announced,
+                    announced=set(on_feed.commits),
                     after=after,
-                    before=grace_bound(now, settings.commit_reconcile_grace_seconds),
+                    before=before,
                     record_of=lambda transaction_uuid, version, ref: commit_records.recorded(
                         control, control_so, table_uuid, transaction_uuid=transaction_uuid, version=version, ref=ref
                     ),
@@ -450,9 +507,117 @@ def reconcile_table(
         mark = _forgotten_up_to(scan, control, control_so, table_uuid)
         if mark is not None:
             kept[commit_records.ref_key(scan.branch, scan.branch_identifier)] = mark
+    published = _PublicationVerdict()
+    try:
+        published = _judge_publication(
+            _published_tag(location, so),
+            commit_records.tag_movers(control, control_so, table_uuid, tag=PUBLISHED_TAG),
+            mark=marks.refs.get(PUBLICATION_MARK),
+            on_feed=on_feed.publications,
+            run_id_of=publication_run_id,
+            after=after,
+            before=before,
+            authenticates=settings.oidc_enabled,
+        )
+    except Exception as exc:  # noqa: BLE001 — a publication this pass cannot judge is judged by the next; the refs' marks still land
+        log.error("commit_reconcile_publication_unreadable", extra={"table": segments, "error": str(exc)[:300]})
+        unreadable.append(PUBLICATION_MARK)
+    _forget_movers(control, control_so, table_uuid, published.forget)
+    if published.mark is not None:
+        kept[PUBLICATION_MARK] = published.mark
     if any(marks.refs.get(key) != value for key, value in kept.items()):
         commit_records.write_marks(control, control_so, table_uuid, commit_records.CommitMarks(refs={**marks.refs, **kept}))
-    return TableReconcile(scans=tuple(scans), unreadable=tuple(unreadable))
+    return TableReconcile(scans=tuple(scans), unreadable=tuple(unreadable), publication=published.publication, unauthored_publication=published.unauthored)
+
+
+class PublishedTag(BaseModel):
+    """The move ``published`` names now: the main version, and when the tag moved there as its file records it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    version: int
+    moved_at: datetime
+
+
+class _PublicationVerdict(BaseModel):
+    """What a pass decided of one table's publication: the one to announce, the version moved past every door, the mark
+    it settled, and the versions whose mover records are no longer needed."""
+
+    model_config = ConfigDict(frozen=True)
+
+    publication: Publication | None = None
+    unauthored: int | None = None
+    mark: int | None = None
+    forget: tuple[int, ...] = ()
+
+
+def _judge_publication(
+    current: PublishedTag | None,
+    movers: list[commit_records.TagMover],
+    *,
+    mark: int | None,
+    on_feed: frozenset[str],
+    run_id_of: Callable[[int, str], str],
+    after: datetime,
+    before: datetime,
+    authenticates: bool,
+) -> _PublicationVerdict:
+    """Judge the move ``published`` names now against the run ids of the feed's publications (``on_feed``) and the mover
+    records (``movers``) ([[LH-552]]).
+
+    A move other than the one ``mark`` settled is settled once the feed holds the run its announcement is derived to
+    (``run_id_of``), or it moved before the horizon (``after``), which the feed's retention may have dropped. One moved before the
+    grace (``before``) that the feed lacks is announced for the caller the catalog recorded moving it, or, where the
+    catalog authenticates its callers and recorded none, counted unauthored once and settled. A record of another
+    version (a move superseded since, or one that never landed) is forgotten once it is older than the grace, so a move
+    in flight keeps its record.
+    """
+    stale = tuple(mover.version for mover in movers if (current is None or mover.version != current.version) and mover.recorded_at < before)
+    if current is None:
+        return _PublicationVerdict(forget=stale)
+    recorded = next((mover for mover in movers if mover.version == current.version), None)
+    # The current version's record goes once it is older than the grace too: a newer move to the same version may be
+    # in flight, recorded and not yet landed.
+    settled = stale + ((current.version,) if recorded is not None and recorded.recorded_at < before else ())
+    if mark == _move_mark(current.moved_at):
+        return _PublicationVerdict(forget=settled)
+    if run_id_of(current.version, current.moved_at.isoformat()) in on_feed or current.moved_at < after:
+        return _PublicationVerdict(mark=_move_mark(current.moved_at), forget=settled)
+    if current.moved_at >= before:
+        return _PublicationVerdict(forget=stale)
+    if recorded is None and authenticates:
+        return _PublicationVerdict(unauthored=current.version, mark=_move_mark(current.moved_at), forget=stale)
+    author = recorded.author if recorded is not None else None
+    return _PublicationVerdict(publication=Publication(version=current.version, author=author, moved_at=current.moved_at.isoformat()), forget=stale)
+
+
+def _move_mark(moved_at: datetime) -> int:
+    """A move of ``published`` as its mark keeps it: its ``updatedAt`` in microseconds since the epoch."""
+    return (moved_at - _EPOCH) // timedelta(microseconds=1)
+
+
+def _published_tag(location: str, so: StorageOptions) -> PublishedTag | None:
+    """The move the table's ``published`` tag names now; ``None`` when it names nothing on main.
+
+    Raises:
+        ValueError: The tag file records no time it moved, so no move can be told from another.
+    """
+    entry = lance.dataset(location, storage_options=so.in_clear() or None).tags.list().get(PUBLISHED_TAG)
+    if entry is None or entry.get("branch") is not None:
+        return None
+    moved_at = entry.get("updated_at")
+    if not isinstance(moved_at, datetime):
+        raise ValueError("the table's `published` tag records no time it moved")
+    return PublishedTag(version=int(entry["version"]), moved_at=moved_at)
+
+
+def _forget_movers(control: str, control_so: StorageOptions, table_uuid: str, versions: tuple[int, ...]) -> None:
+    """Delete the mover record of each of ``versions``; one the store keeps is forgotten by a later pass."""
+    for version in versions:
+        try:
+            commit_records.forget_tag_move(control, control_so, table_uuid, tag=PUBLISHED_TAG, version=version)
+        except OSError as exc:
+            log.warning("publication_mover_unforgotten", extra={"table": table_uuid, "version": version, "error": str(exc)[:300]})
 
 
 def _forgotten_up_to(scan: RefScan, control: str, control_so: StorageOptions, table_uuid: str) -> int | None:

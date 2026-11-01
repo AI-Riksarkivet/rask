@@ -10,7 +10,9 @@ signature either way.
 
 Each find is counted on ``catalog.commit_reconcile.reannounced``, each version the catalog recorded no author for on
 ``catalog.commit_reconcile.unauthored``, and each ref whose log could not be read on ``catalog.commit_reconcile.unreadable``;
-each pages (`deploy/alerting/rules.yml`).
+each pages (`deploy/alerting/rules.yml`). A publication whose announcement the feed lacks is announced the same way, from
+the version the table's ``published`` tag names, for the caller the catalog recorded moving it ([[LH-552]]), and counted
+on the same counters under its operation, ``publish_table``.
 
 The same tick watches every released erasure obligation for a late derived table (ADR 0183 §5,
 `catalog.services.erasure_derived.watch_released`): a table derived from the erased one, written before the release and
@@ -30,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from datetime import UTC, timedelta
 from functools import partial
 from typing import Annotated
@@ -42,9 +45,9 @@ from pydantic import BaseModel
 
 from catalog.api.cron import mount_cron
 from catalog.api.dependencies import ClockDep, ObjectUuids, SettingsDep, StorageOptionsDep, estate_namespace, namespace_for_top_ns
-from catalog.core.commit_ids import commit_ids_of
+from catalog.core.commit_ids import commit_ids_of, tag_move_run_id
 from catalog.core.config import Settings
-from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
+from catalog.core.lineage_emit import PUBLISH_TABLE, LineageEmitter, emit_write_event, run_inputs
 from catalog.services import commit_reconcile, dataplane, erasure_derived, native, table_claims
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
@@ -61,9 +64,9 @@ _meter = metrics.get_meter("lance.catalog")
 _reannounced = _meter.create_counter(
     "catalog.commit_reconcile.reannounced",
     unit="{commit}",
-    description="Committed versions whose announcement lineage's feed lacked past the grace, announced again from the "
-    "version log ([[LH-497]]). Each is an announcement lost between a commit and its staging: a pipeline following the "
-    "feed was not told of the write until now.",
+    description="Committed versions, and publications, whose announcement lineage's feed lacked past the grace, announced "
+    "again from the version log or the `published` tag ([[LH-497]], [[LH-552]]), by operation. Each is an announcement lost "
+    "between an act and its staging: a pipeline following the feed was not told until now.",
 )
 _unreadable = _meter.create_counter(
     "catalog.commit_reconcile.unreadable",
@@ -86,9 +89,9 @@ _late_derived_unwatched = _meter.create_counter(
 _unauthored = _meter.create_counter(
     "catalog.commit_reconcile.unauthored",
     unit="{commit}",
-    description="Committed versions of an operation the catalog announces for which the catalog recorded no author "
-    "(ADR 0187): a commit made past every catalog door, whatever rask.author it carries, which nothing can announce on "
-    "anyone's behalf.",
+    description="Committed versions of an operation the catalog announces, and publications, for which the catalog "
+    "recorded no author (ADR 0187, [[LH-552]]): a commit made or a `published` tag moved past every catalog door, which "
+    "nothing can announce on anyone's behalf.",
 )
 
 #: How much earlier than the oldest commit looked for the feed is read: a row is received after its commit, never
@@ -197,6 +200,39 @@ async def _announce(
     )
 
 
+def _publication_run_id(request: Request, table_uuid: str) -> Callable[[int, str], str]:
+    """How the run id of a publication of the table ``table_uuid`` is derived, as the emitter derives it ([[LH-552]])."""
+    key = commit_ids_of(request.app).key()
+    return lambda version, moved_at: tag_move_run_id(key, table_uuid=table_uuid, operation=PUBLISH_TABLE, version=version, moved_at=moved_at)
+
+
+async def _reannounce_publication(
+    emitter: LineageEmitter, request: Request, settings: Settings, table: _LiveTable, publication: commit_reconcile.Publication
+) -> None:
+    """Announce that ``published`` moved to ``publication.version``, as the publish door announced it, for the caller the
+    catalog recorded moving it ([[LH-552]]): the run id is derived from the move, so a late original lands no second row."""
+    await emit_write_event(
+        emitter,
+        table.segments,
+        author=publication.author,
+        version=publication.version,
+        operation=PUBLISH_TABLE,
+        authorization=None,
+        uuids=ObjectUuids(request, settings),
+        known=table.uuids,
+        source_uri=table.location,
+        event_time=publication.moved_at,
+    )
+    audit(
+        AuditAction.PUBLICATION_ANNOUNCED,
+        AuditOutcome.SUCCESS,
+        subject=publication.author,
+        resource=f"table:{fga.canonical_object_id(table.segments)}",
+        version=publication.version,
+        operation=PUBLISH_TABLE,
+    )
+
+
 async def _on_cron(
     request: Request,
     settings: SettingsDep,
@@ -229,6 +265,7 @@ async def _on_cron(
                         table_uuid=str(table.uuids.table_uuid),
                         feed=feed,
                         now=now,
+                        publication_run_id=_publication_run_id(request, str(table.uuids.table_uuid)),
                     )
                 )
             except Exception as exc:  # noqa: BLE001 — one table this tick cannot read must not stop the others
@@ -252,6 +289,15 @@ async def _on_cron(
                     log.error("commit_unauthored", extra={"table": table.segments, "versions": list(scan.unauthored), "branch": scan.branch})
                 reannounced += len(scan.missing)
                 unauthored += len(scan.unauthored)
+            if found.publication is not None:
+                await _reannounce_publication(emitter, request, settings, table, found.publication)
+                _reannounced.add(1, {"lance.catalog.operation": PUBLISH_TABLE})
+                log.warning("publication_reannounced", extra={"table": table.segments, "version": found.publication.version})
+                reannounced += 1
+            if found.unauthored_publication is not None:
+                _unauthored.add(1, {"lance.catalog.operation": PUBLISH_TABLE})
+                log.error("publication_unauthored", extra={"table": table.segments, "version": found.unauthored_publication})
+                unauthored += 1
     log.info(
         "commit_reconcile_tick",
         extra={"tables": len(tables), "reannounced": reannounced, "unauthored": unauthored, "unreadable": unreadable, "late_derived": late_derived},

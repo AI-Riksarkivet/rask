@@ -17,6 +17,10 @@ the name inherits neither (ADR 0173 §8):
 - **The reconciler's mark** (``_commit_marks/table-<digest>.json``): for each ref of the table, the highest version up
   to which no version is left to announce, so a pass reads only the versions after it. A registered table's first mark
   is its register's, at each ref's head: the versions a register attaches were committed past every door ([[LH-550]]).
+- **The caller the catalog authorized each move of a tag for** (``_commit_authors/<table uuid>/tags/<tag>/<version>.json``,
+  [[LH-552]]): a publication moves the table's ``published`` tag and commits no version, so it has no transaction to
+  name its author. The door records its verified caller right before the tag moves, and the reconciler signs a lost
+  publication's announcement only for that caller, never for whoever can write the tag file.
 
 Every function is BLOCKING IO; callers threadpool it.
 """
@@ -26,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Final
 
 import pyarrow.fs as pafs
@@ -33,7 +38,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from service_kit.lakehouse import records
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
-from service_kit.lakehouse.record_store import delete_record, get_record, put_record, record_key
+from service_kit.lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
 
 
 AUTHORS_PREFIX: Final = "_commit_authors"
@@ -167,6 +172,57 @@ def forget_author(control_root: str, storage_options: StorageOptions, table_uuid
     delete_record(control_root, storage_options, key)
 
 
+class TagMover(BaseModel):
+    """The caller the catalog authorized a move of one tag to one version for."""
+
+    model_config = ConfigDict(frozen=True)
+
+    author: str
+    tag: str
+    version: int
+    #: When the door recorded it, right before the tag moved: a record kept for a move that did not land is forgotten
+    #: only once it is older than the reconciler's grace, so a move in flight is never mistaken for one.
+    recorded_at: datetime
+
+
+def _tag_moves(table_uuid: str, tag: str) -> str:
+    return f"{AUTHORS_PREFIX}/{table_uuid}/tags/{tag}"
+
+
+def record_tag_move(control_root: str, storage_options: StorageOptions, table_uuid: str, *, tag: str, version: int, author: str) -> None:
+    """Record ``author`` as the caller the move of ``tag`` to ``version`` on the table ``table_uuid`` was authorized for,
+    right before the tag moves. A record kept for the version is replaced: the caller moving the tag now is its author.
+
+    Raises:
+        OSError: The store refused the write.
+    """
+    record = TagMover(author=author, tag=tag, version=version, recorded_at=datetime.now(UTC))
+    put_record(control_root, storage_options, f"{_tag_moves(table_uuid, tag)}/{version}.json", record.model_dump(mode="json"))
+
+
+def tag_movers(control_root: str, storage_options: StorageOptions, table_uuid: str, *, tag: str) -> list[TagMover]:
+    """Every move of ``tag`` the catalog recorded on the table ``table_uuid`` and has not forgotten.
+
+    Read whole: a reconciler that finds no record for a move counts it as made past every door, so a record it could
+    not read must stop it rather than read as no record.
+
+    Raises:
+        OSError: A record could not be read.
+        ValueError: A record is not one (pydantic's ``ValidationError`` is one).
+    """
+    loaded = list_records(control_root, storage_options, _tag_moves(table_uuid, tag), event="tag_mover", strict=True)
+    return [TagMover.model_validate(record) for record in loaded]
+
+
+def forget_tag_move(control_root: str, storage_options: StorageOptions, table_uuid: str, *, tag: str, version: int) -> None:
+    """Delete the record of the move of ``tag`` to ``version``, if one is kept.
+
+    Raises:
+        OSError: The store refused the delete.
+    """
+    delete_record(control_root, storage_options, f"{_tag_moves(table_uuid, tag)}/{version}.json")
+
+
 def end_authors(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
     """Delete every author record of the table ``table_uuid``; whether any existed."""
     fs, base = fs_and_base(control_root, storage_options)
@@ -180,6 +236,8 @@ def end_authors(control_root: str, storage_options: StorageOptions, table_uuid: 
 class CommitMarks(BaseModel):
     """For each ref of one table, the highest version up to which no version is left to announce: each is on the feed, is
     one no door announces, was counted unauthored, is past the horizon, or was committed before the table's register.
+    Under ``tag:published``, the move of the table's publication the reconciler settled, as its ``updatedAt`` in
+    microseconds since the epoch ([[LH-552]]).
 
     A ref is keyed by its name and its incarnation, ``""`` for main: a deleted and recreated branch restarts its
     numbering, so a mark kept for its earlier incarnation says nothing about the new one.

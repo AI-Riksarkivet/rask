@@ -44,7 +44,7 @@ from dapr.aio.clients import DaprClient
 from opentelemetry import metrics
 from pydantic import BaseModel
 
-from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id
+from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, tag_move_run_id
 from catalog.core.run_context import RunContext
 from lineage_kit import CanonError, SigningKey, attach_signature, author_of
 from service_kit.governed import fga
@@ -751,18 +751,24 @@ class _BaseLineageEmitter:
         await self._send(event, operation=operation, table_id=table_id, authorization=fields.get("authorization"))
 
     def _run_id(self, version: int | None, operation: str, fields: EmitFields) -> str:
-        """The event's run id: derived from the commit for a version of a table the catalog minted a uuid for, so every
-        announcement of one commit is one run ([[LH-497]]); a fresh id for a versionless marker (a drop, a declare) and
-        for a tag move, which names a version another write committed (:data:`TAG_MOVES`).
+        """The event's run id, for a version of a table the catalog minted a uuid for: derived from the commit, so every
+        announcement of one commit is one run ([[LH-497]]), or for a publication from the move, whose ``eventTime`` is the
+        tag file's own ``updatedAt``, so every announcement of one move is one run ([[LH-552]]). A fresh id for a
+        versionless marker (a drop, a declare), for any other tag move (:data:`TAG_MOVES`), and for a publication whose
+        move time was not read.
 
         Raises:
             SigningKeyUnavailableError: The catalog reads its key from the store and does not hold it.
         """
         uuids = fields.get("uuids")
-        if version is None or uuids is None or not uuids.table_uuid or operation in TAG_MOVES:
+        table_uuid = uuids.table_uuid if uuids is not None else None
+        moved_at = fields.get("event_time") if operation == PUBLISH_TABLE else None
+        if version is None or not table_uuid or (operation in TAG_MOVES and not moved_at):
             return str(uuid.uuid4())
         key = (self._commit_ids or UnkeyedCommitIds()).key()
-        return commit_run_id(key, table_uuid=uuids.table_uuid, branch=fields.get("branch"), branch_identifier=fields.get("branch_identifier"), version=version)
+        if moved_at:
+            return tag_move_run_id(key, table_uuid=table_uuid, operation=operation, version=version, moved_at=moved_at)
+        return commit_run_id(key, table_uuid=table_uuid, branch=fields.get("branch"), branch_identifier=fields.get("branch_identifier"), version=version)
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:  # pragma: no cover — abstract
         raise NotImplementedError

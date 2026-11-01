@@ -200,3 +200,4 @@ before they had a record here; each names its source document and the date of th
 | [0185](0185-the-catalog-reclaims-each-roots-namespace-index-and-holds-no-connection-past-it.md) | LH-251 | The catalog reclaims each root's namespace index, and holds no connection past it (2026-10-30) |
 | [0186](0186-a-commit-that-lost-its-race-takes-its-refs-turn.md) | LH-259 | A commit that lost its race takes its ref's turn (2026-10-31) |
 | [0187](0187-a-re-announcement-is-signed-only-for-the-author-the-catalog-recorded.md) | LH-550 | A re-announcement is signed only for the author the catalog recorded authorizing the commit (2026-11-01) |
+| [0188](0188-a-lost-publication-is-announced-from-its-tag-and-lifecycle-markers-stay-best-effort.md) | LH-552 | A lost publication is announced from its tag; a table's lifecycle markers stay best-effort (2026-11-01) |

@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 
 from lance_namespace import (
@@ -64,7 +65,7 @@ from service_kit.lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Asser
 
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from catalog.services.table_claims import DoorTable
     from service_kit.lakehouse.gate_specs import GateSpec
@@ -350,6 +351,9 @@ class PublicationResult(BaseModel):
     held: bool = False
     #: Why it is held: the failed assertions a validator may waive, then the band's reasons.
     hold_reasons: list[str] = []
+    #: When the tag moved to `to_version`, as its file records it (:func:`moved_at`); ``None`` when nothing moved or the
+    #: time could not be read.
+    moved_at: str | None = None
 
     @property
     def advanced(self) -> bool:
@@ -412,18 +416,47 @@ def set_tag(table: DoorTable, so: StorageOptions, tag: str, version: int) -> Non
     dataplane.update_tag(table, so, UpdateTableTagRequest(id=table.segments, tag=tag, version=version))
 
 
-def advance(table: DoorTable, so: StorageOptions, version: int, *, tag: str = PUBLISHED_TAG) -> tuple[bool, int | None]:
-    """Move ``tag`` forward to ``version``: whether it moved, and the version it named before.
+class TagAdvance(BaseModel):
+    """What :func:`advance` did: whether the tag moved, the version it named before, and when it moved."""
+
+    model_config = ConfigDict(frozen=True)
+
+    moved: bool
+    previous: int | None
+    moved_at: str | None = None
+
+
+def advance(table: DoorTable, so: StorageOptions, version: int, *, tag: str = PUBLISHED_TAG, before_move: Callable[[], None] = lambda: None) -> TagAdvance:
+    """Move ``tag`` forward to ``version``.
 
     Read again right before the move, so a publication that landed after the caller's own read is never moved back
     over. The read and the move are two operations, because a Lance tag has no conditional update, so two
-    publications inside that gap can still race.
+    publications inside that gap can still race. ``before_move`` runs right before the tag moves, and only then: the
+    door records the move's author there ([[LH-552]]), and an exception from it leaves the tag where it was.
     """
     current = _main_version_of_tag(table, so, tag)
     if current is not None and current >= version:
-        return False, current
+        return TagAdvance(moved=False, previous=current)
+    before_move()
     set_tag(table, so, tag, version)
-    return True, current
+    return TagAdvance(moved=True, previous=current, moved_at=moved_at(table, so, version, tag=tag))
+
+
+def moved_at(table: DoorTable, so: StorageOptions, version: int, *, tag: str = PUBLISHED_TAG) -> str | None:
+    """When ``tag`` moved to ``version`` on main, as Lance records it in the tag file (``updatedAt``), read right after
+    the move; ``None`` when it cannot be read or the tag names another move by now. A publication's announcement is
+    identified by it ([[LH-552]]), so a failed read degrades only that announcement's dedupe, never the publication,
+    which has already landed.
+    """
+    try:
+        entry = table.open_unchecked(so).tags.list().get(tag)
+    except (OSError, ValueError):
+        log.warning("publication_move_time_unread", extra={"table": table.segments, "tag": tag}, exc_info=True)
+        return None
+    if entry is None or entry.get("branch") is not None or entry.get("version") != version:
+        return None
+    moved = entry.get("updated_at")
+    return moved.isoformat() if isinstance(moved, datetime) else None
 
 
 def drop_tag(table: DoorTable, so: StorageOptions, tag: str) -> None:
@@ -512,6 +545,7 @@ def publish(
     tag: str = PUBLISHED_TAG,
     declared_by: str = "",
     review: ReviewPolicy | None = None,
+    before_move: Callable[[], None] = lambda: None,
 ) -> PublicationResult:
     """Gate `version`, then advance `published` to it. Returns the range the notification should carry.
 
@@ -529,6 +563,10 @@ def publish(
     `publish` cannot end up under different policy.
 
     ``table`` is the table the door resolved: every read and every tag move is at its location ([[LH-530]]).
+
+    ``before_move`` runs once the gate passed, right before the tag advances to ``version``: the door records the move's
+    author there ([[LH-552]]), and an exception from it leaves the tag where it was. A publication of the version already
+    published passes the gate and leaves the tag as it is.
     """
     if version < 1:
         raise InvalidInputError(f"version must be >= 1, got {version}")
@@ -593,8 +631,7 @@ def publish(
                 hold_reasons=verdict.reasons if verdict.outcome == "hold" else [],
             )
 
-        set_tag(table, storage_options, tag, version)
-        return PublicationResult(
+        published = PublicationResult(
             table=candidate.uri,
             published=True,
             from_version=previous,
@@ -603,6 +640,13 @@ def publish(
             accepted=verdict.accepted,
             gate_source=gate_source_for(declared_by),
         )
+        if version == previous:
+            # Published already: setting the tag again would only restamp its file's move time, a move no door announces
+            # and the reconciler would take for one made past every door ([[LH-552]]).
+            return published
+        before_move()
+        set_tag(table, storage_options, tag, version)
+        return published.model_copy(update={"moved_at": moved_at(table, storage_options, version, tag=tag)})
     finally:
         # Suppressed on purpose: a failure to unpin must never mask the publish outcome, and the worst
         # case is one version exempt from GC until someone deletes a visible tag.

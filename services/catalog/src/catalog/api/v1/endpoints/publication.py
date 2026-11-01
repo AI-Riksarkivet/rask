@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 from fastapi import APIRouter, Header, Query
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import ConcurrentModificationError, InternalError, InvalidTableStateError, RestoreTableRequest
+from lance_namespace import ConcurrentModificationError, InternalError, InvalidTableStateError, RestoreTableRequest, ServiceUnavailableError
 
 from catalog.api import lineage_deps
 from catalog.api.dependencies import (
@@ -58,11 +58,13 @@ from catalog.services.table_claims import DoorTable
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.lakehouse import commit_records
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.records import RecordChangedError
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from datetime import datetime
 
 
@@ -350,6 +352,7 @@ async def publish_table(
             accept_assertions=tuple(body.accept_assertions),
             declared_by=gate.declared_by,
             review=gate.review,
+            before_move=_record_mover(settings, table.resolved.require_uuid(), version=body.version, token=token),
         )
     )
     hold: PromotionHold | None = None
@@ -396,6 +399,7 @@ async def publish_table(
             authorization=authorization,
             from_version=result.from_version,
             to_version=result.to_version,
+            moved_at=result.moved_at,
             location=result.table,
             accepted=result.accepted,
             cascade_id=body.cascade_id,
@@ -493,6 +497,27 @@ async def _close_what_published_reached(*, settings: Settings, table: DoorTable,
         log.warning("promotion_supersede_failed", extra={"table": table.segments, "published": published}, exc_info=True)
 
 
+def _record_mover(settings: Settings, table_uuid: str, *, version: int, token: Caller | None) -> Callable[[], None]:
+    """What a move of `published` to ``version`` runs right before the tag moves: record the caller it was authorized for
+    ([[LH-552]]), so a publication whose announcement a crash lost is announced again for that caller and no other.
+    Nothing for a catalog that authenticates nobody, whose announcements name no author. Blocking: the move runs in the
+    threadpool. The call raises ``ServiceUnavailableError`` when the store refuses the record, and the tag does not move.
+    """
+    if token is None:
+        return lambda: None
+
+    def record() -> None:
+        try:
+            commit_records.record_tag_move(
+                settings.registry_root, settings.storage_options(), table_uuid, tag=publication.PUBLISHED_TAG, version=version, author=token.subject
+            )
+        except OSError as exc:
+            log.warning("publication_mover_unrecorded", extra={"table": table_uuid, "version": version, "error": str(exc)[:300]})
+            raise ServiceUnavailableError(f"the publisher of version {version} could not be recorded, so `published` was not moved") from exc
+
+    return record
+
+
 async def _announce_publication(
     *,
     lineage: LineageEmitter,
@@ -504,6 +529,7 @@ async def _announce_publication(
     authorization: str | None,
     from_version: int | None,
     to_version: int,
+    moved_at: str | None,
     location: str,
     accepted: list[str] | None = None,
     cascade_id: str = "",
@@ -527,6 +553,9 @@ async def _announce_publication(
         authorization=authorization,
         uuids=uuids,
         source_uri=location,
+        # The move's own time, which with the table and the version names the move, so the reconciler announcing it
+        # again lands the same run ([[LH-552]]).
+        event_time=moved_at,
     )
     await emit_control(
         control,
@@ -617,8 +646,10 @@ async def approve_promotion(
     segments = parse_identifier(id)
     table_uuid = table.resolved.require_uuid()
     decided, _ = await _decision(settings, table, so, version=body.version, state="approved", token=token, at=clock())
-    moved, previous = await run_in_threadpool(publication.advance, table, so, decided.version)
-    if moved:
+    advanced = await run_in_threadpool(
+        partial(publication.advance, table, so, decided.version, before_move=_record_mover(settings, table_uuid, version=decided.version, token=token))
+    )
+    if advanced.moved:
         await _announce_publication(
             lineage=lineage,
             uuids=uuids,
@@ -627,15 +658,16 @@ async def approve_promotion(
             table_uuid=table_uuid,
             token=token,
             authorization=authorization,
-            from_version=previous,
+            from_version=advanced.previous,
             to_version=decided.version,
+            moved_at=advanced.moved_at,
             location=decided.location,
             cascade_id=decided.cascade_id,
             originator=decided.originator,
         )
     await _repin(settings, table, so, table_uuid)
     canonical = fga.canonical_object_id(segments)
-    return PromotionDecision(hold=_view(decided, table=canonical), published_version=decided.version if moved else previous)
+    return PromotionDecision(hold=_view(decided, table=canonical), published_version=decided.version if advanced.moved else advanced.previous)
 
 
 @table_router.post("/{id}/promotion/reject")

@@ -99,7 +99,9 @@ The table's `published` tag moved: the version readers of a governed tier read c
 catalog's emitter whose `run.facets.rask_lance.operation` is `publish_table` and whose `version` is the version now
 published, a version an earlier row already committed. `run.facets.rask_author.sub` is who moved it: the publisher when the
 project's gate passed the version, or the validator who approved it when the gate held it. Trigger the next tier on
-this row when it should read only what readers of `@published` read.
+this row when it should read only what readers of `@published` read. Its run id is derived from the table, the version
+and the time the tag moved, so one publication is one row however many times it is announced, and a version published
+again later (after an erasure dropped the tag) is a new row.
 
 ### A dataset change
 
@@ -133,6 +135,14 @@ is recorded without a uuid. Every other facet is that producer's own claim.
   the estate's operator (LH-550). A table registered over a dataset written elsewhere is
   looked at from its register on (LH-550): the versions it held then were committed past the catalog, so none is
   announced, whatever author it names, and the register's own `register_table` event is the one the feed carries.
+- A publication is recovered the same way (LH-552, [ADR 0188](adr/0188-a-lost-publication-is-announced-from-its-tag-and-lifecycle-markers-stay-best-effort.md)):
+  the reconcile cron reads the version each table's `published` tag names and when the tag moved there, and when the feed
+  holds no `publish_table` for that move, announces it for the person the catalog recorded moving the tag. A tag moved past the catalog's doors names no
+  such person: it is counted unauthored, which pages, and never announced. Only the version the tag names now is looked
+  for, so a publication the tag moved past before the cron ran is not announced; the newer one is.
+- A table's lifecycle markers (a declare, a register, a rename's pair, a drop, a deregister) are best-effort: a crash
+  between the change and its outbox stage loses that marker, and nothing announces it again (ADR 0188). A follower that
+  must not miss a table coming or going reads `ListTables` and `DescribeTable` as the truth, and the marker as its cue.
 - An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later
   commits. Order the writes of one table by `rask_lance.version`, not by `seq`.
 - The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), so a follower
