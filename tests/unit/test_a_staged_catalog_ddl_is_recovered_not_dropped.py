@@ -135,25 +135,27 @@ def _settings(tmp_path: Path, *, fga_enabled: bool, signers: frozenset[str] = fr
     )
 
 
-def _create_event(catalog: Any, author: str = _AUTHOR) -> dict[str, Any]:  # noqa: ANN401 - the conftest's EventSigner
-    """The catalog's create for `_TABLE`, from its real builder, signed as the catalog on behalf of `author`."""
+def _create_event(catalog: Any, *, reannounced: bool = False) -> dict[str, Any]:  # noqa: ANN401 - the conftest's EventSigner
+    """The catalog's create for `_TABLE`, from its real builder, signed as the catalog on behalf of `_AUTHOR`; with
+    `reannounced`, the commit reconciler's re-announcement of it."""
     event = build_write_event(
         table_id=_TABLE,
         uuids=_uuids(_TABLE),
         namespace="lance",
-        author=author,
+        author=_AUTHOR,
         version=1,
         operation="create_table",
         run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a60",
         event_time="2026-10-02T12:00:00+00:00",
         job_namespace="lance",
+        reannounced=reannounced,
     )
-    return catalog.sign(event, on_behalf_of=author)
+    return catalog.sign(event, on_behalf_of=_AUTHOR)
 
 
-def _stage_a_create(settings: LineageSettings, catalog: Any) -> tuple[str, str]:  # noqa: ANN401 - the conftest's EventSigner
+def _stage_a_create(settings: LineageSettings, catalog: Any, *, reannounced: bool = False) -> tuple[str, str]:  # noqa: ANN401 - the conftest's EventSigner
     """What the catalog leaves in the outbox when its publish fails: its create event, signed."""
-    doc = _create_event(catalog)
+    doc = _create_event(catalog, reannounced=reannounced)
     outbox.stage_event(settings.outbox_uri, StorageOptions(), event_identity(doc), json.dumps(doc))
     staged = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
     assert len(staged) == 1, f"staging left {len(staged)} objects, not one"
@@ -200,13 +202,6 @@ def _without_signature(staged_json: str) -> dict[str, Any]:
     doc = json.loads(staged_json)
     doc["dataset"]["facets"].pop("rask_signature")
     assert signature_of(doc) is None
-    return doc
-
-
-def _restamped(catalog: Any, author: str) -> dict[str, Any]:  # noqa: ANN401 - the conftest's EventSigner
-    """The same create, stamped for another subject and signed again: a valid signature over an author who may not write."""
-    doc = _create_event(catalog, author)
-    assert signature_of(doc) is not None
     return doc
 
 
@@ -271,24 +266,14 @@ def test_the_drain_re_ingests_a_staged_create_through_the_dataset_door(tmp_path:
     assert not list(outbox.list_events(settings.outbox_uri, StorageOptions())), "a recovered event must not stay staged"
 
 
-@pytest.mark.parametrize(
-    ("unsigned", "writer", "reason_names"),
-    [
-        pytest.param(False, "dex~somebody-else", "can_write_data", id="a-stamped-author-who-may-not-write"),
-        pytest.param(True, _AUTHOR, "no signature", id="an-event-no-listed-signer-signed"),
-    ],
-)
-def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, unsigned: bool, writer: str, reason_names: str
-) -> None:
-    """The DatasetEvent path still runs `enforce_bus_authz`: a stamped author who may not write is refused, and so is an event no
-    listed signer signed. Both are recorded and retired, never ingested and never announced: a retry cannot change either answer."""
+def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
+    """The DatasetEvent path still runs `enforce_bus_authz`: a create no listed signer signed is refused, recorded and retired,
+    never ingested and never announced, since a retry cannot change the answer."""
     settings = _settings(tmp_path, fga_enabled=True)
     key, staged_json = _stage_a_create(settings, catalog)
-    if unsigned:
-        staged_json = json.dumps(_without_signature(staged_json))
-        _rewrite_staged(settings, key, json.loads(staged_json))
-    _arm_gate(monkeypatch, writer=writer)
+    staged_json = json.dumps(_without_signature(staged_json))
+    _rewrite_staged(settings, key, json.loads(staged_json))
+    _arm_gate(monkeypatch, writer=_AUTHOR)
     repo, publisher = _Repo(), _Publisher()
 
     outcome = _drain(settings, repo, publisher)
@@ -297,25 +282,24 @@ def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(
     assert repo.datasets == [] and repo.runs == [] and publisher.published == [], "a refused create reached the feed or the bus"
     # No run to name: the key is what identifies a static change, and `run_id` stays empty rather than lying.
     [refusal] = repo.refusals
-    assert reason_names in str(refusal["reason"]), f"the recorded reason does not say what was refused: {refusal['reason']}"
+    assert "no signature" in str(refusal["reason"]), f"the recorded reason does not say what was refused: {refusal['reason']}"
     assert refusal == {"outbox_key": key, "run_id": None, "author": _AUTHOR, "reason": refusal["reason"], "event_json": staged_json}
     assert not list(outbox.list_events(settings.outbox_uri, StorageOptions())), "a recorded refusal must retire the staged object"
 
 
 @pytest.mark.parametrize(
-    ("operation", "by_the_catalog", "drained"),
+    ("by_the_catalog", "drained"),
     [
-        pytest.param("drop_table", True, 1, id="a-delegators-drop-is-admitted-though-its-grants-are-gone"),
-        pytest.param("drop_table", False, 0, id="another-listed-signers-drop-keeps-the-full-check"),
+        pytest.param(True, 1, id="a-delegators-drop-is-admitted-though-its-grants-are-gone"),
+        pytest.param(False, 0, id="another-listed-signers-drop-keeps-the-full-check"),
     ],
 )
-def test_the_relay_admits_a_delegators_drop_without_a_grant_and_nothing_else(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, event_signer: Any, operation: str, by_the_catalog: bool, drained: int
+def test_the_relay_admits_a_delegators_drop_without_a_grant_and_no_other_signers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, event_signer: Any, by_the_catalog: bool, drained: int
 ) -> None:
     """The catalog revokes a table's grants in the request that drops it, so a drop delivered after the revoke asks FGA about a
     table nobody may write. A drop whose signature verifies as a delegator is the catalog's attestation that it enforced `can_drop`,
-    and is admitted without the grant; everything else, a delegator's create or a drop signed by any other listed signer, still
-    needs it."""
+    and is admitted without the grant; a drop any other listed signer signed still needs it."""
     other = event_signer("service-bronze-to-silver")
     respx.get(f"{_SECRETS}/signing-public-{other.identity}").mock(return_value=httpx.Response(200, json={"keys": other.public}))
     settings = _settings(tmp_path, fga_enabled=True, signers=frozenset({_CATALOG, other.identity}))
@@ -326,7 +310,7 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_nothing_else(
         namespace="lance",
         author=author,
         version=None,
-        operation=operation,
+        operation="drop_table",
         run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a61",
         event_time="2026-10-02T12:00:00+00:00",
         job_namespace="lance",
@@ -339,7 +323,7 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_nothing_else(
     outcome = _drain(settings, repo, _Publisher())
 
     assert (outcome.drained, outcome.refused) == (drained, 1 - drained), f"the relay answered {outcome}"
-    assert [(e.dataset.name, e.operation) for e in repo.datasets] == ([(_TABLE, operation)] if drained else [])
+    assert [(e.dataset.name, e.operation) for e in repo.datasets] == ([(_TABLE, "drop_table")] if drained else [])
 
 
 @pytest.mark.parametrize("body", _HOSTILE.values(), ids=_HOSTILE.keys())
@@ -478,10 +462,11 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
 
 def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
     """A staged copy of a create the feed already holds byte-for-byte (published, then the stager's own
-    delete failed) is a redelivery, even when its author has since lost the grant. The feed keys a
-    static change by its derived id, never by a run id it does not have."""
+    delete failed) is a redelivery, even when its author has since lost the grant. It is staged as a
+    re-announcement, which the gate checks in full ([[LH-551]]), so the refusal it meets is what the replay
+    answers. The feed keys a static change by its derived id, never by a run id it does not have."""
     settings = _settings(tmp_path, fga_enabled=True)
-    _, staged_json = _stage_a_create(settings, catalog)
+    _, staged_json = _stage_a_create(settings, catalog, reannounced=True)
     _arm_gate(monkeypatch, writer="dex~somebody-else")
     held = DatasetEvent.model_validate(json.loads(staged_json))
 
@@ -575,23 +560,6 @@ def test_the_dlq_replay_answers_bytes_no_parser_accepts_as_poison(tmp_path: Path
         asyncio.run(dlq.replay_dlq(hostile, _request(), cast("Any", _Repo()), settings, None, flt, _Publisher()))
 
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "a poison replay must leave the object for the relay"
-
-
-def test_the_dlq_replay_refuses_a_signed_create_its_stamped_author_may_not_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
-    """The stamped author is authorized as well as the operator, and a valid signature does not change that: an operator who may
-    write the table still cannot replay provenance the catalog attests for a subject who may not."""
-    settings = _settings(tmp_path, fga_enabled=True)
-    key, _ = _stage_a_create(settings, catalog)
-    _rewrite_staged(settings, key, _restamped(catalog, "dex~somebody-else"))
-    _arm_gate(monkeypatch, writer="dex~operator")
-    operator = _person("operator")
-    repo, publisher = _Repo(), _Publisher()
-
-    with pytest.raises(PermissionDeniedError) as refused:
-        asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", repo), settings, operator, fga_deps.DatasetFilter(_request(), settings, operator), publisher))
-
-    assert not isinstance(refused.value, UnverifiedEventError), "the signature was valid, so the refusal has to be the stamped author's missing grant"
-    assert repo.datasets == [] and publisher.published == []
 
 
 def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_replayable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:

@@ -282,6 +282,10 @@ AUTHOR_FACET: Final = "rask_author"
 #: The :data:`LANCE_FACET` key for the incarnation of the ref it names: the last uuid of pylance's ``branch_identifier`` chain,
 #: on a run's facet for the ref it wrote and on an input's for the ref it was read on ([[LH-413]]).
 BRANCH_IDENTIFIER: Final = "branchIdentifier"
+#: The :data:`LANCE_FACET` key, ``true``, on the catalog's re-announcement of a commit whose own announcement the feed lacks
+#: (the commit reconciler, [[LH-497]]): its author is the one the version log names, which the catalog did not authenticate
+#: in that request, so lineage checks it as it checks any producer's event ([[LH-551]]). Absent on every other event.
+REANNOUNCED: Final = "reannounced"
 _TABLE_UUID: Final = "tableUuid"
 _NAMESPACE_UUID: Final = "namespaceUuid"
 

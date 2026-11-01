@@ -4,8 +4,9 @@ A write is announced after its commit (`catalog.core.lineage_emit`), and a crash
 its event loses the announcement while the version stays committed, so a pipeline following ``/events?since=`` never
 starts its next hop. This tick finds such a version from the table's own version log
 (`catalog.services.commit_reconcile`) and announces it, as the catalog announced it the first time: the same event,
-under the run id derived from the commit, signed by the catalog for the commit's author. A late original and the
-re-announcement are then one run, which lineage's feed records once.
+under the run id derived from the commit, signed by the catalog for the commit's author, and marked a re-announcement
+(`rask_lance.reannounced`), since that author is the one the version log names. A late original and the re-announcement
+are then one run, which lineage's feed records once.
 
 Each find is counted on ``catalog.commit_reconcile.reannounced``, each version naming no author on
 ``catalog.commit_reconcile.unauthored``, and each ref whose log could not be read on ``catalog.commit_reconcile.unreadable``;
@@ -163,7 +164,12 @@ def _feed_location(settings: Settings, ns: LanceNamespace) -> str | None:
 async def _announce(
     emitter: LineageEmitter, request: Request, settings: Settings, so: StorageOptions, table: _LiveTable, commit: commit_reconcile.Commit
 ) -> None:
-    """Announce ``commit`` as its door announced it, for its author, and audit the announcement."""
+    """Announce ``commit`` as its door announced it, for its author, marked as a re-announcement, and audit the announcement.
+
+    Marked because its author is the one the version log names, which this request did not authenticate: lineage checks a
+    re-announcement as it checks any producer's event, and records only the catalog's own announcement on its signature
+    ([[LH-551]]).
+    """
     readback = await run_in_threadpool(dataplane.read_version_and_schema, table.location, so, table.segments, commit.version, commit.branch)
     await emit_write_event(
         emitter,
@@ -182,6 +188,7 @@ async def _announce(
         run=commit.run,
         commits_rows=commit.commits_rows,
         event_time=commit.committed_at,
+        reannounced=True,
     )
     audit(
         AuditAction.COMMIT_VERSION_ANNOUNCED,

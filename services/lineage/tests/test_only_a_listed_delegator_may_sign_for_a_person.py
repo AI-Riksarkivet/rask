@@ -3,11 +3,11 @@
 [[LH-064]] C2. A signature binds an event to a key, and `onBehalfOf` lets the signer record a person as the author.
 Only the identities the chart names as delegators (the catalog, which authenticated that person) may do that, and an
 identity outside the chart's signer set is refused before lineage reads any key, since the facet's identity is the
-sender's own claim. The catalog's own DROP is admitted on its signature alone, with no grant check, because the
-catalog revoked the table's grants in the same request: so only a catalog signature this delivery verified may do it.
-A write the catalog signed whose output it has since dropped or deregistered is admitted on the same signature
-([[LH-502]]): its output holds no tuple at all, and the catalog authorized the write before it committed it. An output
-that is governed and merely not writable by the author keeps the refusal.
+sender's own claim. An announcement the catalog signed for the caller it authenticated, a write or a drop, is recorded
+on that signature with no grant re-derived ([[LH-551]]): the catalog authorized it before it committed it, so a grant
+revoked since, on its outputs or its inputs, takes nothing back. A re-announcement the commit reconciler marks
+(`rask_lance.reannounced`) names the author the version log carries, which nothing proves the catalog authenticated,
+so it is checked as any other producer's event is, a drop included.
 
 Driven through the registered `/lineage-events` route, FGA on. Public keys come from the sidecar's secret API,
 stood in for by respx; signatures are built by the root conftest's `EventSigner` from the wire format alone.
@@ -36,8 +36,11 @@ CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-bronze-to-silver"
 #: A listed signer that is no delegator and signs its own runs, as the principal it is.
 PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
 SECRETS = "http://localhost:3500/v1.0/secrets/lance-secrets"
-#: The uuid the catalog minted for the run's output, which its events carry in the output's `rask_lance` facet (ADR 0173 §10).
+#: The uuids the catalog minted for the run's output, the table it read and the table a drop names, which its events carry
+#: in each dataset's `rask_lance` facet (ADR 0173 §10).
 EVENTS_UUID = "5d0f6a1e-8b2c-4f3d-9e7a-1c2b3d4e5f60"
+SOURCE_UUID = "8e1f2a3b-4c5d-4e6f-8a7b-9c0d1e2f3a4b"
+DROPPED_UUID = "2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901"
 
 
 class _Feed:
@@ -54,25 +57,38 @@ class _Feed:
         return None
 
 
-def _run(author: str) -> dict[str, Any]:
+def _operation(name: str, *, reannounced: bool) -> dict[str, Any]:
+    """The run's `rask_lance` facet, as the catalog stamps it, marked when the reconciler re-announces the commit."""
+    return {"operation": name, "reannounced": True} if reannounced else {"operation": name}
+
+
+def _run(author: str, *, reannounced: bool = False) -> dict[str, Any]:
+    """A write to one governed table that read another: where the gate checks the author's grants, it checks both."""
     return {
         "eventType": "COMPLETE",
         "eventTime": "2026-10-02T12:00:00+00:00",
-        "run": {"runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c", "facets": {"rask_author": {"name": author, "sub": author}}},
-        "job": {"namespace": "lance", "name": "catalog.insert"},
+        "run": {
+            "runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5c",
+            "facets": {"rask_author": {"name": author, "sub": author}, "rask_lance": _operation("insert", reannounced=reannounced)},
+        },
+        "job": {"namespace": "lance", "name": "insert.acme-bronze$events"},
+        "inputs": [{"namespace": "bronze", "name": "acme-bronze$source", "facets": {"rask_lance": {"tableUuid": SOURCE_UUID}}}],
         "outputs": [{"namespace": "bronze", "name": "acme-bronze$events", "facets": {"rask_lance": {"tableUuid": EVENTS_UUID}}}],
         "producer": "https://github.com/AI-Riksarkivet/rask",
         "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent",
     }
 
 
-def _drop() -> dict[str, Any]:
+def _drop(*, reannounced: bool = False) -> dict[str, Any]:
     return {
         "eventTime": "2026-10-02T12:00:00+00:00",
         "dataset": {
             "namespace": "lance",
             "name": "acme-bronze$dropped",
-            "facets": {"rask_lance": {"operation": "drop_table"}, "rask_author": {"name": PERSON, "sub": PERSON}},
+            "facets": {
+                "rask_lance": {**_operation("drop_table", reannounced=reannounced), "tableUuid": DROPPED_UUID},
+                "rask_author": {"name": PERSON, "sub": PERSON},
+            },
         },
         "producer": "https://github.com/AI-Riksarkivet/rask",
         "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/DatasetEvent",
@@ -131,12 +147,12 @@ def _door(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], gover
     ("case", "held", "governed", "status", "recorded"),
     [
         pytest.param("stage-for-a-person", _everything, _everything, "SUCCESS", False, id="a-signer-that-is-not-a-delegator-signing-for-a-person"),
-        pytest.param("catalog-for-a-person", _everything, _everything, "SUCCESS", True, id="the-delegator-signing-for-a-person"),
+        pytest.param("catalog-for-a-person", _nothing, _everything, "SUCCESS", True, id="the-delegator-signing-for-a-person-whose-grants-were-revoked-since"),
         pytest.param("unlisted-signer", _everything, _everything, "SUCCESS", False, id="a-signer-the-chart-does-not-list"),
         pytest.param("catalog-drop", _nothing, _nothing, "SUCCESS", True, id="a-catalog-drop-its-signature-verifies"),
         pytest.param("forged-catalog-drop", _nothing, _nothing, "SUCCESS", False, id="a-catalog-drop-its-signature-does-not-verify"),
-        pytest.param("catalog-for-a-person", _nothing, _nothing, "SUCCESS", True, id="a-catalog-write-whose-output-was-since-dropped"),
-        pytest.param("catalog-for-a-person", _nothing, _everything, "DROP", False, id="a-catalog-write-to-a-governed-output-its-author-may-not-write"),
+        pytest.param("catalog-re-announcement", _nothing, _everything, "DROP", False, id="a-catalog-re-announcement-whose-author-may-not-write"),
+        pytest.param("catalog-re-announced-drop", _nothing, _everything, "DROP", False, id="a-catalog-re-announced-drop-whose-author-may-not-write"),
         pytest.param("pipeline-own-run", _nothing, _nothing, "SUCCESS", False, id="a-non-delegators-write-whose-output-holds-no-tuple"),
     ],
 )
@@ -161,6 +177,8 @@ def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # 
         "unlisted-signer": lambda: unlisted.sign(_run(UNLISTED)),
         "catalog-drop": lambda: catalog.sign(_drop(), on_behalf_of=PERSON),
         "forged-catalog-drop": lambda: impostor.sign(_drop(), on_behalf_of=PERSON),
+        "catalog-re-announcement": lambda: catalog.sign(_run(PERSON, reannounced=True), on_behalf_of=PERSON),
+        "catalog-re-announced-drop": lambda: catalog.sign(_drop(reannounced=True), on_behalf_of=PERSON),
         "pipeline-own-run": lambda: pipeline.sign(_run(PIPELINE)),
     }[case]()
 

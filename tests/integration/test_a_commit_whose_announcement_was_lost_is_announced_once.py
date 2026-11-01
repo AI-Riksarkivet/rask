@@ -4,7 +4,10 @@ The catalog announces a write after its commit, and a crash between the commit a
 announcement while the version stays committed. Here the loss is real rather than simulated: the catalog announces over
 HTTP through a gate that refuses every event while it is down, so each write's own announcement fails and nothing is
 staged. One tick of the catalog's reconcile cron then finds each version from the table's version log and announces it,
-under the run id derived from the commit, so the write's own announcement, delivered late, lands no second row.
+under the run id derived from the commit, so the write's own announcement, delivered late, lands no second row. A
+re-announcement says so (`rask_lance.reannounced`) and a write's own announcement does not: lineage records the catalog's
+own announcement on its signature, and checks a re-announcement, whose author only the version log names, as it checks any
+producer's event ([[LH-551]]).
 
 Driven over real sockets against the real catalog and lineage apps on a real ``dir`` namespace, as
 `test_the_commit_feed_is_a_lance_table_followed_forward.py` drives them: the claim is about what a pipeline following
@@ -53,14 +56,15 @@ def _follow(client: httpx.Client) -> list[dict[str, Any]]:
     raise AssertionError(f"the walk did not settle: {seen}")
 
 
-def _commits(rows: list[dict[str, Any]]) -> list[tuple[str, str, str]]:
-    """``(table, operation, version)`` of each feed row announcing a write of ``db$t``."""
+def _commits(rows: list[dict[str, Any]]) -> list[tuple[str, str, str, bool]]:
+    """``(table, operation, version, re-announced)`` of each feed row announcing a write of ``db$t``."""
     found = []
     for row in rows:
         event: Mapping[str, Any] = row["event"]
         for output in event.get("outputs") or []:
             if output["name"] == "db$t":
-                found.append((output["name"], event["run"]["facets"]["rask_lance"]["operation"], output["facets"]["version"]["datasetVersion"]))
+                lance = event["run"]["facets"]["rask_lance"]
+                found.append((output["name"], lance["operation"], output["facets"]["version"]["datasetVersion"], lance.get("reannounced") is True))
     return found
 
 
@@ -122,6 +126,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(tmp_path
             assert catalog.post("/v1/table/db$declared/declare", json={}).status_code == 200
             originals = [event for event in gate.refused if "run" in event and event["outputs"][0]["name"] == "db$t"]
             assert len(originals) == 2, gate.refused
+            assert [original["run"]["facets"]["rask_lance"].get("reannounced") for original in originals] == [None, None], originals
 
             with live_lineage(catalog_url, monkeypatch, port=free_port()) as lineage_url, httpx.Client(base_url=lineage_url, timeout=60) as lineage:
                 gate.lineage = lineage_url
@@ -144,7 +149,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(tmp_path
                 tick = catalog.post(f"/{_TICK}")
                 assert tick.status_code == 200, tick.text
                 assert tick.json()["reannounced"] == 2, tick.json()
-                assert _commits(_follow(lineage)) == [("db$t", "create_table", "1"), ("db$t", "insert", "2")]
+                assert _commits(_follow(lineage)) == [("db$t", "create_table", "1", True), ("db$t", "insert", "2", True)]
 
                 # Each write's own announcement arriving late, as the outbox relay delivers one it had staged.
                 for original in originals:
@@ -152,7 +157,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(tmp_path
                     assert late.status_code == 201, late.text
                 again = catalog.post(f"/{_TICK}")
                 assert (again.json()["reannounced"], again.json()["unreadable"]) == (0, 0), again.json()
-                assert _commits(_follow(lineage)) == [("db$t", "create_table", "1"), ("db$t", "insert", "2")]
+                assert _commits(_follow(lineage)) == [("db$t", "create_table", "1", True), ("db$t", "insert", "2", True)]
 
     assert [amount for amount, _ in counted.added] == [1, 1]
     assert [dict(attributes or {}) for _, attributes in counted.added] == [

@@ -328,7 +328,9 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   (`catalog.api.commit_reconcile`) lists every held location claim whose name still describes to it, reads each ref's
   versions after its mark (`_commit_marks/`) older than `LANCE_COMMIT_RECONCILE_GRACE_SECONDS`, looks each up on
   `provenance$events` by the table's uuid, ref and version (so a renamed table is not announced again), and announces
-  every one the feed lacks from the version log alone, signed for its author; each find counts
+  every one the feed lacks from the version log alone, signed for its author and marked `rask_lance.reannounced`, since
+  that author is the one the version log names and no request authenticated it: lineage records the catalog's own
+  announcements on its signature and checks a re-announcement in full ([[LH-551]]); each find counts
   `catalog.commit_reconcile.reannounced`, and a version of an announced operation with no author counts
   `catalog.commit_reconcile.unauthored` (both page, `deploy/alerting/rules.yml`). A mark moves only past versions
   confirmed on the feed, unannounced by design (a `Clone`, a config-only disarm, a provenance row write) or unauthored.

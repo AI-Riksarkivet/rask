@@ -60,6 +60,7 @@ from service_kit.openlineage import (
     DATASET_EVENT_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
     LANCE_FACET,
+    REANNOUNCED,
     RUN_EVENT_SCHEMA_URL,
     VERSION_FACET_SCHEMA_URL,
     DatasetUuids,
@@ -327,6 +328,7 @@ def build_write_event(
     catalog_impl: str = "",
     warehouse_uri: str = "",
     uuids: DatasetUuids | None = None,
+    reannounced: bool = False,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
@@ -352,8 +354,15 @@ def build_write_event(
 
     ``uuids`` are the table's and its namespace's (ADR 0173 §10): the output's ``rask_lance`` facet carries them beside its
     name, as each input's carries its own, so lineage keys the table by what a rename keeps.
+
+    ``reannounced`` marks the commit reconciler's re-announcement (``rask_lance.reannounced``, inside the bytes the catalog
+    signs). Its author is the one the version log names, and a version the catalog's doors did not make can name anyone
+    there (a registered table's history, a commit made past every door), so lineage records only the catalog's own
+    announcement on its signature and checks a re-announcement in full ([[LH-551]]).
     """
     lance_fields: dict[str, Any] = {"operation": operation}
+    if reannounced:
+        lance_fields[REANNOUNCED] = True
     if run is not None:
         lance_fields["runId"] = run.run_id
         if run.job is not None:
@@ -531,6 +540,8 @@ class EmitFields(TypedDict, total=False):
     commits_rows: bool
     #: The table's and its namespace's uuids (ADR 0173 §10), which the output names beside its name.
     uuids: DatasetUuids | None
+    #: Whether this is the commit reconciler's re-announcement, whose author the version log names (:func:`build_write_event`).
+    reannounced: bool
 
 
 @runtime_checkable
@@ -747,6 +758,7 @@ class _BaseLineageEmitter:
             uuids=fields.get("uuids"),
             catalog_impl=self._catalog_impl,
             warehouse_uri=self._warehouse_uri,
+            reannounced=fields.get("reannounced", False),
         )
         await self._send(event, operation=operation, table_id=table_id, authorization=fields.get("authorization"))
 
@@ -964,6 +976,7 @@ async def emit_write_event(
     run: RunContext | None = None,
     commits_rows: bool = False,
     event_time: str | None = None,
+    reannounced: bool = False,
 ) -> None:
     """Publish a best-effort lineage event for a catalog mutation, awaited INLINE in the handler.
 
@@ -978,7 +991,8 @@ async def emit_write_event(
     rename passes its source; a pipeline's write passes the inputs its run names); ``run`` names that run's id and job.
     ``commits_rows`` says the commit added rows, which makes a create a write (:func:`build_write_event`).
     ``event_time`` is when the commit was made, the event's ``eventTime``; a versioned event's run id is derived from
-    the commit (:mod:`catalog.core.commit_ids`).
+    the commit (:mod:`catalog.core.commit_ids`). ``reannounced`` marks the commit reconciler's re-announcement
+    (:func:`build_write_event`).
     Names come from ``fga.canonical_object_id``, so the lineage Dataset is named as the catalog names the table.
 
     ``uuids`` reads the table's uuid and its namespace's, which the event names beside the names (ADR 0173 §10), and each
@@ -1011,4 +1025,5 @@ async def emit_write_event(
         commits_rows=commits_rows,
         uuids=table_uuids,
         event_time=event_time,
+        reannounced=reannounced,
     )

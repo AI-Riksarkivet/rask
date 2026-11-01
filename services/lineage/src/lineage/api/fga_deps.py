@@ -367,8 +367,9 @@ class _StampedAuthor:
     is that the stamp becomes CONSEQUENTIAL: a forged subject must still hold the rung on every output, so a
     forger can only claim an identity that was already authorized to write those datasets, which bounds the
     forgery to producers that could have recorded it honestly. Where signing is enforced the stamp is also
-    proven: the signer IS the author, or a delegator declared acting for them (`verify_arrived_event`), and the
-    subject is then authorized exactly as below.
+    proven: the signer IS the author, or a delegator declared acting for them (`verify_arrived_event`). An event the
+    catalog attests (`_attested`) is then recorded on that signature, and any other event's subject is authorized
+    exactly as below.
     """
 
     __slots__ = ("subject",)
@@ -404,7 +405,8 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     listed signer's published key verifies (`UnverifiedEventError`) and answers an unreadable key list as an outage
     (`ServiceUnavailableError`). Every door that records a bus or staged event passes through here, so all four
     apply the one rule: the bus subscription, the outbox drain, the operator's DLQ replay and the parking route's
-    re-ingest.
+    re-ingest. So do they all record an announcement the catalog attests on its signature (`_attested`, [[LH-551]]):
+    a drop here, a write with no grant re-derived in `enforce_output_authz`.
     """
     # OVER `arrived`, NEVER over a re-serialisation of the parsed model, and BEFORE `fga_enabled` is
     # consulted. Two separate rules, both load-bearing:
@@ -419,7 +421,7 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     # subject may write; it says nothing about whether the producer is who it claims to be, so gating
     # the one on the other would let an estate with auth on and FGA off verify nothing at all.
     verified = await verify_arrived_event(arrived, request, settings)
-    if _is_a_delegators_drop(event, verified, settings):
+    if _is_an_attested_drop(event, verified, settings):
         log.info("lineage_catalog_drop_admitted", extra={"dataset": event.dataset.name, "operation": event.operation})
         return
     if not settings.fga_enabled:
@@ -448,8 +450,9 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
         log.info("lineage_replay_not_reauthorized", extra={"run": event.run_id, "event_type": event.feed_event_type})
 
 
-def _is_a_delegators_drop(event: RunEvent | DatasetEvent, verified: VerifiedSignature | None, settings: LineageSettings) -> TypeGuard[DatasetEvent]:
-    """A DROP the catalog signed — admitted on that signature, never on the author's grants (owner ruling 2026-09-26).
+def _is_an_attested_drop(event: RunEvent | DatasetEvent, verified: VerifiedSignature | None, settings: LineageSettings) -> TypeGuard[DatasetEvent]:
+    """A DROP the catalog attests (:func:`_attested`) — admitted on that signature, never on the author's grants (owner ruling
+    2026-09-26).
 
     THE GRANTS ARE GONE BY DESIGN. The catalog emits `drop_table` / `deregister_table` and then revokes the
     table's tuples in the same request, so a delivery that arrives after the revoke — every bus delivery
@@ -457,20 +460,33 @@ def _is_a_delegators_drop(event: RunEvent | DatasetEvent, verified: VerifiedSign
     The catalog enforced `can_drop` before it mutated anything; its verified signature is that
     attestation, the way Lakekeeper treats the catalog's own events as facts rather than re-asking a grant.
 
-    ONLY A SIGNATURE THIS CALL VERIFIED, AND ONLY AS ONE OF THE CHART'S DELEGATORS. The catalog is the delegator
-    set (`LINEAGE_DELEGATORS`, derived from the identities the chart mints keys for), so the name the shortcut
-    trusts cannot differ from the name the catalog signs under. A `rask_signature` merely PRESENT proves nothing
-    and is not read here: where signing is not enforced `verified` is None and the shortcut is off, and an unsigned
-    drop, or one signed by any other identity, keeps the full check. The signing key's reach bounds this
-    attestation: only the catalog's own sidecar may read its private key, at the Dapr scope and at the store, where the
-    catalog's login is the only one whose policy grants it (ADR 0169).
+    A drop the commit reconciler re-announced attests nothing: its operation is the one the version log names, which a
+    version no catalog door made can name as `drop_table`, so it keeps the full check.
     """
-    return isinstance(event, DatasetEvent) and _signed_by_a_delegator(verified, settings) and lifecycle_state(event.operation or "") == "DROP"
+    return isinstance(event, DatasetEvent) and _attested(event, verified, settings) and lifecycle_state(event.operation or "") == "DROP"
 
 
-def _signed_by_a_delegator(verified: VerifiedSignature | None, settings: LineageSettings) -> bool:
-    """Whether this call verified the event's signature as one of the chart's delegators (the catalog)."""
-    return verified is not None and verified.identity in settings.signing.delegators
+def _attested(event: RunEvent | DatasetEvent, verified: VerifiedSignature | None, settings: LineageSettings) -> bool:
+    """Whether the catalog attests ``event``: one of the chart's delegators signed it, as this call verified, and it is no
+    re-announcement (owner rulings 2026-09-26, 2026-10-20 and 2026-11-01, [[LH-551]]).
+
+    WHAT THE SIGNATURE ATTESTS. The catalog checks the caller's rung on every table a write or a drop names, its outputs and
+    the inputs its run declares, before it commits, and signs the announcement for the caller it authenticated in that
+    request. A grant revoked between the commit and the recording (a delivery the bus held, a lineage outage, the offboarding
+    door revoking every tuple of a principal) changes nothing the catalog attests, so re-deriving it here would erase a true
+    record. A re-announcement (``rask_lance.reannounced``) is the commit reconciler's, for the author the version log names,
+    which a version no catalog door made (a registered table's history, a commit made past every door) can name as anyone:
+    the catalog did not authenticate it, so it attests nothing and is checked as any producer's event is.
+
+    ONLY A SIGNATURE THIS CALL VERIFIED, AND ONLY AS ONE OF THE CHART'S DELEGATORS. The catalog is the delegator set
+    (`LINEAGE_DELEGATORS`, derived from the identities the chart mints keys for), so the name trusted here cannot differ
+    from the name the catalog signs under. A `rask_signature` merely PRESENT proves nothing and is not read here: where
+    signing is not enforced ``verified`` is None, and an unsigned event, or one signed by any other identity, keeps the
+    full check. The signing key's reach bounds the attestation: only the catalog's own sidecar may read its private key,
+    at the Dapr scope and at the store, where the catalog's login is the only one whose policy grants it (ADR 0169). The
+    mark rides the signed bytes, so no relay can strip it.
+    """
+    return verified is not None and verified.identity in settings.signing.delegators and not event.reannounced
 
 
 async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], request: Request) -> bool:
@@ -525,11 +541,11 @@ async def enforce_output_authz(
     rename keeps the uuid, so a rename's register names its source by the uuid the destination holds, and its grants
     with it. A governed dataset carrying no uuid names no table the producer may see, so it is refused.
 
-    ``signed_by`` is the signature the bus door verified (`verify_arrived_event`), never a caller's claim. A write signed
-    by one of the chart's delegators whose every denied output carries zero tuples is admitted ([[LH-502]], owner ruling
-    2026-10-20): the catalog revokes a table's tuples when it drops or deregisters it, so its own create or write
-    announcement, delivered after that revoke, names an object nobody may write, and the catalog authorized the write
-    before it committed it. A governed output the author may not write keeps the refusal, and so does every input.
+    ``signed_by`` is the signature the bus door verified (`verify_arrived_event`), never a caller's claim. An event the
+    catalog attests with it (:func:`_attested`) has neither its outputs' rung nor its inputs' re-derived ([[LH-551]]): the
+    catalog checked both before it committed the write, and a grant revoked since, or a table dropped since, takes nothing
+    back. Everything else still holds for it: the run-author check, and the refusal of an output or input that names no
+    uuid, since neither depends on when the event is recorded.
     """
     if not settings.fga_enabled:
         return
@@ -564,16 +580,15 @@ async def enforce_output_authz(
         reason = f"{' or '.join(relations)} required on outputs: {', '.join(sorted(outputs.unresolved))}"
         log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": sorted(outputs.unresolved)})
         raise UngovernedOutputError(reason)
-    if outputs.objects:
+    attested = _attested(event, signed_by, settings)
+    if outputs.objects and not attested:
         denied = await _denied_objects(decider, user=token.subject, relations=relations, objects=sorted(outputs.objects))
         if denied:
             log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": denied})
             reason = f"{' or '.join(relations)} required on outputs: {', '.join(_names_of(event.outputs, denied))}"
             if not await _none_are_governed(decider, objects=denied):
                 raise PermissionDeniedError(reason)
-            if not _signed_by_a_delegator(signed_by, settings):
-                raise UngovernedOutputError(reason)
-            log.info("lineage_catalog_write_admitted", extra={"run": event.run_id, "outputs": denied, "operation": event.operation})
+            raise UngovernedOutputError(reason)
     # Inputs: you may only RECORD reading a dataset you can SEE — else an authenticated reader (e.g. the
     # service-web read identity) could forge provenance like "service-web read gold$catalog" into the
     # feed and the edge list. `writer ⊇ reader` in model.fga, so writers and readers
@@ -593,7 +608,7 @@ async def enforce_output_authz(
     column_upstreams = {up.name for out in event.outputs for up in out.column_upstreams if not is_external_source(up.namespace, up.name)}
     read = governed_refs(event.inputs, column_upstreams=column_upstreams)
     hidden = set(read.unresolved)
-    if read.objects:
+    if read.objects and not attested:
         seen = await decider.batch_check(user=token.subject, relation="can_get_metadata", objects=sorted(read.objects))
         hidden |= set(_names_of(event.inputs, [obj for obj in read.objects if not seen.get(obj)]))
     if hidden:

@@ -91,8 +91,12 @@ An in-place refinement (a run that reads and writes one table) bumps that table'
 **Intake.** The author is stamped from the verified bearer token, overwriting any `rask_author` facet the body carries, and
 only a run's author may extend an existing run. A producer may record writing a governed output only where it holds
 `can_write_data`, and reading a governed input only where it holds `can_get_metadata`; an external input is exempt,
-since no tuple could ever exist for it. One event names at most 64 inputs and 64 outputs and weighs at most 1 MiB as
-JSON, else 422. Every door (HTTP, bus, outbox drain, DLQ replay) parses through the same models, so all of them refuse
+since no tuple could ever exist for it. On the bus doors an announcement the catalog signed for the caller it
+authenticated is recorded on that signature instead, with neither rung re-derived: the catalog checked both before it
+committed the write, so a grant revoked since takes nothing back (LH-551). The catalog's re-announcement of a commit
+whose own announcement was lost (`rask_lance.reannounced`) names the author the version log carries, which no request
+authenticated, so it is checked as any producer's event is. One event names at most 64 inputs and 64 outputs and
+weighs at most 1 MiB as JSON, else 422. Every door (HTTP, bus, outbox drain, DLQ replay) parses through the same models, so all of them refuse
 alike. This door records and triggers nothing: it publishes nothing on `lineage.events.v1`, so a write that should be
 announced goes through the catalog's data-plane doors, whose emitter announces it.
 

@@ -126,7 +126,8 @@ is recorded without a uuid. Every other facet is that producer's own claim.
   table's version log (LH-497). A write's run id is derived from its commit (the table's uuid, ref, ref incarnation and
   version, keyed by a secret only the catalog holds), so the write's own announcement and a re-announcement are one
   run and land one row, whichever arrives first. A versioned dataset change carries its commit's time as `eventTime`
-  for the same reason.
+  for the same reason. A re-announcement carries `rask_lance.reannounced: true`; for a follower it names the same commit
+  at the same version as the write's own announcement would.
 - An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later
   commits. Order the writes of one table by `rask_lance.version`, not by `seq`.
 - The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), so a follower

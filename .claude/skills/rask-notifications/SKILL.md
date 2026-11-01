@@ -48,11 +48,12 @@ own COMPLETE for each commit the pipeline makes is authored as the verified call
 
 Moving a table's `published` tag notifies the project's watchers (ADR 0156 C1, ADR 0161, [[LH-466]]): the catalog
 emits a `publish_table` run authored by the verified caller, its `rask_lance.project` the tenant and its output the table,
-so it is delivered by WATCH like any catalog write. Lineage records it only because its bus door authorizes a
-`publish_table` run on `can_update_tag` or `can_promote` rather than the writer rung (`lineage/api/fga_deps.py`): a
-validator's approval demanded `can_write_data`, was refused and dead-lettered, and still rang the watcher's bell, the
-class of trap 5. Lineage's `GET /events` follows forward from `since=` with the commit-event shape in
-`docs/COMMIT-EVENTS.md` (C7, [[LH-472]]). Lineage is an authenticated OpenLineage intake, a commit feed and table-level
+so it is delivered by WATCH like any catalog write. Lineage's bus doors record it on the catalog's signature, as they
+record every announcement the catalog signs for the caller it authenticated, with no grant re-derived ([[LH-551]]); its
+HTTP door, which verifies no signature, authorizes a `publish_table` run on `can_update_tag` or `can_promote` rather than
+the writer rung (`lineage/api/fga_deps.py`): a validator's approval demanded `can_write_data`, was refused and
+dead-lettered, and still rang the watcher's bell, the class of trap 5. Lineage's `GET /events` follows forward from
+`since=` with the commit-event shape in `docs/COMMIT-EVENTS.md` (C7, [[LH-472]]). Lineage is an authenticated OpenLineage intake, a commit feed and table-level
 edge list kept as Lance tables in the catalog's provenance namespace, and a forwarder to a bring-your-own graph backend
 (ADR 0158). It answers no graph query: a notification cannot be targeted on an upstream or downstream walk, only on what
 the event itself names.
