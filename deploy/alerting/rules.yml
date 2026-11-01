@@ -150,8 +150,8 @@ groups:
             `lance.catalog.operation` label and the catalog's `commit_reannounced` logs for the tables.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
 
-      # A version of an announced operation naming no author, which the catalog recorded none for, was committed past
-      # every catalog door; nothing can announce it on anyone's behalf.
+      # A version of an announced operation the catalog recorded no author for, whatever rask.author it carries, was
+      # committed past every catalog door (or its record failed); nothing can announce it on anyone's behalf.
       - alert: CatalogCommitsUnauthored
         expr: (sum(increase(catalog_commit_reconcile_unauthored_total[15m])) > 0) or (sum(catalog_commit_reconcile_unauthored_total unless catalog_commit_reconcile_unauthored_total offset 15m) > 0)
         labels:
@@ -160,9 +160,11 @@ groups:
         annotations:
           summary: "A table holds versions no catalog door committed"
           description: >-
-            The catalog's commit reconciler found committed versions that name no author and for which version/create
-            recorded none: a manifest was finalized past every catalog door, by a credential that can write one. The
-            version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions.
+            The catalog's commit reconciler found committed versions for which the catalog recorded no author, whatever
+            rask.author they carry: a manifest was finalized past every catalog door, by a credential that can write one,
+            or the catalog's own record of a write Lance committed failed (a `commit_author_unrecorded` log names that
+            version). The version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables
+            and versions.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
 
       # A ref the reconciler cannot read past keeps its mark, so every lost announcement after that point waits on it.

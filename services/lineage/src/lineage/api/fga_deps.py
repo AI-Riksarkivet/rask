@@ -459,34 +459,30 @@ def _is_an_attested_drop(event: RunEvent | DatasetEvent, verified: VerifiedSigna
     and every outbox drain — asks FGA about a table nobody may write, and the drop could never be recorded.
     The catalog enforced `can_drop` before it mutated anything; its verified signature is that
     attestation, the way Lakekeeper treats the catalog's own events as facts rather than re-asking a grant.
-
-    A drop the commit reconciler re-announced attests nothing: its operation is the one the version log names, which a
-    version no catalog door made can name as `drop_table`, so it keeps the full check.
     """
-    return isinstance(event, DatasetEvent) and _attested(event, verified, settings) and lifecycle_state(event.operation or "") == "DROP"
+    return isinstance(event, DatasetEvent) and _attested(verified, settings) and lifecycle_state(event.operation or "") == "DROP"
 
 
-def _attested(event: RunEvent | DatasetEvent, verified: VerifiedSignature | None, settings: LineageSettings) -> bool:
-    """Whether the catalog attests ``event``: one of the chart's delegators signed it, as this call verified, and it is no
-    re-announcement (owner rulings 2026-09-26, 2026-10-20 and 2026-11-01, [[LH-551]]).
+def _attested(verified: VerifiedSignature | None, settings: LineageSettings) -> bool:
+    """Whether the catalog attests the event ``verified`` was verified on: one of the chart's delegators signed it, as this
+    call verified (owner rulings 2026-09-26, 2026-10-20 and 2026-11-01, [[LH-551]], [[LH-550]]).
 
     WHAT THE SIGNATURE ATTESTS. The catalog checks the caller's rung on every table a write or a drop names, its outputs and
-    the inputs its run declares, before it commits, and signs the announcement for the caller it authenticated in that
-    request. A grant revoked between the commit and the recording (a delivery the bus held, a lineage outage, the offboarding
-    door revoking every tuple of a principal) changes nothing the catalog attests, so re-deriving it here would erase a true
-    record. A re-announcement (``rask_lance.reannounced``) is the commit reconciler's, for the author the version log names,
-    which a version no catalog door made (a registered table's history, a commit made past every door) can name as anyone:
-    the catalog did not authenticate it, so it attests nothing and is checked as any producer's event is.
+    the inputs its run declares, before it commits, records the caller it authorized the commit for, and signs the
+    announcement for that caller. A grant revoked between the commit and the recording (a delivery the bus held, a lineage
+    outage, the offboarding door revoking every tuple of a principal) changes nothing the catalog attests, so re-deriving it
+    here would erase a true record. The commit reconciler's re-announcement of a commit whose own announcement was lost is
+    signed for the author the catalog recorded authorizing it, never for the ``rask.author`` a version carries, and a
+    version it recorded no author for is announced for nobody (ADR 0187), so it attests what the original would have.
 
     ONLY A SIGNATURE THIS CALL VERIFIED, AND ONLY AS ONE OF THE CHART'S DELEGATORS. The catalog is the delegator set
     (`LINEAGE_DELEGATORS`, derived from the identities the chart mints keys for), so the name trusted here cannot differ
     from the name the catalog signs under. A `rask_signature` merely PRESENT proves nothing and is not read here: where
     signing is not enforced ``verified`` is None, and an unsigned event, or one signed by any other identity, keeps the
     full check. The signing key's reach bounds the attestation: only the catalog's own sidecar may read its private key,
-    at the Dapr scope and at the store, where the catalog's login is the only one whose policy grants it (ADR 0169). The
-    mark rides the signed bytes, so no relay can strip it.
+    at the Dapr scope and at the store, where the catalog's login is the only one whose policy grants it (ADR 0169).
     """
-    return verified is not None and verified.identity in settings.signing.delegators and not event.reannounced
+    return verified is not None and verified.identity in settings.signing.delegators
 
 
 async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], request: Request) -> bool:
@@ -580,7 +576,7 @@ async def enforce_output_authz(
         reason = f"{' or '.join(relations)} required on outputs: {', '.join(sorted(outputs.unresolved))}"
         log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": sorted(outputs.unresolved)})
         raise UngovernedOutputError(reason)
-    attested = _attested(event, signed_by, settings)
+    attested = _attested(signed_by, settings)
     if outputs.objects and not attested:
         denied = await _denied_objects(decider, user=token.subject, relations=relations, objects=sorted(outputs.objects))
         if denied:

@@ -96,7 +96,7 @@ def _door(location: str) -> DoorTable:
     store = ClaimStore(control_root=str(Path(location).parent / "control"))
     location_claims.take(store, location, "ns$t", ["ns", "t"], is_gone=lambda _claim: False, uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
     resolved = ResolvedTable(segments=["ns", "t"], location=location, claim=location_claims.read(store, location))
-    return DoorTable(cast("Any", _Namespace(location)), store, resolved)
+    return DoorTable(cast("Any", _Namespace(location)), store, resolved, announces=lambda _operation: True)
 
 
 @pytest.fixture

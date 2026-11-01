@@ -26,6 +26,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -40,18 +41,18 @@ import pytest
 import uvicorn
 from lance.bitmap import Bitmap
 from lance.commit import CommitConflictError
-from lance.dataset import Index
+from lance.dataset import Index, Transaction
 from lance.optimize import Compaction
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
-from catalog.services import table_claims
+from catalog.services import dataplane, table_claims
 from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse import base_refs, commit_turns, maintenance_due, records
+from service_kit.lakehouse import base_refs, commit_records, commit_turns, maintenance_due, records
 from service_kit.lakehouse.objectfs import StorageOptions
 
 
@@ -218,7 +219,8 @@ def _rows(dataset: lance.LanceDataset) -> list[tuple[int, str]]:
 def test_append_delete_merge_insert_update_and_restore_each_commit_through_version_create(served: Served, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="lance.audit"):
         stock = _created(served)
-        lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
+        # The append names its own author, which `version/create` admits for the caller it verified.
+        lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append", transaction_properties={"rask.author": "dex~alice"})
         assert _rows(_opened(stock)) == [(1, "a"), (2, "b"), (3, "c"), (4, "d")]
         _opened(stock).delete("id = 2")
         assert _rows(_opened(stock)) == [(1, "a"), (3, "c"), (4, "d")]
@@ -234,17 +236,21 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
     assert restored.version == 6
     committed = [(getattr(r, "audit.version"), getattr(r, "audit.operation")) for r in caplog.records if getattr(r, "audit.action", None) == "commit_version"]
     assert committed == [(1, "Overwrite"), (2, "Append"), (3, "Delete"), (4, "Update"), (5, "Update"), (6, "Restore")]
-    # A stock commit carries no `rask.author`, so the catalog recorded its verified caller as each version's author ([[LH-497]]).
+    # The catalog recorded its verified caller as each version's author, the one naming itself included (ADR 0187).
     from catalog.core.config import get_settings
-    from service_kit.lakehouse import commit_records
 
+    # Each names the manifest it judged, which is the one that landed: the backend finalizes those bytes unchanged.
     settings, table_uuid = get_settings(), str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
-    authors = []
+    signed = []
     for version in range(1, 7):
         transaction = restored.read_transaction(version)
         assert transaction is not None
-        authors.append(commit_records.recorded_author(settings.registry_root, settings.storage_options(), table_uuid, transaction.uuid))
-    assert authors == ["dex~alice"] * 6
+        record = commit_records.recorded(
+            settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction.uuid, version=version, ref=""
+        )
+        assert record is not None, version
+        signed.append((record.author, record.manifest == dataplane.committed_manifest_digest(restored.uri, StorageOptions(), version)))
+    assert signed == [("dex~alice", True)] * 6
 
 
 def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_create(served_on_s3: Served, caplog: pytest.LogCaptureFixture) -> None:
@@ -557,6 +563,55 @@ def _commit_an_index(stock: lance_namespace.LanceNamespace, index: Index) -> Non
     )
 
 
+def _append_under_a_transaction_recorded_for_another_commit(stock: lance_namespace.LanceNamespace) -> None:
+    """An append staged as version 4 under a transaction the catalog recorded at version 4 for another caller's commit, still
+    in flight: its uuid is on that commit's staged manifest, which every reader of the table sees (ADR 0187)."""
+    from catalog.core.config import get_settings
+
+    settings, dataset = get_settings(), _opened(stock)
+    held = str(uuid.uuid4())
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    commit_records.record_author(
+        settings.registry_root,
+        settings.storage_options(),
+        table_uuid,
+        transaction_uuid=held,
+        version=dataset.version + 1,
+        ref="",
+        author="dex~bob",
+        manifest=commit_records.manifest_digest(b"the other commit's staged manifest"),
+    )
+    (written,) = lance.fragment.write_fragments(_keyed([5], ["e"]), dataset)
+    lance.LanceDataset.commit(
+        dataset,
+        Transaction(read_version=dataset.version, operation=lance.LanceOperation.Append([written]), uuid=held),
+        namespace_client=stock,
+        table_id=_TABLE,
+        namespace_client_managed_versioning=True,
+    )
+
+
+def _append_under_a_transaction_whose_record_is_unreadable(stock: lance_namespace.LanceNamespace) -> None:
+    """An append staged as version 4 under a transaction whose record at version 4 the store holds but that does not read
+    as one: it signs nothing, and is never taken for this commit's."""
+    from catalog.core.config import get_settings
+
+    settings, dataset = get_settings(), _opened(stock)
+    held = str(uuid.uuid4())
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    unreadable = Path(settings.registry_root) / commit_records.AUTHORS_PREFIX / table_uuid / held / f"{dataset.version + 1}.json"
+    unreadable.parent.mkdir(parents=True)
+    unreadable.write_bytes(b'{"author": ')
+    (written,) = lance.fragment.write_fragments(_keyed([5], ["e"]), dataset)
+    lance.LanceDataset.commit(
+        dataset,
+        Transaction(read_version=dataset.version, operation=lance.LanceOperation.Append([written]), uuid=held),
+        namespace_client=stock,
+        table_id=_TABLE,
+        namespace_client_managed_versioning=True,
+    )
+
+
 def _index_read_through_a_base(stock: lance_namespace.LanceNamespace) -> None:
     _commit_an_index(stock, _index(base_id=0))
 
@@ -625,6 +680,10 @@ def _data_staged_under_an_index_label(stock: lance_namespace.LanceNamespace) -> 
         pytest.param(_index_read_through_a_base, set(), False, 400, 13, ("db$t", 4), id="an-index-is-read-from-the-tables-own-indices"),
         pytest.param(_index_with_no_files, set(), False, 400, 13, ("db$t", 4), id="an-index-names-files-that-are-there"),
         pytest.param(_data_staged_under_an_index_label, set(), False, 400, 13, ("db$t", 4), id="an-index-commit-changes-no-data"),
+        pytest.param(
+            _append_under_a_transaction_recorded_for_another_commit, set(), False, 400, 13, ("db$t", 4), id="another-commits-transaction-is-not-reused"
+        ),
+        pytest.param(_append_under_a_transaction_whose_record_is_unreadable, set(), False, 400, 13, ("db$t", 4), id="an-unreadable-record-is-no-retrys"),
     ],
 )
 def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_error(
@@ -767,6 +826,106 @@ def test_a_commit_whose_answer_is_lost_lands_once_and_the_client_gets_its_versio
     table = _opened(stock)
     assert (written.version, answered, [entry["version"] for entry in table.versions()]) == (2, [2], [1, 2])
     assert _rows(table) == [(1, "a"), (2, "b"), (3, "c"), (4, "d")]
+    # The request whose answer was lost failed after its version landed, so its author record stands (ADR 0187).
+    from catalog.core.config import get_settings
+
+    settings, transaction = get_settings(), table.read_transaction(2)
+    assert transaction is not None
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    record = commit_records.recorded(settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction.uuid, version=2, ref="")
+    assert record is not None
+    assert (record.author, record.manifest) == ("dex~alice", dataplane.committed_manifest_digest(table.uri, StorageOptions(), 2))
+
+
+def test_a_version_landed_past_every_door_under_an_in_flight_commits_transaction_is_signed_for_no_one(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR 0187: a writer past every door reads an in-flight stock commit's transaction uuid off its staged manifest and
+    lands that version first, with other rows (pylance 13.0.0 commits a transaction under any uuid it is given,
+    measured). The commit's finalize loses, and the delete of its author record is refused here, so a record names that
+    transaction at that version; it names the manifest the catalog judged too, which is not the one there, so the
+    reconciler signs the version for no one and signs the commit's retry, a version later, for its caller."""
+    from catalog.core.config import get_settings
+    from catalog.services import commit_reconcile, managed_versions
+
+    finalize = managed_versions.finalize
+    forged: list[int] = []
+
+    def beaten_to_its_version(table: table_claims.DoorTable, staged: managed_versions.StagedVersion, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — finalize's own arguments and answer
+        if not forged:
+            root = staged.table_location
+            planned = lance.fragment.write_fragments(_keyed([9], ["forged"]), root, return_transaction=True, data_storage_version="2.2")
+            lance.LanceDataset.commit(root, replace(planned, read_version=staged.version - 1, uuid=staged.transaction_uuid))
+            forged.append(staged.version)
+        return finalize(table, staged, *args, **kwargs)
+
+    def refused(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the delete's own arguments
+        raise OSError("the store refused the delete")
+
+    stock = _created(served)
+    monkeypatch.setattr(managed_versions, "finalize", beaten_to_its_version)
+    monkeypatch.setattr(commit_records, "forget_author", refused)
+
+    lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
+
+    landed = _opened(stock)
+    (taken,) = forged
+    held, retried = landed.read_transaction(taken), landed.read_transaction(taken + 1)
+    assert held is not None and retried is not None and held.uuid == retried.uuid
+    settings = get_settings()
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    scan = commit_reconcile.scan_ref(
+        landed.uri,
+        StorageOptions(),
+        branch=None,
+        branch_identifier=None,
+        mark=taken - 1,
+        announced=set(),
+        after=datetime.now(UTC) - timedelta(hours=1),
+        before=datetime.now(UTC) + timedelta(hours=1),
+        record_of=lambda transaction_uuid, version, ref: commit_records.recorded(
+            settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction_uuid, version=version, ref=ref
+        ),
+        authenticates=True,
+        unannounced=lambda _operation: False,
+    )
+    assert (scan.unauthored, [(commit.version, commit.author) for commit in scan.missing]) == ((taken,), [(taken + 1, "dex~alice")])
+    # The record that signs nothing there is forgotten with the version it was counted for.
+    assert [commit.version for commit in scan.forget] == [taken]
+
+
+def test_a_retry_of_an_in_flight_commit_leaves_the_record_its_twin_made(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ADR 0187: a request that finds its commit's author already recorded, a retry of that commit made while the first
+    request is in flight, deletes nothing when it fails before its finalize: the first request lands its version, and
+    the record names its author."""
+    from catalog.core.config import get_settings
+
+    waited = table_claims.DoorTable.wait_for_turn_in_loop
+    posted: list[str] = []
+    twins: list[int] = []
+
+    async def _a_twin_while_waiting(table: table_claims.DoorTable, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
+        if posted:
+            raise table_claims.TurnWaitRefusedError("every seat a commit waits in is taken")
+        described = await asyncio.to_thread(httpx.post, f"{served.url}/v1/table/db$t/describe", json={"vend_credentials": False}, headers=_TOKEN)
+        (pending,) = Path(described.json()["location"].removeprefix("file://")).glob("_versions/*.manifest-*")
+        # Off the event loop, which serves the describe a stock client's open sends.
+        request = {"version": (await asyncio.to_thread(_opened, stock)).version + 1, "manifest_path": pending.relative_to("/").as_posix()}
+        posted.append(request["manifest_path"])
+        twins.append((await asyncio.to_thread(httpx.post, f"{served.url}/v1/table/db$t/version/create", json=request, headers=_TOKEN)).status_code)
+        return await waited(table, ref, mine=mine, handed=handed)
+
+    stock = _created(served)
+    monkeypatch.setattr(table_claims.DoorTable, "wait_for_turn_in_loop", _a_twin_while_waiting)
+
+    written = lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
+
+    transaction = written.read_transaction(written.version)
+    assert transaction is not None
+    settings = get_settings()
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    record = commit_records.recorded(
+        settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction.uuid, version=written.version, ref=""
+    )
+    assert (twins, written.version, record.author if record is not None else None) == ([409], 2, "dex~alice")
 
 
 #: An unkeyed table, so the catalog's ``/insert`` appends through Lance's own commit rather than a keyed plan.
@@ -959,8 +1118,21 @@ def test_a_stock_writer_whose_finalize_loses_is_handed_the_refs_next_turn(served
 
     lance.write_dataset(_row(2), namespace_client=_SlowRoundTrip(served.stock(), 0.0, before=_note_the_turn), table_id=_APPENDED_TO, mode="append")
 
-    ids = lance.dataset(namespace_client=stock, table_id=_APPENDED_TO).to_table(columns=["id"]).column("id").to_pylist()
+    landed = lance.dataset(namespace_client=stock, table_id=_APPENDED_TO)
+    ids = landed.to_table(columns=["id"]).column("id").to_pylist()
     assert (at_the_retry[:1], sorted(ids)) == ([(True, False)], [0, 1, 2])
+    # Each version keeps its commit's author record, and the attempt whose finalize lost deleted its own: the retry staged
+    # again under the same transaction landed a version later (ADR 0187).
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_APPENDED_TO)).properties or {})["rask.uuid"])
+    control = str(tmp_path / "control")
+    authors = []
+    for version in (1, 2, 3):
+        transaction = landed.read_transaction(version)
+        assert transaction is not None
+        record = commit_records.recorded(control, StorageOptions(), table_uuid, transaction_uuid=transaction.uuid, version=version, ref="")
+        authors.append(record.author if record is not None else None)
+    kept = list((tmp_path / "control" / commit_records.AUTHORS_PREFIX / table_uuid).rglob("*.json"))
+    assert (authors, len(kept)) == (["dex~alice"] * 3, 3)
 
 
 @pytest.mark.parametrize(

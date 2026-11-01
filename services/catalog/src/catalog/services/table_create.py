@@ -73,7 +73,7 @@ from catalog.core.lineage_emit import CREATE_TABLE, OVERWRITE_TABLE, LineageEmit
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
-from catalog.services import dataplane, native, table_bases, table_claims, table_inputs
+from catalog.services import dataplane, native, provenance_namespace, table_bases, table_claims, table_inputs
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import base_registry, data_directories, location_claims
@@ -255,7 +255,8 @@ async def create_governed_table(
         # about its protection.
         await fga_deps.require_table_unprotected(settings, overwritten, force=force)
         # The table asked about is the one overwritten ([[LH-530]]).
-        overwriting = table_claims.DoorTable(ns, table_claims.claim_store(settings), overwritten)
+        overwriting = table_claims.DoorTable(ns, table_claims.claim_store(settings), overwritten, announces=provenance_namespace.announcer(segments, settings))
+    operation = OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
@@ -277,7 +278,10 @@ async def create_governed_table(
         data_bases=data_base or None,
         registry=registry,
         holder=table_id,
-        transaction_properties=run_context.commit_properties(run, author=created_by, operation=OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE),
+        transaction_properties=run_context.commit_properties(run, author=created_by, operation=operation),
+        # The author the reconciler signs a lost announcement of this write for (ADR 0187); none for a write the emitter
+        # never announces, which keeps no record.
+        recorded_author=None if provenance_namespace.is_unannounced(namespace, operation, settings) else created_by,
         overwriting=overwriting,
         before_commit=table_inputs.recorder(
             settings.registry_root, settings.storage_options(), name=table_id, declared=await fga_deps.declared_inputs(resolver, run)

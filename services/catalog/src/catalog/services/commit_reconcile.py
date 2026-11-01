@@ -1,12 +1,13 @@
 """Find every committed version whose announcement is not on lineage's feed: the commit is the outbox ([[LH-497]]).
 
 The catalog announces a write after its commit, by staging the event in its object-store outbox and publishing it, and a
-crash between the commit and the stage loses the announcement. The version itself is not lost: every version names its
-author (``rask.author`` in the commit, or the record ``version/create`` wrote for a stock commit that cannot carry it,
-:mod:`service_kit.lakehouse.commit_records`) and, for a catalog door's commit, its lineage operation (``rask.operation``),
-and an announcement's run id is derived from the commit itself (:mod:`catalog.core.commit_ids`). So each table's own
-version log is the outbox: a pass reads each ref's versions after its mark, looks for each on the feed, and hands the
-caller every version the feed lacks, rebuilt from the version log alone.
+crash between the commit and the stage loses the announcement. The version itself is not lost: the catalog recorded the
+caller it authorized every commit for (:mod:`service_kit.lakehouse.commit_records`, ADR 0187), a catalog door's commit
+names its lineage operation (``rask.operation``), and an announcement's run id is derived from the commit itself
+(:mod:`catalog.core.commit_ids`). So each table's own version log is the outbox: a pass reads each ref's versions after
+its mark, looks for each on the feed, and hands the caller every version the feed lacks, rebuilt from the version log and
+signed for the author recorded, never for the ``rask.author`` a version carries, which any writer that can put a final
+manifest can stamp. A version the catalog recorded no author for was committed past every door, and is counted.
 
 ON THE FEED means a row naming the table's uuid, the ref and its incarnation, and the version: name-independent, so a
 table renamed since its write is not announced again under its new name. The rows are read off ``provenance$events``
@@ -30,7 +31,6 @@ import json
 import logging
 from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
-from functools import partial
 from typing import Any, Final
 
 import lance
@@ -65,10 +65,9 @@ class Commit(BaseModel):
     branch: str | None
     branch_identifier: str | None
     operation: str
-    #: Who made it; ``None`` only where the catalog authenticates nobody.
-    author: str | None
-    #: Whether the author is the one ``version/create`` recorded beside the commit, which names none itself.
-    author_recorded: bool = False
+    #: The author the catalog recorded authorizing it (ADR 0187); ``None`` where it recorded nobody: a commit made past
+    #: every door, or one where the catalog authenticates nobody.
+    author: str | None = None
     #: The commit's ``rask.*`` run, when it names one.
     run: run_context.RunContext | None
     committed_at: str | None
@@ -86,10 +85,12 @@ class RefScan(BaseModel):
     branch_identifier: str | None
     #: The versions to announce, oldest first.
     missing: tuple[Commit, ...] = ()
-    #: Versions of an operation the doors announce that name no author: committed past every door, so unannounceable.
+    #: Versions of an operation the doors announce for which the catalog recorded no author: committed past every door, so
+    #: unannounceable.
     unauthored: tuple[int, ...] = ()
-    #: The transactions whose recorded author is no longer needed: their versions are on the feed.
-    forget: tuple[str, ...] = ()
+    #: The commits whose recorded author is no longer needed: their versions are on the feed, past the horizon, or counted
+    #: unauthored.
+    forget: tuple[Commit, ...] = ()
     #: The highest version up to which every version is on the feed, unannounced by design, or unauthored.
     mark: int | None = None
 
@@ -209,7 +210,7 @@ def scan_ref(
     announced: set[tuple[str, int]],
     after: datetime,
     before: datetime,
-    author_of: Callable[[str], str | None],
+    record_of: Callable[[str, int, str], commit_records.CommitAuthor | None],
     authenticates: bool,
     unannounced: Callable[[str], bool],
 ) -> RefScan:
@@ -217,20 +218,26 @@ def scan_ref(
     lacks.
 
     A version on the feed is confirmed, whoever made it. ``after`` is the horizon: a version committed before it is past
-    the feed's own retention, so the feed may hold no row for it and the pass confirms it unread. ``author_of`` answers the
-    author the catalog recorded for a transaction uuid. ``authenticates`` is whether the catalog authenticates its callers:
-    where it does, a missing version of an announced operation naming no author was committed past every door, and is
-    counted rather than announced, since an announcement must name who made it. ``unannounced`` answers, for an operation,
+    the feed's own retention, so the feed may hold no row for it and the pass confirms it unread. ``record_of`` answers,
+    for a transaction's uuid, the version it holds and the ref's key, the record of the author the catalog authorized that
+    commit there for, the only author a re-announcement is signed for (ADR 0187), and only when the version holds the
+    manifest the record names, if it names one: a version's own ``rask.author`` is whatever its writer stamped, and its
+    transaction's uuid is one every reader of the table sees. ``authenticates`` is whether the
+    catalog authenticates its callers: where it does, a missing version the catalog recorded no author for was committed
+    past every door, and is counted rather than announced, since an announcement must name who made it; so is a version
+    whose transaction cannot be read, or whose operation no door commits. ``unannounced`` answers, for an operation,
     whether the emitter leaves it unannounced on this table (a row write in the provenance namespace,
-    `catalog.services.provenance_namespace`), which the feed then holds no row for by design.
+    `catalog.services.provenance_namespace`), which the feed then holds no row for and the catalog keeps no author for.
 
     Raises:
         ReconcileReadError: A retained version, or its commit time, could not be read; the mark stops before it.
+        OSError: A recorded author, or the manifest it names, could not be read.
     """
     key = commit_records.ref_key(branch, branch_identifier)
+    ref_location = managed_versions.CommitRef(table_location=location, branch=branch).location
     missing: list[Commit] = []
     unauthored: list[int] = []
-    forget: list[str] = []
+    forget: list[Commit] = []
     confirmed = mark
     contiguous = True
     for version, handle in _versions_after(location, so, branch, mark):
@@ -239,17 +246,29 @@ def scan_ref(
             raise ReconcileReadError(f"version {version} of {location} on {branch or 'main'} records no readable commit time")
         if when >= before:
             break
-        commit = None if when < after else _commit_at(handle, version, branch=branch, branch_identifier=branch_identifier, author_of=author_of)
+        on_feed = when < after or (key, version) in announced
+        try:
+            commit = _commit_at(handle, version, branch=branch, branch_identifier=branch_identifier)
+        except UnidentifiedCommitError as exc:
+            if not on_feed and authenticates:
+                log.warning("commit_reconcile_unidentified", extra={"location": location, "branch": branch, "version": version, "error": str(exc)})
+                unauthored.append(version)
+            commit = None
         if commit is None or unannounced(commit.operation):
             pass
-        elif (key, version) in announced:
-            if commit.author_recorded:
-                forget.append(commit.transaction_uuid)
-        elif commit.author is None and authenticates:
-            unauthored.append(version)
+        elif on_feed:
+            forget.append(commit)
         else:
-            missing.append(commit)
-            contiguous = False
+            record = record_of(commit.transaction_uuid, version, key)
+            author = _signed_for(record, ref_location, so, version)
+            if author is None and authenticates:
+                unauthored.append(version)
+                if record is not None:
+                    # This ref's record for other bytes signs nothing, and is not needed once the version is counted.
+                    forget.append(commit)
+            else:
+                missing.append(commit.model_copy(update={"author": author}))
+                contiguous = False
         if contiguous:
             confirmed = version
     return RefScan(
@@ -260,6 +279,21 @@ def scan_ref(
         forget=tuple(forget),
         mark=confirmed,
     )
+
+
+def _signed_for(record: commit_records.CommitAuthor | None, ref_location: str, so: StorageOptions, version: int) -> str | None:
+    """The author a re-announcement of ``version`` is signed for: the one ``record`` names, when the record was read off the
+    landed version or names the manifest committed there; ``None`` otherwise, a version put past every door under another
+    commit's transaction uuid included.
+
+    Raises:
+        OSError: The manifest committed as ``version`` could not be read.
+    """
+    if record is None:
+        return None
+    if record.manifest is not None and record.manifest != dataplane.committed_manifest_digest(ref_location, so, version):
+        return None
+    return record.author
 
 
 def _versions_after(location: str, so: StorageOptions, branch: str | None, mark: int | None) -> Iterator[tuple[int, lance.LanceDataset]]:
@@ -287,21 +321,26 @@ def _committed_at(handle: lance.LanceDataset) -> datetime | None:
     return datetime.fromisoformat(stamp) if stamp is not None else None
 
 
-def _commit_at(
-    handle: lance.LanceDataset, version: int, *, branch: str | None, branch_identifier: str | None, author_of: Callable[[str], str | None]
-) -> Commit | None:
-    """The commit at ``version`` as the doors announce it, or ``None`` for one no door announces."""
+class UnidentifiedCommitError(Exception):
+    """A version whose transaction cannot be read, or names an operation no door commits: none of the catalog's."""
+
+
+def _commit_at(handle: lance.LanceDataset, version: int, *, branch: str | None, branch_identifier: str | None) -> Commit | None:
+    """The commit at ``version`` as the doors announce it, or ``None`` for one no door announces.
+
+    Raises:
+        UnidentifiedCommitError: The version names no transaction, or one whose operation no door commits.
+    """
     transaction = handle.read_transaction(version)
     if transaction is None:
-        return None
+        raise UnidentifiedCommitError(f"version {version} names no transaction")
     properties = dict(transaction.transaction_properties or {})
     name = type(transaction.operation).__name__
     if name in _UNANNOUNCED or _only_changes_config(transaction.operation):
         return None
     operation = properties.get(run_context.OPERATION_PROPERTY) or _operation_of(name, version=version, branch=branch)
     if operation is None:
-        log.warning("commit_reconcile_unknown_operation", extra={"operation": name, "version": version, "branch": branch})
-        return None
+        raise UnidentifiedCommitError(f"version {version} commits a {name}, which no door commits")
     stock = {key: value for key, value in properties.items() if key != run_context.OPERATION_PROPERTY}
     try:
         run = run_context.from_properties(stock)
@@ -309,15 +348,11 @@ def _commit_at(
         # A malformed run is announced without one, never dropped.
         run = None
     fragments = getattr(transaction.operation, "fragments", None) or []
-    stamped = properties.get(run_context.AUTHOR_PROPERTY)
-    recorded = None if stamped is not None else author_of(transaction.uuid)
     return Commit(
         version=version,
         branch=branch,
         branch_identifier=branch_identifier,
         operation=operation,
-        author=stamped or recorded,
-        author_recorded=recorded is not None,
         run=run,
         committed_at=dataplane.commit_time(handle),
         commits_rows=operation == lineage_emit.CREATE_TABLE and sum(int(fragment.physical_rows or 0) for fragment in fragments) > 0,
@@ -371,8 +406,8 @@ def reconcile_table(
     feed: str,
     now: datetime,
 ) -> TableReconcile:
-    """Scan every ref of the table at ``location`` against the feed at ``feed``, keep each mark the scan confirmed, and
-    forget the recorded author of every stock commit found on the feed.
+    """Scan every ref of the table at ``location`` against the feed at ``feed``, forget the recorded author of every commit
+    the scan confirmed, and keep each mark it confirmed.
 
     The window is the grace (``LANCE_COMMIT_RECONCILE_GRACE_SECONDS``) at the young end and the horizon
     (``LANCE_COMMIT_RECONCILE_HORIZON_SECONDS``, inside the feed's retention) at the old end. A ref whose log cannot be
@@ -400,7 +435,9 @@ def reconcile_table(
                     announced=announced,
                     after=after,
                     before=grace_bound(now, settings.commit_reconcile_grace_seconds),
-                    author_of=partial(commit_records.recorded_author, control, control_so, table_uuid),
+                    record_of=lambda transaction_uuid, version, ref: commit_records.recorded(
+                        control, control_so, table_uuid, transaction_uuid=transaction_uuid, version=version, ref=ref
+                    ),
                     authenticates=settings.oidc_enabled,
                     unannounced=lambda operation: provenance_namespace.is_unannounced(parent, operation, settings),
                 )
@@ -408,10 +445,25 @@ def reconcile_table(
         except ReconcileReadError as exc:
             log.error("commit_reconcile_ref_unreadable", extra={"table": segments, "branch": branch, "error": str(exc)[:300]})
             unreadable.append(commit_records.ref_key(branch, identifier))
-    kept = {commit_records.ref_key(scan.branch, scan.branch_identifier): scan.mark for scan in scans if scan.mark is not None}
+    kept: dict[str, int] = {}
+    for scan in scans:
+        mark = _forgotten_up_to(scan, control, control_so, table_uuid)
+        if mark is not None:
+            kept[commit_records.ref_key(scan.branch, scan.branch_identifier)] = mark
     if any(marks.refs.get(key) != value for key, value in kept.items()):
         commit_records.write_marks(control, control_so, table_uuid, commit_records.CommitMarks(refs={**marks.refs, **kept}))
-    for scan in scans:
-        for transaction_uuid in scan.forget:
-            commit_records.forget_author(control, control_so, table_uuid, transaction_uuid)
     return TableReconcile(scans=tuple(scans), unreadable=tuple(unreadable))
+
+
+def _forgotten_up_to(scan: RefScan, control: str, control_so: StorageOptions, table_uuid: str) -> int | None:
+    """Forget the recorded author of each commit ``scan`` confirmed on the feed; answer the ref's mark, held below the
+    first version whose record the store refused to delete, so the next pass reads that version and forgets it then."""
+    mark = scan.mark
+    for commit in scan.forget:
+        try:
+            commit_records.forget_author(control, control_so, table_uuid, transaction_uuid=commit.transaction_uuid, version=commit.version)
+        except OSError as exc:
+            log.warning("commit_author_unforgotten", extra={"table": table_uuid, "version": commit.version, "branch": scan.branch, "error": str(exc)[:300]})
+            if mark is not None and commit.version <= mark:
+                mark = commit.version - 1
+    return mark

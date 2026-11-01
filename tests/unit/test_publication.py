@@ -78,7 +78,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
 @pytest.fixture
 def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     """The table as a door acts on it, resolved on ``ns``."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
 
 
 def _uri(ns) -> str:  # noqa: ANN001
@@ -296,7 +296,7 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
     # The control root the fixture's create took the table's claim on, where the door reads the table's uuid.
     monkeypatch.setenv("LANCE_CONTROL_ROOT", str(tmp_path / "control"))
     settings = Settings()
-    table = door_table(ns, claim_store(settings), TABLE_ID)
+    table = door_table(ns, claim_store(settings), TABLE_ID, announces=lambda _operation: True)
 
     good = _write(ns, [1, 2, 3])
     await publish_table(

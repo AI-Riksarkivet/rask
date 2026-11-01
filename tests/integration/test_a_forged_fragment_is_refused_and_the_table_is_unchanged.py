@@ -38,6 +38,7 @@ import pytest
 import uvicorn
 from lance import blob_array, blob_field
 from lance.blob import Blob
+from lance.dataset import Transaction
 from pydantic import SecretStr
 
 from service_kit.governed.store_credential import S3KeyPair
@@ -196,6 +197,8 @@ class _Staged:
         self.table = table
         self.location = location
         self.fragment = fragment
+        #: The uuid the commit's transaction names; ``None`` lets pylance mint one.
+        self.transaction_uuid: str | None = None
 
     def copy(self) -> dict[str, Any]:
         return copy.deepcopy(self.fragment)
@@ -261,11 +264,11 @@ def _commit(staged: _Staged, fragments: list[dict[str, Any]], read_version: int)
     """Commit ``fragments`` as an Append through the namespace; on a refusal, the catalog's answer to the retained staged manifest."""
     table_id = staged.table.split("$")
     operation = lance.LanceOperation.Append([lance.FragmentMetadata.from_json(json.dumps(fragment)) for fragment in fragments])
+    transaction = Transaction(read_version=read_version, operation=operation, uuid=staged.transaction_uuid or str(uuid.uuid4()))
     try:
         lance.LanceDataset.commit(
             staged.location,
-            operation,
-            read_version=read_version,
+            transaction,
             storage_options=staged.estate.key.in_clear(),
             namespace_client=staged.estate.stock,
             table_id=table_id,
@@ -279,6 +282,17 @@ def _commit(staged: _Staged, fragments: list[dict[str, Any]], read_version: int)
             f"/v1/table/{quote(staged.table, safe='$')}/version/create", json={"version": read_version + 1, "manifest_path": manifest_path}
         )
     return None
+
+
+def _named_by(transaction_uuid: str) -> Callable[[_Staged], list[dict[str, Any]]]:
+    """The writer's own fragment, committed under a transaction naming ``transaction_uuid``: pylance 13.0.0 commits any
+    string there (measured), and the catalog keys the commit's author record by it (ADR 0187)."""
+
+    def forge(staged: _Staged) -> list[dict[str, Any]]:
+        staged.transaction_uuid = transaction_uuid
+        return [staged.copy()]
+
+    return forge
 
 
 def _external(uri: str, *, nested: bool = False) -> Callable[[_Staged], list[dict[str, Any]]]:
@@ -407,6 +421,8 @@ def _missing_sidecar(sidecar_id: int) -> Callable[[_Staged], list[dict[str, Any]
         ),
         pytest.param(_plain, lambda staged: [staged.copy(), staged.copy()], "one data file is named twice", id="same-file-in-two-fragments"),
         pytest.param(_committed, lambda staged: [staged.copy()], "names data file(s) the table already holds", id="re-append-a-held-file-after-a-delete"),
+        pytest.param(_plain, _named_by(" ".join(["not", "a", "uuid"])), "names no transaction with a canonical uuid", id="transaction-uuid-not-a-uuid"),
+        pytest.param(_plain, _named_by(str(uuid.UUID(int=0xABCDEF)).upper()), "names no transaction with a canonical uuid", id="transaction-uuid-upper-case"),
     ],
 )
 def test_a_forged_fragment_is_refused_and_the_table_is_unchanged(

@@ -199,7 +199,7 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
     ns = connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(ns, StorageOptions(), ["db", "t"], _id_table(), root=str(tmp_path / "data"), mode="create", registry=None)
-    table = table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
+    table = table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
     if branch is not None:
         table.open(StorageOptions()).create_branch(branch, None)
 

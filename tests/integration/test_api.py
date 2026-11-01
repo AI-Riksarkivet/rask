@@ -124,6 +124,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         registry=None,
         holder="",
         transaction_properties=None,
+        recorded_author=None,
         overwriting=None,
         before_commit=None,
     ) -> CreateTableResponse:

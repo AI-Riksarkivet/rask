@@ -48,7 +48,12 @@ def compacted(tmp_path: Path) -> DoorTable:
     for value in (2, 3, 4):
         lance.write_dataset(pa.table({"id": [value]}), uri, mode="append")
     lance.dataset(uri).optimize.compact_files()
-    return DoorTable(cast(Any, None), ClaimStore(control_root=str(tmp_path / "control")), ResolvedTable(segments=["db", "t"], location=uri))
+    return DoorTable(
+        cast(Any, None),
+        ClaimStore(control_root=str(tmp_path / "control")),
+        ResolvedTable(segments=["db", "t"], location=uri),
+        announces=lambda _operation: True,
+    )
 
 
 def _history(table: DoorTable) -> dict[int, Any]:

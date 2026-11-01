@@ -121,9 +121,9 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
 def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     """The table as a door acts on it, resolved on ``ns``, holding its location under a uuid as every table does (ADR 0173 §6)."""
     claims = ClaimStore(control_root=str(tmp_path / "control"))
-    location = table_claims.door_table(ns, claims, TABLE_ID).location
+    location = table_claims.door_table(ns, claims, TABLE_ID, announces=lambda _operation: True).location
     table_claims.claim_new_table(ns, claims, location, table="db$rows", segments=TABLE_ID, table_uuid=str(uuid4()))
-    return table_claims.door_table(ns, claims, TABLE_ID)
+    return table_claims.door_table(ns, claims, TABLE_ID, announces=lambda _operation: True)
 
 
 @pytest.mark.parametrize("tag", [pytest.param(ABSENT, id="absent"), pytest.param(TOO_LONG_FOR_A_KEY_SEGMENT, id="no-ref-file-can-name-it")])

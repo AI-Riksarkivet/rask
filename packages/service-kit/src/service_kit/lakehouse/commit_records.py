@@ -3,12 +3,17 @@
 Two control-root registries, both keyed by the table's uuid, so a rename moves neither and a table created later under
 the name inherits neither (ADR 0173 §8):
 
-- **The author of a stock commit that names none** (``_commit_authors/<table uuid>/<transaction uuid>.json``).
-  ``version/create`` records the verified caller here before it finalizes a commit whose transaction properties carry
-  no ``rask.author``: a stock compaction cannot carry one (pylance 13.0.0 commits ``ReserveFragments`` and ``Rewrite``
-  with no properties, and models no class for the first), so the catalog's own record is how the version names who
-  made it. Keyed by the transaction's uuid, never the version number, because a commit that loses its race leaves its
-  record for a version another writer then holds.
+- **The author the catalog authorized each commit for** (``_commit_authors/<table uuid>/<transaction uuid>/<version>.json``,
+  ADR 0187). Every commit of an operation the doors announce that a catalog door makes or ``version/create`` admits
+  records its verified caller here, with the ref it was made on: the reconciler signs a re-announcement only for the
+  author recorded for that transaction at that ref and version, never for the ``rask.author`` a version's transaction
+  properties carry, which any writer that can put a final manifest can stamp. A transaction's uuid alone would not do:
+  every reader of the table sees it, and a manifest put past every door can carry it again at another version. A stock
+  client chooses its transaction's uuid and keeps it when it stages the commit again on a later version, so each
+  version it is made for has a record of its own, written once: one recorded for another caller, or on another ref,
+  is never recorded again. A record written before its commit's finalize also names the manifest the catalog judged and
+  finalizes (:func:`manifest_digest`): a writer past every door can read the uuid off the commit's staged transaction and
+  land that version first with other content, which then matches no record.
 - **The reconciler's mark** (``_commit_marks/table-<digest>.json``): for each ref of the table, the highest version up
   to which no version is left to announce, so a pass reads only the versions after it. A registered table's first mark
   is its register's, at each ref's head: the versions a register attaches were committed past every door ([[LH-550]]).
@@ -18,11 +23,15 @@ Every function is BLOCKING IO; callers threadpool it.
 
 from __future__ import annotations
 
+import hashlib
+import json
+import uuid
 from typing import Final
 
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from service_kit.lakehouse import records
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.record_store import delete_record, get_record, put_record, record_key
 
@@ -32,38 +41,130 @@ MARKS_PREFIX: Final = "_commit_marks"
 
 
 class CommitAuthor(BaseModel):
-    """Who made one stock commit, as the catalog verified the caller of its ``version/create``."""
+    """The caller the catalog authorized one commit for, at the ref and version it was made for."""
 
     model_config = ConfigDict(frozen=True)
 
     author: str
     transaction_uuid: str
+    #: The ref's key (:func:`ref_key`): ``""`` for main, else the branch and its incarnation.
+    ref: str
+    version: int
+    #: The :func:`manifest_digest` of the manifest the catalog judged and finalizes, for a record written before its
+    #: commit's finalize; ``None`` for one read off the version once it landed.
+    manifest: str | None = None
 
 
-def _author_key(table_uuid: str, transaction_uuid: str) -> str:
-    return f"{AUTHORS_PREFIX}/{table_uuid}/{transaction_uuid}.json"
+def manifest_digest(manifest: bytes) -> str:
+    """The SHA-256 a record names a manifest by, hex."""
+    return hashlib.sha256(manifest).hexdigest()
 
 
-def record_author(control_root: str, storage_options: StorageOptions, table_uuid: str, transaction_uuid: str, author: str) -> None:
-    """Record ``author`` as the maker of the commit whose transaction is ``transaction_uuid``, on the table ``table_uuid``."""
-    record = CommitAuthor(author=author, transaction_uuid=transaction_uuid)
-    put_record(control_root, storage_options, _author_key(table_uuid, transaction_uuid), record.model_dump())
+class InvalidTransactionUuidError(ValueError):
+    """A transaction names a uuid that is not one in its canonical form, so no record is keyed by it."""
 
 
-def recorded_author(control_root: str, storage_options: StorageOptions, table_uuid: str, transaction_uuid: str) -> str | None:
-    """The author recorded for the commit whose transaction is ``transaction_uuid``, or ``None`` when none is."""
-    loaded = get_record(control_root, storage_options, _author_key(table_uuid, transaction_uuid), event="commit_author")
+def is_canonical_uuid(value: str) -> bool:
+    """Whether ``value`` is a uuid spelled as Lance mints a transaction's: lower-case hex in hyphenated groups. A stock
+    client chooses its own transaction's uuid, and a record's key is built from it."""
+    try:
+        return str(uuid.UUID(value)) == value
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def _author_key(table_uuid: str, transaction_uuid: str, version: int) -> str:
+    if not is_canonical_uuid(transaction_uuid):
+        raise InvalidTransactionUuidError(f"transaction uuid {transaction_uuid!r} is not a canonical uuid")
+    return f"{AUTHORS_PREFIX}/{table_uuid}/{transaction_uuid}/{version}.json"
+
+
+class AuthorRecordedError(Exception):
+    """The transaction is recorded at the version already, for another author or on another ref: it names another
+    caller's commit."""
+
+
+def record_author(
+    control_root: str, storage_options: StorageOptions, table_uuid: str, *, transaction_uuid: str, version: int, ref: str, author: str, manifest: str | None
+) -> bool:
+    """Record ``author`` as the caller the commit of ``transaction_uuid`` at ``version`` of the ref ``ref`` was authorized for,
+    on the table ``table_uuid``, its manifest ``manifest`` (:class:`CommitAuthor`); whether this call created the record.
+
+    Created only where none is recorded. Recording the same author on the same ref again is a retry and changes nothing:
+    the record keeps the manifest it named, so a retry that lands other bytes matches it nowhere.
+
+    Raises:
+        InvalidTransactionUuidError: ``transaction_uuid`` is not a canonical uuid.
+        AuthorRecordedError: The transaction is recorded at ``version`` for another author or on another ref.
+        OSError: The store refused, or could not be reached for, the write or the read.
+    """
+    record = CommitAuthor(author=author, transaction_uuid=transaction_uuid, ref=ref, version=version, manifest=manifest)
+    key = _author_key(table_uuid, transaction_uuid, version)
+    try:
+        records.create_json(control_root, storage_options, key, record.model_dump())
+    except records.RecordExistsError:
+        recorded = _read(control_root, storage_options, key)
+        if recorded is None or (recorded.author, recorded.ref) != (author, ref):
+            raise AuthorRecordedError(f"transaction {transaction_uuid} of table {table_uuid} is recorded at version {version} for another commit") from None
+        return False
+    except Exception as exc:
+        if _from_the_store(exc):
+            raise OSError(f"the store refused recording the author of transaction {transaction_uuid}: {exc}") from exc
+        raise
+    return True
+
+
+def _from_the_store(exc: Exception) -> bool:
+    """Whether ``exc`` is the S3 client's answer for a store that refused or did not answer, which every caller here reads
+    as an ``OSError`` like pyarrow's."""
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    return isinstance(exc, ClientError | BotoCoreError)
+
+
+def _read(control_root: str, storage_options: StorageOptions, key: str) -> CommitAuthor | None:
+    """The record at ``key``; ``None`` when none is kept or it does not read as one, which signs nothing and is never taken
+    for a retry's."""
+    try:
+        loaded = get_record(control_root, storage_options, key, event="commit_author")
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
     if loaded is None:
         return None
     try:
-        return CommitAuthor.model_validate(loaded).author
+        return CommitAuthor.model_validate(loaded)
     except ValidationError:
         return None
 
 
-def forget_author(control_root: str, storage_options: StorageOptions, table_uuid: str, transaction_uuid: str) -> None:
-    """Delete the author record of one commit, once its version's announcement is on the feed."""
-    delete_record(control_root, storage_options, _author_key(table_uuid, transaction_uuid))
+def recorded(control_root: str, storage_options: StorageOptions, table_uuid: str, *, transaction_uuid: str, version: int, ref: str) -> CommitAuthor | None:
+    """The record of the commit of ``transaction_uuid`` at ``version`` of the ref ``ref``; ``None`` when none is kept, when
+    the record names another ref, or when ``transaction_uuid`` is no canonical uuid, which no record is keyed by.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the read.
+    """
+    try:
+        key = _author_key(table_uuid, transaction_uuid, version)
+    except InvalidTransactionUuidError:
+        return None
+    found = _read(control_root, storage_options, key)
+    if found is None or (found.transaction_uuid, found.version, found.ref) != (transaction_uuid, version, ref):
+        return None
+    return found
+
+
+def forget_author(control_root: str, storage_options: StorageOptions, table_uuid: str, *, transaction_uuid: str, version: int) -> None:
+    """Delete the author record of the commit of ``transaction_uuid`` at ``version``, if one is kept.
+
+    Raises:
+        OSError: The store refused the delete.
+    """
+    try:
+        key = _author_key(table_uuid, transaction_uuid, version)
+    except InvalidTransactionUuidError:
+        return
+    delete_record(control_root, storage_options, key)
 
 
 def end_authors(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:

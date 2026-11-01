@@ -4,11 +4,11 @@ A write is announced after its commit (`catalog.core.lineage_emit`), and a crash
 its event loses the announcement while the version stays committed, so a pipeline following ``/events?since=`` never
 starts its next hop. This tick finds such a version from the table's own version log
 (`catalog.services.commit_reconcile`) and announces it, as the catalog announced it the first time: the same event,
-under the run id derived from the commit, signed by the catalog for the commit's author, and marked a re-announcement
-(`rask_lance.reannounced`), since that author is the one the version log names. A late original and the re-announcement
-are then one run, which lineage's feed records once.
+under the run id derived from the commit, signed by the catalog for the author it recorded authorizing the commit (ADR
+0187). A late original and the re-announcement are then one run, which lineage's feed records once, on the catalog's
+signature either way.
 
-Each find is counted on ``catalog.commit_reconcile.reannounced``, each version naming no author on
+Each find is counted on ``catalog.commit_reconcile.reannounced``, each version the catalog recorded no author for on
 ``catalog.commit_reconcile.unauthored``, and each ref whose log could not be read on ``catalog.commit_reconcile.unreadable``;
 each pages (`deploy/alerting/rules.yml`).
 
@@ -86,8 +86,9 @@ _late_derived_unwatched = _meter.create_counter(
 _unauthored = _meter.create_counter(
     "catalog.commit_reconcile.unauthored",
     unit="{commit}",
-    description="Committed versions of an operation the catalog announces that name no author and for which the catalog "
-    "recorded none: a commit made past every catalog door, which nothing can announce on anyone's behalf.",
+    description="Committed versions of an operation the catalog announces for which the catalog recorded no author "
+    "(ADR 0187): a commit made past every catalog door, whatever rask.author it carries, which nothing can announce on "
+    "anyone's behalf.",
 )
 
 #: How much earlier than the oldest commit looked for the feed is read: a row is received after its commit, never
@@ -164,12 +165,8 @@ def _feed_location(settings: Settings, ns: LanceNamespace) -> str | None:
 async def _announce(
     emitter: LineageEmitter, request: Request, settings: Settings, so: StorageOptions, table: _LiveTable, commit: commit_reconcile.Commit
 ) -> None:
-    """Announce ``commit`` as its door announced it, for its author, marked as a re-announcement, and audit the announcement.
-
-    Marked because its author is the one the version log names, which this request did not authenticate: lineage checks a
-    re-announcement as it checks any producer's event, and records only the catalog's own announcement on its signature
-    ([[LH-551]]).
-    """
+    """Announce ``commit`` as its door announced it, for the author the catalog recorded authorizing it, and audit the
+    announcement."""
     readback = await run_in_threadpool(dataplane.read_version_and_schema, table.location, so, table.segments, commit.version, commit.branch)
     await emit_write_event(
         emitter,
@@ -188,7 +185,6 @@ async def _announce(
         run=commit.run,
         commits_rows=commit.commits_rows,
         event_time=commit.committed_at,
-        reannounced=True,
     )
     audit(
         AuditAction.COMMIT_VERSION_ANNOUNCED,

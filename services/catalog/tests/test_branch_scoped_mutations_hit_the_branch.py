@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from lance_namespace import CreateNamespaceRequest, connect
+from lance_namespace import CreateNamespaceRequest, ServiceUnavailableError, connect
 from tables_by_name import open_by_name
 
 from catalog.services import table_claims
@@ -37,6 +37,7 @@ from service_kit.lakehouse.objectfs import StorageOptions
 
 lance = pytest.importorskip("lance")
 
+from lance.dataset import Branches  # noqa: E402
 from lance_namespace_urllib3_client.models.delete_from_table_request import DeleteFromTableRequest  # noqa: E402
 from lance_namespace_urllib3_client.models.update_table_request import UpdateTableRequest  # noqa: E402
 
@@ -67,7 +68,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
 @pytest.fixture
 def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     """The table as a door acts on it, resolved on ``ns``."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
 
 
 def test_an_update_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001
@@ -76,6 +77,24 @@ def test_an_update_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> No
 
     main = open_by_name(ns, StorageOptions(), TABLE_ID).to_table().column("label").to_pylist()
     assert main == ["main", "main", "main"], f"a branch-scoped update rewrote MAIN: {main}"
+
+
+def test_a_branch_commit_the_store_cannot_key_is_refused_before_it_lands(ns, table: DoorTable, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
+    """ADR 0187: a door's commit on a branch records its author under the branch's incarnation, read off the table's branch
+    listing as a reconcile pass reads it. A listing the store does not answer refuses the commit 503 before it plans,
+    rather than recording it under a key no pass reads."""
+
+    def unanswered(_branches: object) -> dict[str, object]:
+        # pylance's own text for a store that accepted the request and never answered (`service_kit.lancekit.outage`).
+        raise OSError("LanceError(IO): Error performing GET http://store/rows/_refs/branches/ in 3.0s - HTTP error: error sending request")
+
+    monkeypatch.setattr(Branches, "list", unanswered)
+    with pytest.raises(ServiceUnavailableError):
+        update_table(table, StorageOptions(), UpdateTableRequest(id=TABLE_ID, branch=BRANCH, updates=[["label", "'edited'"]]), transaction_properties=STAMP)
+    monkeypatch.undo()
+
+    staging = open_by_name(ns, StorageOptions(), TABLE_ID, branch=BRANCH).to_table().column("label").to_pylist()
+    assert staging == ["main", "main", "main"]
 
 
 def test_a_delete_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001

@@ -115,7 +115,10 @@ def test_a_tier_without_stage_or_lineage_publishes_and_keeps_its_source_rowid(tm
     assert (response.status_code, response.json().get("published")) == (200, True), response.text
     location = namespace.describe_table(DescribeTableRequest(id=TABLE_ID)).location
     published = lance.dataset(
-        location, version=published_version(table_claims.door_table(namespace, ClaimStore(control_root=registry_root), TABLE_ID), StorageOptions())
+        location,
+        version=published_version(
+            table_claims.door_table(namespace, ClaimStore(control_root=registry_root), TABLE_ID, announces=lambda _operation: True), StorageOptions()
+        ),
     )
     assert published.to_table(columns=["source_rowid"]).column(0).to_pylist() == [11, 12, 13]
 
@@ -126,6 +129,9 @@ def test_a_source_rowid_of_the_wrong_width_is_refused(tmp_path: Path, monkeypatc
     response = _publish(client, key_column="id")
 
     assert (response.status_code, "uint64" in response.text) == (400, True), response.text
-    assert published_version(table_claims.door_table(namespace, ClaimStore(control_root=registry_root), TABLE_ID), StorageOptions()) is None, (
-        "the refusal must be fail-closed — nothing may be pointed at"
-    )
+    assert (
+        published_version(
+            table_claims.door_table(namespace, ClaimStore(control_root=registry_root), TABLE_ID, announces=lambda _operation: True), StorageOptions()
+        )
+        is None
+    ), "the refusal must be fail-closed — nothing may be pointed at"

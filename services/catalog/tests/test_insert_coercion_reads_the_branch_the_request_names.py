@@ -93,7 +93,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
 @pytest.fixture
 def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     """The table as a door acts on it, resolved on ``ns``."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
 
 
 def test_a_branch_insert_lands_the_branch_only_column(ns, table: DoorTable) -> None:  # noqa: ANN001

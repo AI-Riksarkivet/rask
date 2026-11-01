@@ -22,6 +22,7 @@ from collections.abc import Callable, Iterator
 
 import lance
 import pyarrow.fs as pafs
+from lance.dataset import Transaction
 from opentelemetry import metrics
 
 from catalog.services import client_fragments
@@ -74,17 +75,23 @@ def added(
 
 def record_landed(
     record: Callable[[file_identities.CommittedFiles], None], after: lance.LanceDataset, *, table_location: str, branch: str | None, so: StorageOptions
-) -> None:
+) -> Transaction | None:
     """Record, through ``record``, what ``after`` added over the version before it: a version Lance committed itself.
+    Answers the version's transaction, which its author is recorded under (:mod:`catalog.services.commit_authors`), or
+    ``None`` when none could be read.
 
     After the version lands, since the write and its commit are one call: a store failure here is logged at ERROR and
     counted, and the door still answers its version, because the write landed and an error would have its caller retry
     it. So is a version that names no transaction, which no record can be keyed by.
     """
-    transaction = after.read_transaction(after.version)
+    try:
+        transaction = after.read_transaction(after.version)
+    except OSError as exc:
+        _count_unrecorded(table_location, after.version, f"{type(exc).__name__}: {exc}")
+        return None
     if transaction is None:
         _count_unrecorded(table_location, after.version, "the version names no transaction")
-        return
+        return None
     try:
         before = None if branch is None and after.version == 1 else after.checkout_version(after.version - 1 if branch is None else (branch, after.version - 1))
         record(
@@ -92,8 +99,9 @@ def record_landed(
         )
     except OSError as exc:
         _count_unrecorded(table_location, after.version, f"{type(exc).__name__}: {exc}")
-        return
+        return transaction
     _unrecorded.add(0)
+    return transaction
 
 
 def _count_unrecorded(table_location: str, version: int, reason: str) -> None:

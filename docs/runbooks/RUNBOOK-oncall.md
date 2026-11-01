@@ -189,17 +189,24 @@ mean something other than the catalog wrote under `_control_outbox`: treat that 
 version and an operation. `CatalogCommitsUnauthored` (critical): `commit_unauthored` ERROR logs name a table and
 versions.
 
-**Cause.** The commit is the outbox (LH-497). Every version names its author and, for a catalog door's, its operation,
-and the catalog's reconcile cron (`catalog-commit-reconcile-cron`) announces every version older than
+**Cause.** The commit is the outbox (LH-497). The catalog records the caller it authorized every commit for, a catalog
+door's commit names its operation, and the catalog's reconcile cron (`catalog-commit-reconcile-cron`) announces every version older than
 `catalog.commitReconcile.graceSeconds` that lineage's feed holds no row for. A re-announced version is a write whose own
 announcement was lost between its commit and its staging: a catalog restart mid-write, or a lineage emit failing before
-the outbox staged it (`CatalogLineageEmitFailing` beside it). An unauthored one names no author and has none recorded:
-a manifest finalized past every catalog door, which only a credential that can write a final manifest can do.
+the outbox staged it (`CatalogLineageEmitFailing` beside it). An unauthored one is a version the catalog recorded no
+author for at that version, whatever `rask.author` or transaction uuid it carries: a manifest finalized past every catalog
+door, which only a credential that can write a final manifest can do, or a write Lance committed whose author record
+failed just after it landed (a `commit_author_unrecorded` ERROR log names that version, counted on
+`catalog.commit_authors.unrecorded`). A version whose transaction cannot be read is counted the same way, and a
+`commit_reconcile_unidentified` WARN log names it: no catalog commit leaves one.
 
 **Diagnose.** For a re-announcement, look for a catalog restart or emit failures at the version's commit time; the feed
-now holds the version, so a pipeline following `/events` has caught up. For an unauthored version, find who could
-write that table's `_versions/`: no writer is vended a put on a final manifest, so it is a maintain-tier or store-root
-credential.
+now holds the version, so a pipeline following `/events` has caught up. For an unauthored version, look first for a
+`commit_author_unrecorded` ERROR log naming it: that version is the catalog's own write, whose author record failed, and
+needs no incident. Then for a `commit_version` success in the catalog's audit log naming that table and version: that is
+a stock client's retry that landed while an earlier attempt of the same commit was still in flight, which the earlier
+attempt's record does not match, and it needs no incident either. Otherwise find who could write that table's
+`_versions/`: no writer is vended a put on a final manifest, so it is a maintain-tier or store-root credential.
 
 A blocked reconciler (`CatalogCommitReconcileBlocked`, `commit_reconcile_ref_unreadable` ERROR logs) could not read a
 retained version or its commit time; it keeps that ref's mark until the read succeeds, so it skips nothing.

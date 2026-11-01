@@ -226,6 +226,8 @@ async def create_table_version(
         # Another writer took the version since this one staged it: a lost race, so its retry gets the ref's next turn ([[LH-259]]).
         await run_in_threadpool(table.hand_turn, ref.branch, managed_versions.writer_turn(caller, exc.transaction_uuid, exc.operation))
         raise
+    author: str | None = None
+    created = False
     try:
         await fga_deps.require_staged_operation(
             client, settings, token, segments=segments, location=location, operation=staged.operation, creates=staged.creates
@@ -253,6 +255,15 @@ async def create_table_version(
             await fga_deps.require_classifier_to_set_labels(
                 client, settings, token, obj=fga.table_object(table.resolved.require_uuid()), label=canonical, labels=labels
             )
+        author = caller if caller is not None and table.announces(managed_versions.lineage_operation(staged)) else None
+        if author is not None:
+            # BEFORE THE FINALIZE: the reconciler signs a re-announcement only for the author the catalog recorded (ADR 0187).
+            try:
+                created = await run_in_threadpool(
+                    partial(table.record_author, staged.transaction_uuid, version=staged.version, ref=ref.key, author=author, manifest=staged.manifest_digest)
+                )
+            except commit_records.AuthorRecordedError as exc:
+                raise InvalidInputError(f"commit refused: its transaction {staged.transaction_uuid} is another commit's at version {staged.version}") from exc
     except maintenance.ReferredSourceError as exc:
         await run_in_threadpool(managed_versions.refuse, staged, so)
         raise await fga_deps.refusal_naming_referrers(settings, token, client, exc) from exc
@@ -261,23 +272,27 @@ async def create_table_version(
         raise
     finally:
         await run_in_threadpool(managed_versions.discard, staged, so)
-    if caller is not None and run_context.AUTHOR_PROPERTY not in staged.properties:
-        # BEFORE THE FINALIZE: once the version lands it must name its author, and this commit cannot ([[LH-497]]).
-        await run_in_threadpool(
-            commit_records.record_author, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), staged.transaction_uuid, caller
-        )
-    # BEFORE THE FINALIZE: each file the version adds is checked again from the moment it lands ([[LH-419]]).
-    await run_in_threadpool(table.record_committed_files, verdict.files)
-    if declared:
-        # BEFORE THE FINALIZE: an erasure names this table from the moment the version lands ([[LH-541]]).
-        await run_in_threadpool(
-            partial(table_inputs.record, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), name=canonical, declared=declared)
-        )
-    writer = managed_versions.writer_turn(caller, staged.transaction_uuid, staged.operation)
-    # Waited out here, in the event loop, so a stock writer waiting holds no request thread; a turn handed to another stock
-    # writer is not waited out, since this writer races it as Lance's own backoff spreads them ([[LH-259]]).
-    kept = await table.wait_for_turn_in_loop(ref.branch, mine=writer.token if writer is not None else None, handed=False)
-    response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), table, staged, body, so)
+    try:
+        # BEFORE THE FINALIZE: each file the version adds is checked again from the moment it lands ([[LH-419]]).
+        await run_in_threadpool(table.record_committed_files, verdict.files)
+        if declared:
+            # BEFORE THE FINALIZE: an erasure names this table from the moment the version lands ([[LH-541]]).
+            await run_in_threadpool(
+                partial(
+                    table_inputs.record, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), name=canonical, declared=declared
+                )
+            )
+        writer = managed_versions.writer_turn(caller, staged.transaction_uuid, staged.operation)
+        # Waited out here, in the event loop, so a stock writer waiting holds no request thread; a turn handed to another stock
+        # writer is not waited out, since this writer races it as Lance's own backoff spreads them ([[LH-259]]).
+        kept = await table.wait_for_turn_in_loop(ref.branch, mine=writer.token if writer is not None else None, handed=False)
+        response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), table, staged, body, so)
+    except Exception:
+        # Only the request that created the record deletes it: a retry sharing the transaction relies on its twin's. A
+        # cancelled request is left out too, since its finalize may still land in the thread it runs in.
+        if created:
+            await run_in_threadpool(managed_versions.forget_unlanded_author, table, staged, so)
+        raise
     audit(
         AuditAction.COMMIT_VERSION,
         AuditOutcome.SUCCESS,

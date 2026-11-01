@@ -88,7 +88,7 @@ def test_the_coerced_body_is_held_to_the_cap_where_the_estimate_leaves_off(tmp_p
     cap = (max(len(body), estimate) + encoded) // 2
     assert max(len(body), estimate) < cap < encoded, "no cap separates the estimate from the encoded body, so this tests nothing"
 
-    table = table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "w"])
+    table = table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "w"], announces=lambda _operation: True)
 
     with pytest.raises(InvalidInputError, match="as the table's column types"):
         coerce_insert_arrow(table, StorageOptions(), body, max_bytes=cap)

@@ -114,11 +114,21 @@ from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
-from catalog.core.run_context import OPERATION_PROPERTY
+from catalog.core.run_context import AUTHOR_PROPERTY, OPERATION_PROPERTY
 from catalog.core.vending import classified_columns, labelled_fields
-from catalog.services import changes, committed_files, native, primary_keys, table_bases, table_claims
+from catalog.services import changes, commit_authors, committed_files, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
-from service_kit.lakehouse import auto_cleanup, base_registry, branch_layout, commit_turns, data_directories, file_identities, location_claims, trash
+from service_kit.lakehouse import (
+    auto_cleanup,
+    base_registry,
+    branch_layout,
+    commit_records,
+    commit_turns,
+    data_directories,
+    file_identities,
+    location_claims,
+    trash,
+)
 from service_kit.lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
 from service_kit.lakehouse.features import manifest_base_path_refs
@@ -616,6 +626,7 @@ def create_table(
     registry: base_registry.BaseRegistry | None,
     holder: str = "",
     transaction_properties: dict[str, str] | None = None,
+    recorded_author: str | None = None,
     overwriting: table_claims.DoorTable | None = None,
     before_commit: Callable[[str], None] | None = None,
 ) -> CreateTableResponse:
@@ -661,6 +672,8 @@ def create_table(
     table's canonical id, required whenever ``registry`` is given.
 
     ``transaction_properties`` ride the commit that writes the data (the run a governed create names).
+    ``recorded_author`` is the caller the door authorized the write for, recorded as its author once it lands (ADR 0187);
+    ``None`` records nobody: a write the emitter leaves unannounced, or one the catalog authenticated no caller for.
 
     ``overwriting`` is the table an ``Overwrite`` asked ``can_drop`` on, as its door resolved it ([[LH-530]]): the write
     lands at that location once the name still resolves there.
@@ -707,7 +720,7 @@ def create_table(
                 properties=properties,
                 transaction_properties=transaction_properties,
             )
-            _record_written_files(registry, existing, so, dataset)
+            _record_written(registry, existing, so, dataset, author=recorded_author)
             return CreateTableResponse(location=existing, version=dataset.version)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
             return _kept_at(existing, so)
@@ -735,6 +748,7 @@ def create_table(
             registry=registry,
             holder=holder,
             transaction_properties=transaction_properties,
+            recorded_author=recorded_author,
             before_commit=before_commit,
         )
 
@@ -752,6 +766,7 @@ def create_table(
         registry=registry,
         holder=holder,
         transaction_properties=transaction_properties,
+        recorded_author=recorded_author,
         before_commit=before_commit,
     )
 
@@ -767,20 +782,41 @@ def _before_commit(hook: Callable[[str], None] | None, location: str, registry: 
     hook(claim.claim.uuid)
 
 
-def _record_written_files(registry: base_registry.BaseRegistry | None, location: str, so: StorageOptions, written: lance.LanceDataset) -> None:
-    """Record what the create door's write added ([[LH-419]]), under the uuid the location's claim records; nothing for a
-    caller outside governance. ``write_dataset`` writes and commits in one call, so it is recorded once it lands
-    (:func:`committed_files.record_landed`)."""
+def _record_written(registry: base_registry.BaseRegistry | None, location: str, so: StorageOptions, written: lance.LanceDataset, *, author: str | None) -> None:
+    """Record what the create door's write added ([[LH-419]]) and the author it was made for (ADR 0187), under the uuid the
+    location's claim records; nothing for a caller outside governance. ``write_dataset`` writes and commits in one call, so
+    both are recorded once it lands (:func:`committed_files.record_landed`, :func:`commit_authors.record_landed`)."""
     if registry is None:
         return
+    uuids: list[str] = []
 
-    def record(committed: file_identities.CommittedFiles) -> None:
-        claim = location_claims.read(_claim_store(registry), location)
-        if claim is None or claim.claim.uuid is None:
-            raise InternalError(f"the table written at {location} holds no claim recording its uuid")
-        file_identities.record(registry.control_root, registry.storage_options, claim.claim.uuid, committed)
+    def table_uuid() -> str:
+        if not uuids:
+            claim = location_claims.read(_claim_store(registry), location)
+            if claim is None or claim.claim.uuid is None:
+                raise InternalError(f"the table written at {location} holds no claim recording its uuid")
+            uuids.append(claim.claim.uuid)
+        return uuids[0]
 
-    committed_files.record_landed(record, written, table_location=location, branch=None, so=so)
+    def record_files(committed: file_identities.CommittedFiles) -> None:
+        file_identities.record(registry.control_root, registry.storage_options, table_uuid(), committed)
+
+    def record_author(transaction_uuid: str, version: int) -> None:
+        if author is not None:
+            commit_records.record_author(
+                registry.control_root,
+                registry.storage_options,
+                table_uuid(),
+                transaction_uuid=transaction_uuid,
+                version=version,
+                ref="",
+                author=author,
+                manifest=None,
+            )
+
+    transaction = committed_files.record_landed(record_files, written, table_location=location, branch=None, so=so)
+    if author is not None:
+        commit_authors.record_landed(record_author, transaction, version=int(written.version), table_location=location)
 
 
 def _named_by_its_uuid(table: pa.Table, location: str, registry: base_registry.BaseRegistry | None) -> pa.Table:
@@ -816,6 +852,7 @@ def _write_blob_into(
     registry: base_registry.BaseRegistry | None,
     holder: str = "",
     transaction_properties: dict[str, str] | None = None,
+    recorded_author: str | None = None,
     before_commit: Callable[[str], None] | None = None,
 ) -> CreateTableResponse:
     """Write the blob table's first data version into an already-declared ``location``, rolling the declare
@@ -883,7 +920,7 @@ def _write_blob_into(
                 raise InvalidInputError(f"the table's schema holds a type Lance does not store: {clean_lance_message(str(exc))}") from exc
             raise
         raise InternalError("the table's first write panicked in Lance; the create was rolled back and may be retried") from exc
-    _record_written_files(registry, location, so, dataset)
+    _record_written(registry, location, so, dataset, author=recorded_author)
     return CreateTableResponse(location=location, version=dataset.version)
 
 
@@ -1279,6 +1316,7 @@ def commit_stamped[T](
     table_id = table.segments
     ref = recorded_branch(branch)
     turn: str | None = None
+    author = properties.get(AUTHOR_PROPERTY) if table.announces(properties.get(OPERATION_PROPERTY, "")) else None
     with ExitStack() as held:
         for attempt in range(_STAMPED_COMMIT_ATTEMPTS):
             dataset = disarm_commit_path_cleanup(opened if opened is not None else table.open(so, branch=ref), table_id)
@@ -1318,12 +1356,27 @@ def commit_stamped[T](
                     manifest_path=f"{object_store_path(location)}/_versions/d{finalize_id}.manifest",
                     manifest_size=len(body),
                 )
+                judged = commit_records.manifest_digest(body)
+                if author is not None:
+                    # BEFORE THE FINALIZE: the reconciler signs a re-announcement only for the author recorded for exactly
+                    # these bytes (ADR 0187), which the backend moves into the version slot unchanged, under the ref's
+                    # incarnation as this attempt reads it.
+                    ref_key = commit_ref_key(table.location, so, table_id, ref)
+                    table.record_author(stamped.uuid, version=version, ref=ref_key, author=author, manifest=judged)
                 try:
                     table.finalize_version(request, turn=turn)
                 except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError):
+                    if author is not None:
+                        _forget_unlanded_author(table, so, stamped.uuid, location=location, version=version, judged=judged)
                     raise
                 except ConcurrentModificationError:
                     discard_detached_manifest(location, so, finalize_id)
+                    if _landed_as_judged(table, so, location=location, version=version, judged=judged):
+                        # The store answered a conditional put that landed as a conflict: the version is this commit, and
+                        # planning it again would apply the change twice.
+                        return version, measured
+                    if author is not None:
+                        _forget_unlanded_author(table, so, stamped.uuid, location=location, version=version, judged=judged)
                     turn = _turn_for_the_next_attempt(table, ref, held, turn, attempt)
                     continue
             except BaseException:
@@ -1333,6 +1386,75 @@ def commit_stamped[T](
                 discard_detached_manifest(location, so, detached.version)
             return version, measured
         raise ConcurrentModificationError(f"the commit lost the race for the next version {_STAMPED_COMMIT_ATTEMPTS} times; retry it")
+
+
+def _landed_as_judged(table: table_claims.DoorTable, so: StorageOptions, *, location: str, version: int, judged: str) -> bool:
+    """Whether ``version`` of the ref whose own location is ``location`` holds the very manifest ``judged`` names.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer the read, so whether the commit landed is unknown: planning it
+            again could apply it twice, and its author record is kept.
+    """
+    try:
+        return committed_manifest_digest(location, so, version) == judged
+    except OSError as exc:
+        log.warning("commit_landing_unread", extra={"table": table.segments, "version": version, "error": str(exc)[:300]})
+        raise ServiceUnavailableError(f"the object store did not answer whether version {version} landed; describe the table before retrying") from exc
+
+
+def _forget_unlanded_author(table: table_claims.DoorTable, so: StorageOptions, transaction_uuid: str, *, location: str, version: int, judged: str) -> None:
+    """Delete the author an attempt recorded before a finalize that did not land, unless the version holds the very
+    manifest it judged, which a store that did not answer may hide (ADR 0187). Every attempt plans a transaction of its
+    own, so no other attempt relies on the record. A read or a delete the store refuses is logged and leaves it."""
+    try:
+        if committed_manifest_digest(location, so, version) == judged:
+            return
+        table.forget_author(transaction_uuid, version=version)
+    except OSError as exc:
+        log.warning("commit_author_unforgotten", extra={"table": table.segments, "transaction": transaction_uuid, "version": version, "error": str(exc)[:300]})
+
+
+def committed_manifest_digest(location: str, so: StorageOptions, version: int) -> str | None:
+    """The :func:`commit_records.manifest_digest` of the manifest committed as ``version`` on the ref whose own location is
+    ``location`` (the table's root, or a branch's ``tree/<name>``); ``None`` when the ref holds no such version. A version
+    found under both naming schemes is ambiguous and answers ``""``, which names no manifest: Lance opens one of them by
+    the table's scheme, and a record must not be matched against the other.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the read.
+    """
+    fs, base = dataset_fs(location, so)
+    found: list[str] = []
+    for name in (f"{_MANIFEST_NAME_BASE - version:020d}.manifest", f"{version}.manifest"):
+        try:
+            with fs.open_input_stream(f"{base.rstrip('/')}/_versions/{name}") as source:
+                found.append(commit_records.manifest_digest(source.read()))
+        except FileNotFoundError:
+            continue
+    if not found:
+        return None
+    return found[0] if len(found) == 1 else ""
+
+
+def commit_ref_key(location: str, so: StorageOptions, table_id: list[str], branch: str | None) -> str:
+    """The key the commit reconciler reads ``branch`` (``None`` = main) of the table at ``location`` by
+    (:func:`commit_records.ref_key`): ``""`` for main, else the branch and its current incarnation, read off the table's
+    branch listing as a pass reads it.
+
+    Raises:
+        ServiceUnavailableError: The object store did not answer listing the table's branches, so no record is keyed.
+        TableChangedError: The location holds no readable dataset any more: the table changed while the request was served.
+    """
+    if branch is None:
+        return ""
+    try:
+        listed = open_resolved_dataset_unchecked(location, so, table_id).branches.list() or {}
+    except (OSError, ValueError) as exc:
+        if reads_as_store_outage(exc):
+            raise ServiceUnavailableError("the object store did not answer listing the table's branches") from exc
+        log.warning("commit_ref_unread", extra={"table": table_id, "location": location, "error": str(exc)[:300]})
+        raise table_claims.TableChangedError("the table changed while the request was served: its branches could not be listed") from exc
+    return commit_records.ref_key(branch, identifier_of(listed.get(branch)))
 
 
 #: What Lance raises planning an expression it cannot resolve: an unknown column is a ``ValueError`` (pylance 13.0.0).
@@ -2365,7 +2487,23 @@ def insert_into_table(
             table.wait_for_turn(recorded_branch(req.branch))
             dataset.insert(rows, mode=mode.value, transaction_properties=transaction_properties)
             version = int(dataset.version)
-            committed_files.record_landed(table.record_committed_files, dataset, table_location=table.location, branch=req.branch, so=so)
+            transaction = committed_files.record_landed(table.record_committed_files, dataset, table_location=table.location, branch=req.branch, so=so)
+            author = transaction_properties.get(AUTHOR_PROPERTY)
+            if author is not None and table.announces(transaction_properties.get(OPERATION_PROPERTY, "")):
+                # The ref's key is read inside the recorder, so a store that does not answer it is a counted miss: the
+                # version has landed, and an error would have the caller append it again.
+                commit_authors.record_landed(
+                    lambda transaction_uuid, landed: table.record_author(
+                        transaction_uuid,
+                        version=landed,
+                        ref=commit_ref_key(table.location, so, table.segments, recorded_branch(req.branch)),
+                        author=author,
+                        manifest=None,
+                    ),
+                    transaction,
+                    version=version,
+                    table_location=table.location,
+                )
     # The rows this request wrote, read off its own payload: a row count diff across the commit would
     # include whatever a concurrent writer appended in between.
     return InsertIntoTableResponse(version=version, num_inserted_rows=rows.num_rows)

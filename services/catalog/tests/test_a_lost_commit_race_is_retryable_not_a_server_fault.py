@@ -25,16 +25,26 @@ from lance_namespace import (
     AlterTableDropColumnsRequest,
     ConcurrentModificationError,
     CreateNamespaceRequest,
+    CreateTableVersionRequest,
     DeleteFromTableRequest,
     InsertIntoTableRequest,
+    ServiceUnavailableError,
     UpdateTableRequest,
     connect,
 )
 
 from catalog.services import table_claims
-from catalog.services.dataplane import add_columns, create_table, delete_from_table, drop_columns, insert_into_table, update_table
+from catalog.services.dataplane import (
+    add_columns,
+    committed_manifest_digest,
+    create_table,
+    delete_from_table,
+    drop_columns,
+    insert_into_table,
+    update_table,
+)
 from catalog.services.table_claims import DoorTable
-from service_kit.lakehouse import base_registry
+from service_kit.lakehouse import base_registry, commit_records
 from service_kit.lakehouse.location_claims import ClaimStore
 from service_kit.lakehouse.objectfs import StorageOptions
 
@@ -75,10 +85,13 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
 @pytest.fixture
 def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     """The table as a door acts on it, resolved on ``ns``."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID)
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
 
 
-def test_concurrent_add_columns_each_land_in_a_version_of_its_own(table: DoorTable) -> None:
+def test_concurrent_add_columns_each_land_in_a_version_of_its_own(table: DoorTable, tmp_path: Path) -> None:
+    """Each landed version keeps the author record its commit made before its finalize, and an attempt that lost its race
+    deletes its own (ADR 0187)."""
+
     def add(i: int) -> int | BaseException:
         request = AlterTableAddColumnsRequest(id=TABLE_ID, new_columns=[AddColumnsEntry(name=f"c{i}", expression="id + 1")])
         try:
@@ -96,6 +109,74 @@ def test_concurrent_add_columns_each_land_in_a_version_of_its_own(table: DoorTab
     assert len(landed) == WRITERS, f"{len(failed)} of {WRITERS} writers lost all their attempts: {failed!r}"
     names = set(table.open(StorageOptions()).schema.names)
     assert {f"c{i}" for i in range(WRITERS)} <= names, names
+    table_uuid = table.resolved.require_uuid()
+    signed = [_signed(table, str(tmp_path / "control"), table_uuid, version) for version in landed]
+    kept = list((tmp_path / "control" / commit_records.AUTHORS_PREFIX / table_uuid).rglob("*.json"))
+    assert (signed, len(kept)) == ([("alice", True)] * WRITERS, WRITERS)
+
+
+@pytest.mark.parametrize(
+    ("refusal", "unread", "answer"),
+    [
+        pytest.param(ConcurrentModificationError("the store answered the put as a conflict after it landed"), False, None, id="answered-as-a-conflict"),
+        pytest.param(
+            ConcurrentModificationError("the store answered the put as a conflict after it landed"),
+            True,
+            ServiceUnavailableError,
+            id="answered-as-a-conflict-and-its-landing-unread",
+        ),
+        pytest.param(
+            table_claims.TableChangedError("the name left the location after the put landed"),
+            False,
+            table_claims.TableChangedError,
+            id="the-table-changed-after",
+        ),
+    ],
+)
+def test_a_finalize_refused_after_its_version_landed_keeps_that_commits_record(
+    table: DoorTable, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refusal: Exception, unread: bool, answer: type[Exception] | None
+) -> None:
+    """ADR 0187: a finalize can be refused after its conditional put landed: the store answers it as a conflict, or the
+    door finds the name left the location once it wrote. The version holds the very manifest the detached commit judged,
+    so its author record is kept, and the change is applied once: a conflict is answered as that version, never planned
+    again on the version it made; one whose landing the store does not answer is refused 503, its outcome unknown; and a
+    changed table is refused 409 as it was."""
+    finalize = table_claims.DoorTable.finalize_version
+    refused_after: list[int] = []
+
+    def landed_then_refused(door: DoorTable, request: CreateTableVersionRequest, *, turn: str | None = None) -> object:
+        landed = finalize(door, request, turn=turn)
+        if not refused_after:
+            refused_after.append(request.version)
+            raise refusal
+        return landed
+
+    def unanswered(*_args: object, **_kwargs: object) -> str | None:
+        raise OSError("the store did not answer reading the version's manifest")
+
+    monkeypatch.setattr(table_claims.DoorTable, "finalize_version", landed_then_refused)
+    if unread:
+        monkeypatch.setattr("catalog.services.dataplane.committed_manifest_digest", unanswered)
+    request = UpdateTableRequest(id=TABLE_ID, predicate="id >= 0", updates=[["id", "id + 10"]])
+    try:
+        outcome: int | type[Exception] = update_table(table, StorageOptions(), request, transaction_properties={**STAMP, "rask.operation": "update"}).version
+    except Exception as error:  # noqa: BLE001 — the door's answer is the outcome under test
+        outcome = type(error)
+
+    (landed,) = refused_after
+    latest = table.open(StorageOptions())
+    ids = sorted(latest.to_table(columns=["id"]).column("id").to_pylist())
+    signed = _signed(table, str(tmp_path / "control"), table.resolved.require_uuid(), landed)
+    assert (outcome, latest.version, ids, signed) == (answer or landed, landed, [11, 12, 13], ("alice", True))
+
+
+def _signed(table: DoorTable, control: str, table_uuid: str, version: int) -> tuple[str, bool]:
+    """The author recorded for ``version``, and whether the record names the manifest that landed there."""
+    transaction = table.open(StorageOptions(), version=version).read_transaction(version)
+    assert transaction is not None
+    record = commit_records.recorded(control, StorageOptions(), table_uuid, transaction_uuid=transaction.uuid, version=version, ref="")
+    assert record is not None, version
+    return record.author, record.manifest == committed_manifest_digest(table.location, StorageOptions(), version)
 
 
 #: An unkeyed table, so ``/insert`` appends through Lance's own commit rather than a stamped one of its own.
@@ -104,7 +185,7 @@ APPENDED_TO = ["db", "appended"]
 
 def _resolved(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     """``APPENDED_TO`` as a door acts on it, resolved now."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), APPENDED_TO)
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), APPENDED_TO, announces=lambda _operation: True)
 
 
 def _ipc(rows: pa.Table) -> bytes:

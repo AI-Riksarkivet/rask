@@ -41,7 +41,7 @@ from pydantic import BaseModel, InstanceOf
 from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, table_claims
-from service_kit.lakehouse import base_refs, base_registry, commit_turns, features, file_identities, maintenance_due
+from service_kit.lakehouse import base_refs, base_registry, commit_records, commit_turns, features, file_identities, maintenance_due
 from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lancekit.outage import reads_as_store_outage
@@ -61,6 +61,13 @@ class CommitRef(BaseModel):
 
     table_location: str
     branch: str | None = None
+    #: The branch's incarnation (pylance's ``branch_identifier``), ``None`` for main.
+    identifier: str | None = None
+
+    @property
+    def key(self) -> str:
+        """The key the commit reconciler reads the ref by (:func:`commit_records.ref_key`)."""
+        return commit_records.ref_key(self.branch, self.identifier)
 
     @property
     def location(self) -> str:
@@ -82,26 +89,28 @@ def commit_ref(table_location: str, so: StorageOptions, branch: str | None) -> C
     """
     if branch is None:
         return CommitRef(table_location=table_location)
-    if branch not in _listed_branches(table_location, so):
+    listed = _listed_branches(table_location, so)
+    if branch not in listed:
         raise TableBranchNotFoundError(
             f"branch {branch!r} does not exist: a branch is created through CreateTableBranch (POST /v1/table/{{id}}/branches/create), "
             "and each later version of it is committed here"
         )
-    return CommitRef(table_location=table_location, branch=branch)
+    return CommitRef(table_location=table_location, branch=branch, identifier=dataplane.identifier_of(listed[branch]))
 
 
-def _listed_branches(table_location: str, so: StorageOptions) -> set[str]:
-    """The branches the table lists; none when it has no readable dataset, from which no branch was ever taken.
+def _listed_branches(table_location: str, so: StorageOptions) -> dict[str, object]:
+    """The branches the table lists, each with what pylance lists of it; none when it has no readable dataset, from which
+    no branch was ever taken.
 
     A store that did not answer raises rather than reading as no branches ([[LH-247]]): pylance reports it as the same
     bare error as an absent dataset.
     """
     try:
-        return set(lance.dataset(table_location, storage_options=so.in_clear() or None).branches.list())
+        return dict(lance.dataset(table_location, storage_options=so.in_clear() or None).branches.list() or {})
     except (OSError, ValueError) as exc:
         if reads_as_store_outage(exc):
             raise ServiceUnavailableError("the object store did not answer listing the table's branches") from exc
-        return set()
+        return {}
 
 
 class StagedVersion(BaseModel):
@@ -123,8 +132,10 @@ class StagedVersion(BaseModel):
     operation: str
     #: The staged transaction's properties, where a stock writer names its run (:mod:`catalog.core.run_context`).
     properties: dict[str, str] = {}
-    #: The staged transaction's own uuid, which keys the author the catalog records for a commit naming none ([[LH-497]]).
+    #: The staged transaction's own uuid, canonical, which keys the author the catalog records for the commit (ADR 0187).
     transaction_uuid: str = ""
+    #: The :func:`commit_records.manifest_digest` of the bytes the finalize lands, which the author record names.
+    manifest_digest: str = ""
     #: The version the staged transaction was planned on, which names its transaction file.
     read_version: int = 0
     #: The staged manifest's ``max_fragment_id``, ``None`` when it states none.
@@ -177,12 +188,11 @@ class VersionTakenError(ConcurrentModificationError):
 
 def writer_turn(caller: str | None, transaction_uuid: str, operation: str) -> commit_turns.Writer | None:
     """The stock writer a staged commit's turn is handed to: its verified caller and the uuid of the transaction it staged,
-    which pylance keeps when it stages the commit again ([[LH-259]]). ``None`` for a transaction naming no uuid, whose retry
-    could not be told from any other writer's, and for a ``Merge``, which pylance never stages again: Lance answers a Merge
-    that lost to any write of data as a conflict its application re-runs (``lance_docs/lance/format/table/transaction.md``
-    § Merge Compatibility), so a turn handed to it only holds the ref's other writers (measured on pylance 13.0.0 beside the
-    catalog's ``/insert`` appending in a tight loop: 30 s)."""
-    if not transaction_uuid or operation == "Merge":
+    which pylance keeps when it stages the commit again ([[LH-259]]). ``None`` for a ``Merge``, which pylance never stages
+    again: Lance answers a Merge that lost to any write of data as a conflict its application re-runs
+    (``lance_docs/lance/format/table/transaction.md`` § Merge Compatibility), so a turn handed to it only holds the ref's
+    other writers (measured on pylance 13.0.0 beside the catalog's ``/insert`` appending in a tight loop: 30 s)."""
+    if operation == "Merge":
         return None
     return commit_turns.Writer(caller=caller or "", transaction=transaction_uuid)
 
@@ -223,7 +233,11 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
     except BaseException:
         _discard(location, so, detached_id, finalize_id)
         raise
-    operation = type(transaction.operation).__name__ if transaction is not None else "Unknown"
+    if transaction is None or not commit_records.is_canonical_uuid(transaction.uuid):
+        _discard(location, so, detached_id, finalize_id)
+        # Every stock writer pylance builds names one (a uuid4, canonical); the catalog keys the commit's author by it.
+        raise InvalidInputError("commit refused: the staged manifest names no transaction with a canonical uuid, which the catalog records its author under")
+    operation = type(transaction.operation).__name__
     if operation == lance.LanceOperation.BaseOperation.__name__:
         operation = _unmodelled_operation(manifest) or operation
     # Taken first: the version a writer staged went to another writer whatever the manifest states, and the handed turn
@@ -232,13 +246,13 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         _discard(location, so, detached_id, finalize_id)
         raise VersionTakenError(
             f"commit refused: version {request.version} is taken, the latest version is {latest}; stage the commit again on it",
-            transaction_uuid=transaction.uuid if transaction is not None else "",
+            transaction_uuid=transaction.uuid,
             operation=operation,
         )
     if stated != request.version:
         _discard(location, so, detached_id, finalize_id)
         raise InvalidInputError(f"commit refused: the staged manifest is version {stated}, the request names {request.version}")
-    properties = dict(transaction.transaction_properties or {}) if transaction is not None else {}
+    properties = dict(transaction.transaction_properties or {})
     return StagedVersion(
         location=location,
         table_location=ref.table_location,
@@ -249,8 +263,9 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         version=request.version,
         operation=operation,
         properties=properties,
-        transaction_uuid=transaction.uuid if transaction is not None else "",
-        read_version=transaction.read_version if transaction is not None else 0,
+        transaction_uuid=transaction.uuid,
+        manifest_digest=commit_records.manifest_digest(manifest),
+        read_version=transaction.read_version,
         max_fragment_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.MAX_FRAGMENT_ID_FIELD),
     )
 
@@ -910,6 +925,23 @@ def finalize(
         raise
     _delete_staged(staged, so)
     return response
+
+
+def forget_unlanded_author(table: table_claims.DoorTable, staged: StagedVersion, so: StorageOptions) -> None:
+    """Delete the author recorded for ``staged`` once its finalize did not land, unless the version it was staged for holds
+    the very manifest it judged: a finalize whose answer was lost landed it (ADR 0187). Any other content there, a writer's
+    who read the transaction's uuid off the staged manifest included, matches the record nowhere. A read or a delete the
+    store refuses is logged and leaves the record.
+    """
+    try:
+        if dataplane.committed_manifest_digest(staged.location, so, staged.version) == staged.manifest_digest:
+            return
+        table.forget_author(staged.transaction_uuid, version=staged.version)
+    except OSError as exc:
+        log.warning(
+            "commit_author_unforgotten",
+            extra={"table": table.segments, "transaction": staged.transaction_uuid, "version": staged.version, "error": str(exc)[:300]},
+        )
 
 
 def _delete_staged(staged: StagedVersion, so: StorageOptions) -> None:

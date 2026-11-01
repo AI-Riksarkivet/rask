@@ -37,6 +37,7 @@ holds, and never fails its own boot on it: until it holds, lineage retries creat
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
@@ -76,6 +77,13 @@ def is_unannounced(namespace_id: str, operation: str, settings: Settings) -> boo
     """Whether a write of ``operation`` under ``namespace_id`` goes unannounced: any in the provenance namespace but a
     compaction (``COMPACT_TABLE``)."""
     return operation != COMPACT_TABLE and is_provenance(namespace_id, settings)
+
+
+def announcer(segments: Sequence[str], settings: Settings) -> Callable[[str], bool]:
+    """Whether a write of an operation on the table ``segments`` names is announced, as the emitter judges it
+    (:func:`is_unannounced`): a door's table records the author only of what is announced (ADR 0187)."""
+    parent = fga.parent_namespace_id(list(segments)) or ""
+    return lambda operation: not is_unannounced(parent, operation, settings)
 
 
 def provenance_tuples(settings: Settings, *, namespace_uuid: str, parent: str | None) -> list[fga.ClientTuple]:

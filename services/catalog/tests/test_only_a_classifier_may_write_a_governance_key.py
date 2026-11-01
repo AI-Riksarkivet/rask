@@ -82,7 +82,7 @@ def _call(updates: list[dict[str, Any]]) -> Any:
         ep.update_field_metadata(
             id="bronze$pages",
             body=cast("Any", body),
-            table=DoorTable(cast("Any", object()), ClaimStore(control_root="/unread"), _RESOLVED),
+            table=DoorTable(cast("Any", object()), ClaimStore(control_root="/unread"), _RESOLVED, announces=lambda _operation: True),
             settings=cast("Any", SimpleNamespace(fga_enabled=True)),
             so=cast("Any", {}),
             token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),

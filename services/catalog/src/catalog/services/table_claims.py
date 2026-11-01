@@ -29,6 +29,7 @@ from lance_namespace import (
     InvalidTableStateError,
     LanceNamespace,
     NamespaceNotFoundError,
+    ServiceUnavailableError,
     TableNotFoundError,
 )
 from pydantic import BaseModel
@@ -38,7 +39,7 @@ from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_
 from catalog.services import native
 from catalog.services.object_uuids import UnidentifiedObjectError
 from service_kit.governed import fga
-from service_kit.lakehouse import commit_turns, file_identities, history_fences, location_claims, trash
+from service_kit.lakehouse import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
 from service_kit.lakehouse.base_refs import decoded_path
 from service_kit.lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 from service_kit.lakehouse.objectfs import StorageOptions
@@ -130,10 +131,11 @@ class DoorTable:
     moved (:meth:`read_natively`), and right before a write (:meth:`write_natively`).
     """
 
-    def __init__(self, ns: LanceNamespace, claims: ClaimStore, resolved: ResolvedTable) -> None:
+    def __init__(self, ns: LanceNamespace, claims: ClaimStore, resolved: ResolvedTable, *, announces: Callable[[str], bool]) -> None:
         self._ns = ns
         self._claims = claims
         self._resolved = resolved
+        self._announces = announces
 
     @property
     def segments(self) -> list[str]:
@@ -249,7 +251,7 @@ class DoorTable:
         A writer that loses the race is handed the ref's next turn (:meth:`hand_turn`), so its retry, staged again under the
         same transaction, finalizes before the catalog's own writers of the ref. A retry that reaches its finalize releases
         it; one refused before its finalize, or a writer that never retries, leaves it to lapse at its hold. ``None``, a
-        staged transaction naming no uuid, holds no turn and is handed none.
+        ``Merge``, which pylance never stages again, holds no turn and is handed none.
 
         Raises:
             ConcurrentModificationError: Another writer took the version first.
@@ -384,6 +386,47 @@ class DoorTable:
         """
         file_identities.record(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), committed)
 
+    def announces(self, operation: str) -> bool:
+        """Whether the emitter announces a write of ``operation`` on this table: every one but a row write in the provenance
+        namespace (`catalog.services.provenance_namespace`), which the feed holds no row for by design and so keeps no
+        author record (ADR 0187)."""
+        return self._announces(operation)
+
+    def record_author(self, transaction_uuid: str, *, version: int, ref: str, author: str, manifest: str | None) -> bool:
+        """Record ``author``, the caller this door authenticated, as the maker of the commit of ``transaction_uuid`` at
+        ``version`` of the ref ``ref`` (:func:`commit_records.ref_key`), its manifest ``manifest`` (``None`` when the record
+        is read off the landed version): the one author the reconciler signs a re-announcement of it for (ADR 0187).
+        Whether this call created the record, rather than finding it a retry's.
+
+        Raises:
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+            commit_records.AuthorRecordedError: The transaction is recorded at the version for another commit.
+            ServiceUnavailableError: The store refused, or could not be reached for, the record.
+        """
+        try:
+            return commit_records.record_author(
+                self._claims.control_root,
+                self._claims.storage_options,
+                self._resolved.require_uuid(),
+                transaction_uuid=transaction_uuid,
+                version=version,
+                ref=ref,
+                author=author,
+                manifest=manifest,
+            )
+        except OSError as exc:
+            raise ServiceUnavailableError(f"the object store did not answer recording the author of the commit at version {version}") from exc
+
+    def forget_author(self, transaction_uuid: str, *, version: int) -> None:
+        """Delete the author recorded for the commit of ``transaction_uuid`` at ``version``, one that did not land.
+
+        Raises:
+            OSError: The store refused the delete.
+        """
+        commit_records.forget_author(
+            self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), transaction_uuid=transaction_uuid, version=version
+        )
+
 
 class TableChangedError(ConcurrentModificationError):
     """The table a door resolved changed while the request was served (the spec's code 14).
@@ -414,9 +457,10 @@ def _etag(claim: ClaimRead | None) -> str | None:
     return claim.etag if claim is not None else None
 
 
-def door_table(ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> DoorTable:
-    """The table ``segments`` names now, for a reader that resolves it outside a request's door (a cron acting on a record)."""
-    return DoorTable(ns, store, resolve(ns, store, segments))
+def door_table(ns: LanceNamespace, store: ClaimStore, segments: list[str], *, announces: Callable[[str], bool]) -> DoorTable:
+    """The table ``segments`` names now, for a reader that resolves it outside a request's door (a cron acting on a record),
+    whose writes the emitter judges by ``announces``."""
+    return DoorTable(ns, store, resolve(ns, store, segments), announces=announces)
 
 
 def uuid_at(store: ClaimStore, location: str, segments: list[str]) -> str:

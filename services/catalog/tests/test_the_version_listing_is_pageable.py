@@ -50,7 +50,9 @@ def _table_with(version_count: int) -> table_claims.DoorTable:
     lance.write_dataset(pa.table({"id": [1]}), uri)
     for value in range(2, version_count + 1):
         lance.write_dataset(pa.table({"id": [value]}), uri, mode="append")
-    return table_claims.door_table(ln.connect("dir", {"root": root}), ClaimStore(control_root=str(pathlib.Path(root) / "control")), ["t"])
+    return table_claims.door_table(
+        ln.connect("dir", {"root": root}), ClaimStore(control_root=str(pathlib.Path(root) / "control")), ["t"], announces=lambda _operation: True
+    )
 
 
 def _list(table: table_claims.DoorTable, **kwargs: Any) -> Any:

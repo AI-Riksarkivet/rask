@@ -12,7 +12,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lineage_kit.signing import SIGNATURE_FACET, RefusalReason
-from service_kit.openlineage import AUTHOR_FACET, BRANCH_IDENTIFIER, LANCE_FACET, REANNOUNCED, static_event_id
+from service_kit.openlineage import AUTHOR_FACET, BRANCH_IDENTIFIER, LANCE_FACET, static_event_id
 
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
@@ -314,12 +314,6 @@ class DatasetEvent(BaseModel):
         return lance.get("operation") if isinstance(lance, dict) else None
 
     @property
-    def reannounced(self) -> bool:
-        """Whether the catalog marked this change its commit reconciler's re-announcement, on the ``rask_lance`` dataset facet."""
-        lance = (self.dataset.facets or {}).get(LANCE_FACET)
-        return isinstance(lance, dict) and bool(lance.get(REANNOUNCED))
-
-    @property
     def feed_event_type(self) -> str:
         """The state the durable feed records this change under. A WIRE FIELD IT DOES NOT HAVE.
 
@@ -533,15 +527,6 @@ class RunEvent(BaseModel):
         """
         lance = (self.run.facets or {}).get(LANCE_FACET)
         return lance.get("operation") if isinstance(lance, dict) else None
-
-    @property
-    def reannounced(self) -> bool:
-        """Whether the catalog marked this run its commit reconciler's re-announcement (``rask_lance.reannounced``, [[LH-551]]).
-
-        The mark rides the bytes the catalog signs, so an announcement the catalog made in the request that authenticated
-        its author carries none, and no relay can add or strip one without breaking the signature.
-        """
-        return bool(self._run_lance_facet().get(REANNOUNCED))
 
     @property
     def write_ref(self) -> str | None:

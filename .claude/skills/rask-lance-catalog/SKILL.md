@@ -315,10 +315,24 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   built from it read one column's data as another's. A keyed insert and a merge plan `execute_uncommitted` instead,
   since `LanceDataset.commit` of one rebases past a racing writer without its key check (a duplicate key landed). A
   restore is planned as Lance's `Restore`, and `drop_index` keeps the `dir` backend's own refusals (a system index 406,
-  a missing one 404). A stock commit that cannot carry an author (`Compaction.commit` stamps neither of its two commits,
-  and pylance models no class for `ReserveFragments`) has its verified caller recorded by `version/create` before the
-  finalize, at `_commit_authors/<table uuid>/<transaction uuid>.json` (`service_kit.lakehouse.commit_records`), ended
-  with the table by `end_object_records`.
+  a missing one 404). **Every commit of an operation the doors announce records the caller it was authorized for**
+  ([[LH-550]], ADR 0187), at `_commit_authors/<table uuid>/<transaction uuid>/<version>.json`
+  (`service_kit.lakehouse.commit_records`) naming the ref's key (`ref_key`: the branch and its incarnation, `""` for
+  main), so a version put past every door under another commit's transaction uuid (pylance 13.0.0 commits any uuid it is
+  given, measured) matches no record; a record written before its finalize also names the SHA-256 of the manifest the
+  catalog judged, which the backend lands unchanged (measured), and the reconciler signs only when that manifest is the
+  one committed there, so a writer past every door that lands an in-flight commit's version first under its uuid matches
+  nothing. The emitter's rule decides which (`DoorTable.announces`, `provenance_namespace.announcer`): a provenance row
+  write keeps none. Written once (one held for another caller or
+  ref refuses `version/create` 400 code 13, as does a staged commit naming no transaction or a non-canonical uuid) and
+  ended with the table by `end_object_records`: `commit_stamped` and `version/create` (every stock commit, one naming
+  itself as `rask.author` included) before the finalize, an attempt whose finalize did not land deleting its record (at
+  `version/create` only the request that created it, and only when the version it was staged for does not hold the
+  manifest it judged, which a finalize whose answer was lost landed); the
+  create door's write and an unkeyed `/insert`, which Lance commits itself and whose transaction uuid it mints inside the
+  commit, just after it lands, under the transaction `committed_files.record_landed` read (`commit_authors.record_landed`,
+  owner 2026-11-01), a failure logged `commit_author_unrecorded` at ERROR and counted on
+  `catalog.commit_authors.unrecorded`.
 - **The commit is the outbox** ([[LH-497]]). A versioned announcement's OpenLineage run id is a UUIDv8 of HMAC-SHA256
   under `commit-id-key` (a secret only the catalog reads; a stack with no store derives under the empty key) over the
   table's uuid, the ref, its incarnation and the version (`catalog.core.commit_ids`), and its `eventTime` is the
@@ -328,12 +342,14 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   (`catalog.api.commit_reconcile`) lists every held location claim whose name still describes to it, reads each ref's
   versions after its mark (`_commit_marks/`) older than `LANCE_COMMIT_RECONCILE_GRACE_SECONDS`, looks each up on
   `provenance$events` by the table's uuid, ref and version (so a renamed table is not announced again), and announces
-  every one the feed lacks from the version log alone, signed for its author and marked `rask_lance.reannounced`, since
-  that author is the one the version log names and no request authenticated it: lineage records the catalog's own
-  announcements on its signature and checks a re-announcement in full ([[LH-551]]); each find counts
-  `catalog.commit_reconcile.reannounced`, and a version of an announced operation with no author counts
+  every one the feed lacks from the version log alone, signed for the author the catalog recorded authorizing the commit,
+  never for the `rask.author` a version carries, which any writer that can put a final manifest can stamp, so lineage
+  records it on the catalog's signature as it records the original ([[LH-551]], [[LH-550]]); each find counts
+  `catalog.commit_reconcile.reannounced`, and a version of an announced operation the catalog recorded no author for at
+  that version, or whose transaction cannot be read (`commit_reconcile_unidentified`), counts
   `catalog.commit_reconcile.unauthored` (both page, `deploy/alerting/rules.yml`). A mark moves only past versions
-  confirmed on the feed, unannounced by design (a `Clone`, a config-only disarm, a provenance row write) or unauthored.
+  confirmed on the feed, unannounced by design (a `Clone`, a config-only disarm, a provenance row write) or unauthored,
+  and only once each confirmed version's author record is deleted: a delete the store refuses holds the mark below it.
   A registered table's first mark is its register's ([[LH-550]]): the register door mints the table's uuid, marks each
   ref at its head (`commit_reconcile.mark_registered_heads`, 503 code 17 when a head cannot be read; a dataset pylance
   refuses over its feature flags is left to the judge, which refuses it, 400 for flag 256 and 503 for any other) and

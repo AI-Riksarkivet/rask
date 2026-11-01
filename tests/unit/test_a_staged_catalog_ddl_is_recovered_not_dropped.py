@@ -135,27 +135,26 @@ def _settings(tmp_path: Path, *, fga_enabled: bool, signers: frozenset[str] = fr
     )
 
 
-def _create_event(catalog: Any, *, reannounced: bool = False) -> dict[str, Any]:  # noqa: ANN401 - the conftest's EventSigner
-    """The catalog's create for `_TABLE`, from its real builder, signed as the catalog on behalf of `_AUTHOR`; with
-    `reannounced`, the commit reconciler's re-announcement of it."""
+def _create_event(signer: Any, *, author: str = _AUTHOR) -> dict[str, Any]:  # noqa: ANN401 - the conftest's EventSigner
+    """A create for `_TABLE` from the catalog's real builder, signed by `signer`: the catalog signs on behalf of `author`,
+    any other signer for itself."""
     event = build_write_event(
         table_id=_TABLE,
         uuids=_uuids(_TABLE),
         namespace="lance",
-        author=_AUTHOR,
+        author=author,
         version=1,
         operation="create_table",
         run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a60",
         event_time="2026-10-02T12:00:00+00:00",
         job_namespace="lance",
-        reannounced=reannounced,
     )
-    return catalog.sign(event, on_behalf_of=_AUTHOR)
+    return signer.sign(event, on_behalf_of=author) if signer.identity == _CATALOG else signer.sign(event)
 
 
-def _stage_a_create(settings: LineageSettings, catalog: Any, *, reannounced: bool = False) -> tuple[str, str]:  # noqa: ANN401 - the conftest's EventSigner
-    """What the catalog leaves in the outbox when its publish fails: its create event, signed."""
-    doc = _create_event(catalog, reannounced=reannounced)
+def _stage_a_create(settings: LineageSettings, signer: Any, *, author: str = _AUTHOR) -> tuple[str, str]:  # noqa: ANN401 - the conftest's EventSigner
+    """What a stager leaves in the outbox when its publish fails: its create event, signed."""
+    doc = _create_event(signer, author=author)
     outbox.stage_event(settings.outbox_uri, StorageOptions(), event_identity(doc), json.dumps(doc))
     staged = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
     assert len(staged) == 1, f"staging left {len(staged)} objects, not one"
@@ -460,13 +459,15 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "the undeletable poison should wait for the next tick"
 
 
-def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
+def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, event_signer: Any) -> None:
     """A staged copy of a create the feed already holds byte-for-byte (published, then the stager's own
-    delete failed) is a redelivery, even when its author has since lost the grant. It is staged as a
-    re-announcement, which the gate checks in full ([[LH-551]]), so the refusal it meets is what the replay
-    answers. The feed keys a static change by its derived id, never by a run id it does not have."""
-    settings = _settings(tmp_path, fga_enabled=True)
-    _, staged_json = _stage_a_create(settings, catalog, reannounced=True)
+    delete failed) is a redelivery, even when its author has since lost the grant. It is signed by a listed signer that
+    is no delegator, which the gate checks in full, so the refusal it meets is what the replay answers. The feed keys a
+    static change by its derived id, never by a run id it does not have."""
+    other = event_signer("service-bronze-to-silver")
+    respx.get(f"{_SECRETS}/signing-public-{other.identity}").mock(return_value=httpx.Response(200, json={"keys": other.public}))
+    settings = _settings(tmp_path, fga_enabled=True, signers=frozenset({_CATALOG, other.identity}))
+    _, staged_json = _stage_a_create(settings, other, author=other.identity)
     _arm_gate(monkeypatch, writer="dex~somebody-else")
     held = DatasetEvent.model_validate(json.loads(staged_json))
 

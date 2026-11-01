@@ -120,14 +120,17 @@ is recorded without a uuid. Every other facet is that producer's own claim.
 - The catalog stages each write's event in its outbox (the chart sets `LANCE_LINEAGE_OUTBOX_URI`) before
   publishing; from there, delivery into the feed is at least once, and lineage records each event once
   (an insert-only merge on the row's key), so a redelivery lands no second row.
-- A crash between the Lance commit and the stage loses that announcement, not the write: the commit names its author
-  and operation, and the catalog's reconcile cron (`catalog.commitReconcile`, every 10 minutes by default) announces
+- A crash between the Lance commit and the stage loses that announcement, not the write: the catalog recorded the
+  caller it authorized the commit for and the commit names its operation, and the catalog's reconcile cron (`catalog.commitReconcile`, every 10 minutes by default) announces
   every committed version older than `catalog.commitReconcile.graceSeconds` that the feed holds no row for, from the
   table's version log (LH-497). A write's run id is derived from its commit (the table's uuid, ref, ref incarnation and
   version, keyed by a secret only the catalog holds), so the write's own announcement and a re-announcement are one
   run and land one row, whichever arrives first. A versioned dataset change carries its commit's time as `eventTime`
-  for the same reason. A re-announcement carries `rask_lance.reannounced: true`; for a follower it names the same commit
-  at the same version as the write's own announcement would. A table registered over a dataset written elsewhere is
+  for the same reason. A re-announcement names the same commit, at the same version and for the same author, as the
+  write's own announcement would: the catalog signs it only for the caller it recorded authorizing that commit, at that
+  version and for the manifest it judged. Where the catalog authenticates its callers, a version it recorded no author
+  for, whatever `rask.author` or transaction uuid it carries, is never announced: it is counted unauthored, which pages
+  the estate's operator (LH-550). A table registered over a dataset written elsewhere is
   looked at from its register on (LH-550): the versions it held then were committed past the catalog, so none is
   announced, whatever author it names, and the register's own `register_table` event is the one the feed carries.
 - An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later

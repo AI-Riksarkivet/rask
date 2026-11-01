@@ -1250,7 +1250,7 @@ tests:
               service: "catalog"
             exp_annotations:
               summary: "A table holds versions no catalog door committed"
-              description: "The catalog's commit reconciler found committed versions that name no author and for which version/create recorded none: a manifest was finalized past every catalog door, by a credential that can write one. The version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
+              description: "The catalog's commit reconciler found committed versions for which the catalog recorded no author, whatever rask.author they carry: a manifest was finalized past every catalog door, by a credential that can write one, or the catalog's own record of a write Lance committed failed (a `commit_author_unrecorded` log names that version). The version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
 
   # A ref the reconciler cannot read past, tick after tick, pages after half an hour.
   - interval: 1m
@@ -1293,7 +1293,7 @@ tests:
               service: "catalog"
             exp_annotations:
               summary: "A table holds versions no catalog door committed"
-              description: "The catalog's commit reconciler found committed versions that name no author and for which version/create recorded none: a manifest was finalized past every catalog door, by a credential that can write one. The version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
+              description: "The catalog's commit reconciler found committed versions for which the catalog recorded no author, whatever rask.author they carry: a manifest was finalized past every catalog door, by a credential that can write one, or the catalog's own record of a write Lance committed failed (a `commit_author_unrecorded` log names that version). The version is unjudged and unannounced. Read the catalog's `commit_unauthored` logs for the tables and versions. Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced"
 
   # One late derived table pages, a pod's first find included: its counter's first sample is already 1.
   - interval: 1m

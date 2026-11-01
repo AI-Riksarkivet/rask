@@ -47,7 +47,7 @@ def table(tmp_path: Path) -> DoorTable:
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(ns, StorageOptions(), ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
 
 
 def test_update_with_an_unknown_column_is_invalid_input(table: DoorTable) -> None:

@@ -147,7 +147,10 @@ def test_the_REFUSED_publish_moves_nothing(client: TestClient, ns, registry_root
     """A refusal is fail-closed: the pointer stays where it was, so no consumer sees the version."""
     _publish(client, key_column="nope")
 
-    assert published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID), StorageOptions()) is None
+    assert (
+        published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID, announces=lambda _operation: True), StorageOptions())
+        is None
+    )
 
 
 def test_the_same_refusal_applies_to_the_gate_only_QUESTION(client: TestClient) -> None:
@@ -193,7 +196,10 @@ def test_a_DECLARED_column_the_table_lost_BLOCKS_the_publish(client: TestClient,
 
     assert payload["published"] is False
     assert "column_declared" in (payload["reason"] or "")
-    assert published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID), StorageOptions()) is None
+    assert (
+        published_version(table_claims.door_table(ns, ClaimStore(control_root=registry_root), TABLE_ID, announces=lambda _operation: True), StorageOptions())
+        is None
+    )
 
 
 def test_the_RESULT_NAMES_WHICH_GATE_RAN(client: TestClient, registry_root: str) -> None:

@@ -41,6 +41,8 @@ def _settings() -> Any:
         model_artifacts_root="",
         reserved_bucket_set=frozenset(),
         storage_options=dict,
+        # ADR 0187: the create records its author unless it is a provenance row write, and no namespace is that here.
+        provenance_namespace="",
     )
 
 

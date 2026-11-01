@@ -62,7 +62,7 @@ def ns(tmp_path: Path):
 
 def _door(ns, tmp_path: Path, table_id: list[str]) -> DoorTable:  # noqa: ANN001
     """``table_id`` as the blob door resolves it on ``ns``."""
-    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), table_id)
+    return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), table_id, announces=lambda _operation: True)
 
 
 @pytest.fixture

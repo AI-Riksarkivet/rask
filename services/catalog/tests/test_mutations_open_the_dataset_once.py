@@ -49,7 +49,7 @@ def table(tmp_path: Path) -> DoorTable:
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
     rows = pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]})
     dataplane.create_table(backend, StorageOptions(), ["db", "t"], rows, root=str(tmp_path), mode="create", registry=registry, holder="db$t")
-    return table_claims.door_table(backend, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"])
+    return table_claims.door_table(backend, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
 
 
 @pytest.fixture

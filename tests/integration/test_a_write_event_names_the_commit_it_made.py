@@ -278,7 +278,7 @@ def test_a_branch_lookup_that_walks_past_the_branch_point_finds_nothing_and_rais
     from catalog.core.config import get_settings
     from catalog.services import table_claims
 
-    table = table_claims.door_table(ns, table_claims.claim_store(get_settings()), ["lh214", "t"])
+    table = table_claims.door_table(ns, table_claims.claim_store(get_settings()), ["lh214", "t"], announces=lambda _operation: True)
     assert dataplane.committed_version(table, StorageOptions(), "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
 
 

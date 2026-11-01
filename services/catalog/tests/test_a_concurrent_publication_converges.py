@@ -55,7 +55,9 @@ def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch)
     monkeypatch.setattr(publication.dataplane, "create_tag", _create)
     monkeypatch.setattr(publication.dataplane, "update_tag", _update)
 
-    table = DoorTable(cast("Any", None), ClaimStore(control_root="/unread"), ResolvedTable(segments=["acme", "silver", "features"]))
+    table = DoorTable(
+        cast("Any", None), ClaimStore(control_root="/unread"), ResolvedTable(segments=["acme", "silver", "features"]), announces=lambda _operation: True
+    )
     publication.set_tag(table, StorageOptions(), "published", 7)
 
     assert calls == ["create", "update"], f"the lost race was not converged: {calls}"

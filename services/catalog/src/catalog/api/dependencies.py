@@ -26,7 +26,7 @@ from catalog.core.lineage_emit import LineageEmitter, NoopEmitter, OriginatorBou
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor, ModeBVendor
-from catalog.services import dataplane, object_uuids, table_claims, warehouses
+from catalog.services import dataplane, object_uuids, provenance_namespace, table_claims, warehouses
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from service_kit.control_emit import ControlEmitter, NoopControlEmitter
 from service_kit.control_events import CatalogControlEvent, ControlUuids
@@ -410,7 +410,13 @@ ResolvedTableDep = Annotated[ResolvedTable, Depends(get_resolved_table)]
 
 def get_door_table(ns: NamespaceDep, settings: SettingsDep, resolved: ResolvedTableDep) -> DoorTable:
     """The table the request's ``{id}`` resolved to, as a door reading or writing its data or metadata acts on it ([[LH-530]])."""
-    return DoorTable(ns, table_claims.claim_store(settings), resolved)
+    return _door_table(ns, settings, resolved)
+
+
+def _door_table(ns: LanceNamespace, settings: Settings, resolved: ResolvedTable) -> DoorTable:
+    """A door's table, answering whether a write of an operation on it is announced as the emitter judges it
+    (`catalog.services.provenance_namespace`), which decides whether its author is recorded (ADR 0187)."""
+    return DoorTable(ns, table_claims.claim_store(settings), resolved, announces=provenance_namespace.announcer(resolved.segments, settings))
 
 
 DoorTableDep = Annotated[DoorTable, Depends(get_door_table)]
@@ -425,7 +431,7 @@ async def get_transaction_table(ns: NamespaceDep, settings: SettingsDep, resolve
         InvalidInputError: The id names no table.
     """
     resolved = await resolver.table(transaction_table(parse_identifier(request.path_params["id"])), ns=ns)
-    return DoorTable(ns, table_claims.claim_store(settings), resolved)
+    return _door_table(ns, settings, resolved)
 
 
 TransactionTableDep = Annotated[DoorTable, Depends(get_transaction_table)]
