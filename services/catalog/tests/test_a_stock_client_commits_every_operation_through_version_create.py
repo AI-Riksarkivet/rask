@@ -17,6 +17,7 @@ the door's own rung choice is what decides.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -45,6 +46,7 @@ from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
+from catalog.services import table_claims
 from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
@@ -806,11 +808,11 @@ _ESTATE_ROUND_TRIP_SECONDS = 2.5
 
 
 class _SlowRoundTrip(lance_namespace.LanceNamespace):
-    """pylance's REST namespace with each commit reaching the catalog ``delay`` seconds late; the other calls pylance makes
-    for a commit pass straight through."""
+    """pylance's REST namespace with each commit reaching the catalog ``delay`` seconds late, ``before`` called ahead of
+    it; the other calls pylance makes for a commit pass straight through."""
 
-    def __init__(self, inner: lance_namespace.LanceNamespace, delay: float) -> None:
-        self._inner, self._delay = inner, delay
+    def __init__(self, inner: lance_namespace.LanceNamespace, delay: float, *, before: Callable[[], None] | None = None) -> None:
+        self._inner, self._delay, self._before = inner, delay, before
 
     def namespace_id(self) -> str:
         return self._inner.namespace_id()
@@ -825,6 +827,8 @@ class _SlowRoundTrip(lance_namespace.LanceNamespace):
         return self._inner.describe_table_version(request)
 
     def create_table_version(self, request: lance_namespace.CreateTableVersionRequest) -> lance_namespace.CreateTableVersionResponse:
+        if self._before is not None:
+            self._before()
         time.sleep(self._delay)
         return self._inner.create_table_version(request)
 
@@ -923,6 +927,40 @@ def test_a_stock_writer_commits_while_a_turn_handed_to_another_stock_writer_is_h
     lance.write_dataset(_row(1), namespace_client=served.stock(), table_id=_APPENDED_TO, mode="append")
 
     assert time.monotonic() - began < 5
+
+
+def test_a_stock_writer_whose_finalize_loses_is_handed_the_refs_next_turn(served: Served, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[[LH-259]] A stock writer's version can be taken after ``version/create`` found it free: by a writer committing
+    while this one waits out a door's turn, right before its finalize. The finalize then loses, and the writer is handed
+    the ref's next turn there, so its retry, staged again under its transaction, finalizes before the catalog's own
+    writers: when the retry reaches ``version/create``, the record keeps a turn under the writer's own token, read from
+    the store, and holds no door's."""
+    stock = served.stock()
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"]))
+    lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    competitor = served.stock()
+    waited = table_claims.DoorTable.wait_for_turn_in_loop
+    beaten: list[str] = []
+    at_the_retry: list[tuple[bool, bool]] = []
+
+    async def _waited_then_beaten(table: table_claims.DoorTable, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
+        kept = await waited(table, ref, mine=mine, handed=handed)
+        if mine is not None and not beaten:
+            beaten.append(mine)
+            await asyncio.to_thread(competitor.insert_into_table, lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(1)))
+        return kept
+
+    def _note_the_turn() -> None:
+        if beaten:
+            turns = _turns(stock, tmp_path)
+            at_the_retry.append((turns.keeps(beaten[0]), turns.poll(None, handed=False)))
+
+    monkeypatch.setattr(table_claims.DoorTable, "wait_for_turn_in_loop", _waited_then_beaten)
+
+    lance.write_dataset(_row(2), namespace_client=_SlowRoundTrip(served.stock(), 0.0, before=_note_the_turn), table_id=_APPENDED_TO, mode="append")
+
+    ids = lance.dataset(namespace_client=stock, table_id=_APPENDED_TO).to_table(columns=["id"]).column("id").to_pylist()
+    assert (at_the_retry[:1], sorted(ids)) == ([(True, False)], [0, 1, 2])
 
 
 @pytest.mark.parametrize(

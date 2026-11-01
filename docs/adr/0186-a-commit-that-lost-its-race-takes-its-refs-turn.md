@@ -117,7 +117,11 @@ its target failed its commit as of unknown outcome, after one call.
   that loses the turn's protection.
 - A table's other refs are not held: a turn is per ref.
 - A writer waiting in the event loop holds a connection and a task, not a thread, and stops waiting when its request is
-  cancelled. A turn taken by another process (another catalog replica), or recorded under another signing identity (a
+  cancelled. It takes a fresh shared answer in the loop itself and hops to the executor only to read the record: 53
+  waiters on one held turn cost a process 32-35 millicores of CPU this way, against 60-62 with each poll sent to the
+  executor (measured on a local control root); what remains is each waiter's wake-ups, which polling a store with no
+  watch costs. A turn taken by
+  another process (another catalog replica), or recorded under another signing identity (a
   view of its own, as across a renewal of the catalog's store session), reaches this process's waiters once their view
   is renewed: up to 0.1 s after the store answered, plus that read's own latency, which ran 1-2 s on the overloaded
   estate. Every waiter polling in that window passes its wait, and each meets the holder's next attempt, which plans
