@@ -122,17 +122,20 @@ def _signing_key() -> SigningKey | None:
     return SigningKey.from_seed(seed) if seed else None
 
 
+def _flat_store_options() -> dict[str, str]:
+    """The probe's store options as the flat map Lance and pyarrow read, the one spelling the harness and its child share."""
+    return {
+        "endpoint": S3,
+        "access_key_id": S3_ACCESS_KEY,
+        "secret_access_key": S3_SECRET_KEY,
+        "region": "us-east-1",
+        "allow_http": "true",
+        "virtual_hosted_style_request": "false",
+    }
+
+
 def _so() -> StorageOptions:
-    return StorageOptions.from_flat(
-        {
-            "endpoint": S3,
-            "access_key_id": S3_ACCESS_KEY,
-            "secret_access_key": S3_SECRET_KEY,
-            "region": "us-east-1",
-            "allow_http": "true",
-            "virtual_hosted_style_request": "false",
-        }
-    )
+    return StorageOptions.from_flat(_flat_store_options())
 
 
 @pytest.fixture(scope="module")
@@ -151,19 +154,27 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
 
     The child stages the event and then blocks forever. We kill it with -9 from the parent: the process dies
     with the staged object on disk and no publish — byte-for-byte the state a producer that crashed between its commit and its announcement leaves behind.
+
+    The store options reach the child as JSON on its stdin, never in its command line: a `StorageOptions` repr redacts its
+    secret ([[LH-543]]), so it cannot be evaluated into a credential, and a command line is readable by every process on the host.
     """
     child = textwrap.dedent(f"""
-        import sys, time
+        import json, sys, time
         sys.path.insert(0, {os.path.join(os.getcwd(), "services")!r})
         from service_kit.lakehouse import outbox
-        outbox.stage_event({OUTBOX_URI!r}, {_so()!r}, {run_id!r}, {event_json!r})
+        from service_kit.lakehouse.objectfs import StorageOptions
+        so = StorageOptions.from_flat(json.loads(sys.stdin.readline()))
+        outbox.stage_event({OUTBOX_URI!r}, so, {run_id!r}, {event_json!r})
         print("STAGED", flush=True)          # the commit→publish window is now OPEN
         time.sleep(300)                       # ...and we die inside it
     """)
     proc = subprocess.Popen(  # noqa: S603
-        [sys.executable, "-c", child], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        [sys.executable, "-c", child], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     try:
+        assert proc.stdin is not None
+        proc.stdin.write(json.dumps(_flat_store_options()) + "\n")
+        proc.stdin.close()
         # wait for the child to confirm it staged (do not race the kill against the write)
         deadline = time.time() + 30
         assert proc.stdout is not None
