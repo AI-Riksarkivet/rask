@@ -224,7 +224,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # table's own vended scope is granted READ only if it is on it; without that, a writer on one table
         # could declare a base naming another tenant's prefix and read it with their next credential. The
         # external blob bases are not on it ([[LH-209]]): they are pointer bases the blob door serves, and
-        # granting the default one handed every vend every project's model artifacts. Empty by default.
+        # granting one would hand every vend every object under it. Empty by default.
         sanctioned_bases=settings.multibase_data_base_list,
     )
     # [[LH-279]] WHAT EVERY TABLE READ JUDGES A DECLARED BASE AGAINST: the control root the create and

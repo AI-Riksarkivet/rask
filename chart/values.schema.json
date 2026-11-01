@@ -628,10 +628,6 @@
                     "description": "Dapr app-id of the maintenance service; also names its durable consumer.",
                     "type": "string"
                 },
-                "declaredPlatformRoots": {
-                    "description": "Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unregistered.",
-                    "type": "string"
-                },
                 "discoveryMaxDepth": {
                     "description": "How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge.",
                     "type": "integer"
@@ -1858,7 +1854,7 @@
                     "type": "string"
                 },
                 "externalBlobBases": {
-                    "description": "Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://\u003cobjectStore.bucket\u003e/models/`; a value replaces that default.",
+                    "description": "Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty approves no base.",
                     "type": "string"
                 },
                 "mode": {

@@ -16,7 +16,6 @@ from typing import Annotated, Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from catalog.services import models as registry
 from catalog.services.changes import ChangeKind
 from catalog.services.control_records import DeleteMode
 from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
@@ -626,68 +625,6 @@ class ProjectPoliciesResponse(BaseModel):
     policies: list[PolicyResponse]
     incomplete: bool = False
     skipped_bindings: list[str] = Field(default_factory=list)
-
-
-# --------------------------------------------------------------------------- #
-# Model registry — candidate→blessed promotion (#17)
-# --------------------------------------------------------------------------- #
-
-
-class PromoteRequest(BaseModel):
-    """Bless a candidate model version (candidate→blessed). ``version`` is the model/Lance version to bless;
-    ``min_metrics`` is the fail-closed gate — each named metric must be present AND >= its threshold."""
-
-    version: int = Field(ge=1)
-    min_metrics: dict[str, float] = Field(default_factory=dict)
-    tag: str = Field(default=registry.BLESSED_TAG, min_length=1, max_length=64)
-
-
-class PromoteResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-    model: str
-    blessed_version: int
-    tag: str
-
-
-class ModelArtifact(BaseModel):
-    """One plain-path artifact object under the model's tree (the #17/#92 layout:
-    ``models/<model>/<token>/…``). ``path`` is relative to the model's artifact root
-    (``<token>/weights.json``); ``updated_at`` is the object's mtime as ISO-8601, ``null`` when the
-    filesystem reports none."""
-
-    path: str
-    size_bytes: int
-    updated_at: str | None
-
-
-class ModelDescribeResponse(BaseModel):
-    model_config = ConfigDict(protected_namespaces=())
-    model: str
-    latest_version: int
-    blessed_version: int | None
-    candidate_metrics: dict[str, Any] | None
-    blessed_metrics: dict[str, Any] | None
-    # The registry rows point at these plain-path objects; [] when nothing is laid out (registry-only).
-    artifacts: list[ModelArtifact] = Field(default_factory=list)
-
-
-class ModelSummary(BaseModel):
-    """One registry entry in the list view. Versions are ``None`` only for a registry directory that is
-    not (yet) a readable Lance dataset — surfaced, not hidden, so an interrupted first publish is visible —
-    and ``blessed_version`` also when the blessed tag names a branch, which blesses no main version."""
-
-    model_config = ConfigDict(protected_namespaces=())
-    model: str
-    latest_version: int | None
-    blessed_version: int | None
-
-
-class ModelsListResponse(BaseModel):
-    models: list[ModelSummary]
-    #: Continue the listing after the last model on this page. `None` means the listing is COMPLETE —
-    #: which is the half that was missing: the route sliced at `limit` and said nothing, so a caller
-    #: could not tell a short estate from a cut one.
-    page_token: str | None = None
 
 
 # --------------------------------------------------------------------------- #

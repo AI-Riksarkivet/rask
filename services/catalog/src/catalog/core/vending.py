@@ -559,9 +559,8 @@ def require_vendable_bases(location: str, facts: VendFacts, judge: BaseJudge) ->
 
     AN EXTERNAL BLOB BASE IS SANCTIONED AND NEVER GRANTED ([[LH-209]]). It is a pointer base — every data
     file stays under the table's own root, and only blob descriptors name objects through it — and it is
-    authorized per table and per object at the create door, while a credential's unit is a prefix: the
-    default base is the model-artifact tree of every project, so granting it handed every vend every
-    tenant's weights. Its bytes are served by the catalog's blob door instead. So the answer drops each
+    authorized per table and per object at the create door, while a credential's unit is a prefix: a
+    configured base can hold every tenant's objects, so granting it would hand every vend all of them. Its bytes are served by the catalog's blob door instead. So the answer drops each
     base judged CONFIGURED, or RECORDED as ``external_blob``, from what the policy is asked to grant.
 
     Returns:

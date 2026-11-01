@@ -7,8 +7,8 @@ or namespace record is keyed by the object's uuid (ADR 0173 §8, [[LH-523]]), wh
 the name it is addressed by, so a rename keeps the policy and a table created later under the same name
 holds none of it; the maintenance sweep matches a dataset's table and ancestor namespaces by the uuids
 ``__manifest`` and the location claims record, with no catalog round-trip. Old-version cleanup can never
-remove a tag-pinned version (Lance exempts tagged versions), so ``blessed`` and every other promotion tag
-survive any policy.
+remove a tag-pinned version (Lance exempts tagged versions), so ``published`` and every other tag survive any
+policy.
 
 The #84 PROJECT policy is the tenant-wide fallback below both: it matches by the project's warehouse
 BUCKETS (resolved from the warehouse registry at set time), so it covers every dataset in the project's

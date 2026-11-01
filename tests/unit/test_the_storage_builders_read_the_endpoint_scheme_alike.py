@@ -2,13 +2,12 @@
 
 Two builders hand options to object_store: `service_kit.lakehouse.objectfs.lance_storage_options`
 (every vend and most service opens) and the catalog's `namespace_properties` (its own `dir` connection).
-One script builds a set from its own arguments
-through the first, the model-artifact janitor, and is checked by what it hands Lance. object_store lowercases the scheme — measured on pylance 12.0.0 against a closed
+object_store lowercases the scheme — measured on pylance 12.0.0 against a closed
 port, `HTTP://127.0.0.1:1` with `allow_http=true` requests `http://127.0.0.1:1/…` and with
 `allow_http=false` dies at `builder error`. So a case-sensitive `startswith("http://")` hands an
 upper-case plaintext endpoint `false`, and the client is never built.
 
-The pyarrow half reads the same endpoint: `s3_filesystem`, and the janitor's filesystem, which goes through it.
+The pyarrow half reads the same endpoint through `s3_filesystem`.
 pyarrow accepts only a lowercase `http`/`https` scheme — measured on pyarrow 25.0.0, `scheme="HTTP"`
 raises `ArrowInvalid: Invalid S3 connection scheme 'HTTP'` — so an endpoint Lance opens must not be
 one every pyarrow consumer refuses. An empty endpoint is AWS proper on both halves, and its regional
@@ -21,16 +20,9 @@ pyarrow override that keeps only the host reaches `/bucket/key`, a different roo
 
 from __future__ import annotations
 
-import contextlib
-import importlib.util
-import io
-import sys
 import threading
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from types import ModuleType
-from unittest import mock
 from urllib.parse import urlsplit
 
 import lance
@@ -40,23 +32,7 @@ from pydantic import SecretStr
 
 from catalog.core.config import Settings as CatalogSettings
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
-
-
-_SCRIPTS = Path(__file__).parents[2] / "scripts"
-
-
-def _load_script(stem: str) -> ModuleType:
-    """A script loaded by path under its own module name, registered first so its dataclasses resolve."""
-    spec = importlib.util.spec_from_file_location(f"{stem}_under_scheme_test", _SCRIPTS / f"{stem}.py")
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-janitor = _load_script("model_artifact_janitor")
+from service_kit.lakehouse.objectfs import lance_storage_options, s3_filesystem
 
 
 def _lance(endpoint: str) -> str:
@@ -65,25 +41,6 @@ def _lance(endpoint: str) -> str:
 
 def _catalog(endpoint: str) -> str:
     return CatalogSettings(LANCE_S3_ENDPOINT=endpoint, LANCE_S3_ACCESS_KEY_ID="k").namespace_properties()["storage.allow_http"]
-
-
-def _janitor_options(endpoint: str) -> StorageOptions:
-    """What the janitor's CLI hands `sweep`, read by standing in for the sweep itself."""
-    handed: list[StorageOptions | None] = []
-
-    def recording_sweep(**kwargs: object) -> object:
-        options = kwargs["storage_options"]
-        assert options is None or isinstance(options, StorageOptions)
-        handed.append(options)
-        return janitor.JanitorReport()
-
-    argv = ["janitor", "--registry-uri", "s3://lake/registry", "--artifact-base", "s3://lake/artifacts"]
-    argv += ["--s3-endpoint", endpoint, "--s3-key", "AK", "--s3-secret", "SK"]
-    with mock.patch.object(janitor, "sweep", recording_sweep), mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
-        janitor.main()
-    [options] = handed
-    assert options is not None
-    return options
 
 
 _BUILDERS: dict[str, Callable[[str], str]] = {
@@ -119,22 +76,6 @@ def test_the_pyarrow_filesystem_reads_the_scheme_by_the_same_rule(endpoint: str,
 
     assert built == pafs.S3FileSystem(access_key="AK", secret_key="SK", endpoint_override=host, scheme=scheme, region="us-east-1")
     assert (scheme == "http") == (_lance(endpoint) == "true"), "pyarrow and Lance disagree on whether this endpoint is plaintext"
-
-
-@pytest.mark.parametrize(("endpoint", "scheme", "host"), [("http://rustfs:9000/tenant/", "http", "rustfs:9000/tenant")])
-def test_the_janitor_filesystem_reads_the_scheme_by_the_same_rule(endpoint: str, scheme: str, host: str) -> None:
-    built, root = janitor._filesystem("s3://bucket/artifacts/", _janitor_options(endpoint))
-
-    assert built == pafs.S3FileSystem(access_key="AK", secret_key="SK", endpoint_override=host, scheme=scheme, region="us-east-1")
-    assert root == "bucket/artifacts"
-
-
-def test_a_script_opens_lance_with_the_estate_builders_options() -> None:
-    """The builder's whole option set, not only `allow_http`: its `aws_`-prefixed credential keys are
-    the ones that displace an ambient AWS_* environment (see `lance_storage_options`)."""
-    assert _janitor_options("https://s3.example.com") == lance_storage_options(
-        "https://s3.example.com", S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), "us-east-1"
-    )
 
 
 _EMPTY_LISTING = (

@@ -696,14 +696,11 @@ vending:
   # The SAFER alternative to the blanket flag: a comma-separated allowlist of approved external base URIs
   # (e.g. "s3://media-bucket/approved,s3://other/base"). External Blob.from_uri pointers are accepted ONLY
   # under a registered base, with the blanket bypass left off — a curated media source without the SSRF door.
-  # Empty = the chart defaults it to the release's own model-artifact base (s3://<objectStore.bucket>/models/,
-  # the #92 allowlist for #115 registry pointers — plain-path artifacts in the lake's own bucket, no SSRF
-  # surface). Overriding REPLACES that default — include the models base yourself or the train registry's
-  # external pointers get rejected.
+  # Empty approves no base, so a create naming one is refused and a plain create registers none.
   # One value, rendered as LANCE_EXTERNAL_BLOB_BASES into every reader of it: the catalog's create and read
   # doors, maintenance and lineage. A base inside it needs no base-record
   # entry ([[LH-279]]), so a reader without it would treat each table's blob base as unrecorded.
-  # -- Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://<objectStore.bucket>/models/`; a value replaces that default.
+  # -- Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty approves no base.
   externalBlobBases: ""
 
 # === Catalog request limits =======================================================================
@@ -1187,17 +1184,6 @@ maintenance:
   # report names the prefixes it stopped at, which is where that measurement starts.
   # -- How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge.
   discoveryMaxDepth: 3
-
-  # Stores the PLATFORM owns and the catalog deliberately cannot resolve ([[LH-164]]). The model
-  # registry's models sit at `<root>/medallion/models/<model>` and the catalog's promote/describe doors
-  # open it by EXPLICIT URI, because native namespace resolution would drop the `/medallion/` prefix
-  # (`catalog/core/config.py:516-522`). So it is not unregistered — it is known and unresolvable.
-  #
-  # NAMED RATHER THAN INFERRED. Left empty, the reconciler reports the registry's own datasets among
-  # `unregistered_datasets` every tick, since no `__manifest` row names them ([[LH-520]]) — the fail-loud
-  # direction, but it buries the datasets nobody has accounted for.
-  # -- Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unregistered.
-  declaredPlatformRoots: "s3://lance-catalog/medallion/models"
 
   # LH-101: wall-clock ceiling for ONE sweep tick, checked BETWEEN datasets — never inside a compaction.
   # 0 = unlimited, which is today's behaviour and stays the default: the right value depends on the

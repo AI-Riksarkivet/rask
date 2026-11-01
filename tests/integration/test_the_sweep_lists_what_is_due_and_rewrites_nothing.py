@@ -8,9 +8,7 @@ the table's name by reading the manifest.
 
 Maintenance names a dataset only through `__manifest` ([[LH-520]]): the table, and its branch through the table's row. A
 dataset no row names is reported by its location, and is neither expired nor vended, though a project policy covering
-its bucket would reclaim its versions. A declared platform root, which the platform opens by explicit URI and registers
-nowhere ([[LH-164]]), is no unnamed dataset: it is neither refused nor expired. The catalog's vend door is a double here,
-and only the named table is asked.
+its bucket would reclaim its versions. The catalog's vend door is a double here, and only the named table is asked.
 
 The lineage event for the expiry names the table's uuid, from the claim the catalog took on its location, and its
 namespace's, from the namespace's own `__manifest` row (ADR 0173 §6, §10). The sidecar it publishes to is a recording
@@ -56,9 +54,6 @@ BRANCHED = f"{ROOT}/{BRANCHED_UUID}"
 BRANCH = f"{BRANCHED}/tree/work"
 #: A dataset in the catalog's layout that no `__manifest` row names.
 UNNAMED = f"{ROOT}/5e3b2a1c-9d8f-4e7a-b6c5-d4e3f2a1b0c9"
-#: The model registry's store: a declared platform root.
-PLATFORM_ROOT = f"{ROOT}/medallion/models"
-PLATFORM = f"{PLATFORM_ROOT}/m"
 CATALOG = "http://catalog.test"
 
 
@@ -76,9 +71,9 @@ def moto_url() -> Iterator[str]:
 @pytest.fixture
 def estate(moto_url: str) -> StorageOptions:
     """Four small fragments in four versions registered as `db$t`, under its own policy keeping two versions; `db$b` with a
-    branch; three versions nothing names, under the bucket's project policy keeping one; and two in a declared platform root."""
+    branch; and three versions nothing names, under the bucket's project policy keeping one."""
     options = lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
-    for uri, versions in ((URI, 4), (BRANCHED, 1), (UNNAMED, 3), (PLATFORM, 2)):
+    for uri, versions in ((URI, 4), (BRANCHED, 1), (UNNAMED, 3)):
         for i in range(versions):
             rows = pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())})
             lance.write_dataset(
@@ -120,7 +115,6 @@ def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Test
         "MAINTENANCE_S3_BUCKET": BUCKET,
         "MAINTENANCE_MIN_VERSIONS_TO_EXPIRE": "1",
         "MAINTENANCE_CATALOG_URL": CATALOG,
-        "MAINTENANCE_DECLARED_PLATFORM_ROOTS": PLATFORM_ROOT,
     }.items():
         monkeypatch.setenv(key, value)
     from maintenance.core.config import get_settings
@@ -163,10 +157,7 @@ def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(estate
     assert (after.version, [fragment.fragment_id for fragment in after.get_fragments()]) == (before.version, fragments), "the tick rewrote the table"
     assert [version["version"] for version in after.versions()] == [before.version - 1, before.version], answered.text
     refusals = answered.json()["refusals"]
-    assert (answered.json()["refused_by"].get("unnamed"), UNNAMED in refusals, BRANCH in refusals, PLATFORM in refusals) == (1, True, False, False), json.dumps(
-        answered.json()
-    )
-    assert len(lance.dataset(PLATFORM, storage_options=estate.in_clear()).versions()) == 2, "a declared platform root was expired"
+    assert (answered.json()["refused_by"].get("unnamed"), UNNAMED in refusals, BRANCH in refusals) == (1, True, False), json.dumps(answered.json())
     assert len(lance.dataset(UNNAMED, storage_options=estate.in_clear()).versions()) == 3, "a dataset no manifest names was expired"
     assert set(asked) <= {TABLE, "db$b"} and TABLE in asked, f"the vend door was asked about {asked}"
     record = read_due(ROOT, estate, LOCATION)

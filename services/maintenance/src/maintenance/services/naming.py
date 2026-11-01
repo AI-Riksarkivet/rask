@@ -126,13 +126,3 @@ def policy_owners(names: TableIds, table: str, *, claims: location_claims.ClaimS
         log.warning("maintenance_namespace_uuid_unread", extra={"table": table, "namespaces": unnamed})
         return None
     return PolicyOwners(table_uuid=uuid, namespace_uuids=[names.namespace_uuids[ancestor] for ancestor in ancestors])
-
-
-def under_a_declared_root(dataset: str, declared_roots: tuple[str, ...]) -> bool:
-    """Whether ``dataset`` lives in a store the platform owns and opens by explicit URI, never registered ([[LH-164]]).
-
-    The model registry is one: no ``__manifest`` row names its datasets, so they are accounted for rather than reported
-    or refused as unnamed. Matched with the trailing delimiter, because a bare prefix match would declare
-    ``medallion/models-scratch`` platform-owned for sharing eight characters.
-    """
-    return f"{normalise(dataset)}/".startswith(tuple(f"{normalise(root)}/" for root in declared_roots))

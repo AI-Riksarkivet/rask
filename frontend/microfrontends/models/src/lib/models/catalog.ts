@@ -1,16 +1,40 @@
-// The model registry's wire CONTRACTS. Types are generated from docs/catalog-openapi.json
-// (`bun run gen:types:catalog`) — never hand-mirrored. The describe route serializes with
-// response_model_exclude_none, so its null fields arrive absent — read optional fields with `?? null`
-// rather than trusting the generated required-nullable shape.
+// The model registry's wire shapes. The catalog serves no model registry (LH-558), so nothing generates
+// them and they are declared here; the doors this zone calls answer 404. A null field may be absent rather
+// than null, so read optional fields with `?? null`.
 //
 // The registry TRANSPORT (list / describe / promote) lives in `remote/models.remote.ts` — the zone's
 // remote-function dialect. A remote file may export only remote functions, so the types stay here.
-import type { components } from '@rask/api/generated/catalog';
 
-export type ModelSummary = components['schemas']['ModelSummary'];
-export type ModelsList = components['schemas']['ModelsListResponse'];
-export type ModelDescribe = components['schemas']['ModelDescribeResponse'];
+export type ModelSummary = {
+	model: string;
+	latest_version: number | null;
+	blessed_version: number | null;
+};
+
+export type ModelsList = {
+	models: ModelSummary[];
+	page_token?: string | null;
+};
+
 /** One object under the model's artifact tree (path relative to the model root) — the describe
  * response's `artifacts` listing the registry detail renders as a table. */
-export type ModelArtifact = components['schemas']['ModelArtifact'];
-export type PromoteResponse = components['schemas']['PromoteResponse'];
+export type ModelArtifact = {
+	path: string;
+	size_bytes: number;
+	updated_at: string | null;
+};
+
+export type ModelDescribe = {
+	model: string;
+	latest_version: number;
+	blessed_version: number | null;
+	candidate_metrics: { [key: string]: unknown } | null;
+	blessed_metrics: { [key: string]: unknown } | null;
+	artifacts?: ModelArtifact[];
+};
+
+export type PromoteResponse = {
+	model: string;
+	blessed_version: number;
+	tag: string;
+};

@@ -101,21 +101,6 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: sweep, which takes a fresh one first. The catalog's commit judge holds the same bound
     #: (`LANCE_CLONE_LIST_MAX_AGE_SECONDS`, default 3600).
     clone_list_max_age_seconds: int = Field(default=3600, ge=60, alias="MAINTENANCE_CLONE_LIST_MAX_AGE_SECONDS")
-    #: Stores the PLATFORM owns and the catalog deliberately cannot resolve ([[LH-164]]). Today that is
-    #: the model registry: it lives at `<root>/medallion/models/<model>`, an explicit location, and
-    #: the catalog's promote/describe doors open it by EXPLICIT URI, because native namespace resolution
-    #: would drop the `/medallion/` prefix (`catalog/core/config.py:516-522`).
-    #:
-    #: NAMED RATHER THAN INFERRED, so the reconciler can tell "known and unresolvable" from "not looked
-    #: at". Empty means nothing is declared and every unreadable location is reported as a coverage gap,
-    #: which is the fail-loud direction for a report.
-    declared_platform_roots: str = Field(default="", alias="MAINTENANCE_DECLARED_PLATFORM_ROOTS")
-
-    @property
-    def declared_platform_root_list(self) -> tuple[str, ...]:
-        """The declared roots, split and trimmed. Comma-separated for the same reason every other
-        multi-value setting in this file is."""
-        return tuple(part.strip() for part in self.declared_platform_roots.split(",") if part.strip())
 
     # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each dataset whose versions
     # were reclaimed, to the lineage graph via Dapr pub/sub. Publishes to the SAME pubsub component + topic the

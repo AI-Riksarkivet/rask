@@ -84,8 +84,6 @@ def _settings() -> SimpleNamespace:
         external_blob_base_list=[],
         # [[LH-209]] What the judge holds a configured base against: governed roots and buckets. None here.
         root="",
-        models_root="",
-        model_artifacts_root="",
         reserved_bucket_set=frozenset(),
         dapr_secret_store="",
     )

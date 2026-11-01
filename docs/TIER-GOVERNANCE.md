@@ -53,8 +53,6 @@ default path) for the work it does, and notifications target a person from those
   (`POST /management/v1/table/{id}/promotion/approve`: `published` moves to it) or rejects it (`.../promotion/reject`:
   main is restored to the published version). A hold nobody answers within the gate's `review_hours` expires. Every move
   of `published` notifies the project's watchers.
-- **The model registry.** `models$<name>` are governed tables, promoted candidate → blessed on the catalog's
-  `POST /management/v1/model/{name}/promote`, at the validator rung.
 
 ## What ADR 0156 adds, and where each piece is tracked
 

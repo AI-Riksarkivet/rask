@@ -124,7 +124,6 @@ spec:
             - { name: MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tombstoneSweepMaxPerTick") | ternary .Values.maintenance.tombstoneSweepMaxPerTick 50 | quote }} }
             - { name: MAINTENANCE_ORPHAN_SCAN_ENABLED, value: {{ hasKey .Values.maintenance "orphanScan" | ternary .Values.maintenance.orphanScan false | quote }} }
             - { name: MAINTENANCE_DISCOVERY_MAX_DEPTH, value: {{ hasKey .Values.maintenance "discoveryMaxDepth" | ternary .Values.maintenance.discoveryMaxDepth 3 | quote }} }
-            - { name: MAINTENANCE_DECLARED_PLATFORM_ROOTS, value: {{ hasKey .Values.maintenance "declaredPlatformRoots" | ternary .Values.maintenance.declaredPlatformRoots "" | quote }} }
             {{- if .Values.maintenance.controlEmit }}
             - { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
             - { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.daprAppId | quote }} }

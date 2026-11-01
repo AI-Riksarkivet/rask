@@ -349,8 +349,8 @@ async def _vend_on_spec_door(
     return options
 
 
-# `paginate` lives in `catalog.api.pagination` (it moved when the model registry needed the same
-# cursor) — two keyset implementations in one service is two things to keep in step.
+# `paginate` lives in `catalog.api.pagination`, shared by every catalog listing: two keyset implementations in one
+# service is two things to keep in step.
 @router.post("/{id}/declare", response_model_exclude_none=True)
 async def declare_table(
     id: str,
@@ -1118,7 +1118,6 @@ async def register_table(
         root=root,
         control_root=settings.registry_root,
         configured=[*context.configured, *context.data_allowlist],
-        model_roots=[settings.models_root, settings.model_artifacts_root],
     )
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.

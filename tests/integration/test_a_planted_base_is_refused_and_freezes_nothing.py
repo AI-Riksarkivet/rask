@@ -468,8 +468,7 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     that opens another table's directory: pylance 12.0.0 drops the tab from ``x/.\\t./<victim>`` (and a line
     feed or carriage return likewise) and resolves the ``..`` left behind (lh279 r4 register_probe). Each
     segment is judged as it reads after one percent-decode, so ``%2e%2e`` is refused as ``..`` and ``%5Fbases``
-    as ``_bases``. A location over the model registry is refused too ([[LH-204]]): it is opened by explicit
-    URI and never registered, so a table there would be vended every model's history.
+    as ``_bases``.
 
     A ``?``, or its encoded ``%3F``, names no location either, by the spelling rule every judge asks: the store keeps it
     under a re-encoded name that holds no table, so an id registered there is not found by query or count (measured on
@@ -498,7 +497,7 @@ def test_a_table_location_is_exclusive(estate: _Estate) -> None:
     pinned at its door by `test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`.
     """
     victim = estate.victim.removeprefix(f"{estate.root}/")
-    spellings = (".", "_bases", "%5Fbases", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}", f"{victim}?x", f"{victim}%3Fx", "medallion/models/m")
+    spellings = (".", "_bases", "%5Fbases", f"x/.\t./{victim}", f"x/.\n./{victim}", f"x/%2e%2e/{victim}", f"{victim}?x", f"{victim}%3Fx")
     for location in spellings:
         resp = estate.client.post("/v1/table/db$squatter/register", json={"location": location})
         _refused(resp, _INVALID_INPUT)

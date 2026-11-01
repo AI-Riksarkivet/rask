@@ -467,36 +467,35 @@ def test_resolver_fails_closed_503_on_status_read_error(monkeypatch: pytest.Monk
 # --------------------------------------------------------------------------- #
 
 
-def test_reserved_bucket_set_folds_in_models_and_multibase_buckets() -> None:
-    # The set must cover the shared root, the registry/control bucket, a ZONED model-registry root, and
-    # every approved multi-base data bucket — plus the named medallion zone buckets. A warehouse over any
-    # of them would hand one project governance of platform (or every tenant's) data there.
+def test_reserved_bucket_set_folds_in_the_control_and_multibase_buckets() -> None:
+    # The set must cover the shared root, the registry/control bucket and every approved multi-base data
+    # bucket, plus the named medallion zone buckets. A warehouse over any of them would hand one project
+    # governance of platform (or every tenant's) data there.
     s = Settings.model_validate(
         {
             "root": "s3://lance-catalog",
             "control_root": "s3://lance-control/registry",
-            "models_registry_root": "s3://lance-models/medallion/models",
             "multibase_data_bases": "s3://lance-data-1, s3://lance-data-2/prefix",
             "reserved_buckets": "lance-source",
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
         }
     )
-    assert s.reserved_bucket_set == frozenset({"lance-catalog", "lance-control", "lance-models", "lance-data-1", "lance-data-2", "lance-source"})
+    assert s.reserved_bucket_set == frozenset({"lance-catalog", "lance-control", "lance-data-1", "lance-data-2", "lance-source"})
 
 
 def test_reserved_bucket_set_defaults_collapse_to_the_root_bucket() -> None:
-    # Defaults: models_root lives UNDER the catalog root and multibase is off, so nothing extra is
-    # reserved — byte-identical to the single-bucket posture. file:// roots contribute no bucket at all.
+    # Defaults: the control root is the catalog root and multibase is off, so nothing extra is reserved,
+    # byte-identical to the single-bucket posture. file:// roots contribute no bucket at all.
     s = Settings.model_validate({"s3_access_key_id": "x", "s3_secret_access_key": "x"})
     assert s.reserved_bucket_set == frozenset({"lance-catalog"})
     local = Settings.model_validate({"root": "file:///tmp/cat", "s3_access_key_id": "x", "s3_secret_access_key": "x"})
     assert local.reserved_bucket_set == frozenset()
 
 
-def test_create_warehouse_rejects_models_and_multibase_buckets(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # End-to-end through the endpoint guard: a warehouse claiming the zoned model-registry bucket or an
-    # approved multi-base data bucket is refused BEFORE any bucket/registry/FGA side effect.
+def test_create_warehouse_rejects_multibase_and_catalog_buckets(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # End-to-end through the endpoint guard: a warehouse claiming an approved multi-base data bucket or the
+    # catalog's own bucket is refused BEFORE any bucket/registry/FGA side effect.
     from catalog.api.v1.endpoints import warehouses as wh_ep
     from catalog.schemas import CreateWarehouseRequest
 
@@ -504,7 +503,6 @@ def test_create_warehouse_rejects_models_and_multibase_buckets(tmp_path: Any, mo
         {
             "warehouses_enabled": True,
             "control_root": _root(tmp_path),
-            "models_registry_root": "s3://lance-models/medallion/models",
             "multibase_data_bases": "s3://lance-data-1,s3://lance-data-2",
             "s3_access_key_id": "x",
             "s3_secret_access_key": "x",
@@ -515,7 +513,7 @@ def test_create_warehouse_rejects_models_and_multibase_buckets(tmp_path: Any, mo
     # The project EXISTS (seeded in the registry) so the refusal below is the reserved-bucket guard
     # itself, not require_project_exists' 404 firing first.
     proj_svc.put_project(_root(tmp_path), StorageOptions(), {"id": "evil", "created_at": "t", "created_by": "x", "protected": "false"})
-    for bucket in ("lance-models", "lance-data-1", "lance-data-2", "lance-catalog"):
+    for bucket in ("lance-data-1", "lance-data-2", "lance-catalog"):
         with pytest.raises(InvalidInputError):
             asyncio.run(
                 wh_ep.create_warehouse(

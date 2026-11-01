@@ -1,7 +1,6 @@
 """Keyset pagination shared by the catalog's own listings.
 
-Lifted out of `endpoints/tables.py` when the model registry needed the identical cursor. It stays a
-CATALOG module rather than moving to `service-kit`: the cursor is "the last name of the previous
+It is a CATALOG module rather than a `service-kit` one: the cursor is "the last name of the previous
 page", which is only stateless and stable because these listings are `sorted(set(...))` name lists.
 That is a property of this service's listings, not of pagination in general: an offset strategy has no such
 precondition.

@@ -37,8 +37,6 @@ def _settings() -> Any:
         registry_root="",
         # [[LH-209]] What the create judges a requested external blob base against; this create requests none.
         root="",
-        models_root="",
-        model_artifacts_root="",
         reserved_bucket_set=frozenset(),
         storage_options=dict,
         # ADR 0187: the create records its author unless it is a provenance row write, and no namespace is that here.

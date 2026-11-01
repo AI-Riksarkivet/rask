@@ -134,20 +134,15 @@ OVERWRITE_TABLE = "overwrite_table"
 #: location. Both are "the table came into existence in this catalog" events, like ``create_table``.
 DECLARE_TABLE = "declare_table"
 REGISTER_TABLE = "register_table"
-#: #17 model promotion: the ``blessed`` tag on a model registry (``models$<model>``) was moved to a candidate
-#: Lance version (candidate→blessed). A metadata-only tag move mints no new data version, so the emitted
-#: ``version`` is the tag's TARGET (the promoted model version), not a fresh write — a distinct op so a
-#: blessing is never mistaken for a training run or a data write on the run board.
-PROMOTE_MODEL = "promote_model"
 #: The tag gate (ADR 0156 C1, [[LH-466]]): a table's ``published`` tag moved, so readers of its tier now read
-#: ``version``, the tag's target. Like a model promotion it mints no version, and it is a run of its own so the
-#: project's watchers are told that new data is live: the notifications plane targets them by this event's
-#: ``rask_lance.project`` (`.claude/skills/rask-notifications`, WATCH).
+#: ``version``, the tag's target. It mints no version, and it is a run of its own so the project's watchers are told
+#: that new data is live: the notifications plane targets them by this event's ``rask_lance.project``
+#: (`.claude/skills/rask-notifications`, WATCH).
 PUBLISH_TABLE = "publish_table"
 
 #: The operations that move a tag and commit no version: the ``version`` their event names is the tag's target, a version
 #: another write committed and announced, so their run is never that commit's ([[LH-497]]).
-TAG_MOVES = frozenset({PUBLISH_TABLE, PROMOTE_MODEL})
+TAG_MOVES = frozenset({PUBLISH_TABLE})
 
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required,
 #: and what a Marquez-style consumer records as the event source).
@@ -754,8 +749,7 @@ class _BaseLineageEmitter:
         """The event's run id, for a version of a table the catalog minted a uuid for: derived from the commit, so every
         announcement of one commit is one run ([[LH-497]]), or for a publication from the move, whose ``eventTime`` is the
         tag file's own ``updatedAt``, so every announcement of one move is one run ([[LH-552]]). A fresh id for a
-        versionless marker (a drop, a declare), for any other tag move (:data:`TAG_MOVES`), and for a publication whose
-        move time was not read.
+        versionless marker (a drop, a declare) and for a publication whose move time was not read.
 
         Raises:
             SigningKeyUnavailableError: The catalog reads its key from the store and does not hold it.

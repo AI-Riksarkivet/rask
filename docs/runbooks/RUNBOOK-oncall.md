@@ -8,7 +8,7 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 
 ## Orientation
 
-- **Services** (FastAPI): `catalog` (REST catalog, tier governance and the model registry), `lineage`
+- **Services** (FastAPI): `catalog` (REST catalog and tier governance), `lineage`
   (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `provenance` namespace;
   the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (planner + worker),
   `notifications`, and the zones (`web-<zone>`); public `/api/*` reaches them through the platform's Gateway on the chart's HTTPRoutes. The lakehouse runs no stage and no pipeline: moving data

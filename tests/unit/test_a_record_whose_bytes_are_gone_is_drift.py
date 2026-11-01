@@ -82,7 +82,7 @@ def test_a_record_is_drift_only_when_its_resolved_location_is_absent(
 def _drift(registered: dict[str, tuple[str, str | None]], datasets: list[str], walked: list[str]) -> ReconcileReport:
     report = ReconcileReport(checked_at="now")
     sources = Sources(tables=[], table_locations=registered, trash=[])
-    _registration_drift(report, sources, [(uri, uri.removeprefix("s3://")) for uri in datasets], walked_buckets=walked, declared_roots=())
+    _registration_drift(report, sources, [(uri, uri.removeprefix("s3://")) for uri in datasets], walked_buckets=walked)
     return report
 
 

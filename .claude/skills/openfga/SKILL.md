@@ -126,8 +126,8 @@ spell it through `user_object`.
 its `rask.uuid`; DescribeTable and DescribeNamespace answer it). No name reaches OpenFGA: a rename writes no tuple, a
 table created again under a dropped name inherits nothing, and a name OpenFGA could not hold as an id (a space) is
 fine. A catalog door resolves the name once per request (`catalog.api.dependencies.Resolver`); a test or a seed spells
-an object by resolving the name first, never by joining it into `table:<name>`. A registry model
-(`table:models$<name>`), a warehouse, a project, a classification label and a transaction keep their ids.
+an object by resolving the name first, never by joining it into `table:<name>`. A
+warehouse, a project, a classification label and a transaction keep their ids.
 
 ### Testing
 | File | Description |

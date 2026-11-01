@@ -1,7 +1,7 @@
 """[[LH-209]] An external blob base is registered per table and only on request, and no vend grants one.
 
 THE ESTATE is the real catalog app on a moto bucket whose ``models/`` prefix holds a victim model's
-weights, with ``LANCE_EXTERNAL_BLOB_BASES`` naming that prefix (the chart's default) and a separate
+weights, with ``LANCE_EXTERNAL_BLOB_BASES`` naming that prefix and a separate
 corpus bucket, and the lifespan's own vendor, whose token exchange is captured so the session
 policy it would send is what the test reads. Measured before the fix: every create registered the
 ``models/`` base, so a plain create's read vend granted ``ListBucket`` and ``GetObject`` on

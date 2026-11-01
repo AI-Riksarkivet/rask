@@ -24,7 +24,6 @@ way. With that rung removed, every door refuses as the router would: 503 code 17
 
 from __future__ import annotations
 
-import json
 import logging
 from abc import abstractmethod
 from collections.abc import Callable
@@ -32,7 +31,6 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
-import lance
 import pyarrow as pa
 import pytest
 import router_walk
@@ -50,8 +48,8 @@ from service_kit.lakehouse.maintenance_due import CompactionDue, DueRecord
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
-#: The estate the doors name: acme's warehouse, the two namespaces bound to it, a table in one, and a registry model.
-PROJECT, WAREHOUSE, NAMESPACE, SIDE, TABLE, MODEL = "acme", "wh-acme", "lake", "side", "lake$t", "m"
+#: The estate the doors name: acme's warehouse, the two namespaces bound to it, and a table in one.
+PROJECT, WAREHOUSE, NAMESPACE, SIDE, TABLE = "acme", "wh-acme", "lake", "side", "lake$t"
 #: A signed-in person holding no grant, and one who reads `SIDE` and nothing else.
 STRANGER, READER = "mallory", "bob"
 
@@ -194,15 +192,11 @@ _DOORS: list[_Door] = [
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/access/my-permissions", params={"id": WAREHOUSE}),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/managed-access/describe", params={"id": WAREHOUSE}),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/managed-access/set", params={"id": WAREHOUSE}, body={"enabled": True}),
-    # The model registry: a registry model is no lance-namespace table, so its doors decide it themselves.
-    _Refusing(method="GET", route="/management/v1/model/{model}", params={"model": MODEL}),
-    _Refusing(method="POST", route="/management/v1/model/{model}/promote", params={"model": MODEL}, body={"version": 1}),
     # The listings.
     _Listing(method="GET", route="/management/v1/projects", shown=[]),
     _Listing(method="GET", route="/management/v1/warehouses", shown=[]),
     _Listing(method="GET", route="/management/v1/warehouses/-/bindings", shown={"bindings": {}}),
     _Listing(method="GET", route="/v1/table", shown={"tables": []}),
-    _Listing(method="GET", route="/management/v1/model", shown={"models": [], "page_token": None}),
     _Listing(method="GET", route="/management/v1/erasures", shown={"obligations": [], "page_token": None}),
     _Listing(method="GET", route="/management/v1/maintenance/due", shown={"tables": [], "page_token": None}),
     _Listing(method="GET", route="/management/v1/promotions", shown={"holds": [], "page_token": None}),
@@ -245,8 +239,8 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     alice owns the estate, as the chart's bootstrap hook grants it, and makes ``acme``, the two namespaces bound to its
     warehouse, a table in one, an erasure obligation on that table and bob's grant on the other namespace through the
     doors. What no door on a ``dir`` estate makes is written where its writer keeps it: the warehouse's record and project
-    edge (its door provisions a bucket and probes the store), maintenance's due record, a promotion hold (written by a
-    publish a review gate holds) and a registry model (written by the pipeline that trains it).
+    edge (its door provisions a bucket and probes the store), maintenance's due record and a promotion hold (written by a
+    publish a review gate holds).
     """
     monkeypatch.setenv("LANCE_WAREHOUSES_ENABLED", "true")
     catalog = request.getfixturevalue("governed_catalog")
@@ -280,8 +274,6 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     promotions.open_hold(root, so, held)
     compaction = CompactionDue(fragments=4, candidate_fragments=4, tasks=1)
     maintenance_due.write_due(root, so, DueRecord(table=TABLE, uuid=uuid, location=location, version=1, compaction=compaction, evaluated_at=now))
-    published = pa.table({"artifact": ["weights"], "meta": [json.dumps({"config": {}, "features": [TABLE], "metrics": {"cer": 0.1}, "token": "t1"})]})
-    lance.write_dataset(published, settings.model_uri(MODEL), data_storage_version="2.2", enable_stable_row_ids=True)
     return catalog
 
 

@@ -147,7 +147,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.controlEmit | bool | `false` | Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default. |
 | maintenance.controlRoot | string | `""` | S3 root of the catalog's control registries (projects, warehouses, trash, `_bases/`). Empty uses the primary bucket; set together with the catalog's. |
 | maintenance.daprAppId | string | `"maintenance"` | Dapr app-id of the maintenance service; also names its durable consumer. |
-| maintenance.declaredPlatformRoots | string | `"s3://lance-catalog/medallion/models"` | Platform-owned store roots the catalog cannot resolve (e.g. medallion models) that the reconciler accounts for instead of reporting as unregistered. |
 | maintenance.discoveryMaxDepth | int | `3` | How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge. |
 | maintenance.driftRepair | bool | `false` | Revoke OpenFGA tuples whose object no registry names (ghost projects/warehouses/tables); deletes tuples only. Off by default. |
 | maintenance.driftRepairDryRun | bool | `true` | Plan and report drift repair without deleting any tuple. Defaults true. |
@@ -300,6 +299,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | vending.assumeRoleArn | string | `"arn:aws:iam::000000000000:role/lance-vend"` | The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one. |
 | vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default. |
 | vending.endpoint | string | `""` | Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. |
-| vending.externalBlobBases | string | `""` | Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty = `s3://<objectStore.bucket>/models/`; a value replaces that default. |
+| vending.externalBlobBases | string | `""` | Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty approves no base. |
 | vending.mode | string | `"web_identity"` | How the catalog vends storage credentials for direct object I/O: `web_identity` (default, its own token exchanged for a per-table session) or `mode_b` (none, server-mediated). |
 | vending.ttlSeconds | int | `900` | Lifetime in seconds of a vended STS / web-identity credential (LANCE_VENDING_TTL_SECONDS). |

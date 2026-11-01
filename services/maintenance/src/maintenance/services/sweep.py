@@ -55,7 +55,7 @@ from maintenance.services import base_reclaim, committed_files, credentials, pur
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.due import refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
-from maintenance.services.naming import PolicyOwners, TableIds, policy_owners, read_uuids, table_uuid, under_a_declared_root
+from maintenance.services.naming import PolicyOwners, TableIds, policy_owners, read_uuids, table_uuid
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
@@ -268,9 +268,6 @@ def plan_sweep(settings: MaintenanceSettings) -> SweepPlan:
     buckets = buckets_to_sweep(settings, options)
     uris = _discover_all(_s3fs(settings), buckets, max_depth=settings.discovery_max_depth)
     protected = _protected_roots(uris, options, settings)
-    # A declared platform root is opened by explicit URI and named by no `__manifest` row, so it is no unnamed dataset
-    # to refuse every tick; it is still read above, since a clone resolving its files there protects them.
-    uris = [uri for uri in uris if not under_a_declared_root(uri, settings.declared_platform_root_list)]
     uris, decided = _exclude_trashed(uris, trashed_by_path)
     # Discovery order is deterministic, so a pass that consistently dies at dataset N would never reach what follows.
     random.shuffle(uris)

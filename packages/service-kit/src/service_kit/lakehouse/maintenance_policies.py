@@ -24,7 +24,7 @@ inside the storage trust boundary. A drop or deregister ends a table's record th
 :mod:`service_kit.lakehouse.object_records`.
 
 Fields: ``retention_days`` / ``retain_versions`` (old-version cleanup overrides — Lance itself exempts
-tag-pinned versions from cleanup, so ``blessed`` and friends survive any policy), ``compact_enabled``
+tag-pinned versions from cleanup, so ``published`` and every other tag survive any policy), ``compact_enabled``
 (opt a dataset out of maintenance entirely), ``compact_interval_hours`` (cadence — the sweep skips the
 dataset until the interval has elapsed since its last maintenance; the sweep records that stamp under
 ``_policies/state/``, a separate prefix so the two writers never contend). All IO is blocking; callers

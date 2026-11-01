@@ -48,8 +48,8 @@ class GovernedStorage(BaseModel):
     """Storage the catalog governs, which no external blob base may reach ([[LH-209]]).
 
     Lance resolves an external pointer relative to its base (``blob_id`` > 0), so a base covering governed
-    bytes lets every pointer through it name them. ``roots`` are the catalog, control, model-registry and
-    model-artifact roots; ``governed_bucket`` answers whether a bucket is reserved or claimed by a warehouse.
+    bytes lets every pointer through it name them. ``roots`` are the catalog and control roots;
+    ``governed_bucket`` answers whether a bucket is reserved or claimed by a warehouse.
     """
 
     roots: list[str]
@@ -64,7 +64,7 @@ class GovernedStorage(BaseModel):
     @classmethod
     def from_settings(cls, settings: Settings) -> GovernedStorage:
         return cls(
-            roots=[settings.root, settings.registry_root, settings.models_root, settings.model_artifacts_root],
+            roots=[settings.root, settings.registry_root],
             governed_bucket=partial(_governed_bucket, settings),
         )
 
@@ -123,9 +123,9 @@ class BaseJudge(BaseModel):
     def judge(self, location: str, refs: Sequence[BasePathRef]) -> list[base_registry.BaseJudgement]:
         """:func:`service_kit.lakehouse.base_registry.judge_bases`, with a configured base that covers governed storage judged by the record alone.
 
-        The chart's default entry is the model-artifact tree, so CONFIGURED standing there would let a holder
-        of a table's write credential ``add_bases`` another model's tree and have the blob door serve its
-        weights. Only the read and register doors that authorize ask this; the maintenance and lineage
+        A configured entry can cover governed storage, so CONFIGURED standing there would let a holder of a
+        table's write credential ``add_bases`` a prefix holding another tenant's bytes and have the blob door
+        serve them. Only the read and register doors that authorize ask this; the maintenance and lineage
         protection passes keep configuration's standing, which only ever protects bytes from reclaim.
         """
         judged = base_registry.judge_bases(location, refs, configured=self.configured, load_record=partial(self.read_record, location))

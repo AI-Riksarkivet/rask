@@ -508,83 +508,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/management/v1/model": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Models
-         * @description List the model registry: every model with its candidate (latest) + blessed versions.
-         *
-         *     Mirrors the governed table listing: enumerate storage, then — when FGA is on — return only the models
-         *     the caller holds the reader rung (``can_get_metadata``) on, the same relation the per-model describe
-         *     enforces. Name-shape filtering runs before authz so a stray directory can never reach an FGA object id.
-         *     Metrics are deliberately absent here (see :func:`catalog.services.models.summarize`) — the per-model
-         *     describe carries them. ``limit`` bounds the per-request dataset opens (one per listed model);
-         *     truncation is deterministic (name-sorted first ``limit``).
-         */
-        get: operations["list_models_management_v1_model_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/model/{model}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Describe Model
-         * @description Registry summary: the latest (candidate) version, the blessed version (or null), both metrics, and
-         *     the model's plain-path artifact objects (path/size/mtime under ``models/<model>/<token>/…`` — the
-         *     #17/#92 layout; ``[]`` when none are laid out).
-         *
-         *     Reader-gated (``can_get_metadata``) — a reader may see which version is blessed and compare metrics; only
-         *     a validator may move the pointer.
-         */
-        get: operations["describe_model_management_v1_model__model__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/management/v1/model/{model}/promote": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Promote Model
-         * @description Move the ``blessed`` tag to model ``version`` — validator-gated, metrics-gated, lineage-emitting.
-         *
-         *     Authorization is the VALIDATOR rung (``can_promote``), a deliberately higher bar than a plain writer:
-         *     training PUBLISHES candidates (writer), a validator BLESSES one (the model analog of silver→gold). The
-         *     metrics gate runs inside the fail-closed promote op BEFORE the irreversible tag move; the promotion
-         *     RunEvent is best-effort AFTER (a lineage outage never fails a promotion).
-         */
-        post: operations["promote_model_management_v1_model__model__promote_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/management/v1/namespace/{id}/access/check": {
         parameters: {
             query?: never;
@@ -3675,7 +3598,7 @@ export interface paths {
          *     2026-09-13 on a seven-version table: `limit=3` serves three rows and answers `page_token: None`,
          *     and a token it is handed changes nothing. `None` is what a client stops on, so forwarding `limit`
          *     told a caller asking for three of seven that it had seen everything — truncation wearing
-         *     pagination's clothes, the shape `GET /management/v1/model` already names.
+         *     pagination's clothes.
          *
          *     So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
          *     listings — and the cursor is this layer's. The full list is what the backend returns unbounded
@@ -7632,61 +7555,6 @@ export interface components {
             version?: number | null;
         };
         /**
-         * ModelArtifact
-         * @description One plain-path artifact object under the model's tree (the #17/#92 layout:
-         *     ``models/<model>/<token>/…``). ``path`` is relative to the model's artifact root
-         *     (``<token>/weights.json``); ``updated_at`` is the object's mtime as ISO-8601, ``null`` when the
-         *     filesystem reports none.
-         */
-        ModelArtifact: {
-            /** Path */
-            path: string;
-            /** Size Bytes */
-            size_bytes: number;
-            /** Updated At */
-            updated_at: string | null;
-        };
-        /** ModelDescribeResponse */
-        ModelDescribeResponse: {
-            /** Artifacts */
-            artifacts?: components["schemas"]["ModelArtifact"][];
-            /** Blessed Metrics */
-            blessed_metrics: {
-                [key: string]: unknown;
-            } | null;
-            /** Blessed Version */
-            blessed_version: number | null;
-            /** Candidate Metrics */
-            candidate_metrics: {
-                [key: string]: unknown;
-            } | null;
-            /** Latest Version */
-            latest_version: number;
-            /** Model */
-            model: string;
-        };
-        /**
-         * ModelSummary
-         * @description One registry entry in the list view. Versions are ``None`` only for a registry directory that is
-         *     not (yet) a readable Lance dataset — surfaced, not hidden, so an interrupted first publish is visible —
-         *     and ``blessed_version`` also when the blessed tag names a branch, which blesses no main version.
-         */
-        ModelSummary: {
-            /** Blessed Version */
-            blessed_version: number | null;
-            /** Latest Version */
-            latest_version: number | null;
-            /** Model */
-            model: string;
-        };
-        /** ModelsListResponse */
-        ModelsListResponse: {
-            /** Models */
-            models: components["schemas"]["ModelSummary"][];
-            /** Page Token */
-            page_token?: string | null;
-        };
-        /**
          * MultiMatchQuery
          * @description MultiMatchQuery
          */
@@ -8030,33 +7898,6 @@ export interface components {
             serving?: string | null;
             /** Status */
             status: string;
-        };
-        /**
-         * PromoteRequest
-         * @description Bless a candidate model version (candidate→blessed). ``version`` is the model/Lance version to bless;
-         *     ``min_metrics`` is the fail-closed gate — each named metric must be present AND >= its threshold.
-         */
-        PromoteRequest: {
-            /** Min Metrics */
-            min_metrics?: {
-                [key: string]: number;
-            };
-            /**
-             * Tag
-             * @default blessed
-             */
-            tag?: string;
-            /** Version */
-            version: number;
-        };
-        /** PromoteResponse */
-        PromoteResponse: {
-            /** Blessed Version */
-            blessed_version: number;
-            /** Model */
-            model: string;
-            /** Tag */
-            tag: string;
         };
         /**
          * PromotionDecision
@@ -9910,116 +9751,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_models_management_v1_model_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                /** @description Continue after this model name (the previous page's `page_token`). */
-                page_token?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelsListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    describe_model_management_v1_model__model__get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: never;
-            path: {
-                model: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelDescribeResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    promote_model_management_v1_model__model__promote_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                model: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PromoteRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PromoteResponse"];
                 };
             };
             /** @description Validation Error */

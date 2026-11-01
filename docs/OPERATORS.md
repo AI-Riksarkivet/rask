@@ -85,13 +85,10 @@ DOES have are already owned elsewhere:
 | Concern | Owner today | Status |
 |---|---|---|
 | background maintenance (version expiry, trash purge, orphan scan, reconcile, the due list) | `services/maintenance`: commit-driven expiry plus a 30-minute backstop sweep (FAIL-visible) | shipped; compaction and index builds are a bring-your-own job's, judged at `version/create` (ADR 0162) |
-| orphan-artifact GC (`models/<m>/<token>/` from crashed runs; blob-pointer lifecycle) | `scripts/model_artifact_janitor.py` — dry-run default, referenced⇒never-collected unit-pinned | shipped 2026-07-11 (models lane); live drive + the broader pointer-aware-GC posture remain §9 |
 | stream/bucket/grant provisioning | chart Jobs + seed scripts (idempotent) | shipped; NACK could absorb the stream half |
 | version/feature pinning (`pylance`, `lance-ray`, data_storage_version) | image pins + probe-before-callsite (§0) + `lance_docs/` | process, not software |
 
-So: nothing to install for either. The single actionable follow-up either way is the **orphan
-janitor** (already tracked in docs/adr/0011-blob-pointer-lifecycle-gc-never-collect-referenced-artifacts.md as blob-pointer lifecycle — GC must never collect
-registry-referenced artifact objects, and crashed-run tokens need a sweep).
+So: nothing to install for either.
 
 ## 5 · Secrets: the dev-mode fragility, and the operator plan (added 2026-07-14)
 

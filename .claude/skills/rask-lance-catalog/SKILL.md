@@ -126,7 +126,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   listing batch-checks its own candidates on their uuids and fills its page (`fga_deps.authorized_page`, [[LH-223]]);
   only `/management/v1/me` calls `list_objects`, and the estate admin's raw ListObjects explorer. Grant, review and
   access answers carry `object` (the uuid object) and `name`; a control event's `object_id` is the uuid object with
-  `object_name` beside it. A registry model (`table:models$<name>`) is no lance-namespace table and keeps its name.
+  `object_name` beside it.
   A check-only service asks the decision door's `/management/v1/decisions/check` about objects by uuid, or about
   `tables` by name ([[LH-531]]): the door resolves each name through the request's `Resolver`, decides on the uuid and
   answers keyed by the name, with the table's and its namespace's uuid only when allowed (a name naming no table, one
@@ -614,7 +614,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   policy syntax once decoded (`vending.IAM_POLICY_SYNTAX`: `*` and `?`, which IAM reads as wildcards, and `${`, a
   policy variable, in every policy a credential for the table is scoped by, [[LH-437]], [[LH-526]]); a segment
   beginning with `_` once decoded; one equal to or containing the control root; and one overlapping a configured
-  base or a model root ([[LH-204]]).
+  base ([[LH-204]]).
   Any other `%` is a name: `describe_table` answers a registered location's non-ASCII characters percent-encoded
   (`räksmörgås` -> `r%C3%A4ksm%C3%B6rg%C3%A5s`), so a rule refusing every `%` would strand those tables. A first segment
   spelled as a uuid is refused: the catalog lays out the tables it makes there ([[LH-520]]).
@@ -633,8 +633,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   overlaps and bases).
 - **An external blob base is per table, on request, and never vended** ([[LH-209]]). A create registers
   one only when the request names it in the door's `external_blob_base` query parameter (never a
-  schema or property key, which LH-208 refuses), inside a `LANCE_EXTERNAL_BLOB_BASES` entry and outside every governed root and bucket (catalog,
-  control, model registry and artifact roots, reserved and warehouse-claimed buckets:
+  schema or property key, which LH-208 refuses), inside a `LANCE_EXTERNAL_BLOB_BASES` entry and outside every governed root and bucket (the catalog
+  and control roots, reserved and warehouse-claimed buckets:
   `table_bases.requested_external_blob_base`); a plain create registers none, so Lance refuses its
   `Blob.from_uri` rows. `version/create` accepts a kind-3 descriptor only through a base the table's RECORD holds
   as `external_blob`, never one merely configured or in the manifest. A vend drops every pointer base
@@ -987,8 +987,8 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   **MAINTENANCE NAMES A DATASET BY `__manifest` ALONE** ([[LH-520]], `maintenance.services.naming.TableIds.table_of`):
   the row whose location it is, or whose table it is a branch of. It parses no name out of a path and reads no
   `lineage.dataset_id` stamp. A dataset no row names is refused `unnamed` by the sweep (reported by its location, never
-  opened, expired or vended; the model registry, opened by explicit URI, is such a dataset), refused by the floor pass,
-  and reported by the reconciler as an `UnregisteredDataset` by location (declared platform roots excepted).
+  opened, expired or vended), refused by the floor pass, and reported by the reconciler as an `UnregisteredDataset` by
+  location.
 
   **A DERIVED TIER INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** No maintenance reader
   names a dataset by it, and `lineage.dataset_id` is schema METADATA, which survives `set_column` / `append_column` /
@@ -1028,7 +1028,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   silently succeed, make that project the bucket's owner, and let **a later project-policy set govern
   every tenant's data in the shared catalog bucket**. The reservation is DEFENCE IN DEPTH in three
   places: `reserved_bucket_set` (`catalog/core/config.py` — the catalog root, the control/registry root,
-  the model registry, every approved multi-base data bucket, and `LANCE_RESERVED_BUCKETS`), the
+  every approved multi-base data bucket, and `LANCE_RESERVED_BUCKETS`), the
   warehouse-create and bucket-claim refusals (`warehouses.py`), and `policies.py`, which subtracts
   reserved buckets from the project-policy MATCH set rather than trusting the registry. A dataset in
   platform storage that needs retention or protection gets a platform-level mechanism or moves into a
@@ -1068,10 +1068,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   13.0.0: a tag on `("work", 3)` answers 3). Every catalog reader resolves a tag through `dataplane.tag_reference`,
   which reads both. DescribeTable refuses a tag on a branch with the code `branch` gets (406, code 0), since
   DescribeTableResponse has no field to name the branch. The tags the catalog keeps on main (`published`,
-  `publishing`, `rask.held`, a registry model's `blessed`) are read through `dataplane.main_version_of_tag`, which
-  refuses one found on a branch 409 code 19; the model listing leaves such a `blessed` out as null and logs it at ERROR.
-  Pinned by `tests/integration/test_moto_s3.py::test_describe_at_tag_resolves_via_the_catalog`,
-  `tests/integration/test_model_endpoints.py` and `tests/unit/test_publication.py`.
+  `publishing`, `rask.held`) are read through `dataplane.main_version_of_tag`, which refuses one found on a branch 409
+  code 19. Pinned by `tests/integration/test_moto_s3.py::test_describe_at_tag_resolves_via_the_catalog` and
+  `tests/unit/test_publication.py`.
 - **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**
   `packages/service-kit/src/service_kit/lakehouse/features.py` reads
   `reader_feature_flags`/`writer_feature_flags` as varints at

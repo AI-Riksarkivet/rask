@@ -70,9 +70,6 @@ _TABLE = "s3://acme-wh/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
             [],
             id="trashed-as-the-catalog-spells-it",
         ),
-        # A store the platform owns and the catalog opens by explicit URI, never registered ([[LH-164]]): accounted for,
-        # not reported.
-        pytest.param(["s3://lance-catalog/medallion/models/m"], [], set(), [], id="a-declared-platform-root"),
         # A report an operator reads across ticks must not reshuffle, and one dataset discovered twice in a
         # walk is one finding.
         pytest.param(
@@ -87,7 +84,7 @@ _TABLE = "s3://acme-wh/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"
 def test_a_dataset_no_manifest_row_names_is_reported_by_its_location(discovered: list[str], registered: list[str], trashed: set[str], named: list[str]) -> None:
     names = TableIds(by_location={normalise(location): f"db$t{index}" for index, location in enumerate(registered)})
 
-    found = _unregistered_datasets(discovered=discovered, names=names, trashed=trashed, declared_roots=("s3://lance-catalog/medallion/models",))
+    found = _unregistered_datasets(discovered=discovered, names=names, trashed=trashed)
 
     assert [f.location for f in found] == named
 

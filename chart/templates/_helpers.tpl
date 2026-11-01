@@ -941,7 +941,7 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- end -}}
 
 {{- define "lance.externalBlobBases" -}}
-{{ .Values.vending.externalBlobBases | default (printf "s3://%s/models/" .Values.objectStore.bucket) }}
+{{ .Values.vending.externalBlobBases }}
 {{- end }}
 
 {{- define "rask.rayDashboardUrl" -}}

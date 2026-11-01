@@ -47,7 +47,7 @@ from pydantic import BaseModel, Field
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.discovery import discover_datasets
-from maintenance.services.naming import TableIds, under_a_declared_root
+from maintenance.services.naming import TableIds
 from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
 from service_kit.lakehouse import location_claims, trash
@@ -642,7 +642,7 @@ def _trashed_keys(trashed: Iterable[str]) -> set[str]:
     return {decoded_path(location) for location in trashed}
 
 
-def _unregistered_datasets(*, discovered: Iterable[str], names: TableIds, trashed: set[str], declared_roots: tuple[str, ...]) -> list[UnregisteredDataset]:
+def _unregistered_datasets(*, discovered: Iterable[str], names: TableIds, trashed: set[str]) -> list[UnregisteredDataset]:
     """Discovered datasets no ``__manifest`` row names, by their location ([[LH-520]]).
 
     THE INVERSE OF :func:`_ungoverned_tables`: there the catalog knows a table and authorization does
@@ -654,15 +654,9 @@ def _unregistered_datasets(*, discovered: Iterable[str], names: TableIds, trashe
     disk under a trash record that names them while its table record is gone BY DEFINITION. Counting
     those would make this category loudest exactly when the estate is behaving correctly. Each record is
     matched at the key it decodes to (:func:`_trashed_keys`).
-
-    ``declared_roots`` are the stores the platform owns and opens by explicit URI (:func:`under_a_declared_root`).
     """
     in_trash = _trashed_keys(trashed)
-    unnamed = {
-        uri.rstrip("/")
-        for uri in discovered
-        if normalise(uri) not in in_trash and names.table_of(uri) is None and not under_a_declared_root(uri, declared_roots)
-    }
+    unnamed = {uri.rstrip("/") for uri in discovered if normalise(uri) not in in_trash and names.table_of(uri) is None}
     return [UnregisteredDataset(location=location) for location in sorted(unnamed)]
 
 
@@ -1183,9 +1177,7 @@ def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, s
     return buckets
 
 
-def _registration_drift(
-    report: ReconcileReport, sources: Sources, datasets: list[tuple[str, str]], *, walked_buckets: list[str], declared_roots: tuple[str, ...]
-) -> None:
+def _registration_drift(report: ReconcileReport, sources: Sources, datasets: list[tuple[str, str]], *, walked_buckets: list[str]) -> None:
     """Both directions of catalog-vs-storage disagreement, from the walk's findings and the manifest.
 
     [[LH-176]] finds bytes no catalog record names; [[LH-192]] a record whose location holds no bytes.
@@ -1195,10 +1187,6 @@ def _registration_drift(
     GUARDED ON THE TABLE LISTING AND THE TRASH INDEX: both findings are an ABSENCE from one of the two
     sets, so a catalog read failure would otherwise report every dataset in the estate as unregistered,
     and an unread trash index every table in the trash ([[LH-319]]).
-
-    `declared_roots` is REQUIRED rather than defaulted: a defaulted parameter makes an un-wired chain
-    look clean. Measured here — removing the call site's
-    `declared_roots=settings.declared_platform_root_list` left all 377 tests green.
 
     Measured 2026-09-19: `orphan_files` counted an unknown dataset's files while no category said the
     dataset was unknown. Measured 2026-09-22: `bronze$events` answered `describe` 200 at a location
@@ -1214,7 +1202,6 @@ def _registration_drift(
         names=_manifest_names(sources.table_locations or {}),
         # A dropped table's bytes are still on disk under the record that names them.
         trashed=trashed,
-        declared_roots=declared_roots,
     )
     report.counts["unregistered_datasets"] = len(report.unregistered_datasets)
     # FILTERED TO THE BUCKETS ACTUALLY WALKED — which is what `discover_datasets` was POINTED at,
@@ -1299,7 +1286,7 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not scanned"))
     # Before the per-dataset scan and not gated on it: whether the catalog and storage agree a dataset
     # EXISTS is a different question from which files inside it are unreferenced.
-    _registration_drift(report, sources, datasets, walked_buckets=walked_buckets, declared_roots=settings.declared_platform_root_list)
+    _registration_drift(report, sources, datasets, walked_buckets=walked_buckets)
 
     try:
         scan = scan_datasets(fs, datasets, settings.storage_options())

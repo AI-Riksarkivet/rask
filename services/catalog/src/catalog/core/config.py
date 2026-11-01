@@ -562,22 +562,6 @@ class Settings(
     # empty = only the root/registry buckets are reserved (the default, byte-identical for single-bucket).
     reserved_buckets: str = Field(default="", alias="LANCE_RESERVED_BUCKETS")
 
-    # #17 model registry (candidate→blessed promotion). Each model's Lance registry dataset lives at
-    # ``<models_root>/<model>`` — an explicit location rather than a namespace-resolved one, so the
-    # catalog can NOT reach it through native namespace resolution (that would drop the ``/medallion/``
-    # prefix): the promote/describe endpoints open it by EXPLICIT URI. Defaults to ``<root>/medallion/models``
-    # so a single-bucket deploy needs no extra config; override only when the registry is zoned elsewhere.
-    # INVARIANT (operator's): this root MUST share the catalog's S3 endpoint + creds — the read path vends
-    # only ``storage_options()`` (same constraint as multibase_data_bases).
-    models_registry_root: str = Field(default="", alias="LANCE_MODELS_REGISTRY_ROOT")
-
-    # #17/#92 model ARTIFACTS — the plain-path weights/config objects the registry rows point at. The
-    # trainer lays them out OUTSIDE any Lance dataset (``models/<model>/<token>/…`` at the BUCKET root on
-    # s3; a ``model-artifacts`` sibling of the registry locally — medallion's ``artifact_base_for``), so
-    # the describe read lists them by object listing, never through the registry. Empty = derive the
-    # trainer's default layout from ``models_root``; override only when the artifact tree is zoned apart.
-    model_artifacts_base: str = Field(default="", alias="LANCE_MODEL_ARTIFACTS_ROOT")
-
     @property
     def registry_root(self) -> str:
         """Where warehouse records + namespace bindings live (defaults to the catalog `root` bucket)."""
@@ -585,45 +569,17 @@ class Settings(
 
     @property
     def reserved_bucket_set(self) -> frozenset[str]:
-        """Bucket names no warehouse may claim: the shared catalog root, the registry/control bucket, the
-        model-registry root, every approved multi-base data bucket, and the configured medallion zone
-        buckets (``LANCE_RESERVED_BUCKETS``). Platform-owned storage is reserved regardless of zoning —
-        a zoned ``models_root`` or a multibase data bucket is exactly as claimable-looking as the shared
-        root, and a warehouse over any of them would hand one project governance of every tenant's data
-        there. Non-s3 roots (local dev/test ``file://`` registries) contribute nothing — there is no
-        bucket to reserve."""
+        """Bucket names no warehouse may claim: the shared catalog root, the registry/control bucket, every
+        approved multi-base data bucket, and the configured medallion zone buckets (``LANCE_RESERVED_BUCKETS``).
+        Platform-owned storage is reserved regardless of zoning: a multibase data bucket is exactly as
+        claimable-looking as the shared root, and a warehouse over any of them would hand one project
+        governance of every tenant's data there. Non-s3 roots (local dev/test ``file://`` registries)
+        contribute nothing, since there is no bucket to reserve."""
         named = {b.strip() for b in self.reserved_buckets.split(",") if b.strip()}
-        for uri in (self.root, self.registry_root, self.models_root, *self.multibase_data_base_list):
+        for uri in (self.root, self.registry_root, *self.multibase_data_base_list):
             if uri.startswith("s3://") and (bucket := uri.removeprefix("s3://").split("/", 1)[0]):
                 named.add(bucket)
         return frozenset(named)
-
-    @property
-    def models_root(self) -> str:
-        """Root for per-model registry datasets (defaults to ``<root>/medallion/models``)."""
-        return self.models_registry_root.rstrip("/") or f"{self.root.rstrip('/')}/medallion/models"
-
-    def model_uri(self, model: str) -> str:
-        """The explicit Lance-dataset URI for one model's registry: ``<models_root>/<model>``."""
-        return f"{self.models_root}/{model}"
-
-    @property
-    def model_artifacts_root(self) -> str:
-        """Root of the per-model artifact trees (``<root>/<model>/<token>/…``) — where a client writing the
-        registry lays the artifacts its rows point at: on s3,
-        ``s3://<bucket>/models`` (the registry's bucket root — pointer targets must never sit inside a
-        Lance dataset, see #92); locally, a ``model-artifacts`` sibling under the registry's parent."""
-        if self.model_artifacts_base:
-            return self.model_artifacts_base.rstrip("/")
-        base = self.models_root.rsplit("/", 1)[0]  # the medallion base the registry sits under
-        if base.startswith("s3://"):
-            bucket = "/".join(base.split("/", 3)[:3])  # s3://<bucket>
-            return f"{bucket}/models"
-        return f"{base}/model-artifacts"
-
-    def model_artifacts_uri(self, model: str) -> str:
-        """One model's artifact tree: ``<model_artifacts_root>/<model>``."""
-        return f"{self.model_artifacts_root}/{model}"
 
     # OIDC authentication + OpenFGA authorization (both opt-in, both inherited from
     # `GovernedAuthSettings`). The app finds the store (or the pinned `RASK_FGA_STORE_ID`) at startup and

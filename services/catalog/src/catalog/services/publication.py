@@ -25,10 +25,7 @@ and they drift. It is also the one home for the race: a tag file carries no form
 the error prose's table names code 14), so `set_tag` converges a first publication's create race on
 Lance's create refusal, and a later move of the tag is last-writer-wins.
 
-Deliberately shaped after `services/models.py::promote`, which has run this exact pattern for the
-model registry since it was written — gate first, fail-closed, then create-or-update the tag. Models
-gate on metric thresholds and data gates on assertions, but the control flow is the same one, and
-having two spellings of it would be the drift this module exists to prevent.
+The control flow is gate first, fail-closed, then create-or-update the tag.
 
 **THE TAG IS THE GATE, AND A BREACH IS HELD (ADR 0156 C1, [[LH-466]]).** Readers of a governed tier read the
 version tagged `published`, so a version reaches them only through this door. When the project's declared gate
@@ -76,7 +73,7 @@ log = logging.getLogger(__name__)
 
 #: The pointer a consumer reads. One flat name per dataset — tag names cannot contain `/`, so a
 #: branch cannot carry its own `published` and must encode the branch in the name if it ever needs
-#: one. Matches `BLESSED_TAG` in the model registry: same concept, different subject.
+#: one.
 PUBLISHED_TAG = "published"
 
 #: Held on the candidate version for the DURATION OF THE GATE, then dropped.

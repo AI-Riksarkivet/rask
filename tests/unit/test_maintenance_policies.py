@@ -226,8 +226,8 @@ def test_a_naive_or_malformed_stamp_maintains_instead_of_raising(tmp_path: Path)
 
 
 def test_tag_pinned_version_survives_any_retention_policy(tmp_path: Path) -> None:
-    # CONTRACT (the goal's protection clause): retention never removes the blessed model version or
-    # anything a tag pins — Lance exempts tagged versions from cleanup. Driven with real Lance.
+    # CONTRACT (the goal's protection clause): retention never removes anything a tag pins: Lance exempts
+    # tagged versions from cleanup. Driven with real Lance.
     uri = str(tmp_path / "ds")
     table = pa.table({"n": pa.array([1], pa.int64())})
     lance.write_dataset(table, uri, mode="overwrite")  # v1

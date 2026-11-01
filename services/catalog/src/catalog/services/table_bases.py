@@ -80,15 +80,15 @@ def requested_external_blob_base(
     in its rows is refused by Lance at the write ("outside registered external bases",
     ``lance_docs/lance/guide/blob.md`` § blob v2: "external blob URIs must map to a registered non-dataset-root base
     path"). Registering every ``LANCE_EXTERNAL_BLOB_BASES`` entry on every create would let every table
-    point at every object under them, and the default entry is the model-artifact tree of every project.
+    point at every object under them.
 
     The base is authorized by WHERE IT IS as well as by the allowlist, because Lance resolves every
     pointer as a path relative to it (``blob_id`` > 0), so whatever the base covers, every pointer
     through it may name. Approval says the operator trusts the prefix as an external source; it does not
     say the prefix holds no tenant's bytes. So a base is refused when it overlaps a governed root (the
-    catalog root, the control root, the model registry or the model-artifact tree, each either way) or
-    sits in a bucket the catalog governs (a reserved bucket or a warehouse's claimed one): no pointer
-    under a registered base can then reach a table, a model artifact or a record.
+    catalog root or the control root, each either way) or sits in a bucket the catalog governs (a reserved
+    bucket or a warehouse's claimed one): no pointer under a registered base can then reach a table or a
+    record.
 
     Raises:
         InvalidInputError: A base is named on a schema with no blob-v2 column, does not name one location,
@@ -108,7 +108,7 @@ def requested_external_blob_base(
     return base
 
 
-def require_registrable_location(location: str | None, *, root: str, control_root: str, configured: Sequence[str], model_roots: Sequence[str]) -> str:
+def require_registrable_location(location: str | None, *, root: str, control_root: str, configured: Sequence[str]) -> str:
     """The relative ``location`` a register names, refused when its shape alone breaks exclusivity.
 
     ``root`` is the namespace root the backend resolves the location against. Answered from the path
@@ -147,10 +147,7 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
       a table off the records beneath it;
     - it may not equal, contain or sit under a ``configured`` base (the external blob and approved data
       bases). A table containing one is vended write access to the bytes that base's pointers name; a
-      table beneath one is readable through every table that registers that base as its external blob base;
-    - it may not equal, contain or sit under a ``model_roots`` entry (the model registry and the model
-      artifact tree, [[LH-204]]). Those datasets and objects are opened by explicit URI and never
-      registered, so a table over one would be vended write access to every model's weights and history.
+      table beneath one is readable through every table that registers that base as its external blob base.
 
     Raises:
         InvalidInputError: The location breaks the rule; the message says which part.
@@ -183,9 +180,6 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
     for base in configured:
         if location_within(absolute, base) or location_within(base, absolute):
             raise InvalidInputError(f"register location {stated!r} overlaps a configured base, which every vended credential may read")
-    for model_root in model_roots:
-        if location_within(absolute, model_root) or location_within(model_root, absolute):
-            raise InvalidInputError(f"register location {stated!r} overlaps the model registry, which no table may be vended")
     return relative
 
 
@@ -256,8 +250,8 @@ def entries_for_registration(
     """The record entries a registered dataset's bases earn — or a refusal naming the ones nothing sanctions.
 
     A base is admitted when it is inside the table's own root, inside a configured external blob base and
-    outside ``governed`` storage (recorded as ``external_blob``; [[LH-209]]: a configured base over the
-    model-artifact tree is not recorded on the dataset's word), or already in the table's record. A plain base BENEATH an
+    outside ``governed`` storage (recorded as ``external_blob``; [[LH-209]]: a configured base over
+    governed storage is not recorded on the dataset's word), or already in the table's record. A plain base BENEATH an
     approved multi-base data base (``LANCE_MULTIBASE_DATA_BASES``), in its store, is admitted as ``data`` only while
     the table has NO record yet: the allowlist is a gate at the moment the record is first written, and
     once written the record is the authority — an allowlisted base appearing later is a plant. The approved
