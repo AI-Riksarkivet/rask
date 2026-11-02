@@ -72,10 +72,11 @@ def test_create_list_get_warehouse(client: TestClient, tmp_path: Any, monkeypatc
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme")
 
-    resp = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"})
+    # A new warehouse declared primary is primary from its first write, as its project's routing reads it ([[LH-548]]).
+    resp = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "primary": True})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["id"] == "wh-a" and body["bucket"] == "wh-a" and body["root_uri"] == "s3://wh-a"
+    assert (body["id"], body["bucket"], body["root_uri"], body.get("primary")) == ("wh-a", "wh-a", "s3://wh-a", True)
     assert provisioned == ["wh-a"]  # the physical bucket was provisioned at runtime
 
     listed = client.get("/management/v1/warehouses")
@@ -83,7 +84,8 @@ def test_create_list_get_warehouse(client: TestClient, tmp_path: Any, monkeypatc
     assert "wh-a" in [w["id"] for w in listed.json()]
 
     got = client.get("/management/v1/warehouses/wh-a")
-    assert got.status_code == 200 and got.json()["bucket"] == "wh-a"
+    assert got.status_code == 200
+    assert (got.json()["bucket"], got.json().get("primary")) == ("wh-a", True)
 
 
 class _VendingStore:

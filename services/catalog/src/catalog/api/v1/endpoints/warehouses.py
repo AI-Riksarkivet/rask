@@ -318,6 +318,11 @@ async def create_warehouse(
     protection = None if body.protected is None else warehouses.ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
     if protection is not None:
         record = warehouses.with_protection(record, protection)
+    # A new warehouse's record takes the primary marker the request names, as the string `"true"` a re-create's merge
+    # writes and `warehouse_registry._is_primary` reads ([[LH-548]]); a re-create takes it inside the merge
+    # (`upsert_warehouse`), where a request naming nothing carries the live marker forward.
+    if body.primary:
+        record["primary"] = "true"
 
     # BOTH re-create paths go through the CONDITIONAL upsert (diff2 F4). They used to end in an
     # unconditional `put_warehouse` of a record assembled from a read taken at the top of this handler —
