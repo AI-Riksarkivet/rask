@@ -2728,6 +2728,8 @@
               "warehouse_bound",
               "warehouse_unbound",
               "warehouse_deleted",
+              "warehouse_protected",
+              "warehouse_unprotected",
               "policy_set",
               "policy_deleted",
               "gate_set",
@@ -4382,9 +4384,15 @@
             "type": "string"
           },
           "protected": {
-            "default": false,
-            "title": "Protected",
-            "type": "boolean"
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected"
           },
           "serving": {
             "anyOf": [
@@ -10849,7 +10857,7 @@
         "type": "object"
       },
       "SetProtectionRequest": {
-        "description": "The one field the protection doors write. Setting is idempotent; clearing removes the record.\n\nONE definition for both the table and namespace doors: two identically-shaped copies in the two\nendpoint modules made FastAPI mangle the schema names into\n``catalog__api__v1__endpoints__{tables,namespaces}__SetProtectionRequest`` \u2014 module paths leaking\ninto the public contract and into every generated client.",
+        "description": "The one field the protection doors write. Setting is idempotent; clearing removes the flag.\n\nONE definition for the table, namespace and warehouse doors, so the contract names one schema: a copy per\nendpoint module makes FastAPI qualify each name with its module path\n(``catalog__api__v1__endpoints__tables__SetProtectionRequest``), which every generated client then carries.",
         "properties": {
           "protected": {
             "title": "Protected",
@@ -11926,6 +11934,17 @@
               }
             ],
             "title": "Protected"
+          },
+          "protected_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Protected By"
           },
           "root_uri": {
             "title": "Root Uri",
@@ -18779,6 +18798,82 @@
           }
         ],
         "summary": "Unbind Warehouse Namespace",
+        "tags": [
+          "warehouse"
+        ]
+      }
+    },
+    "/management/v1/warehouses/{warehouse_id}/protection": {
+      "post": {
+        "description": "Arm or clear the warehouse's deletion protection ([[LH-548]]), the lock its delete turns only with ``force=true``.\n\nGated on ``project#can_administer`` of the warehouse's own project, read from its record: arming or clearing the\nlock on a warehouse's destruction is the authority that destruction needs, as the delete door asks it. A caller\nwithout it is answered the missing warehouse's 404, as the delete and lifecycle doors answer one, so the door tells\nnobody which ids exist. The write is conditional on the record as it stands and refuses a record that moved to\nanother project since the decision. Re-arming an armed warehouse keeps who armed it. Announced as\n``warehouse_protected`` or ``warehouse_unprotected`` on every call, as the table and namespace doors announce theirs.",
+        "operationId": "set_warehouse_protection_management_v1_warehouses__warehouse_id__protection_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProtectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Warehouse Protection",
         "tags": [
           "warehouse"
         ]

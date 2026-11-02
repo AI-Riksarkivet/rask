@@ -2177,6 +2177,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/warehouses/{warehouse_id}/protection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Warehouse Protection
+         * @description Arm or clear the warehouse's deletion protection ([[LH-548]]), the lock its delete turns only with ``force=true``.
+         *
+         *     Gated on ``project#can_administer`` of the warehouse's own project, read from its record: arming or clearing the
+         *     lock on a warehouse's destruction is the authority that destruction needs, as the delete door asks it. A caller
+         *     without it is answered the missing warehouse's 404, as the delete and lifecycle doors answer one, so the door tells
+         *     nobody which ids exist. The write is conditional on the record as it stands and refuses a record that moved to
+         *     another project since the decision. Re-arming an armed warehouse keeps who armed it. Announced as
+         *     ``warehouse_protected`` or ``warehouse_unprotected`` on every call, as the table and namespace doors announce theirs.
+         */
+        post: operations["set_warehouse_protection_management_v1_warehouses__warehouse_id__protection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/warehouses/{warehouse_id}/validate": {
         parameters: {
             query?: never;
@@ -4883,7 +4910,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -5561,11 +5588,8 @@ export interface components {
             primary?: boolean;
             /** Project */
             project: string;
-            /**
-             * Protected
-             * @default false
-             */
-            protected?: boolean;
+            /** Protected */
+            protected?: boolean | null;
             /** Serving */
             serving?: string | null;
         };
@@ -8439,12 +8463,11 @@ export interface components {
         };
         /**
          * SetProtectionRequest
-         * @description The one field the protection doors write. Setting is idempotent; clearing removes the record.
+         * @description The one field the protection doors write. Setting is idempotent; clearing removes the flag.
          *
-         *     ONE definition for both the table and namespace doors: two identically-shaped copies in the two
-         *     endpoint modules made FastAPI mangle the schema names into
-         *     ``catalog__api__v1__endpoints__{tables,namespaces}__SetProtectionRequest`` — module paths leaking
-         *     into the public contract and into every generated client.
+         *     ONE definition for the table, namespace and warehouse doors, so the contract names one schema: a copy per
+         *     endpoint module makes FastAPI qualify each name with its module path
+         *     (``catalog__api__v1__endpoints__tables__SetProtectionRequest``), which every generated client then carries.
          */
         SetProtectionRequest: {
             /** Protected */
@@ -8957,6 +8980,8 @@ export interface components {
             project: string;
             /** Protected */
             protected?: boolean | null;
+            /** Protected By */
+            protected_by?: string | null;
             /** Root Uri */
             root_uri: string;
             /** Serving */
@@ -12213,6 +12238,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UnbindWarehouseNamespaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_warehouse_protection_management_v1_warehouses__warehouse_id__protection_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetProtectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
                 };
             };
             /** @description Validation Error */

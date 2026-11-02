@@ -171,6 +171,13 @@ _DOORS: list[_Door] = [
     _Refusing(method="DELETE", route="/management/v1/warehouses/{warehouse_id}", params={"warehouse_id": WAREHOUSE}, refused=_NOT_FOUND),
     _Refusing(method="POST", route="/management/v1/warehouses/{warehouse_id}/activate", params={"warehouse_id": WAREHOUSE}, refused=_NOT_FOUND),
     _Refusing(method="POST", route="/management/v1/warehouses/{warehouse_id}/deactivate", params={"warehouse_id": WAREHOUSE}, refused=_NOT_FOUND),
+    _Refusing(
+        method="POST",
+        route="/management/v1/warehouses/{warehouse_id}/protection",
+        params={"warehouse_id": WAREHOUSE},
+        body={"protected": False},
+        refused=_NOT_FOUND,
+    ),
     _Refusing(method="POST", route="/management/v1/warehouses/{warehouse_id}/validate", params={"warehouse_id": WAREHOUSE}, refused=_NOT_FOUND),
     _Refusing(method="GET", route="/management/v1/warehouses/{warehouse_id}/namespaces", params={"warehouse_id": WAREHOUSE}),
     # The same listing behind its gate: bob reads `side` alone, which opens the warehouse to him through its `child` edge,

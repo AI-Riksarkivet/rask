@@ -189,10 +189,11 @@ _ROOT_OBJECT = str(Settings.model_fields["fga_root_object"].default)
 
 
 class _FakeStore:
-    """A minimal stand-in for the OpenFGA store: it records the tuples the seed writes and resolves the two
-    relations this flow checks against them — ``project#can_create_warehouse`` from a direct ``project#admin``
-    tuple and ``warehouse#can_observe_events`` from a direct ``owner`` on the root — both exactly as the
-    compiled model derives them. That makes the SEQUENCE provable offline: an estate admin mints a tenant,
+    """A minimal stand-in for the OpenFGA store: it records the tuples the seed writes and resolves the
+    relations this flow checks against them — ``project#can_create_warehouse`` and ``project#can_administer``
+    (asked when a create names its protection) from a direct ``project#admin`` tuple and
+    ``warehouse#can_observe_events`` from a direct ``owner`` on the root — each exactly as the compiled model
+    derives it. That makes the SEQUENCE provable offline: an estate admin mints a tenant,
     and the tenant is then self-governing (the second warehouse passes on its OWN project rung, not the
     estate door). A relation outside the pair is an error, so a silent gate change can't slip past."""
 
@@ -207,7 +208,7 @@ class _FakeStore:
         subject = user if _kw.get("qualify") is False else fga_module.user_object(user)
         if relation == "can_observe_events":
             return (subject, "owner", obj) in self.tuples
-        if relation == "can_create_warehouse":
+        if relation in {"can_create_warehouse", "can_administer"}:
             return (subject, "admin", obj) in self.tuples
         raise AssertionError(f"the warehouse-create gate checked an unexpected relation: {relation}")
 

@@ -77,7 +77,7 @@ def test_a_deactivate_that_lands_INSIDE_the_write_window_is_not_overwritten(cont
 
     monkeypatch.setattr(rec, "_replace_json", racing_replace)
 
-    written = warehouses.upsert_warehouse(
+    _, written = warehouses.upsert_warehouse(
         control_root,
         StorageOptions(),
         {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme", "created_at": "t2"},
@@ -102,14 +102,20 @@ def test_the_same_hazard_on_protected_and_serving(control_root: str) -> None:
     _seed(control_root)
 
     # An operator arms protection and designates the warehouse gold AFTER the re-POST's read.
-    armed = warehouses.upsert_warehouse(
-        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, serving="gold", protect=True
+    _, armed = warehouses.upsert_warehouse(
+        control_root,
+        StorageOptions(),
+        {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"},
+        serving="gold",
+        protection=warehouses.ProtectionChange(protected=True, by="user:dex~anna"),
     )
     assert armed["protected"] == "true"
     assert armed["serving"] == "gold"
 
-    # A later re-POST that names NEITHER must not disarm or demote — a request may arm, never disarm.
-    plain = warehouses.upsert_warehouse(control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"})
+    # A later re-POST that names NEITHER must not disarm or demote: a field it does not name stands as it is.
+    _, plain = warehouses.upsert_warehouse(
+        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}
+    )
     assert plain["protected"] == "true", "a re-create disarmed deletion protection"
     assert plain["serving"] == "gold", "a re-create demoted a gold warehouse to a work warehouse"
 
@@ -217,12 +223,14 @@ def test_primary_arms_through_the_write_and_survives_a_plain_re_post(control_roo
     """
     _seed(control_root)
 
-    armed = warehouses.upsert_warehouse(
+    _, armed = warehouses.upsert_warehouse(
         control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}, primary=True
     )
     assert armed.get("primary") == "true", f"the primary marker did not survive the conditional write: {armed}"
 
     # A later re-POST naming neither must carry it forward — same rule as serving/protected. A GitOps
     # re-apply that silently demoted the primary would stop the tenant's cascade, not misroute it.
-    plain = warehouses.upsert_warehouse(control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"})
+    _, plain = warehouses.upsert_warehouse(
+        control_root, StorageOptions(), {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"}
+    )
     assert plain.get("primary") == "true", f"a plain re-POST demoted the primary warehouse: {plain}"

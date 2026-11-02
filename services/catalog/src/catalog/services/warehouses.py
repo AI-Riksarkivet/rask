@@ -22,6 +22,7 @@ from typing import Any
 
 import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
+from pydantic import BaseModel, ConfigDict
 
 from catalog.services.control_records import (
     BindingRecord,
@@ -183,16 +184,64 @@ class WarehouseProjectConflict(Exception):
     """
 
 
+#: The record fields deletion protection writes: the flag `fga_deps.require_not_protected` reads, and who armed it.
+PROTECTION_FIELDS = ("protected", "protected_by")
+
+
+class ProtectionChange(BaseModel):
+    """Deletion protection armed by ``by`` when ``protected``, else cleared ([[LH-548]])."""
+
+    model_config = ConfigDict(frozen=True)
+
+    protected: bool
+    #: The principal making the change, `user:<subject>`, recorded as `protected_by` when it arms.
+    by: str
+
+
+def with_protection(record: dict[str, str], change: ProtectionChange) -> dict[str, str]:
+    """``record`` with ``change`` applied: armed is the string ``"true"`` beside who armed it, and a cleared record
+    carries neither field, as a warehouse never armed carries neither. Arming an armed record leaves it as it is, so it
+    keeps naming who armed it and a declaration re-applied on every reconcile writes nothing new."""
+    if change.protected and record.get("protected") == "true":
+        return dict(record)
+    unprotected = {key: value for key, value in record.items() if key not in PROTECTION_FIELDS}
+    return {**unprotected, "protected": "true", "protected_by": change.by} if change.protected else unprotected
+
+
+def set_warehouse_protection(
+    control_root: str, storage_options: StorageOptions, warehouse_id: str, *, project: str, change: ProtectionChange
+) -> dict[str, str] | None:
+    """Apply ``change`` to ``project``'s warehouse ``warehouse_id``, conditional on the record's ETag.
+
+    Returns the updated record, or ``None`` when no such warehouse of ``project`` exists: the caller was authorized on
+    ``project``, so a record that went to another project between that decision and this write is not the warehouse
+    the caller may protect. Every other field is the record's as it stands at the write (``mutate_json``).
+    """
+
+    def protect(record: dict[str, str]) -> dict[str, str]:
+        if record.get("project") != project:
+            raise WarehouseProjectConflict(f"warehouse {warehouse_id!r} is registered to another project")
+        return with_protection(record, change)
+
+    try:
+        return mutate_json(control_root, storage_options, _warehouse_key(warehouse_id), protect)
+    except (RecordMissingError, WarehouseProjectConflict):
+        return None
+
+
 def upsert_warehouse(
     control_root: str,
     storage_options: StorageOptions,
     record: dict[str, str],
     *,
     serving: str | None = None,
-    protect: bool = False,
+    protection: ProtectionChange | None = None,
     primary: bool = False,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, str]]:
     """Idempotent re-create of an EXISTING warehouse, CONDITIONAL on the record's ETag (diff2 F4).
+
+    Returns the record as it stood when the write landed and the record written, so a caller announces what the write
+    changed rather than what it read earlier.
 
     THE BUG THIS CLOSES. The re-create used to build a whole record from a read taken at the top of
     the handler, then `put_warehouse` it unconditionally. Between those two points sit the project
@@ -210,16 +259,20 @@ def upsert_warehouse(
 
     So the merge happens INSIDE the conditional write, against the record as it actually is:
     `_CALLER_OWNED` fields come from the caller, every other field is carried from live, and
-    `serving`/`protect` are honoured as REQUESTS (they may arm, never disarm — same rule the
-    sequential path always had). `mutate_json` re-reads and re-applies on a lost race, so a
+    `serving`/`primary` are honoured as REQUESTS (they may arm, never disarm). `protection` is what the
+    request names ([[LH-548]]), armed or cleared, and `None`, a request naming nothing, carries the live
+    value forward. `mutate_json` re-reads and re-applies on a lost race, so a
     concurrent deactivate is preserved instead of clobbered.
 
     Raises :class:`WarehouseProjectConflict` if the live record moved to another project, and
     ``RecordMissingError`` if it vanished (a concurrent delete — retryable, never a blind create).
     """
     project = record["project"]
+    # The record each attempt merged against; the last one is the record the landed write replaced.
+    stood: list[dict[str, str]] = []
 
     def merge(live: dict[str, str]) -> dict[str, str]:
+        stood.append(dict(live))
         if live.get("project") != project:
             raise WarehouseProjectConflict(f"warehouse {record['id']!r} is registered to another project")
         if DELETE_MODE in record:
@@ -232,18 +285,19 @@ def upsert_warehouse(
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
         if serving:
             merged["serving"] = serving
-        if protect:
-            merged["protected"] = "true"
+        if protection is not None:
+            merged = with_protection(merged, protection)
         # THE THIRD REQUEST FIELD, and it must be one: `merged` takes only `_CALLER_OWNED` keys from
         # the caller's record, so a field that is neither caller-owned nor an explicit request is
         # silently dropped. Setting `record["primary"]` at the endpoint returned 200 and wrote nothing
-        # (measured against the deployed catalog 2026-09-06). Same arm-never-disarm rule as the other
-        # two: a re-POST naming nothing carries the live value forward.
+        # (measured against the deployed catalog 2026-09-06). Arm-never-disarm, as `serving` is: a
+        # re-POST naming nothing carries the live value forward.
         if primary:
             merged["primary"] = "true"
         return merged
 
-    return mutate_json(control_root, storage_options, _warehouse_key(record["id"]), merge)
+    written = mutate_json(control_root, storage_options, _warehouse_key(record["id"]), merge)
+    return stood[-1], written
 
 
 def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:

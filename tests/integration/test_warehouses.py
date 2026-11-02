@@ -313,6 +313,24 @@ def test_recreate_does_not_reactivate_a_deactivated_warehouse(client: TestClient
     assert re.json()["created_at"] == created_at, "re-create reset created_at"
 
 
+def test_a_re_create_applies_the_protection_it_names_and_carries_it_when_it_names_none(
+    client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """[[LH-548]] The create door is a declaration a reconciler re-POSTs, so it converges on the protection it names
+    either way, and a re-POST naming none leaves it as it stands: absent carried forward, never read as `false`."""
+    monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
+    s = _settings(tmp_path)
+    client.app.dependency_overrides[get_settings] = lambda: s
+    _mk_projects(client, "acme")
+
+    declared = [
+        client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"} | protection)
+        for protection in ({"protected": True}, {}, {"protected": False}, {})
+    ]
+
+    assert [(answer.status_code, answer.json().get("protected")) for answer in declared] == [(200, True), (200, True), (200, None), (200, None)]
+
+
 def test_namespace_create_refused_on_deactivated_warehouse(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # AUDIT #2/#6: create_warehouse_namespace resolves the bucket DIRECTLY (bypassing the resolver's
     # deactivation gate), so it must gate on status itself — else a namespace + fresh FGA grants could be

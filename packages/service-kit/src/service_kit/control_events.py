@@ -49,6 +49,9 @@ ControlAction = Literal[
     # word keeps routing a namespace at a warehouse nothing binds it to any more.
     "warehouse_unbound",
     "warehouse_deleted",
+    # Deletion protection on a warehouse ([[LH-548]]), the warehouse twin of the table and namespace pair below.
+    "warehouse_protected",
+    "warehouse_unprotected",
     "policy_set",
     "policy_deleted",
     # A project's quality-gate settings changed through the catalog door. Audited because it decides
@@ -206,6 +209,8 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             | "warehouse_bound"
             | "warehouse_unbound"
             | "warehouse_deleted"
+            | "warehouse_protected"
+            | "warehouse_unprotected"
             | "policy_set"
             | "policy_deleted"
             | "gate_set"

@@ -37,7 +37,6 @@ from lance_namespace import (
 
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import NoopEmitter
-from catalog.core.vending import ModeBVendor
 from catalog.services import warehouses
 from lakehouse_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga as fga_module
@@ -364,42 +363,6 @@ def test_force_true_overrides_the_protection_flag(tmp_path: Any) -> None:
     _seed(settings, protected=True)
     _delete(settings, _request(), force=True)
     assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is None
-
-
-def test_an_idempotent_re_create_does_not_silently_disarm_the_protection_flag(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``create_warehouse`` rebuilds the record from scratch, so every mutable lifecycle field it does not
-    explicitly carry forward is DESTROYED by a re-POST — the ordinary GitOps-reconcile / retry path.
-
-    ``protected`` is the one whose loss is both silent and irreversible: with the flag gone, this delete
-    door stops asking for ``force=true`` and ``?purge_bucket=true`` takes the bucket. So the re-create must
-    preserve it, and the proof is that the delete still refuses afterwards.
-    """
-    from catalog.schemas import CreateWarehouseRequest
-    from catalog.services import projects as proj_svc
-
-    settings = _settings(tmp_path)
-    monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
-    proj_svc.put_project(settings.registry_root, settings.storage_options(), {"id": "acme", "created_at": "t", "created_by": "unit", "protected": "false"})
-    _seed(settings, protected=True)
-
-    async def _recreate() -> None:
-        from catalog.api.v1.endpoints import warehouses as wh_ep
-
-        await wh_ep.create_warehouse(
-            settings=settings,
-            token=None,
-            client=None,
-            control=NoopControlEmitter(),
-            vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
-            body=CreateWarehouseRequest(id="acme-wh", project="acme"),
-        )
-
-    asyncio.run(_recreate())
-
-    record = warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh")
-    assert record is not None and record.get("protected") == "true"
-    with pytest.raises(NamespaceNotEmptyError):
-        _delete(settings, _request())
 
 
 def test_force_true_without_authorization_is_still_refused(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

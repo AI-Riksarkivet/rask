@@ -105,6 +105,8 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
         "warehouse_unbound",
         "warehouse_deactivated",
         "warehouse_deleted",
+        "warehouse_protected",
+        "warehouse_unprotected",
     }
 )
 

@@ -84,6 +84,8 @@ from catalog.schemas import (
     DeleteProfile,
     DeleteWarehouseResponse,
     EstateBindingsResponse,
+    ProtectionResponse,
+    SetProtectionRequest,
     UnbindWarehouseNamespaceResponse,
     WarehouseNamespacesResponse,
     WarehouseResponse,
@@ -91,7 +93,7 @@ from catalog.schemas import (
 from catalog.services import native, object_uuids, table_claims, warehouses
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from lakehouse_kit import base_registry, data_directories, location_claims, object_records, trash
-from lakehouse_kit.control_emit import emit_control
+from lakehouse_kit.control_emit import ControlEmitter, emit_control
 from lakehouse_kit.records import RecordExistsError, RecordMissingError
 from service_kit.governed import fga
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
@@ -203,6 +205,9 @@ async def create_warehouse(
     await fga_deps.require_project_exists(settings, project)
     records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
     await fga_deps.require_can_create_warehouse(client, settings, token, project=project)
+    # A declaration naming the warehouse's deletion protection asks what the protection door asks ([[LH-548]]).
+    if body.protected is not None:
+        await _require_project_admin(client, settings, token, project=project)
 
     # Cross-tenant takeover guard: `can_create_warehouse` gates on the caller-named `project`, so an admin of
     # ANY project could otherwise re-POST an EXISTING warehouse id under their own project — the seed ADDS
@@ -305,24 +310,14 @@ async def create_warehouse(
     serving = body.serving or (existing.get("serving") if existing is not None else None)
     if serving:
         record["serving"] = serving
-    # Deletion protection (Decision 5) carries forward for the SAME reason as status/serving, and it is the
-    # one whose loss is silent AND irreversible: the record is rebuilt from scratch here, so a re-POST that
-    # dropped the flag would disarm the delete door's only safety catch with no error and no audit signal —
-    # `DELETE ?purge_bucket=true` would then take the bucket without ever asking for force=true. The field
-    # stays ABSENT (not "false") on unprotected warehouses so pre-protection records remain byte-identical.
-    protected = existing.get("protected") if existing is not None else None
-    if body.protected:
-        # #123: the flag is finally settable at the door that writes the record. String "true", the
-        # shape `require_not_protected` and the hand-armed records already use.
-        protected = "true"
-    if protected:
-        record["protected"] = protected
-    # `primary` carries forward for the same reason as serving/protected, and its loss has the sharpest
-    # consequence of the three: dropping it does not disable a safety catch, it makes the project
-    # UNROUTABLE — `_resolve_root` refuses an ambiguous set outright, so a re-POST that silently
-    # demoted the marked record would stop the tenant's cascade rather than misroute it. Stored as the
-    # boolean the resolver reads (`record.get("primary") is True`), and ABSENT on unmarked records so
-    # every pre-2026-09-06 record stays byte-identical.
+    # Deletion protection (Decision 5) is what the request declares ([[LH-548]]): `true` arms it, `false` clears it, and
+    # a request naming neither leaves it as it stands. A new warehouse's record takes it here; a re-create's merge takes
+    # it inside the conditional write (`upsert_warehouse`), against the record as it stands, since a re-POST that lost
+    # the flag it never named would disarm the delete door's only safety catch with no error and no audit signal.
+    actor = f"user:{token.subject}" if token is not None else None
+    protection = None if body.protected is None else warehouses.ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    if protection is not None:
+        record = warehouses.with_protection(record, protection)
 
     # BOTH re-create paths go through the CONDITIONAL upsert (diff2 F4). They used to end in an
     # unconditional `put_warehouse` of a record assembled from a read taken at the top of this handler —
@@ -330,16 +325,18 @@ async def create_warehouse(
     # anywhere in that window was overwritten by the status this request carried forward, lifting a
     # quarantine with no `/activate` and no audit signal. The merge now happens inside the write,
     # against the record as it actually stands, so a concurrent lifecycle change survives.
-    async def _converge() -> dict[str, str]:
+    async def _converge() -> tuple[dict[str, str], dict[str, str]]:
         try:
             return await run_in_threadpool(
-                warehouses.upsert_warehouse,
-                settings.registry_root,
-                so,
-                record,
-                serving=body.serving,
-                protect=bool(body.protected),
-                primary=bool(body.primary),
+                partial(
+                    warehouses.upsert_warehouse,
+                    settings.registry_root,
+                    so,
+                    record,
+                    serving=body.serving,
+                    protection=protection,
+                    primary=bool(body.primary),
+                )
             )
         except warehouses.WarehouseProjectConflict:
             # The pre-flight guard above already refuses this for the ordinary case; reaching it here
@@ -351,6 +348,8 @@ async def create_warehouse(
             # this; the sequential path would have re-created the record the operator just deleted.)
             raise ConcurrentModificationError(f"warehouse {warehouse_id!r} write raced a concurrent delete; retry") from None
 
+    # The record the write replaced, empty for a mint, so the protection this write changed is announced and no other.
+    replaced: dict[str, str] = {}
     if existing is None:
         # The id-MINT is conditional (F1): the takeover guard above read the registry BEFORE deciding,
         # and a rival create landing between that read and this write used to win silently — the store
@@ -358,12 +357,11 @@ async def create_warehouse(
         try:
             await run_in_threadpool(warehouses.create_warehouse_record, settings.registry_root, so, record)
         except RecordExistsError:
-            record = await _converge()  # lost the mint race — converge on the WINNER, conditionally
+            replaced, record = await _converge()  # lost the mint race — converge on the WINNER, conditionally
     else:
-        record = await _converge()
+        replaced, record = await _converge()
     await fga_deps.seed_warehouse(client, settings, token, warehouse_id=warehouse_id, project=project)
     log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
-    actor = f"user:{token.subject}" if token else None
     await emit_control(
         control,
         action="warehouse_created",
@@ -372,6 +370,8 @@ async def create_warehouse(
         actor=actor,
         extra={"bucket": bucket, "project": project},
     )
+    if replaced.get("protected") != record.get("protected"):
+        await _announce_protection(control, warehouse_id, actor, protected=record.get("protected") == "true")
     return WarehouseResponse.model_validate(record)
 
 
@@ -558,6 +558,74 @@ async def activate_warehouse(
         extra={},
     )
     return result
+
+
+@router.post("/{warehouse_id}/protection", response_model_exclude_none=True)
+async def set_warehouse_protection(
+    warehouse_id: str,
+    body: SetProtectionRequest,
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    control: ControlEmitterDep,
+) -> ProtectionResponse:
+    """Arm or clear the warehouse's deletion protection ([[LH-548]]), the lock its delete turns only with ``force=true``.
+
+    Gated on ``project#can_administer`` of the warehouse's own project, read from its record: arming or clearing the
+    lock on a warehouse's destruction is the authority that destruction needs, as the delete door asks it. A caller
+    without it is answered the missing warehouse's 404, as the delete and lifecycle doors answer one, so the door tells
+    nobody which ids exist. The write is conditional on the record as it stands and refuses a record that moved to
+    another project since the decision. Re-arming an armed warehouse keeps who armed it. Announced as
+    ``warehouse_protected`` or ``warehouse_unprotected`` on every call, as the table and namespace doors announce theirs.
+    """
+    _require_enabled(settings)
+    _validate_id(warehouse_id, what="warehouse id")
+    record = await _administered_warehouse(warehouse_id, settings=settings, token=token, client=client)
+    actor = f"user:{token.subject}" if token is not None else None
+    change = warehouses.ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    protect = partial(
+        warehouses.set_warehouse_protection, settings.registry_root, settings.storage_options(), warehouse_id, project=record["project"], change=change
+    )
+    if await run_in_threadpool(protect) is None:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
+    log.info("warehouse_protection_set", extra={"warehouse": warehouse_id, "protected": body.protected})
+    await _announce_protection(control, warehouse_id, actor, protected=body.protected)
+    return ProtectionResponse(id=warehouse_id, protected=body.protected)
+
+
+async def _require_project_admin(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str) -> None:
+    """Refuse a caller without ``can_administer`` on ``project``: the authority over its warehouses' destruction, and so
+    over the lock on it."""
+    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+
+
+async def _administered_warehouse(warehouse_id: str, *, settings: Settings, token: Caller | None, client: OpenFgaClient | None) -> dict[str, str]:
+    """The record of ``warehouse_id``, for a caller who administers its project (:func:`_require_project_admin`).
+
+    The record is read first, since the gate is on the warehouse's own project and never on one the caller names. NO
+    EXISTENCE ORACLE (audit #4): a caller who is not the project's admin is answered exactly the missing warehouse's 404,
+    so nobody can probe which warehouse ids exist; an outage or a missing caller still answers 503 or 401.
+    """
+    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
+    if record is None:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
+    try:
+        await _require_project_admin(client, settings, token, project=record["project"])
+    except PermissionDeniedError as exc:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
+    return record
+
+
+async def _announce_protection(control: ControlEmitter, warehouse_id: str, actor: str | None, *, protected: bool) -> None:
+    """Announce that ``actor`` armed or cleared the warehouse's deletion protection."""
+    await emit_control(
+        control,
+        action="warehouse_protected" if protected else "warehouse_unprotected",
+        object_type="warehouse",
+        object_id=f"warehouse:{warehouse_id}",
+        actor=actor,
+        extra={},
+    )
 
 
 @router.post("/{warehouse_id}/namespaces", response_model_exclude_none=True)
@@ -1026,20 +1094,10 @@ async def delete_warehouse(
     _require_enabled(settings)
     _validate_id(warehouse_id, what="warehouse id")
     so = settings.storage_options()
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
-    if record is None:
-        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-
+    # NO EXISTENCE ORACLE (audit #4), as `_set_warehouse_status` in this same module answers: delete is strictly MORE
+    # sensitive than the deactivate that established the rule, so the quieter door must not leak what this one guards.
+    record = await _administered_warehouse(warehouse_id, settings=settings, token=token, client=client)
     project = record["project"]
-    try:
-        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    except PermissionDeniedError as exc:
-        # NO EXISTENCE ORACLE (audit #4), matching `_set_warehouse_status` in this same module: a caller who
-        # is not the warehouse's project admin gets exactly the missing-warehouse 404, so the not-found and
-        # permission-denied outcomes are indistinguishable and nobody can probe which warehouse ids exist.
-        # Delete is strictly MORE sensitive than the deactivate that established this rule — leaving the two
-        # doors disagreeing would mean the quieter one leaks what the louder one protects.
-        raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
     # state, so it runs strictly after the gate above.
     fga_deps.require_not_protected(record, kind="warehouse", obj_id=warehouse_id, force=force)

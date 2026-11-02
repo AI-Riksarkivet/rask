@@ -479,7 +479,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   row. Declared-only tables (no recorded location) are skipped by undrop with a warning: no bytes
   were lost.
 - **Protection covers EVERY rung since #73** (2026-08-04): warehouses/projects carry `protected` on
-  their registry records; tables/namespaces carry it as a **control-root `_protection/` record**
+  their registry records. A warehouse's is set and cleared through `POST /management/v1/warehouses/{warehouse_id}/protection`
+  on its project's `can_administer`, a denial answered the missing warehouse's 404, and recorded beside `protected_by`;
+  the create door applies a `protected` it names and carries it forward when it names none ([[LH-548]],
+  `services/catalog/tests/test_a_warehouses_protection_is_set_and_cleared_by_its_project_admin.py`).
+  Tables/namespaces carry it as a **control-root `_protection/` record**
   (`lakehouse_kit.protection`) gating drop/deregister/rename and both Overwrite modes,
   `create?mode=Overwrite` over an existing table and `insert?mode=overwrite` on any branch ([[LH-242]]),
   (table) and drop (namespace). It guards no history reclaim (ADR 0150, [[LH-300]]): `version/delete`, `tags/delete`,

@@ -655,12 +655,11 @@ class CreateWarehouseRequest(BaseModel):
     # Serving designation (docs/adr/0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md "Medallion tiers — hybrid physical layout"): "gold" marks this as the
     # project's gold SERVING warehouse — a tenant's gold target root. Absent (default) = a WORK warehouse. Only "gold" is accepted for now.
     serving: str | None = None
-    # #123 deletion protection, ARMABLE at last. The guard (`require_not_protected` at the delete
-    # door) shipped a year before any API could set this flag — the only armed warehouses were ones
-    # whose registry JSON someone edited by hand, while both delete dialogs shipped an "Override
-    # deletion protection" checkbox for a 409 production could not produce. Absent (default) keeps
-    # pre-protection records byte-identical; a re-POST still carries an existing flag forward.
-    protected: bool = False
+    #: Deletion protection as the declaration states it ([[LH-548]]): `true` arms it and `false` clears it, so a
+    #: re-POST converges on what it declares either way. Absent leaves it as it stands, so a declaration that never
+    #: names it leaves it to `POST /management/v1/warehouses/{warehouse_id}/protection`; a new warehouse is then
+    #: unprotected, its record carrying no `protected` key.
+    protected: bool | None = None
     # THE PROJECT'S PRIMARY WAREHOUSE IN ITS SERVING CLASS — the operator's answer to
     # `AmbiguousProjectWarehouseError`. A project may legitimately hold several active warehouses, and
     # until 2026-09-06 the resolver silently picked `min()` by id: measured, `acme` held SIX and its
@@ -669,7 +668,7 @@ class CreateWarehouseRequest(BaseModel):
     # writes the record, or the refusal names a repair only a hand-edited JSON file can perform (the
     # `rayComputeAccessKey` shape: hardening an operator cannot actually apply).
     # Absent (default) keeps every existing record byte-identical; a re-POST carries an existing flag
-    # forward, exactly as `serving` and `protected` do.
+    # forward, exactly as `serving` does.
     primary: bool = False
     # [[LH-067]] THE OBJECT STORE THIS WAREHOUSE'S BUCKET LIVES AT. Absent (default) means the estate's
     # and keeps existing records byte-identical; an explicit empty string re-points a record at the
@@ -697,6 +696,9 @@ class WarehouseResponse(BaseModel):
     # #123: the delete-door safety, finally OBSERVABLE — records carry "true" (string), coerced here.
     # None on unprotected/pre-protection records (exclude_none keeps them byte-identical on the wire).
     protected: bool | None = None
+    #: Who armed the protection (`user:<principal>`), so a refused delete can be traced to its armer ([[LH-548]]); None
+    #: while unprotected.
+    protected_by: str | None = None
     # Which warehouse a project's writes actually route to, made OBSERVABLE. An operator resolving an
     # ambiguity has to be able to read back which record they marked; None on unmarked records
     # (exclude_none keeps them byte-identical on the wire).
@@ -907,12 +909,11 @@ class PromotionDecision(BaseModel):
 
 
 class SetProtectionRequest(BaseModel):
-    """The one field the protection doors write. Setting is idempotent; clearing removes the record.
+    """The one field the protection doors write. Setting is idempotent; clearing removes the flag.
 
-    ONE definition for both the table and namespace doors: two identically-shaped copies in the two
-    endpoint modules made FastAPI mangle the schema names into
-    ``catalog__api__v1__endpoints__{tables,namespaces}__SetProtectionRequest`` — module paths leaking
-    into the public contract and into every generated client.
+    ONE definition for the table, namespace and warehouse doors, so the contract names one schema: a copy per
+    endpoint module makes FastAPI qualify each name with its module path
+    (``catalog__api__v1__endpoints__tables__SetProtectionRequest``), which every generated client then carries.
     """
 
     protected: bool
