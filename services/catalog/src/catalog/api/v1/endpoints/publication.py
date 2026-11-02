@@ -9,8 +9,8 @@ project's declared gate has review on, a version that breaches it is HELD: `publ
 listed on `GET /management/v1/promotions`, and a `can_promote` holder answers it on
 `POST /management/v1/table/{id}/promotion/approve` (`published` moves to the held version, the spec's
 `UpdateTableTag`) or `.../promotion/reject` (main is restored to the published version, the spec's
-`RestoreTable`). Every move of `published` is announced as a `publish_table` lineage run, which the
-notifications plane delivers to the project's watchers.
+`RestoreTable`). Every move of `published` is announced as a `publish_table` lineage run, which a notifier
+delivers to the project's watchers.
 
 It is an endpoint, not a library call, because every writer must publish identically — the ingest
 plane, a Ray job, a backfill script, a person with credentials. A contract each writer implements
@@ -111,7 +111,7 @@ def publication_originator(claimed: str, token: Caller | None) -> str:
       originator, and honouring a body field over a verified principal would let a caller redirect a
       notification into somebody else's inbox.
 
-    Neither is trusted as authorization: the notifications plane re-derives every recipient's
+    Neither is trusted as authorization: a notifier re-derives every recipient's
     visibility at delivery, so the worst a forged claim achieves is a row in the inbox of someone who
     can already read the run's outputs.
 

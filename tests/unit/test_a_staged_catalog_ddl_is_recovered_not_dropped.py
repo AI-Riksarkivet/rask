@@ -32,7 +32,7 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Tran
 
 from catalog.core.lineage_emit import INSERT, build_write_event
 from lakehouse_kit import outbox, outbox_metrics
-from lakehouse_kit.openlineage import DatasetUuids, event_identity, run_id_for
+from lakehouse_kit.openlineage import run_id_for
 from lineage.api import fga_deps, relay_cron
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
@@ -43,6 +43,7 @@ from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
+from service_kit.lineage_events import DatasetUuids, event_identity
 from service_kit.storage_options import StorageOptions
 
 

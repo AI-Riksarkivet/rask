@@ -1,7 +1,7 @@
 # Running the AGE Postgres on CloudNativePG
 
 The chart's Postgres server, `rask-age` (a single in-chart StatefulSet, `chart/templates/age-postgres.yaml`), serves
-the **OpenFGA** datastore and the **Dapr state store** (notifications' inbox read state, workflow and actor state).
+the **OpenFGA** datastore.
 Lineage keeps no database ([ADR 0158](adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md)): its feed and edge list are
 Lance tables in the catalog's `provenance` namespace. The server runs on the `apache/age` image, and its databases
 load the `age` extension at init (`age-postgres.yaml`). In production the platform's Postgres replaces it
@@ -55,8 +55,8 @@ than a build log: three layers matching the three `COPY` lines — 8,559 B of `/
 reads as an empty image; the same command lists `alpine:3.20` normally, so the manifest is the check
 to trust.
 
-What remains is the CUTOVER, which is a data migration rather than a proof: OpenFGA's and the Dapr state
-store's tables live in the StatefulSet's PVC, and `age-cluster.yaml` deliberately fails the render
+What remains is the CUTOVER, which is a data migration rather than a proof: OpenFGA's tables live in
+the StatefulSet's PVC, and `age-cluster.yaml` deliberately fails the render
 if both stores are on.
 
 ### The 2026-07-20 proof status, kept as the record
@@ -78,7 +78,7 @@ environment snag, not an AGE one.
    currently idle for want of a `Cluster` to manage. Every environment requirement above is met on
    this cluster: **K8s v1.36.2** (ImageVolume default-on since 1.35), **containerd 2.3.2-k3s2** (≥2.1),
    **CNPG 1.29.1** (≥1.27). So the remaining gap is the extension image and then the CUTOVER ITSELF,
-   which is a data migration rather than a proof — OpenFGA's and the Dapr state store's tables live in the
+   which is a data migration rather than a proof — OpenFGA's tables live in the
    StatefulSet's PVC, and `age-cluster.yaml` deliberately fails the render if both stores are on.
 
    **The 2026-07-20 investigation below stands as the record of a KIND-HOST problem**, kept because it

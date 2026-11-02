@@ -1,29 +1,27 @@
 """Phase 1's soak: a day after the acceptance, the estate still reads its drive as the criteria did (XC-090).
 
 The acceptance holds one drive of the bring-your-own scenario to the criteria the moment it ends. An estate left running
-goes on acting on what that drive made: maintenance sweeps its tables, the outbox relays and the notifications reconciler
-re-read the feed and re-deliver, sidecars reconnect, secrets are re-read. An acceptance run keeps its drive with
-`--keep-drive PATH` (`kept_drive`), and a day later this module reads that drive again and holds the estate to four
-claims, reported together:
+goes on acting on what that drive made: maintenance sweeps its tables, the outbox relays deliver what the catalog
+staged, sidecars reconnect, secrets are re-read. An acceptance run keeps its drive with `--keep-drive PATH`
+(`kept_drive`), and a day later this module reads that drive again and holds the estate to three claims, reported
+together:
 
 1. Lance holds exactly the commits the drive made, each carrying the run it named and who committed it, and the edge
    list exactly one edge for each input those commits name (criterion 1);
 2. lineage's feed names every version on every ref of the drive's tables, and holds exactly the rows it held when the
    drive was kept (criterion 4): no version below the tip is unannounced, and nothing was recorded again;
-3. nobody has been told anything of the drive that they had not been told when it was kept (criterion 4);
-4. estate-wide, nothing parked on the DLQ stream from the tenant's creation on, and both of the catalog's outboxes are
+3. estate-wide, nothing parked on the DLQ stream from the tenant's creation on, and both of the catalog's outboxes are
    drained.
 
 These are the readings XC-090's closes-when names versions_below_tip, unknown_to_graph, the dead-lettered delta and the
 outbox depth, taken where provenance and events are kept (ADR 0158): the commits' `rask.*` properties, the Lance-stored
 feed and edge list, the DLQ stream and the outboxes. Each is present before it is compared, because the kept drive
-committed versions that name an input, was announced, and told each person something: a soak that reads an emptied
-tenant fails rather than passing on nothing.
+committed versions that name an input and was announced: a soak that reads an emptied tenant fails rather than passing
+on nothing.
 
 WHAT IS NOT CLAIMED, and why. Only the drive's two tables are read: criterion 5's drill tables commit enough versions for
-maintenance to expire old ones, and criterion 2's objects are its own. An inbox keeps only its newest rows
-(`RASK_NOTIFICATIONS_INBOX_MAX_ROWS`), so a row the drive put in a busy one may have been trimmed by the time the soak
-reads it: claim 3 holds what each person is told now to what they were told then, and not the other way.
+maintenance to expire old ones, and criterion 2's objects are its own. Nobody's inbox is read: whether a person is told
+is a notifier's claim, and the inbox is a client the lakehouse does not run (XC-188).
 
 The estate runs `LANCE_E2E_SOAK_SECONDS` from the moment the drive was kept, a day unless the run says otherwise. The
 e2e-stack lane soaks for no time at all, so keeping and resuming a drive runs on every push; the deployed estate soaks for
@@ -44,7 +42,7 @@ import byo_scenario as scenario
 import kept_drive
 import pytest
 from byo_scenario import Tenant
-from correctness import announced, as_named, edges_named, history_of, recorded_edges, settled_control_outbox_depth, settled_outbox_depth, told
+from correctness import announced, as_named, edges_named, history_of, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
 from kept_drive import KeptDrive
 
 
@@ -84,7 +82,6 @@ def test_the_estate_left_running_still_reads_the_drive_as_the_criteria_did(kept:
     owed = edges_named(history)
     edges = recorded_edges(tenant.admin, tables, expected=owed)
     feed = announced(tenant.pipeline, drive.run)
-    heard = told(tenant, drive.run)
     parked = bus.messages_since("DLQ", drive.created_at)
     depths = {"lineage": settled_outbox_depth(tenant.admin), "control": settled_control_outbox_depth()}
     named = {(row.table, row.ref, row.version) for row in feed}
@@ -97,12 +94,9 @@ def test_the_estate_left_running_still_reads_the_drive_as_the_criteria_did(kept:
         "versions no feed row names": [version for version in sorted(history, key=repr) if version not in named],
         "feed rows recorded since the drive was kept": [row for row in feed if row not in drive.feed],
         "feed rows gone since the drive was kept": [row for row in drive.feed if row not in feed],
-        "told again": [(part, row) for part, rows in heard.items() for row in (Counter(rows) - Counter(drive.told[part])).elements()],
         "parked on the DLQ since the tenant was made": [(message.seq, message.subject) for message in parked],
         "left in an outbox": [f"{outbox}: {depth}" for outbox, depth in depths.items() if depth],
     }
 
-    assert owed and drive.feed and all(drive.told.values()), (
-        f"the kept drive named no input, held no feed row, or told somebody nothing, so there is nothing to soak: {drive.told}"
-    )
+    assert owed and drive.feed, "the kept drive named no input or held no feed row, so there is nothing to soak"
     assert findings == {finding: [] for finding in findings}

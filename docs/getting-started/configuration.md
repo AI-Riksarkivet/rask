@@ -2,7 +2,7 @@
 
 rask is configured through environment variables, read by each service's
 `Settings` (pydantic-settings, via `service-kit`) from the process environment.
-In-cluster, the chart renders them from `chart/values.yaml` into a ConfigMap, and every
+In-cluster, the chart renders them from `chart/values.yaml` into each Deployment's `env`, and every
 credential reaches a pod from the secret store (the Dapr secret store, or an
 ExternalSecret), never as a chart value. A local `.env` is git-ignored and never committed.
 
@@ -41,7 +41,6 @@ authenticates every request itself. The route table:
 | `/api/explorer/annotations` | annotator (the annotator fixture chart's own HTTPRoute) | `/api/annotations…` |
 | `/api/catalog` | catalog | `/…` |
 | `/api/lineage` | lineage | `/…` |
-| `/api/notifications` | notifications | unchanged |
 | `/api/ray`, `/api/serve` | compute (the compute fixture chart's own HTTPRoute) | unchanged |
 
 The rewrite is Gateway API `URLRewrite` `ReplacePrefixMatch`. An unmatched `/api/*` is the Gateway's own 404.

@@ -32,8 +32,8 @@ contract is [`COMMIT-EVENTS.md`](COMMIT-EVENTS.md). The NATS topics the announce
 estate.
 
 A pipeline emits its own OpenLineage run events (`POST /api/lineage/api/v1/lineage`, the OpenLineage HTTP transport's
-default path) for the work it does, and notifications target a person from those events' `author.sub`
-([`rask-notifications`](https://github.com/AI-Riksarkivet/rask/tree/main/.claude/skills/rask-notifications)).
+default path) for the work it does, and a notifier, a client such as the notifications inbox, targets a person from
+those events' `rask_author.sub` (the contract is [`COMMIT-EVENTS.md`](COMMIT-EVENTS.md#telling-people-the-notifier-contract)).
 
 ## What the catalog enforces today
 

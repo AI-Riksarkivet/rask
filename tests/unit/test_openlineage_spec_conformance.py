@@ -33,6 +33,7 @@ from catalog.core.run_context import RunContext
 from lakehouse_kit import openlineage as ol
 from lineage.models import RunEvent
 from maintenance.core import lineage_emit as compaction_emit
+from service_kit import lineage_events
 from tests.unit.rask_facets import rask_facet_errors
 
 
@@ -179,10 +180,10 @@ def test_a_client_facet_the_door_stamps_uuids_into_carries_rask_s_schema() -> No
     sent = {
         "namespace": "acme",
         "name": "acme$bronze$t",
-        "facets": {ol.LANCE_FACET: {"_producer": "https://client.example/p", "_schemaURL": _SPEC["$id"] + "#/$defs/BaseFacet", "ref": "b"}},
+        "facets": {lineage_events.LANCE_FACET: {"_producer": "https://client.example/p", "_schemaURL": _SPEC["$id"] + "#/$defs/BaseFacet", "ref": "b"}},
     }
-    uuids = ol.DatasetUuids(table_uuid="3f2504e0-4f89-11d3-9a0c-0305e82c3302", namespace_uuid="3f2504e0-4f89-11d3-9a0c-0305e82c3303")
+    uuids = lineage_events.DatasetUuids(table_uuid="3f2504e0-4f89-11d3-9a0c-0305e82c3302", namespace_uuid="3f2504e0-4f89-11d3-9a0c-0305e82c3303")
 
-    stamped = ol.with_dataset_uuids(sent, uuids, producer="https://github.com/AI-Riksarkivet/rask")
+    stamped = lineage_events.with_dataset_uuids(sent, uuids, producer="https://github.com/AI-Riksarkivet/rask")
 
     assert rask_facet_errors({"outputs": [stamped]}) == []

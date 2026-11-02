@@ -13,30 +13,25 @@ are asserted EQUAL to the official facet classes' ``_get_schema()`` by
 a facet's published version moves. That gate was missing until 2026-07-26, and three of the URLs below had
 already drifted (``SchemaDatasetFacet`` 1-1-1→1-2-0, ``DatasourceDatasetFacet`` and ``ErrorMessageRunFacet``
 1-0-0→1-0-1 — the 1-0-0 facets ``$ref`` the retired ``1-0-2`` core spec while our envelope declares 2-0-2).
+
+What a READER of the events needs (rask's own facet keys and schemas, the uuids a dataset carries, an event's identity)
+is the platform's, `service_kit.lineage_events`, so a client reads the lakehouse's events without this kernel; the
+builders here are the lakehouse's emitters' and build on it.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any, Final
+from typing import Final
 
-from pydantic import BaseModel, ConfigDict
+from service_kit.lineage_events import AUTHOR_FACET_SCHEMA_URL, LANCE_FACET_SCHEMA_URL
 
 
 log = logging.getLogger(__name__)
 
 #: The top-level ``schemaURL`` every OpenLineage ``RunEvent`` must carry (spec: ``RunEvent.schemaURL``).
 RUN_EVENT_SCHEMA_URL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
-
-#: Where rask publishes its custom facets' schemas (`spec/facets/rask/`): under a git tag, since OpenLineage asks a
-#: facet's ``_schemaURL`` to be "an immutable pointer to the version of the facet schema", a tag or a sha, never a
-#: branch. A changed schema is a new tag. ``lineage_kit.signing.SIGNATURE_FACET_SCHEMA_URL`` names the same tag.
-RASK_FACET_SCHEMAS: Final = "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask"
-#: The ``_schemaURL`` of :data:`LANCE_FACET`, a JSON pointer to its definition (`RaskLanceFacet.json`).
-LANCE_FACET_SCHEMA_URL: Final = f"{RASK_FACET_SCHEMAS}/RaskLanceFacet.json#/$defs/RaskLanceFacet"
-#: The ``_schemaURL`` of :data:`AUTHOR_FACET` (`RaskAuthorFacet.json`).
-AUTHOR_FACET_SCHEMA_URL: Final = f"{RASK_FACET_SCHEMAS}/RaskAuthorFacet.json#/$defs/RaskAuthorFacet"
 
 #: Standard ``SchemaDatasetFacet`` schema URL — the produced dataset's columns (name + a concise,
 #: blob/vector-aware type via ``lakehouse_kit.schema.facet_fields``). Shared here so every emitter (catalog,
@@ -72,12 +67,14 @@ def run_id_for(seed: str) -> str:
 
 
 def lance_facet(producer: str, **fields: object) -> dict[str, object]:
-    """A :data:`LANCE_FACET` payload carrying ``fields``, with the ``_producer`` and the ``_schemaURL`` every facet needs."""
+    """A ``rask_lance`` payload (`service_kit.lineage_events.LANCE_FACET`) carrying ``fields``, with the ``_producer`` and
+    the ``_schemaURL`` every facet needs."""
     return {"_producer": producer, "_schemaURL": LANCE_FACET_SCHEMA_URL, **fields}
 
 
 def author_facet(producer: str, subject: str) -> dict[str, object]:
-    """The :data:`AUTHOR_FACET` naming ``subject``, a principal key, as both its ``sub`` and its ``name``."""
+    """The ``rask_author`` facet (`service_kit.lineage_events.AUTHOR_FACET`) naming ``subject``, a principal key, as both
+    its ``sub`` and its ``name``."""
     return {"_producer": producer, "_schemaURL": AUTHOR_FACET_SCHEMA_URL, "name": subject, "sub": subject}
 
 
@@ -232,74 +229,10 @@ def catalog_facet(producer: str, *, impl: str, name: str, warehouse_uri: str = "
     return facet
 
 
-#: rask's own dataset and run facet: the ref an input was read on or a run wrote, and the uuids the catalog minted for the
-#: dataset's table and its namespace. Custom, so its key is ``{prefix}_{name}`` (OpenLineage spec, "Custom Facet Naming")
-#: and its schema is rask's own (:data:`LANCE_FACET_SCHEMA_URL`, :func:`lance_facet`).
-LANCE_FACET: Final = "rask_lance"
-#: rask's run facet (a DatasetEvent's dataset facet) naming the verified subject a run was authored by, ``{"name", "sub"}``.
-#: Custom, named as :data:`LANCE_FACET` is, with its own schema (:data:`AUTHOR_FACET_SCHEMA_URL`, :func:`author_facet`).
-AUTHOR_FACET: Final = "rask_author"
-#: The :data:`LANCE_FACET` key for the incarnation of the ref it names: the last uuid of pylance's ``branch_identifier`` chain,
-#: on a run's facet for the ref it wrote and on an input's for the ref it was read on ([[LH-413]]).
+#: The ``rask_lance`` facet key (`service_kit.lineage_events.LANCE_FACET`) for the incarnation of the ref it names: the
+#: last uuid of pylance's ``branch_identifier`` chain, on a run's facet for the ref it wrote and on an input's for the ref
+#: it was read on ([[LH-413]]).
 BRANCH_IDENTIFIER: Final = "branchIdentifier"
-_TABLE_UUID: Final = "tableUuid"
-_NAMESPACE_UUID: Final = "namespaceUuid"
-
-
-class DatasetUuids(BaseModel):
-    """The uuids the catalog minted for a dataset's table and that table's namespace (ADR 0173 §10).
-
-    A dataset's identity across a rename is its table's uuid, not its name: a name can be given up and taken by another
-    table, a uuid cannot. ``None`` where the dataset has none, an external source's always, or where it was not resolved.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    table_uuid: str | None = None
-    namespace_uuid: str | None = None
-
-
-def dataset_uuids(dataset: object) -> DatasetUuids:
-    """The uuids an OpenLineage dataset's ``rask_lance`` facet carries, reading only the plain ``facets`` slot.
-
-    Tolerant of a payload that is not the shape it should be, since every reader holds an event it did not build: a value
-    that is not a non-empty string is no uuid.
-    """
-    facets = dataset.get("facets") if isinstance(dataset, dict) else None
-    lance = facets.get(LANCE_FACET) if isinstance(facets, dict) else None
-    lance = lance if isinstance(lance, dict) else {}
-
-    def text(key: str) -> str | None:
-        value = lance.get(key)
-        return value if isinstance(value, str) and value else None
-
-    return DatasetUuids(table_uuid=text(_TABLE_UUID), namespace_uuid=text(_NAMESPACE_UUID))
-
-
-def with_dataset_uuids(dataset: dict[str, Any], uuids: DatasetUuids, *, producer: str) -> dict[str, Any]:
-    """``dataset`` with its ``rask_lance`` facet naming exactly ``uuids``: a uuid set where it has one, and removed where it has none.
-
-    Removed rather than kept, so a stamp is the whole answer: a dataset carrying a uuid the stamping service did not
-    resolve would keep a claim nobody checked. The ``rask_lance`` facet's other fields (an input's ``ref``) stay, and its
-    ``_producer`` and ``_schemaURL`` become ``producer``'s and rask's schema, since the stamped facet is rask's to describe
-    whatever a client's said ([[LH-500]]). The facet is left out when it would hold nothing but those two. ``dataset`` itself
-    is not changed.
-    """
-    facets = dict(dataset.get("facets") or {})
-    lance = dict(facets.get(LANCE_FACET) or {})
-    for key, value in ((_TABLE_UUID, uuids.table_uuid), (_NAMESPACE_UUID, uuids.namespace_uuid)):
-        if value:
-            lance[key] = value
-        else:
-            lance.pop(key, None)
-    if set(lance) - {"_producer", "_schemaURL"}:
-        facets[LANCE_FACET] = {**lance, "_producer": producer, "_schemaURL": LANCE_FACET_SCHEMA_URL}
-    else:
-        facets.pop(LANCE_FACET, None)
-    stamped = {**dataset, "facets": facets}
-    if not facets:
-        stamped.pop("facets")
-    return stamped
 
 
 #: Standard ``DatasetTypeDatasetFacet`` schema URL — WHAT KIND of thing this dataset is.
@@ -330,57 +263,5 @@ def dataset_type_facet(producer: str, *, external: bool) -> dict[str, object]:
     }
 
 
-#: The UUID namespace for a static metadata event's derived identity. A fixed literal rather than a
-#: hash of anything, because it must be byte-identical in every service that derives one — a namespace
-#: that varies is two namespaces.
-_STATIC_EVENT_NAMESPACE: Final = uuid.UUID("6f0d9bb2-3c47-5f1a-9b8e-4a2d1c7e5f30")
-
 #: OpenLineage's spec URL for a `DatasetEvent` — a dataset change that no job performed.
 DATASET_EVENT_SCHEMA_URL: Final = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/DatasetEvent"
-
-
-def static_event_id(*, producer: str, namespace: str, name: str, operation: str, event_time: str) -> str:
-    """The identity of a ``DatasetEvent`` — derived from its content, never minted.
-
-    A static metadata event carries no run id, and two things downstream need one anyway: the durable
-    feed keys a static change's row on this id (``lineage.services.provenance.feed_key``), so a minted id
-    would land the row again on every at-least-once redelivery; and the notifications plane keys a
-    pointer by ``${run_id}@${state}``, so a minted id would put two rows in an inbox for one change.
-
-    DERIVED HERE BECAUSE IT HAS TWO INDEPENDENT READERS SEEING DIFFERENT COPIES. The notifications bus
-    lane reads the catalog's raw publish while its feed lane reads what lineage stored, and the two
-    must agree exactly or one change lands twice. A shared function is the only thing that makes that
-    true by construction rather than by two implementations happening to match.
-
-    ``event_time`` IS PART OF THE IDENTITY, and both directions matter: a redelivery carries the same
-    instant and so collapses onto one id, while a genuine repeat — a table dropped and created again —
-    carries a different one and stays a second fact rather than being silently swallowed by the first.
-    """
-    return str(uuid.uuid5(_STATIC_EVENT_NAMESPACE, "|".join((producer, namespace, name, operation, event_time))))
-
-
-def event_identity(event: dict[str, Any]) -> str:
-    """The identity of one OpenLineage event on the wire, whichever shape it is.
-
-    A run event IS its run id. A ``DatasetEvent`` has none, and three hops need one anyway — the
-    catalog's outbox stages under it (a wrong key stages under a name the relay cannot find, which is
-    the provenance loss the outbox exists to prevent), lineage's durable feed dedups on it, and the
-    notifications plane keys a pointer by it. One derivation, so a single change cannot acquire three
-    identities and be staged, fed and delivered as three different facts.
-    """
-    run = event.get("run")
-    if isinstance(run, dict) and run.get("runId"):
-        return str(run["runId"])
-    dataset = event.get("dataset")
-    dataset = dataset if isinstance(dataset, dict) else {}
-    facets = dataset.get("facets")
-    facets = facets if isinstance(facets, dict) else {}
-    lance = facets.get(LANCE_FACET)
-    lance = lance if isinstance(lance, dict) else {}
-    return static_event_id(
-        producer=str(event.get("producer") or ""),
-        namespace=str(dataset.get("namespace") or ""),
-        name=str(dataset.get("name") or ""),
-        operation=str(lance.get("operation") or ""),
-        event_time=str(event.get("eventTime") or ""),
-    )

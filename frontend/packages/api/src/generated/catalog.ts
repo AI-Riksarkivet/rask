@@ -1363,14 +1363,14 @@ export interface paths {
          *     available, not a metadata lookup.
          *
          *     THE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find
-         *     it. That `ControlAction` (`lakehouse_kit/control_events.py:101`) announces a version advance and
+         *     it. That `ControlAction` (`service_kit/control_events.py:92`) announces a version advance and
          *     carries `{from_version, to_version}` — "the RANGE (D-R3) the notification carries, so a consumer
          *     resolves the delta" (`catalog/services/publication.py:245-254`) — which is exactly the window this
          *     door takes. Its emitter is a DIFFERENT `publication.py`, the route module
          *     `catalog/api/v1/endpoints/publication.py:343-356`, gated on `result.advanced` so only a real
          *     advance signals. A consumer subscribes to `catalog.control.v1`, reads the pair off the event, and
          *     calls here with it — no new `ControlAction` member, so no added control-buffer cost.
-         *     It is deliberately NOT in notifications' `NAMED_ACTIONS`: a version advance changes an OBJECT, not
+         *     It names no person a notifier addresses: a version advance changes an OBJECT, not
          *     what any particular person may do, so it is an untargeted control event like the other 31 and
          *     reaches a feed rather than a person.
          *
@@ -2633,7 +2633,7 @@ export interface paths {
          *     ANNOUNCED ON THE CONTROL LANE ([[LH-056]]) and UNTARGETED. The rule the estate codified is that a
          *     control event is targeted when it changes what a specific PERSON may do or must do, not when it
          *     changes an object; a branch appearing changes an object, so it joins the 31 members that name
-         *     nobody and stays out of notifications' `NAMED_ACTIONS`. A console invalidating a branch list is
+         *     nobody, so no notifier targets it. A console invalidating a branch list is
          *     the consumer this serves.
          */
         post: operations["create_table_branch_v1_table__id__branches_create_post"];

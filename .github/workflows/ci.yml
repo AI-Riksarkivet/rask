@@ -116,6 +116,10 @@ jobs:
   #             operator mode with test-only keys, and the real daprd the Dapr fixture injects, running the chart's
   #             Components against it: each bus client reaches exactly its own subjects. Hermetic,
   #             public images only. `dagger call nats-auth` == `make nats-auth`.
+  #   lakehouse-alone
+  #             every client tree deleted (`.dagger/lakehouse.go` names them), the workspace re-locked without
+  #             them, then the lakehouse's import contracts and offline suite: the lakehouse holds with no client
+  #             ([[XC-188]]). `dagger call lakehouse-alone` == `make lakehouse-alone`.
   ms-gates:
     name: ms-${{ matrix.gate }}
     runs-on: ubuntu-latest
@@ -124,7 +128,7 @@ jobs:
       matrix:
         # install-from-empty: rask installed onto an empty k3s inside Dagger, fixtures then the product chart, until
         # every workload is Ready ([[XC-133]]); the command a developer runs locally.
-        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth, install-from-empty]
+        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth, install-from-empty, lakehouse-alone]
     steps:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)

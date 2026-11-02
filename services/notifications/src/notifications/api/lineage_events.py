@@ -20,9 +20,9 @@ from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lakehouse_kit.openlineage import AUTHOR_FACET, LANCE_FACET, dataset_uuids, static_event_id
 from notifications.models import NotificationDelivery, NotificationReason, UtcDatetime, notification_id
 from service_kit.governed import fga
+from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, dataset_uuids, static_event_id
 
 
 #: The states a person needs to be told about. RESOLVED as a product decision, not a technical

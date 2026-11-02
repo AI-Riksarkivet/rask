@@ -10,8 +10,8 @@
 // and `dagger call image` produces the same layers `docker buildx build` does. Nothing here reimplements
 // a build; it changes who drives it.
 //
-//	dagger call image --name=notifications
-//	dagger call image --name=notifications publish --address=172.17.0.1:5000/notifications:dev
+//	dagger call image --name=rest-catalog
+//	dagger call image --name=rest-catalog publish --address=172.17.0.1:5000/lance-rest-catalog:dev
 //	dagger call zone-image --zone=lakehouse publish --address=…
 //
 // ── The one host requirement ────────────────────────────────────────────────────────────────────
@@ -80,7 +80,7 @@ func extraArgs(kv []string) []dagger.BuildArg {
 
 // Image builds ANY deployable from its own dockerfile under .docker/.
 //
-// `name` is the dockerfile stem: notifications, compute, rest-catalog, media, ray-cluster,
+// `name` is the dockerfile stem: rest-catalog, compute, media, ray-cluster,
 // runner, assist-runner, cnpg-age-ext.
 func (m *Rask) Image(
 	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",

@@ -1,20 +1,30 @@
 ---
 name: rask-notifications
-description: How a feature gets a person told — the targeted inbox behind the estate's bell. The targeting sources (AUTHOR/ORIGINATOR/WATCH/GRANT_ADDED/GRANT_REVOKED/ERASURE_RELEASE_SCHEDULED), the producer contract for the lineage and control lanes, and the five silent-drop traps (an emitted event that reaches nobody, or reaches the bell and not lineage's feed). Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
+description: How a feature gets a person told — the targeting contract the lakehouse's events publish for any notifier (docs/COMMIT-EVENTS.md), and how the notifications inbox, a client beside the console, consumes it. The targeting sources (AUTHOR/ORIGINATOR/WATCH/GRANT_ADDED/GRANT_REVOKED/ERASURE_RELEASE_SCHEDULED), the producer contract for the lineage and control lanes, and the five silent-drop traps (an emitted event that reaches nobody, or reaches the bell and not lineage's feed). Use when adding a feature whose outcome a person should hear about; when a notification "should have fired" and did not; when adding a `ControlAction` or a `NotificationReason`; when emitting an OpenLineage run event from any service; or when wiring a new service into `lineage.events.v1` / `catalog.control.v1`.
 ---
 
 # rask notifications — how a feature gets a person told
 
+**The lakehouse emits; a notifier delivers** (ADR 0190). The lakehouse runs no notifier. It publishes its events, the
+fields in them that name whom each is about, and the verbs a notifier asks before it tells anyone (`can_be_notified`
+through the catalog's decision door, the whole run feed at `GET /events/projection` for an `event_reader`). That
+published contract lives in `docs/COMMIT-EVENTS.md` § Telling people, and a client reads it through service-kit
+(`service_kit.control_events`, `service_kit.lineage_events`, `service_kit.governed.subjects`,
+`service_kit.signature_doors`), never through `lakehouse_kit`. This skill is the producer's side of that contract, and
+how the one notifier in this repo consumes it.
+
 **A notification names a PERSON and a REASON. A feed names an estate.** `services/notifications` is an
 inbox behind the bell — one Dapr `InboxActor` per subject holding claim-check pointers with durable
-read state — precisely so the badge counts *your* work rather than the estate's. That makes coverage a
-**targeting** problem, not a transport one: the ingresses already carry everything the estate does, and
-the plane's whole job is to discard all of it except rows that name a subject under one of six reasons.
+read state — precisely so the badge counts *your* work rather than the estate's. It is a client of the lakehouse's
+events that lives in this repo beside the console, as the web plane's per-user backend; no chart in this repo deploys
+it, and its import contract (`services/notifications/pyproject.toml`) forbids `lakehouse_kit` by any chain. That makes
+coverage a **targeting** problem, not a transport one: the ingresses already carry everything the estate does, and
+the inbox's whole job is to discard all of it except rows that name a subject under one of six reasons.
 
 **The corollary, and the thing to internalise: a state change that names nobody is not
 under-delivered, it is UNDELIVERABLE.** No amount of subscribing fixes it. Coverage is decided at the
-**producer**. For the topology (ports, ingresses, chart wiring, the four values entries the service
-needs in-cluster) see `rask-services-fleet`; this skill is only "what must I emit, and who hears it".
+**producer**. For the inbox's topology (ports, ingresses, and what a release that runs it in-cluster must provide)
+see `rask-services-fleet`; this skill is only "what must I emit, and who hears it".
 
 ## The decision procedure
 
@@ -101,6 +111,9 @@ does not verify. Notifications' `/lineage-events` checks the same signature agai
 `notifiable()` would deliver, as `RASK_SIGNATURE_DOORS` says: `enforce` refuses it (acked, told to nobody, counted in
 `notifications_signature_refused_total`), `observe` delivers it and counts it, and `off`, the default, verifies nothing,
 so an unsigned event still rings the bell for a run lineage's feed never recorded (trap 5, `docs/LINEAGE.md` § Signed events).
+The inbox's release names those signer sets (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`,
+`RASK_CONTROL_SIGNER_ROLES`, `service_kit.signature_doors`) and gives its sidecar read of each signer's
+`signing-public-<identity>`; no store role the product chart renders grants a client that read.
 
 ```python
 event = {
@@ -114,8 +127,8 @@ event = {
             #     (5) binds it: a signer is its own author, so a service stamps its own signing
             #     identity and the person rides in `rask_lance.originator` (Q2). Only the catalog signs
             #     for a person it authenticated (`on_behalf_of=`).
-            "author": {"name": token.subject, "sub": token.subject},
-            "lance": {
+            "rask_author": {"name": token.subject, "sub": token.subject},  # AUTHOR_FACET, service_kit.lineage_events
+            "rask_lance": {  # LANCE_FACET
                 "operation": "promote",
                 "runId": producer_run_id,  # what YOUR detail door answers to; the catalog and lineage spell it so
                 "project": project_id,  # (3) WATCH's key. Omit -> zero watchers.
@@ -123,7 +136,7 @@ event = {
             "errorMessage": {"message": reason},
         },
     },
-    # (4) Each output carries its table's uuids (`with_dataset_uuids` stamps `facets.rask_lance.tableUuid` and
+    # (4) Each output carries its table's uuids (`service_kit.lineage_events.with_dataset_uuids` stamps `facets.rask_lance.tableUuid` and
     #     `namespaceUuid`), as the table's and namespace's DescribeTable/DescribeNamespace answer them (`rask.uuid`).
     #     An output without one names no object any grant reaches, so the run reaches nobody.
     "outputs": [with_dataset_uuids({"namespace": "gold", "name": f"{project_id}-gold$catalog"}, uuids, producer=PRODUCER)],
@@ -156,7 +169,8 @@ act ends or moves the object reads them first and passes them.
 `extra.subject` is the entire targeting, and it is the OpenFGA user the change names (`fga.user_object`: `user:` and the
 principal key percent-encoded, or a userset). `named_subjects` decodes a `user:` id back to the principal key
 (`fga.subject_of`), so a key carrying an encoded character addresses the inbox its owner's token reaches, and keeps only
-a person (`is_person_subject`): a userset is expanded to its person members through `list_users` (`userset_expander`),
+a person (`is_person_subject`): a userset is expanded to its person members through the catalog decision door's
+`list-users` (`userset_expander`, on the account's `member_expander` role),
 and a missing subject, a bare `user:`, the `*` wildcard, a userset with authorization off or unwired, and a service
 account's principal address nobody, and the event is then filed IGNORED with a `SUCCESS` ack. A raw `f"user:{key}"` in `extra.subject` is the
 defect, though the `actor` keeps that form: it addresses another inbox whenever the key carries a character the encoding
@@ -175,7 +189,7 @@ republishes a staged event verbatim only when it verifies as signed by the catal
 else as poison, so a staged forgery never becomes a catalog-signed event.
 
 **Under `RASK_SIGNATURE_DOORS=enforce` a named action reaches nobody unless the role that emits it signed it.**
-`lakehouse_kit.control_events.control_signer_role(action)` names that role, and the `/control-events` door
+`service_kit.control_events.control_signer_role(action)` names that role, and the `/control-events` door
 verifies the envelope's top-level `rask_signature` against the role's identities in `RASK_CONTROL_SIGNER_ROLES`, so a
 valid signature from another service is refused. A person actor (`user:<sub>`) verifies only under a delegation from a
 delegator, `onBehalfOf` equal to the whole actor. No action is exempt, so the lane carries only the lakehouse's own
@@ -189,7 +203,8 @@ sidecar's plain state API, beside the lineage cursor: one insert-only key per ev
 ETag-guarded index of their ids (`control-parks`), since the state API cannot list keys. Every reconcile tick offers each
 park again, within a 4 s budget and on `Lane.PARK`, to the same signature door and idempotent control ingest. A park
 retires when it lands, when it is refused for good, or after the dead-letter stream's 168h retention (`expired`,
-alerted as `NotificationsControlNotificationLost`); nothing else drops one, and a park the store cannot keep answers the
+counted in `notifications_control_parks_total{lance_notifications_outcome="expired"}`, whose alert is the inbox
+release's to provide, like its state store and its durables); nothing else drops one, and a park the store cannot keep answers the
 dead letter RETRY rather than acking the only copy.
 
 **One action erases rather than delivers: `principal_deleted`** (`ERASING_ACTIONS`, CTL-022). The catalog's offboarding door
@@ -205,12 +220,15 @@ the erasure and write rows again, never an enrolment.
 
 **A new named action is a THREE-file change, and all three are load-bearing:**
 
-1. `lakehouse_kit/control_events.py` — add the member to `ControlAction`, or the envelope will not validate, and
+1. `service_kit/control_events.py` — add the member to `ControlAction`, or the envelope will not validate, and
    its case to `control_signer_role` (ty fails the `assert_never` until it has one), which names the role whose
    signature the doors require.
 2. `notifications/api/control_events.py` — add it to `NAMED_ACTIONS`, or the lane files it IGNORED.
 3. `notifications/models.py` — add the matching `NotificationReason`, because `as_delivery` constructs
    `NotificationReason(event.action)` and would otherwise **raise on every delivery**.
+
+The first is the lakehouse's published contract; the other two are the inbox's, a client's, and
+`services/notifications/tests/test_control_action_three_file_contract.py` holds the three together.
 
 The deeper reason for (3) is that the reason is **stored, not inferred**: a delivery re-check keys on
 it, and a governance row is checked against no object rule at all, so a reader that could not tell it
@@ -264,7 +282,7 @@ so it must read as a reason a person would accept; and `notification-center.stor
    that verified the caller: a `ServicePrincipal` (a projected service-account token, [[LH-220]]) is a
    service, and an IdP token is a person whatever claims it carries.
 2. **A service token SUBSTITUTES the author.** If your emit runs behind a service bearer,
-   `enforce_author` (`lineage/api/fga_deps.py:295`) **overwrites** the facet with that service's
+   `enforce_author` (`lineage/api/fga_deps.py:296`) **overwrites** the facet with that service's
    sub — "never trust the request body" is doing its job, and your human is gone. Carrying the human's
    sub through your own call graph is the only fix.
 3. **No `rask_lance.project` disables WATCH silently.** `api/fanout.py:108` skips the watcher loop entirely when
@@ -298,17 +316,19 @@ so it must read as a reason a person would accept; and `notification-center.stor
 ## The FGA prerequisite
 
 The reconciler reads lineage's `GET /events/projection` as its own service principal ([[CTL-021]]): the
-whole run feed with no per-dataset filter, gated on the estate rung `can_read_event_feed`, which the
-chart's bootstrap hook grants it as `event_reader` on `estate:rask`. Not the governed `/events`: that
+whole run feed with no per-dataset filter, gated on the estate rung `can_read_event_feed`, which a deployment grants
+the inbox's ServiceAccount by mapping it to `event_reader` in the product chart's `auth.externalDeciders`
+(`{"<namespace>:<serviceaccount>": ["decider", "member_expander", "event_reader"]}`; bootstrap-admin writes each tuple
+on `estate:rask` and revokes it once the map stops naming the role). Not the governed `/events`: that
 shows a service only the tables its grants reach, so every tenant warehouse's runs would be invisible to
 the lane and the tick would still log success. Each row carries only the targeting view (run id, state,
 time, the `rask_author` and `rask_lance` facets, and each output's name with its own `rask_lance` facet, which carries the table's
 uuids), because addressing people needs nothing more. A
-deployment that forgets the grant gets a 403 on every tick, and no retry helps — the sidecar's
-`invokeRetry` (`<release>-invocation-resiliency`, scoped to `notifications`, targeting `lineage`) retries
-`408,429,500-599` and never a 4xx, because a 403's answer will not change. Delivery needs
-`can_be_notified` and render needs `can_get_metadata` on `table:<output uuid>` per recipient; an FGA
-outage is fail-closed (RETRY), never a delivery.
+deployment that forgets the grant gets a 403 on every tick, and no retry helps: the invocation retry the inbox's
+release scopes to its app-id retries `408,429,500-599` and never a 4xx, because a 403's answer will not change.
+Delivery needs `can_be_notified` and render needs `can_get_metadata` on `table:<output uuid>` per recipient, each asked
+through the catalog's decision door (`check`, on the account's `decider` role); an FGA outage is fail-closed (RETRY),
+never a delivery.
 
 So a new producer ships **one** grant: the recipients' grants on the objects its outputs name. The feed
 reaches the reconciler whichever warehouse the run wrote. See `openfga` — `can_*` relations are never

@@ -162,8 +162,8 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # --- Feed retention, in DAYS of arrival time (the estate's own `received_at`, never the
     # producer-supplied eventTime). 0 = unbounded. Pruned once per relay tick, never on the ingest path.
     #
-    # DAYS BECAUSE THE CONSUMER REASONS IN DAYS. `services/notifications` walks this feed from a persisted
-    # cursor as the estate's catch-up path after an outage, so the only question an operator needs a
+    # DAYS BECAUSE A CONSUMER REASONS IN DAYS. A notifier walks this feed from a persisted
+    # cursor as its catch-up path after an outage, so the only question an operator needs a
     # retention knob to answer is "how long an outage does the feed survive". A count cannot answer it at
     # any volume.
     #

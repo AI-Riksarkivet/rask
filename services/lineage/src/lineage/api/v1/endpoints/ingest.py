@@ -7,7 +7,7 @@ contract. Durable catalog→lineage delivery rides the Dapr subscription (``line
 **THIS DOOR RECORDS; IT DOES NOT TRIGGER.** An event ingested here lands in the commit feed and the edge
 list and drives NOTHING — the whole handler is authorize, ``ingest_event``, return, with no publish
 anywhere on the path. The subscribers on the ``lineage.events.v1`` TOPIC (maintenance's arrival
-door, the notifications inbox) hear only what is published there, and nothing republishes from HTTP
+door, a notifier on the bus) hear only what is published there, and nothing republishes from HTTP
 ingest onto that topic.
 
 The distinction is easy to miss and expensive: this is the one door an external orchestrator finds,

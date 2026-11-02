@@ -51,10 +51,10 @@ from catalog.core.lineage_emit import PUBLISH_TABLE, LineageEmitter, emit_write_
 from catalog.services import commit_reconcile, dataplane, erasure_derived, native, table_claims
 from lakehouse_kit import location_claims
 from lakehouse_kit.base_refs import decoded_path
-from lakehouse_kit.openlineage import DatasetUuids
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.lineage_events import DatasetUuids
 from service_kit.storage_options import StorageOptions
 
 

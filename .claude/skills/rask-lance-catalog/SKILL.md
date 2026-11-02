@@ -235,7 +235,7 @@ any project's only direct admin, refuses 400 code 13 the caller and every princi
 a tuple on the estate root or a warehouse `maintenance` tuple, which only the bootstrap hook and the catalog's own seed
 write, and the accounts the catalog's settings name; judged on the tuples, so the catalog names no client the hook
 grants a decision role, XC-183), records `_principals/<blake2s>.json` (`GET` on the same path), answers `revoked` as the tuples it removed and
-emits `principal_deleted` (signed by the catalog) for the notifications plane's erasure. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create any more: one
+emits `principal_deleted` (signed by the catalog), on which a notifier erases what it keeps for the person. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create: one
 door, and a warehouse-owner cannot ride a create into project admin.
 
 Check order at every create door: **identity (401) → shape (`InvalidInput` 400) → parent exists
@@ -884,7 +884,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   reached through the UI cannot be seeded either. A grant whose create failed is SKIPPED rather than
   written; writing it is exactly how a ghost is made.
 - **The control-event vocabulary is a wire contract in three files.** `ControlAction` /
-  `ControlObjectType` (`lakehouse_kit/control_events.py`) reach the frontend through
+  `ControlObjectType` (`service_kit/control_events.py`) reach the frontend through
   `docs/catalog-openapi.json` → `frontend/packages/api/src/generated/catalog.ts`. Adding an action
   without `make openapi` + `bun --cwd=frontend run gen:types:catalog` leaves the TS client unable to
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
@@ -1018,7 +1018,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   holder answers on `POST /management/v1/table/{id}/promotion/approve` (`published` moves to it) or
   `.../promotion/reject` (main is restored to the published version as a new commit); a hold unanswered after the
   gate's `review_hours` expires on `catalog-promotion-expiry-cron`. Every move of `published` emits a `publish_table`
-  lineage run, which the notifications plane delivers to the project's watchers, and the spec's tag doors refuse
+  lineage run, which a notifier delivers to the project's watchers (`docs/COMMIT-EVENTS.md`), and the spec's tag doors refuse
   `published`, `publishing` and every `rask.` tag (400), so nothing else moves it. A governed row needs no column (C9, [[LH-477]]): `source_rowid`
   is an opt-in the publish door holds to uint64 stable row ids, and `stage` and `lineage` are the writer's.
 

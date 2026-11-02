@@ -49,10 +49,8 @@ rule order.
 | --- | --- | --- |
 | `/api/catalog` | `<fullname>-catalog` | `/…` |
 | `/api/lineage` | `<fullname>-lineage` | `/…` |
-| `/api/notifications` | `<release>-notifications` | unchanged |
 
-Notifications' row renders only when it is front-door (`services.notifications.frontDoor`) or the install is
-single-tenant. Flows, viewer and search are clients with no row here. Compute's `/api/ray` and
+Notifications, flows, viewer and search are clients with no row here. Compute's `/api/ray` and
 `/api/serve` are not here either: the compute fixture chart renders its own HTTPRoute
 (`deploy/fixtures/compute/chart/templates/route.yaml`).
 

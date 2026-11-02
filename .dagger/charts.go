@@ -357,10 +357,10 @@ render --set dapr.resiliency.enabled=false > /tmp/legacy.yaml
 off=$(grep -c "kind: Resiliency" /tmp/legacy.yaml || true); [ "$off" = "0" ] || exit 1
 # THE TOGGLE OWNS THE POLICY LANES, NOT EVERY DLQ IN THE ESTATE. Maintenance's write-event lane carries
 # its own DLQ topic, which the toggle does not gate -- so it correctly survives the toggle. ON renders
-# LINEAGE, NOTIFICATIONS and MAINTENANCE_ARRIVAL; OFF renders only MAINTENANCE_ARRIVAL.
+# LINEAGE, the catalog's control lane (LANCE_CONTROL) and MAINTENANCE_ARRIVAL.
 # Asserting the policy-governed lanes by NAME says what the toggle actually means, and a new lane that
 # wires its own DLQ does not red a gate about somebody else's retry policy.
-for governed in LINEAGE_DLQ_TOPIC RASK_NOTIFICATIONS_DLQ_TOPIC; do
+for governed in LINEAGE_DLQ_TOPIC LANCE_CONTROL_DLQ_TOPIC; do
   ! grep -q "$governed" /tmp/legacy.yaml || { echo "FAIL: $governed survives dapr.resiliency.enabled=false, but the retry policy that gives it meaning does not"; exit 1; }
 done
 grep -q '30s,60s,120s,300s' /tmp/legacy.yaml`

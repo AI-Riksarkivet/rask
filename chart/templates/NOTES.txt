@@ -5,10 +5,10 @@ rask {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}" (namespac
 Event-driven path:  catalog --Dapr publish--> [pubsub.jetstream over NATS] --> lineage /lineage-events --> the provenance tables (forwarded as OpenLineage to services.lineage.forward.url)
 
 Services (ClusterIP):
-{{- range $name, $svc := .Values.services }}
-  - {{ $name }}: {{ include "rask.fullname" $root }}-{{ $name }}:{{ $svc.port }}
+{{- range $name := list "catalog" "lineage" }}
+  - {{ $name }}: {{ include "rask.fullname" $root }}-{{ $name }}:{{ (index $root.Values.services $name).port }}
 {{- end }}
-  - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Postgres — OpenFGA's database and the Dapr state store{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})
+  - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Postgres — OpenFGA's database{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})
 {{- if .Values.objectStore.enabled }}
   - store:     {{ include "lance.objectStoreHost" $root }}:{{ .Values.objectStore.port }} (the rustfs fixture's development store)
 {{- end }}

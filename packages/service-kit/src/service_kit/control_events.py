@@ -7,7 +7,8 @@ trail (#41, GreptimeDB); this is the real-time **subscribable** layer on top, so
 invalidation, an in-estate reaction worker) and the admin console get a live feed (comparable catalogs ship
 the same).
 
-Shared here (`service_kit`) so producers (the catalog) and consumers import ONE model. The event is a
+Shared here (`service_kit`, the platform a client pins) so producers (the catalog, maintenance) and every consumer,
+a client of the lakehouse included, import ONE model: it is the control lane's published contract. The event is a
 plain pointer payload (claim-check invariant — no data), published onto the existing Dapr/NATS bus by
 `lakehouse_kit.control_emit`; Dapr wraps it in a CloudEvent envelope at the sidecar (the same envelope the
 lineage subscriber already speaks). An event is a **refresh hint**, never authoritative data: a consumer
@@ -99,8 +100,8 @@ ControlAction = Literal[
     # THE REF PLANE ([[LH-056]]), and UNTARGETED for the reason the rule states: a control event is
     # targeted when it changes what a specific person may do or must do, not when it changes an object.
     # Creating or deleting a branch, and creating, moving or deleting a tag, change an OBJECT -- nobody's
-    # standing moves -- so they belong with the other object-lifecycle members and stay OUT of
-    # notifications' `NAMED_ACTIONS`. `table_published` is the sibling that is NOT here, and the
+    # standing moves -- so they belong with the other object-lifecycle members and name no person a notifier
+    # could address. `table_published` is the sibling that is NOT here, and the
     # difference is instructive: a publication stamps an `originator`, so it names somebody.
     "table_branch_created",
     "table_branch_deleted",
@@ -113,8 +114,8 @@ ControlAction = Literal[
     # commits are lost with it. Being told is the only window to copy work out; there is no door that defers it.
     "erasure_release_scheduled",
     # A principal removed from every grant by the estate admin's offboarding door ([[LH-233]]). `object_id` and
-    # `extra.subject` are the OpenFGA user it was (`fga.user_object`). Not a delivery: the notifications plane erases
-    # the person's inbox, preferences, cursor and watches on it, since nobody is left to tell (CTL-022).
+    # `extra.subject` are the OpenFGA user it was (`fga.user_object`). Not a delivery: a notifier erases what it keeps
+    # for the person on it (an inbox, preferences, watches), since nobody is left to tell (CTL-022).
     "principal_deleted",
 ]
 
@@ -165,8 +166,8 @@ class CatalogControlEvent(BaseModel):
     actor: str | None = None
     #: Action-specific detail — kept small (claim-check: pointers, never data). E.g. a grant's
     #: `{relation, subject}`, a rename's `{from, to}`, a warehouse bind's `{namespace}`. A `subject` is the OpenFGA
-    #: user the change names (`fga.user_object`: the principal key percent-encoded, or a userset), which the
-    #: notifications plane decodes back to the principal whose inbox it is.
+    #: user the change names (`fga.user_object`: the principal key percent-encoded, or a userset), which a notifier
+    #: decodes back to the principal it addresses (`fga.subject_of`).
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -10,7 +10,7 @@ at a time.
 CARDINALITY. Two closed label keys and nothing else: ``lance.lineage.reason`` (author | transport)
 and ``lance.lineage.state`` (the six OpenLineage run states). A job name, a namespace or an exception
 string must NEVER become a label — job names are producer-chosen and unbounded, which is the estate's
-own rule (``notifications/api/metrics.py``). Per-event detail belongs on the log line, where it is
+own rule. Per-event detail belongs on the log line, where it is
 indexed rather than multiplied.
 
 API ONLY, never the SDK. ``get_meter`` returns a proxy that binds if and when the host process

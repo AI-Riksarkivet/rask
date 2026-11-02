@@ -8,8 +8,8 @@ the root `packages/`, TS/Svelte libraries in `frontend/packages/`.
 |---|---|---|---|
 | `runners/htr` (the sealed HTR runner) | Python | runner, scripts | — |
 | `packages/storage` | Python | runner, lakehouse-kit and the catalog and maintenance, the media viewer (objects browser), scripts | [Storage](storage.md) · [API reference](../reference/storage.md) |
-| `packages/service-kit` | Python | every service: the platform package a client pins by lakehouse tag (the app factory, config, auth plane, naming and guards) | — |
-| `packages/lakehouse-kit` | Python | catalog, lineage, maintenance and notifications (the lakehouse's kernel; every client's import contract forbids it) | — |
+| `packages/service-kit` | Python | every service: the platform package a client pins by lakehouse tag (the app factory, config, auth plane, naming and guards, and the contract the lakehouse's events publish: `control_events`, `lineage_events`, `governed.subjects`, `signature_doors`) | — |
+| `packages/lakehouse-kit` | Python | catalog, lineage and maintenance (the lakehouse's kernel; every client's import contract forbids it) | — |
 | `packages/client-kit` | Python | viewer, search and the annotator (`client_kit.media`, `client_kit.lancekit`, `client_kit.rate_limit`) | — |
 | `packages/ray-kit` | Python | the compute service | — |
 | `frontend/packages/ui` (`@rask/ui`) | TS / Svelte | all 7 frontend apps | — |

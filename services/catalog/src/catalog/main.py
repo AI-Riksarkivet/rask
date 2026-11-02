@@ -243,7 +243,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         lineage_http = httpx.AsyncClient(timeout=settings.lineage_emit_timeout_seconds)
 
     # WHICH TENANT a write belongs to, for the emitted `rask_lance.project` facet — WATCH targeting's only
-    # key. Without it `notifications` skips the watcher loop entirely and every catalog write in the
+    # key. Without it a notifier skips the watcher loop entirely and every catalog write in the
     # estate reaches its author and nobody else.
     #
     # Resolved through the warehouse registry (binding → warehouse → project) because no string rule

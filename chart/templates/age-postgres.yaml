@@ -1,6 +1,6 @@
 {{- if .Values.age.enabled }}
-# Apache AGE Postgres — OpenFGA's datastore (db 'openfga') and the Dapr state store (db 'daprstate'). Lineage keeps
-# no database (ADR 0158). initdb scripts (alphabetical) load AGE into the bootstrap database, then create the two.
+# Apache AGE Postgres — OpenFGA's datastore (db 'openfga'). Lineage keeps no database (ADR 0158), and the lakehouse no
+# Dapr state store. initdb scripts (alphabetical) load AGE into the bootstrap database, then create OpenFGA's.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -23,20 +23,6 @@ data:
     -- That is what wedged OpenFGA at schema v5 (migration 006 drops an index) and failed every upgrade.
     -- Removing age from shared_preload_libraries is not an option; AGE requires it.
     \c "{{ .Values.age.openfgaDb }}"
-    CREATE EXTENSION IF NOT EXISTS age;
-  30-daprstate.sql: |
-    -- The Dapr state store's own database: operational state (notification inboxes, each person's UI
-    -- state, actor and workflow state) that Lance must not hold — a per-item state flip would be a dataset
-    -- version, so hundreds of manifests a minute and a history that is noise rather than provenance.
-    --
-    -- Its own database: Dapr owns this schema completely (it creates and migrates its own tables), so a Dapr
-    -- migration can reach nothing else. Same isolation argument as openfga's.
-    CREATE DATABASE "{{ .Values.age.stateDb }}";
-    ALTER DATABASE "{{ .Values.age.stateDb }}" SET search_path = public;
-    -- Same ag_catalog-must-exist rule as openfga above, and it matters MORE here: Dapr migrates this
-    -- schema itself, so a future Dapr version whose migration drops anything would fail against the
-    -- store holding actor state and workflow history.
-    \c "{{ .Values.age.stateDb }}"
     CREATE EXTENSION IF NOT EXISTS age;
 ---
 apiVersion: v1

@@ -47,10 +47,9 @@ SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_CHAOS_SETTLE_SECONDS", "300"))
 CATALOG = f"{RELEASE}-catalog"
 LINEAGE = f"{RELEASE}-lineage"
 OPENFGA = f"{RELEASE}-openfga"
-NOTIFICATIONS = f"{RELEASE}-notifications"
 #: The release's workloads whose sidecar holds a connection to the bus that the drills' readings depend on: the catalog
-#: announces, lineage records and relays, notifications acknowledges (`lance.busEnv`).
-BUS_CLIENTS = (CATALOG, LINEAGE, NOTIFICATIONS)
+#: announces, lineage records and relays (`lance.busEnv`).
+BUS_CLIENTS = (CATALOG, LINEAGE)
 #: The dev fixtures standing in for the platform's dependencies.
 #: The object store's StatefulSet (`deploy/fixtures/rustfs`), which the store drill scales to zero.
 STORE = os.environ.get("LANCE_E2E_STORE_WORKLOAD", "rask-rustfs")

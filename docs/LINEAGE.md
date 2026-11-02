@@ -9,7 +9,7 @@ catalog control plane, and it keeps no database.
 ```
 catalog, maintenance ─lineage.events.v1─▶ lineage ──merge_insert / query──▶ catalog ──▶ provenance$events
 a user's pipeline ──POST /api/v1/lineage─▶   │                                         provenance$edges
-pipelines, notifications ◀── GET /events ────┤                                         provenance$refusals
+pipelines, notifiers ◀── GET /events ────────┤                                         provenance$refusals
 erasure ◀── GET /tables/{name}/derived ──────┤                                         provenance$cursors
                                              └─ relay tick ─ OpenLineage HTTP ─▶ graph backend (Marquez, DataHub, …)
 ```
@@ -81,7 +81,7 @@ An in-place refinement (a run that reads and writes one table) bumps that table'
 |---|---|
 | `POST /api/v1/lineage` | Authenticated OpenLineage intake (the HTTP transport's default path): a `RunEvent`, or a `DatasetEvent` for a change no job performed |
 | `GET /events` | The durable commit feed, governed per dataset: newest first by `after`, or forward from `since` with `next_cursor`; filterable by `table` or `namespace`; reports `oldest_seq` |
-| `GET /events/projection` | The same feed without the per-dataset filter, cut to the fields that decide whom to notify; gated on `can_read_event_feed`, for the notifications reconciler |
+| `GET /events/projection` | The same feed without the per-dataset filter, cut to the fields that decide whom to notify; gated on `can_read_event_feed`, for a notifier holding `event_reader` (granted through `auth.externalDeciders`) |
 | `GET /tables/{name}/derived?depth=` | Every table derived from `name`, nearest first |
 | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | The dead-letter queue: list parked deliveries, replay one |
 | `POST /lineage-events` | Dapr subscription on `lineage.events.v1` (sidecar only) |
@@ -177,7 +177,7 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   delegation (`onBehalfOf` equal to the whole actor) declared by a delegator, and an absent or non-`user:` actor is a
   service acting for itself, signed with no delegation. The emitting service signs at emit, before the event is staged
   (`lakehouse_kit.control_emit`, its signer injected). Who signs which action is
-  `lakehouse_kit.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
+  `service_kit.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
   authenticated; maintenance signs `table_purged` and `namespace_purged` as itself. No action is exempt: the lane carries only the
   lakehouse's own signed events, and a client tool publishes nothing on it (ADR 0171). A signer whose key
   is unresolved publishes and stages nothing unsigned: it withholds the event, counts it under
@@ -202,10 +202,10 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   claimed identity and the reason. A key list that cannot be read is an outage, not a verdict, and the delivery is
   retried. What each reason means and what to do:
   [RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events).
-- **The doors that act on the bus.** Notifications (`/lineage-events`, `/control-events`), the catalog's own
-  `/control-events` (which feeds `GET /management/v1/events` and the warehouse-binding cache) and maintenance's
-  `/maintenance-arrival` verify the same signatures before they act, in the mode `RASK_SIGNATURE_DOORS` names (chart
-  `signing.doors`: off, observe or enforce). A lineage event verifies against `RASK_EVENT_SIGNERS` and
+- **The doors that act on the bus.** The catalog's own `/control-events` (which feeds `GET /management/v1/events` and
+  the warehouse-binding cache) and maintenance's `/maintenance-arrival` verify the same signatures before they act, in
+  the mode `RASK_SIGNATURE_DOORS` names (chart `signing.doors`: off, observe or enforce), and a notifier's doors verify
+  them with the same settings (`service_kit.signature_doors`). A lineage event verifies against `RASK_EVENT_SIGNERS` and
   `RASK_EVENT_DELEGATORS`, lineage's own sets. A control
   event verifies against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role its action names. Only an event
   the door would act on is verified. Enforcing, a refusal is acknowledged and drives nothing, counted in

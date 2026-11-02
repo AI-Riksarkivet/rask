@@ -74,14 +74,28 @@ The operator-pinned store (env parity with the catalog's RASK_FGA_STORE_ID): the
 prefers this over the name lookup, so a pinned store named anything BUT `lance-catalog`
 still gets the bootstrap grant in the right place.
 
-## `{{- $eventReaders := list }}`
+## `estate_roles = json.loads(os.environ["FGA_ESTATE_ROLES"])`
 
-EVENT READERS hold `can_read_event_feed` on the estate ROOT ([[CTL-021]]): lineage's run feed
-with no per-dataset filter (`GET /events/projection`), which the notifications reconciler
-walks to find whom to tell about runs in EVERY warehouse. The governed `/events` shows a
-service only the tables its grants reach, so a tenant warehouse's runs would never arrive.
-`event_reader` and nothing wider: no tier, no tenant data, no rung that mints a project or
-edits a tuple (`model.fga.yaml` pins both halves). Who is told stays gated per person.
-The subject is the reconciler's ServiceAccount's (`lance.saSubject`), the one lineage's door
-verifies its token as, so the two cannot drift. Every grant names the user its subject is
-(`service_kit.governed.fga.user_object`, `:` written `%3A`).
+THE ESTATE ROLES, one JSON object from each account's subject to the machine roles it holds on the estate root
+(`lance.fgaEstateRoles`): lineage's `decider` and `governance_prober`, and each `auth.externalDeciders` account's own
+list. EVENT READERS hold `can_read_event_feed` ([[CTL-021]]): lineage's run feed with no per-dataset filter
+(`GET /events/projection`), which a notifier walks to find whom to tell about runs in EVERY warehouse. The governed
+`/events` shows a service only the tables its grants reach, so a tenant warehouse's runs would never arrive.
+`event_reader` and nothing wider: no tier, no tenant data, no rung that mints a project or edits a tuple
+(`model.fga.yaml` pins both halves). Who is told stays gated per person. Each subject is the one the door verifies the
+account's token as (`lance.saSubject` for lineage, `kubernetes~system:serviceaccount:<namespace>:<name>` for an external
+account), so the two cannot drift. Every grant names the user its subject is (`service_kit.governed.fga.user_object`,
+`:` written `%3A`).
+
+## `for relation in ("decider", "member_expander", "governance_prober", "event_reader"):`
+
+THE MACHINE ROLES CONVERGE TO WHAT THE RELEASE DECLARES. The grant loop above only adds, so on its own an account taken
+out of `auth.externalDeciders`, or a role taken out of its list, would keep that role for as long as the store lives: a
+standing grant no file in git declares, which an install from git would not reproduce (GitOps) and which outlives the
+decision that made it (zero trust). The hook reads every tuple of the four machine relations on the estate root,
+following OpenFGA's `continuation_token` page by page, and deletes each one `estate_roles` does not name, so the next
+upgrade after a removal leaves the account nothing. Only these four are read, and that is what makes the delete safe:
+each is `[user]` alone in `model.fga` and names a machine, and nothing else in the repo grants one by name
+(`make fga-estate-migrate` carries `owner` only), so a holder the release does not declare is revoked whoever wrote it,
+the estate admin's raw tuple door included. `admin` and every person's rung are never read. A failed read or delete
+exits non-zero and fails the hook, so a convergence that did not happen is never reported as done.

@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 SIGNATURE_FACET = "rask_signature"
 
 #: The facet naming the subject a producer stamped on its own event, read by :func:`author_of`. The same name as
-#: ``lakehouse_kit.openlineage.AUTHOR_FACET``, which every emitter writes: the two packages never import each other.
+#: ``service_kit.lineage_events.AUTHOR_FACET``, which every emitter writes: the two packages never import each other.
 AUTHOR_FACET = "rask_author"
 
 #: The schema the facet's `_schemaURL` names. The URL is inside the signed bytes, so it cannot be corrected

@@ -37,8 +37,8 @@ _GRACEFUL_S = 5
 _EXIT_WITHIN_S = _GRACEFUL_S + 5
 
 #: The loop owns SIGTERM's delivery (asyncio's wakeup-fd trampoline, uvloop's own), so the handoff is proven on
-#: both: `auto` resolves to uvloop where `uvicorn[standard]` is installed, and the gateway and notifications
-#: install plain `uvicorn`, so they run asyncio.
+#: both: `auto` resolves to uvloop where `uvicorn[standard]` is installed, and a service that installs plain
+#: `uvicorn` runs asyncio.
 _EVERY_LOOP = pytest.mark.parametrize("loop", ["asyncio", "uvloop"])
 
 _APP = textwrap.dedent(

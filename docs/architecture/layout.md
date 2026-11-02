@@ -11,8 +11,8 @@ one `.docker/<name>.dockerfile` per deployable running `uv sync --frozen --packa
 flowchart TD
     subgraph py["Python plane · repo root · uv workspace"]
         subgraph services["services/ · runnable code"]
-            lake["lakehouse: catalog · lineage · maintenance · notifications"]
-            fleet["flows · compute"]
+            lake["lakehouse: catalog · lineage · maintenance"]
+            fleet["flows · compute · notifications"]
             media["media: viewer · search"]
             annot["annotator (a client, own release)"]
         end
@@ -51,8 +51,8 @@ plane, and language purity is what lets both workspaces glob their members.
 
 | Package | Language | Purpose |
 |---|---|---|
-| `packages/service-kit` | Python | The platform package a client pins by lakehouse tag: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, health and probes, telemetry, the auth plane (`service_kit.governed`), the naming a client needs and the input and credential guards (`service_kit.arrow_ipc`, `service_kit.storage_options`). Dependency-light (no lancedb/ray/sqlmodel), carries no code only a client runs, and imports nothing from the lakehouse's kernel. |
-| `packages/lakehouse-kit` | Python | The lakehouse's kernel: the lance app factory, the catalog's records, registries and governance guards, the namespace clients, the OpenLineage, control-event and outbox seams and the store session. Imported by catalog, lineage, maintenance and notifications; every client's import contract forbids it. |
+| `packages/service-kit` | Python | The platform package a client pins by lakehouse tag: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, health and probes, telemetry, the auth plane (`service_kit.governed`), the naming a client needs, the input and credential guards (`service_kit.arrow_ipc`, `service_kit.storage_options`), and the contract the lakehouse's events publish (`service_kit.control_events`, `service_kit.lineage_events`, `service_kit.governed.subjects`, `service_kit.signature_doors`). Dependency-light (no lancedb/ray/sqlmodel), carries no code only a client runs, and imports nothing from the lakehouse's kernel. |
+| `packages/lakehouse-kit` | Python | The lakehouse's kernel: the lance app factory, the catalog's records, registries and governance guards, the namespace clients, the OpenLineage, control-event and outbox seams and the store session. Imported by catalog, lineage and maintenance; every client's import contract forbids it. |
 | `packages/client-kit` | Python | Code the lakehouse's clients share and the lakehouse never runs: the media app factory and lifespan, the lancedb dataset registry and descriptors, the per-route rate limiter. Used by viewer, search and the annotator; the lakehouse may not import it. |
 | `packages/lineage-kit` | Python | The OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used by catalog, lineage, maintenance and notifications. |
 | [`packages/storage`](../packages/storage.md) | Python | The S3 client seam (`s3_client`, `configured_endpoint`, STS, `iter_keys`, `split_s3_uri`, the `StorageError` family). |
@@ -68,7 +68,8 @@ plane, and language purity is what lets both workspaces glob their members.
 
 | Path | Type | Purpose |
 |---|---|---|
-| `services/{catalog,lineage,maintenance,notifications}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with tier governance, OpenLineage intake, the durable `GET /events` feed and edge list (Lance tables the catalog governs) and the forwarder to a graph backend, maintenance (expiry, purge, orphan scan, reconcile), and the targeted inbox. |
+| `services/{catalog,lineage,maintenance}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with tier governance, OpenLineage intake, the durable `GET /events` feed and edge list (Lance tables the catalog governs) and the forwarder to a graph backend, and maintenance (expiry, purge, orphan scan, reconcile). |
+| `services/notifications` | FastAPI | The targeted inbox behind the console's bell (`:8850`), a client of the lakehouse's events that reads them through service-kit's contract and imports nothing from `lakehouse_kit`; no chart in this repo deploys it (ADR 0190). |
 | `services/{viewer,search}` | FastAPI | The media plane (`:8101`–`:8102`, public `/api/explorer/*`). The viewer also serves the S3 object browser. |
 | `services/annotator` | FastAPI | The labeling tool (`:8103`, public `/api/explorer/annotations`), a client of the lakehouse that reads and writes only through the catalog's doors; deployed by its own chart, `deploy/fixtures/annotator`, not the product chart (ADR 0171). |
 | `services/flows` | FastAPI | The studio flow-builder's server half (`/api/flows`). |

@@ -26,8 +26,8 @@ import pytest
 
 from catalog.core.config import get_settings as catalog_settings
 from lakehouse_kit import trash
-from lakehouse_kit.control_events import CatalogControlEvent
 from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.control_events import CatalogControlEvent
 from service_kit.governed.fga import user_object
 from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance
 from tests.integration.openfga_grants import principal_key

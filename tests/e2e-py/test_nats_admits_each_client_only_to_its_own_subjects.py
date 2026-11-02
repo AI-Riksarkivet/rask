@@ -99,26 +99,19 @@ PUBLISHERS: dict[str, frozenset[str]] = {
     "lineage.events.v1": frozenset({"catalog", "lineage", "maintenance"}),
     "catalog.control.v1": frozenset({"catalog", *_control_emitters(_values())}),
     "dlq.lineage.events": frozenset({"lineage"}),
-    "dlq.notifications": frozenset({"notifications"}),
     "dlq.maintenance.arrival": frozenset({"maintenance"}),
     "dlq.catalog.control": frozenset({"catalog"}),
-    **{f"probe.{app}": frozenset({app}) for app in ("catalog", "lineage", "maintenance", "notifications")},
+    **{f"probe.{app}": frozenset({app}) for app in ("catalog", "lineage", "maintenance")},
 }
 #: The subjects no stream captures, so an owner's publish is acknowledged by nobody and only the broker's log says
 #: whether it was refused.
 UNSTORED = frozenset(subject for subject in PUBLISHERS if subject.startswith("probe."))
 
 #: What each sidecar subscribes, as (durableName, topic); a `{podName}` durable is one each replica names for its pod.
-#: catalog/api/dapr.py; lineage/api/dapr.py;
-#: notifications/api/{subscriptions,dlq}.py; maintenance/api/arrival.py.
+#: catalog/api/dapr.py; lineage/api/dapr.py; maintenance/api/arrival.py.
 DAPR_SUBSCRIPTIONS: dict[str, tuple[tuple[str, str], ...]] = {
     "catalog": ((f"catalog-control-{POD_NAME}", "catalog.control.v1"),),
     "lineage": (("lineage-durable", "lineage.events.v1"), ("lineage-dlq-durable", "dlq.lineage.events")),
-    "notifications": (
-        ("notifications-durable", "lineage.events.v1"),
-        ("notifications-durable", "dlq.notifications"),
-        ("notifications-control-durable", "catalog.control.v1"),
-    ),
     "maintenance": (("maintenance-durable", "lineage.events.v1"),),
 }
 
@@ -255,12 +248,13 @@ async def _publish_matrix(url: str, mint_: Mint, table: dict[str, Permissions], 
 
 
 async def _publish_until_delivered(sidecar: Sidecar, pubsub: str, topic: str, app: SubscriberApp, route: str, timeout: float = 30.0) -> str | None:
-    """Publish through `sidecar` until `app` receives one on `route`: a `deliverPolicy: new` consumer drops what precedes it."""
+    """Publish through `sidecar` until `app` receives one of these publishes on `route`: a `deliverPolicy: new` consumer
+    drops what precedes it, and a `deliverPolicy: all` one first delivers what the stream already held."""
     deadline = asyncio.get_running_loop().time() + timeout
     for attempt in range(1_000):
         await sidecar.publish(pubsub, topic, {"marker": f"{topic}#{attempt}"})
         await asyncio.sleep(0.5)
-        if delivered := app.markers(route):
+        if delivered := [marker for marker in app.markers(route) if marker.startswith(f"{topic}#")]:
             return delivered[0]
         if asyncio.get_running_loop().time() > deadline:
             break
@@ -289,10 +283,14 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
     """One real daprd per Component shape, each delivering a message end to end with the chart's own Component."""
     findings: list[str] = []
     creds = mint_.credentials
+    # Lineage's durable ingest, whose dead letters come back to its parking route on a Component of their own
+    # (`lineage.api.dapr.register_dapr`).
+    ingest = _subscriber_component(components, "lineage", "lineage-durable")[0]
+    parking = _subscriber_component(components, "lineage", "lineage-dlq-durable")[0]
     subscriber_app = SubscriberApp(
         [
-            {"pubsubname": "lineage-pubsub-notifications", "topic": "lineage.events.v1", "route": "/lineage-events", "deadLetterTopic": "dlq.notifications"},
-            {"pubsubname": "lineage-pubsub-notifications", "topic": "dlq.notifications", "route": "/dlq-event"},
+            {"pubsubname": ingest["metadata"]["name"], "topic": "lineage.events.v1", "route": "/lineage-events", "deadLetterTopic": "dlq.lineage.events"},
+            {"pubsubname": parking["metadata"]["name"], "topic": "dlq.lineage.events", "route": "/lineage-dlq"},
         ],
         failing=frozenset({"/lineage-events"}),
     )
@@ -307,8 +305,8 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
     sidecars = [
         Sidecar(
             tools.daprd,
-            "notifications",
-            [sidecar_component(_named(components, "lineage-pubsub-notifications"), broker.url, creds["notifications"])],
+            "lineage",
+            [sidecar_component(component, broker.url, creds["lineage"]) for component in (ingest, parking)],
             subscriber_app,
             workdir / "subscriber",
         ),
@@ -341,15 +339,16 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
     try:
         marker = await _publish_until_delivered(publisher, "lineage-pubsub", "lineage.events.v1", subscriber_app, "/lineage-events")
         if marker is None:
-            findings.append("daprd catalog (publisher-only) -> daprd notifications (durable): nothing reached /lineage-events")
+            findings.append("daprd catalog (publisher-only) -> daprd lineage (durable): nothing reached /lineage-events")
         else:
             for _ in range(60):
-                if marker in subscriber_app.markers("/dlq-event"):
+                if marker in subscriber_app.markers("/lineage-dlq"):
                     break
                 await asyncio.sleep(0.25)
             else:
-                findings.append(f"daprd notifications never dead-lettered {marker} through dlq.notifications back to itself")
-            findings += await _unacked(rig, ("LINEAGE", "DLQ"), component_metadata(_named(components, "lineage-pubsub-notifications")))
+                findings.append(f"daprd lineage never dead-lettered {marker} through dlq.lineage.events back to itself")
+            findings += await _unacked(rig, ("LINEAGE",), component_metadata(ingest))
+            findings += await _unacked(rig, ("DLQ",), component_metadata(parking))
         if await _publish_until_delivered(broadcast, "catalog-control-pubsub", "catalog.control.v1", broadcast_app, "/control-events") is None:
             findings.append("daprd catalog (broadcast): nothing reached /control-events")
         else:

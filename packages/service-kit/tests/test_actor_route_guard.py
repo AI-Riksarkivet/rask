@@ -1,19 +1,17 @@
-"""The actor callback surface is not a public read API for other people's inboxes.
+"""The actor callback surface is not a public read API for other people's actor state.
 
 THE HOLE. `DaprActor(app)` root-mounts `PUT /actors/{actor_type}/{actor_id}/method/{method}`, and for
-this service the actor IS the private store — one inbox per subject, keyed by an id that is merely
-`base64url(sub)`. The inbox's own doors (OIDC, `require_actor_plane`, the FGA re-check) hang on the
-ROUTER under `settings.api_prefix`; these routes are mounted at the ROOT and inherit none of them. So
-before the guard, anything able to reach the pod read any actor's state by name. The notifications inbox is the
-sharpest case — one inbox per subject, actor id `base64url(sub)`:
+a service whose actors are its private store, one per subject, the actor id is merely
+`base64url(sub)`. The service's own doors (OIDC, the FGA re-check) hang on the ROUTER under
+`settings.api_prefix`; these routes are mounted at the ROOT and inherit none of them. So without the
+guard, anything able to reach the pod reads any actor's state by name:
 
-    curl -XPUT :8850/actors/InboxActor/YWxpY2U/method/Page -d '{"state":"all","limit":100}'
+    curl -XPUT :<port>/actors/SubjectActor/YWxpY2U/method/Page -d '{"state":"all","limit":100}'
 
 `YWxpY2U` is `base64url("alice")` and subjects are readable off lineage's author facets — the actor id
 was never a secret, so it cannot be the access control.
 
-It lives in `service_kit` because TWO services mount `DaprActor` this way — notifications (the
-per-subject inbox) and the annotator (claims, drafts, reviews, the lease holder) — and two copies of
+It lives in `service_kit` because more than one service mounts `DaprActor` this way, and two copies of
 an auth guard is how they drift apart.
 
 These drive the middleware through a real app rather than calling it directly, because what is being
@@ -47,18 +45,18 @@ def client() -> TestClient:
     async def _actor(actor_type: str, actor_id: str, method: str) -> dict[str, str]:
         return {"actor_id": actor_id}
 
-    @app.get("/api/inbox")
-    async def _inbox() -> dict[str, str]:
+    @app.get("/api/state")
+    async def _state() -> dict[str, str]:
         return {"ok": "yes"}
 
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_an_unauthenticated_caller_cannot_read_an_inbox_by_actor_id(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unauthenticated_caller_cannot_read_an_actors_state_by_its_id(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The regression, in the exact shape of the reported exploit."""
     monkeypatch.setenv("APP_API_TOKEN", "the-sidecar-token")
 
-    response = client.put(f"/actors/InboxActor/{ALICE}/method/Page", json={"state": "all", "limit": 100})
+    response = client.put(f"/actors/SubjectActor/{ALICE}/method/Page", json={"state": "all", "limit": 100})
 
     assert response.status_code == 403
     assert ALICE not in response.text, "the refusal echoed the actor id back"
@@ -70,7 +68,7 @@ def test_the_sidecar_itself_still_gets_through(client: TestClient, monkeypatch: 
     monkeypatch.setenv("APP_API_TOKEN", "the-sidecar-token")
 
     response = client.put(
-        f"/actors/InboxActor/{ALICE}/method/Page",
+        f"/actors/SubjectActor/{ALICE}/method/Page",
         json={},
         headers={"dapr-api-token": "the-sidecar-token"},
     )
@@ -78,13 +76,13 @@ def test_the_sidecar_itself_still_gets_through(client: TestClient, monkeypatch: 
     assert response.status_code == 200
 
 
-def test_the_guard_does_not_touch_the_inbox_ROUTER(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Scope check. The inbox routes carry their own doors (OIDC + FGA); applying the sidecar token to
+def test_the_guard_does_not_touch_the_services_ROUTER(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scope check. The service's routes carry their own doors (OIDC + FGA); applying the sidecar token to
     them as well would refuse every human caller, which is the failure mode of a path-prefix guard
     written one character too broad."""
     monkeypatch.setenv("APP_API_TOKEN", "the-sidecar-token")
 
-    assert client.get("/api/inbox").status_code == 200
+    assert client.get("/api/state").status_code == 200
 
 
 def test_the_dapr_CONFIG_probe_is_guarded_too(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -127,9 +127,9 @@ untrusted `Any` and guard with `isinstance` before touching `data`.
 
 | Topic | Producer → consumer | Schema (the pydantic model) | Where the name lives |
 |---|---|---|---|
-| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), maintenance (`maintenance/core/lineage_emit.py`) → lineage **and notifications** subscribers, one per-app component each | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `MAINTENANCE_LINEAGE_TOPIC` in each service's `core/config.py`; `RASK_NOTIFICATIONS_LINEAGE_TOPIC` in `notifications/api/settings.py`, rendered from `pubsub.topic` by the chart configmap |
-| `catalog.control.v1` | the catalog and maintenance through `packages/lakehouse-kit/src/lakehouse_kit/control_emit.py`, each signed as `control_signer_role` names → every catalog replica (broadcast, no `queueGroupName`) and notifications' `/control-events`, each verifying the signature | `lakehouse_kit.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/lakehouse-kit/src/lakehouse_kit/control_events.py`, imported by every producer and by the catalog subscriber; notifications re-types it as the default of `RASK_NOTIFICATIONS_CONTROL_TOPIC` |
-| `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`), `dlq.notifications` (chart `configmap.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
+| `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), maintenance (`maintenance/core/lineage_emit.py`) → lineage and, under `maintenance.arrivalEnabled`, maintenance's arrival lane, one per-app component each | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `MAINTENANCE_LINEAGE_TOPIC` in each service's `core/config.py` |
+| `catalog.control.v1` | the catalog and maintenance through `packages/lakehouse-kit/src/lakehouse_kit/control_emit.py`, each signed as `control_signer_role` names → every catalog replica (broadcast, no `queueGroupName`), each verifying the signature | `service_kit.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/service-kit/src/service_kit/control_events.py`, imported by every producer and by the catalog subscriber |
+| `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
 
 The two **cross-plane** topics carry an explicit `.v1`: the version in the NAME is the compatibility
 unit — a consumer subscribed to `lineage.events.v1` is entitled to `RunEvent`-shaped payloads
@@ -162,7 +162,7 @@ already support (subjects `lineage.events.*` style bindings cost nothing).
 
 A registry earns its keep when producers and consumers ship independently. Here they cannot drift:
 **one repo, one CI** — producers and consumers import the same model classes
-(`lakehouse_kit.control_events`, `lineage.models.RunEvent`), so `ty` type-checks both sides of every topic
+(`service_kit.control_events`, `lineage.models.RunEvent`), so `ty` type-checks both sides of every topic
 in the same run. A registry would add an operand and a failure mode to re-prove a property CI already
 proves. **Revisit trigger:** the moment a consumer is deployed from OUTSIDE
 this repo's CI — an independently-released service, or tenant-authored consumers on the bus — the
@@ -171,21 +171,23 @@ version) becomes the contract carrier.
 
 ### 7.6 Becoming a notification producer
 
-The notification plane turns events into things addressed to a PERSON. It is a consumer of the fabric
-above, not a parallel one — so a service that wants its work to reach someone adds a topic and a door,
-never a special case inside `services/notifications`.
+A notifier turns events into things addressed to a PERSON. It is a client of the fabric above, not a parallel one
+(the notifications inbox, `services/notifications`, is one) — so a service that wants its work to reach someone stamps
+the fields a notifier targets by, never a special case inside a notifier.
 
-**The producer contract is deliberately NOT restated here.** It lives in exactly one place,
-`.claude/skills/rask-notifications`, which is maintained against the code and which the project rule
+**The targeting contract is deliberately NOT restated here.** It lives in exactly one place,
+[`COMMIT-EVENTS.md`](COMMIT-EVENTS.md#telling-people-the-notifier-contract), the lakehouse's published contract for any
+notifier ([ADR 0190](adr/0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md)), and the producer's
+how-to against it in `.claude/skills/rask-notifications`, maintained against the code, which the project rule
 requires be corrected *in the same commit* as any change it describes. This section used to carry a
 second copy, and it drifted exactly as a second copy does: it named **three** targeting sources long
 after the plane had six, and told producers they owed "exactly four things" while the real rule for a
 named action had become a three-file change with a stored-enum compatibility surface. A contract with
 two homes has none — and the stale half is worse than no half, because a published page asserts
-settledness whatever it says. Read the skill.
+settledness whatever it says. Read the contract, then the skill.
 
 What belongs here is the FABRIC-level rule, which this document does own: **a producer never writes
-into an inbox.** It publishes; the plane derives the audience, re-checks visibility per recipient, and
+into an inbox.** It publishes; a notifier derives the audience, re-checks visibility per recipient, and
 stores a claim-check POINTER — never a payload copy. That is what keeps this document's own rule
 intact one layer up: an event is a refresh hint, and the governed read is still the only path to the
 data.

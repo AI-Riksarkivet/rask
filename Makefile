@@ -1,4 +1,4 @@
-.PHONY: k3s-clients fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: k3s-clients fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill lakehouse-alone audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -99,15 +99,15 @@ lint:
 	bun --cwd=frontend run lint
 
 # The import-layer contracts in `.importlinter` (the lakehouse's, which name no client module), then each client's
-# own in its pyproject. `uv run --with` layers the pinned import-linter over the workspace venv, so the graph it walks
-# is the workspace's own editable installs.
+# own: every workspace member whose pyproject declares `[tool.importlinter]`. A client's contract travels with its tree,
+# so this target names no client and holds with every client tree deleted (XC-188). `uv run --with` layers the pinned
+# import-linter over the workspace venv, so the graph it walks is the workspace's own editable installs.
 lint-imports:
 	uv run --with import-linter==2.15 lint-imports
-	uv run --with import-linter==2.15 lint-imports --config services/annotator/pyproject.toml
-	uv run --with import-linter==2.15 lint-imports --config services/viewer/pyproject.toml
-	uv run --with import-linter==2.15 lint-imports --config services/search/pyproject.toml
-	uv run --with import-linter==2.15 lint-imports --config packages/client-kit/pyproject.toml
-	uv run --with import-linter==2.15 lint-imports --config services/table-maintenance/pyproject.toml
+	@for config in $$(grep -l '^\[tool\.importlinter\]' services/*/pyproject.toml packages/*/pyproject.toml); do \
+		echo "lint-imports --config $$config"; \
+		uv run --with import-linter==2.15 lint-imports --config "$$config" || exit 1; \
+	done
 
 fmt:
 	uv run ruff format .
@@ -195,41 +195,6 @@ frontend-images: ## Build every zone image from the one parametrized dockerfile 
 # deliberately excludes .localbin so a host-downloaded binary cannot shadow the pinned one.
 prod-render-check: ## Render values-prod.yaml and assert its HA + security switches are ON
 	./scripts/prod_render_check.sh
-
-# ---- the notification channel verify rig (open_notifications.md §7) --------
-# A SIDE STACK, not a deploy path. It answers the one question unit tests cannot: does exactly ONE
-# message leave the estate per (event, subject, channel) when the broker redelivers? Mailpit shows
-# every message it received, so a duplicate is visible rather than inferred. Point the email
-# binding's host at localhost:1025 while it is up.
-# The notification-lane drives. Two tracked, documented .mjs files proving claims no unit test can
-# make — that a run whose AUTHOR is not you still reaches you because you are named as the human the
-# work is for — and until 2026-08-22 they were referenced by NOTHING: one grep hit each, their own
-# declaration. They also sit outside playwright's `testDir: './tests'`, so `make e2e` skipped them too.
-#
-# A drive nobody can name is a drive nobody runs, and these are the only proof the estate has for the
-# ORIGINATOR targeting source end to end. They need a DEPLOYED estate (a live Dapr actor
-# plane), which is why they are a named target rather than part of an offline gate.
-#
-# Pinned by tests/unit/test_e2e_collection_gate.py, which now requires every tests/e2e/verify_*.mjs to
-# have an invocation site — so a new drive cannot land unreferenced.
-notifications-lanes: ## The notification-lane drives vs a deployed estate (ORIGIN=http://…)
-	@test -n "$(ORIGIN)" || { echo "set ORIGIN, e.g. make notifications-lanes ORIGIN=http://localhost:8080"; exit 1; }
-	@# OpenFGA admits only a projected rask-openfga token (XC-077): one TokenRequest for the bootstrap Job account.
-	@FGA_TOKEN_FILE="$$(mktemp)"; trap 'rm -f "$$FGA_TOKEN_FILE"' EXIT; \
-	kubectl create token "$${RELEASE:-rask}-sa-jobs" --audience rask-openfga --duration 1h > "$$FGA_TOKEN_FILE" || exit 1; \
-	export FGA_TOKEN_FILE; \
-	for drive in tests/e2e/verify_originator_lane.mjs \
-	              tests/e2e/verify_notifications_two_users.mjs; do \
-		echo "== $$drive"; ORIGIN=$(ORIGIN) node "$$drive" || exit 1; \
-	done
-
-# Foreground is right for THIS rig specifically: it is a thing you poke at (open the Mailpit UI,
-# redeliver, look again), so seeing it run and killing it with Ctrl-C is the workflow
-# rather than a cost. The rustfs smoke went the other way and became a single non-interactive
-# `dagger call smoke-rustfs`, because it is a script with an answer.
-notifications-rig: ## Mailpit for the channel idempotency drive (Ctrl-C stops it)
-	@echo "Mailpit UI  : http://localhost:8025"
-	@dagger call notifications-mailpit up --ports=1025:1025 --ports=8025:8025
 
 # `promtool` is resolved, not assumed. A bare `promtool` had never been on PATH here: `make bootstrap`
 # installs it into .localbin and NOTHING prepends that to PATH — `.dagger/charts.go` asserted in a
@@ -373,14 +338,14 @@ scan-secrets:
 	dagger call scan-secrets
 
 scan-image:
-	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=notifications"; exit 1; }
+	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=rest-catalog"; exit 1; }
 	dagger call scan-image --name=$(NAME)
 
 # THE INVENTORY, not a gate. `scan-image` answers "is this image clean today"; this answers "what is
 # IN it", which is the question a new CVE asks and the one nothing here could answer. Emitted from the
 # same tarball the scanner reads, so the SBOM describes the exact bytes that were scanned.
-sbom: ## CycloneDX SBOM for one image (NAME=notifications) — writes ./sbom-<name>.cdx.json
-	@test -n "$(NAME)" || { echo "  !! usage: make sbom NAME=notifications"; exit 1; }
+sbom: ## CycloneDX SBOM for one image (NAME=rest-catalog) — writes ./sbom-<name>.cdx.json
+	@test -n "$(NAME)" || { echo "  !! usage: make sbom NAME=rest-catalog"; exit 1; }
 	dagger call sbom --name=$(NAME) export --path=./sbom-$(NAME).cdx.json
 	@echo "  -> ./sbom-$(NAME).cdx.json"
 
@@ -649,18 +614,21 @@ governance-chain: ## Governance e2e — authz + provenance authorship + lineage 
 nats-auth: ## NATS auth e2e — each bus client admitted only to its own subjects (operator-mode broker + daprd)
 	dagger call nats-auth
 
+# The lakehouse's own gates in a tree with every client deleted ([[XC-188]]): the import contracts (`make lint-imports`)
+# and the offline suite, on a workspace re-locked without the clients. `.dagger/lakehouse.go` names the client trees.
+lakehouse-alone: ## The lakehouse's import contracts and offline suite with every client tree deleted
+	dagger call lakehouse-alone
+
 # ---- local k3s ------------------------------------------------------------
 # A service that is in neither this list nor $(K3S_IMAGES) is never built by `make k3s-build` and never
 # side-loaded by `make k3s-import`, so a hand-built image lands outside CONTAINERD and k3s answers
 # ErrImagePull. Measured 2026-08-06: a Dagger build succeeded (exit 0), `kubectl set image` ->
 # ErrImagePull, rolled back.
-# `notifications` joins for exactly that reason, in the same commit as its dockerfile and its chart
-# Deployment — the three are one act, and any two of them without the third is the ErrImagePull above.
 # `annotator` is a client with its own release (deploy/fixtures/annotator, ADR 0171) and its own image, and so is
 # `table-maintenance`, the bring-your-own compaction job (deploy/fixtures/table-maintenance, [[LH-529]]).
 # `media` is the viewer and search, clients of the lakehouse that build apart from its image ([[XC-177]]); the product
 # chart's explorer runs it.
-COMPOSE_IMAGES = compute notifications flows annotator table-maintenance media
+COMPOSE_IMAGES = compute flows annotator table-maintenance media
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 # Routed through scripts/helm.sh, which sets HELM_DRIVER=sql. NOT bare `helm`: the release lives in
 # Postgres, and against the default Secret backend helm reports it ABSENT and `upgrade --install`
@@ -736,9 +704,9 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null \
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
 # given the issuer and origin rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's; observability is
-# the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to and mailpit the
-# relay the email channel sends to. A GPU node with no device plugin yet adds nvidia-device-plugin.
-FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao observability marquez mailpit
+# the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to. A GPU node
+# with no device plugin yet adds nvidia-device-plugin.
+FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao observability marquez
 
 # THE CLIENTS, each its own release and none a prerequisite: `k3s-up` installs the lakehouse alone, and `k3s-clients`
 # adds them after it (XC-183), each reaching the lakehouse by reference. The Ray engine is two releases, the operator
@@ -941,7 +909,7 @@ kind-load: ## Side-load the :dev image set into the kind cluster
 # `apache/age:release_`, so the image the OpenFGA migration blocks on would be the one this target
 # never preloads.
 kind-preload: bootstrap ## Pull the chart's third-party images into the host cache, then side-load them
-	@imgs=$$(helm template rask ./chart --set singleTenant.enabled=true \
+	@imgs=$$(helm template rask ./chart \
 	    --set observability.enabled=true 2>/dev/null \
 	  | grep -oE 'image: *"?[A-Za-z0-9./:@_-]+' | sed 's/image: *"\?//' \
 	  | grep -vE "^($$(echo '$(K3S_IMAGES)' | tr ' ' '|'))(:|$$)" \
@@ -1030,7 +998,7 @@ E2E_SUITES = annotator byo-branch byo-erasure byo-pipeline cas chaos compaction 
                                           # expands to nothing and silently declares no target.
 
 e2e-annotator:      ## XC-167 live proof: the annotator, from its own release, works a scratch tenant through the lakehouse's public doors as the person and publishes as its own account (`bash scripts/e2e_live.sh tests/e2e-py services/annotator/tests/live -m annotator --require-live` discovers its addresses)
-	@test -n "$(LANCE_E2E_ANNOTATOR_URL)" || { echo "  !! e2e-annotator needs LANCE_E2E_ANNOTATOR_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX, LANCE_E2E_NOTIFICATIONS_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_ANNOTATOR_URL)" || { echo "  !! e2e-annotator needs LANCE_E2E_ANNOTATOR_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	uv run pytest tests/e2e-py services/annotator/tests/live -m annotator --require-live -v
 e2e-byo-branch:     ## LH-490 live proof: a branch the owner creates through CreateTableBranch takes a writer's stock append, delete and update through version/create on the table's vended credential, main is unchanged, a refused branch commit answers a typed error, and the store refuses the credential a final manifest and a ref (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX; `bash scripts/e2e_live.sh tests/e2e-py/test_a_stock_client_commits_on_a_branch.py` discovers them)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-byo-branch needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
@@ -1041,23 +1009,21 @@ e2e-byo-erasure:    ## LH-493 live proof: the erasure door records an obligation
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-byo-erasure needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-byo-erasure needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m byo_erasure -v --require-live
-e2e-byo-pipeline:   ## LH-478 live proof: a stock-client pipeline seeds bronze, derives silver with provenance, is held behind `published`, approved and followed on /events?since= (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX; `bash scripts/e2e_live.sh tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` discovers them)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_NOTIFICATIONS_URL)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_NOTIFICATIONS_URL=$(LANCE_E2E_NOTIFICATIONS_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m byo_pipeline -v --require-live
+e2e-byo-pipeline:   ## LH-478 live proof: a stock-client pipeline seeds bronze, derives silver with provenance, is held behind `published`, approved and followed on /events?since= (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX; `bash scripts/e2e_live.sh tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` discovers them)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-byo-pipeline needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m byo_pipeline -v --require-live
 e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs (needs LANCE_E2E_S3_ENDPOINT)
 	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-cas needs LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m cas -v
-e2e-chaos:          ## Criterion 5's dependency-outage drills (XC-095): each takes one dependency of the release down, drives the doors while it is gone, restores it and holds the estate to criteria 1 and 4; they TAKE THE RELEASE'S DEPENDENCIES DOWN, so they run only with --chaos (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on its cluster; `bash scripts/e2e_live.sh -m phase1 --require-live --chaos` discovers them)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_NOTIFICATIONS_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_S3)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_NOTIFICATIONS_URL=$(LANCE_E2E_NOTIFICATIONS_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_S3=$(LANCE_E2E_S3) uv run pytest tests/e2e-py -m chaos -v --require-live --chaos
+e2e-chaos:          ## Criterion 5's dependency-outage drills (XC-095): each takes one dependency of the release down, drives the doors while it is gone, restores it and holds the estate to criteria 1 and 4; they TAKE THE RELEASE'S DEPENDENCIES DOWN, so they run only with --chaos (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on its cluster; `bash scripts/e2e_live.sh -m phase1 --require-live --chaos` discovers them)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_S3)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3, and kubectl on the release's cluster — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_S3=$(LANCE_E2E_S3) uv run pytest tests/e2e-py -m chaos -v --require-live --chaos
 e2e-compaction:     ## Maintenance sweep proofs: the deployed service's sweep and the in-process sweep on real S3 (needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_DAPR_TOKEN, LANCE_E2E_S3_ENDPOINT with its LANCE_E2E_S3_ACCESS_KEY and LANCE_E2E_S3_SECRET_KEY)
 	@test -n "$(LANCE_E2E_MAINTENANCE_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_DAPR_TOKEN, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_S3_ACCESS_KEY, LANCE_E2E_S3_SECRET_KEY — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_DAPR_TOKEN)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_DAPR_TOKEN, LANCE_E2E_S3_ENDPOINT, LANCE_E2E_S3_ACCESS_KEY, LANCE_E2E_S3_SECRET_KEY — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
@@ -1094,23 +1060,21 @@ e2e-observability:  ## OTLP → GreptimeDB observability proof (needs LANCE_E2E_
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_GREPTIME_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_GREPTIME_URL=$(LANCE_E2E_GREPTIME_URL) uv run pytest tests/e2e-py -m observability -v
-e2e-phase1:         ## Phase 1's acceptance (XC-090): one drive of the bring-your-own scenario, its own claims, and each criterion module read off it; criterion 1, provenance, is XC-091, criterion 2, the catalog, is XC-092, criterion 4, events, is XC-094, and criterion 5's drills (XC-095) run only with --chaos (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE; `bash scripts/e2e_live.sh -m phase1 --require-live` discovers them, and with `--chaos --keep-drive PATH` runs the drills and keeps the drive for `make e2e-soak`)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_NOTIFICATIONS_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_SERVICE_TOKEN_FILE)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_NOTIFICATIONS_URL=$(LANCE_E2E_NOTIFICATIONS_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_SERVICE_TOKEN_FILE=$(LANCE_E2E_SERVICE_TOKEN_FILE) uv run pytest tests/e2e-py -m phase1 -v --require-live
-e2e-soak:           ## Phase 1's soak (XC-090): a day after an acceptance run kept its drive (`--keep-drive PATH`), the estate still reads it as the criteria did, nothing parked and both outboxes drained; removes the kept tenant once it passes (needs SOAK, the kept drive's PATH, and LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 with its key pair; `bash scripts/e2e_live.sh -m soak --require-live --soak PATH` discovers them)
-	@test -n "$(SOAK)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_NOTIFICATIONS_URL)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_S3)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_NOTIFICATIONS_URL=$(LANCE_E2E_NOTIFICATIONS_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_S3=$(LANCE_E2E_S3) uv run pytest tests/e2e-py -m soak -v --require-live --soak $(SOAK)
+e2e-phase1:         ## Phase 1's acceptance (XC-090): one drive of the bring-your-own scenario, its own claims, and each criterion module read off it; criterion 1, provenance, is XC-091, criterion 2, the catalog, is XC-092, criterion 4, events, is XC-094, and criterion 5's drills (XC-095) run only with --chaos (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE; `bash scripts/e2e_live.sh -m phase1 --require-live` discovers them, and with `--chaos --keep-drive PATH` runs the drills and keeps the drive for `make e2e-soak`)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_SERVICE_TOKEN_FILE)" || { echo "  !! e2e-phase1 needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_SERVICE_TOKEN_FILE — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_SERVICE_TOKEN_FILE=$(LANCE_E2E_SERVICE_TOKEN_FILE) uv run pytest tests/e2e-py -m phase1 -v --require-live
+e2e-soak:           ## Phase 1's soak (XC-090): a day after an acceptance run kept its drive (`--keep-drive PATH`), the estate still reads it as the criteria did, nothing parked and both outboxes drained; removes the kept tenant once it passes (needs SOAK, the kept drive's PATH, and LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 with its key pair; `bash scripts/e2e_live.sh -m soak --require-live --soak PATH` discovers them)
+	@test -n "$(SOAK)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_NATS_URL)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_S3)" || { echo "  !! e2e-soak needs SOAK, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_DEX, LANCE_E2E_NATS_URL, LANCE_E2E_S3 — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) LANCE_E2E_NATS_URL=$(LANCE_E2E_NATS_URL) LANCE_E2E_S3=$(LANCE_E2E_S3) uv run pytest tests/e2e-py -m soak -v --require-live --soak $(SOAK)
 e2e-track-a:        ## Track A acceptance: tier contract + gate/publish symmetry + branch isolation (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_S3_ENDPOINT)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_TOKEN)" || { echo "  !! e2e-track-a needs LANCE_E2E_CATALOG_URL, LANCE_E2E_TOKEN, LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }

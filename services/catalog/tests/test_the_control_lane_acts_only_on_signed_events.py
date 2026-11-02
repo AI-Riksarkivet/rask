@@ -4,8 +4,7 @@ Every catalog replica subscribes to the lane as a broadcast and, for each delive
 `GET /management/v1/events` serves the console and evicts the bindings it names from the warehouse-binding cache. The
 `dapr-api-token` on a delivery proves only that this app's sidecar delivered it, and every app the bus lets publish
 reaches that sidecar, so the actor an event names is a claim until its signature proves it. Under an enforcing door a
-forgery is acknowledged and acted on nowhere, as notifications' `/control-events` refuses it, while the signed event
-delivered after it still reaches both.
+forgery is acknowledged and acted on nowhere, while the signed event delivered after it still reaches both.
 
 Driven over HTTP through the catalog's own routes: the subscription `register_control_dapr` mounts and the feed's poll
 door. The keys are read through the sidecar's secret API, which respx answers.

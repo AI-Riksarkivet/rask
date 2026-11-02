@@ -258,11 +258,8 @@ spec:
 {{- end }}
 {{- if .Values.age.enabled }}
 ---
-# (3c) age-postgres:5432 — the OpenFGA datastore + the Dapr state store
-# (dapr-statestore.yaml rides this same instance). Clients: openfga (subchart pods carry
-# app.kubernetes.io/name=openfga), the openfga-migrate job, the pg backup job, and the state-store-scoped
-# apps — daprd's state.postgresql component connects DIRECTLY to this postgres, so those pods' sidecars
-# are real 5432 clients (blocked = the state store never loads and actor hosting silently disables).
+# (3c) age-postgres:5432 — the OpenFGA datastore. Clients: openfga (subchart pods carry
+# app.kubernetes.io/name=openfga), the openfga-migrate job and the pg backup job.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -280,9 +277,6 @@ spec:
                 operator: In
 
                 {{- $ageClients := list "openfga-migrate" "backup-pg" }}
-                {{- if and .Values.dapr.enabled .Values.stateStore.enabled }}
-                {{- $ageClients = concat $ageClients .Values.stateStore.scopes }}
-                {{- end }}
 
                 values:
                   {{- range ($ageClients | uniq) }}
@@ -356,7 +350,7 @@ spec:
 # bus elsewhere is reached through `networkPolicy.extraEgress`. component=nats (not just name) so nats-box is not a target.
 # Admitted from ANY intra-namespace pod, port-scoped, and honestly so:
 # the legitimate clients are the daprd SIDECARS, which live inside every dapr.io/enabled app pod
-# (catalog, lineage, maintenance, notifications) plus the nats-box hook Jobs
+# (catalog, lineage, maintenance) plus the nats-box hook Jobs
 # (stream provision + DLQ tooling) — i.e. nearly every first-party pod in the namespace, and the set
 # follows the dapr.io/enabled ANNOTATION, which no label selector can see. Enumerating component labels
 # would restate that near-total list and silently strand the next sidecar carrier (a wedged bus, not a

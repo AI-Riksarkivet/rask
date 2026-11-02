@@ -35,8 +35,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from lakehouse_kit.openlineage import AUTHOR_FACET
 from maintenance.core.lineage_emit import build_maintenance_event
+from service_kit.lineage_events import AUTHOR_FACET
 
 
 def _event(*, author: str) -> dict[str, Any]:

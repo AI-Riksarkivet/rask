@@ -11,22 +11,18 @@ reading "Internal Server Error". That is the framework default for any app with 
 handler, so on its own it is not a rask choice. It is still a third envelope on services whose every
 other error is RFC 9457, and the fix is one handler in the place the whole fleet already shares.
 
-**The one that actually misreports.** The four `make_service_app`-only apps (compute, controlplane,
-flows, notifications) cannot map `lance_namespace` errors at all — and the shared governed kernel they
-call RAISES them: `governed/fga.py:507` raises `ServiceUnavailableError("authorization service
-unavailable")` under a docstring promising "outage → ServiceUnavailableError → 503". In notifications
-that contract silently did not hold. It still fails CLOSED — the refusal happens, nothing is
-disclosed, no door opens — so this is a misreported outage, not an exposure. But
-`api/visibility.py` answers the same class of failure two different ways in ONE function: its
-`service_kit.exceptions.ServiceUnavailableError` became a 503 problem+json while the one
-`fga.batch_check` raises became a text/plain 500.
+**The one that actually misreports.** An app built by `make_service_app` alone cannot map
+`lance_namespace` errors at all — and the shared governed kernel it calls RAISES them: `governed/fga.py`
+raises `ServiceUnavailableError("authorization service unavailable")` under a docstring promising
+"outage → ServiceUnavailableError → 503". Without the handlers this file pins, that contract silently
+does not hold on such an app. It still fails CLOSED — the refusal happens, nothing is disclosed, no door
+opens — so this is a misreported outage, not an exposure. But one function can then answer the same
+class of failure two different ways: a `service_kit.exceptions.ServiceUnavailableError` becomes a 503
+problem+json while the one `fga.batch_check` raises becomes a text/plain 500.
 
-The fix follows `ingest/__init__.py`, which already installs both handler sets on a
-`make_service_app` app and says why in a comment: "A DENIAL MUST BE A 403, NOT A 500." Doing it in
-the factory rather than per app also settles the divergence `docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit"` X11 files
-— ingest's
-422 differing from its three fleet siblings — by making all of them the same shape rather than by
-removing the handler that made ingest right.
+The factory installs both handler sets, because a denial must be a 403, not a 500. Doing it in the factory rather than
+per app also settles the divergence `docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate
+audit"` X11 files, one app's 422 differing from its fleet siblings', by making every app the same shape.
 """
 
 from __future__ import annotations

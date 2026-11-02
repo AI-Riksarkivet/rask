@@ -52,7 +52,7 @@ acknowledged nothing for the sixteen minutes that followed and both outboxes kep
 list stayed correct, because the lineage relay records the outbox without the bus.
 
 The fix is upstream (components-contrib#4563; #4564, `MaxReconnects(-1)`, unmerged). Until a Dapr release ships it, the
-catalog, lineage, maintenance and notifications each run `service_kit.bus_watchdog` over their own sidecar. The watchdog probes every
+catalog, lineage and maintenance each run `service_kit.bus_watchdog` over their own sidecar. The watchdog probes every
 `pubsub.jetstream` component every 30 s on `probe.<app-id>`, a subject no stream captures. When a probe answers that the
 connection is closed, the watchdog waits until the bus greets a new connection, then asks the sidecar to shut down, and
 the kubelet restarts it. A shorter outage needs none of this: a client still reconnecting buffers its publishes and
@@ -78,7 +78,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
 > **Delivery semantics per subscriber.** Each subscriber has its **own** pubsub component with
 > `queueGroupName=<app-id>` (replicas = competing consumers → single delivery per app) and a `durableName`, so
 > the consumer cursor survives pod death and redeploys. `deliverPolicy` is **`all` for lineage** (replay into the
-> insert-only merge is the durability story, and the first chaos row holds) and **`new`** for notifications and
+> insert-only merge is the durability story, and the first chaos row holds) and **`new`** for
 > maintenance, whose durable cursor delivers an event published while they were down on recovery
 > (`chart/templates/dapr-component.yaml`).
 
@@ -146,9 +146,8 @@ semantics, so it must not undercut the slowest handler. Either way the window co
 5. **Single points of failure (single-node infra).** Every stateful backing store runs as **one replica** on
    kind — this is a **demo topology, not an HA one**. If any of these pods dies, the pipeline stalls until it
    restarts (no data loss — PVCs persist — but no availability either):
-   - **AGE / Postgres** — one StatefulSet pod serving OpenFGA's datastore and the Dapr state store. Down →
-     authz checks fail (lineage's ingest gate answers `RETRY`, so events stay buffered) and notifications' inbox
-     state is unreadable. Lineage keeps no database: its tables live in the object store behind the catalog.
+   - **AGE / Postgres** — one StatefulSet pod serving OpenFGA's datastore. Down →
+     authz checks fail (lineage's ingest gate answers `RETRY`, so events stay buffered). Lineage keeps no database: its tables live in the object store behind the catalog.
    - **The catalog** — lineage's feed and edge list are read and written through its doors. Down → lineage
      ingest answers `RETRY` (buffered) and lineage's `/readyz` reports the catalog unavailable.
    - **NATS / JetStream** — three nodes, `streamReplicas=3`, each on its own volume; the Dapr pub/sub backbone. All
@@ -221,7 +220,7 @@ pipeline's own invariants are its engine's business. Two rules bind the work the
 test that fails without it:
 
 - **Refuse new work while draining.** `service_kit.draining.retry_when_draining` guards every sidecar-delivered work
-  door (notifications' subscriptions, maintenance's arrival, work and index routes): a draining process answers
+  door (maintenance's arrival, work and index routes): a draining process answers
   RETRY so the broker redelivers to a live replica. It answers RETRY, not DROP, because on a subscription that
   declares a `deadLetterTopic` daprd routes a DROP to that topic, so a good message would be parked for a human to
   find (`service_kit/draining.py` carries the daprd source references). Pinned by

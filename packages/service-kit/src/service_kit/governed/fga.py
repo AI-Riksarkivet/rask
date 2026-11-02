@@ -2236,10 +2236,10 @@ async def commit_unless_changed(
 
 
 def names_someone(user: str) -> bool:
-    """Whether a tuple's ``user`` names someone an inbox can be addressed to: a person or a group of them.
+    """Whether a tuple's ``user`` names someone a notifier can address: a person or a group of them.
 
-    ``user:<principal>`` is a person; ``role:x#assignee`` and ``team:y#member`` are usersets the notifications lane
-    expands into people. Every other user a revoke removes is an object-to-object edge (``team``, ``parent``,
+    ``user:<principal>`` is a person; ``role:x#assignee`` and ``team:y#member`` are usersets a notifier expands into
+    people (the decision door's list-users). Every other user a revoke removes is an object-to-object edge (``team``, ``parent``,
     ``child``), which names no one, so a ``grant_revoked`` for it would address an inbox named after an object.
     """
     return user.startswith("user:") or "#" in user

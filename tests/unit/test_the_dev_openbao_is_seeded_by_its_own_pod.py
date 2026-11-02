@@ -455,9 +455,6 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     assert {key: _store(stores, "local", path).get(field) for key, (path, field) in _GENERATED.items()} == generated, (
         "the store does not hold the credentials ESO generated"
     )
-    assert f":{generated['postgres-password']}@" in _store(stores, "local", "secret/dapr-state").get("connection-string", ""), (
-        "the state store DSN is not built from the generated password"
-    )
     assert (stores / "local.tokens").read_text().split() == [_ADMIN_TOKEN], "the store answers a token beside its administrator: the init token was not revoked"
     assert (store_keys / "unseal-key").read_text() == _UNSEAL_KEY and stat.S_IMODE((store_keys / "unseal-key").stat().st_mode) == 0o600, (
         "the unseal key is not kept for its owner alone, so a sealed store could not be unsealed"

@@ -1,7 +1,8 @@
 
 {{- if .Values.podDisruptionBudget.enabled }}
 {{/**/}}
-{{- range $name, $svc := $.Values.services }}
+{{- range $name := list "catalog" "lineage" }}
+{{- $svc := index $.Values.services $name }}
 {{- if gt (int ((hasKey $svc "replicas") | ternary $svc.replicas 1)) 1 }}
 ---
 apiVersion: policy/v1

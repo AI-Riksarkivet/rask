@@ -1,9 +1,8 @@
 # rask umbrella chart values — the MERGED estate (rask 0.2.0 + lance-ns 0.1.0, one release named `rask`).
 #
-# Two systems now install from this one file:
-#   * the rask fleet (notifications);
-#   * the lance-ns lakehouse (catalog + lineage + maintenance), governance
-#     (Dex OIDC + OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier.
+# One system installs from this file: the lance-ns lakehouse (catalog + lineage + maintenance), governance (Dex OIDC +
+# OpenFGA), the Dapr/NATS event fabric, OpenBao, and the OTel-first observability tier. It renders no client of the
+# lakehouse: each reaches it by reference from its own release (XC-175, XC-188).
 #
 # Merge rule applied throughout (plan P4, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): rask's chart is the BASE and every rask key is preserved;
 # subchart DEPENDENCIES are rask's (one control plane each — see Chart.yaml); subchart VALUES are
@@ -23,29 +22,11 @@ nameOverride: ""
 # -- List of pull Secrets ({name: ...}) added to every first-party pod and hook Job. Empty pulls anonymously.
 imagePullSecrets: []
 
-# singleTenant gates the LEGACY single-tenant default workloads (the default
-# domain services + default Postgres/NATS/migration).
-# Default false => front-door-only install (the services the cluster route
-# publishes, operators). Set true to restore the old single-tenant stack.
-# NOTE: the OBJECT STORE is
-# deliberately NOT in this list: objectStore.enabled alone gates the store's provisioning hooks
-# (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) because the lakehouse plane resolves the store
-# (`rask-rustfs:9000` in development) regardless of singleTenant.
-singleTenant:
-  # -- Renders the single-tenant default workloads (every fleet service). False installs front-door services only; the object store is gated by `objectStore.enabled`.
-  enabled: false
-
 # NO CREDENTIAL IS A CHART VALUE ([[XC-004]]). Every secret the estate uses lives in the secret store and
 # reaches a pod from it: the Dapr secret store for a sidecar, an ExternalSecret for a pod without one.
 # The dev OpenBao's are generated in-cluster (templates/external-secrets.yaml, `<release>-dev-credentials`);
 # a real deployment's are provisioned in the platform's store by its operator, and the render refuses a
 # credential passed as a value (templates/prod-credentials.yaml).
-#
-# Optional override: if set, this Secret is used verbatim instead of the chart's `<release>-app`
-# (prod with external deps). It carries configuration (the object store's access key ID and endpoint),
-# never a credential.
-# -- Name of a pre-made Secret used instead of the chart's `<release>-app` (object store access key ID and endpoint, never a credential). Empty renders `<release>-app`.
-existingSecret: ""
 
 # INTERACTIVE API DOCS — /docs, /redoc and /openapi.json — across every app in the release.
 #
@@ -58,24 +39,8 @@ docs:
   # -- Serves /docs, /redoc and /openapi.json on every app in the release. Off by default; turn on only for a dev cluster.
   enabled: false
 
-# Non-secret env shared by the fleet ConfigMap.
-config:
-  # -- Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap.
-  RASK_API_PREFIX: "/api"
-  # -- AWS region written to the fleet ConfigMap for S3 clients to sign with. RustFS's default region is `us-east-1`; whether it accepts another signing region is not measured, so keep `us-east-1` against it.
-  AWS_REGION: "us-east-1"
-  # -- Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String "true" or "false".
-  HCP_INSECURE: "true"
-
-# Per-service definitions. TWO planes share this map, by design of the merge:
-#   * the rask FLEET (notifications) — rendered by templates/fleet.yaml, which ranges over this
-#     map but only emits a `frontDoor` entry unless singleTenant.enabled;
-#   * the lance-ns LAKEHOUSE apps (catalog, lineage) — rendered by templates/services.yaml, which
-#     reads .Values.services.catalog / .Values.services.lineage by NAME.
-# RESOLVED (P4 collision guard, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md): fleet.yaml excludes the lakehouse entries by name (its $lakehouse
-# list — catalog, lineage), unconditionally, so each service renders from exactly ONE template under
-# every singleTenant combination: the fleet entries from fleet.yaml, catalog+lineage from
-# services.yaml. A new lakehouse entry added to this map must also be added to that list.
+# Per-service definitions: the lakehouse apps (catalog, lineage), rendered by templates/services.yaml, which reads
+# .Values.services.catalog / .Values.services.lineage by NAME.
 # The peers whose `x-forwarded-*` headers uvicorn may believe, for every pod the cluster route reaches
 # (rendered by rask.proxyHeaderArgs alongside --proxy-headers).
 #
@@ -91,87 +56,6 @@ config:
 forwardedAllowIps: 127.0.0.1
 
 services:
-  # ==== rask fleet (uvicorn modules, one Deployment each via templates/fleet.yaml) ====
-  # (compute and flows are clients of the lakehouse, not here: the product chart deploys neither.)
-  # The notification plane: one InboxActor per subject, holding
-  # claim-check pointers with durable read state, so the bell counts YOUR work instead of the whole
-  # estate's. Its own app-id because an inbox aggregates lineage runs and catalog governance and
-  # belongs to neither producer.
-  #
-  # `frontDoor: true` because a client's bell polls /api/notifications, and the route publishes
-  # it only on an install that renders this Deployment.
-  #
-  # replicas: 1 is the fleet default, not an actor constraint: Dapr placement distributes actor ids
-  # across hosts, and the bus subscription's `queueGroupName` makes replicas a competing-consumer
-  # group. What must NOT be scaled is uvicorn WORKERS inside one pod — see the dockerfile.
-  notifications:
-    # -- uvicorn import path the notifications (inbox) Deployment runs.
-    module: "notifications:app"
-    # -- Container and Service port of the notifications app.
-    port: 8850
-    # -- Replica count of the notifications Deployment; replicas form a competing-consumer group. 0 scales it to zero.
-    replicas: 1
-    # -- Renders notifications outside singleTenant, because the cluster route publishes /api/notifications on it.
-    frontDoor: true
-    # The inbox door verifies the bearer and re-derives visibility per recipient — NotificationsSettings
-    # extends GovernedAuthSettings, so the prefix is LANCE_.
-    # -- Gives notifications the OIDC/FGA env and FGA token mount when auth.enabled.
-    governedAuth: true
-    # This service HOSTS a sidecar-delivered route (`POST /lineage-events`) and refuses to start
-    # without the token: `register_subscriptions` calls `assert_app_token_configured`, which raises
-    # whenever RASK_DAPR_ENABLED is true and APP_API_TOKEN is unset — the estate's fail-closed rule for
-    # a live delivery route. So this flag is not a preference, it is the difference between a running
-    # pod and a CrashLoopBackOff on the DEFAULT install (dapr.enabled is on).
-    #
-    # It is the first fleet.yaml service to need the token: every other caller of
-    # `assert_app_token_configured` is a lance-plane pod (catalog, lineage, maintenance) templated elsewhere, each rendering APP_API_TOKEN explicitly. In fleet.yaml
-    # the token had only ever been reachable through `lanceWriter`, which this service is not.
-    # -- Renders APP_API_TOKEN for notifications, which refuses to start with Dapr on and no token.
-    daprIngest: true
-    # The SECOND ingress (open_notifications.md §2). The bus carries run lifecycle; a user's pipeline
-    # and every external OpenLineage producer emit over HTTP only and never reach the topic,
-    # so a subscribe-and-stop plane silently never notifies a whole class of run. This cron ticks the
-    # sidecar-only reconcile route, which walks lineage's durable `GET /events` down from a persisted
-    # cursor. It is also the catch-up path after a notifications outage.
-    #
-    # One key, two renders: `notifications-cron.yaml` names the Component from it and `configmap.yaml`
-    # renders RASK_NOTIFICATIONS_BINDING_NAME from it. Dapr delivers an input binding to the route
-    # matching the COMPONENT NAME, so a second literal on the app side is a cron that ticks into a 404.
-    # CHANNELS (S5) — email, OFF by default. A channel is an interruption someone has to ask for, so
-    # the estate's posture is chosen here rather than implied by a template; the per-user opt-in is a
-    # separate act on top (`PUT /api/notifications/prefs`). A push reaches the address its person
-    # supplied and no shared channel: every reader of one would get rows nobody checked them against.
-    #
-    # Credentials come from the secret store ONLY — the Component carries `secretKeyRef`, never a
-    # value. There is deliberately no plaintext fallback to fall back to.
-    channels:
-      email:
-        # -- Renders the `notifications-email` Dapr SMTP binding and adds `email` to RASK_NOTIFICATIONS_CHANNELS. Off by default.
-        enabled: false
-        # -- SMTP server host for the email channel.
-        host: ""
-        # -- SMTP server port for the email channel (default 587).
-        port: 587
-        # -- Sender address the email channel sends from.
-        from: ""
-        # -- Secret-store key holding the SMTP `user` and `password` fields.
-        secretName: notifications-smtp
-    # -- Name of the reconcile cron binding; also rendered as RASK_NOTIFICATIONS_BINDING_NAME so the tick reaches the matching route.
-    reconcileBindingName: notifications-reconcile-cron
-    # Must stay ABOVE RASK_NOTIFICATIONS_RECONCILE_BUDGET_SECONDS (app default 25 s), or a slow lineage
-    # lets ticks stack on each other instead of the next one finding the same work still to do.
-    # -- Schedule of the reconcile cron over lineage's /events feed; must stay above the app's 25 s reconcile budget.
-    reconcileSchedule: "@every 30s"
-    # The doors notifications calls as its own ServiceAccount: one projected token per audience
-    # (`lance.identityTokens`). At lineage's door it is the subject
-    # `kubernetes~system:serviceaccount:<ns>:<release>-sa-notifications`, and the reconciler reads
-    # `/events/projection`, gated on `can_read_event_feed` at the estate root, which
-    # `bootstrap-admin.yaml` grants that subject as `event_reader` ([[CTL-021]]). Without the grant every
-    # feed page answers 403.
-    # -- Audiences of the service-account tokens projected into the notifications pod, one per door it calls (rask-lineage).
-    identityAudiences: [rask-lineage]
-    # -- List of dependencies notifications waits for in an init container; only `objectStore` is honoured (when objectStore.enabled).
-    waitFor: []
   # ==== lance-ns lakehouse apps (templates/services.yaml; share the catalog image, different entrypoint) ====
   catalog:
     # -- uvicorn import path the catalog Deployment runs (templates/services.yaml).
@@ -222,8 +106,7 @@ services:
     # (records and re-publishes every event a producer staged but never saw acknowledged), prunes the feed past
     # eventsRetentionDays, and forwards the feed to the graph backend `forward.url` names. Every step is
     # idempotent, so overlapping ticks and several replicas need no lock. Render-gated on dapr.enabled.
-    # Every 30 s, the notifications reconciler's cadence: the forwarder is the graph backend's only feed, so the
-    # schedule bounds how far behind the graph runs.
+    # Every 30 s: the forwarder is the graph backend's only feed, so the schedule bounds how far behind the graph runs.
     relay:
       # -- Renders the relay cron, which drains the lineage outbox, prunes the feed and forwards it. Needs dapr.enabled.
       enabled: true
@@ -241,12 +124,11 @@ services:
     # Durable /events feed retention, in DAYS of ARRIVAL time (`received_at`, the estate's clock, never the
     # producer-supplied eventTime). Pruned on the relay tick. 0 = unbounded.
     #
-    # DAYS, BECAUSE THE CONSUMER OF THIS FEED REASONS IN DAYS. `services/notifications` walks it from a
-    # persisted cursor as the estate's catch-up path after an outage (the bus alone provably misses every
-    # external OpenLineage producer), so what an operator needs from this number is how long an outage the
-    # feed survives. 7 is the horizon the deployed feed was measured holding (2026-08-31 to 2026-09-07,
-    # 3,133 rows). Raise it if this estate's acceptable notifications outage is longer than a week.
-    # -- Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded.
+    # DAYS, BECAUSE A CONSUMER OF THIS FEED REASONS IN DAYS. A consumer that walks it from a persisted cursor, as a
+    # notifier's catch-up path after an outage does (the bus alone provably misses every external OpenLineage
+    # producer), needs from this number how long an outage the feed survives. 7 is the horizon the deployed feed was
+    # measured holding (2026-08-31 to 2026-09-07, 3,133 rows). Raise it if a consumer's acceptable outage is longer.
+    # -- Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a consumer's outage it survives. 0 is unbounded.
     eventsRetentionDays: 7
     # The forwarder (ADR 0158): the lineage graph is bring-your-own, and the relay tick sends every event lineage
     # records, as standard OpenLineage over the HTTP transport, to the backend `url` names (Marquez, DataHub,
@@ -265,11 +147,11 @@ services:
         # -- Field of that secret the API key is under.
         key: api-key
 
-# Image registry/tag shared by every fleet + migration container, PLUS the per-image lance-ns block so
+# Image registry/tag shared by every first-party container, PLUS the per-image lance-ns block so
 image:
   # A REGISTRY, e.g. ghcr.io/<org>/<repo> or localhost:5000. Required — see `rask.image` in
-  # _helpers.tpl for why an empty default was actively harmful: it rendered a BARE `notifications:dev`,
-  # which is `docker.io/library/notifications:dev`, and only ever worked because `make k3s-import` had
+  # _helpers.tpl for why an empty default is actively harmful: it renders a BARE `lance-rest-catalog:dev`,
+  # which is `docker.io/library/lance-rest-catalog:dev`, and works only where `make k3s-import` has
   # side-loaded the tag into the node. A GitOps reconciler has no such side channel.
   # -- Registry prefix for every first-party image (e.g. ghcr.io/<org>/<repo>). Required unless localImages is true.
   repository: ""
@@ -281,18 +163,17 @@ image:
   digest: ""
   # PER-COMPONENT pins (#135) — the reason a `helm upgrade` stopped being destructive.
   #
-  # One `tag` above cannot describe this fleet. A real estate runs a catalog tag across 11 services,
-  # a different tag on notifications, and a
-  # DIGEST on one more. Rendering all of them from one value overwrites every image with a tag that is not on
-  # the node — observed twice on 2026-08-06, once taking the whole fleet to ImagePullBackOff.
+  # One `tag` above cannot describe images that move at different times: rendering all of them from one value
+  # overwrites every image with a tag that is not on the node — observed twice on 2026-08-06, once taking the
+  # whole release to ImagePullBackOff.
   #
-  # Keys are the COMPONENT name the template passes to `rask.image` (`notifications`,
-  # `lance-rest-catalog`, …) — the same string that appears in the rendered
-  # reference. `digests` beats `tags`, exactly as the global `digest` beats the global `tag`.
+  # Keys are the COMPONENT name the template passes to `rask.image` (`lance-rest-catalog`, …) — the same string
+  # that appears in the rendered reference. `digests` beats `tags`, exactly as the global `digest` beats the
+  # global `tag`.
   #
-  #   tags:    { lance-rest-catalog: be-256ca0da, notifications: be-14d8882d }
-  #   digests: { notifications: "sha256:834d2e23…" }
-  # -- Per-component tag map keyed by component name (notifications, lance-rest-catalog, ...); beats the global tag.
+  #   tags:    { lance-rest-catalog: be-256ca0da }
+  #   digests: { lance-rest-catalog: "sha256:834d2e23…" }
+  # -- Per-component tag map keyed by component name (lance-rest-catalog, ...); beats the global tag.
   tags: {} # @schema additionalProperties: {"type": "string"}
   # -- Per-component digest map keyed by component name; beats `tags` and the global tag.
   digests: {} # @schema additionalProperties: {"type": "string"}
@@ -308,11 +189,6 @@ image:
   catalog: { repository: lance-rest-catalog }
 
 resources:
-  # rask fleet tier (templates/fleet.yaml).
-  # -- CPU/memory requests and limits for fleet services (templates/fleet.yaml) that name no tier of their own.
-  fleet:
-    requests: {cpu: "50m", memory: "128Mi"}
-    limits: {cpu: "1", memory: "512Mi"}
   # AGE is a DATABASE and was sized as a stateless app container, which is a different thing. It asks
   # `lance.resources` for a `comp="age"` tier (templates/age-postgres.yaml:155); with no such key it
   # silently fell through to `default` below — 128Mi request, 512Mi limit — and Postgres does not
@@ -434,7 +310,7 @@ lifecycle:
   teardownSeconds: 10
 
 # === Pod hardening (applied to every FIRST-PARTY app container via the lance.securityContext helper) --
-# fleet.yaml calls the helper for every fleet workload, including the pod the Ingress routes /api to, and
+# services.yaml and maintenance.yaml call the helper for every lakehouse workload, and
 # tests/unit/test_every_first_party_workload_is_hardened.py derives its subject list from the render, so a new
 # first-party workload is covered by default rather than by memory.
 # INFRA pods are a separate, deliberately staged decision — see security.infraContexts below.
@@ -579,7 +455,7 @@ auth:
     audienceScope: ""
     # A PERSON IS THE PRINCIPAL THEIR DEX CONNECTOR MAPS TO ([[LH-063]], ADR 0159 D5): `<idp-id>~<user id>`, with
     # the idp id named here for the connector id Dex reports in `federated_claims` and the upstream user id that
-    # connector reports. Every grant, inbox and attribution keys on it, so renaming a connector in Dex is one more
+    # connector reports. Every grant and attribution keys on it, so renaming a connector in Dex is one more
     # entry under the same idp id and re-keys no grant. The development Dex's one connector, its password database
     # `local`, is `dex` whenever `dex.enabled`; without it every connector of the platform's Dex is named here.
     # -- The idp id each Dex connector's users are principals of, keyed by connector id (`RASK_OIDC_CONNECTORS`; `{ldap: corp}` makes user `u` of connector `ldap` the principal `corp~u`). An idp id is lower-case letters, digits and `-`, never `kubernetes`. With `dex.enabled` the development Dex's `local` connector is `dex` unless named here; otherwise at least one entry is required.
@@ -604,12 +480,17 @@ auth:
   fgaEgress: []
   # OpenFGA authorizes none of its callers, so only the services that write tuples hold a `rask-openfga` token
   # ([[LH-442]]); every other governed service asks the catalog's decision door (`/management/v1/decisions`) as its own
-  # ServiceAccount, holding `decider` on the estate root (`lance.fgaDecisionRoles`, seeded by bootstrap-admin). A
-  # first-party service installed as its own release (the compute fixture, deploy/fixtures/compute) asks the same door
-  # from an account this chart does not render, so its name is listed here, `<namespace>:<name>`, and granted `decider`.
-  # OpenFGA reads its own subject list (the writers) only at start, so a change to it needs an OpenFGA restart.
-  # -- ServiceAccounts outside this release that may ask the catalog's decision door, each `<namespace>:<name>` (e.g. `default:rask-sa-compute` for the compute fixture); bootstrap-admin grants each `decider`. Read only with auth on.
-  externalDeciders: []
+  # ServiceAccount, holding the estate roles that open the routes it calls (`lance.fgaEstateRoles`, seeded by
+  # bootstrap-admin). A client of the lakehouse installed as its own release (the compute fixture,
+  # deploy/fixtures/compute) holds them from an account this chart does not render, so its name is listed here,
+  # `<namespace>:<name>`, mapped to its roles: `decider` (the door's check), `member_expander` (its list-users over a
+  # membership userset) and `event_reader` (lineage's whole run feed, `GET /events/projection`). Each account holds
+  # exactly the roles named for it: bootstrap-admin revokes a machine role on the estate root that this map and lineage's
+  # own no longer declare, so an account removed here keeps nothing. Set it in a values file or with `--set-json`, since a
+  # key holds a `:`. OpenFGA reads its own subject list (the writers) only at start, so a change to it needs an OpenFGA
+  # restart.
+  # -- ServiceAccounts outside this release granted estate roles, each `<namespace>:<name>` mapped to its roles from `decider`, `member_expander` and `event_reader` (e.g. `{"default:rask-sa-compute": ["decider"]}` for the compute fixture); bootstrap-admin grants each exactly these and revokes what is no longer named. Read only with auth on.
+  externalDeciders: {}
   # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services, the openfga-model hook and the
   # bootstrap-admin Job) uses that store; empty (default) = the newest store named `lance-catalog`. A
   # MODEL pin makes every service check against that one model whatever its image carries; no deployment
@@ -762,8 +643,8 @@ catalog:
   # Each replica hears the broadcast through a durable consumer of its own, `catalog-control-<pod>` on the mirror stream
   # CATALOG_CONTROL_BROADCAST ([[LH-305]]): an ephemeral one is deleted after 5 s without interest and Dapr never re-creates
   # it, so a replica whose connection drops for longer is deaf until it restarts. A durable outlives a lapse up to this threshold,
-  # set on the mirror as its consumer limit so a deleted pod's consumer is reaped; notifications' durable stays on
-  # CATALOG_CONTROL, which takes no such limit. Longer than nats.go's reconnect budget (60 tries, 2 s apart), past which the
+  # set on the mirror as its consumer limit so a deleted pod's consumer is reaped; CATALOG_CONTROL itself takes no such
+  # limit. Longer than nats.go's reconnect budget (60 tries, 2 s apart), past which the
   # bus watchdog restarts the sidecar under the same pod name; the mirror keeps messages as long, so a returning replica
   # resumes where it stopped.
   # -- Seconds a catalog replica's control-event consumer outlives lost interest before NATS reaps it; also the broadcast mirror's message age.
@@ -985,8 +866,9 @@ maintenance:
   # ON since 2026-08-16. The reason it was off — "opt-in, like the medallion toggles" — was a posture,
   # not a cost: the events are graph-only by construction, so turning it on adds provenance and cannot
   # add notification noise. `maintenance/core/lineage_emit.py` stamps a `rask_lance` facet and outputs, and
-  # NO `rask_author` facet and no `rask_lance.project`; per `.claude/skills/rask-notifications`, AUTHOR targeting
-  # reads `rask_author.sub` and nothing else, and WATCH needs `rask_lance.project` — so a sweep addresses nobody.
+  # NO `rask_author` facet and no `rask_lance.project`; per the events' targeting contract (docs/COMMIT-EVENTS.md), a
+  # notifier addresses a run's author by `rask_author.sub` and nothing else, and its project's watchers by
+  # `rask_lance.project` — so a sweep addresses nobody.
   # That is correct rather than a gap: a cron tick has no human to name.
   #
   # What it buys is the FAILURE surface named below. Left off, a persistently failing dataset was
@@ -1193,50 +1075,6 @@ maintenance:
   # -- Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default.
   controlEmit: false
 
-# === Dapr state store — operational state (NOT analytical data) ===================================
-# Backed by the already-deployed AGE Postgres, in its own database. This is what the notification inbox
-# (#125) persists to; Lance keeps the
-# published, versioned, analytical data and nothing operational. See chart/templates/dapr-statestore.yaml
-# for why Postgres rather than Redis.
-stateStore:
-  # -- Render the Dapr Postgres state store component (actor state) on the AGE `stateDb`.
-  enabled: true
-  # -- Name of the Dapr state store component.
-  name: lance-statestore
-  # -- Version of the Dapr Postgres state store component.
-  componentVersion: v1
-  # The Dapr secret store that resolves the connection string — OpenBao, not a k8s Secret. See
-  # service_kit.governed.secrets for why the store must be the sole source.
-  # -- Dapr secret store that resolves the state store's connection string (OpenBao, never a k8s Secret).
-  secretStore: lance-secrets
-  # -- Postgres table holding Dapr state rows.
-  tableName: state
-  # -- Table the Dapr state store keeps its own metadata in.
-  metadataTableName: dapr_metadata
-  # Only the services that own operational state may load it. An unscoped component is loadable by
-  # every app-id in the namespace, which would let any service write another's state.
-  # -- App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods.
-  scopes:
-    # ── `notifications` needs STATE, and it is the entry that forces the rollout. ────────────────────
-    # The whole service is actor state: one InboxActor per subject, holding the pointer rows and the
-    # compaction reminder. Unscoped, the sidecar answers "Actor state store not configured - actor
-    # hosting disabled" to every actor call. The pod does NOT crash-loop and does not even report
-    # itself degraded: `ActorRuntime.register_actor` is process-local (it never touches the sidecar),
-    # so the lifespan sets `actors_registered = True`, `require_actor_plane` lets the request through,
-    # and the refusal happens per INVOCATION — today as an untranslated 500 from every inbox route on
-    # a pod whose probes stay green. Symptom: a healthy pod and a bell that never fills.
-    #
-    # THIS ADDITION IS A COORDINATED ROLLOUT, and that is a scheduling fact rather than a code one.
-    # `lance-statestore` carries `actorStateStore: "true"`, and daprd refuses to hot-reload any actor
-    # state store (measured 2026-08-07): the component is re-read only at sidecar
-    # BOOT, so already-running pods of every scoped app keep the OLD scope list until they restart.
-    # Adding an app-id while it has no pod is the single safe case and this is it — nothing regresses
-    # on the others, they simply do not observe the change — but the notifications pod itself must
-    # come up AFTER the component carrying this scope exists. open_notifications.md §11 q4 holds the
-    # window open for its other passengers (the Dapr Configuration/ActorStateTTL
-    # decision, the state.postgresql v1→v2 move); ride them together or not at all.
-    - notifications
-
 # === Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
 # managed/operator path (CloudNativePG for AGE — the rask deployment), DISABLE these
 # and let the operators do backups (PITR + scheduled, better than this). These exist so a self-contained
@@ -1321,8 +1159,8 @@ autoscaling:
 # vendor-neutral because in production it names the platform's S3; in development the server is the rustfs fixture
 # (deploy/fixtures/rustfs, Service `<release>-rustfs`). `enabled` gates the scoped-users hook
 # (templates/object-store-scoped-users.yaml), which makes the platform buckets and every scoped user, and the root's
-# Secret (`<release>-object-store-root`) — on objectStore.enabled ALONE, not singleTenant, because the lakehouse/medallion/observability consumers
-# render without singleTenant and must resolve the store. The ONE endpoint is `rask-rustfs:9000`
+# Secret (`<release>-object-store-root`) — on objectStore.enabled ALONE, because every lakehouse consumer must resolve
+# the store. The ONE endpoint is `rask-rustfs:9000`
 # (`lance.objectStoreHost`/`lance.s3Endpoint`), or `externalEndpoint` when set.
 #
 # THE KEEP-PVC POSTURE holds in the fixture: a StatefulSet's `volumeClaimTemplates` claims survive pod rolls and
@@ -1588,21 +1426,6 @@ nats:
       monitor:
         publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.CONSUMER.LIST.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $SYS.REQ.USER.INFO]
         subscribe: [_INBOX.>]
-      notifications:
-        publish:
-          - dlq.notifications
-          - $JS.API.STREAM.NAMES
-          - $JS.API.CONSUMER.INFO.LINEAGE.notifications-durable
-          - $JS.API.CONSUMER.CREATE.LINEAGE.notifications-durable.>
-          - $JS.ACK.LINEAGE.notifications-durable.>
-          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.notifications-control-durable
-          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL.notifications-control-durable.>
-          - $JS.ACK.CATALOG_CONTROL.notifications-control-durable.>
-          - $JS.API.CONSUMER.INFO.DLQ.notifications-durable
-          - $JS.API.CONSUMER.CREATE.DLQ.notifications-durable.>
-          - $JS.ACK.DLQ.notifications-durable.>
-          - probe.notifications
-        subscribe: [_INBOX.>]
 
 # === Dapr — rask's Components, Configurations, Resiliency and sidecars ===========================
 # The control plane (operator, sentry, placement, scheduler, sidecar injector) is a PREREQUISITE the platform runs
@@ -1611,7 +1434,7 @@ nats:
 # dapr.io/v1alpha1.
 dapr:
   # One switch for "rask uses Dapr". Off runs plain pods with no Components, and services call each other on their Service URLs.
-  # -- Use Dapr: inject a daprd sidecar into every fleet and lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it.
+  # -- Use Dapr: inject a daprd sidecar into every lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it.
   enabled: true
   # -- Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it.
   controlPlaneNamespace: dapr-system
@@ -1923,10 +1746,6 @@ age:
   bootstrapDb: lineage
   # -- Name of the database OpenFGA uses as its datastore.
   openfgaDb: openfga
-  # The Dapr state store's database (see stateStore above). Dapr owns this schema outright — it creates
-  # and migrates its own tables — so it gets its own database rather than a table beside AGE's graph.
-  # -- Name of the database the Dapr Postgres state store owns and migrates itself.
-  stateDb: daprstate
   # -- Postgres port of the AGE store, used by every client DSN, the backup job and the network policy.
   port: 5432
   # Externalize ([[XC-132]]): with age.enabled=false every client (the in-chart OpenFGA's datastore DSN, the
@@ -2053,23 +1872,22 @@ signing:
   # the render refuses anything but the three strings (as it refuses an unset value under `--reuse-values`).
   #
   # A door is a subscription that ACTS on what the bus delivers, so a forged event there does more than lie in the graph:
-  # notifications' /lineage-events and /control-events (a named person's bell), and /maintenance-arrival (a
-  # write refreshes a table's due record). maintenance registers that route while `maintenance.arrivalEnabled` is on, and
-  # its Deployment then carries the settings.
+  # /maintenance-arrival (a write refreshes a table's due record) and the catalog's control subscription. maintenance
+  # registers that route while `maintenance.arrivalEnabled` is on, and its Deployment then carries the settings.
   #
   # Wherever the store and auth are on (where lineage can verify), each door's Deployment carries RASK_SIGNATURE_DOORS and
   # the two sets lineage verifies with, from the same helpers (one narrower set, below): RASK_EVENT_SIGNERS
   # (lance.signingIdentities) and RASK_EVENT_DELEGATORS (lance.delegatorIdentities), so a door and lineage cannot disagree
   # about who signs. The apps
-  # whose doors take control events (notifications, and the catalog under catalog.controlEmit) also carry RASK_CONTROL_SIGNER_ROLES, a JSON object
+  # whose doors take control events (the catalog under catalog.controlEmit) also carry RASK_CONTROL_SIGNER_ROLES, a JSON object
   # from each service that emits control events to the identities it signs as (lance.signers' `role`): catalog -> the
   # catalog, maintenance -> maintenance (its purge, under maintenance.controlEmit). The keys are
-  # exactly lakehouse_kit.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
+  # exactly service_kit.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
   # every key is present, and a role whose service is not deployed is an empty list. A door's per-action policy
   # (control_signer_role) resolves every action's allowed signers from it. Without the store or auth nothing is rendered and the doors
   # verify nothing, as lineage does.
   #
-  # Notifications and maintenance keep lineage's full sets: every signer's events reach them.
+  # Maintenance keeps lineage's full sets: every signer's events reach it.
   #
   # off verifies nothing. observe acts exactly as off and counts what it would refuse
   # (<service>_signature_would_refuse_total). enforce acknowledges a refused event (never a DROP, which parks and re-parks on
@@ -2137,7 +1955,7 @@ allocator:
   arrowMemoryPool: system
 
 # ==== observability ==========================================================
-# rask's telemetry seam is ONE OpenTelemetry Collector (templates/otel-collector.yaml): it RECEIVES the fleet's
+# rask's telemetry seam is ONE OpenTelemetry Collector (templates/otel-collector.yaml): it RECEIVES the lakehouse services'
 # OTLP, TAILS infra-pod logs (filelog), SCRAPES the Dapr sidecars, the Dapr control plane and OpenFGA, and
 # EXPORTS everything over OTLP/HTTP to the endpoint named here. What stores, graphs and alerts on that telemetry is
 # the platform's (ADR 0153): rask installs no store, no dashboards and no alert evaluator. Its alert rules are an
@@ -2152,7 +1970,7 @@ allocator:
 # username, password; the dev OpenBao mints it, a platform store must hold it). GAP, stated: the fixture's GreptimeDB
 # has no user provider, so it ignores the credential.
 observability:
-  # -- Deploy rask's OTel Collector and turn on OTLP export from the fleet, Dapr and OpenFGA to it; needs `export.endpoint`.
+  # -- Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services, Dapr and OpenFGA to it; needs `export.endpoint`.
   enabled: false
   # -- Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace.
   environment: rask # deployment.environment.name resource attr — override per deploy (dev / staging / prod)

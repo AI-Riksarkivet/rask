@@ -40,7 +40,6 @@ from lakehouse_kit.features import flags_from_open_error, manifest_base_path_ref
 from lakehouse_kit.history_fences import TableHistory
 from lakehouse_kit.lance_session import affordable_cache_bytes
 from lakehouse_kit.maintenance_due import CloneList, DueRecord, delete_due, list_due, write_clone_list
-from lakehouse_kit.openlineage import DatasetUuids
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
@@ -65,6 +64,7 @@ from maintenance.services.naming import PolicyOwners, TableIds, policy_owners, r
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
+from service_kit.lineage_events import DatasetUuids
 from service_kit.storage_options import StorageOptions, s3_filesystem
 
 

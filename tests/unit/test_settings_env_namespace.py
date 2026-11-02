@@ -45,12 +45,8 @@ _SETTINGS: list[tuple[str, str, str]] = [
     ("packages/service-kit", "service_kit.config", "Settings"),
     ("packages/lineage-kit", "lineage_kit.config", "LineageSettings"),
     ("services/lineage", "lineage.core.config", "LineageSettings"),
-    ("services/notifications", "notifications.api.settings", "IngressSettings"),
     ("services/catalog", "catalog.core.config", "Settings"),
     ("services/maintenance", "maintenance.core.config", "MaintenanceSettings"),
-    # This one reaches `populate_by_name` by declaring it next to a GovernedAuthSettings mixin, which
-    # is why grepping for the flag on a `class X(BaseSettings)` line misses it.
-    ("services/notifications", "notifications.config", "NotificationsSettings"),
 ]
 
 _IDS = [f"{m.split('.')[0]}.{c}" for _, m, c in _SETTINGS]

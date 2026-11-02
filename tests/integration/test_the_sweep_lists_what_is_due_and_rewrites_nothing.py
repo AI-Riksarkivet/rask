@@ -36,8 +36,8 @@ from pydantic import SecretStr
 from lakehouse_kit import location_claims, maintenance_policies
 from lakehouse_kit.maintenance_due import read_due
 from lakehouse_kit.objectfs import lance_storage_options
-from lakehouse_kit.openlineage import DatasetUuids, dataset_uuids
 from service_kit.governed.store_credential import S3KeyPair
+from service_kit.lineage_events import DatasetUuids, dataset_uuids
 from service_kit.storage_options import StorageOptions
 
 

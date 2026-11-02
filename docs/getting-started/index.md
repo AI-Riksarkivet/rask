@@ -35,7 +35,7 @@ listening. `lakehouse`, `explorer`, `annotator` and `models` ship a seed; `home`
 
 ## Run the lakehouse (k3s)
 
-The lakehouse services (catalog, lineage, maintenance, notifications) need Dapr sidecars, NATS JetStream, OpenFGA and
+The lakehouse services (catalog, lineage, maintenance) need Dapr sidecars, NATS JetStream, OpenFGA and
 an object store, so they run in-cluster. Development installs those prerequisites from `deploy/fixtures`, each its own
 release, before rask's:
 

@@ -132,11 +132,8 @@ spec:
               # replica's ring buffer (GET /management/v1/events). Its own stream so a parking-free broadcast publish
               # can't fail for want of a stream. The catalog's replicas consume it through the mirror below.
               #
-              # IT IS NOT THE ONLY CONSUMER, and this stream IS in the drift loop below because of the
-              # other one. `dapr-component.yaml` renders `notifications-control-durable`, a chart-owned
-              # DURABLE subscription whose maxDeliver/backOff are templated from the same
-              # `dapr.resiliency.enabled` conditional as EXP_MAXD/EXP_BOFF, which is exactly the pair the
-              # loop repairs; walking the stream is what makes that repair reach it.
+              # The stream stays in the drift loop below, so a durable on it that no component in this release renders
+              # is deleted there like one on any other stream.
               add_if_missing CATALOG_CONTROL "catalog.control.>"
               # The mirror holding each catalog replica's durable, its consumer limit reaping a deleted pod's (LH-305).
               BROADCAST_INACTIVE_NS="{{ mul (int (required "catalog.controlConsumerInactiveSeconds is required" .Values.catalog.controlConsumerInactiveSeconds)) 1000000000 }}"
@@ -189,10 +186,10 @@ spec:
               # see is the class that never changes — measured for LH-127: four durables of one removed app and
               # two of another, all reporting the expected MaxDeliver/Backoff.
               #
-              # KEYED ON THE RENDERED NAME SET, never on app-ids. Three durables this chart owns are not
-              # `<app-id>-durable` — the dead-letter consumer and both control lanes — so an app-id test
-              # deletes them. `lance.chartDurables` is the single derivation; the chart-owns-it test asserts
-              # it against the rendered Components, so a new durable that forgets the list fails there.
+              # KEYED ON THE RENDERED NAME SET, never on app-ids. The dead-letter consumer this chart owns is not
+              # `<app-id>-durable`, so an app-id test deletes it. `lance.chartDurables` is the single derivation; the
+              # chart-owns-it test asserts it against the rendered Components, so a new durable that forgets the list
+              # fails there.
               EXP_DURABLES="{{ include "lance.chartDurables" . }}"
               for st in LINEAGE DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 for c in $(nats --server "$S" consumer ls "$st" --names 2>/dev/null | grep -- '-durable$'); do

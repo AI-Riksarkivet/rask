@@ -12,9 +12,6 @@ dependencies = [
     # in the image, whose venv is `uv sync --frozen --package notifications` alone: that is the exact
     # crash-loop the ingest door and then the flows door each paid for once.
     "service-kit[governed]",
-    # The lakehouse's event vocabularies the inbox reads (`control_events`, `openlineage`, `subjects`) and the
-    # signature door settings, without the data plane.
-    "lakehouse-kit",
     # The signature doors on both bus routes ([[XC-078]]): `lineage_kit.signing` verifies an event's
     # `rask_signature`, `lineage_kit.keys` reads and caches each signer's published keys, and
     # `lineage_kit.door` turns the outcome into deliver, refuse or retry. Declared rather than borrowed:
@@ -44,6 +41,17 @@ build-backend = "hatchling.build"
 packages = ["src/notifications"]
 
 [tool.uv.sources]
-lakehouse-kit = { workspace = true }
 service-kit = { workspace = true }
 lineage-kit = { workspace = true }
+
+# The inbox's own import-layer rule, run by `make lint-imports` beside the lakehouse's `.importlinter`, so it travels with
+# the inbox and the lakehouse's contracts name no notifications module.
+[tool.importlinter]
+root_packages = ["notifications", "service_kit", "lineage_kit"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "XC-188: notifications imports nothing from lakehouse_kit, the lakehouse's kernel, by any chain"
+type = "forbidden"
+source_modules = ["notifications", "service_kit", "lineage_kit"]
+forbidden_modules = ["lakehouse_kit"]

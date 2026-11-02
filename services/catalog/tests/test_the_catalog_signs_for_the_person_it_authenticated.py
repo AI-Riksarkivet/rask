@@ -48,8 +48,8 @@ from lance_namespace import (
 )
 
 from lakehouse_kit import location_claims, outbox
-from lakehouse_kit.control_events import CONTROL_TOPIC
 from lineage_kit import SIGNATURE_FACET, RefusalReason, SignatureError, verify_control_signature, verify_signature
+from service_kit.control_events import CONTROL_TOPIC
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import IDToken

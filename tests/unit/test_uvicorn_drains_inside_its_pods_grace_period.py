@@ -35,7 +35,6 @@ _DRAIN_ARMED = frozenset(
     {
         "Deployment/rask-lineage",
         "Deployment/rask-maintenance",
-        "Deployment/rask-notifications",
     }
 )
 
@@ -111,8 +110,7 @@ def test_a_lifecycle_that_leaves_no_drain_refuses_to_RENDER(lifecycle: dict[str,
     assert refusal in refused.value.stderr, refused.value.stderr
 
 
-#: The init each image the product chart runs uvicorn from declares as its ENTRYPOINT (`.docker/rest-catalog.dockerfile`,
-#: `notifications.dockerfile`).
+#: The init the image the product chart runs uvicorn from declares as its ENTRYPOINT (`.docker/rest-catalog.dockerfile`).
 #: What a uvicorn container's command line begins with: uvicorn itself, or the tracer that execs it.
 _LAUNCHERS = {"uvicorn", "opentelemetry-instrument"}
 

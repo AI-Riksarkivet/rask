@@ -34,9 +34,9 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
 from lakehouse_kit.base_registry import BaseRegistry
-from lakehouse_kit.control_events import CatalogControlEvent
 from lakehouse_kit.derived_tables import EDGES
 from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.control_events import CatalogControlEvent
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal

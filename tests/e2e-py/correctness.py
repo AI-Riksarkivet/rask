@@ -8,7 +8,8 @@ hold, given the commits a writer was told landed; `recorded_edges` reads the sec
 hold, given the first.
 
 WHAT A DRIVE CAUSED. `feed_of` reads every row lineage's feed holds about the scenario's two tables and `announced` the
-commit each names; `told` reads what each person the scenario names was told of the drive.
+commit each names; `uuids_of` reads each table's uuid as the catalog's DescribeTable answers it, which is how an event
+names the table it is about (`docs/COMMIT-EVENTS.md`).
 
 A branch is its own version history (`lance_docs/lance/format/table/branch_tag.md` § Branch and Tag Specification): its manifests and
 transactions live under `tree/<branch>/`, and its history starts after the parent version `_refs/branches/<branch>.json`
@@ -44,11 +45,11 @@ import bus
 import byo_scenario as scenario
 import lance
 import requests
-from byo_scenario import Commit, Identity, ScenarioRun, Tenant
+from byo_scenario import Commit, Identity, ScenarioRun
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse_kit import outbox
-from lakehouse_kit.openlineage import event_identity
+from service_kit.lineage_events import event_identity
 from service_kit.naming import uuid_of
 from service_kit.storage_options import StorageOptions
 
@@ -66,8 +67,6 @@ STORE_SECRET = os.environ.get("LANCE_E2E_S3_SECRET_KEY", "")
 #: Each version of a set of tables, as ``(table, branch, version)`` with ``None`` for main, and the `rask.*`
 #: properties its commit carries.
 type History = dict[tuple[str, str | None, int], dict[str, Any]]
-#: What a person was told of a drive, as ``(notification id, reason, object)``.
-type Told = tuple[str, str, str]
 
 
 class Edge(BaseModel):
@@ -163,16 +162,17 @@ def _sql_list(names: Iterable[str]) -> str:
     return ", ".join("'" + name.replace("'", "''") + "'" for name in names)
 
 
-def _named_by_uuid(owner: Identity, tables: Iterable[str]) -> dict[str, str]:
-    """Each of ``tables`` by the uuid the catalog answers for it (ADR 0173 §11), mapped back to its name."""
+def uuids_of(reader: Identity, tables: Iterable[str]) -> dict[str, str]:
+    """Each of ``tables`` mapped to the uuid the catalog's DescribeTable answers ``reader`` for it, its `rask.uuid`
+    property (ADR 0173 §11)."""
     from lance_namespace import DescribeTableRequest
 
-    named: dict[str, str] = {}
+    found: dict[str, str] = {}
     for table in tables:
-        table_uuid = uuid_of(owner.namespace().describe_table(DescribeTableRequest(id=table.split("$"))).properties)
+        table_uuid = uuid_of(reader.namespace().describe_table(DescribeTableRequest(id=table.split("$"))).properties)
         assert table_uuid is not None, f"the catalog answers no uuid for {table}"
-        named[table_uuid] = table
-    return named
+        found[table] = table_uuid
+    return found
 
 
 def recorded_edges(owner: Identity, tables: Iterable[str], *, expected: Iterable[Edge], within: float = scenario.SETTLE_SECONDS) -> list[Edge]:
@@ -184,7 +184,7 @@ def recorded_edges(owner: Identity, tables: Iterable[str], *, expected: Iterable
     edge is read by the names its event used (`in_name`, `out_name`), which is what ``expected`` names.
     """
     bus.wait_until_acked("LINEAGE", (LINEAGE_DURABLE,), bus.last_seq("LINEAGE"), within=within)
-    names = _named_by_uuid(owner, tables)
+    names = {table_uuid: table for table, table_uuid in uuids_of(owner, tables).items()}
     keyed = _sql_list(names)
     wanted = Counter(expected)
     deadline = time.monotonic() + within
@@ -219,21 +219,6 @@ def announced(reader: Identity, run: ScenarioRun) -> list[Announcement]:
         for row in feed_of(reader, run)
         for facet in (scenario.lance_facet(row),)
     ]
-
-
-def told(tenant: Tenant, run: ScenarioRun) -> dict[str, list[Told]]:
-    """What each person the scenario names was told of the drive, by the part they play: their inbox rows since the tenant
-    was made about its project, its two namespaces or its two tables, sorted. A row names a table or namespace by its
-    uuid (`object_id`, [[LH-524]]) and its name (`object_name`), which is what this reads; any other object by its id."""
-    about = {run.bronze_table, run.silver_table, tenant.bronze, tenant.silver, f"project:{tenant.project}"}
-
-    def named(row: dict[str, Any]) -> str:
-        return str(row.get("object_name") or row["object_id"])
-
-    return {
-        part: sorted((row["notification_id"], row["reason"], named(row)) for row in person.inbox(since=tenant.created_at) if named(row) in about)
-        for part, person in tenant.people.items()
-    }
 
 
 def _settled(depth: Callable[[], int], within: float) -> int:

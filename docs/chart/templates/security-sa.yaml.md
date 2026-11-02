@@ -3,16 +3,17 @@
 Rationale for `chart/templates/security-sa.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- $components := list "catalog" "lineage" "web" "maintenance" "jobs" "issuer-mirror" "hooks" }}`
+## `{{- $components := list "catalog" "lineage" "maintenance" "jobs" "issuer-mirror" "hooks" }}`
 
 ONE ServiceAccount PER FIRST-PARTY SERVICE, each with automountServiceAccountToken: false on the
 SA object, so a pod holds a Kubernetes API token only where its own spec asks for one. The Dapr
 injector's projected Sentry token is a separate volume and is unaffected.
 These SAs carry no grant except issuer discovery below; a pod that calls the API keeps its own
-RBAC-bound SA in its template. The fleet's SAs come from the same map fleet.yaml ranges, so a new
-fleet service cannot name an SA this file did not render, and a pod names its SA with this file's
-prefix (lance.fullname), which follows the release name where rask.fullname does not. Pinned by
-tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
+RBAC-bound SA in its template. The list names each component the chart runs, and a key under `.Values.services` adds
+none, so a release's values cannot render an identity for a service the chart does not run, such as a client's key a
+release kept. A pod names its SA with this file's prefix (lance.fullname), which follows the release name where
+rask.fullname does not. Pinned by tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py, and
+the stale client key by tests/unit/test_the_product_chart_renders_no_client.py.
 
 ## `"hooks"` in the component list
 

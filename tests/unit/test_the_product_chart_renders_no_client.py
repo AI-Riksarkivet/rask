@@ -28,9 +28,21 @@ import yaml
 from tests.unit.chart_render import DEFAULT_ARGS, PROD_ARGS, REPO, render
 
 
+#: A deployed release's values can hold a key a client once owned: revision 35's (`helm get values rask`, 2026-11-02)
+#: held the inbox's email channel under `services.notifications`. The deployed overlay carries it, so such a key is shown
+#: to render nothing.
+_STALE_CLIENT_VALUES = '{"channels":{"email":{"enabled":true,"host":"rask-mailpit","port":1025,"secretName":"notifications-smtp"}}}'
+
 _OVERLAYS: dict[str, tuple[str, ...]] = {
     "default": DEFAULT_ARGS,
-    "deployed": ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml")),
+    "deployed": (
+        "--set",
+        "image.localImages=true",
+        "-f",
+        str(REPO / "deploy/values-local.yaml"),
+        "--set-json",
+        f"services.notifications={_STALE_CLIENT_VALUES}",
+    ),
     "prod": PROD_ARGS,
 }
 
@@ -47,20 +59,22 @@ _CLIENTS: dict[str, re.Pattern[str]] = {
     "kueue": re.compile(r"kueue", re.IGNORECASE),
     "table-maintenance": re.compile(r"table-maintenance", re.IGNORECASE),
     "hf": re.compile(r"hf[-_]?token|hugging\s*face", re.IGNORECASE),
+    # NATS's reply subjects are `_INBOX.>`, which every bus user subscribes to; the inbox client is any other `inbox`.
+    "notifications": re.compile(r"notification|(?<![_a-z])inbox", re.IGNORECASE),
 }
 
 #: The values a deployment sets to admit a client of its own release by its ServiceAccount (owner, 2026-10-25, XC-183),
-#: and the lakehouse objects each one feeds: bootstrap-admin writes a decider's tuple, and the catalog reads the
-#: provenance maintainers from its environment. They are the only values that may name a client, and admitting one may
-#: change these objects and nothing else.
-_EXTENSION_POINTS: dict[str, set[tuple[str, str]]] = {
-    "auth.externalDeciders": {("Job", "rask-bootstrap-admin")},
-    "services.lineage.provenanceMaintainers": {("Deployment", "rask-catalog")},
+#: each with the value that admits nobody and the lakehouse objects it feeds: bootstrap-admin writes a client's estate
+#: roles, and the catalog reads the provenance maintainers from its environment. They are the only values that may name
+#: a client, and admitting one may change these objects and nothing else.
+_EXTENSION_POINTS: dict[str, tuple[str, set[tuple[str, str]]]] = {
+    "auth.externalDeciders": ("{}", {("Job", "rask-bootstrap-admin")}),
+    "services.lineage.provenanceMaintainers": ("[]", {("Deployment", "rask-catalog")}),
 }
 
 
 def _without_clients() -> tuple[str, ...]:
-    return tuple(arg for path in _EXTENSION_POINTS for arg in ("--set-json", f"{path}=[]"))
+    return tuple(arg for path, (nobody, _) in _EXTENSION_POINTS.items() for arg in ("--set-json", f"{path}={nobody}"))
 
 
 def _strings(value: Any, path: str) -> Iterator[tuple[str, str]]:
@@ -115,4 +129,4 @@ def test_admitting_a_client_changes_only_the_objects_its_extension_point_feeds(p
     before, after = by_name(absent), by_name(present)
     changed = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
     assert _deployed_value(point), f"values-local.yaml admits no client at {point}, so this case compares two equal renders"
-    assert changed == _EXTENSION_POINTS[point]
+    assert changed == _EXTENSION_POINTS[point][1]

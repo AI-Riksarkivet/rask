@@ -12,7 +12,8 @@ tiers live ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catal
 committed write as an OpenLineage event over Dapr pub/sub on **NATS JetStream**; **lineage** records it in a durable
 commit feed (`GET /events`) and a table-level edge list, Lance tables in the catalog's provenance namespace, and
 forwards it to a bring-your-own graph backend ([ADR 0158](../adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md)), and
-**notifications** turns the events into a per-person inbox.
+a notifier, a client such as the **notifications** inbox, turns the events into a per-person inbox
+([the contract](../COMMIT-EVENTS.md#telling-people-the-notifier-contract)).
 **Maintenance** expires versions, purges trash, scans for orphans and reconciles stores. Moving data between tiers,
 ingest and training are the user's pipeline, on the user's own compute and orchestrator
 ([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)). The HTTP backend sits behind the
@@ -29,7 +30,7 @@ flowchart TB
     client["A user's pipeline<br/><sub>its own compute</sub>"] -->|"namespace doors"| cat
     gw --> cat["catalog<br/><sub>tier governance</sub>"]
     gw --> lin["lineage<br/><sub>GET /events · provenance tables</sub>"]
-    gw --> notif["notifications"]
+    gw --> notif["notifications<br/><sub>a client of the events</sub>"]
     gw --> media["media<br/>viewer · search"]
     gw --> annot["annotator<br/><sub>a client, its own release</sub>"]
     annot -->|"namespace doors"| cat
@@ -54,8 +55,7 @@ flowchart TB
   `the-lakehouse-knows-no-client`, which forbids every client). The `compute` service (Ray dashboard introspection and the Serve proxy) is the
   companion of a bring-your-own Ray engine and ships in its own chart, which publishes `/api/ray` and `/api/serve` with its own
   HTTPRoute. A workload's model environment is a sealed `runners/<workload>` project.
-- **State** is the Lance tables on S3 (RustFS in development), lineage's among them, plus Postgres for OpenFGA and the
-  Dapr state store. The
+- **State** is the Lance tables on S3 (RustFS in development), lineage's among them, plus Postgres for OpenFGA. The
   Helm chart in `chart/` deploys rask's own services; Dapr, NATS, the object store, the secret store and the
   observability store are prerequisites the platform runs.
 

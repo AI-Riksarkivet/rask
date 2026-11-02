@@ -20,7 +20,8 @@ store is reached at addresses no URL derives, and the render refuses the rule em
 
 ## `{{- $ageClients := list "openfga-migrate" "backup-pg" }}`
 
-stateStore.scopes appended + uniq'd: the state-store-scoped apps' daprd dial this Postgres directly.
+The Postgres's component-labelled clients: OpenFGA's migrate Job and the pg backup job (OpenFGA's own pods are
+admitted by their subchart's name label below). No daprd dials it, since the release renders no Dapr state store.
 
 ## `name: {{ include "lance.fullname" . }}-object-store-ingress`
 

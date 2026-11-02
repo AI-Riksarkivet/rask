@@ -189,7 +189,7 @@ data:
             # `dapr-scheduler-server` is a 3-replica StatefulSet with a 16 Gi etcd PVC. So it is a
             # failure domain that can be lost INDEPENDENTLY of the data its reminders bound, and the
             # symptom of a lost reminder is SILENCE: a lease that never expires, a publish that never
-            # re-drives, an inbox that never compacts. `ActorStateTTL` is off on this estate, so there
+            # re-drives. `ActorStateTTL` is off on this estate, so there
             # is no TTL backstop underneath it either.
             #
             # `dapr_scheduler_sidecars_connected` is the only Dapr-specific metric the scheduler

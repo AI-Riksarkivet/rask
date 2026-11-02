@@ -315,7 +315,7 @@ func (m *Rask) scanContainer(
 
 // ScanImage builds a deployable from .docker/<name>.dockerfile and scans that exact image.
 //
-// `name` is the dockerfile stem, identical to `dagger call image --name=…`: notifications, compute, runner,
+// `name` is the dockerfile stem, identical to `dagger call image --name=…`: rest-catalog, compute, runner,
 // ray-cluster, …
 func (m *Rask) ScanImage(
 	ctx context.Context,
@@ -394,7 +394,7 @@ func (m *Rask) sbomContainer(img *dagger.Container, name string) *dagger.File {
 
 // Sbom builds a deployable from .docker/<name>.dockerfile and emits its CycloneDX SBOM.
 //
-//	dagger call sbom --name=notifications export --path=./sbom-notifications.cdx.json
+//	dagger call sbom --name=rest-catalog export --path=./sbom-rest-catalog.cdx.json
 func (m *Rask) Sbom(
 	// +defaultPath="/"
 	// +optional

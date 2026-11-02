@@ -64,7 +64,7 @@ on `can_get_metadata` for every dataset they name; the HTTP ingest takes the aut
 | Capability | Endpoints | Notes |
 |---|---|---|
 | **Ingest** | `POST /api/v1/lineage`, `GET /dapr/subscribe` | HTTP + Dapr-subscription transports into the commit feed and the edge list |
-| **Commit feed** | `GET /events`, `GET /events/projection` | the durable feed a pipeline polls ([COMMIT-EVENTS.md](COMMIT-EVENTS.md)); the projection is notifications', gated on `can_read_event_feed` |
+| **Commit feed** | `GET /events`, `GET /events/projection` | the durable feed a pipeline polls ([COMMIT-EVENTS.md](COMMIT-EVENTS.md)); the projection is a notifier's, gated on `can_read_event_feed` (`event_reader`, granted through `auth.externalDeciders`) |
 | **Derived tables** | `GET /tables/{name}/derived?depth=` | every table derived from `name`, over the edge list; how an erasure finds them |
 | **Dead letters** | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | parked deliveries |
 | **Health** | `GET /livez`, `GET /readyz` | |

@@ -16,13 +16,13 @@ from fastapi import APIRouter, Query, Request
 from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse_kit.openlineage import AUTHOR_FACET, LANCE_FACET
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, Governed, governed, governed_refs, output_refs, require_event_feed_reader
 from lineage.api.security import CurrentToken
 from lineage.schemas import EventRecord, Events, FeedProjection, ProjectedEvent
 from lineage.services.names import CatalogNames
 from service_kit.governed import fga
+from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET
 from service_kit.naming import CATALOG_DELIMITER
 
 
@@ -88,7 +88,7 @@ def _governed_datasets(record: EventRecord) -> Governed:
 
 
 #: The top-level fields of an OpenLineage event that targeting reads: the state, when it happened, and the
-#: producer (half of the id a static change is keyed by, `lakehouse_kit.openlineage.static_event_id`).
+#: producer (half of the id a static change is keyed by, `service_kit.lineage_events.static_event_id`).
 _TARGETING_FIELDS: Final = ("eventType", "eventTime", "producer")
 #: The facets that name WHO: the verified author, and rask's own facet carrying the tenant, the originator
 #: and the producer's run id. Every other facet describes the data or the job.
@@ -116,8 +116,8 @@ def _dataset(item: object, *, facets: tuple[str, ...]) -> object:
 def targeting_view(event: dict[str, Any]) -> dict[str, Any]:
     """An event cut to what deciding WHOM TO TELL reads, and nothing describing data.
 
-    The one consumer is the notifications reconciler, and what it reads is
-    `notifications/api/lineage_events.py`'s: the run id and its `rask_author` and `rask_lance` facets, the state and
+    Its consumer is a notifier walking the feed, and what one reads to target people is the targeting contract
+    (docs/COMMIT-EVENTS.md): the run id and its `rask_author` and `rask_lance` facets, the state and
     time, and the output names with each output's `rask_lance` facet, which names the table by its uuids; for a static
     change, the dataset's name, namespace and those two facets, plus `producer`. Inputs, the job, every other
     output facet (column lineage among them, which names other tables and their columns) and every other run facet
@@ -218,7 +218,7 @@ async def get_events_projection(
     since: Annotated[int | None, Query(ge=0)] = None,
     limit: Annotated[int, Query(ge=1, le=_EVENTS_RETURN)] = _EVENTS_RETURN,
 ) -> FeedProjection:
-    """The run feed WITHOUT the per-dataset filter, for the notifications reconciler ([[CTL-021]]).
+    """The run feed WITHOUT the per-dataset filter, for a notifier walking it ([[CTL-021]]).
 
     WHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is
     right for a person: an event naming a table you cannot see must not disclose it. It is wrong for a

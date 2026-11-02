@@ -255,88 +255,6 @@ data:
         ]
       }
     }
-  notifications.json: |
-    {
-      "kind": "Dashboard",
-      "metadata": { "name": "notifications", "project": "rask" },
-      "spec": {
-        "display": { "name": "Notifications — the targeted inbox", "description": "The notification plane's two ingress lanes, its fan-out outcomes and its dead-letter floor. The lane split is the panel worth reading: the BUS carries run lifecycle, the FEED carries every producer that emits lineage over HTTP only (Ray TRAIN, external OpenLineage), and a feed lane flat at zero on a busy estate is a reconciler refused on every page (not admitted, or without the event_reader rung) while its pod stays Ready." },
-        "duration": "6h",
-        "panels": {
-          "ingressByLane": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "Ingress events /s by lane" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (lance_notifications_lane) (rate(notifications_ingress_events_total[5m]))",
-                "seriesNameFormat": {{ "{{lance_notifications_lane}}" | quote }} } } } } ]
-            }
-          },
-          "ingressByOutcome": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "Ingress outcomes /s (dropped + retried are the ones to watch)" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (lance_notifications_outcome) (rate(notifications_ingress_events_total[5m]))",
-                "seriesNameFormat": {{ "{{lance_notifications_outcome}}" | quote }} } } } } ]
-            }
-          },
-          "fanoutOutcomes": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "Per-recipient delivery outcomes /s" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (lance_notifications_outcome) (rate(notifications_fanout_recipients_total[5m]))",
-                "seriesNameFormat": {{ "{{lance_notifications_outcome}}" | quote }} } } } } ]
-            }
-          },
-          "deadLettered": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "Dead-lettered deliveries /s (the floor under RETRY)" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum(rate(notifications_dlq_parked_total[5m]))" } } } } ]
-            }
-          },
-          "actorTurnQueue": {
-            "kind": "Panel",
-            "spec": {
-              "display": { "name": "InboxActor pending calls (turn-queue depth)" },
-              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
-              "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "max(dapr_runtime_actor_pending_actor_calls{actor_type=\"InboxActor\"})" } } } } ]
-            }
-          }
-        },
-        "layouts": [
-          {
-            "kind": "Grid",
-            "spec": {
-              "display": { "title": "Ingress" },
-              "items": [
-                { "x": 0, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/ingressByLane" } },
-                { "x": 12, "y": 0, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/ingressByOutcome" } }
-              ]
-            }
-          },
-          {
-            "kind": "Grid",
-            "spec": {
-              "display": { "title": "Delivery" },
-              "items": [
-                { "x": 0, "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/fanoutOutcomes" } },
-                { "x": 8, "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/deadLettered" } },
-                { "x": 16, "y": 0, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/actorTurnQueue" } }
-              ]
-            }
-          }
-        ]
-      }
-    }
   maintenance.json: |
     {
       "kind": "Dashboard",
@@ -605,13 +523,11 @@ data:
           "silentLoss": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Silent data loss", "description": "Two counters that record UNRECOVERABLE loss and are read by no alert and no other panel. Both carry `or vector(0)`: they only ever increment on loss, so without it a healthy estate renders NO DATA \u2014 and a silent-loss counter that is itself silent reads as coverage." },
+              "display": { "name": "Silent data loss", "description": "A counter that records UNRECOVERABLE loss and is read by no alert and no other panel. It carries `or vector(0)`: it only ever increments on loss, so without it a healthy estate renders NO DATA \u2014 and a silent-loss counter that is itself silent reads as coverage." },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(increase(outbox_events_poison_dropped_total[1h])) or vector(0)", "seriesNameFormat": {{ "outbox poison dropped" | quote }} } } } },
-                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(increase(notifications_feed_gaps_total[1h])) or vector(0)", "seriesNameFormat": {{ "lineage feed pruned below cursor" | quote }} } } } }
+                  "query": "sum(increase(outbox_events_poison_dropped_total[1h])) or vector(0)", "seriesNameFormat": {{ "outbox poison dropped" | quote }} } } } }
               ]
             }
           }

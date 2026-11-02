@@ -72,8 +72,8 @@ consequences it does not spell out.
   than the run (criterion 2's principal × door matrix, `test_the_catalog_is_correct.py`) makes its own objects in
   the shared tenant's warehouse, under names that do not carry the project id, so the other criteria read only what
   the scenario made. The bus is read through `tests/e2e-py/bus.py`, by sequence, with no consumer of its own.
-  What every criterion reads to call the estate correct (each ref's history, the edge list, the feed's rows and the
-  inboxes' about the drive, the DLQ and both outboxes) is `tests/e2e-py/correctness.py`, so a new criterion holds the
+  What every criterion reads to call the estate correct (each ref's history, the edge list, the feed's rows about the
+  drive and each table's uuid, the DLQ and both outboxes) is `tests/e2e-py/correctness.py`, so a new criterion holds the
   estate to the same readings. The acceptance is the marker, not a file list: `make e2e-phase1` and the e2e-stack
   lane run `-m phase1`, so a module joins both by carrying it; the scenario's own module
   (`test_a_bring_your_own_pipeline_runs_end_to_end.py`) carries it beside `byo_pipeline`.
@@ -114,10 +114,12 @@ consequences it does not spell out.
   `[tool.ruff.lint.flake8-tidy-imports.banned-api]`, restated in `services/viewer`,
   whose nested map replaces the root one. A sanctioned use takes a line-level
   `# noqa: TID251`, and only a module that IS the seam takes a per-file ignore. A layer rule is a
-  contract in `.importlinter` (the lakehouse's, which names no client module) or, for a client, in its own
-  `pyproject.toml` `[tool.importlinter]` (`services/annotator`, `services/viewer`, `services/search`, `packages/client-kit`,
-  `services/table-maintenance`); `make lint-imports`
-  (part of `make check`) runs each.
+  contract in `.importlinter` (the lakehouse's, in which no client is a root package: each is forbidden as an external
+  name) or, for a client, in its own
+  `pyproject.toml` `[tool.importlinter]` (`services/annotator`, `services/notifications`, `services/viewer`,
+  `services/search`, `packages/client-kit`, `services/table-maintenance`); `make lint-imports`
+  (part of `make check`) runs `.importlinter`, then every member pyproject that declares `[tool.importlinter]`, found by
+  grep, so it names no client and holds with every client tree deleted.
 
 ### Lanes
 
@@ -132,6 +134,7 @@ consequences it does not spell out.
 | CI: `dagger call rustfs-lifecycle`, `dagger call smoke-rustfs` | `tests/e2e-py/test_e2e.py` under `--require-live` against a catalog whose bytes are on RustFS, and `scripts/smoke_rustfs.py` through `packages/storage` |
 | CI: `dagger call rustfs-provisioning` (= `make rustfs-provisioning`) | `tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py` (marker `rustfs_provisioning`) under `--require-live`: the scoped-users hook's `scripts/rustfs_admin.py` against a throwaway RustFS booted as the fixture boots it (root pair from files); the e2e-stack lane leaves the marker out, since it provisions IAM on the store it runs against |
 | CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`) under `--require-live`: the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
+| CI: `dagger call lakehouse-alone` (= `make lakehouse-alone`, ms-gates leg `lakehouse-alone`) | every client tree deleted (`.dagger/lakehouse.go` names them: the client services and kits, the runners, `frontend`, `tests/e2e`, the clients' fixtures and their dockerfiles), the workspace re-locked without them, then `make lint-imports` and the offline suite (`-m "not e2e and not slow"`): red when a lakehouse module, test, contract or gate needs a client's tree ([[XC-188]]) |
 | CI: `e2e-stack` (= `make e2e-ci`) | against a stack the lane brings up with no client, three sessions under `--require-live`: every `tests/e2e-py` module carrying none of the markers the lane leaves out, then Phase 1's acceptance (`-m phase1 --chaos --keep-drive`), then its soak at once (`-m soak`); only then does it install the annotator and run `-m annotator` in a fourth session (XC-183) |
 | `make fga-test` (part of `make check`)            | the OpenFGA model's own `.fga.yaml` suite                                                                         |
 | `make e2e-<suite>`, `make e2e-live`               | `tests/e2e-py` against a stack already deployed: one marker at the addresses you pass, or `-m e2e` against the k3s release |

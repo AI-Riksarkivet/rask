@@ -44,7 +44,6 @@ ENTRYPOINTS: list[tuple[str, str]] = [
     ("catalog.main", "app"),
     ("lineage.main", "app"),
     ("maintenance.service", "app"),
-    ("notifications", "app"),
 ]
 
 _PROBE = """

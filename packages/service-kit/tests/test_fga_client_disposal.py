@@ -13,9 +13,8 @@ lifespans call one factory and only one of them disposed — so the fix is not f
 it is one disposer the factory's own package owns. The audit says exactly that: "make it
 un-forgettable rather than per-service".
 
-Suppressed rather than raised, for the reason the notifications block already gives: a shutdown path
-that raises hides whatever came after it, and a failed close cannot be retried on a pod that is
-leaving.
+Suppressed rather than raised: a shutdown path that raises hides whatever came after it, and a failed
+close cannot be retried on a pod that is leaving.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_a_failing_close_does_not_stop_the_teardown() -> None:
-    """ "A shutdown path that raises hides whatever came after it" — the notifications block's own words."""
+    """A shutdown path that raises hides whatever came after it, so a failed close is suppressed and the teardown goes on."""
     from fastapi import FastAPI
 
     from service_kit.governed.fga import dispose

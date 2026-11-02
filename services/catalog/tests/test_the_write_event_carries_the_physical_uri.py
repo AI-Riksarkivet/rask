@@ -27,7 +27,7 @@ from typing import Any, cast
 
 import pytest
 
-from lakehouse_kit.openlineage import DatasetUuids
+from service_kit.lineage_events import DatasetUuids
 from service_kit.storage_options import StorageOptions
 
 

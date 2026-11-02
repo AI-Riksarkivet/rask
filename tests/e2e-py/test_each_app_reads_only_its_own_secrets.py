@@ -31,7 +31,6 @@ SIDECAR_READS: Final[dict[str, tuple[str, str, str]]] = {
     "catalog": ("dapr-app-token", "token", "lineage-s3"),
     "lineage": ("lineage-s3", "access_key", "maintenance-s3"),
     "maintenance": ("maintenance-s3", "access_key", "lineage-s3"),
-    "notifications": ("dapr-app-token", "token", "lineage-s3"),
 }
 
 #: Asks the pod's own sidecar for each named secret and prints, per secret, the status and the FIELD NAMES it answered.

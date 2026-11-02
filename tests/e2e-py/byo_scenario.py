@@ -10,14 +10,13 @@ tag gate. `drive` is that job, run from outside the cluster:
 3. it derives silver through the catalog's create and insert doors, naming its run and the bronze input at that
    version in the spec Context (`x-rask-run-id`, `x-rask-job`, `x-rask-inputs`);
 4. it publishes: the project's gate holds a breaching version behind `published`, readers of `@published` keep the
-   previous version, a validator approves while the admin watches the project, and the admin stops watching once
-   told;
+   previous version, and a validator approves the held version;
 5. it follows the feed over silver and reads its writes and both publications in commit order;
 6. it writes a branch, as every table writer may (D3): it cuts `staging` from silver and commits a stock append on it
    through `version/create`, naming the run and the bronze input as transaction properties.
 
 Three Dex users from the deployed configmap play the parts. The estate admin creates a scratch tenant (a project,
-a warehouse with its own bucket, a bronze and a silver namespace), declares its gate and watches it. The pipeline
+a warehouse with its own bucket, a bronze and a silver namespace) and declares its gate. The pipeline
 identity holds only `writer` on the two namespaces, so it owns what it creates. The validator holds `validator` on
 silver. The tenant is deleted at the end of the session, unless the session keeps the drive for the soak (`kept_drive`).
 
@@ -50,14 +49,12 @@ from pydantic import BaseModel, Field
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
-#: The notifications service under its API prefix (`http://<host>:8850/api`).
-NOTIFICATIONS = os.environ.get("LANCE_E2E_NOTIFICATIONS_URL", "").rstrip("/")
 DEX = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
 DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 ADMIN_USER = os.environ.get("LANCE_E2E_USER", "alice@example.com")
 PIPELINE_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.internal")
 VALIDATOR_USER = os.environ.get("LANCE_E2E_VALIDATOR_USER", "bob@example.com")
-#: How long a committed write may take to reach lineage's feed and an inbox.
+#: How long a committed write may take to reach lineage's feed.
 SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_SETTLE_SECONDS", "120"))
 ARROW = "application/vnd.apache.arrow.stream"
 #: The branch the pipeline cuts from silver and commits on.
@@ -71,8 +68,8 @@ STAGING = "staging"
 CLOSE_EACH_REQUEST = "close"
 
 #: Whether a deployed estate is named, and what to set when it is not.
-LIVE = bool(CATALOG and LINEAGE and NOTIFICATIONS and DEX)
-REQUIRES = "set LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_NOTIFICATIONS_URL and LANCE_E2E_DEX (a deployed estate)"
+LIVE = bool(CATALOG and LINEAGE and DEX)
+REQUIRES = "set LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL and LANCE_E2E_DEX (a deployed estate)"
 
 
 class Identity:
@@ -110,22 +107,6 @@ class Identity:
             "rest", {"uri": CATALOG, "headers.Authorization": f"Bearer {self.bearer}", "headers.Connection": CLOSE_EACH_REQUEST, **headers}
         )
 
-    def inbox(self, *, since: datetime) -> list[dict[str, Any]]:
-        """This person's inbox rows about things that happened at or after ``since``, newest first.
-
-        The inbox pages newest first by `occurred_at`, so paging stops at the first page that reaches back past
-        ``since``: an estate's long-lived inbox is not read whole on every poll.
-        """
-        rows: list[dict[str, Any]] = []
-        cursor: str | None = None
-        while True:
-            params: dict[str, str | int] = {"limit": 100, **({"cursor": cursor} if cursor else {})}
-            page = ok(self.http.get(f"{NOTIFICATIONS}/notifications/inbox", params=params, timeout=30))
-            rows += page["notifications"]
-            cursor = page.get("next_cursor")
-            if not cursor or not page["notifications"] or datetime.fromisoformat(page["notifications"][-1]["occurred_at"]) < since:
-                return [row for row in rows if datetime.fromisoformat(row["occurred_at"]) >= since]
-
 
 def ok(answer: requests.Response) -> dict[str, Any]:
     assert answer.status_code == 200, f"{answer.request.method} {answer.request.url} -> {answer.status_code}: {answer.text[:500]}"
@@ -155,9 +136,8 @@ class Tenant:
         self.bronze = f"{self.project}-bronze"
         self.silver = f"{self.project}-silver"
         self.tables: list[str] = []
-        self.watching = False
-        #: The wall clock just before the tenant's first door, which `create` sets: the tenant's grants are told from
-        #: here, before any write, so a reader of the inboxes or the bus reads from here.
+        #: The wall clock just before the tenant's first door, which `create` sets: the tenant's grants are announced
+        #: from here, before any write, so a reader of the bus reads from here.
         self.created_at = datetime.now(UTC)
         #: Whether the session keeps the tenant past its end, for the soak to read (`kept_drive.keep`).
         self.kept = False
@@ -183,21 +163,12 @@ class Tenant:
         body = {"key_column": "id", "review_band": 0.25, "review_enabled": review}
         ok(self.admin.http.post(f"{CATALOG}/management/v1/project/{self.project}/gate/set", json=body))
 
-    def watch(self) -> None:
-        ok(self.admin.http.put(f"{NOTIFICATIONS}/notifications/watches/{self.project}", timeout=30))
-        self.watching = True
-
-    def unwatch(self) -> None:
-        ok(self.admin.http.delete(f"{NOTIFICATIONS}/notifications/watches/{self.project}", timeout=30))
-        self.watching = False
-
     def tear_down(self) -> list[str]:
         """Drop every table the pipeline made, then the warehouse with its bucket, then the project; what failed."""
         failed: list[str] = []
-        attempts: list[tuple[str, Callable[[], requests.Response]]] = []
-        if self.watching:
-            attempts.append(("watch", lambda: self.admin.http.delete(f"{NOTIFICATIONS}/notifications/watches/{self.project}", timeout=30)))
-        attempts += [(table, lambda t=table: self.pipeline.http.post(f"{CATALOG}/v1/table/{t}/drop", json={}, timeout=60)) for table in self.tables]
+        attempts: list[tuple[str, Callable[[], requests.Response]]] = [
+            (table, lambda t=table: self.pipeline.http.post(f"{CATALOG}/v1/table/{t}/drop", json={}, timeout=60)) for table in self.tables
+        ]
         attempts.append(
             (
                 "warehouse",
@@ -327,11 +298,10 @@ class ScenarioRun(BaseModel):
 
 
 def drive(tenant: Tenant) -> ScenarioRun:
-    """Run the pipeline once on ``tenant`` and record what it saw (the module docstring's five steps)."""
+    """Run the pipeline once on ``tenant`` and record what it saw (the module docstring's six steps)."""
     pipeline, validator, admin = tenant.pipeline, tenant.validator, tenant.admin
     bronze_id, silver_id = [tenant.bronze, "orders"], [tenant.silver, "orders"]
     bronze_table, silver_table = "$".join(bronze_id), "$".join(silver_id)
-    started_at = datetime.now(UTC)
     start = feed_start(pipeline)
 
     # 1. Seed bronze with stock pylance through the namespace, each commit naming its run: a first load, then an increment.
@@ -385,23 +355,13 @@ def drive(tenant: Tenant) -> ScenarioRun:
     published_while_held = published_rows(admin, silver_id)
     stock_while_held = lance.dataset(namespace_client=stock, table_id=silver_id).count_rows()
 
-    # The validator approves; the admin, watching from just before, is told by the approval's announcement.
-    tenant.watch()
+    # The validator approves the held version, which moves `published` to it.
     approved = ok(validator.http.post(f"{CATALOG}/management/v1/table/{silver_table}/promotion/approve", json={"version": 2}, timeout=120))
     published_after = published_rows(admin, silver_id)
 
     # 5. Following silver's feed reads its writes and both publications in commit order.
     silver_rows, cursor = follow(pipeline, since=silver_start, table=silver_table, until=lambda rows: ("publish_table", 2) in writes(rows))
     caught_up = ok(pipeline.http.get(f"{LINEAGE}/events", params={"since": cursor, "table": silver_table}, timeout=30))
-
-    # The watcher stops watching once the approval reached it, so a later delivery of an earlier run reaches nobody
-    # new. Whether it reached it, and nothing else, is criterion 4's targeting claim (`test_events_are_correct.py`).
-    announced = [row for row in silver_rows if writes([row]) == [("publish_table", 2)]]
-    notification = f"{announced[0]['event']['run']['runId']}@COMPLETE" if announced else ""
-    deadline = time.monotonic() + SETTLE_SECONDS
-    while notification and time.monotonic() < deadline and not any(row["notification_id"] == notification for row in admin.inbox(since=started_at)):
-        time.sleep(3)
-    tenant.unwatch()
 
     # 6. The pipeline cuts `staging` from silver through the spec's CreateTableBranch, then commits a stock append on it
     #    through version/create, naming its run and the bronze input as transaction properties.

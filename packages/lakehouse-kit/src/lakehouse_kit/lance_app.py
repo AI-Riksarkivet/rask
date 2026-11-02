@@ -2,7 +2,7 @@
 
 Two factories, two planes, and the split is deliberate rather than accidental:
 
-* ``service_kit.make_service_app`` — the FLEET plane (notifications). Routers mount under
+* ``service_kit.make_service_app`` — the FLEET plane, the clients' services (compute, flows, the notifications inbox). Routers mount under
   ``RASK_API_PREFIX``; config is ``service_kit.config.Settings``.
 * this — the LANCE plane. Routers mount at the root under each service's own paths (``/v1/...``,
   ``/events``, a cron binding's ``/<name>``), config is each service's own ``*Settings``, and the middleware order

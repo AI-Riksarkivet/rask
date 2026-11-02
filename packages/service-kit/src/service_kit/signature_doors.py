@@ -1,8 +1,9 @@
 """The settings a verifying bus door reads: its mode, and the identities that sign the lakehouse's events.
 
 A door that verifies a lineage event or a catalog control event before it acts on it (the catalog's and maintenance's
-control-lane consumers) mixes :class:`SignatureDoorSettings` into its own settings. The signer roles are the control
-lane's (:data:`~lakehouse_kit.control_events.ControlSigner`), so these settings are the kernel's, not the platform's.
+control-lane consumers, and any client's door on the lakehouse's events) mixes :class:`SignatureDoorSettings` into its
+own settings. The signer roles are the control lane's (:data:`~service_kit.control_events.ControlSigner`), part of the
+contract the lakehouse publishes for its events, so these settings are the platform's.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
-from lakehouse_kit.control_events import ControlSigner
+from service_kit.control_events import ControlSigner
 
 
 #: How a bus door treats an event's signature: the chart's `signing.doors`, and the values of `lineage_kit.door.DoorMode`,
@@ -33,7 +34,7 @@ class SignatureDoorSettings:
     chart guard is a render error: an empty set verifies nothing and refuses everything, so an enforcing door would
     acknowledge every honest event away and an observing one would report every event as one it would refuse.
 
-    A plain mixin, like the auth mixins above, so it takes the host class's own `model_config`.
+    A plain mixin, like the auth mixins in `service_kit.governed.settings`, so it takes the host class's own `model_config`.
     """
 
     signature_doors: DoorModeName = Field(default="off", alias="RASK_SIGNATURE_DOORS")

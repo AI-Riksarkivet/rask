@@ -16,8 +16,8 @@ from pydantic import BaseModel, Field
 from lakehouse_kit import location_claims
 from lakehouse_kit.base_refs import normalise
 from lakehouse_kit.branch_layout import BRANCH_CONTAINER
-from lakehouse_kit.openlineage import DatasetUuids
 from service_kit.governed import fga
+from service_kit.lineage_events import DatasetUuids
 from service_kit.naming import CATALOG_DELIMITER, uuid_of
 
 

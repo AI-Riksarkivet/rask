@@ -4,8 +4,8 @@ The defect this closes was measured against a real uvicorn process, not reasoned
 `ActorProxy.create` builds a process-global factory on first use, and that constructor calls
 `DaprHealth.wait_for_sidecar()` — a synchronous `urllib` + `time.sleep` loop, 60 s by default. So the
 first actor call in a process pays it, ON THE EVENT LOOP: one cron tick against an unreachable
-sidecar pinned the notifications service for 60 s, and the reconcile pass's own `asyncio.timeout`
-never fired, because the loop the timer would fire on was the blocked one.
+sidecar pinned an actor-hosting service for 60 s, and the tick's own `asyncio.timeout` never fired,
+because the loop the timer would fire on was the blocked one.
 
 Two properties are worth a test and neither is about Dapr: the warm-up must not RAISE (a lifespan
 that raises takes the pod down over a capability the service can refuse), and it must not BLOCK the

@@ -78,7 +78,6 @@ from lakehouse_kit import location_claims, object_records, trash, warehouse_reco
 from lakehouse_kit.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
 from lakehouse_kit.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError, forget_base_record
 from lakehouse_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
-from lakehouse_kit.control_events import ControlAction, ControlObjectType, ControlUuids
 from lakehouse_kit.control_prefixes import CONTROL_PREFIXES
 from lakehouse_kit.data_directories import delete_directories, directories_to_end, directory_uri
 from lakehouse_kit.objectfs import fs_and_base
@@ -86,6 +85,7 @@ from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
 from maintenance.services.naming import manifest_uuid
 from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, ReconcileReport
+from service_kit.control_events import ControlAction, ControlObjectType, ControlUuids
 from service_kit.governed import fga
 from service_kit.storage_options import StorageOptions
 

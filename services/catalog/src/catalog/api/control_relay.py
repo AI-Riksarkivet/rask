@@ -5,7 +5,7 @@ publishes and drops it only on ack, so a NATS blip leaves the event durable rath
 the other half: the thing that reads that prefix and delivers what it finds.
 
 **Why it matters more than "a refresh hint".** Most control events are exactly that — a console ring
-buffer or a tag-polling reader loses a redraw. Not all of them: the notifications plane targets people off this
+buffer or a tag-polling reader loses a redraw. Not all of them: a notifier targets people off this
 lane, so a dropped event is a person never told, with the route 200, every pod green, and nothing red.
 
 **IT DELIVERS ONLY WHAT THIS CATALOG SIGNED, AND SIGNS NOTHING** ([[XC-078]]). A staged object proves nothing about who
@@ -59,10 +59,10 @@ from pydantic import BaseModel, ValidationError
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
 from lakehouse_kit import dapr_publish, outbox, outbox_metrics
-from lakehouse_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
 from lineage_kit import SigningKey
 from lineage_kit.keys import PublishedKeys
 from lineage_kit.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature, control_signature_of, verify_control_signature
+from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
 
@@ -200,8 +200,8 @@ async def _republish(publisher: object, settings: Settings, event_json: str) -> 
     redelivery is that subscribers see exactly what they would have seen the first time.
 
     The staged ``event_id`` is also what makes the redelivery IDEMPOTENT: every subscriber on this topic
-    keys on it — the catalog's own ring buffer dedupes on ``event_id``, and the notifications plane's
-    ledger on ``<event_id>@<ACTION>``.
+    keys on it — the catalog's own ring buffer dedupes on ``event_id``, and a notifier keys what it delivers on it
+    too (the inbox client's ledger on ``<event_id>@<ACTION>``).
     """
     await dapr_publish.publish_event(  # noqa: TID251
         publisher,

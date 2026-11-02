@@ -5,8 +5,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `{{- if .Values.podDisruptionBudget.enabled }}`
 
-HA for the stateless request-serving services — the lakehouse pair AND the fleet, derived from
-`.Values.services` rather than named. Off by default
+HA for the stateless request-serving services, the lakehouse pair, catalog and lineage. Off by default
 (single-node kind); the prod overlay enables the PDB after bumping replicas. The stateful stores
 (AGE, the object store) get HA from their operators or the platform, NOT from here. The
 event-driven subscribers are intentionally excluded — eviction is safe there (Dapr redelivers, and
@@ -16,13 +15,13 @@ ONE RULE THROUGHOUT, and it is why every block below is gated: a `minAvailable: 
 replica blocks every voluntary drain, so a node cordon hangs instead of proceeding. Scale first, bound
 second.
 
-## `{{- range $name, $svc := $.Values.services }}`
+## `{{- range $name := list "catalog" "lineage" }}`
 
-EVERY service in `.Values.services`, gated on replicas > 1 — the lakehouse pair (catalog,
-lineage) and the fleet (notifications) alike, never a literal list. An ungated literal
-list, with PDBs enabled and a service left at one replica, writes a `minAvailable: 1` budget over a single pod, which blocks EVERY voluntary drain
-— a node cordon then hangs instead of proceeding. That is this file's own header warning, applied
-to every backend. Scale first, bound second, never the inverse.
+The two services the chart runs, named, so a key a release's values hold under `.Values.services` for a service the
+chart does not run (a client's) renders no budget. Each is gated on its replicas > 1: an ungated budget, with PDBs
+enabled and a service left at one replica, writes `minAvailable: 1` over a single pod, which blocks EVERY voluntary
+drain — a node cordon then hangs instead of proceeding. That is this file's own header warning, applied to every
+backend. Scale first, bound second, never the inverse.
 
 ## `behavior:`
 

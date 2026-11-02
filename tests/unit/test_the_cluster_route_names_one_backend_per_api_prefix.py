@@ -26,7 +26,6 @@ from tests.unit.chart_render import DEFAULT_ARGS, PROD_ARGS, render, render_text
 _PRODUCT_API = {
     "/api/catalog": ("rask-catalog", 2333, None),
     "/api/lineage": ("rask-lineage", 8000, "/"),
-    "/api/notifications": ("rask-notifications", 8850, None),
 }
 
 

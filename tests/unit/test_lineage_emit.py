@@ -32,8 +32,9 @@ from catalog.core.lineage_emit import (
     emit_write_event,
     make_emitter,
 )
-from lakehouse_kit.openlineage import DatasetUuids
+from catalog.core.run_context import RunContext
 from lineage.models import RunEvent
+from service_kit.lineage_events import LANCE_FACET, DatasetUuids
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -70,19 +71,11 @@ def _facets(event: dict) -> dict:
 
 
 def test_build_write_event_stamps_the_project_so_watchers_can_be_found() -> None:
-    """THE WATCH DEFECT. `lance_fields` carried `operation` + `version` and nothing else, so every
-    catalog-authored event reached ZERO watchers estate-wide.
+    """`rask_lance.project` is the tenant a notifier keys a project watch on (`spec/facets/rask/RaskLanceFacet.json`),
+    so an event that names no project reaches its author and none of the project's watchers.
 
-    `notifications/api/lineage_events.py::project_id` reads `run.facets.rask_lance.project`, and
-    `fanout.py:88` skips the watcher loop ENTIRELY when it is `None`. So a table created, dropped,
-    renamed or reindexed in a project nobody could hear about — not because the watch was wrong, but
-    because the producer never named the tenant. `ingest/lineage.py:213-215` had it right all along.
-
-    Asserted through `project_id` rather than only on the dict key: the key name IS the contract with
-    a consumer in another deployable, and a test on `lance["project"]` alone would still pass if the
-    reader looked somewhere else."""
-    from notifications.api.lineage_events import LineageRunEvent, project_id
-
+    Read where the published facet puts it: a create that commits no rows is a `DatasetEvent`, whose `rask_lance` facet
+    rides the dataset because the event has no run to carry it."""
     event = build_write_event(
         table_id="acme-bronze$images",
         namespace="acme-bronze",
@@ -94,20 +87,13 @@ def test_build_write_event_stamps_the_project_so_watchers_can_be_found() -> None
         job_namespace="lance-catalog",
         project="acme",
     )
-    assert _facets(event)["rask_lance"]["project"] == "acme"
-    # Validated into the CONSUMER's model (notifications' own `LineageRunEvent`), not lineage's
-    # `RunEvent`: the assertion worth making is that the plane which reads this wire JSON finds the
-    # tenant, and only its parser proves that.
-    assert project_id(LineageRunEvent.model_validate(event).run) == "acme"
+    assert event["dataset"]["facets"][LANCE_FACET].get("project") == "acme"
 
 
 def test_build_write_event_omits_an_unsafe_project_rather_than_qualifying_with_it() -> None:
-    """The same guard `ingest.naming.tenant` applies, for the reason stated there: a value outside the
-    path-safe shape must never become a lineage-name qualifier. Omitted, not sanitized — a project that
-    cannot be named is one whose watchers must not be guessed at, and silence is the safe direction
-    (`project_id`'s own docstring: a project-less run reaches its author and no watchers)."""
-    from notifications.api.lineage_events import LineageRunEvent, project_id
-
+    """A value outside the path-safe project shape must never become a lineage-name qualifier. Omitted, not
+    sanitized: a project that cannot be named is one whose watchers must not be guessed at, and a project-less event
+    reaches its author and no watchers, which is the safe direction."""
     event = build_write_event(
         table_id="alpha$bronze$images",
         namespace="alpha$bronze",
@@ -119,8 +105,7 @@ def test_build_write_event_omits_an_unsafe_project_rather_than_qualifying_with_i
         job_namespace="lance-catalog",
         project="../etc/passwd",
     )
-    assert "project" not in _facets(event)["rask_lance"]
-    assert project_id(LineageRunEvent.model_validate(event).run) is None
+    assert "project" not in event["dataset"]["facets"][LANCE_FACET]
 
 
 def test_build_write_event_attaches_schema_facet_and_round_trips() -> None:
@@ -309,10 +294,12 @@ def test_build_write_event_records_derived_from_inputs() -> None:
     assert _written(event)["name"] == "db1$renamed"
 
 
-def test_a_derived_write_event_pins_each_input_at_its_version_and_branch() -> None:
+def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_the_writers_run() -> None:
     # A write derived from inputs names each at the version it consumed (the standard DatasetVersionDatasetFacet,
     # which lineage records on the edge), and an input read off a branch names that branch, because a branch
-    # numbers its versions apart from main.
+    # numbers its versions apart from main. The run the writer named rides the run's `rask_lance` facet as `runId`
+    # ([[CTL-33]]), and lineage records it on every edge as the run the writer's own tooling answers to: the event's
+    # own run id is the catalog's, derived from the commit.
     event = build_write_event(
         table_id="db$gold",
         namespace="db",
@@ -323,6 +310,7 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch() -> No
         event_time="2026-07-21T00:00:00Z",
         job_namespace="catalog",
         inputs=[InputRef("db", "db$silver", 4), InputRef("db", "db$review", 2, "draft")],
+        run=RunContext(run_id="pipeline-run-42"),
     )
     on_main, on_branch = event["inputs"]
     assert (on_main["facets"]["version"]["datasetVersion"], "rask_lance" in on_main["facets"]) == ("4", False)
@@ -332,9 +320,9 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch() -> No
     from lineage.services.provenance import edges_of
 
     edges = edges_of(_parsed(event), received_at=datetime.now(UTC))
-    assert sorted((e["in_table"], e["in_version"], e["in_branch"], e["out_table"], e["out_version"]) for e in edges) == [
-        ("db$review", 2, "draft", "db$gold", 7),
-        ("db$silver", 4, None, "db$gold", 7),
+    assert sorted((e["in_table"], e["in_version"], e["in_branch"], e["out_table"], e["out_version"], e["writer_run_id"]) for e in edges) == [
+        ("db$review", 2, "draft", "db$gold", 7, "pipeline-run-42"),
+        ("db$silver", 4, None, "db$gold", 7, "pipeline-run-42"),
     ]
 
 
@@ -416,7 +404,7 @@ def test_make_emitter_selects_implementation() -> None:
     client = cast(httpx.AsyncClient, object())
 
     def _make(**over: object) -> object:
-        kw: dict[str, object] = {
+        kw: dict[str, Any] = {
             "enabled": True,
             "transport": "http",
             "url": "http://lineage",
@@ -427,7 +415,7 @@ def test_make_emitter_selects_implementation() -> None:
             "job_namespace": "lance-catalog",
         }
         kw.update(over)
-        return make_emitter(**kw)  # ty: ignore[invalid-argument-type]  # dict[str, object] kwargs fan-out
+        return make_emitter(**kw)
 
     assert isinstance(_make(), HttpLineageEmitter)
     assert isinstance(_make(enabled=False), NoopEmitter)  # disabled → no-op
@@ -550,16 +538,12 @@ def test_http_emitter_emit_write_posts_operation_and_version_under_the_commits_r
 
 @pytest.mark.asyncio
 async def test_a_catalog_write_RESOLVES_its_tenant_so_watchers_are_reachable() -> None:
-    """Trap 3, closed at the one place that can close it.
+    """The emitter resolves the tenant itself, at the one place every catalog write passes.
 
-    `rask_lance.project` is what the notifications plane's WATCH fan-out keys on: `fanout.py` skips the
-    watcher loop ENTIRELY when it is None. The catalog had the whole mechanism — a `project` kwarg on
-    every emit, an `is_safe_project` guard, and a registry-backed `project_for` resolver — and not one
-    caller passed it, so no catalog write reached a watcher anywhere in the estate.
-
-    Resolving it HERE rather than at each of the call sites is deliberate: the mapping is mechanical
-    (top namespace → registry binding → tenant), and a per-caller kwarg is a rule every future
-    endpoint has to remember. This is the "one place" version.
+    `rask_lance.project` is the key a notifier's project watch is looked up by, so an event without it reaches no
+    watcher at all. Resolving it HERE rather than at each of the call sites is deliberate: the mapping is mechanical
+    (top namespace → registry binding → tenant), and a per-caller kwarg is a rule every future endpoint has to
+    remember.
     """
     client = _CapturingClient()
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
@@ -572,7 +556,7 @@ async def test_a_catalog_write_RESOLVES_its_tenant_so_watchers_are_reachable() -
     await emitter.emit_create(table_id="acme-bronze$events", namespace="acme-bronze", author="alice", version=1)
 
     lance = _facets(client.posted)["rask_lance"]
-    assert lance["project"] == "acme", "without this the watcher loop is skipped and every watcher is silently lost"
+    assert lance.get("project") == "acme", "an event naming no project reaches none of the project's watchers"
 
 
 @pytest.mark.asyncio
@@ -593,17 +577,14 @@ async def test_an_EXPLICIT_project_is_not_overridden_by_resolution() -> None:
 
 @pytest.mark.asyncio
 async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
-    """Q2 — ORIGINATOR — for the catalog's own emits.
+    """ORIGINATOR, for the catalog's own emits.
 
-    Some catalog writes are made BY a service ON BEHALF OF a person: the annotator's publish saga is
-    the live case, driven from an actor reminder under a dedicated `publisher@rask.internal` service
-    account. `enforce_author` correctly overwrites `author` with that service's verified principal, so the
-    human CANNOT be the author and must not try to be — `rask_lance.originator` is the field for exactly
-    this, and the catalog had no way to carry it.
+    Some catalog writes are made BY a service ON BEHALF OF a person, under the service's own account.
+    `enforce_author` overwrites `author` with that service's verified principal, so the human CANNOT be the
+    author and must not try to be: `rask_lance.originator` is the field that names them.
 
-    It is a TARGETING hint and authorizes nothing: the notifications plane re-derives every
-    recipient's visibility at delivery, so a forged one can at worst put a row in an inbox whose
-    owner can already see the run's outputs.
+    It is a TARGETING hint and authorizes nothing: a notifier re-derives every recipient's visibility at
+    delivery, so a forged one can at worst tell a person about a run whose outputs they can already see.
     """
     client = _CapturingClient()
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
@@ -620,8 +601,8 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("junk", ["system"])
 async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
-    """Trap 4. An address must identify a person; a role, a wildcard or a userset is not one, and
-    carrying it writes into an inbox actor literally named that."""
+    """An originator is an address, so it must identify a person; a role, a wildcard or a userset is not one, and
+    carrying it would address whatever it names (`service_kit.governed.subjects.is_person_subject`)."""
     client = _CapturingClient()
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
 

@@ -25,7 +25,6 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Unau
 from openfga_sdk import OpenFgaClient
 from pydantic import ValidationError
 
-from lakehouse_kit.openlineage import AUTHOR_FACET_SCHEMA_URL, DatasetUuids
 from lineage.api import fga_deps, security
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
@@ -37,6 +36,7 @@ from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
+from service_kit.lineage_events import AUTHOR_FACET_SCHEMA_URL, DatasetUuids
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 

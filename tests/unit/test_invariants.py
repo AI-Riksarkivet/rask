@@ -269,16 +269,17 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     Precedence is asserted end to end, because a pin that is merely ACCEPTED and then overridden is
     worse than no pin: it reads as safety while the deploy still rewrites the image.
     """
-    pinned = _helm_template(*_REAL_REGISTRY, "image.tags.notifications=PINNED")
-    assert 'image: "reg.example/notifications:PINNED"' in pinned, "a per-component tag did not reach the render"
-    assert 'image: "reg.example/lance-rest-catalog:dev"' in pinned, "the pin leaked onto a component that did not ask for it"
+    pinned = _helm_template(*_REAL_REGISTRY, "image.tags.lance-rest-catalog=PINNED")
+    assert 'image: "reg.example/lance-rest-catalog:PINNED"' in pinned, "a per-component tag did not reach the render"
+    elsewhere = _helm_template(*_REAL_REGISTRY, "image.tags.some-other-component=PINNED")
+    assert 'image: "reg.example/lance-rest-catalog:dev"' in elsewhere, "a pin leaked onto a component that did not ask for it"
 
     # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
-    both = _helm_template(*_REAL_REGISTRY, "image.tags.notifications=IGNORED", "image.digests.notifications=sha256:abc")
-    assert 'image: "reg.example/notifications@sha256:abc"' in both, "a per-component tag overrode a digest"
+    both = _helm_template(*_REAL_REGISTRY, "image.tags.lance-rest-catalog=IGNORED", "image.digests.lance-rest-catalog=sha256:abc")
+    assert 'image: "reg.example/lance-rest-catalog@sha256:abc"' in both, "a per-component tag overrode a digest"
 
 
-@pytest.mark.parametrize("key", ["image.tags.lance-rest-catalog", "image.digests.notifications"])
+@pytest.mark.parametrize("key", ["image.tags.lance-rest-catalog", "image.digests.lance-rest-catalog"])
 def test_an_image_reference_that_helm_parsed_as_a_number_is_refused_at_render(key: str) -> None:
     """A short sha can be all digits, and `--set` parses `93951597` as an int64.
 
@@ -411,61 +412,8 @@ def test_the_object_store_carries_NO_credential_in_its_environment() -> None:
                 assert keys[0] in held, f"{var} reads key {keys[0]!r}, absent from Secret {secret['secretName']!r} (has {sorted(held)})"
 
 
-def test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one() -> None:
-    """The sidecar's TWO halves on the one Deployment that cannot work without it.
-
-    `test_every_dapr_annotated_pod_carries_the_injector_webhook_label` proves the correspondence for
-    every pod that asks — and says nothing at all about a pod that never asks. That is the vacuous case
-    this closes: the whole notification plane is actor state plus one bus subscription, so a
-    Deployment rendered with no `dapr.io/*` annotations would come up healthy, serve its health surface
-    and its route, and fail every inbox route forever — on a pod whose probes stay green,
-    because actor registration is process-local and cannot notice that no sidecar was injected.
-
-    The app-id is asserted because it is not decoration: `lance-statestore`'s `scopes`, the
-    `lineage-pubsub-notifications` component's subscriber list and the resiliency CRDs all key on that
-    exact string, and a mismatch disables actor hosting with no error anywhere. The reconciler reads
-    lineage's feed through this sidecar and carries no retry of its own, so the invocation Resiliency
-    targeting `lineage` must be scoped to this app-id: a Resiliency applies only in the sidecars its
-    `scopes` name.
-    """
-    rendered = _helm_template()
-
-    pod = next(
-        (
-            (doc.get("spec") or {}).get("template")
-            for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
-            if isinstance(doc, dict) and doc.get("kind") == "Deployment" and "notifications" in ((doc.get("metadata") or {}).get("name") or "")
-        ),
-        None,
-    )
-    assert pod is not None, "no notifications Deployment rendered — the service is not deployed at all"
-
-    meta = pod.get("metadata") or {}
-    annotations = meta.get("annotations") or {}
-    assert annotations.get("dapr.io/enabled") == "true", f"the notifications pod does not ask for a sidecar: {sorted(annotations)}"
-    assert annotations.get("dapr.io/app-id") == "notifications"
-    assert annotations.get("dapr.io/app-port") == "8850"
-    assert (meta.get("labels") or {}).get("dapr.io/enabled") == "true", (
-        "the notifications pod asks for a sidecar by ANNOTATION but carries no injector LABEL — the "
-        "fail-closed webhook skips it and it comes up un-injected, with every inbox route failing"
-    )
-
-    feed_retry = [
-        doc
-        for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
-        if isinstance(doc, dict) and doc.get("kind") == "Resiliency" and "lineage" in (((doc.get("spec") or {}).get("targets") or {}).get("apps") or {})
-    ]
-    assert [doc["scopes"] for doc in feed_retry] == [["notifications"]], "no Resiliency the notifications sidecar loads retries its lineage feed read"
-
-
 # --------------------------------------------------------------------------------------------------
-# 12. The notification plane's WIRING — the four facts that live in the chart and nowhere else
-#
-# The service's own suites prove what each route answers; none of them can see whether anything ever
-# reaches those routes. Each guard below covers one address that is written down in exactly one place,
-# read somewhere else, and whose omission produces a HEALTHY pod: a subscription on a component that does not exist, an actor
-# host with no state store, and a kubelet probing a path the app does not serve. Two of the three have already shipped once in this estate on
-# a neighbouring service.
+# 12. What the render names that a service dials: the bus, and the stand-ins a real deployment replaces
 # --------------------------------------------------------------------------------------------------
 
 
@@ -489,40 +437,6 @@ def test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one(
 @functools.cache
 def _rendered_docs(*set_values: str) -> list[dict]:
     return [doc for doc in yaml.load_all(_helm_template(*set_values), Loader=FAST_LOADER) if isinstance(doc, dict)]
-
-
-def _fleet_config(docs: list[dict]) -> dict[str, str]:
-    """The fleet ConfigMap — the one carrying `RASK_API_PREFIX` and the notifications plane's addresses."""
-    for doc in docs:
-        if doc.get("kind") == "ConfigMap" and "RASK_API_PREFIX" in (doc.get("data") or {}):
-            return doc["data"]
-    raise AssertionError("no fleet ConfigMap rendered — every fleet address would fall back to a localhost default")
-
-
-def test_the_inbox_subscribes_on_a_component_the_chart_actually_renders() -> None:
-    """A subscription names its pubsub component by string, and a name that resolves to nothing is a
-    STARTUP error the pod survives: daprd logs it, the app serves its health surface and its route,
-    and not one lineage event is ever delivered.
-
-    Both ends are asserted because they fail in different deployments. The chart's value is what the
-    pod reads; the app's DEFAULT is what a dev run without the ConfigMap reads, and the two drifting
-    apart is how a subscription works in one environment and is silently dead in the other: the name is
-    a coordinate, and nothing else compares its two ends.
-    """
-    from notifications.api.settings import IngressSettings
-
-    docs = _rendered_docs()
-    configured = _fleet_config(docs)["RASK_NOTIFICATIONS_PUBSUB"]
-    component = next((d for d in docs if d.get("kind") == "Component" and d["metadata"]["name"] == configured), None)
-
-    assert component is not None, f"the inbox is configured to subscribe on {configured!r}, which the chart renders no Component for"
-    assert IngressSettings.model_fields["pubsub"].default == configured, (
-        f"the service defaults to {IngressSettings.model_fields['pubsub'].default!r} while the chart configures {configured!r} — "
-        "a dev run and a deployed pod would subscribe on different components"
-    )
-    # `scopes` is a ROOT field of a Dapr Component, not part of `spec`: an unscoped app-id gets
-    # "component not found" from its sidecar, which is the same silence as a missing component.
-    assert "notifications" in (component.get("scopes") or []), f"{configured} is not scoped to notifications — its sidecar refuses to load it"
 
 
 def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_none() -> None:
@@ -628,68 +542,6 @@ def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_pla
         if isinstance(value, str) and "://" in value and urllib.parse.urlsplit(value).password
     )
     assert not leaked, f"a credential rides in an env value rather than by reference: {leaked}"
-
-
-# `test_the_kubelet_probes_the_inbox_on_a_path_the_service_actually_serves` lived here and is GONE,
-# subsumed rather than deleted for tidiness: `tests/unit/test_probe_paths_are_served.py` asks the same
-# question — is every path the chart probes one the app actually mounts — of every first-party app in
-# the render, under that container's own chart env, instead of notifications alone. Keeping both would
-# leave two mechanisms for one claim, and the weaker one was the reason the audit filed
-# "the probe-path-is-actually-served gate covers exactly one of the fifteen apps".
-
-
-def _notifications_cron_component(docs: list[dict]) -> dict:
-    """The `bindings.cron` Component scoped to the notifications app-id."""
-    for doc in docs:
-        if doc.get("kind") == "Component" and (doc.get("spec") or {}).get("type") == "bindings.cron" and "notifications" in (doc.get("scopes") or []):
-            return doc
-    raise AssertionError("no bindings.cron Component is scoped to `notifications` — the /events reconciler would never tick")
-
-
-def test_the_notifications_cron_binding_name_is_the_route_it_is_delivered_to() -> None:
-    """The reconciler's Component name, its env, and the route the app serves are ONE string.
-
-    Dapr delivers an input binding to `POST /<component name>` at the pod root. So a Component named
-    one thing and a route mounted at another is a cron that fires into a 404 on every tick — with a
-    healthy pod, a rendered Component, a running schedule, and nothing anywhere saying the deliveries
-    are being dropped. The feed lane would simply never reconcile, which is indistinguishable from a
-    feed that had nothing to reconcile.
-
-    Guards all three corners at once, because any two of them can agree while the third drifts.
-
-    The third corner runs in a SUBPROCESS, and that is load-bearing rather than tidy. The route path
-    is bound at module import (`_binding = get_ingress_settings().binding_name`), so setting the env
-    var in this process and calling `importlib.reload` proves nothing: reload re-executes the package
-    `__init__` while `notifications.api.reconcile_cron` is already in `sys.modules`, so the pre-built
-    router is re-included unchanged and the assertion silently degrades to "the chart default equals
-    the code default". Worse, it then FAILS on a correct deployment the moment anyone edits
-    `reconcileBindingName` — blaming the app for a chart change that a real pod, being a fresh
-    process, honours. A subprocess IS that fresh process.
-    """
-    import os
-    import sys
-
-    docs = _rendered_docs()
-    component = _notifications_cron_component(docs)
-    binding = component["metadata"]["name"]
-    config = _fleet_config(docs)
-
-    assert config.get("RASK_NOTIFICATIONS_BINDING_NAME") == binding, (
-        f"the cron Component is named {binding!r} but the app is told {config.get('RASK_NOTIFICATIONS_BINDING_NAME')!r} — "
-        "every tick would be delivered to a route the service does not serve"
-    )
-
-    probe = subprocess.run(
-        [sys.executable, "-c", "import json,notifications; print(json.dumps(sorted(notifications.app.openapi()['paths'])))"],
-        capture_output=True,
-        text=True,
-        check=True,
-        env={**os.environ, "RASK_NOTIFICATIONS_BINDING_NAME": binding, "RASK_API_PREFIX": config["RASK_API_PREFIX"]},
-        cwd=REPO,
-    )
-    served = json.loads(probe.stdout)
-
-    assert f"/{binding}" in served, f"the service serves no route at /{binding} — the cron Component ticks into a 404"
 
 
 def _lance_tracing_config(rendered: str) -> dict[str, Any] | None:

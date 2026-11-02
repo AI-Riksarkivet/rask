@@ -5,9 +5,9 @@ description: >-
   `rask`): the Lance Namespace REST catalog with tier governance, lineage (its provenance feed,
   forwarded as OpenLineage), maintenance, authorization on OpenFGA, rask's Dapr Components and
   Configurations, NATS stream definitions and bus users, and the OTel Collector that exports its
-  telemetry to the OTLP endpoint the operator names. It also ships the notifications inbox, a client
-  of the lakehouse, until that has a release of its own. Dapr's control plane, the NATS bus and the
-  External Secrets Operator are prerequisites, and the compute engine is bring-your-own.
+  telemetry to the OTLP endpoint the operator names. It renders no client of the lakehouse: a client
+  reaches it by reference from its own release. Dapr's control plane, the NATS bus and the External
+  Secrets Operator are prerequisites, and the compute engine is bring-your-own.
 type: application
 # 0.2.0 (rask) + 0.1.0 (lance-ns) merged into one chart — a whole second system's templates and
 # values landed here, so this is a real minor bump, not a no-op.

@@ -38,19 +38,10 @@ from typing import Any, Final, Protocol, runtime_checkable
 from dapr.aio.clients import DaprClient
 
 from lakehouse_kit import outbox
-from lakehouse_kit.openlineage import (
-    AUTHOR_FACET,
-    ERROR_MESSAGE_FACET_SCHEMA_URL,
-    LANCE_FACET,
-    RUN_EVENT_SCHEMA_URL,
-    DatasetUuids,
-    author_facet,
-    lance_facet,
-    run_id_for,
-    with_dataset_uuids,
-)
+from lakehouse_kit.openlineage import ERROR_MESSAGE_FACET_SCHEMA_URL, RUN_EVENT_SCHEMA_URL, author_facet, lance_facet, run_id_for
 from lineage_kit import CanonError, SigningKey, attach_signature
 from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
+from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
 from service_kit.storage_options import StorageOptions
 
 

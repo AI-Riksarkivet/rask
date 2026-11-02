@@ -3,10 +3,10 @@
 A person's grants are tuples naming their principal on objects of every type the model defines, written by many doors
 (the members door, the per-object grant doors, the raw tuple door), so offboarding was a hunt through the store one
 tuple at a time. ``DELETE /management/v1/access/principals/{principal}`` reads every tuple naming the principal, revokes
-them, records the principal deleted under the control root and announces ``principal_deleted`` for the notifications
-plane to erase the person's inbox (CTL-022); ``GET`` on the same path answers the record. It never strands a project:
-a principal holding the only direct ``admin`` of any project is refused (409, code 14) and nothing is revoked, not even
-an admin it holds on another project beside a second admin, and
+them, records the principal deleted under the control root and announces ``principal_deleted`` on the control lane, so
+a client holding something for the person can erase it (CTL-022); ``GET`` on the same path answers the record. It
+never strands a project: a principal holding the only direct ``admin`` of any project is refused (409, code 14) and
+nothing is revoked, not even an admin it holds on another project beside a second admin, and
 an estate admin cannot delete themselves, since the rung the door asks would go with them. A principal whose grants git
 declares is refused too, since the next upgrade or boot would grant it again: one holding a rung on the estate, which
 only the chart's bootstrap hook grants, and an account the catalog's settings name.
@@ -25,7 +25,7 @@ import pytest
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
-from lakehouse_kit.control_events import CatalogControlEvent
+from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga
 
 

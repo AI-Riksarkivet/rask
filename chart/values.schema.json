@@ -42,10 +42,6 @@
                     "description": "Postgres port of the AGE store, used by every client DSN, the backup job and the network policy.",
                     "type": "integer"
                 },
-                "stateDb": {
-                    "description": "Name of the database the Dapr Postgres state store owns and migrates itself.",
-                    "type": "string"
-                },
                 "storage": {
                     "description": "PVC size of the AGE StatefulSet. Immutable after install: the chart fails an upgrade that changes it (see docs/runbooks/RUNBOOK-restore.md).",
                     "type": "string"
@@ -85,8 +81,8 @@
                     "type": "boolean"
                 },
                 "externalDeciders": {
-                    "description": "ServiceAccounts outside this release that may ask the catalog's decision door, each `\u003cnamespace\u003e:\u003cname\u003e` (e.g. `default:rask-sa-compute` for the compute fixture); bootstrap-admin grants each `decider`. Read only with auth on.",
-                    "type": "array"
+                    "description": "ServiceAccounts outside this release granted estate roles, each `\u003cnamespace\u003e:\u003cname\u003e` mapped to its roles from `decider`, `member_expander` and `event_reader` (e.g. `{\"default:rask-sa-compute\": [\"decider\"]}` for the compute fixture); bootstrap-admin grants each exactly these and revokes what is no longer named. Read only with auth on.",
+                    "type": "object"
                 },
                 "fgaApiUrl": {
                     "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.",
@@ -368,23 +364,6 @@
                 }
             }
         },
-        "config": {
-            "type": "object",
-            "properties": {
-                "AWS_REGION": {
-                    "description": "AWS region written to the fleet ConfigMap for S3 clients to sign with. RustFS's default region is `us-east-1`; whether it accepts another signing region is not measured, so keep `us-east-1` against it.",
-                    "type": "string"
-                },
-                "HCP_INSECURE": {
-                    "description": "Skips TLS verification for the S3 client (`storage.client` reads it as an alias of RASK_S3_INSECURE). String \"true\" or \"false\".",
-                    "type": "string"
-                },
-                "RASK_API_PREFIX": {
-                    "description": "Path prefix the fleet apps mount their API under, via the shared fleet ConfigMap.",
-                    "type": "string"
-                }
-            }
-        },
         "dapr": {
             "type": "object",
             "properties": {
@@ -410,7 +389,7 @@
                     }
                 },
                 "enabled": {
-                    "description": "Use Dapr: inject a daprd sidecar into every fleet and lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it.",
+                    "description": "Use Dapr: inject a daprd sidecar into every lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it.",
                     "type": "boolean"
                 },
                 "logLevel": {
@@ -478,10 +457,6 @@
                     "type": "boolean"
                 }
             }
-        },
-        "existingSecret": {
-            "description": "Name of a pre-made Secret used instead of the chart's `\u003crelease\u003e-app` (object store access key ID and endpoint, never a credential). Empty renders `\u003crelease\u003e-app`.",
-            "type": "string"
         },
         "externalSecrets": {
             "type": "object",
@@ -564,7 +539,7 @@
                     "type": "string"
                 },
                 "tags": {
-                    "description": "Per-component tag map keyed by component name (notifications, lance-rest-catalog, ...); beats the global tag.",
+                    "description": "Per-component tag map keyed by component name (lance-rest-catalog, ...); beats the global tag.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -927,23 +902,6 @@
                                             }
                                         }
                                     }
-                                },
-                                "notifications": {
-                                    "type": "object",
-                                    "properties": {
-                                        "publish": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        },
-                                        "subscribe": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "string"
-                                            }
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -1042,7 +1000,7 @@
             "type": "object",
             "properties": {
                 "enabled": {
-                    "description": "Deploy rask's OTel Collector and turn on OTLP export from the fleet, Dapr and OpenFGA to it; needs `export.endpoint`.",
+                    "description": "Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services, Dapr and OpenFGA to it; needs `export.endpoint`.",
                     "type": "boolean"
                 },
                 "environment": {
@@ -1443,34 +1401,6 @@
                         }
                     }
                 },
-                "fleet": {
-                    "description": "CPU/memory requests and limits for fleet services (templates/fleet.yaml) that name no tier of their own.",
-                    "type": "object",
-                    "properties": {
-                        "limits": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            }
-                        },
-                        "requests": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            }
-                        }
-                    }
-                },
                 "lineage": {
                     "description": "CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful.",
                     "type": "object",
@@ -1616,7 +1546,7 @@
                             "type": "integer"
                         },
                         "eventsRetentionDays": {
-                            "description": "Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a notifications outage it survives. 0 is unbounded.",
+                            "description": "Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a consumer's outage it survives. 0 is unbounded.",
                             "type": "integer"
                         },
                         "forward": {
@@ -1696,84 +1626,6 @@
                             "type": "integer"
                         }
                     }
-                },
-                "notifications": {
-                    "type": "object",
-                    "properties": {
-                        "channels": {
-                            "type": "object",
-                            "properties": {
-                                "email": {
-                                    "type": "object",
-                                    "properties": {
-                                        "enabled": {
-                                            "description": "Renders the `notifications-email` Dapr SMTP binding and adds `email` to RASK_NOTIFICATIONS_CHANNELS. Off by default.",
-                                            "type": "boolean"
-                                        },
-                                        "from": {
-                                            "description": "Sender address the email channel sends from.",
-                                            "type": "string"
-                                        },
-                                        "host": {
-                                            "description": "SMTP server host for the email channel.",
-                                            "type": "string"
-                                        },
-                                        "port": {
-                                            "description": "SMTP server port for the email channel (default 587).",
-                                            "type": "integer"
-                                        },
-                                        "secretName": {
-                                            "description": "Secret-store key holding the SMTP `user` and `password` fields.",
-                                            "type": "string"
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        "daprIngest": {
-                            "description": "Renders APP_API_TOKEN for notifications, which refuses to start with Dapr on and no token.",
-                            "type": "boolean"
-                        },
-                        "frontDoor": {
-                            "description": "Renders notifications outside singleTenant, because the cluster route publishes /api/notifications on it.",
-                            "type": "boolean"
-                        },
-                        "governedAuth": {
-                            "description": "Gives notifications the OIDC/FGA env and FGA token mount when auth.enabled.",
-                            "type": "boolean"
-                        },
-                        "identityAudiences": {
-                            "description": "Audiences of the service-account tokens projected into the notifications pod, one per door it calls (rask-lineage).",
-                            "type": "array",
-                            "items": {
-                                "type": "string"
-                            }
-                        },
-                        "module": {
-                            "description": "uvicorn import path the notifications (inbox) Deployment runs.",
-                            "type": "string"
-                        },
-                        "port": {
-                            "description": "Container and Service port of the notifications app.",
-                            "type": "integer"
-                        },
-                        "reconcileBindingName": {
-                            "description": "Name of the reconcile cron binding; also rendered as RASK_NOTIFICATIONS_BINDING_NAME so the tick reaches the matching route.",
-                            "type": "string"
-                        },
-                        "reconcileSchedule": {
-                            "description": "Schedule of the reconcile cron over lineage's /events feed; must stay above the app's 25 s reconcile budget.",
-                            "type": "string"
-                        },
-                        "replicas": {
-                            "description": "Replica count of the notifications Deployment; replicas form a competing-consumer group. 0 scales it to zero.",
-                            "type": "integer"
-                        },
-                        "waitFor": {
-                            "description": "List of dependencies notifications waits for in an init container; only `objectStore` is honoured (when objectStore.enabled).",
-                            "type": "array"
-                        }
-                    }
                 }
             }
         },
@@ -1791,51 +1643,6 @@
                 "provisioned": {
                     "description": "Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there.",
                     "type": "boolean"
-                }
-            }
-        },
-        "singleTenant": {
-            "type": "object",
-            "properties": {
-                "enabled": {
-                    "description": "Renders the single-tenant default workloads (every fleet service). False installs front-door services only; the object store is gated by `objectStore.enabled`.",
-                    "type": "boolean"
-                }
-            }
-        },
-        "stateStore": {
-            "type": "object",
-            "properties": {
-                "componentVersion": {
-                    "description": "Version of the Dapr Postgres state store component.",
-                    "type": "string"
-                },
-                "enabled": {
-                    "description": "Render the Dapr Postgres state store component (actor state) on the AGE `stateDb`.",
-                    "type": "boolean"
-                },
-                "metadataTableName": {
-                    "description": "Table the Dapr state store keeps its own metadata in.",
-                    "type": "string"
-                },
-                "name": {
-                    "description": "Name of the Dapr state store component.",
-                    "type": "string"
-                },
-                "scopes": {
-                    "description": "App-ids allowed to load the state store; the secret-store scope is derived from this list too. Adding one needs a restart of scoped pods.",
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "secretStore": {
-                    "description": "Dapr secret store that resolves the state store's connection string (OpenBao, never a k8s Secret).",
-                    "type": "string"
-                },
-                "tableName": {
-                    "description": "Postgres table holding Dapr state rows.",
-                    "type": "string"
                 }
             }
         },

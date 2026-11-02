@@ -90,34 +90,6 @@ dapr.io/config: "lance-tracing"
 {{- printf "service.namespace=rask,deployment.environment.name=%s,service.version=%s" ($o.environment | default .Release.Namespace) .Chart.AppVersion -}}
 {{- end -}}
 
-
-{{- define "rask.otelEnv" -}}
-{{- $root := index . 0 -}}
-{{- $svc := index . 1 -}}
-{{- $o := $root.Values.observability -}}
-
-{{- if include "lance.otelEnabled" $root -}}
-{{/**/}}
-- name: RASK_OTEL_ENABLED
-  value: "true"
-
-- name: OTEL_EXPORTER_OTLP_ENDPOINT
-  value: "{{ include "lance.otlpEndpoint" $root }}"
-- name: OTEL_EXPORTER_OTLP_PROTOCOL
-  value: "http/protobuf"
-
-- name: OTEL_METRIC_EXPORT_INTERVAL
-  value: "5000"
-
-- name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS
-  value: "/livez,/readyz,/healthz,/api/health,/metrics"
-- name: OTEL_SERVICE_NAME
-  value: {{ $svc | quote }}
-- name: OTEL_RESOURCE_ATTRIBUTES
-  value: {{ include "rask.otelResourceAttrs" $root | quote }}
-{{- end }}
-{{- end -}}
-
 {{- define "lance.fullname" -}}{{ .Release.Name }}{{- end -}}
 
 {{- define "rask.bootstrapRev" -}}r{{ .Release.Revision }}{{- end -}}
@@ -390,26 +362,6 @@ topologySpreadConstraints:
 - "--forwarded-allow-ips={{ $cidr }}"
 {{- end -}}
 
-{{- define "rask.fleetProbes" -}}
-{{- $svc := . -}}
-{{- $live := ($svc.healthPath | default "/livez") -}}
-startupProbe:
-  httpGet: { path: {{ $live }}, port: http }
-  periodSeconds: 10
-  failureThreshold: 30
-  timeoutSeconds: 5
-readinessProbe:
-  httpGet: { path: {{ $svc.readyPath | default "/readyz" }}, port: http }
-  initialDelaySeconds: 5
-  periodSeconds: 10
-  timeoutSeconds: 5
-livenessProbe:
-  httpGet: { path: {{ $live }}, port: http }
-  initialDelaySeconds: 15
-  periodSeconds: 20
-  timeoutSeconds: 5
-{{- end -}}
-
 {{- define "lance.appProbes" -}}
 {{/**/}}
 startupProbe:
@@ -521,10 +473,6 @@ securityContext:
 - { name: identity-{{ . }}, mountPath: /var/run/secrets/rask/identity/{{ . }}, readOnly: true }
 {{- end }}
 {{- end }}
-{{- end -}}
-
-{{- define "lance.fleetAudiences" -}}
-{{- join " " ((index . 1).identityAudiences | default list) -}}
 {{- end -}}
 
 {{- define "lance.saSubject" -}}
@@ -648,15 +596,18 @@ catalog maintenance
 {{- $out | uniq | sortAlpha | join "," -}}
 {{- end -}}
 
-{{- define "lance.fgaDecisionRoles" -}}
+{{- define "lance.fgaEstateRoles" -}}
 {{- $v := .Values -}}{{- $root := . -}}
-{{- $routes := dict "lineage" (list "governance_prober") "notifications" (list "member_expander") -}}
-{{- $names := list "lineage" -}}
-{{- range $n, $s := $v.services }}{{ if and (not (has $n (list "catalog" "lineage"))) (or $s.frontDoor $v.singleTenant.enabled) $s.governedAuth }}{{ $names = append $names $n }}{{ end }}{{ end -}}
 {{- $out := dict -}}
 {{- if $v.auth.enabled -}}
-{{- range ($names | uniq) }}{{ if not (include "lance.isFgaWriter" (list $root .)) }}{{ $_ := set $out (include "lance.saSubject" (list $root .)) (prepend (get $routes . | default list) "decider") }}{{ end }}{{ end -}}
-{{- range ($v.auth.externalDeciders | default list) }}{{- if not (regexMatch "^[a-z0-9-]+:[a-z0-9.-]+$" .) }}{{- fail (printf "auth.externalDeciders entry %q is not <namespace>:<serviceaccount>" .) }}{{- end }}{{ $_ := set $out (printf "kubernetes~system:serviceaccount:%s" .) (list "decider") }}{{ end -}}
+{{- $_ := set $out (include "lance.saSubject" (list $root "lineage")) (list "decider" "governance_prober") -}}
+{{- $grantable := list "decider" "member_expander" "event_reader" -}}
+{{- range $account, $roles := ($v.auth.externalDeciders | default dict) }}
+{{- if not (regexMatch "^[a-z0-9-]+:[a-z0-9.-]+$" $account) }}{{- fail (printf "auth.externalDeciders key %q is not <namespace>:<serviceaccount>" $account) }}{{- end }}
+{{- if not $roles }}{{- fail (printf "auth.externalDeciders %q grants no role" $account) }}{{- end }}
+{{- range $roles }}{{- if not (has . $grantable) }}{{- fail (printf "auth.externalDeciders %q names %q, which is not one of %s" $account . (join ", " $grantable)) }}{{- end }}{{- end }}
+{{- $_ := set $out (printf "kubernetes~system:serviceaccount:%s" $account) ($roles | uniq | sortAlpha) }}
+{{- end }}
 {{- end -}}
 {{- toJson $out -}}
 {{- end -}}
@@ -723,7 +674,6 @@ scoped_secret() {
 {{- $reads := dict -}}
 {{- if $v.dapr.enabled -}}
 {{- $sa := printf "%s-sa-" (include "lance.fullname" .) -}}
-{{- $state := ternary ($v.stateStore.scopes | default list) list (and $v.stateStore.enabled true) -}}
 {{- $doors := ne (($v.signing).doors | toString) "off" -}}
 {{- $everySigner := list -}}
 {{- range (include "lance.signingKeys" (list .) | splitList " " | compact) }}{{- $everySigner = append $everySigner (printf "signing-public-%s" .) }}{{- end -}}
@@ -735,20 +685,9 @@ scoped_secret() {
 {{- if $v.maintenance.enabled -}}
 {{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "maintenance-s3" "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
 {{- end -}}
-{{- range $name, $svc := $v.services -}}
-{{- if and (not (has $name (list "catalog" "lineage"))) (or $svc.frontDoor $v.singleTenant.enabled) -}}
-{{- $api := ternary (list "dapr-app-token") list ($svc.daprIngest | default false) -}}
-{{- $channels := list -}}
-{{- if eq $name "notifications" }}
-{{- $api = concat $api (ternary $everySigner list (and $v.auth.enabled $doors)) }}
-{{- with get ($svc.channels | default dict) "email" }}{{- if .enabled }}{{- $channels = append $channels .secretName }}{{- end }}{{- end }}
-{{- end -}}
-{{- $apps = append $apps (dict "app" $name "sa" $name "api" $api "bus" (eq $name "notifications") "channels" $channels) -}}
-{{- end -}}
-{{- end -}}
 {{- range $apps -}}
 {{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}
-{{- $components := concat (ternary (list (printf "nats-user-%s" .app)) list (and .bus true)) (ternary (list "dapr-state") list (has .app $state)) (.channels | default list) | compact | uniq | sortAlpha -}}
+{{- $components := ternary (list (printf "nats-user-%s" .app)) list (and .bus true) -}}
 {{- if or $api $components -}}
 {{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api "components" $components) -}}
 {{- end -}}
@@ -958,10 +897,5 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- $rows := list -}}
 {{- $rows = append $rows (dict "prefix" (include "rask.catalogPublicPrefix" $root) "component" "catalog" "service" (printf "%s-catalog" (include "lance.fullname" $root)) "port" .Values.services.catalog.port "rewrite" "") -}}
 {{- $rows = append $rows (dict "prefix" "/api/lineage" "component" "lineage" "service" (printf "%s-lineage" (include "lance.fullname" $root)) "port" .Values.services.lineage.port "rewrite" "/") -}}
-{{- $prefix := .Values.config.RASK_API_PREFIX -}}
-{{- $svc := $root.Values.services.notifications -}}
-{{- if or $svc.frontDoor $root.Values.singleTenant.enabled -}}
-{{- $rows = append $rows (dict "prefix" (printf "%s/notifications" $prefix) "component" "notifications" "service" (printf "%s-notifications" (include "rask.fullname" $root)) "port" $svc.port "rewrite" "") -}}
-{{- end -}}
 {{- toJson $rows -}}
 {{- end -}}

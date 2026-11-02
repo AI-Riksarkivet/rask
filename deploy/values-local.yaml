@@ -46,7 +46,7 @@ maintenance:
 
 # The compute fixture (deploy/fixtures/compute) is its own release; the catalog's decision door answers its account by name.
 auth:
-  externalDeciders: ["default:rask-sa-compute"]
+  externalDeciders: {"default:rask-sa-compute": ["decider"]}
 
 # Interactive API docs (/docs, /redoc, /openapi.json) across the release.
 #
@@ -120,15 +120,6 @@ services:
     # The table-maintenance fixture (deploy/fixtures/table-maintenance) is its own release: the catalog grants its
     # account the compaction rungs on the provenance namespace by name ([[LH-529]]).
     provenanceMaintainers: ["default:rask-sa-table-maintenance"]
-  notifications:
-    channels:
-      # The development SMTP relay, the mailpit fixture (deploy/fixtures/mailpit): the email channel sends there, and a
-      # read-back reads what it sent off Mailpit's API. The pair the Component presents is the dev seed's.
-      email:
-        enabled: true
-        host: rask-mailpit
-        port: 1025
-        from: notifications@rask.local
 
 # The edge on k3s is Traefik's Gateway provider (`make k3s-install` switches it on; deploy/k3s/traefik-gateway.yaml):
 # its `traefik-gateway` in kube-system, listener `web`, the same entrypoint the node's port 80 serves. uvicorn trusts the

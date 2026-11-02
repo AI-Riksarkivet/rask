@@ -75,9 +75,9 @@ from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, table_claims, trash_doors, warehouses
 from lakehouse_kit import base_registry, location_claims, protection, trash
 from lakehouse_kit.control_emit import emit_control
-from lakehouse_kit.control_events import ControlUuids
-from lakehouse_kit.openlineage import DatasetUuids
+from service_kit.control_events import ControlUuids
 from service_kit.governed import fga
+from service_kit.lineage_events import DatasetUuids
 from service_kit.naming import CATALOG_DELIMITER
 from service_kit.storage_options import StorageOptions
 

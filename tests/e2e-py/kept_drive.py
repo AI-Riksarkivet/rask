@@ -5,8 +5,8 @@ The acceptance (`-m phase1`) holds one drive of the bring-your-own scenario to t
 maintenance sweeps, outbox relays and reconcilers acting on what the drive made, does it still read the drive the way
 the criteria did? So a run passed `--keep-drive PATH` keeps the scenario's tenant when every test it ran passed, and
 records at PATH what the soak needs to read the drive again: the tenant, the run, who played each part, and what lineage's
-feed and each person's inbox held of the drive once the session ended. A run passed `--soak PATH` resumes that tenant,
-signed in again, and removes it once the soak passes.
+feed held of the drive once the session ended. A run passed `--soak PATH` resumes that tenant, signed in again, and
+removes it once the soak passes.
 
 The record is written before the tenant is marked kept, so a record that could not be written leaves the tenant to the
 session's own teardown rather than keeping a tenant nothing names.
@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 from byo_scenario import ScenarioRun, Tenant
-from correctness import Announcement, Told, announced, told
+from correctness import Announcement, announced
 from pydantic import BaseModel
 
 
@@ -35,7 +35,6 @@ class KeptDrive(BaseModel):
     principals: dict[str, str]
     run: ScenarioRun
     feed: list[Announcement]
-    told: dict[str, list[Told]]
 
 
 def principals(tenant: Tenant) -> dict[str, str]:
@@ -51,7 +50,7 @@ def passed_whole(session: pytest.Session) -> bool:
 
 
 def keep(tenant: Tenant, run: ScenarioRun, path: Path) -> None:
-    """Record ``run`` on ``tenant`` at ``path``, with what the feed and the inboxes hold of it now, and keep the tenant."""
+    """Record ``run`` on ``tenant`` at ``path``, with what the feed holds of it now, and keep the tenant."""
     drive = KeptDrive(
         project=tenant.project,
         tables=list(tenant.tables),
@@ -60,7 +59,6 @@ def keep(tenant: Tenant, run: ScenarioRun, path: Path) -> None:
         principals=principals(tenant),
         run=run,
         feed=announced(tenant.pipeline, run),
-        told=told(tenant, run),
     )
     path.write_text(drive.model_dump_json(indent=2), encoding="utf-8")
     tenant.kept = True

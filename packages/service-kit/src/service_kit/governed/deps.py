@@ -47,8 +47,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 # The 503 stays on the fleet taxonomy, and that is not drift left standing. `ns_errors.problem_detail`
 # REDACTS every 5xx detail (`_UNREDACTED_5XX` is empty), so a lance `ServiceUnavailableError` here would answer
 # "Internal Server Error" and delete "Authentication is enabled but unavailable" — the one string that
-# tells an operator WHICH knob is unwired, and the thing
-# `services/notifications/tests/test_inbox_door_contract.py` asserts. That is a capability statement,
+# tells an operator WHICH knob is unwired. That is a capability statement,
 # not a fault report, so the honest fix is to widen `_UNREDACTED_5XX`; until that is decided, keeping
 # the message beats matching the sibling module.
 from lance_namespace import UnauthenticatedError

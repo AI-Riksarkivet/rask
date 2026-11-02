@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from lakehouse_kit.openlineage import DatasetUuids, with_dataset_uuids
 from notifications.api.lineage_events import LineageRunEvent, author_subject, is_terminal, notifiable
+from service_kit.lineage_events import DatasetUuids, with_dataset_uuids
 
 
 def _event(

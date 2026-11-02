@@ -181,7 +181,6 @@ data:
         [ -s "$G/$k" ] || { echo "the generated dev credential $k is missing, so this store stays not Ready" >&2; exit 1; }
       done
       root=$(cat "$G/object-store-secret-key")
-      (umask 077; printf 'postgres://%s:%s@%s:%s/%s?sslmode=disable' {{ .Values.age.user | squote }} "$(cat "$G/postgres-password")" {{ include "lance.ageConnectHost" . | squote }} {{ .Values.age.port | squote }} {{ .Values.age.stateDb | squote }} > "$HOME/seed/dapr-state-dsn")
       {{- range $id := list .Values.objectStore.maintenanceAccessKey .Values.objectStore.lineageAccessKey (include "lance.backupIdentity" .) | compact | uniq }}
       scoped_secret {{ $id }} "$HOME/seed/scoped-{{ $id }}"
       {{- end }}
@@ -190,7 +189,6 @@ data:
     seen=$(fingerprint)
     derive
     bao kv put secret/postgres password=@"$G/postgres-password" >/dev/null
-    bao kv put secret/dapr-state connection-string=@"$HOME/seed/dapr-state-dsn" >/dev/null
     bao kv put secret/dapr-app-token token=@"$G/dapr-app-token" >/dev/null
     {{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "lineage" .Values.objectStore.lineageAccessKey }}
     {{- if $id }}
@@ -223,17 +221,6 @@ data:
     fi
     bao kv put secret/commit-id-key key=@"$i" >/dev/null
     echo "seeded secret/commit-id-key into OpenBao"
-    {{- with ((.Values.services.notifications).channels).email }}
-    {{- if .enabled }}
-    m="$HOME/seed/{{ .secretName }}"
-    if [ ! -s "$m" ]; then
-      if svc_get {{ .secretName }} password; then v=$got; else v=$(head -c 30 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n'); fi
-      (umask 077; printf '%s' "$v" > "$m")
-    fi
-    bao kv put secret/{{ .secretName }} user=notifications password=@"$m" >/dev/null
-    echo "seeded secret/{{ .secretName }} into OpenBao"
-    {{- end }}
-    {{- end }}
 
     {{- if $nats }}
     nats_bundle

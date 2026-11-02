@@ -18,8 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from catalog.services.changes import ChangeKind
 from catalog.services.control_records import DeleteMode
-from lakehouse_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 from lakehouse_kit.maintenance_due import CompactionDue, IndexDue
+from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 
 
 # --------------------------------------------------------------------------- #
@@ -805,7 +805,7 @@ class PublishRequest(BaseModel):
     #: THE PERSON THE BATCH IS FOR, when the caller is a service running on their behalf.
     #:
     #: An untrusted CLAIM, exactly like `cascade_id`: it authorizes nothing here and nothing downstream
-    #: — the notifications plane re-derives every recipient's visibility at delivery — so carrying it
+    #: — a notifier re-derives every recipient's visibility at delivery — so carrying it
     #: across the bus needs no new trust. It is a TARGETING hint, and the reason it must be a hint is
     #: that the truthful actor cannot serve: a pipeline's service principal authenticates to this door as
     #: itself, so its publish names the service, and a stage that fails later would address an inbox

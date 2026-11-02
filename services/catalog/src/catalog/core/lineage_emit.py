@@ -48,30 +48,26 @@ from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, 
 from catalog.core.run_context import RunContext
 from lakehouse_kit import outbox
 from lakehouse_kit.openlineage import (
-    AUTHOR_FACET,
     BRANCH_IDENTIFIER,
     DATASET_EVENT_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
-    LANCE_FACET,
     RUN_EVENT_SCHEMA_URL,
     VERSION_FACET_SCHEMA_URL,
-    DatasetUuids,
     author_facet,
     catalog_facet,
     dataset_type_facet,
-    event_identity,
     lance_facet,
     lifecycle_facet,
     lifecycle_state,
     processing_engine_facet,
     schema_facet,
-    with_dataset_uuids,
 )
 from lakehouse_kit.schema import SchemaFields
-from lakehouse_kit.subjects import is_person_subject
 from lineage_kit import CanonError, SigningKey, attach_signature, author_of
 from service_kit.governed import fga
 from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
+from service_kit.governed.subjects import is_person_subject
+from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, event_identity, with_dataset_uuids
 from service_kit.naming import is_safe_project
 from service_kit.storage_options import StorageOptions
 
@@ -89,8 +85,8 @@ _emit_failed = _meter.create_counter(
 )
 
 #: Operation markers carried in the OpenLineage ``rask_lance`` run facet. Lineage's ingest authorizer reads them to
-#: pick the relation a write needs and to admit a drop (``lineage.api.fga_deps``), and the notifications plane
-#: renders them, so the producers and those readers share these contract strings.
+#: pick the relation a write needs and to admit a drop (``lineage.api.fga_deps``), and a notifier renders them, so the
+#: producers and those readers share these contract strings.
 CREATE_TABLE = "create_table"
 INSERT = "insert"
 MERGE_INSERT = "merge_insert"
@@ -136,7 +132,7 @@ DECLARE_TABLE = "declare_table"
 REGISTER_TABLE = "register_table"
 #: The tag gate (ADR 0156 C1, [[LH-466]]): a table's ``published`` tag moved, so readers of its tier now read
 #: ``version``, the tag's target. It mints no version, and it is a run of its own so the project's watchers are told
-#: that new data is live: the notifications plane targets them by this event's ``rask_lance.project``
+#: that new data is live: a notifier targets them by this event's ``rask_lance.project``
 #: (`.claude/skills/rask-notifications`, WATCH).
 PUBLISH_TABLE = "publish_table"
 
@@ -276,7 +272,7 @@ def _as_dataset_event(*, output: dict[str, Any], run_facets: dict[str, Any], eve
     custom facets rather than spec-typed run facets, and two readers depend on them: the ingest
     authorizer takes `rask_author.sub` (and refuses the standard `ownership` facet, so there is nowhere else
     for it to go) and `rask_lance.operation` (the relation the change needs, and whether it is a drop), and
-    the notifications plane takes `rask_author.sub`, `rask_lance.project`, `rask_lance.originator` and `rask_lance.operation`. Leaving them on
+    a notifier takes `rask_author.sub`, `rask_lance.project`, `rask_lance.originator` and `rask_lance.operation`. Leaving them on
     a run that no longer exists would silently unauthor every DDL change and silence the person it
     belongs to.
 
@@ -373,8 +369,8 @@ def build_write_event(
         # `parentVersion` and `createAt` are identical (measured on 12.0.0). Main has no identifier.
         if branch_identifier:
             lance_fields[BRANCH_IDENTIFIER] = branch_identifier
-    # THE TENANT, and it is WATCH targeting's only key. `notifications` reads
-    # `run.facets.rask_lance.project` (`api/lineage_events.py::project_id`) and its fan-out skips the
+    # THE TENANT, and it is WATCH targeting's only key. A notifier reads
+    # `run.facets.rask_lance.project` and its fan-out skips the
     # watcher loop ENTIRELY when it is absent — so while this facet carried only operation/version,
     # every catalog-authored event in the estate reached zero watchers. Not a broken watch: a
     # producer that never named the tenant the watch is keyed on. `ingest/lineage.py` was the

@@ -13,7 +13,7 @@ catalog's grant door. One drive, against the deployed estate:
 * the person saves an annotation on the corpus, which the annotator writes through the catalog on the person's own
   token, so the commit is theirs;
 * the admin sends the item, assigns it to the person, who drafts and submits it; the admin accepts it, freezes the
-  project and publishes it, and the annotator's account commits the published table for the admin, who is told;
+  project and publishes it, and the annotator's account commits the published table for the admin;
 * every table the drive wrote is read back through the catalog with pylance's stock client.
 
 Run with `make e2e-annotator` against an estate the annotator's release is installed beside (`make k3s-clients`, after
@@ -28,7 +28,6 @@ import json
 import os
 import time
 from collections.abc import Iterator
-from datetime import UTC, datetime
 from typing import Any
 
 import byo_scenario
@@ -56,8 +55,8 @@ pytestmark = [
     pytest.mark.e2e,
     pytest.mark.annotator,
     pytest.mark.skipif(
-        not (ANNOTATOR and CATALOG and scratch_tenant.DEX and byo_scenario.NOTIFICATIONS),
-        reason="LANCE_E2E_ANNOTATOR_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX and LANCE_E2E_NOTIFICATIONS_URL",
+        not (ANNOTATOR and CATALOG and scratch_tenant.DEX),
+        reason="LANCE_E2E_ANNOTATOR_URL, LANCE_E2E_CATALOG_URL and LANCE_E2E_DEX",
     ),
 ]
 
@@ -84,8 +83,6 @@ class Drive(BaseModel):
     published_table: str
     published: list[dict[str, Any]]
     published_commit: dict[str, Any]
-    #: The admin's inbox rows since the drive began, as (reason, object).
-    told: list[tuple[str, str]]
 
 
 def _stream(table: pa.Table) -> bytes:
@@ -149,17 +146,6 @@ def _published(admin: requests.Session, project_id: str) -> dict[str, Any]:
         time.sleep(3)
 
 
-def _told(admin: Identity, table_id: str, *, since: datetime) -> list[tuple[str, str]]:
-    """The admin's inbox rows since ``since``, read until one names ``table_id`` or the settle window is spent."""
-    reader = byo_scenario.Identity(admin.bearer)
-    deadline = time.monotonic() + SETTLE_SECONDS
-    while True:
-        rows = [(str(row["reason"]), str(row["object_id"])) for row in reader.inbox(since=since)]
-        if any(object_id == table_id for _, object_id in rows) or time.monotonic() >= deadline:
-            return rows
-        time.sleep(3)
-
-
 def _authors(reader: byo_scenario.Identity, table_id: str, *, since: int, after: int) -> list[str]:
     """Who the catalog announced each write to ``table_id`` past version ``after`` as, read off lineage's feed from row
     ``since``. By version, since the feed lags the commit: the table's own create can arrive after ``since`` was read.
@@ -185,7 +171,6 @@ def tenant() -> Iterator[Tenant]:
 @pytest.fixture(scope="module")
 def drive(tenant: Tenant) -> Iterator[Drive]:
     """The drive, and the project archived after it: its state is the annotator's, which the tenant's teardown never reaches."""
-    started = datetime.now(UTC)
     admin, person = tenant.admin, tenant.job
     silver = f"{tenant.project}-silver"
     ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{tenant.project}/namespaces", json={"namespace": silver, "properties": {"rask.tier": "silver"}}))
@@ -243,7 +228,6 @@ def drive(tenant: Tenant) -> Iterator[Drive]:
         published_table=published_table,
         published=published,
         published_commit=published_commit,
-        told=_told(admin, published_table, since=started),
     )
     _answer(as_admin.post(f"{ANNOTATOR}/projects/{project_id}/events", json={"event": "archive"}, timeout=30))
 
@@ -254,8 +238,7 @@ def test_the_annotator_works_the_lakehouse_through_its_public_doors(drive: Drive
     The annotator decides its own project roles: a person of no tenant is refused the project until the admin grants them
     a role on it. It holds no store credential: the person's annotation is written through the catalog on their own
     token, so the catalog announces the write as theirs. Its publish is its own account's commit in the tenant's silver,
-    the row names who annotated and who reviewed from the task's own record, and the admin who published is told it is
-    theirs.
+    and the row names who annotated and who reviewed from the task's own record.
     """
     assert (drive.refused, drive.admitted) == (403, 200)
     assert [(row["id"], row["label"], row["reviewer"]) for row in drive.annotations] == [("a1", LABEL, tenant.job.principal)]
@@ -265,4 +248,3 @@ def test_the_annotator_works_the_lakehouse_through_its_public_doors(drive: Drive
     assert drive.published_table.startswith(f"{tenant.project}-silver$")
     assert drive.published_commit.get("rask.author") == ANNOTATOR_ACCOUNT
     assert drive.published_commit.get("rask.inputs") == [{"table": [tenant.bronze, "chunks"], "version": drive.selected}]
-    assert ("originator", drive.published_table) in drive.told, f"the admin was not told the publish was theirs: {drive.told}"

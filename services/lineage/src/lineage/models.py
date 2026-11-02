@@ -11,8 +11,9 @@ from typing import Any, Final
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lakehouse_kit.openlineage import AUTHOR_FACET, BRANCH_IDENTIFIER, LANCE_FACET, static_event_id
+from lakehouse_kit.openlineage import BRANCH_IDENTIFIER
 from lineage_kit.signing import SIGNATURE_FACET, RefusalReason
+from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, static_event_id
 
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
@@ -330,7 +331,7 @@ class DatasetEvent(BaseModel):
     def feed_id(self) -> str:
         """The id the durable feed stores this change under — derived from its content, never minted.
 
-        A static change has no run id, so the feed keys it under :func:`lakehouse_kit.openlineage.static_event_id`.
+        A static change has no run id, so the feed keys it under :func:`service_kit.lineage_events.static_event_id`.
         ONE derivation for the writer (`services.provenance.feed_key`) and the reader that asks whether this
         exact event is already there (`api.fga_deps._is_replay`), so the two cannot look in different places.
         """
@@ -406,8 +407,8 @@ def author_sub_from_payload(raw: object) -> str | None:
     ``name`` and falls back to the standard ``ownership`` job facet, which is right for ATTRIBUTION on
     a board — an external producer's claimed owner beats no owner — and wrong here: both are
     producer-supplied and unverified, so a loss record built on them could name someone who is not the
-    author of the run that was lost. Anonymous beats misattributed. Same rule
-    ``notifications.author_subject`` applies for the same reason.
+    author of the run that was lost. Anonymous beats misattributed. A notifier's author rule is the same, for the same
+    reason.
 
     TWO HOMES, ONE RULE. A :class:`DatasetEvent` has no run, so its stamp rides the same reserved
     ``rask_author`` facet on the DATASET — and it is read under exactly the same restriction. Moving DDL off

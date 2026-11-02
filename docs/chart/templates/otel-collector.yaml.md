@@ -65,7 +65,7 @@ traces. `error_mode: ignore` so a span with no name cannot wedge the pipeline.
 
 Proportion matters here: this is the SMALL half of the trace noise. The kubelet probe spans
 fixed in the same change were 31,916 over the same window, and those are excluded at the SDK
-(rask.otelEnv's OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them — dropping them
+(lance.otelEnv's OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them — dropping them
 here instead would pay to serialize and ship spans only to discard them at the far end.
 
 ## `otlphttp/traces:`
@@ -106,7 +106,7 @@ points apart, so it was re-measured before acting rather than taken on trust: 3,
 in three hours, the ninth-largest span name in the estate.
 Worth knowing for proportion — it was never the big one. The kubelet probe spans fixed in
 the same change were 31,916 over the same window, and those are excluded at the SDK
-(`rask.otelEnv`'s OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them.
+(`lance.otelEnv`'s OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them.
 
 ## `logs/audit:`
 

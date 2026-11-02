@@ -58,12 +58,13 @@ from lakehouse_kit.lancekit.catalog_client import catalog_api_client, request_he
 from lakehouse_kit.lancekit.filters import in_lists, sql_literal
 from lakehouse_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from lakehouse_kit.lancekit.writer import RestCatalogWriteTransport
-from lakehouse_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, dataset_uuids
+from lakehouse_kit.openlineage import BRANCH_IDENTIFIER
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
 from service_kit.arrow_ipc import encode_arrow_stream
 from service_kit.governed.machine_identity import read_identity_token
+from service_kit.lineage_events import LANCE_FACET, dataset_uuids
 from service_kit.naming import CATALOG_DELIMITER, is_external_source_namespace
 
 
@@ -790,10 +791,6 @@ class ProvenanceStore:
     async def reset_cursor(self, follower: str, seq: int) -> None:
         """Set ``follower``'s cursor to ``seq`` whichever way it moves: for a cursor the feed never issued (a rebuilt feed)."""
         await self._run(lambda: self._writer(CURSORS).merge_upsert(_cursor_row(follower, seq), on="follower"))
-
-    async def run_recorded(self, run_id: str) -> bool:
-        """Whether the feed holds any row of this run."""
-        return await self._run(lambda: self._reader(FEED).count_rows(f"run_id = {sql_literal(run_id)}")) > 0
 
     async def run_author(self, run_id: str) -> str | None:
         """The verified author sub the run is bound to, or ``None`` when no event of it was recorded or its first named none."""

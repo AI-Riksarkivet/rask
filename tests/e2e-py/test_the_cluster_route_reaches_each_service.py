@@ -34,14 +34,13 @@ _PROBES = [
     ("GET", "/api/catalog/management/v1/me"),
     ("GET", "/api/lineage/events?limit=1"),
     ("POST", "/api/explorer/annotations/tags"),
-    ("GET", "/api/notifications/inbox"),
     ("GET", "/api/ray/jobs"),
     ("GET", "/api/serve/applications/"),
 ]
 
 
 #: The lakehouse's prefixes whose door verifies a person's token.
-_LAKEHOUSE_PROBES = [probe for probe in _PROBES if probe[1].startswith(("/api/catalog/", "/api/lineage/", "/api/notifications/"))]
+_LAKEHOUSE_PROBES = [probe for probe in _PROBES if probe[1].startswith(("/api/catalog/", "/api/lineage/"))]
 
 
 @pytest.fixture(scope="module")

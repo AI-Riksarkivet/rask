@@ -15,8 +15,6 @@ spec:
     components:
 {{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId) }}
 
-{{- $subscribers = append $subscribers (dict "appId" "notifications") }}
-
 {{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}
 {{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId) }}
 {{- end }}
@@ -26,11 +24,6 @@ spec:
           retry: pubsubDeliveryRetry
 {{- end }}
 
-{{- if .Values.services.notifications }}
-      {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}-notifications:
-        inbound:
-          retry: pubsubDeliveryRetry
-{{- end }}
 {{- if .Values.catalog.controlEmit }}
       {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}:
         inbound:
@@ -43,32 +36,5 @@ scopes:
 {{- end }}
 {{- if .Values.catalog.controlEmit }}
   - {{ .Values.services.catalog.daprAppId }}
-{{- end }}
-{{- $notifications := .Values.services.notifications }}
-{{- if or $notifications.frontDoor .Values.singleTenant.enabled }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Resiliency
-metadata:
-  name: {{ .Release.Name }}-invocation-resiliency
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  policies:
-    timeouts:
-      invokeTimeout: 300s
-    retries:
-      invokeRetry:
-        policy: constant
-        duration: 2s
-        maxRetries: 3
-        matching:
-          httpStatusCodes: 408,429,500-599
-  targets:
-    apps:
-      {{ .Values.services.lineage.daprAppId }}:
-        timeout: invokeTimeout
-        retry: invokeRetry
-scopes:
-  - notifications
 {{- end }}
 {{- end }}

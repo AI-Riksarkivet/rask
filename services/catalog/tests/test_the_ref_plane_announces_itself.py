@@ -5,11 +5,9 @@ tag moving. The other five ref mutations moved in silence: a console holding a b
 no way to learn one appeared, moved or vanished, and a reader that polls discovers a deleted tag by a
 failing read.
 
-UNTARGETED, by the rule the estate codified in
-`tests/unit/test_control_action_three_file_contract.py`: "a control event is targeted when it changes
-what a specific person may do or must do, not when it changes an object". A branch or tag is an object,
-so these five name nobody and stay out of notifications' `NAMED_ACTIONS` -- they reach a feed, not a
-person.
+UNTARGETED: a control event names a person to tell when it changes what a specific person may do or
+must do, not when it changes an object. A branch or tag is an object, so these five name nobody -- they
+reach a feed, not a person.
 
 DRIVEN THROUGH THE ROUTES against a real `dir` namespace and real pylance refs, because the subject is
 whether the DOOR emits. A unit test on the emitter would pass with no route calling it, which is the

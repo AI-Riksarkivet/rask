@@ -12,7 +12,7 @@ is a person who is told now and would not be told after.
 THE IDENTITY MUST BE DERIVED, NOT MINTED. `notification_id` is `${run_id}@${state}` and a static event
 has no run id, while the two lanes see DIFFERENT copies of the same event — the bus lane takes the
 catalog's raw publish, the feed lane takes what lineage stored. A random id would land two pointers
-for one change; `lakehouse_kit.openlineage.static_event_id` derives one from the content so both lanes
+for one change; `service_kit.lineage_events.static_event_id` derives one from the content so both lanes
 agree, which is the property `deliver_lineage_event`'s own docstring rests on.
 """
 

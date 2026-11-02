@@ -15,7 +15,9 @@
  *   ALICE  author     -> a row, reason `author`     (v1, unchanged — the control)
  *   BOB    originator -> a row, reason `originator` (v5, the thing being proven)
  *
- * Run:  ORIGIN=http://localhost:8080 node tests/e2e/verify_originator_lane.mjs
+ * Run, against an estate where the notifications inbox runs:
+ *   FGA_TOKEN_FILE=<file> ORIGIN=http://localhost:8080 node tests/e2e/verify_originator_lane.mjs
+ * No lane runs this drive while the product chart deploys no inbox (ADR 0190).
  */
 
 import { readFileSync } from 'node:fs';
@@ -25,8 +27,8 @@ const LINEAGE_URL = process.env.LINEAGE_URL ?? `${ORIGIN}/api/lineage`;
 const GATEWAY_URL = process.env.GATEWAY_URL ?? ORIGIN;
 const FGA_API_URL = process.env.FGA_API_URL ?? 'http://localhost:18099';
 const FGA_STORE_NAME = process.env.FGA_STORE_NAME ?? 'lance-catalog';
-/** OpenFGA admits only a projected `rask-openfga` token (XC-077): `make notifications-lanes` mints one into
- *  FGA_TOKEN_FILE, read again on every call. */
+/** OpenFGA admits only a projected `rask-openfga` token (XC-077): mint one into FGA_TOKEN_FILE with
+ *  `kubectl create token <release>-sa-jobs --audience rask-openfga`; it is read again on every call. */
 const FGA_TOKEN_FILE = process.env.FGA_TOKEN_FILE;
 function fgaAuth() {
 	if (!FGA_TOKEN_FILE) throw new Error('set FGA_TOKEN_FILE to a rask-openfga token (kubectl create token <release>-sa-jobs --audience rask-openfga)');

@@ -38,9 +38,9 @@ the tenant's project id, as criterion 2's matrix does, so criteria 1 and 4 read 
 holds `writer` there and owns each table it makes. Every commit names a run whose input is the namespace's source table
 at version 1, so every version has an edge to hold the edge list to.
 
-A DRILL BEGINS QUIET. Before it takes anything down it waits until every service that acts on a lane has acknowledged
-every message the bus holds, so the outage meets no delivery in flight, and its DLQ window opens there. Its outage ends
-in a `finally`, so a drill that fails hands the release back with what it took down serving again.
+A DRILL BEGINS QUIET. Before it takes anything down it waits until lineage has acknowledged every announcement the bus
+holds, so the outage meets no announcement in flight, and its DLQ window opens there. Its outage ends in a `finally`, so
+a drill that fails hands the release back with what it took down serving again.
 
 WHAT IS NOT CLAIMED, and why. A commit whose writer never got its answer may lack its announcement: a kill between the
 Lance commit and the outbox stage loses it (LH-497, #641, parked; ADR 0037), so such a version is held to at most one
@@ -72,13 +72,10 @@ import pytest
 import requests
 from byo_scenario import CATALOG, Commit, NamedRun, Tenant
 from chaos import Workload
-from correctness import as_named, edges_named, history_of, rask_properties, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
+from correctness import LINEAGE_DURABLE, as_named, edges_named, history_of, rask_properties, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
 from pydantic import BaseModel
 
 
-#: The durable consumers that act on each lane: lineage records the feed, notifications fills the inboxes.
-LINEAGE_DURABLES = ("lineage-durable", "notifications-durable")
-CONTROL_DURABLES = ("notifications-control-durable",)
 #: The spec's code for a door that cannot answer now (`lance_docs/ns_catalog/spec.yaml`, `ErrorResponse.code`).
 SERVICE_UNAVAILABLE = 17
 #: How long an announcement may take to land once its dependency is back: a delivery its sidecar retries waits out a
@@ -246,10 +243,11 @@ class Drills:
         return commit
 
     def quiet(self) -> datetime:
-        """Wait until every service that acts on a lane has acknowledged every message the bus holds; the instant the
-        drill's DLQ window opens."""
-        bus.wait_until_acked("LINEAGE", LINEAGE_DURABLES, bus.last_seq("LINEAGE"), within=RECOVERY_SECONDS)
-        bus.wait_until_acked("CATALOG_CONTROL", CONTROL_DURABLES, bus.last_seq("CATALOG_CONTROL"), within=RECOVERY_SECONDS)
+        """Wait until lineage has acknowledged every announcement the bus holds; the instant the drill's DLQ window opens.
+
+        Lineage's is the one durable consumer the readings depend on. The control lane has none: each catalog replica
+        reads it through a broadcast consumer named by its pod, and the control outbox's depth is read on its own."""
+        bus.wait_until_acked("LINEAGE", (LINEAGE_DURABLE,), bus.last_seq("LINEAGE"), within=RECOVERY_SECONDS)
         return datetime.now(UTC)
 
     def assert_correct(self, tables: Iterable[list[str]], *, since: datetime) -> None:

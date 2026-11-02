@@ -28,13 +28,13 @@ move the Deployments but not those, splitting the estate the moment release name
 Install under any other release name and the two planes diverge — keep them equal.
 
 LABELS: `rask.labels` emits app.kubernetes.io/name=rask, `lance.labels` emits =lance-ns. Kept distinct on
-purpose: rask workloads select on {name,instance,component} (fleet.yaml)
+purpose: rask-labelled pods (the catalog's crons, the OpenFGA hooks, the issuer mirror) carry {name,instance,component}
 while lance Services select on {component,instance} only (services.yaml). Different `name` values are what
 guarantee a rask selector can never adopt a lance pod inside the shared release.
 =====================================================================================================
 
 ---------------------------------------------------------------------------------------------------
-rask — the base chart's helpers (fleet: notifications, the cluster route —
+rask — the base chart's helpers (the cluster route —
 the orchestrator died at P7a; core-api/search-api/volumes-api died in the R6/R20 wave).
 ---------------------------------------------------------------------------------------------------
 
@@ -49,7 +49,7 @@ The ONE store's root identity is objectStore.accessKey (a value) and the store's
 only readers, since on RustFS the root secret signs every STS session token (ADR 0168).
 
 Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
-estate: the rask fleet AND the lance planes (services.yaml catalog/lineage,
+estate: the lance planes (services.yaml catalog/lineage,
 maintenance.yaml) all render
 THIS helper, so the sidecar contract can never drift between planes (DAPRIFY 2026-07-27). Carries the full union of what the two planes shipped:
   - enabled / app-id / app-port / log-level (the original rask surface)
@@ -135,16 +135,15 @@ to always has the projected token it logs in with.
 
 ## `{{- define "lance.daprOtlpTarget" -}}`
 
-OTLP/OpenTelemetry container env for the rask FLEET (no-op unless observability.enabled). Shared by
-fleet so the OTLP wiring never drifts.
-Usage: {{- include "rask.otelEnv" (list $root "service-name") | nindent 12 }}
+The Collector's OTLP/HTTP address, `host:port` with no scheme, that each app's Dapr Configuration names as its
+sidecar's `tracing.otel.endpointAddress`; empty unless observability.enabled.
 
 Every plane exports to the in-chart Collector (`lance.otlpEndpoint`), never to a store: the app stays
 backend-agnostic and the Collector adds the backend's headers (`observability.export`).
 
 ## `{{- define "rask.otelResourceAttrs" -}}`
 
-THE single OTel resource identity for every pod in this chart — fleet, lakehouse and Ray.
+THE single OTel resource identity for every pod in this chart.
 Call: {{ include "rask.otelResourceAttrs" $root }}
 
 ONE derivation, because two had drifted. The fleet emitted
@@ -163,59 +162,13 @@ the old name), and it would not close the seam anyway: the historical column alr
 `service.version` is the CHART version, not the running image tag — it answers "which chart
 rendered this pod", not "which build emitted this span".
 
-## `{{- if include "lance.otelEnabled" $root -}}`
-
-GATED ON `lance.otelEnabled`, NOT on `observability.enabled`. The narrow gate meant the chart's own
-documented prod posture — ship OTLP off-cluster, deploy no in-cluster stack — rendered ZERO OTEL_*
-on the entire request-serving fleet while the lakehouse plane kept exporting: a fleet container
-came back as literally `env: null`. Nothing announced it: `setup_otel` returns False, every pod
-stays Ready, and every trace that crossed the fleet lost the span that should have parented it. The identical defect was found and fixed for RAY alone in August 2026; the
-fleet was left behind and pinned by nothing.
-
-## `- name: RASK_OTEL_ENABLED`
-
-The fleet's `setup_otel` is opt-in on this flag, unlike the lakehouse pods which are launched under
-`opentelemetry-instrument` and need none. It MUST stay paired with the endpoint: drop it and
-setup_otel returns False while every OTEL_* var below still renders.
-
-## `- name: OTEL_EXPORTER_OTLP_ENDPOINT`
-
-One endpoint derivation for the whole chart, the Collector, so every plane gets its k8sattributes
-enrichment and none names a store.
-
-## `- name: OTEL_METRIC_EXPORT_INTERVAL`
-
-BOTH OF THESE TAKE EFFECT WITHOUT `opentelemetry-instrument`, which is why the fleet is not exempt
-from them — it was just unset. Verified against the installed SDK rather than assumed:
-`PeriodicExportingMetricReader.__init__` reads OTEL_METRIC_EXPORT_INTERVAL, and the FastAPI
-instrumentor reads OTEL_PYTHON_FASTAPI_EXCLUDED_URLS itself. The vars that genuinely ARE
-launcher-only — OTEL_{TRACES,METRICS,LOGS}_EXPORTER and
-OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED — are deliberately NOT copied: they live in
-`opentelemetry.sdk._configuration`, which only the launcher runs, and the fleet already makes the
-equivalent calls explicitly in `setup_otel`.
-
-## `- name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS`
-
-The probes are hit every few seconds on every pod, so on a quiet estate the health checks ARE the
-request rate: the RED dashboard reads busy and the latency distribution is dominated by a route
-nobody calls.
-
-## `value: "/livez,/readyz,/healthz,/api/health,/metrics"`
-
-MUST cover every path `fleet.yaml` points a probe at — NOT just the operational pair. A list
-that leaves out `/api/health` lets every service taking the default health path trace its own
-kubelet polls twice a second: measured 2026-08-23, 31,916 spans in three hours across four such
-services, eight times the Dapr workflow keepalive. Each probe costs SEVERAL spans, not one — ASGI
-instrumentation emits a child per send/receive, which is why `GET /api/health http send`
-outnumbered `GET /api/health` three to one.
-
 ## `{{- define "lance.fullname" -}}{{ .Release.Name }}{{- end -}}`
 
 ---------------------------------------------------------------------------------------------------
 lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
 
 Every one of these is referenced by a grafted lance template (services.yaml, maintenance.yaml,
-fleet.yaml, object-store-scoped-users.yaml, openbao-seed.yaml, age-postgres.yaml,
+object-store-scoped-users.yaml, openbao-seed.yaml, age-postgres.yaml,
 otel-collector.yaml, network-policy.yaml, ha.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
@@ -286,7 +239,7 @@ In-cluster hostnames (subcharts derive their service name from the release).
 The ONE object store's S3 host — the Service in front of the rustfs fixture's StatefulSet ([[XC-131]]).
 P4's store unification (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md) still holds ("the ONE store"); what changed with LH-133 is the store and
 therefore its Service name, since a first-party StatefulSet names its own Service
-to name is deleted, so fleet + lakehouse + observability all resolve the same endpoint.
+to name is deleted, so the lakehouse and observability planes resolve the same endpoint.
 
 ## `{{- define "lance.catalogImage" -}}`
 
@@ -329,7 +282,8 @@ Whether the apps carry the OTel SDK wiring (instrument + otelEnv + the lance-tra
 
 THE PLATFORM'S STORE IS NAMED, AND OVER TLS ([[XC-149]]). The chart renders no secret store, so with
 `openbao.enabled` off the address is required: a render that names no store would leave every
-`secretKeyRef` resolving against Kubernetes Secrets the chart never declares (dapr-statestore.yaml).
+`secretKeyRef` resolving against Kubernetes Secrets the chart never declares (each bus user's `jwt` and `seedKey`,
+`lance.natsCreds`).
 An http address is refused because every sidecar presents the store's token to it, in the clear
 otherwise; the dev store alone is http, inside the namespace.
 
@@ -346,7 +300,7 @@ Measured against the live cluster 2026-08-31.
 ## `{{- define "lance.busEnv" -}}`
 
 The bus a pod's sidecar connects to, named to the pods whose sidecar holds a `pubsub.jetstream` component (catalog,
-lineage, maintenance, notifications). Each service watches its own sidecar with it and restarts the sidecar once one of
+lineage, maintenance). Each service watches its own sidecar with it and restarts the sidecar once one of
 its connections has closed for good and the bus greets a new connection again (`service_kit.bus_watchdog`, [[XC-095]]):
 Dapr 1.18.1's component never reconnects past nats.go's default 60 attempts (components-contrib#4563). An address, not
 a credential: the sidecar's own connection carries the app's bus user.
@@ -355,7 +309,8 @@ a credential: the sidecar's own connection carries the app's bus user.
 
 The per-SUBSCRIBER pubsub component name (call: include "lance.subPubsub" (list $root <appId>)).
 Each subscriber app-id gets its OWN pubsub.jetstream component carrying its queueGroupName — one shared
-component cannot: lineage AND notifications both consume lineage.events.v1, so a single queue group would
+component cannot: lineage AND maintenance (under `maintenance.arrivalEnabled`) both consume lineage.events.v1, so a
+single queue group would
 SPLIT those messages across the two apps instead of duplicating per app / competing per replica. The
 component (dapr-component.yaml) and the app's *_PUBSUB env must agree on this name — hence one helper.
 
@@ -446,10 +401,6 @@ under `opentelemetry-instrument` and export all three signals OTLP. OTel-first: 
 (lance.otlpEndpoint), which adds the backend's headers — so the app stays backend-agnostic (plain OTLP, no
 vendor headers). The SDK appends /v1/{traces,metrics,logs} to the endpoint.
 
-NOT the same as "rask.otelEnv": this one is Python-launcher-specific (the OTEL_PYTHON_* knobs).
-Both names coexist and do not differ on routing: "rask.otelEnv" derives its endpoint from
-"lance.otlpEndpoint" too, so both export to the Collector.
-
 ## `- { name: OTEL_LOGS_EXPORTER, value: "otlp" }`
 
 Logs go out via the OTel SDK (OTLP → the Collector → GreptimeDB `opentelemetry_logs`) — the "three
@@ -472,13 +423,13 @@ Default metric export interval is 60s — too slow to observe in a demo/test. Pu
 ## `- { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/healthz,/api/health,/metrics" }`
 
 Don't trace the k8s probe endpoints — they're hit every 10s and bury real request spans (otel
-signals.md § Exclude noisy endpoints). The FastAPI instrumentor reads this itself, launcher or not —
-which is why the fleet carries it too.
+signals.md § Exclude noisy endpoints). The FastAPI instrumentor reads this itself, launcher or not.
 
-Must MATCH `rask.otelEnv`'s list byte for byte, so a change to one plane changes the other
-in the same commit. Covers every path fleet.yaml points a
-probe at, not just the operational pair — including `/api/health`, which remains served as a badge
-even though no probe asks for it. `/healthz` matches no route any service mounts.
+Covers every path a probe is pointed at, not just the operational pair — including `/api/health`, which remains
+served as a badge even though no probe asks for it. `/healthz` matches no route any service mounts. A list that leaves
+out a probed path lets every pod trace its own kubelet polls: measured 2026-08-23, 31,916 spans in three hours across
+four services, eight times the Dapr workflow keepalive, and each probe costs several spans, since ASGI instrumentation
+emits a child per send and receive.
 
 ## `{{- define "lance.preStop" -}}`
 
@@ -513,28 +464,6 @@ default before, so the stores + the 256MiB-body catalog were sized like request 
 include "lance.resources" (dict "root" $ "comp" "catalog"). (prod-readiness P2)
 
 ## `{{- define "rask.proxyHeaderArgs" -}}`
-
-THE FLEET'S PROBE TRIPLE — one definition for every fleet.yaml workload.
-Call: include "rask.fleetProbes" $svc   (pass an empty dict to take every default).
-
-A hand-written template rendering its own copy of the three probes missed two fixes in a row: the
-measured `timeoutSeconds` fix had to be copied across and the startupProbe never arrived at all.
-One definition is what stops the next divergence.
-
-THE STARTUP PROBE IS THE POINT. `lance.appProbes` has carried one since prod-readiness P1 and
-states the hazard: uvicorn runs the FastAPI lifespan BEFORE it binds the socket, so every
-pre-bind second is a connection REFUSED rather than a slow 200 — liveness alone gives a hard
-`initialDelaySeconds 15 + 3 x 20s` ~= 55s ceiling and then SIGKILLs into CrashLoopBackOff,
-exactly when a dependency is already slow. The fleet's lifespans are not faster than the
-lakehouse plane's: notifications does an OIDC discovery fetch, two OpenFGA provision round-trips
-(at first-install time, while OpenFGA is itself starting), actor registration and a 10s proxy
-warm-up. 30 x 10s = the same 300s budget
-the lakehouse plane gets, deliberately not a second number to keep in step.
-
-`timeoutSeconds: 5` on ALL THREE. k8s defaults it to 1, measured racing the OOM killer on compute
-(#136): under memory pressure the handler missed the deadline, so kills presented as
-CrashLoopBackOff probe failures instead of the OOM they were. Boot is the slowest window a pod
-has, so the startup probe is the last place to keep the default.
 
 THE TRUSTED-PROXY POSTURE the fleet images document, rendered so production actually runs it.
 Call: include "rask.proxyHeaderArgs" $root   (emits two uvicorn args).
@@ -631,12 +560,12 @@ See security.tmpSizeLimit.
 ## `{{- define "rask.image" -}}`
 
 A FULLY-RESOLVED image reference for a first-party component. Call:
-  include "rask.image" (list $root "notifications")
+  include "rask.image" (list $root "lance-rest-catalog")
 
 GITOPS IS THE FIRST-CLASS CONSUMER of this chart, and that decides the two rules below.
 
-1. `image.repository` is REQUIRED. An empty one renders a BARE `notifications:dev` — and a
-   bare name is not a local image, it is `docker.io/library/notifications:dev`. That only
+1. `image.repository` is REQUIRED. An empty one renders a BARE `lance-rest-catalog:dev` — and a
+   bare name is not a local image, it is `docker.io/library/lance-rest-catalog:dev`. That only
    appears to work because `make k3s-import` had side-loaded the tag into the node's containerd,
    so the kubelet never had to pull. A reconciler has no such side channel: every pod
    ImagePullBackOffs, and the error blames Docker Hub rather than the missing setting. Measured
@@ -707,10 +636,6 @@ can never drift into a profile that sets neither.
 
 A caller's projected identity, one volume per door audience it calls ([[LH-220]], D1); rationale in
 values.yaml `auth.serviceAccountIssuer`. Call: include "lance.identityTokens" (list "volumes"|"mounts" <aud>...).
-
-## `{{- define "lance.fleetAudiences" -}}`
-
-A fleet service's door audiences, its `identityAudiences` value: one projected token per door it calls.
 
 ## `{{- define "lance.saSubject" -}}`
 
@@ -798,6 +723,23 @@ include "lance.fgaToken" (list "env"|"volumes"|"mounts").
 The ServiceAccounts OpenFGA admits (`authn.oidc.subjects`), comma-joined: exactly the pods that render
 `lance.fgaToken`, under the same conditions, qualified by the release namespace.
 
+## `{{- define "lance.fgaEstateRoles" -}}`
+
+THE MACHINE ROLES ON THE ESTATE ROOT, one JSON object from each account's subject to the roles it holds there, which
+bootstrap-admin reads as `FGA_ESTATE_ROLES`, grants, and converges the store to ([[LH-442]], [[CTL-021]];
+bootstrap-admin.yaml.md). Empty with auth off. Lineage's own are `decider` (the catalog decision door's `check`) and
+`governance_prober` (its `governed`), on its in-release subject (`lance.saSubject`). Each `auth.externalDeciders` key is
+a ServiceAccount outside this release, `<namespace>:<name>`, whose subject is
+`kubernetes~system:serviceaccount:<namespace>:<name>`, the one the doors verify that account's projected token as,
+mapped to the roles it holds: `decider`, `member_expander` (the door's `list-users` over a membership userset) and
+`event_reader` (lineage's whole run feed, `GET /events/projection`). So a client of the lakehouse, none of which this
+chart renders, holds exactly the routes it calls: the compute fixture `decider` alone, a notifier all three.
+
+THE RENDER FAILS rather than grant what nobody declared: a key that is not `<namespace>:<serviceaccount>` (lower-case
+letters, digits and `-`, and `.` in the name), an account mapped to no role, and a role outside those three.
+`governance_prober` is lineage's alone (the door's `governed`, asked when lineage decides whether a refused output can
+ever be granted), so the map cannot grant it. A role named twice is granted once.
+
 ## `{{- define "lance.governedFgaPins" -}}`
 
 The operator-pinned FGA store/model ids — optional, and emitted at DIFFERENT positions by
@@ -856,15 +798,14 @@ rotating the root rotates every derived secret with it.
 ## `{{- define "lance.storeReads" -}}`
 
 WHO READS WHAT FROM THE STORE, ONE TABLE ([[XC-165]], ADR 0169): app id -> {its ServiceAccount, `api` (the secrets its
-code reads through its sidecar), `components` (the secrets its own components resolve: its bus user, the state store's
-DSN, a notification channel's credential)}. Every place that decides a read is a view of it: the app's Configuration
+code reads through its sidecar), `components` (the secrets its own components resolve: its bus user)}. Every place that decides a read is a view of it: the app's Configuration
 allows `api` (`lance.daprAppSpec`), its store role's policy grants `api` and `components` (the seed's
 `policy-<release>-<app>.json`), and an app with neither reads nothing, so it gets no store at all
 (`lance.secretScopes`). Two lists that agreed when written are how a read gets refused at runtime, or granted past
 its owner, so nothing restates it.
 
 The split is by READER SET, because a store and Dapr both grant by secret name: a secret two apps read is one secret
-both name (`dapr-app-token`, `dapr-state`), never a copy, so a rotation writes one place. The verifier
+both name (`dapr-app-token`, a signer's public key), never a copy, so a rotation writes one place. The verifier
 lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enforce`, the doors under
 `signing.doors`), and a signer reads its own pair. The pub/sub condition restates `dapr-component.yaml`'s, so
 `tests/unit/test_a_dapr_component_names_a_secret_something_can_resolve.py` checks, over every overlay CI deploys, that
@@ -970,17 +911,16 @@ Dapr 1.18 promoted HotReload to GA and default-ON, and every sidecar in this est
 this Configuration — so each one boots with `Enabled features: HotReload …` and runs a 60-second
 reconcile ticker that diffs the operator's components against its own in-memory store.
 
-For `lance-statestore` that diff can never come out equal. Its DSN arrives as a `secretKeyRef`,
-so the operator's copy holds the REFERENCE while daprd's holds the RESOLVED value; the reconciler
-therefore concludes it changed on every single tick, tries to hot-reload it, and refuses —
-because Dapr will not hot-reload a component used as an actor state store. Measured across the
-fleet: ~540 ERROR lines an hour, `Aborting to hot-reload a state store component that is used as
+For a component whose metadata arrives as a `secretKeyRef` (each bus user's `jwt` and `seedKey`,
+`lance.natsCreds`) that diff can never come out equal: the operator's copy holds the REFERENCE while
+daprd's holds the RESOLVED value, so the reconciler concludes it changed on every single tick.
+Measured on an actor state store (`lance-statestore`), which Dapr will not hot-reload: ~540 ERROR
+lines an hour across the fleet, `Aborting to hot-reload a state store component that is used as
 an actor state store: lance-statestore`, one per sidecar per minute, forever. Nothing is pending
 and nothing is broken; the loop is structurally unable to converge, and it buries real errors.
 
-Turning it off costs nothing this estate was using. A component change here is a coordinated
-chart rollout, and for the actor state store a pod restart was ALREADY required — that is the
-very thing the reconciler was refusing to do for us. The trade is explicit: with HotReload off,
+Turning it off costs nothing this estate was using: a component change here is a coordinated
+chart rollout. The trade is explicit: with HotReload off,
 a Component/Resiliency/Configuration edit reaches running sidecars only after
 `kubectl rollout restart`.
 
@@ -1108,8 +1048,8 @@ One app-id's Dapr Configuration spec: the Configuration object and its name (`la
 DENY BY DEFAULT ([[XC-165]]): the app's code reads exactly the secrets `lance.storeReads` lists for it as `api`, and
 nothing a later secret adds. Dapr applies this scope only to the app-facing secrets API (`pkg/api/universal/
 secrets.go:35`, `IsSecretAllowed`, the same in 1.18.1 and 1.19.0-rc.4); a component resolving its own `secretKeyRef`
-goes straight to the store with the sidecar's login (`pkg/runtime/processor/secret/secret.go:162-170`), so a bus user
-or the state store's DSN is resolved for the component and never served to the app. What the store itself refuses is
+goes straight to the store with the sidecar's login (`pkg/runtime/processor/secret/secret.go:162-170`), so a bus user's
+credential is resolved for the component and never served to the app. What the store itself refuses is
 the role's policy, the second layer, which holds even for a request that never asks the sidecar.
 
 Every secret a reader names is known at render. A data base holds no credential of its own ([[LH-286]]),
@@ -1196,8 +1136,7 @@ THE ONE ROUTE TABLE: the public `/api/*` prefixes the cluster route publishes, a
 published prefix and an admitted port come from one list and cannot drift.
 
 The rows mirror the gates of the templates that render each backend: catalog and lineage always
-(services.yaml), notifications only when front-door or single-tenant (fleet.yaml's own condition), so the
-route never names a Service that did not render.
+(services.yaml), so the route never names a Service that did not render.
 
 A new public prefix is a row here plus a row in
 `tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py`. Compute's `/api/ray` and

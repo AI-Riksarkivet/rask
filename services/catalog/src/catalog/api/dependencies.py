@@ -30,9 +30,9 @@ from catalog.services import dataplane, object_uuids, provenance_namespace, tabl
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse_kit import trash
 from lakehouse_kit.control_emit import ControlEmitter, NoopControlEmitter
-from lakehouse_kit.control_events import CatalogControlEvent, ControlUuids
-from lakehouse_kit.openlineage import DatasetUuids
+from service_kit.control_events import CatalogControlEvent, ControlUuids
 from service_kit.governed import fga
+from service_kit.lineage_events import DatasetUuids
 from service_kit.storage_options import StorageOptions
 
 
@@ -488,7 +488,7 @@ _MAX_ORIGINATOR = 128
 def originator_hint(raw: str | None) -> str | None:
     """Reduce a caller-supplied ``x-lance-originator`` header to a person's subject, or ``None``.
 
-    A TARGETING hint and nothing else: it never authorizes, because the notifications plane re-derives
+    A TARGETING hint and nothing else: it never authorizes, because a notifier re-derives
     every recipient's visibility at delivery, so at worst a forged value puts a row in an inbox whose
     owner can already see the run's outputs. That is what makes an unverified header sound here — and
     it is also why the value must still be a PERSON. A userset (``team:acme#member``), a wildcard, a

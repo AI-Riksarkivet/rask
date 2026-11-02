@@ -47,34 +47,9 @@ scopes:
 {{- include "lance.publishPubsub" (list . (printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.daprAppId) .Values.maintenance.daprAppId) }}
 {{- end }}
 
-{{- if and .Values.dapr.enabled .Values.services.notifications }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}-notifications
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: pubsub.jetstream
-  version: v1
-  metadata:
-    - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
-    - { name: name, value: "lance-dapr-catalog-control" }
-    - { name: queueGroupName, value: "notifications" }
-    - { name: deliverPolicy, value: "new" }
-    - { name: durableName, value: "notifications-control-durable" }
-
-    {{- include "lance.brokerWindows" . | nindent 4 }}
-    {{- with include "lance.natsCreds" (list . "notifications") }}{{ . | nindent 4 }}{{- end }}
-{{- include "lance.natsAuth" . }}
-scopes:
-  - notifications
-{{- end }}
 {{- end }}
 
 {{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}
-
-{{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}
 
 {{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}
 {{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId "deliverPolicy" "new") }}
@@ -98,11 +73,6 @@ spec:
     {{- if eq .appId $.Values.services.lineage.daprAppId }}
     - { name: concurrencyMode, value: "parallel" }
     - { name: maxAckPending, value: {{ required "services.lineage.deliveriesInFlight is required" $.Values.services.lineage.deliveriesInFlight | quote }} }
-    {{- end }}
-    {{- if eq .appId "notifications" }}
-    - { name: protectedTopics, value: "{{ $.Values.pubsub.topic }}" }
-    - { name: publishingScopes, value: "{{ .appId }}=dlq.{{ .appId }}" }
-    - { name: subscriptionScopes, value: "{{ .appId }}=dlq.{{ .appId }},{{ $.Values.pubsub.topic }}" }
     {{- end }}
     - { name: durableName, value: "{{ .appId }}-durable" }
 

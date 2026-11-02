@@ -136,7 +136,7 @@ ternary (NOT `| default`, which treats false as empty) so a key missing under
 ## `- { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_control_outbox" }`
 
 #4 transactional outbox on the CONTROL lane + the cron that RELAYS it. A control event lost
-to a NATS blip (a grant, a `table_published`) reaches nobody — not the notifications control
+to a NATS blip (a grant, a `table_published`) reaches nobody — not a notifier on the control
 lane, not any replica's GET /management/v1/events buffer — with every pod green. Staged here, re-published by
 `catalog/api/control_relay.py` on the schedule in catalog-control-relay-cron.yaml.
 

@@ -25,7 +25,6 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, ServiceUnavailableError, TransactionNotFoundError, UnauthenticatedError, UnsupportedOperationError
 
 from lakehouse_kit import outbox
-from lakehouse_kit.openlineage import dataset_uuids
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, Governed, enforce_bus_authz, enforce_output_authz, governed, governed_refs, require_estate_admin
 from lineage.api.security import CurrentToken
@@ -37,6 +36,7 @@ from lineage.services.consumer import RETRY, handle_cloud_event
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 from service_kit.governed import audit, fga
 from service_kit.governed.audit import AuditAction, AuditOutcome
+from service_kit.lineage_events import dataset_uuids
 
 
 log = logging.getLogger(__name__)

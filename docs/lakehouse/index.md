@@ -6,7 +6,7 @@ description: "Index of rask's lakehouse documentation: the catalog, tier governa
 # Lakehouse platform
 
 The lakehouse is the catalog (Lance Namespace REST over Lance tables), the bronze → silver → gold tier governance in
-its write path, lineage, authorization, notifications and maintenance. Compute, ingest and orchestration are the
+its write path, lineage, authorization, maintenance and the events they emit. Compute, ingest and orchestration are the
 user's ([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md),
 [ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)). The rulings behind it are the
 [decision records](../adr/README.md).

@@ -71,7 +71,7 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
     config_map = next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == subjects_ref["name"])
     admitted = set(config_map["data"][subjects_ref["key"]].split(","))
     writers = {f"system:serviceaccount:default:rask-sa-{w}" for w in _WRITERS}
-    seeded = json.loads(next(env_of(c)["FGA_DECISION_ROLES"] for w, _n, c in containers(docs) if w == "Job/rask-bootstrap-admin"))
+    seeded = json.loads(next(env_of(c)["FGA_ESTATE_ROLES"] for w, _n, c in containers(docs) if w == "Job/rask-bootstrap-admin"))
     reaching = next(d for d in docs if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"] == "rask-openfga")["spec"]["ingress"][0]["from"]
     reachers = {v for peer in reaching for e in peer["podSelector"]["matchExpressions"] for v in e["values"]}
 
@@ -104,6 +104,6 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
     assert admitted == openfga_clients == writers, (
         f"OpenFGA admits {sorted(admitted)}; its clients are {sorted(openfga_clients)}; the writers are {sorted(writers)}"
     )
-    assert len(deciders) >= 2 and set(deciders) == set(seeded), f"deciders {sorted(deciders)} vs the roles bootstrap seeds {sorted(seeded)}"
+    assert deciders and set(deciders) == set(seeded), f"deciders {sorted(deciders)} vs the roles bootstrap seeds {sorted(seeded)}"
     assert all("decider" in roles for roles in seeded.values()), seeded
     assert reachers == {"catalog", "maintenance", "bootstrap-admin", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"

@@ -19,11 +19,11 @@ from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse_kit.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
-from lakehouse_kit.signature_doors import SignatureDoorSettings
 from lakehouse_kit.store_session import WebIdentity, held_session
 from service_kit.governed.principal import PrincipalKey
 from service_kit.governed.settings import GovernedAuthSettings
 from service_kit.governed.store_credential import S3KeyPair
+from service_kit.signature_doors import SignatureDoorSettings
 from service_kit.storage_options import StorageOptions
 
 

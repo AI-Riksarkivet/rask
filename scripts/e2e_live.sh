@@ -70,11 +70,8 @@ FGA="$(svc "$RELEASE-openfga")"      || true
 # The telemetry store is the platform's; on a dev estate, the observability fixture's (deploy/fixtures/observability).
 GREPTIME="$(svc greptimedb observability)" || true
 MAINT="$(svc "$RELEASE-maintenance")" || true
-NOTIFICATIONS="$(svc "$RELEASE-notifications")" || true
 # The annotator's own release beside rask (deploy/fixtures/annotator), when it is installed.
 ANNOTATOR="$(svc "$RELEASE-annotator")" || true
-# The notifications service mounts its routers under the fleet's API prefix, read from the release's own config.
-API_PREFIX="$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}' 2>/dev/null || true)"
 # THE BUS THE RELEASE'S PUB/SUB COMPONENTS DIAL (`nats.url`), read off one of them and resolved to that Service's
 # ClusterIP like every address above: the NATS fixture's `rask-nats` on a dev estate. A bus that is no Service in this
 # cluster resolves to nothing, and the suites that read the bus skip.
@@ -139,7 +136,6 @@ url LANCE_E2E_DEX             "$DEX" /dex
 url LANCE_E2E_FGA             "$FGA"
 url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
 url LANCE_E2E_MAINTENANCE_URL "$MAINT"
-url LANCE_E2E_NOTIFICATIONS_URL "$NOTIFICATIONS" "$API_PREFIX"
 url LANCE_E2E_ANNOTATOR_URL   "$ANNOTATOR"
 if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing="$_missing LANCE_E2E_NATS_URL"; fi
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
@@ -341,45 +337,6 @@ if [ -n "$CATALOG" ] && [ -n "$ALICE" ] && [ -n "$BOB" ]; then
     printf '   note: could not provision tenant B (HTTP %s) — the 5 credential-isolation legs will SKIP\n' "${B_CODE:-?}"
   fi
 fi
-
-# ---- settle gate -------------------------------------------------------------------------------
-# A SETTLING ESTATE AND A BROKEN ONE LOOKED IDENTICAL, and that is the whole reason this exists. The
-# suites assert on what bus subscribers did — and after a rollout a subscriber's sidecar takes time to
-# re-register its subscriptions. A suite that starts inside that window publishes to a topic nobody is
-# listening on yet and reports a failure, so a green run needed a second drive and the first one taught
-# nothing.
-#
-# THE PROBE IS THE SIDECAR'S OWN ANSWER, not a sleep: `/v1.0/metadata` reports the subscriptions the
-# runtime has actually registered plus `actorRuntime.hostReady` (notifications hosts the inbox actors). A
-# fixed sleep would be both slower on a settled estate and still wrong on a slow one.
-#
-# It FAILS rather than warns: proceeding into a suite that cannot pass produces a red run whose cause
-# is the clock, and this script's whole job is to make a red run mean something.
-settle_deadline=$(( $(date +%s) + ${LANCE_E2E_SETTLE_SECONDS:-120} ))
-step "3.5/4 waiting for the subscribers' subscriptions to re-register"
-for dep in notifications; do
-  # ROLLOUT FIRST, THEN THE SIDECAR — and that order is the fix for a hole this gate had when it was
-  # first driven. Mid-rollout `kubectl exec deploy/<name>` may land on the OLD pod, which is still
-  # serving and still settled, so the probe answered "ready" 1 second after a restart while the NEW
-  # pod had not registered anything. Waiting for the deployment to converge first means the pod the
-  # probe reaches is the pod the suite will actually be talking to.
-  kubectl rollout status "deploy/$RELEASE-$dep" --timeout="${LANCE_E2E_SETTLE_SECONDS:-120}s" >/dev/null 2>&1 \
-    || fail "$dep did not finish rolling out within ${LANCE_E2E_SETTLE_SECONDS:-120}s"
-  while :; do
-    if kubectl exec "deploy/$RELEASE-$dep" -- python -c '
-import json, sys, urllib.request
-m = json.load(urllib.request.urlopen("http://127.0.0.1:3500/v1.0/metadata", timeout=5))
-topics = {s.get("topic") for s in (m.get("subscriptions") or [])}
-ready = (m.get("actorRuntime") or {}).get("hostReady")
-sys.exit(0 if topics and ready else 1)
-' >/dev/null 2>&1; then
-      printf '   ok   %s
-' "$dep"; break
-    fi
-    [ "$(date +%s)" -lt "$settle_deadline" ] || fail "$dep has not re-registered its subscriptions within ${LANCE_E2E_SETTLE_SECONDS:-120}s — the estate is not settled, and running now would report the clock as a defect"
-    sleep 3
-  done
-done
 
 step "4/4 running the suites against the live estate"
 # `-m e2e` and NOT a file list: the marker is what the suites declare about themselves, so a new suite

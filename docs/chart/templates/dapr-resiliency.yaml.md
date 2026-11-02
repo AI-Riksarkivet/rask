@@ -10,10 +10,11 @@ broker backOff — see values.yaml dapr.resiliency): the SIDECAR owns pub/sub de
 delivery that exhausts this schedule is published to the subscription's dead-letter topic (visible,
 ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
 
-This object governs pub/sub delivery alone. Service invocation has its own object below
-(`<release>-invocation-resiliency`), because Dapr applies invocation resiliency on the CALLING sidecar
-and that object is scoped to the one caller there is. Public traffic reaches each service through the
-cluster route (route.yaml), which involves no sidecar, so no policy can or needs to see it.
+This object governs pub/sub delivery alone, and the chart renders no service-invocation policy: no service in this
+release calls another through Dapr's service invocation. Dapr applies an invocation policy on the CALLING sidecar, so a
+client that reads a lakehouse door through its own sidecar (the notifications inbox reads lineage's feed through
+`/v1.0/invoke/lineage/method`) scopes its policy to its own app-id, in its own release. Public traffic reaches each
+service through the cluster route (route.yaml), which involves no sidecar, so no policy can or needs to see it.
 
 THE POLICY IS `constant` BECAUSE IT IS THE ONLY ONE THAT CAN HOLD A WINDOW. dapr/kit's NewBackOff
 reads `Duration` under PolicyConstant alone (`b = backoff.NewConstantBackOff(c.Duration)`); under
@@ -48,56 +49,16 @@ warning while a GitOps reconciler parks the whole Application OutOfSync on it. `
 is omitted deliberately: it is read only under `exponential`, so carrying it here would be a
 value that looks like a bound and bounds nothing.
 
-## `{{- $subscribers = append $subscribers (dict "appId" "notifications") }}`
-
-The inbox subscription, registered in the SAME act that mints its component. Both halves of the
-omission are silent and they point opposite ways: unregistered, an app-returned RETRY falls back to
-the broker's crash-recovery schedule with no dead-lettering at all; dead-lettering turned on WITHOUT
-this line, the FIRST transient failure parks the message — the publication head's defect, measured
-and fixed this session. `IngressSettings.dlq_topic` therefore ships empty, and enabling it is an act
-that presupposes this line.
-
 ## `{{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}`
 
 MAINTENANCE's write-event subscription. Added here under the SAME condition dapr-component.yaml uses
 to create it, so the two lists cannot disagree about whether the lane exists. It also puts the app-id
 into `scopes:` below, which is the half a component-only entry would silently miss.
 
-## `{{- if .Values.services.notifications }}`
-
-The NOTIFICATION plane's control-topic subscriber (v3 targeting), which `$subscribers` misses
-because `lance.subPubsub` renders the LINEAGE-topic
-component name, and this subscription rides the control one. `notifications` is already in
-`$subscribers`, so `scopes:` below covers the app — it is only the second COMPONENT target that
-has to be named, which is the shape that makes this class of omission invisible.
-
-Rendered under the same condition as the Component itself (dapr-component.yaml), from the same
-expression, so a rename of `pubsub.controlName` cannot leave the policy pointing at a component
-that is gone. Gated by tests/unit/test_invariants.py's durable-component sweep, which is what
-caught this one before it shipped.
-
 ## `{{- if .Values.catalog.controlEmit }}`
 
-The catalog's own broadcast subscriber, which `$subscribers` misses for the reason the notifications control target
-above gives: it rides the control component, not a `lance.subPubsub` one. Its subscription names a dead-letter topic
+The catalog's own broadcast subscriber, which `$subscribers` misses because `lance.subPubsub` renders the LINEAGE-topic
+component name and this subscription rides the control one. Its subscription names a dead-letter topic
 (`LANCE_CONTROL_DLQ_TOPIC`, rendered under `dapr.resiliency.enabled`), so without this target the first transient failure
 would park the event ([[LH-559]]). Rendered under the condition that renders the component and its subscription, and the
 catalog's app-id joins `scopes:` under it.
-
-## `{{- if or $notifications.frontDoor .Values.singleTenant.enabled }}` — `<release>-invocation-resiliency`
-
-The service-invocation policy, rendered only when notifications renders, because notifications is the
-only service-invocation caller in the estate: its reconciler reads lineage's durable feed through
-`/v1.0/invoke/lineage/method` (`IngressSettings.feed_base_url`). Dapr applies an invocation policy on
-the CALLING sidecar, so `scopes: [notifications]` is what makes it apply at all; a policy scoped to any
-other app-id governs nothing on this hop. Pinned by
-`tests/unit/test_invariants.py::test_the_notifications_pod_asks_for_a_sidecar_and_is_allowed_to_receive_one`.
-
-`invokeRetry` is `constant` 2 s, three retries, matching `408,429,500-599`: never a 4xx, because a 403's
-answer will not change, and a missing `event_reader` grant is a 403 on every tick that no retry can fix.
-`invokeTimeout` is 300 s. The only target is app `lineage`. No policy targets the catalog: no service
-invokes it through Dapr, so its write doors are replayed only by their own callers (see
-`lakehouse_kit.idempotency`).
-
-A pass that exhausts the retries leaves the reconciler's cursor where it was (it advances only on a pass
-that completes), so the next cron tick re-walks it.

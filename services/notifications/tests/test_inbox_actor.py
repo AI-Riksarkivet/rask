@@ -17,7 +17,6 @@ from typing import Any, cast
 import pytest
 from dapr.actor import ActorId
 
-from lakehouse_kit.control_events import CatalogControlEvent
 from notifications.api.control_events import ingest_control_event
 from notifications.config import get_notifications_settings
 from notifications.errors import InboxUnreadable
@@ -26,6 +25,7 @@ from notifications.inbox_actor import COMPACTION_REMINDER, DIGEST_KEY, DIGEST_RE
 from notifications.models import InboxMeta, InboxRows, InboxWatches, NotificationReason, notification_id
 from notifications.proxies import inbox_actor_id
 from notifications.watch_actor import WatchIndexActor
+from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga
 
 

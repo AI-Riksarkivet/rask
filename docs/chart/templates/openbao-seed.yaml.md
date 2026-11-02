@@ -138,14 +138,6 @@ the Service, else minted.
 
 LH-497: the key the catalog derives every announcement's run id under, which only the catalog reads (`lance.storeReads`). Carried from the store behind the Service when a pod replaces this one, like a signing pair, because it is never rotated: an id derived under a new key would announce every commit still unconfirmed a second time. Minted as 32 random bytes of hex only when no store serves one. A platform store's operator provisions `commit-id-key` itself; the catalog is not Ready until it reads one.
 
-## `m="$HOME/seed/{{ .secretName }}"`
-
-THE EMAIL CHANNEL'S SMTP CREDENTIAL ([[CTL-30]]), seeded only while `services.notifications.channels.email` is on,
-under the same create-if-absent rule as the Collector's. The `notifications-email` Component resolves its `user` and
-`password` in the notifications sidecar, whose store policy names it through `lance.storeReads`. The dev relay
-(the `mailpit` fixture) asks for no authentication, so the dev pair is one only the store holds; a platform's relay
-gets the pair its operator puts in the platform's store.
-
 ## `bao auth enable -path={{ $.Values.externalSecrets.kubernetesAuthPath }} kubernetes 2>/dev/null || echo "kub...`
 
 THE STORE'S KUBERNETES AUTH, which every identity that reads it logs in through: ESO's SecretStore, as the role

@@ -3,11 +3,6 @@
 {{- if .Values.age.enabled }}
 {{- $components = append $components "age" }}
 {{- end }}
-{{- range $name, $_ := .Values.services }}
-{{- if not (has $name $components) }}
-{{- $components = append $components $name }}
-{{- end }}
-{{- end }}
 {{- range $c := $components }}
 ---
 apiVersion: v1

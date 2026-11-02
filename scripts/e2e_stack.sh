@@ -127,7 +127,7 @@ helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 # is the render's and a new service joins it by existing. `$HELM_SET` is the SAME array the upgrade
 # below uses, so the set built and the set deployed cannot disagree.
 # EXTRACTED BY PARSING THE RENDER, not by matching its text: every chart call site passes
-# `rask.image` through `quote`, so a reference arrives here as `image: "notifications:dev"` and a filter
+# `rask.image` through `quote`, so a reference arrives here as `image: "lance-rest-catalog:dev"` and a filter
 # anchored on the unquoted scalar matches none of them. `scripts/side_loaded_images.py` is that
 # parse, shared with the gate that pins it, and it emits the dockerfile stem beside each image so
 # this loop needs to know neither rule. `--tag` comes from $CATALOG_IMG so one variable decides the
@@ -284,7 +284,7 @@ JOB_LOGS="$(mktemp)"
 # Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt
 # same-tag image only lands on a freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded
 # digest from the node cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha).
-for d in catalog lineage maintenance notifications; do
+for d in catalog lineage maintenance; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done
@@ -296,19 +296,6 @@ kubectl rollout status deploy/"$RELEASE"-openfga --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-catalog --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-lineage --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-maintenance --timeout=300s
-kubectl rollout status deploy/"$RELEASE"-notifications --timeout=300s
-# A ROLLED-OUT SUBSCRIBER IS NOT YET A LISTENING ONE: its sidecar registers its subscriptions and the inbox actors'
-# host after the pod is Ready, and the inbox suite needs both. The sidecar's own `/v1.0/metadata` says when, as
-# scripts/e2e_live.sh's settle gate reads it.
-for i in $(seq 1 60); do
-  kubectl exec "deploy/$RELEASE-notifications" -c notifications -- python -c '
-import json, sys, urllib.request
-m = json.load(urllib.request.urlopen("http://127.0.0.1:3500/v1.0/metadata", timeout=5))
-sys.exit(0 if {s.get("topic") for s in (m.get("subscriptions") or [])} and (m.get("actorRuntime") or {}).get("hostReady") else 1)
-' >/dev/null 2>&1 && { echo "   notifications' sidecar subscribed and hosting its actors"; break; }
-  [ "$i" = "60" ] && { echo "!! notifications' sidecar never registered its subscriptions and actors"; exit 1; }
-  sleep 3
-done
 
 # Every running container of a side-loaded image must serve the archive this run built — the definitive proof the whole
 # suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). A container's `imageID`
@@ -367,7 +354,6 @@ forward "$RELEASE-maintenance" 18001:8000 /tmp/pf-mnt.log
 forward "$RELEASE-rustfs" 9900:9000 /tmp/pf-rfs.log
 forward "$RELEASE-dex" 5556:5556 /tmp/pf-dex.log
 forward "$RELEASE-openfga" 8081:8080 /tmp/pf-fga.log
-forward "$RELEASE-notifications" 8850:8850 /tmp/pf-not.log
 # The bus `nats.url` names (stack_values.sh): criterion 4's module reads its streams and publishes on it.
 forward rask-nats 4222:4222 /tmp/pf-nats.log
 for i in $(seq 1 40); do
@@ -550,9 +536,7 @@ export LANCE_E2E_BASE_B="$BASE_B"
 export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
 export LANCE_E2E_CONTROL_OUTBOX_URI="s3://lance-catalog/_control_outbox"
 export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
-# The bring-your-own scenario and criterion 4's module: the notifications service under the release's API prefix, the
-# bus, and the release whose ServiceAccounts sign.
-export LANCE_E2E_NOTIFICATIONS_URL="http://localhost:8850$(kubectl get cm "$RELEASE-config" -o jsonpath='{.data.RASK_API_PREFIX}')"
+# Phase 1's criteria: the bus they read and publish on, and the release whose ServiceAccounts sign.
 export LANCE_E2E_NATS_URL=nats://localhost:4222
 export LANCE_E2E_RELEASE="$RELEASE"
 # Criterion 2's service identity: the lineage service's account, for the audience the catalog's own door checks.

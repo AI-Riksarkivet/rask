@@ -15,7 +15,7 @@ import pytest
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse_kit.signature_doors import SignatureDoorSettings
+from service_kit.signature_doors import SignatureDoorSettings
 
 
 class _Door(SignatureDoorSettings, BaseSettings):

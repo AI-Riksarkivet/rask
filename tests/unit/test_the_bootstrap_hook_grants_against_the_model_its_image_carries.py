@@ -14,6 +14,7 @@ moved under ``tmp_path``.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from typing import Any
 
 import pytest
 
+from service_kit.governed.fga import user_object
 from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
 from tests.unit.openfga_stub import BY_NAME, CARRYING, PINNED, STORE, Recorded, openfga
 
@@ -54,3 +56,33 @@ def test_every_tuple_request_names_the_model_the_image_carries(stores: list[dict
     )
     assert done.returncode == 0, f"the hook exited {done.returncode}:\n{done.stdout}{done.stderr}"
     assert any(obj == "estate:rask" for _, _, obj in recorded.written), "no estate grant reached the store"
+
+
+def test_a_machine_role_the_release_no_longer_declares_is_revoked(openfga_store: Any, tmp_path: Path) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """An account the release stops naming in `auth.externalDeciders` keeps no estate role after the next upgrade (XC-188).
+
+    Run against the pinned OpenFGA: before the hook, the store holds a departed client's three machine roles and a person's
+    `admin`; after it, exactly the roles the render declares and the person's rung, which the hook never reads.
+    """
+    job = next(c for workload, _, c in containers(render(*DEFAULT_ARGS)) if workload.endswith("-bootstrap-admin"))
+    token = tmp_path / env_of(job)["RASK_FGA_TOKEN_FILE"].lstrip("/")
+    token.parent.mkdir(parents=True)
+    token.write_text("projected-sa-jobs-token\n")
+    departed = user_object("kubernetes~system:serviceaccount:default:rask-sa-a-notifier")
+    person = user_object("dex~alice")
+    openfga_store.write(*((departed, role, "estate:rask") for role in ("decider", "member_expander", "event_reader")), (person, "admin", "estate:rask"))
+
+    done = _run(
+        job,
+        {
+            "PATH": os.environ["PATH"],
+            **env_of(job),
+            "FGA_API_URL": openfga_store.url,
+            "RASK_FGA_STORE_ID": openfga_store.store_id,
+            "RASK_FGA_TOKEN_FILE": str(token),
+        },
+    )
+
+    declared = {(user_object(account), role) for account, roles in json.loads(env_of(job)["FGA_ESTATE_ROLES"]).items() for role in roles}
+    assert done.returncode == 0, f"the hook exited {done.returncode}:\n{done.stdout}{done.stderr}"
+    assert {(user, relation) for user, relation, obj in openfga_store.tuples() if obj == "estate:rask"} == declared | {(person, "admin")}

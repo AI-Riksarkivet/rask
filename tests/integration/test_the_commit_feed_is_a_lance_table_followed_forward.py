@@ -33,7 +33,7 @@ from fastapi.testclient import TestClient
 from lance.optimize import Compaction
 
 from lakehouse_kit import base_refs, maintenance_due
-from lakehouse_kit.openlineage import DatasetUuids, with_dataset_uuids
+from service_kit.lineage_events import DatasetUuids, with_dataset_uuids
 from tests.integration.lineage_app import SUBJECT_HEADER, free_port, governed_lineage, live_catalog, live_lineage, run_event
 
 

@@ -34,7 +34,6 @@ from typing import Any, cast
 import pytest
 from lance_namespace import PermissionDeniedError
 
-from lakehouse_kit.openlineage import DatasetUuids, with_dataset_uuids
 from lineage.api.fga_deps import Governed, enforce_output_authz, is_external_source
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, Job, Run, RunEvent
@@ -42,6 +41,7 @@ from lineage.schemas import EventRecord
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.lineage_events import DatasetUuids, with_dataset_uuids
 
 
 GOVERNED = "bind86-bronze$pages"
@@ -234,8 +234,7 @@ def test_the_discriminator_is_a_URI_SCHEME_OR_A_DECLARED_NAMESPACE(namespace: st
 # column keeps `[d.name for d in event.inputs]` — the NAMESPACE is discarded — so by the time `GET /events`
 # governs a row it has only bare names, and `is_external_source` needs the namespace. Every event with
 # an external input is therefore governed against `table:<bare name>`, which nobody holds a grant on,
-# and the whole row is hidden from EVERY caller. Not just from notifications: the lakehouse events
-# board reads the same feed.
+# and the whole row is hidden from EVERY caller of the feed, whichever client it is.
 #
 # The namespace is not actually lost — the full event payload is stored alongside, and
 # `_column_lineage_datasets` already reads it for exactly this kind of question.

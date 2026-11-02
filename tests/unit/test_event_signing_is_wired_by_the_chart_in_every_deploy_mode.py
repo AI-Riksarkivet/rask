@@ -69,16 +69,16 @@ def _lineage_env(docs: tuple[dict, ...]) -> dict[str, str]:
     return chart_render.env_of(lineage["spec"]["template"]["spec"]["containers"][0])
 
 
-#: The apps that host a signature door, and whether one of their doors takes control events: notifications' /lineage-events
-#: and /control-events, maintenance's /maintenance-arrival, which `register_arrival_route` registers while
-#: MAINTENANCE_ARRIVAL_ENABLED is true, and the catalog's own /control-events, its subscription to the broadcast it
-#: publishes, while LANCE_CONTROL_EMIT_ENABLED is true ([[CTL-32]]).
-_DOOR_APPS = {"notifications:app": True, "maintenance.service:app": False, "catalog.main:app": True}
+#: The apps that host a signature door, and whether one of their doors takes control events: maintenance's
+#: /maintenance-arrival, which `register_arrival_route` registers while MAINTENANCE_ARRIVAL_ENABLED is true, and the
+#: catalog's own /control-events, its subscription to the broadcast it publishes, while LANCE_CONTROL_EMIT_ENABLED is true
+#: ([[CTL-32]]).
+_DOOR_APPS = {"maintenance.service:app": False, "catalog.main:app": True}
 #: The env switch a door's registration waits on, for the apps whose door is conditional.
 _DOOR_SWITCH = {"maintenance.service:app": "MAINTENANCE_ARRIVAL_ENABLED", "catalog.main:app": "LANCE_CONTROL_EMIT_ENABLED"}
 _DOOR_ENV = ("RASK_SIGNATURE_DOORS", "RASK_EVENT_SIGNERS", "RASK_EVENT_DELEGATORS", "RASK_CONTROL_SIGNER_ROLES")
 #: The door hosts each case names, so a values change that stops rendering one fails the case rather than shrinking it.
-_CONTROL_HOSTS = frozenset({"Deployment/rask-notifications", "Deployment/rask-catalog"})
+_CONTROL_HOSTS = frozenset({"Deployment/rask-catalog"})
 _ALL_HOSTS = _CONTROL_HOSTS | {"Deployment/rask-maintenance"}
 
 
@@ -178,7 +178,7 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
 
     hosts = _door_hosts(docs)
     assert hosts.keys() == door_hosts, f"the pods whose app hosts a door are not the ones this case names: {sorted(hosts)}"
-    # Each service that emits control events (lakehouse_kit.control_events.ControlSigner), mapped to the identities its pods sign as.
+    # Each service that emits control events (service_kit.control_events.ControlSigner), mapped to the identities its pods sign as.
     roles = {
         "catalog": _identities_running(docs, "catalog.main:app"),
         "maintenance": _identities_running(docs, "maintenance.service:app"),
@@ -220,7 +220,7 @@ def test_a_configuration_is_renamed_when_and_only_when_its_spec_changes_so_a_pod
     probe = ("--set", "services.lineage.forward.authSecret.name=probe-forward-auth")
     after = _loaded_configurations(chart_render.render(*DEFAULT_ARGS, *probe))
 
-    assert before.keys() == after.keys() and len(before) >= 4, f"the pods that name a Configuration are {sorted(before)}"
+    assert before.keys() == after.keys() and len(before) >= 3, f"the pods that name a Configuration are {sorted(before)}"
     edited = {pod for pod in before if before[pod][1] != after[pod][1]}
     renamed = {pod for pod in before if before[pod][0] != after[pod][0]}
     # The forwarder's credential is denied in every per-app Configuration but lineage's, which reads it.
@@ -258,7 +258,7 @@ def test_a_pubsub_component_edit_rolls_exactly_the_pods_whose_app_it_scopes() ->
     before = _loaded_pubsub(chart_render.render(*DEFAULT_ARGS))
     after = _loaded_pubsub(chart_render.render(*DEFAULT_ARGS, "--set", "services.lineage.deliveriesInFlight=32"))
 
-    assert before.keys() == after.keys() and len(before) >= 4, f"the Dapr pods are {sorted(before)}"
+    assert before.keys() == after.keys() and len(before) >= 3, f"the Dapr pods are {sorted(before)}"
     edited = {pod for pod in before if before[pod][1] != after[pod][1]}
     rolled = {pod for pod in before if before[pod][0] != after[pod][0]}
     assert edited and edited != before.keys(), (

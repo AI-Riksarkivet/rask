@@ -107,24 +107,11 @@ tests:
   #     the door is registered, then ONE refusal at 5m: a series born at 1 shows `rate()` no increase and never fires.
   - interval: 1m
     input_series:
-      - series: 'notifications_signature_refused_total{lance_notifications_door="control-events", lance_notifications_reason="signer"}'
-        values: "0x4 1x10"
       - series: 'maintenance_signature_refused_total{door="maintenance-arrival", reason="kid"}'
         values: "0x4 1x10"
       - series: 'catalog_signature_refused_total{lance_catalog_reason="unsigned"}'
         values: "0x4 1x10"
     alert_rule_test:
-      - eval_time: 8m
-        alertname: NotificationsDoorRefusingEvents
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              service: notifications
-              lance_notifications_door: control-events
-              lance_notifications_reason: signer
-            exp_annotations:
-              summary: "Notifications is REFUSING bus events (control-events, signer) — nobody is told"
-              description: "An event its emitter's signature does not verify was ACKED and told nobody, so only this alert and the `notifications_signature_refused` log line record it. Forged events are reaching the bus, or a signer broke and the people its events name are no longer told. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
       - eval_time: 8m
         alertname: MaintenanceArrivalRefusingEvents
         exp_alerts:
@@ -187,7 +174,7 @@ tests:
   #    (app_id) keeps app_id on the resulting alert, so it names the wedged subscriber.
   - interval: 1m
     input_series:
-      - series: 'dapr_component_pubsub_ingress_count_total{process_status="retry",app_id="notifications"}'
+      - series: 'dapr_component_pubsub_ingress_count_total{process_status="retry",app_id="lineage"}'
         values: "0+1x20" # a retried delivery every scrape — the handler never succeeds
     alert_rule_test:
       - eval_time: 16m
@@ -196,7 +183,7 @@ tests:
           - exp_labels:
               severity: critical
               service: dapr
-              app_id: notifications
+              app_id: lineage
             exp_annotations:
               summary: "Dapr consumer wedged — a subscriber is retrying inbound messages for 15m"
               description: "A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound deliveries for 15m without clearing, so this consumer is not draining its subscription and the cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
@@ -206,7 +193,7 @@ tests:
   #    too, so it would have false-paged here; process_status=retry stays absent on the happy path.
   - interval: 1m
     input_series:
-      - series: 'dapr_component_pubsub_ingress_count_total{process_status="success",app_id="notifications"}'
+      - series: 'dapr_component_pubsub_ingress_count_total{process_status="success",app_id="lineage"}'
         values: "0+5x20" # heavy healthy throughput — five successful deliveries per scrape, no retries
     alert_rule_test:
       - eval_time: 16m
@@ -217,7 +204,7 @@ tests:
   #    retries that never stop). The retry counter stops rising after ~4 min, so rate() falls back to 0.
   - interval: 1m
     input_series:
-      - series: 'dapr_component_pubsub_ingress_count_total{process_status="retry",app_id="notifications"}'
+      - series: 'dapr_component_pubsub_ingress_count_total{process_status="retry",app_id="lineage"}'
         values: "0 1 2 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4" # retried only in the first ~4 min, then recovered
     alert_rule_test:
       - eval_time: 16m
@@ -266,125 +253,6 @@ tests:
               summary: "Maintenance dead-lettered write events (lineage.events.v1) — their tables wait for the sweep"
               description: "The write-event lane's sidecar exhausted its retry schedule and parked a write on dlq.maintenance.arrival, so the table's versions were not expired and its due record not refreshed on arrival; the sweep re-finds it on its next pass. The park is kept on the DLQ stream. A lane that parks every delivery cannot read a manifest, the policy registry or the dataset: read maintenance's logs for the failing evaluation. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
-  # ── the notification plane (S6) ────────────────────────────────────────────────────────────────
-  # Each of the three rules gets a FIRING case and a QUIET case. The quiet cases are the ones worth
-  # having: a rule that only ever fires is a rule nobody can distinguish from a broken one.
-
-  # 10. Sustained dead-lettering → ALERT. A park means the sidecar's whole retry schedule was
-  #     exhausted, so the notification is late (kept and re-driven, or offered again by the feed walk).
-  - interval: 1m
-    input_series:
-      - series: 'notifications_dlq_parked_total{app="notifications"}'
-        values: "0+1x20" # one park per minute, continuously
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: NotificationsDeadLettering
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: notifications
-            exp_annotations:
-              summary: "Notifications are dead-lettering — deliveries are being parked, not retried"
-              description: "The notifications service has parked messages on dlq.notifications for 10m: the sidecar's full retry schedule was exhausted. A parked governance notification is kept and offered again on every reconcile tick, and a run notification is offered again by the walk of lineage's feed unless its row keeps stalling, so each arrives late if at all. Check the inbox actor plane (lance-statestore reachable? actors registered?) and OpenFGA. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-
-  # 11. A plane that has NEVER parked anything → NO alert. The counter sits flat at zero, which is the
-  #     ordinary state and must never page.
-  - interval: 1m
-    input_series:
-      - series: 'notifications_dlq_parked_total{app="notifications"}'
-        values: "0x20"
-    alert_rule_test:
-      - eval_time: 15m
-        alertname: NotificationsDeadLettering
-        exp_alerts: []
-
-  # 11b. A parked control event retired undelivered → ALERT on the first one: a person was never told.
-  - interval: 1m
-    input_series:
-      - series: 'notifications_control_parks_total{lance_notifications_outcome="expired"}'
-        values: "0 0 1 1 1" # created at 0 when the routes are registered, so the first loss is an increase
-      - series: 'notifications_control_parks_total{lance_notifications_outcome="delivered"}'
-        values: "0 3 6 9 12"
-    alert_rule_test:
-      - eval_time: 3m
-        alertname: NotificationsControlNotificationLost
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: notifications
-            exp_annotations:
-              summary: "A governance notification was lost — a parked control event was retired undelivered"
-              description: "A dead-lettered control event (a grant, a revoke or an erasure release) was retired without reaching its person: it stayed undeliverable for the dead-letter stream's 168h retention. The ERROR log control_park_expired names it by event_id. Find why its inbox kept refusing (lance-statestore, actors, an unreadable inbox record). Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-
-  # 11c. Parks that are re-driven and delivered → NO alert: late, not lost.
-  - interval: 1m
-    input_series:
-      - series: 'notifications_control_parks_total{lance_notifications_outcome="expired"}'
-        values: "0x5"
-      - series: 'notifications_control_parks_total{lance_notifications_outcome="delivered"}'
-        values: "0 3 6 9 12"
-    alert_rule_test:
-      - eval_time: 3m
-        alertname: NotificationsControlNotificationLost
-        exp_alerts: []
-
-  # 12. A turn queue that keeps growing → ALERT. Something inside the turn is slow, and every call for
-  #     that subject is behind it.
-  - interval: 1m
-    input_series:
-      - series: 'dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor",app_id="notifications"}'
-        values: "0 4 9 12 15 18 20 22 24 26"
-    alert_rule_test:
-      - eval_time: 9m
-        alertname: InboxActorTurnQueueBacklog
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: notifications
-            exp_annotations:
-              summary: "InboxActor turn queue is backing up — one subject's notifications are serializing"
-              description: "More than 10 calls are queued against a single InboxActor for 2m. Turn-based concurrency means they run one at a time, so something inside a turn is slow — most likely a channel send (the SMTP relay) or an unhealthy state store. Notifications for that subject are delayed, not lost. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-
-  # 13. A BURST that drains → NO alert. A busy inbox briefly queues; the `for: 2m` is what separates a
-  #     burst from a backlog, and this is the case that would false-page without it.
-  - interval: 1m
-    input_series:
-      - series: 'dapr_runtime_actor_pending_actor_calls{actor_type="InboxActor",app_id="notifications"}'
-        values: "0 18 22 3 0 0 0 0 0 0"
-    alert_rule_test:
-      - eval_time: 9m
-        alertname: InboxActorTurnQueueBacklog
-        exp_alerts: []
-
-  # 14. The feed lane processing NOTHING for 30m → ALERT. This is the silent one: an ungranted or
-  #     unadmitted reconciler is refused on every page, with a Ready pod throughout.
-  - interval: 1m
-    input_series:
-      - series: 'notifications_ingress_events_total{lance_notifications_lane="feed",app="notifications"}'
-        values: "5x45" # flat — the counter never moves, so rate() is exactly zero
-    alert_rule_test:
-      - eval_time: 40m
-        alertname: NotificationsReconcilerStalled
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: notifications
-            exp_annotations:
-              summary: "The notifications feed reconciler has processed nothing for 30m"
-              description: "The feed lane has ingested no events for 30m. On an idle estate that is correct; on a busy one it means the reconciler is running and seeing nothing — check that its projected rask-lineage token verifies against lineage's RASK_SA_ISSUER AND that its service-account subject (kubernetes~system:serviceaccount:<ns>:<release>-sa-notifications) holds event_reader on the estate root; missing either, every feed page answers 401 or 403. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-
-  # 15. A reconciler that IS reconciling → NO alert, even at a slow trickle. One event every ten
-  #     minutes is enough to prove the lane is alive, and the rule must not page on a quiet estate that
-  #     is nonetheless working.
-  - interval: 1m
-    input_series:
-      - series: 'notifications_ingress_events_total{lance_notifications_lane="feed",app="notifications"}'
-        values: "0+1x45"
-    alert_rule_test:
-      - eval_time: 40m
-        alertname: NotificationsReconcilerStalled
-        exp_alerts: []
-
   # 11. Dapr scheduler serving ZERO sidecars for 6 min → DaprSchedulerServingNoSidecars fires (5m `for`).
   #     Reminders live in the scheduler's etcd since Dapr 1.15, so zero connected sidecars means NO
   #     reminder can fire for any actor — and the symptom is silence, never an error.
@@ -403,8 +271,8 @@ tests:
               summary: "The Dapr scheduler is serving ZERO sidecars — no actor reminder can fire"
               description: >-
                 Reminders live in the scheduler's etcd (Dapr >= 1.15), so with no sidecars connected every
-                reminder-bounded behaviour silently stops: the annotator's lease reminder never expires, the
-                publish watchdog never re-drives, the InboxActor never compacts. Nothing errors — work just
+                reminder-bounded behaviour silently stops: the annotator's lease reminder never expires and the
+                publish watchdog never re-drives. Nothing errors — work just
                 stops. Check `kubectl get pods -l app=dapr-scheduler-server` and the etcd PVCs; a rollback or
                 PVC loss here is not recoverable from the state store, which holds no copy of the reminders.
                 Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
@@ -918,31 +786,6 @@ tests:
         alertname: WorkflowEngineWedged
         exp_alerts: []
 
-
-  # ABSENT IS NOT ZERO. The reconciler's pod has died, so the series is gone entirely — a bare `== 0` over an empty vector cannot fire, and the alert would go silent exactly when it is most needed.
-  - interval: 1m
-    input_series:
-      - series: "notifications_ingress_events_total{lance_notifications_lane=\"feed\"}"
-        values: "_x40"
-    alert_rule_test:
-      # The absence case now belongs to its OWN rule. It used to be the `or absent(...)` branch of
-      # NotificationsReconcilerStalled — which promtool accepted and GreptimeDB answered HTTP 400 to,
-      # so in production neither half of that rule could fire. Split 2026-08-23.
-      - eval_time: 35m
-        alertname: NotificationsReconcilerMetricsMissing
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: notifications
-              lance_notifications_lane: feed
-            exp_annotations:
-              summary: "The notifications feed lane has stopped reporting entirely"
-              description: "No `notifications_ingress_events_total` series for the feed lane exists at all. That is not an idle estate — an idle reconciler still emits a zero-valued counter. Either the pod is gone, its OTLP export is broken, or the lane label changed. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-      # ...and the `== 0` rule must NOT fire here: it cannot evaluate over an empty vector. That is
-      # the whole reason the absence rule has to exist separately.
-      - eval_time: 35m
-        alertname: NotificationsReconcilerStalled
-        exp_alerts: []
 
   # The sweep pod gone entirely — the one thing that reclaims storage, previously silent AND unalertable.
   - interval: 1m

@@ -62,7 +62,7 @@ log = logging.getLogger(__name__)
 #: business learning which services may decide.
 _DECISION_PERMISSIONS: Final = frozenset({"can_decide_access", "can_expand_members", "can_probe_governance"})
 
-#: The relation a check may name besides the `can_*` permissions: the `project#member` notifications re-checks at
+#: The relation a check may name besides the `can_*` permissions: the `project#member` a notifier re-checks at
 #: delivery. Every other role (`owner`, `writer`, `reader`, `admin`, `operator`, the decision roles) is refused, so a
 #: client gates on a lakehouse verb: Lakekeeper's door takes typed actions only, never a raw relation
 #: (crates/lakekeeper/src/api/management/v1/check.rs:244-280).

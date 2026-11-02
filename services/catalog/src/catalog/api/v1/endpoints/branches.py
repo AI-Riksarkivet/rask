@@ -64,7 +64,7 @@ async def create_table_branch(
     ANNOUNCED ON THE CONTROL LANE ([[LH-056]]) and UNTARGETED. The rule the estate codified is that a
     control event is targeted when it changes what a specific PERSON may do or must do, not when it
     changes an object; a branch appearing changes an object, so it joins the 31 members that name
-    nobody and stays out of notifications' `NAMED_ACTIONS`. A console invalidating a branch list is
+    nobody, so no notifier targets it. A console invalidating a branch list is
     the consumer this serves.
     """
     segments = parse_identifier(id)

@@ -11,9 +11,9 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 - **Services** (FastAPI): `catalog` (REST catalog and tier governance), `lineage`
   (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `provenance` namespace;
   the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (planner + worker),
-  `notifications`, and the zones (`web-<zone>`); public `/api/*` reaches them through the platform's Gateway on the chart's HTTPRoutes. The lakehouse runs no stage and no pipeline: moving data
+  and the zones (`web-<zone>`); public `/api/*` reaches them through the platform's Gateway on the chart's HTTPRoutes. The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
-- **Stores**: `age-postgres` (OpenFGA's datastore **AND** the Dapr state store — one pod, dual-purpose),
+- **Stores**: `age-postgres` (OpenFGA's datastore),
   the object store (RustFS in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), the secret store (the openbao
   fixture in development; the platform's Vault or OpenBao in production), `greptimedb` (metrics), `dex` (OIDC).
 - **Signals**: Perses panels (`make dashboards`), `kubectl logs`, and the domain metrics —
@@ -37,13 +37,13 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | `CatalogManifestReclaimFailing` firing, `manifest_reclaim_failed` WARN logs | [A root's namespace index is not reclaimed](#a-roots-namespace-index-is-not-reclaimed) |
 | `ErasureDerivedAfterRelease` or `ErasureLateDerivedUnwatched` firing | [A table derived from an erased table found after the release](#a-table-derived-from-an-erased-table-found-after-the-release) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
-| FGA failing, notifications' inbox state unreadable | [AGE down](#age-postgres-down--fga--dapr-state) |
+| FGA failing across the estate | [AGE down](#age-postgres-down--fga) |
 
 ---
 
 ## OpenFGA down → 503 everywhere
 
-**Symptom.** Broad 503s: catalog writes, lineage reads AND notifications all fail at once. Logs show
+**Symptom.** Broad 503s: catalog writes and lineage reads all fail at once. Logs show
 `authorization service is not available` or FGA check timeouts.
 
 **Cause.** OpenFGA is the authz chokepoint — every governed call `fga.check`s it and **fails closed**. A
@@ -51,10 +51,10 @@ single-replica OpenFGA (kind) that is drained/OOMed/rescheduling takes the whole
 returns. The prod overlay runs 3 replicas + a PDB, which makes this a quorum event, not a total outage.
 
 **Diagnose.** `kubectl get pods -l app.kubernetes.io/name=openfga`; check its datastore (`age-postgres`) is
-up — OpenFGA stores tuples in the `rask-age` Postgres, beside the Dapr state store.
+up — OpenFGA stores tuples in the `rask-age` Postgres.
 
 **Act.** Wait for reschedule / scale it back up; if the datastore is the real cause, see
-[AGE down](#age-postgres-down--fga--dapr-state). Never "fix" a fail-closed 503 by disabling auth in prod.
+[AGE down](#age-postgres-down--fga). Never "fix" a fail-closed 503 by disabling auth in prod.
 
 ## The secret store sealed → boot deadlock
 
@@ -103,8 +103,8 @@ or its projected `rask-catalog` token (`RASK_CATALOG_IDENTITY_TOKEN_FILE`) is no
 
 ## DLQ parking → a delivery gave up
 
-**Symptom.** `dapr_dead_letter_parked` ERROR logs (and `LineageIngestDeadLettering` or `NotificationsDeadLettering`
-for those subscribers), or `CatalogControlLaneDeadLettering` / `MaintenanceArrivalDeadLettering`, which read the
+**Symptom.** `dapr_dead_letter_parked` ERROR logs (and `LineageIngestDeadLettering`
+for lineage's subscriber), or `CatalogControlLaneDeadLettering` / `MaintenanceArrivalDeadLettering`, which read the
 sidecar's own count (`dapr_component_pubsub_ingress_count_total{status="drop"}`) because no route reads those two lanes'
 parks. A specific event was not processed after exhausting its retry schedule.
 
@@ -147,18 +147,19 @@ the keys published by then.
 
 ## A bus door refusing events
 
-**Symptom.** `NotificationsDoorRefusingEvents` or `MaintenanceArrivalRefusingEvents`
+**Symptom.** `MaintenanceArrivalRefusingEvents` or `CatalogControlLaneRefusingEvents`
 fires, with `<service>_signature_refused_total` rising for a door and a reason, and `<service>_signature_refused` WARN
 lines on that service's pods naming the door, the claimed identity, the event and the reason. Every door x reason
 series exists at 0 from the pod's start, so one refusal fires its alert about two minutes later, and the alert resolves
 about three minutes after that unless another refusal follows. The catalog's own `/control-events` door counts its
-refusals in `catalog_signature_refused_total` with a `catalog_signature_refused` WARN line, and no alert reads it.
+refusals in `catalog_signature_refused_total` with a `catalog_signature_refused` WARN line, which `CatalogControlLaneRefusingEvents`
+reads.
 
 **Cause.** With `RASK_SIGNATURE_DOORS=enforce`,
-notifications (`/lineage-events`, `/control-events`), the catalog's `/control-events` and maintenance's `/maintenance-arrival` act on a bus event only when
+the catalog's `/control-events` and maintenance's `/maintenance-arrival` act on a bus event only when
 a signer that door allows verifiably signed it: a lineage event against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`,
 a control event against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role
-`lakehouse_kit.control_events.control_signer_role` names for its action. A refusal is **acked**: the event drove nothing,
+`service_kit.control_events.control_signer_role` names for its action. A refusal is **acked**: the event drove nothing,
 is not retried and is not parked. The reasons read as in § Lineage refusing a signer's events, with two differences. At a
 control door, `signer` also means a listed identity signed an action its role does not emit. And here `unsigned` and
 `signer` page: every bus publisher signs and no action is exempt, so an unsigned or unlisted event on the bus is a
@@ -271,18 +272,17 @@ table is found; fix the record or the store and the next tick finds what it miss
 
 **Act.** Recover the pod/volume; for prod durability, use the platform's managed S3.
 
-## AGE Postgres down → FGA + Dapr state
+## AGE Postgres down → FGA
 
-**Symptom.** Authz fails across the estate (lineage's ingest gate answers `RETRY`, so events stay on the bus)
-AND notifications cannot read or write inbox state — because this one pod is both OpenFGA's datastore and the
-Dapr state store.
+**Symptom.** Authz fails across the estate (lineage's ingest gate answers `RETRY`, so events stay on the bus),
+because this one pod is OpenFGA's datastore.
 
-**Cause.** Single StatefulSet replica (kind), a dual-purpose SPOF. Prod answer is managed Postgres
+**Cause.** Single StatefulSet replica (kind), a SPOF. Prod answer is managed Postgres
 (`age.externalHost` / CloudNativePG — see [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and docs/CNPG-AGE.md) —
 sized via the `resources.age` tier (1Gi in prod).
 
 **Diagnose.** `kubectl get pods -l app.kubernetes.io/component=age-postgres`; `pg_isready`; PVC bound?
 
-**Act.** Recover the pod/volume; OpenFGA and the sidecars reconnect on their own. For
+**Act.** Recover the pod/volume; OpenFGA reconnects on its own. For
 prod, externalize to a replicated managed Postgres and take real backups
 ([RUNBOOK-restore.md](RUNBOOK-restore.md)).

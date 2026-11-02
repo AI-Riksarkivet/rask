@@ -1,7 +1,10 @@
-# Following committed writes: the commit-event contract
+# The commit-event contract: following writes and telling people
 
 A pipeline that reacts to writes (trigger the next tier, refresh a cache, run a check) follows lineage's
-durable feed. This page is the contract it polls; rask code is not needed to read it (LH-472, ADR 0156).
+durable feed. This page is the contract it polls; rask code is not needed to read it (LH-472, ADR 0156). It is also the
+contract the lakehouse's events publish for any notifier, a client that tells a person what the lakehouse did
+([§ Telling people](#telling-people-the-notifier-contract),
+[ADR 0190](adr/0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md)).
 
 ## The call
 
@@ -38,7 +41,7 @@ Authorization: Bearer <token>
 - **A cursor beyond the feed's head came from another feed.** A `since` larger than the newest seq the feed
   holds is answered with no events and `next_cursor` equal to that newest seq, lower than the `since` you
   sent. The feed was rebuilt or restored; re-read it from `oldest_seq - 1`, and expect to see events again
-  that you have already handled. The notifications reconciler does exactly this.
+  that you have already handled. A notifier walking the feed does exactly this (the notifications inbox's reconciler).
 
 ## What you can see
 
@@ -147,3 +150,91 @@ is recorded without a uuid. Every other facet is that producer's own claim.
   commits. Order the writes of one table by `rask_lance.version`, not by `seq`.
 - The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), so a follower
   that stops for longer can find its cursor below `oldest_seq - 1` (see the cursor rule).
+
+## Telling people: the notifier contract
+
+A notifier tells a person what the lakehouse did: a run wrote a table they may read, a grant changed what they may do.
+The lakehouse runs no notifier. It publishes its events, the fields in them that name whom each is about, and the
+authorization verbs a notifier asks before it tells anyone; a notifier is a client of all three, deployed in its own
+release ([ADR 0190](adr/0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md)). The notifications inbox
+(`services/notifications`, the per-person backend behind the console's bell) is one such client.
+
+An event that names nobody is undeliverable, whoever subscribes to it: coverage is decided by the producer that stamps
+these fields, never by the notifier.
+
+### Whom a run names
+
+On a run event (a dataset change carries the same facets on `dataset.facets`, and has already happened when it is
+emitted):
+
+| field | names |
+| --- | --- |
+| `eventType` | the run's state: `COMPLETE`, `FAIL` and `ABORT` end it |
+| `run.facets.rask_author.sub` | the principal lineage verified as the run's author, `<idp-id>~<user id>`: the posting token's subject on its HTTP door; on the bus the signer, or the person the catalog authenticated, which only the catalog may sign for ([LINEAGE.md](LINEAGE.md) § Signed events). `rask_author.name` and an `ownership` facet are attribution, never an address |
+| `run.facets.rask_lance.originator` | the person a run was done for, when a service authored it as itself |
+| `run.facets.rask_lance.project` | the tenant the run wrote in, whose members may choose to watch it; a run without one reaches no watcher |
+| `outputs[].facets.rask_lance.tableUuid` | each table the run wrote, as the object `table:<tableUuid>` every check is asked on; an output without one names no object a grant could reach |
+
+A value is an address only when it is one person's principal (`service_kit.governed.subjects.is_person_subject`): a role
+literal, a service account's principal, a userset and `*` address nobody.
+
+### Whom a control event names
+
+The catalog announces each governance change on the `catalog.control.v1` topic as a `CatalogControlEvent` (maintenance
+announces its purges there too), after the change succeeds, signed by the role `control_signer_role` names for its
+action. Most actions name an object and nobody.
+These name a person in `extra.subject`, the OpenFGA user the change concerns (`user:` and the principal key
+percent-encoded, which `fga.subject_of` decodes, or a userset):
+
+| `action` | `extra.subject` |
+| --- | --- |
+| `grant_added`, `grant_revoked` | the principal or userset the grant names; `extra.relation` is the rung and `object_id` the object |
+| `erasure_release_scheduled` | one event per person the release costs (the erasure's requester and each table owner), with the deadline in `extra.due_at` |
+| `principal_deleted` | the principal the estate admin offboarded: nobody is left to tell, so a notifier erases what it keeps for them |
+
+`table_published` carries `extra.originator`, the person a publication was for, as the catalog resolved it from a
+service's claim or a person's own token.
+
+### What a notifier asks
+
+A notifier holds no OpenFGA credential. It asks the catalog's decision door as its own ServiceAccount, on the estate
+roles a deployment grants that account in `auth.externalDeciders` (`{"<namespace>:<serviceaccount>": [roles]}`):
+bootstrap-admin grants each account exactly its roles and revokes a role the map stops naming.
+
+| role | route | what it asks |
+| --- | --- | --- |
+| `decider` | `POST /management/v1/decisions/check` | `can_be_notified` on each `table:<uuid>` a run names, for each person it would tell, and `member` on `project:<id>` for a watcher. `can_be_notified` is the lakehouse's verb for any notifier: a stake in the object itself (`reader`), never a grant on something beneath it |
+| `member_expander` | `POST /management/v1/decisions/list-users` | the people a userset in `extra.subject` holds |
+| `event_reader` | lineage's `GET /events/projection` | the whole run feed, below |
+
+### The whole run feed
+
+`GET /api/lineage/events/projection?since=<seq>&limit=<n>` is the feed without the per-dataset filter, for an account
+holding `event_reader` (`can_read_event_feed` on the estate root). The governed `GET /events` shows a service only the
+tables its own grants reach, so a notifier walking it would never see a run in a warehouse it holds nothing on. Each row
+is `{seq, event}`, the event cut to what deciding whom to tell reads: `eventType`, `eventTime`, `producer`, the run id
+with its `rask_author` and `rask_lance` facets, and each output's name with its own `rask_lance` facet (for a dataset
+change, the dataset's name, namespace and those two facets). Nothing describing the data crosses it, and the cursor rule
+above holds unchanged. Who is told stays gated per person by `can_be_notified`, so the role widens what the notifier
+observes and never what a person receives.
+
+The bus carries the run events too, on `lineage.events.v1`, but only the feed holds the ones producers post over HTTP,
+so a notifier that must not miss a run walks the feed. The topics are internal today: how a client consumes the bus is
+decided with the inbox's release (ADR 0190).
+
+### The names a Python client imports
+
+A client reads these events with no import from `lakehouse_kit`, the lakehouse's kernel. service-kit, the platform
+package a client pins by lakehouse tag, carries the contract:
+
+- `service_kit.control_events`: `CatalogControlEvent`, `ControlAction`, `CONTROL_TOPIC` and `control_signer_role`;
+- `service_kit.lineage_events`: the `rask_lance` and `rask_author` facet keys and their schema URLs, `dataset_uuids`
+  and `with_dataset_uuids`, and `event_identity` and `static_event_id`, the one derivation of an event's identity, so a
+  notifier reading the bus and one walking the feed key a change alike;
+- `service_kit.governed.subjects`: `is_person_subject`, the one rule for whether a value is an address;
+- `service_kit.signature_doors`: `SignatureDoorSettings`, a verifying door's mode (`RASK_SIGNATURE_DOORS`) and the
+  identities that sign the lakehouse's events (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`,
+  `RASK_CONTROL_SIGNER_ROLES`), against which a notifier verifies each event's `rask_signature` (`lineage_kit.signing`)
+  before it tells anyone. Each signer's public key is the secret `signing-public-<key name>` (the signer's
+  ServiceAccount name, `lance.signingKeys`) in the platform's secret store. No store role the product chart renders
+  names a client (`lance.storeReads`), so a notifier's release provisions its own role to read those keys.

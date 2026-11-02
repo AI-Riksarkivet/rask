@@ -23,11 +23,11 @@ import pytest
 from lance_namespace import PermissionDeniedError
 from openfga_sdk import OpenFgaClient
 
-from lakehouse_kit.openlineage import DatasetUuids, with_dataset_uuids
 from lineage.api.fga_deps import relations_for_operation
 from lineage.core.config import Signing
 from lineage.models import RunEvent
 from service_kit.governed.decider import OpenFgaDecider
+from service_kit.lineage_events import DatasetUuids, with_dataset_uuids
 
 
 #: The uuids the catalog minted for the tables the events below name, which it stamps on every event it emits.

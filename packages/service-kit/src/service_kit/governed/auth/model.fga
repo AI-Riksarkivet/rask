@@ -159,8 +159,9 @@ type estate
         # The consumer list is kept by hand: a new check of this relation belongs in it.
         define can_observe_events: owner
         # Reading lineage's run feed WITHOUT the per-dataset filter (`GET /events/projection`, [[CTL-021]]),
-        # checked ONLY on the root object. The holder is the notifications reconciler, which must see
-        # every warehouse's runs to work out whom to tell: on the governed `/events` a service sees only
+        # checked ONLY on the root object. The holder is a notifier walking the feed (a client the estate grants it
+        # by name, `auth.externalDeciders`), which must see every warehouse's runs to work out whom to tell: on the
+        # governed `/events` a service sees only
         # the tables its grants reach, so a run in any tenant warehouse it holds nothing on would never
         # reach it. Disclosure stays gated per person at delivery (`can_be_notified`) and at render
         # (`can_get_metadata`), so this widens what the SERVICE observes and never what a person receives.
@@ -331,14 +332,14 @@ type warehouse
     # reads `reader or can_get_metadata from child`, so a subject holding `reader` on ONE table three
     # namespaces down passes it here. Correct for browsing; as a delivery gate it would push a
     # container-scoped governance event to everyone holding a grant on anything underneath — an
-    # audience nobody chose, arriving as a notification. That is the exact failure the notification
-    # plane exists to end (open_notifications.md §3.1), reintroduced through a relation whose own
+    # audience nobody chose, arriving as a notification. That is the exact failure a targeted notifier
+    # exists to end (open_notifications.md §3.1), reintroduced through a relation whose own
     # purpose is unrelated.
     #
     # A notification asserts a stake in the OBJECT ITSELF, so this is bare `reader`. It lives in the
-    # model rather than as a bare-rung check in the notifications service because the model, not the
-    # app, owns the op->privilege mapping — and as a `can_*` it takes no direct assignment, it names
-    # a role (§10.4).
+    # model rather than as a bare-rung check in a notifier because the model, not the client, owns the
+    # op->privilege mapping: it is the verb the lakehouse publishes for any notifier, asked through the decision
+    # door — and as a `can_*` it takes no direct assignment, it names a role (§10.4).
     define can_be_notified: reader
     define can_create_namespace: writer
     define can_create_table: writer

@@ -28,15 +28,15 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from lakehouse_kit.control_events import CatalogControlEvent
-from lakehouse_kit.subjects import is_person_subject
 from notifications.api.fanout import InboxOpener
 from notifications.api.metrics import Lane, Outcome, record_ingress
 from notifications.config import get_notifications_settings
 from notifications.errors import InboxUnreadable
 from notifications.models import NotificationDelivery, NotificationReason
 from notifications.proxies import TypedActorProxy
+from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga
+from service_kit.governed.subjects import is_person_subject
 
 
 if TYPE_CHECKING:  # no runtime cost, and it breaks no import cycle

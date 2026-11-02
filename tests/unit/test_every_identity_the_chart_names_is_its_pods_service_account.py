@@ -56,12 +56,5 @@ def test_every_service_identity_is_the_subject_of_its_own_pods_service_account()
     assert {key for _pod, key, _value in named} == {"RASK_SIGNING_IDENTITY", "MAINTENANCE_CATALOG_SERVICE_IDENTITY"}, f"the render names {named}"
     assert not wrong, f"identities that are not their pod's service-account subject: {wrong}"
 
-    granted = {
-        line.split(" = ", 1)[0].strip(): json.loads(line.split(" = ", 1)[1])
-        for line in hook.splitlines()
-        if line.strip().startswith(("maintainers =", "event_readers ="))
-    }
-    assert granted == {
-        "maintainers": [_subject(accounts["rask-maintenance"])],
-        "event_readers": [_subject(accounts["rask-notifications"])],
-    }, f"the bootstrap hook grants {granted}"
+    granted = {line.split(" = ", 1)[0].strip(): json.loads(line.split(" = ", 1)[1]) for line in hook.splitlines() if line.strip().startswith("maintainers =")}
+    assert granted == {"maintainers": [_subject(accounts["rask-maintenance"])]}, f"the bootstrap hook grants {granted}"

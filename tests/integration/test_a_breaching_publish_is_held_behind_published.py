@@ -12,13 +12,12 @@ double that allows exactly the grants each test names, so who may decide is part
 
 from __future__ import annotations
 
-import asyncio
 import io
 import json
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from unittest.mock import MagicMock
 
 import httpx
@@ -34,11 +33,8 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.lineage_emit import make_emitter
 from catalog.services import object_uuids, table_claims, warehouses
 from lakehouse_kit.location_claims import ClaimStore
-from notifications.api.ingest import ingest_run_event
-from notifications.api.metrics import Lane
-from notifications.api.visibility import Visibility
-from notifications.proxies import TypedActorProxy
 from service_kit.governed import fga
+from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, dataset_uuids
 from service_kit.storage_options import StorageOptions
 from tests.integration.openfga_grants import Grants, act_as
 
@@ -86,14 +82,19 @@ class Estate:
         assert response.status_code == 200, response.text
         return response.json()
 
-    def obj(self, kind: str, name: str) -> str:
-        """The FGA object ``kind`` ``name`` is held by, the uuid the catalog minted for it ([[LH-524]]), read from the
-        namespace backend and the claim store rather than through a door the grants under test would gate."""
+    def uuid(self, kind: str, name: str) -> str:
+        """The uuid the catalog minted for the ``kind`` ``name`` ([[LH-524]]), read from the namespace backend and the
+        claim store rather than through a door the grants under test would gate."""
         ns = self.client.app.dependency_overrides[get_namespace]()
         segments = name.split("$")
         if kind == "namespace":
-            return fga.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
-        return fga.table_object(table_claims.resolve(ns, ClaimStore(control_root=self.root), segments).require_uuid())
+            return object_uuids.require_namespace_uuid(ns, segments)
+        return table_claims.resolve(ns, ClaimStore(control_root=self.root), segments).require_uuid()
+
+    def obj(self, kind: str, name: str) -> str:
+        """The FGA object ``kind`` ``name`` is held by, named by its uuid."""
+        uuid = self.uuid(kind, name)
+        return fga.namespace_object(uuid) if kind == "namespace" else fga.table_object(uuid)
 
     def location(self) -> str:
         act_as(self.client, "alice")
@@ -204,42 +205,27 @@ def lineage(estate: Estate, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, A
     return posted
 
 
-class _Inboxes:
-    """Each subject's inbox as the notifications plane fills it."""
-
-    def __init__(self) -> None:
-        self.rows: dict[str, list[dict[str, Any]]] = {}
-
-    def open(self, subject: str) -> TypedActorProxy:
-        inboxes = self
-
-        class _Inbox:
-            async def deliver(self, payload: dict[str, Any]) -> dict[str, Any]:
-                inboxes.rows.setdefault(subject, []).append(payload)
-                return {"delivered": True}
-
-        return cast("TypedActorProxy", _Inbox())
+def _publications(events: list[dict[str, Any]]) -> list[tuple[str | None, str | None, str | None, str]]:
+    """Each ``publish_table`` run among ``events``, read off the facets the lakehouse publishes for a notifier: the
+    verified author, the tenant a project watch is keyed on, the output's table uuid, and the version `published` moved to."""
+    return [
+        (
+            (event["run"]["facets"].get(AUTHOR_FACET) or {}).get("sub"),
+            event["run"]["facets"][LANCE_FACET].get("project"),
+            dataset_uuids(event["outputs"][0]).table_uuid,
+            event["outputs"][0]["facets"]["version"]["datasetVersion"],
+        )
+        for event in events
+        if event["run"]["facets"][LANCE_FACET]["operation"] == "publish_table"
+    ]
 
 
-def _told(event: dict[str, Any], *, watchers: list[str]) -> dict[str, list[tuple[str, str]]]:
-    """Who the notifications plane tells about ``event`` when the project's watchers are ``watchers``: subject ->
-    ``(reason, object)`` rows."""
-    inboxes = _Inboxes()
-
-    async def _watching(project: str, _at: datetime) -> list[str]:
-        return watchers if project == PROJECT else []
-
-    status = asyncio.run(
-        ingest_run_event(event, lane=Lane.BUS, visibility=Visibility(decider=None, enabled=False), watchers=_watching, open_inbox=inboxes.open)
-    )
-    assert status == {"status": "SUCCESS"}, status
-    return {subject: [(row["reason"], row["object_id"]) for row in rows] for subject, rows in inboxes.rows.items()}
-
-
-def test_approval_moves_published_and_tells_the_watchers_and_rejection_restores_main(estate: Estate, lineage: list[dict[str, Any]]) -> None:
-    """bob, a validator, approves held version 2: `@published` reads it, and the run the catalog announces reaches
-    the project's watcher. Version 3 is held next and bob rejects it: main is restored to the version `published`
-    names, as version 4, `published` stays, and the restore is made once however often the rejection is repeated."""
+def test_approval_moves_published_and_announces_it_as_the_approvers_and_rejection_restores_main(estate: Estate, lineage: list[dict[str, Any]]) -> None:
+    """bob, a validator, approves held version 2: `@published` reads it, and the catalog announces the move as a
+    `publish_table` run naming bob as its author, the project as its tenant and the table by its uuid, which is what a
+    notifier targets the author and the project's watchers by. Version 3 is held next and bob rejects it: main is
+    restored to the version `published` names, as version 4, `published` stays, and the restore is made once however
+    often the rejection is repeated."""
     estate.grants.grant("bob", ("can_promote", estate.obj("table", TABLE)), ("can_get_metadata", estate.obj("table", TABLE)))
     estate.insert(range(4, 12))
     assert estate.publish(2)["held"] is True
@@ -249,10 +235,7 @@ def test_approval_moves_published_and_tells_the_watchers_and_rejection_restores_
     assert approved.status_code == 200, approved.text
     assert (approved.json()["published_version"], approved.json()["hold"]["state"], approved.json()["hold"]["decided_by"]) == (2, "approved", "dex~bob")
     assert (estate.rows("published"), estate.holds()) == (12, [])
-    announced = [event for event in lineage if event["run"]["facets"]["rask_lance"]["operation"] == "publish_table"]
-    assert [event["outputs"][0]["facets"]["version"]["datasetVersion"] for event in announced] == ["2"]
-    told = estate.obj("table", TABLE)
-    assert _told(announced[-1], watchers=["dex~wendy"]) == {"dex~bob": [("author", told)], "dex~wendy": [("watch", told)]}
+    assert _publications(lineage) == [("dex~bob", PROJECT, estate.uuid("table", TABLE), "2")]
 
     estate.insert(range(12, 40))
     assert estate.publish(3)["held"] is True

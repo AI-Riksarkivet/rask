@@ -202,3 +202,4 @@ before they had a record here; each names its source document and the date of th
 | [0187](0187-a-re-announcement-is-signed-only-for-the-author-the-catalog-recorded.md) | LH-550 | A re-announcement is signed only for the author the catalog recorded authorizing the commit (2026-11-01) |
 | [0188](0188-a-lost-publication-is-announced-from-its-tag-and-lifecycle-markers-stay-best-effort.md) | LH-552 | A lost publication is announced from its tag; a table's lifecycle markers stay best-effort (2026-11-01) |
 | [0189](0189-the-product-chart-carries-no-engine-seam.md) | XC-182 | The product chart carries no engine seam: a bring-your-own engine is a client like any other (2026-11-01) |
+| [0190](0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md) | XC-188 | The notifications inbox is a client of the lakehouse's events: the lakehouse emits, a notifier delivers (2026-11-02) |

@@ -1,6 +1,6 @@
 """Best-effort control-plane change-event emission onto the Dapr/NATS bus, signed by the service that emits.
 
-The publish half of :mod:`lakehouse_kit.control_events`, which owns the wire model. Every producer of a
+The publish half of :mod:`service_kit.control_events`, which owns the wire model. Every producer of a
 governance mutation notice uses THIS module — the catalog (grants, warehouses, policies, namespaces,
 tables) and maintenance (the expired-trash purge destroys bytes and revokes grants).
 
@@ -25,7 +25,7 @@ withholds a lineage event it cannot sign, while the signer reports itself not re
 by nothing but the signature they carry, so nothing may sign them later: a relay that signed what it found staged
 would sign whatever any other writer of the prefix put there. A service run with no signing identity (a stack with
 no secret store) passes ``sign=None`` and publishes unsigned, which only a door verifying nothing acts on: every
-action has a signer (:func:`lakehouse_kit.control_events.control_signer_role`).
+action has a signer (:func:`service_kit.control_events.control_signer_role`).
 
 **No broker client in app code.** Publishing goes through the local Dapr sidecar
 (:func:`lakehouse_kit.dapr_publish.publish_event`), which owns retry, backoff and DLQ as component
@@ -51,7 +51,7 @@ from dapr.aio.clients import DaprClient
 from opentelemetry import metrics
 
 from lakehouse_kit import outbox
-from lakehouse_kit.control_events import (
+from service_kit.control_events import (
     CONTROL_TOPIC,
     CatalogControlEvent,
     ControlAction,
@@ -250,8 +250,8 @@ async def emit_control(
     ``object_uuid`` and ``namespace_uuid`` name it by the uuids the catalog minted (ADR 0173 §10, [[LH-524]]).
     ``actor`` must be the verified caller, ``user:`` and its principal key (e.g. ``user:dex~alice``), never a request-body value.
 
-    ``extra["subject"]`` is load-bearing for the notifications plane: for an action in that plane's
-    ``NAMED_ACTIONS`` it names the PERSON the event is about, and being named IS the targeting. It must
+    ``extra["subject"]`` is load-bearing for a notifier: for a targeted action (a grant added or revoked, an erasure
+    release scheduled, a principal deleted) it names the PERSON the event is about, and being named IS the targeting. It must
     be a real principal — a userset or the ``user:*`` wildcard addresses nobody.
 
     Fail-open covers the WHOLE path, not just the publish: the event construction (pydantic validation)

@@ -336,9 +336,9 @@ class TestFanoutHook:
 # state transition rather than a test double agreeing with itself.
 #
 # A real broker redelivering to a real sidecar against a real SMTP conversation is a claim about the
-# thing a person sees, which no in-process test can make. The live read-back makes it against the
-# mailpit fixture (deploy/fixtures/mailpit), the relay deploy/values-local.yaml names, by reading
-# Mailpit's API ([[CTL-30]]); `make notifications-rig` runs Mailpit by hand.
+# thing a person sees, which no in-process test can make. A live read-back makes it against the
+# mailpit fixture (deploy/fixtures/mailpit), on an estate where the inbox's email channel names that
+# relay, by reading Mailpit's API ([[CTL-30]]).
 
 
 class _ActorSm:

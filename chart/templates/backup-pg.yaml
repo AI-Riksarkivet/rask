@@ -1,5 +1,5 @@
 {{- if .Values.backups.pgDump.enabled }}
-# pg_dump the OpenFGA + Dapr-state databases (gzip) → the lakehouse S3 under _backups/pg/<date>/.
+# pg_dump the OpenFGA database (gzip) → the lakehouse S3 under _backups/pg/<date>/.
 # SELF-CONTAINED FALLBACK ONLY: when AGE is a CloudNativePG cluster (the rask path), disable this and use
 # CNPG's scheduled backups / PITR instead — they do this better. Reads creds from the infra-tier Secret.
 apiVersion: batch/v1
@@ -50,11 +50,8 @@ spec:
                 - |
                   set -e
                   rm -f /tmp/.dump-failed
-                  # Both databases that hold state. `stateDb` (daprstate) is the Dapr state store: the
-                  # notifications plane's per-subject InboxActor read state. The inbox CONTENTS are reconstructible (the cron reconciler replays lineage's durable
-                  # GET /events), but WHICH messages a subject has already read exists nowhere else: losing
-                  # it marks the whole estate unread for everyone.
-                  for db in {{ .Values.age.openfgaDb }} {{ .Values.age.stateDb }}; do
+                  # The database that holds state: OpenFGA's tuples, which nothing else can rebuild.
+                  for db in {{ .Values.age.openfgaDb }}; do
                     # NOT `pg_dump | gzip`. A pipeline reports only the LAST command's status, and this is
                     # `sh` — dash, where `set -o pipefail` does not exist. So a pg_dump that dies mid-stream
                     # still leaves a structurally valid gzip and the pipeline exits 0: `set -e` sees a clean

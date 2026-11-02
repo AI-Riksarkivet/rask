@@ -21,11 +21,11 @@ from typing import Final
 
 from lakehouse_kit.lancekit.catalog_client import catalog_api_client, request_headers
 from lakehouse_kit.lancekit.reader import translate_catalog_errors
-from lakehouse_kit.openlineage import DatasetUuids, with_dataset_uuids
 from lineage.core.config import LineageSettings
 from lineage.models import DatasetEvent, RunEvent
 from service_kit.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
 from service_kit.governed.decider import AccessDecider
+from service_kit.lineage_events import DatasetUuids, with_dataset_uuids
 from service_kit.naming import CATALOG_DELIMITER, is_external_source_namespace, uuid_of
 
 

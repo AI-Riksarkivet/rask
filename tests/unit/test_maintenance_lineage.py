@@ -21,7 +21,6 @@ from typing import Any, cast
 
 import pytest
 
-from lakehouse_kit.openlineage import DatasetUuids
 from lineage.models import RunEvent
 from maintenance.core.lineage_emit import (
     EXPIRE_VERSIONS,
@@ -35,6 +34,7 @@ from maintenance.core.lineage_emit import (
 )
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_lineage
+from service_kit.lineage_events import DatasetUuids
 from service_kit.storage_options import StorageOptions
 
 

@@ -7,9 +7,10 @@ governance fold makes a Job's output set its access handle, which makes each one
 object for an operation nobody performed.
 
 ONE BUILDER, NOT TWO. The DDL form is the run form with its wrapper removed and its run facets moved
-onto the dataset, because the facet CONTENT must not be able to differ between the two shapes. The
-things that read it downstream are the authorizer (`rask_author.sub`) and the notifications plane
-(`rask_author.sub`, `rask_lance.project`, `rask_lance.originator`), and all three look in the run slot today.
+onto the dataset, because the facet CONTENT must not be able to differ between the two shapes. What
+reads it downstream is the authorizer (`rask_author.sub`) and a notifier (`rask_author.sub`,
+`rask_lance.project`, `rask_lance.originator`), each reading a DDL event's dataset slot as it reads a
+write's run slot.
 """
 
 from __future__ import annotations

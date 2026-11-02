@@ -100,9 +100,14 @@ def _handler(stores: list[dict[str, str]], recorded: Recorded, token_file: Path)
                 return self._send(404, {"code": "store_id_not_found"})
             body = json.loads(self.rfile.read(int(self.headers["content-length"])))
             if verb == "read":
-                # Read takes no model: it returns the stored tuples on an object, whatever validated them.
-                obj = body["tuple_key"]["object"]
-                held = [{"key": {"user": u, "relation": r, "object": o}} for u, r, o in sorted(recorded.written) if o == obj]
+                # Read takes no model: it returns the stored tuples on an object, under the relation when one is named,
+                # whatever validated them.
+                asked = body["tuple_key"]
+                held = [
+                    {"key": {"user": u, "relation": r, "object": o}}
+                    for u, r, o in sorted(recorded.written)
+                    if o == asked["object"] and r == asked.get("relation", r)
+                ]
                 return self._send(200, {"tuples": held, "continuation_token": ""})
             recorded.requests.append(body)
             named = body.get("authorization_model_id") or history[0]["id"]

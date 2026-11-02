@@ -30,12 +30,12 @@ from lakehouse_kit.features import (
     unsupported_features_from_open_error,
 )
 from lakehouse_kit.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from lakehouse_kit.openlineage import DatasetUuids
 from lakehouse_kit.stored_objects import delete_objects, list_under
 from lakehouse_kit.version_retention import Retention, reclaimable_versions
 from maintenance.core.config import shared_lance_session
 from maintenance.core.metrics import CatalogRefusal
 from maintenance.services import base_reclaim
+from service_kit.lineage_events import DatasetUuids
 from service_kit.storage_options import StorageOptions
 
 

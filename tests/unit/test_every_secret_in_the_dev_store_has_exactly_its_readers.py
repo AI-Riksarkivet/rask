@@ -46,11 +46,11 @@ STORE_POD: Final = "Deployment/rask-openbao"
 #: The KV v2 data path a policy grants a secret by.
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
-_DOORS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
-_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "notifications"))
+_DOORS: Final = frozenset({"catalog", "lineage", "maintenance"})
+_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance"))
 _POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "CronJob/rask-pg-backup"})
-_CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
-_MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance", "notifications"})
+_CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
+_MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 
 #: secret -> {"store": identities whose login reads it, "dapr": apps whose sidecar API serves it, "pods": workloads given it by ESO}.
 EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
@@ -63,13 +63,9 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "signing-key-rask-sa-maintenance": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "signing-public-rask-sa-catalog": {"store": _CATALOG_VERIFIERS, "dapr": _CATALOG_VERIFIERS},
     "signing-public-rask-sa-maintenance": {"store": _MAINTENANCE_VERIFIERS, "dapr": _MAINTENANCE_VERIFIERS},
-    "dapr-state": {"store": frozenset({"notifications"})},
     "nats-user-catalog": {"store": frozenset({"catalog"})},
     "nats-user-lineage": {"store": frozenset({"lineage"})},
     "nats-user-maintenance": {"store": frozenset({"maintenance"})},
-    "nats-user-notifications": {"store": frozenset({"notifications"})},
-    # values-local.yaml turns the email channel on: its Component resolves the SMTP pair in the notifications sidecar alone.
-    "notifications-smtp": {"store": frozenset({"notifications"})},
     "nats-user-admin": {"store": frozenset({"eso"}), "pods": frozenset({"Job/rask-nats-stream-r1"})},
     "nats-user-monitor": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-nats-box"})},
     "nats-server": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},

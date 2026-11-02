@@ -16,9 +16,9 @@ from lance_namespace import DescribeNamespaceRequest, DescribeTableRequest, Inte
 
 from catalog.services import native
 from lakehouse_kit import location_claims
-from lakehouse_kit.control_events import ControlUuids
 from lakehouse_kit.location_claims import ClaimStore
-from lakehouse_kit.openlineage import DatasetUuids
+from service_kit.control_events import ControlUuids
+from service_kit.lineage_events import DatasetUuids
 from service_kit.naming import uuid_of
 
 

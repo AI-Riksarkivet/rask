@@ -40,8 +40,8 @@ The name carries no `-durable` suffix, so the stream Job's orphan and drift pass
 
 The durables live on a mirror of CATALOG_CONTROL whose consumer limit reaps a deleted pod's durable after
 `catalog.controlConsumerInactiveSeconds`. Dapr gives a consumer no inactivity threshold, and a stream's limit applies to
-every consumer on it (nats-server v2.14.2 `consumer.go:663-667`), so on CATALOG_CONTROL it would reap notifications'
-durable as well. Naming the stream also makes Dapr skip its subject lookup, which would answer CATALOG_CONTROL (a mirror
+every consumer on it (nats-server v2.14.2 `consumer.go:663-667`), so on CATALOG_CONTROL it would reap every other
+consumer of the control topic as well. Naming the stream also makes Dapr skip its subject lookup, which would answer CATALOG_CONTROL (a mirror
 captures no subject). The catalog still publishes through this component onto CATALOG_CONTROL, since a publish names
 only its subject.
 
@@ -60,42 +60,13 @@ DLQ stream (`dlq.>`), and `CatalogControlLaneDeadLettering` pages on the sidecar
 The control topic's other publisher, on its own component and so as its own NATS user: maintenance's #79 purge
 announcements. A publisher a component does not scope is refused by its sidecar, silently.
 
-## `{{- include "lance.brokerWindows" . | nindent 4 }}`
-
-Redelivery timing, on the schedule the per-subscriber components below carry and for the same
-invariant: the broker's first backOff step must exceed the sidecar's total retry span, or the broker
-redelivers while the sidecar is still mid-retry and one publication is handled twice, concurrently.
-One helper renders it for every subscriber component, so the schedule has one copy (`_helpers.tpl.md`).
-
-Changing these on an EXISTING cluster mutates a live durable's config — the §2.11 hazard, in its
-benign form: the durable NAME and its filter subject are unchanged, so the sidecar reconfigures
-rather than colliding with a consumer already holding the name, and this is exactly the drift the
-nats-stream-job reconcile compares (maxDeliver/backOff) and repairs.
-
-## `apiVersion: dapr.io/v1alpha1`
-
-The NOTIFICATION plane's control-topic subscriber (v3 targeting: a governance act that NAMED
-someone). Its OWN component rather than a scope added to the
-broadcast component — `queueGroupName` lives on the COMPONENT, so a scope added to a broadcast
-splits it into a competing-consumer group instead of joining it, and the catalog's broadcast exists
-precisely to reach every replica.
-
-`deliverPolicy: new` for the same reason the lineage subscriber carries it: an inbox that replayed
-the retained backlog on every pod restart would re-notify a week of grants on every rollout.
-
-## `{{- include "lance.brokerWindows" . | nindent 4 }}`
-
-Same redelivery schedule as its siblings, and the same invariant: the broker's first backOff
-step must exceed the sidecar's total retry span, or the broker redelivers while the sidecar is
-still mid-retry and one event is handled twice, concurrently.
-
 ## `{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}`
 
 One component PER SUBSCRIBER app-id (see the lance.subPubsub helper): queueGroupName makes that
 app's replicas a competing-consumer group (single delivery per app — without it every replica gets
 EVERY message: jetstream only sets a DeliverGroup when queueGroupName is non-empty), and it CANNOT
-live on one shared component because lineage and notifications both consume lineage.events.v1 — one
-shared queue group would split those messages across the two apps. deliverPolicy differs on
+live on one shared component because lineage and maintenance (under `maintenance.arrivalEnabled`) both consume
+lineage.events.v1 — one shared queue group would split those messages across the two apps. deliverPolicy differs on
 purpose: `all` for lineage (a NEW durable starts at the stream's first message, so its first attach,
 or a rebuild after `nats consumer rm LINEAGE lineage-durable`, replays the retained stream into the
 idempotent ingest), `new` for the other subscribers (a replayed event acts twice).
@@ -126,27 +97,13 @@ changed, so nats-stream-job.yaml recreates `lineage-durable` when its `max_ack_p
 `deliverPolicy: all` replays the retained stream into the keyed ingest. `concurrencyMode` is the
 component's alone and changes no durable. The other subscribers keep one at a time.
 
-## `{{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}`
-
-The INBOX (open_notifications.md §2). `new` is the strongest case in this list: lineage's `all`
-replays the retained stream on its first attach and on a rebuild, which for a graph IS the recovery
-story and for an inbox would re-notify a week of history — a badge that lies loudest when it matters. The durable half is the other side of the same coin: a run
-that terminated while this app was down must still reach its author, and `new` alone skips it on
-reconnect. Unconditional, like the Deployment (services.notifications is frontDoor).
-
-This mints a durable name no stream has seen, so §2.11's migration hazard does not apply here —
-that failure is an EXISTING durable name re-requested with a different filter subject ("consumer
-name already in use", a silently dead subscription the drift reconcile cannot see because
-maxDeliver/backOff still match). `notifications-durable` on LINEAGE is new; the reconcile loop
-(nats-stream-job.yaml) adopts it by its `-durable` suffix from the first tick.
-
 ## `{{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}`
 
 MAINTENANCE's write-event subscription: a write refreshes that table's due record (the tables needing
 compaction or reindexing, ADR 0162) between sweep ticks. It schedules no work; the rewrite is the
 user's job. Its dead letters go to `maintenance.arrivalDlqTopic`.
 
-`new`, for the notifications reason sharpened: replaying the retained stream on a pod restart would
+`new`, because a replayed event acts twice: replaying the retained stream on a pod restart would
 refresh the due record of every table written in the window, hundreds of manifest opens to reach the
 answer the next sweep tick writes anyway. A missed window costs at most one tick; a replayed one costs
 the walk this lane exists to avoid.
@@ -165,20 +122,6 @@ So a future attempt must enumerate EVERY topic each app uses on its component, i
 directions, measured off `/v1.0/metadata` and the publish call sites — not just the one topic
 being protected. The scoping the estate already has is the document-level `scopes:` below, which
 closes each component to one app-id.
-
-## `- { name: protectedTopics, value: "{{ $.Values.pubsub.topic }}" }`
-
-THE ONE CONSUMER-ONLY IDENTITY on the provenance bus, denied publish to it ([[LH-064]]).
-Measured 2026-09-16: `notifications` has NO publish call sites of its own and its sidecar
-registers exactly two topics on this component — `lineage.events.v1` and `dlq.notifications`.
-Applied HERE ONLY, and that is the lesson from the first attempt: the same three keys rolled
-to all eight components broke delivery, because `subscriptionScopes` is not additive — naming
-an app in it makes that list its COMPLETE allowlist, so an unlisted-but-unprotected topic is
-refused too (the `dlq.notifications` refusal quoted above).
-So BOTH topics are listed on the subscribe side, and the publish side grants the dead-letter
-(the sidecar parks on it via `deadLetterTopic`, and whether that publish is scope-checked is
-not documented — granting it costs nothing and withholding it would be the same guess that
-caused the outage) while withholding the provenance topic, which is the whole point.
 
 ## `- { name: durableName, value: "{{ .appId }}-durable" }`
 

@@ -18,7 +18,7 @@ from lakehouse_kit.control_emit import (
     emit_control,
     make_control_emitter,
 )
-from lakehouse_kit.control_events import CONTROL_TOPIC, CatalogControlEvent, ControlAction
+from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent, ControlAction
 
 
 class _FakeDapr:

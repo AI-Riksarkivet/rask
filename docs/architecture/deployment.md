@@ -45,7 +45,7 @@ one role per app that reads the store, `<release>-<app id>`, bound to that app's
 taking only the projected audience, and holding one policy that reads exactly the secrets the app and its components read
 (`lance.storeReads`), plus ESO's role and its policy, which reads exactly the secrets the chart's ExternalSecrets name. A
 role a sidecar cannot log in to fails that sidecar's start closed. Each app's Dapr Configuration denies its code every
-secret but its own (`allowedSecrets`), so a component's secret (a bus user, the state store's DSN) is read by the sidecar's
+secret but its own (`allowedSecrets`), so a component's secret (a bus user) is read by the sidecar's
 login and never served to the app.
 
 THE SECRETS THE STORE MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
@@ -61,10 +61,8 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   the role `vending.assumeRoleArn` names, whose trust policy names the subject.
 - `backup-s3` (ESO, for the backups, when one is on), fields `access_key`, `secret_key`.
 - `dapr-app-token` (fields `token` and, during a rotation, `previous`; docs/OPERATORS.md § 8): the app-API token, read by
-  the apps with a Dapr door (catalog, lineage, maintenance, notifications) and by ESO, which writes it into the
+  the apps with a Dapr door (catalog, lineage, maintenance) and by ESO, which writes it into the
   `<release>-dapr-app-token` Secret daprd stamps the header from.
-- `dapr-state` (field `connection-string`): the Dapr state store's DSN, read by the logins of the apps the state store
-  is scoped to.
 - `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
   every verifier) and then `signing-key-<identity>` (field `seed`, read by that signer alone), described in values.yaml
@@ -117,7 +115,7 @@ and every rask user, so Dapr's pubsub.jetstream can authenticate with a user JWT
 
 ## Prerequisite: the CloudNativePG operator, for the AGE-on-CNPG path
 
-The default Postgres (OpenFGA's datastore and the Dapr state store) is the `rask-age` StatefulSet, which needs no operator. The AGE-on-CNPG path
+The default Postgres (OpenFGA's datastore) is the `rask-age` StatefulSet, which needs no operator. The AGE-on-CNPG path
 (`age.cnpgCluster.enabled`, docs/CNPG-AGE.md) renders a CloudNativePG `Cluster`, so for it the **CloudNativePG operator
 is a prerequisite** (ADR 0153): the chart installs no operator, and with `age.cnpgCluster.enabled` on it refuses to
 render for a cluster that does not serve `postgresql.cnpg.io/v1` (a cluster-less `helm template` names it:
@@ -130,7 +128,7 @@ release `cloudnative-pg` in `cnpg-system`): chart 0.28.3, operator 1.29.1, CRDs 
 
 ## Prerequisites in production: OpenFGA and its Postgres
 
-The chart can run OpenFGA (the `openfga` subchart) and the Postgres behind OpenFGA and the Dapr state store (the
+The chart can run OpenFGA (the `openfga` subchart) and the Postgres behind it (the
 `rask-age` StatefulSet). Development runs both. **Production names the platform's** ([[XC-132]], ADR 0153),
 and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.enabled: false`):
 
@@ -141,11 +139,9 @@ and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.ena
   mirror and subject ConfigMap serve only the in-chart OpenFGA. The subjects to admit are the ones
   `lance.openfgaSubjects` (chart/templates/_helpers.tpl) computes for the overlay. A render with `openfga.enabled=true`
   prints them in the `<release>-openfga-authn` ConfigMap.
-- `age.externalHost` is the platform's Postgres, which needs the `openfga` and `daprstate` databases owned by
+- `age.externalHost` is the platform's Postgres, which needs the `openfga` database owned by
   `age.user`; lineage keeps no database (ADR 0158). Its password is the secret store's
-  `postgres-password`, which ESO delivers, and the Dapr state store reads its whole DSN from the store's
-  `dapr-state-connection-string` (`postgres://<age.user>:<password>@<age.externalHost>:<age.port>/<age.stateDb>`),
-  which the platform writes beside it. No chart value carries either.
+  `postgres-password`, which ESO delivers. No chart value carries it.
 
 The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), each endpoint needs a `networkPolicy.extraEgress` entry, as an external NATS does; the OTLP backend takes its in `observability.export.egress`, the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, and the platform's secret store its addresses in `openbao.egress`, each admitting only the pods that dial it. Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's own datastore, availability and
 backups belong to the platform, so production runs no `pg_dump` CronJob.
@@ -199,7 +195,7 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
-`compute`, `notifications` and `flows`, the six zone images (`web-<zone>`), `annotator` (the client
+`compute` and `flows`, the six zone images (`web-<zone>`), `annotator` (the client
 the annotator fixture runs), `media` (the viewer and search, which the explorer runs), `lance-rest-catalog` (the
 lakehouse image that serves catalog, lineage and maintenance) and the `ray-cluster` image the
 development engine fixture runs. `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
@@ -218,7 +214,7 @@ locally and in CI.
 |---|---|---|
 | `lance-rest-catalog` | `rest-catalog.dockerfile` | The lakehouse image, one image for several deployments: `catalog`, `lineage` and `maintenance`, plus the chart's Jobs and hooks. It installs no client, so deleting a client changes nothing it builds. |
 | `media` | `media.dockerfile` | The viewer and search, clients of the lakehouse, one image for both; the product chart deploys neither. |
-| `flows`, `notifications`, `compute`, `annotator` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` and `annotator` each ship in their own chart (`deploy/fixtures/compute`, `deploy/fixtures/annotator`). |
+| `flows`, `notifications`, `compute`, `annotator` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` and `annotator` each ship in their own chart (`deploy/fixtures/compute`, `deploy/fixtures/annotator`); no chart in this repo deploys `flows` or `notifications`. |
 | `web-<zone>` (6 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the five domain zones (lakehouse, explorer, annotator, compute, studio) each pin a bare base `/<zone>`. The zones are a client of the lakehouse, and the product chart deploys none of them (XC-181). tini as PID 1, non-root UID 10001. |
 | `ray-cluster`, `ray-<runner>` | `ray-cluster.dockerfile`, `ray-runner.dockerfile` | The development engine's head image and one image per sealed runner (`--runner <runner>`); neither is part of the product chart. |
 
@@ -261,8 +257,7 @@ with `--address ray://…:10001`.
 
 `make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
-- **notifications** — the per-subject inbox.
-- **the lakehouse** — catalog, lineage and maintenance. The clients (the zones, flows, the viewer and search, and the
+- **the lakehouse** — catalog, lineage and maintenance. The clients (the zones, flows, the notifications inbox, the viewer and search, and the
   annotator, which has its own release, `deploy/fixtures/annotator`, ADR 0171) are not rendered here.
 - **The cluster route** (`templates/route.yaml`) — Gateway API HTTPRoutes on the platform's Gateway
   (`route.parentRefs`): `<release>-api` sends each public `/api/*` prefix to its service, with a `URLRewrite`
@@ -277,7 +272,7 @@ with `--address ray://…:10001`.
   `traefik-gateway` in kube-system, listener `web` on the node's port 80). The Gateway must allow 64 MB request bodies;
   that is Gateway policy, not route (ADR 0165).
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
-  OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA and the Dapr state store); see *Prerequisites in production*.
+  OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA); see *Prerequisites in production*.
 - **Its own configuration of what it does not run**: the Dapr Components, Configurations and Resiliency, the NATS stream
   Job, the ExternalSecrets and SecretStore, the object store's bucket and user hooks, and the dev OpenBao's seed scripts.
 - **The OTel Collector**, with `observability.enabled` (see below).
@@ -338,8 +333,8 @@ instrumentation is a no-op. Standard OTLP throughout; OTel-Arrow is not used (th
 
 Greenfield local cutover (drops old PVCs): `make k3s-purge && make k3s-up`.
 
-Sensitive config comes from an operator-created Secret (`existingSecret`, default
-`rask-app`); non-sensitive config from `values.yaml` → ConfigMap. See
+Non-sensitive config comes from `values.yaml`, rendered into each Deployment's `env`; no credential is a chart value,
+and every one reaches a pod from the secret store. See
 `chart/README.md`.
 
 ## CI
@@ -356,5 +351,5 @@ Sensitive config comes from an operator-created Secret (`existingSecret`, defaul
   governs (lineage's commit feed, edge list, outbox refusals and forwarder cursors among them, in the catalog's
   provenance namespace, ADR 0158), the outbox, the trash and the registries. Lance puts its commit CAS in the store,
   so neither the catalog nor lineage needs a relational database.
-- **Postgres**: OpenFGA's datastore and the Dapr state store, served by the `rask-age` StatefulSet in development and
+- **Postgres**: OpenFGA's datastore, served by the `rask-age` StatefulSet in development and
   by the platform in production. Lineage keeps no database (ADR 0158, LH-468 #592).

@@ -52,8 +52,9 @@ from catalog.services.publication import PUBLISHED_TAG
 from lakehouse_kit import commit_records
 from lakehouse_kit.features import flags_from_open_error
 from lakehouse_kit.lancekit.filters import sql_literal
-from lakehouse_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, dataset_uuids
+from lakehouse_kit.openlineage import BRANCH_IDENTIFIER
 from service_kit.governed import fga
+from service_kit.lineage_events import LANCE_FACET, dataset_uuids
 from service_kit.storage_options import StorageOptions
 
 

@@ -142,7 +142,7 @@ def test_the_catalog_presents_the_store_identity_the_chart_provisions_for_its_ac
 
 #: The lakehouse services whose doors verify a person's token. Maintenance has no human door: its routes take only the
 #: Dapr sidecar's app token.
-_LAKEHOUSE_DOORS = ("rask-catalog", "rask-lineage", "rask-notifications")
+_LAKEHOUSE_DOORS = ("rask-catalog", "rask-lineage")
 
 
 def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it_trusts() -> None:

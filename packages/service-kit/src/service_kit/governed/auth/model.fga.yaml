@@ -1456,22 +1456,22 @@ tests:
       - user: user:provisioner
         relation: operator
         object: estate:rask
-      # The tuple the chart's bootstrap hook writes for the notifications reconciler ([[CTL-021]]).
-      - user: user:notifications
+      # The tuple the chart's bootstrap hook writes for a notifier's feed walker it is told of by name ([[CTL-021]]).
+      - user: user:a-notifier
         relation: event_reader
         object: estate:rask
       # The tuples the chart's bootstrap hook writes for the check-only services ([[LH-442]]): every one is a
-      # `decider`, notifications alone a `member_expander`, lineage alone a `governance_prober`.
+      # `decider`, the notifier alone a `member_expander`, lineage alone a `governance_prober`.
       - user: user:lineage
         relation: decider
         object: estate:rask
       - user: user:lineage
         relation: governance_prober
         object: estate:rask
-      - user: user:notifications
+      - user: user:a-notifier
         relation: decider
         object: estate:rask
-      - user: user:notifications
+      - user: user:a-notifier
         relation: member_expander
         object: estate:rask
       - user: user:viewer
@@ -1494,8 +1494,8 @@ tests:
           can_decide_access: true
           can_expand_members: false
           can_probe_governance: false
-      # Notifications holds `event_reader` too (above); neither of its decision roles reaches the feed's rung or back.
-      - user: user:notifications
+      # The notifier holds `event_reader` too (above); neither of its decision roles reaches the feed's rung or back.
+      - user: user:a-notifier
         object: estate:rask
         assertions:
           can_decide_access: true
@@ -1536,11 +1536,11 @@ tests:
         assertions:
           can_create_project: true
           can_observe_events: true
-      # THE RECONCILER READS THE WHOLE RUN FEED AND NOTHING ELSE ON THE ROOT ([[CTL-021]]). The two
+      # A FEED READER READS THE WHOLE RUN FEED AND NOTHING ELSE ON THE ROOT ([[CTL-021]]). The two
       # refusals that matter are the doors that mint a tenant (`POST /management/v1/projects` checks
       # `can_observe_events`; `can_create_project` is the model's own verb) and the raw tuple editor
       # (`can_observe_events` too). Each flips if `event_reader` is folded into a rung that carries them.
-      - user: user:notifications
+      - user: user:a-notifier
         object: estate:rask
         assertions:
           can_read_event_feed: true

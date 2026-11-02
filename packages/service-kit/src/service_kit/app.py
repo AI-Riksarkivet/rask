@@ -100,7 +100,7 @@ def build_settings() -> Settings:
 
 
 # NO DAPR CLIENT IS BUILT HERE. Every service that publishes constructs its own client in its own
-# lifespan (catalog, lineage, maintenance, notifications), and the `make_service_app`
+# lifespan (catalog, lineage, maintenance), and the `make_service_app`
 # services never touch `app.state.dapr`. A client wired into the app factory would be a shared seam no
 # caller wants, and one that looks available is the one the next service reaches for.
 
@@ -174,7 +174,7 @@ def make_service_app(
     `settings` IS INJECTABLE, and omitting it builds one from the environment. Every caller builds its
     app at MODULE level, so without this parameter `build_settings()` —
     `load_dotenv()` plus a whole `Settings` validation off the process environment — would run as an
-    unavoidable side effect of importing the service (`import notifications`). Nothing could state
+    unavoidable side effect of importing the service. Nothing could state
     the configuration it wanted: a caller could only mutate the environment and hope it got there before the import did. Passing an object closes that,
     and it is the same object the router prefix, the docs URLs, the middleware, `app.state.settings`
     and the lifespan factory all see — one instance, not a re-read per consumer.
@@ -232,8 +232,7 @@ def make_service_app(
     # types: `governed/fga.py` raises `ServiceUnavailableError` on an FGA outage under a docstring
     # promising "outage → ServiceUnavailableError → 503". Without this the fleet apps could not map
     # one, so that outage answered a text/plain 500 — monitoring cannot tell a dependency being down
-    # from this service being broken, and `notifications/api/visibility.py` answered the same class of
-    # failure two different ways inside ONE function.
+    # from this service being broken.
     #
     # Installed HERE rather than per app, so every service answers a denial as a 403 rather than a 500 and every
     # error body has one shape: the divergence docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
@@ -250,7 +249,7 @@ def make_service_app(
     #
     # ROOT, not under `api_prefix`: a kubelet does not know a service's prefix. Unconditional because
     # the router is dependency-free — `ready_check` is the optional half, for a service with a hard
-    # dependency worth reporting (notifications' actor plane).
+    # dependency worth reporting (an actor plane, say).
     #
     # `/api/health` is untouched: it is the frontend-facing badge the estate documents it to be. The
     # point is that it is not a READINESS answer — it is a constant, so probing it reports "ready"

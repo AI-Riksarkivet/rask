@@ -25,7 +25,7 @@ from typing import Any, cast
 import pytest
 
 from lakehouse_kit.control_emit import DaprControlEmitter
-from lakehouse_kit.control_events import CatalogControlEvent
+from service_kit.control_events import CatalogControlEvent
 from service_kit.storage_options import StorageOptions
 
 

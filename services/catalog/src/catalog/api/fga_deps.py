@@ -60,10 +60,10 @@ from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rena
 from catalog.services import dataplane, maintenance, native, object_uuids, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
 from lakehouse_kit import location_claims, object_records, protection, trash
-from lakehouse_kit.subjects import is_person_subject
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.machine_identity import ServicePrincipal
+from service_kit.governed.subjects import is_person_subject
 from service_kit.naming import CATALOG_DELIMITER
 from service_kit.storage_options import StorageOptions
 

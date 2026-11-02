@@ -1,6 +1,6 @@
-"""A pipeline's run, posted with its own token, reaches notifications and the configured graph backend (LH-468, ADR 0158).
+"""A pipeline's run, posted with its own token, reaches an event reader and the configured graph backend (LH-468, ADR 0158).
 
-Notifications hears of a run posted over HTTP only through the feed's projection, which its reconciler follows
+A client that tells people about runs hears of one posted over HTTP only through the feed's projection, which it follows
 forward (the HTTP door records; it publishes nothing on the bus), so the run must be on `GET /events/projection` with
 the author the token verified. The lineage graph is bring-your-own: the relay tick forwards every event lineage
 recorded, as standard OpenLineage, to the backend `LINEAGE_FORWARD_URL` names, over the OpenLineage HTTP transport.
@@ -27,8 +27,8 @@ from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, GraphBackend, g
 _TABLE = "acme-silver$pages"
 _SIDECAR = {"dapr-api-token": "s3cret"}
 _ALICE = "dex~alice"
-#: The notifications service, which reads the event feed under its own service account.
-_NOTIFICATIONS = "kubernetes~system:serviceaccount:rask:rask-sa-notifications"
+#: A client holding `event_reader`, which reads the event feed under its own service account.
+_READER = "kubernetes~system:serviceaccount:rask:rask-sa-a-notifier"
 
 
 def _declared(catalog_url: str, table: str) -> str:
@@ -56,10 +56,10 @@ def test_a_run_reaches_the_backend_once_across_an_outage(tmp_path: Path, monkeyp
     monkeypatch.setenv("APP_API_TOKEN", _SIDECAR["dapr-api-token"])
     run = run_event("1d3c5a07-0000-4000-8000-000000000592", "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=[_TABLE])
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
-        granted = {(_ALICE, "can_write_data", f"table:{_declared(catalog_url, _TABLE)}"), (_NOTIFICATIONS, "can_read_event_feed", "estate:rask")}
+        granted = {(_ALICE, "can_write_data", f"table:{_declared(catalog_url, _TABLE)}"), (_READER, "can_read_event_feed", "estate:rask")}
         with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
             posted = lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: _ALICE})
-            projected = lineage.get("/events/projection", params={"since": 0}, headers={SUBJECT_HEADER: _NOTIFICATIONS}).json()
+            projected = lineage.get("/events/projection", params={"since": 0}, headers={SUBJECT_HEADER: _READER}).json()
             graph.down = True
             while_down = lineage.post(f"/{RELAY}", headers=_SIDECAR).json()
             graph.down = False

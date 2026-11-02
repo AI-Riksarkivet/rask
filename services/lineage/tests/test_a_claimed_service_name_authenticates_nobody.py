@@ -1,8 +1,8 @@
 """At lineage's door a service is the service account its projected token names, and a name it claims proves nothing.
 
-[[LH-220]], clause "the shared token plus a claimed name answers 401". Measured live before the row: notifications was
-allowlisted and not privileged, so the estate-wide `dapr-api-token` plus `x-lance-service-identity: notifications`
-authenticated as notifications, and any holder of that one token could speak as any allowlisted subject. A service
+[[LH-220]], clause "the shared token plus a claimed name answers 401". Measured live before the row: a fleet service was
+allowlisted and not privileged, so the estate-wide `dapr-api-token` plus `x-lance-service-identity: <its name>`
+authenticated as that service, and any holder of that one token could speak as any allowlisted subject. A service
 authenticates with its pod's projected token, verified offline against the cluster issuer, and is the subject its full
 username names (`kubernetes~system:serviceaccount:<ns>:<sa>`, ADR 0156 C5); the shared token stays only as the proof a
 sidecar delivered a request, and names nobody.
@@ -71,6 +71,6 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
 
 
 def test_lineage_refuses_the_shared_token_and_a_claimed_service_name(door: TestClient) -> None:
-    answered = door.get("/who", headers={"dapr-api-token": _SHARED, "x-lance-service-identity": "notifications"})
+    answered = door.get("/who", headers={"dapr-api-token": _SHARED, "x-lance-service-identity": "maintenance"})
 
     assert answered.status_code == 401, answered.text

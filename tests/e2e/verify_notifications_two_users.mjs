@@ -57,9 +57,10 @@
  * where it is invoked from. `tests/e2e` is also where it belongs on its own terms: the standalone
  * Playwright project with its own lockfile, whose whole purpose is driving a RUNNING deploy.
  *
- * RUN
+ * RUN, against an estate where the notifications inbox runs (no lane runs this drive while the product chart
+ * deploys no inbox, ADR 0190):
  *   kubectl port-forward -n kube-system svc/traefik 8080:80 &
- *   cd tests/e2e && node verify_notifications_two_users.mjs
+ *   cd tests/e2e && FGA_TOKEN_FILE=<file> node verify_notifications_two_users.mjs
  */
 import { readFileSync } from 'node:fs';
 
@@ -117,8 +118,8 @@ const LINEAGE_URL = process.env.LINEAGE_URL ?? 'http://localhost:8001';
 const GATEWAY_URL = process.env.GATEWAY_URL ?? ORIGIN;
 const FGA_API_URL = process.env.FGA_API_URL ?? 'http://localhost:18099';
 const FGA_STORE_NAME = process.env.FGA_STORE_NAME ?? 'lance-catalog';
-/** OpenFGA admits only a projected `rask-openfga` token (XC-077): `make notifications-lanes` mints one into
- *  FGA_TOKEN_FILE, read again on every call. */
+/** OpenFGA admits only a projected `rask-openfga` token (XC-077): mint one into FGA_TOKEN_FILE with
+ *  `kubectl create token <release>-sa-jobs --audience rask-openfga`; it is read again on every call. */
 const FGA_TOKEN_FILE = process.env.FGA_TOKEN_FILE;
 function fgaAuth() {
 	if (!FGA_TOKEN_FILE) throw new Error('set FGA_TOKEN_FILE to a rask-openfga token (kubectl create token <release>-sa-jobs --audience rask-openfga)');

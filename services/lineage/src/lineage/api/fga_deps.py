@@ -37,7 +37,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse_kit.openlineage import AUTHOR_FACET, author_facet, dataset_uuids, lifecycle_state
+from lakehouse_kit.openlineage import author_facet, lifecycle_state
 from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep
 from lineage.api.security import Caller, CurrentToken
 from lineage.core.config import LineageSettings
@@ -56,6 +56,7 @@ from lineage_kit.signing import VerifiedSignature
 from service_kit.governed import fga
 from service_kit.governed.decider import AccessDecider
 from service_kit.governed.principal import is_principal
+from service_kit.lineage_events import AUTHOR_FACET, dataset_uuids
 
 
 log = logging.getLogger(__name__)
@@ -302,7 +303,7 @@ def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None
     THE FACET LIVES SOMEWHERE ELSE ON A STATIC EVENT, and stamping the wrong place is silent: a
     `DatasetEvent` has no run, so its author rides the DATASET's `rask_author` facet — which is exactly
     where :attr:`DatasetEvent.author` reads it, and so where the feed's `author` column and the
-    notifications plane's targeting take it from. Writing a run facet onto it would leave the
+    targeting a notifier does take it from. Writing a run facet onto it would leave the
     verified subject unread and the create attributed to whatever the body claimed.
     """
     if token is None:

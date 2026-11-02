@@ -3,8 +3,8 @@
 OpenFGA's BatchCheck answers each item with EITHER a verdict OR an error (a per-check timeout, a
 resolution too complex, a relation the pinned model lacks), and the SDK hands an errored item back as
 ``allowed=False`` beside a ``CheckError``. A gate that reads only ``allowed`` turns every such item into
-a deny: a catalog batch route answers 403, a notification row is hidden, a train trigger is dropped,
-and each is recorded as a decision. :func:`fga.check` answers the same faults with a 503.
+a deny: a catalog batch route answers 403, a lineage feed row is hidden, and each is recorded as a
+decision. :func:`fga.check` answers the same faults with a 503.
 
 The doubles below speak the SDK's own response classes, and the last test drives a real
 ``OpenFgaClient`` against a server answering OpenFGA's wire shape, so the double cannot drift from

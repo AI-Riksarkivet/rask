@@ -108,7 +108,7 @@ done
 
 # 5. Anti-affinity: the replicas:2 services spread across nodes (else one node loss defeats their PDB).
 spread=$(grep -c "topologySpreadConstraints:" "$OUT" || true)
-[ "$spread" -ge 3 ] || fail "prod must spread the 3 multi-replica services (catalog, lineage, notifications) across nodes (>=3), got $spread"
+[ "$spread" -ge 2 ] || fail "prod must spread the 2 multi-replica services (catalog, lineage) across nodes (>=2), got $spread"
 
 # 6. Resource tiers: the memory-heavy workload in the release (the catalog's Arrow buffer) gets a 1Gi limit
 # above the shared 512Mi default; the object store is the platform's and outside the release. The default
@@ -216,8 +216,8 @@ unrendered=$(comm -23 <(sort -u <<<"$named") <(echo "$rendered"))
 [ -z "$unrendered" ] || fail "workloads name ServiceAccounts this render does not create: $(tr '\n' ' ' <<<"$unrendered")"
 sa=$(grep -c "^kind: ServiceAccount" "$OUT" || true)
 automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
-[ "$automount" -ge 7 ] \
-  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=7 expected; 1 is the baseline)"
+[ "$automount" -ge 6 ] \
+  || fail "prod must stop mounting the SA token into app pods, rendered $automount refusals (>=6 expected; 1 is the baseline)"
 grep -q 'dapr.io/sidecar-seccomp-profile-type: RuntimeDefault' "$OUT" \
   || fail "prod must restrict the daprd sidecar (dapr.sidecarRestricted) — a pod is only as restricted as its loosest container"
 

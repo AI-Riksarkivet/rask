@@ -1,14 +1,13 @@
 """SK-09 — the lifecycle invariants `/readyz` reads are the FACTORY's job, not a convention.
 
 `service_kit.probes.readyz` answers off two flags on ``app.state``: ``startup_complete`` and
-``shutting_down``. Nothing set them for an app built by ``make_service_app`` — every service that
-had them set them by hand in its own lifespan, and the five factory-built deployables (compute,
-controlplane, ingest, flows, notifications) do not. ``compute``'s lifespan even logs the STRING
-``"startup_complete"`` while never setting the attribute, which is how the miss survived review.
+``shutting_down``. Left to each service's own lifespan, setting them is a convention a factory-built
+app can miss without anyone seeing: a lifespan that logs the STRING ``"startup_complete"`` while never
+setting the attribute reads as if it set it, and survives review.
 
-The consequence is a shipped one, not a stylistic one: `/readyz` on those five reports ``starting``
+The consequence is a shipped one, not a stylistic one: `/readyz` on such an app reports ``starting``
 for the whole life of the pod, so a readiness gate over it never opens, and ``shutting_down`` never
-flips, so the drain never begins.
+flips, so the drain never begins. So the factory sets them.
 """
 
 from collections.abc import AsyncGenerator, Callable

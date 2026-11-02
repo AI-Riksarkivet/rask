@@ -18,9 +18,9 @@ from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse_kit.objectfs import lance_storage_options
-from lakehouse_kit.signature_doors import SignatureDoorSettings
 from service_kit.governed.settings import FgaSettings
 from service_kit.governed.store_credential import S3KeyPair, store_key_pair
+from service_kit.signature_doors import SignatureDoorSettings
 from service_kit.storage_options import StorageOptions
 
 

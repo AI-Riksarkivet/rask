@@ -47,10 +47,10 @@ from pydantic import SecretStr
 
 from lakehouse_kit import location_claims, trash
 from lakehouse_kit.base_refs import BaseRefs, normalise
-from lakehouse_kit.control_events import CatalogControlEvent
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge as mod
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, CategoryUnavailable, IncompleteScan, ReconcileReport
+from service_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga as fga_module
 from service_kit.storage_options import StorageOptions
 

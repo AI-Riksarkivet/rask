@@ -51,7 +51,7 @@ def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
     safe on a streamed body such as a 206 Range response — a `BaseHTTPMiddleware` layer
     fully buffers the response body, so a streaming route cannot carry one.
 
-    IT APPLIES ONLY WHERE `setup_otel` RUNS: the `make_service_app` services (notifications). A
+    IT APPLIES ONLY WHERE `setup_otel` RUNS: the `make_service_app` services, the clients' (compute, flows, the inbox). A
     hook is a Python callable passed to `FastAPIInstrumentor.instrument_app`, and
     `opentelemetry-instrument` builds the instrumentor from an entry point with no way to carry one —
     so the apps the chart launches under it (the lance-plane services) carry the id in

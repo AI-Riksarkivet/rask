@@ -42,9 +42,9 @@ from catalog.services import erasure_release, table_claims
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import Pin
 from lakehouse_kit.base_registry import BaseRegistry
-from lakehouse_kit.control_events import CatalogControlEvent
 from lakehouse_kit.history_fences import HistoryWork, TableHistory
 from lakehouse_kit.location_claims import ClaimStore
+from service_kit.control_events import CatalogControlEvent
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal

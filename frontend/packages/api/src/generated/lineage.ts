@@ -229,7 +229,7 @@ export interface paths {
         };
         /**
          * Get Events Projection
-         * @description The run feed WITHOUT the per-dataset filter, for the notifications reconciler ([[CTL-021]]).
+         * @description The run feed WITHOUT the per-dataset filter, for a notifier walking it ([[CTL-021]]).
          *
          *     WHY A SECOND DOOR RATHER THAN A FLAG ON THE FIRST. `/events` is governed per dataset, which is
          *     right for a person: an event naming a table you cannot see must not disclose it. It is wrong for a
