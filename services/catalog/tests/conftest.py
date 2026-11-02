@@ -22,8 +22,10 @@ from pydantic import BaseModel
 
 # THIS DIRECTORY, IMPORTABLE, so a plain helper module beside the suite (`tables_by_name`) resolves for a single file as
 # for the whole directory: under `--import-mode=importlib` nothing else puts it on the path, and a conftest is loaded
-# before collection begins.
+# before collection begins. The repository root too, so a helper the root suites keep (`tests/integration/store_requests`)
+# resolves under the one name those suites import it by, `tests.integration.store_requests`, whatever was collected first.
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(1, str(Path(__file__).parents[3]))
 
 #: The account moto files every role and session under.
 ACCOUNT = "123456789012"

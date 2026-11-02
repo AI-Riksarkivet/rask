@@ -1,4 +1,4 @@
-"""ONE answer to "did this Lance call fail because the object store did not answer?".
+"""ONE answer to "did this object-store call, Lance's or pyarrow's, fail because the store did not answer?".
 
 The sibling of :mod:`service_kit.lancekit.absence`, for the opposite question. Absence PROVES a target
 is not there; an outage proves nothing about the target, only that the store could not be asked. The
@@ -29,6 +29,16 @@ The NATIVE namespace backend says the same in another dialect: it raises a typed
     503 on every request         "IO { source: Generic { store: "S3", source: RetryError(... inner: Status { status: 503, ..."
     403 on every request         "IO { source: PermissionDenied { path: ..., ... inner: Status { status: 403, ..."
 
+The catalog's own reads and writes of a table's objects go through pyarrow's S3 filesystem (aws-sdk-cpp), a third
+dialect: ``When <doing what> ... in bucket '<b>': AWS Error <CODE> during <Operation> operation: <message>``. Measured on
+pyarrow 25.0.0 against a store answering each fault to a HEAD, a multipart PUT and a listing ([[LH-545]]):
+
+    500 on every request         "AWS Error INTERNAL_FAILURE during ...", "AWS Error UNKNOWN (HTTP status 500) during HeadObject ..."
+    503 ServiceUnavailable       "AWS Error SERVICE_UNAVAILABLE during ...", "AWS Error UNKNOWN (HTTP status 503) during HeadObject ..."
+    503 SlowDown                 "AWS Error SLOW_DOWN during ..."
+    connection dropped           "AWS Error NETWORK_CONNECTION during ...: curlCode: 28, Timeout was reached ..."
+    403, 404 NoSuchBucket, 429   "AWS Error ACCESS_DENIED", "AWS Error NO_SUCH_BUCKET", "AWS Error UNKNOWN (HTTP status 429)"
+
 The transport failures and the 5xx are outages. A 4xx is NOT: the store answered, and what it said (no
 such bucket, access denied) will be said again on retry, so it stays the fault it is rather than
 becoming a 503 that invites a retry loop against a misconfiguration. The native 403 is excluded twice
@@ -40,13 +50,20 @@ from __future__ import annotations
 
 __all__ = ["reads_as_store_outage"]
 
-#: Each marker in both dialects: pylance's flattened `LanceError(IO)` text, and the native backend's Debug form.
-#: An object-store failure, as opposed to one of Lance's own.
-_IO_MARKERS = ("LanceError(IO)", "IO { source: Generic {")
+#: Each marker in all three dialects: pylance's flattened `LanceError(IO)` text, the native backend's Debug form, and
+#: pyarrow's S3 error. An object-store failure, as opposed to one of Lance's own.
+_IO_MARKERS = ("LanceError(IO)", "IO { source: Generic {", "AWS Error ")
 #: No response arrived, or its body did not: the connect or the whole request ran out its bound, or the connection dropped.
-_TRANSPORT_MARKERS = ("error sending request", "request or response body error", "inner: Http(HttpError")
+_TRANSPORT_MARKERS = ("error sending request", "request or response body error", "inner: Http(HttpError", "AWS Error NETWORK_CONNECTION")
 #: The store answered with a server error.
-_SERVER_ERROR_MARKERS = ("non-2xx status code: 5", "inner: Status { status: 5")
+_SERVER_ERROR_MARKERS = (
+    "non-2xx status code: 5",
+    "inner: Status { status: 5",
+    "(HTTP status 5",
+    "AWS Error INTERNAL_FAILURE",
+    "AWS Error SERVICE_UNAVAILABLE",
+    "AWS Error SLOW_DOWN",
+)
 
 
 def reads_as_store_outage(exc: BaseException) -> bool:

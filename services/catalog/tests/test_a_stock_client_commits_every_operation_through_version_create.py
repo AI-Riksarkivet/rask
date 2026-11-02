@@ -21,6 +21,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 import struct
 import threading
 import time
@@ -54,6 +55,8 @@ from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.lakehouse import base_refs, commit_records, commit_turns, maintenance_due, records
 from service_kit.lakehouse.objectfs import StorageOptions
+from storage import S3Client
+from tests.integration import store_requests
 
 
 _TOKEN = {"Authorization": "Bearer t"}
@@ -115,6 +118,34 @@ def served_on_s3(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Ser
         "LANCE_S3_ENDPOINT": moto_url,
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
+    }
+    own = {"aws_endpoint": moto_url, "aws_region": "us-east-1", "allow_http": "true", "aws_access_key_id": "test", "aws_secret_access_key": "test"}
+    yield from _serve(Served(url="", denied=set(), root=None, storage_options=own), env, monkeypatch)
+
+
+@pytest.fixture
+def catalogs_store(moto_url: str) -> Iterator[store_requests.CountedStore]:
+    """The catalog's own way to the moto store: a proxy that answers the requests a test names 503, as a store that cannot serve them."""
+    with store_requests.counted(moto_url) as store:
+        yield store
+
+
+@pytest.fixture
+def served_through_a_proxy(moto_url: str, catalogs_store: store_requests.CountedStore, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
+    """``served_on_s3`` with the catalog reaching its store through ``catalogs_store``, while the client reaches the store
+    directly at the endpoint the catalog vends, as an off-cluster writer does (``LANCE_S3_VENDED_ENDPOINT``, [[LH-489]])."""
+    bucket = f"lh545-{uuid.uuid4().hex[:10]}"
+    boto3.client("s3", endpoint_url=moto_url, region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test").create_bucket(Bucket=bucket)
+    env = {
+        "LANCE_REST_ROOT": f"s3://{bucket}",
+        "LANCE_CONTROL_ROOT": f"s3://{bucket}",
+        "LANCE_S3_ENDPOINT": catalogs_store.url,
+        "LANCE_S3_VENDED_ENDPOINT": moto_url,
+        "LANCE_S3_ACCESS_KEY_ID": "test",
+        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        # A request the store cannot serve fails the door at once rather than after Lance's own retries.
+        "LANCE_STORE_MAX_RETRIES": "0",
+        "LANCE_DATA_STORE_MAX_RETRIES": "0",
     }
     own = {"aws_endpoint": moto_url, "aws_region": "us-east-1", "allow_http": "true", "aws_access_key_id": "test", "aws_secret_access_key": "test"}
     yield from _serve(Served(url="", denied=set(), root=None, storage_options=own), env, monkeypatch)
@@ -713,23 +744,113 @@ def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_err
     assert _opened(stock).version == 3
 
 
-def _answer_to_the_staged_commit(served: Served, table: str, version: int, *, branch: str | None = None) -> tuple[int, int, str]:
+def _answer_to_the_staged_commit(served: Served, table: str, version: int, *, branch: str | None = None, location: str | None = None) -> tuple[int, int, str]:
     """The status, spec code and detail the catalog answers the one staged manifest of ``table`` (or of its ``branch``)
-    at ``version``.
+    at ``version``; the table's ``location`` is described unless given.
 
     pylance reports a refused finalize as an unknown outcome and keeps its staged manifest; asking for it again shows
     the answer the client was given.
     """
-    assert served.root is not None, "a staged manifest is read back from a local root"
     ref = f"tree/{branch}/" if branch is not None else ""
-    described = httpx.post(f"{served.url}/v1/table/{table}/describe", json={"vend_credentials": False}, headers=_TOKEN).json()
-    pending = list(Path(described["location"].removeprefix("file://")).glob(f"{ref}_versions/*.manifest-*"))
+    if location is None:
+        location = httpx.post(f"{served.url}/v1/table/{table}/describe", json={"vend_credentials": False}, headers=_TOKEN).json()["location"]
+    pending = _staged_manifests(served, location, ref)
     assert len(pending) == 1, f"one staged manifest of {table} awaits its answer, found {pending}: none means the commit landed"
     (staged,) = pending
-    request = {"version": version, "manifest_path": staged.relative_to("/").as_posix(), **({"branch": branch} if branch is not None else {})}
+    request = {"version": version, "manifest_path": staged, **({"branch": branch} if branch is not None else {})}
     again = httpx.post(f"{served.url}/v1/table/{table}/version/create", json=request, headers=_TOKEN)
     body = again.json()
     return again.status_code, body.get("code"), body.get("detail", "")
+
+
+def _staged_manifests(served: Served, location: str, ref: str) -> list[str]:
+    """The object-store path pylance names each manifest staged under the ref's ``_versions/`` by, read off the store."""
+    if served.root is not None:
+        return [path.relative_to("/").as_posix() for path in Path(location.removeprefix("file://")).glob(f"{ref}_versions/*.manifest-*")]
+    bucket, _, key = location.removeprefix("s3://").partition("/")
+    listed = _s3(served).list_objects_v2(Bucket=bucket, Prefix=f"{key}/{ref}_versions/")
+    return [item["Key"] for item in listed.get("Contents", []) if ".manifest-" in item["Key"]]
+
+
+def _s3(served: Served) -> S3Client:
+    """A client of the store at the endpoint and key the stock client reaches it with."""
+    options = served.storage_options
+    return boto3.client(
+        "s3",
+        endpoint_url=options["aws_endpoint"],
+        region_name=options["aws_region"],
+        aws_access_key_id=options["aws_access_key_id"],
+        aws_secret_access_key=options["aws_secret_access_key"],
+    )
+
+
+def _its_versions_listed_once_a_commit_is_staged(served: Served, location: str) -> Callable[[store_requests.StoreRequest], bool]:
+    """The listing of the table's ``_versions/`` every open of it makes to find its latest version, from the moment a commit
+    is staged there: the listings before it are the describes the client opens the table through."""
+    bucket, _, key = location.removeprefix("s3://").partition("/")
+    return lambda request: request.lists(f"{key}/_versions/") and bool(_staged_manifests(served, f"s3://{bucket}/{key}", ""))
+
+
+def _its_staged_manifest_read(served: Served, location: str) -> Callable[[store_requests.StoreRequest], bool]:
+    """The catalog's read of the manifest the client staged, which it reads through pyarrow's S3 filesystem."""
+    staged = re.compile(rf"/{re.escape(location.removeprefix('s3://'))}/_versions/[0-9]+\.manifest-.+")
+    return lambda request: request.method in ("HEAD", "GET") and staged.fullmatch(request.path) is not None
+
+
+def _its_staged_version_read(served: Served, location: str) -> Callable[[store_requests.StoreRequest], bool]:
+    """The reads of the detached copy the catalog plants to open the staged version through (``managed_versions.stage``)."""
+    detached = re.compile(rf"/{re.escape(location.removeprefix('s3://'))}/_versions/d[0-9]+\.manifest")
+    return lambda request: request.method in ("HEAD", "GET") and detached.fullmatch(request.path) is not None
+
+
+@pytest.mark.parametrize(
+    "failing",
+    [
+        pytest.param(_its_versions_listed_once_a_commit_is_staged, id="the-tables-latest-version"),
+        pytest.param(_its_staged_manifest_read, id="the-staged-manifest"),
+        pytest.param(_its_staged_version_read, id="the-staged-version"),
+    ],
+)
+def test_a_commit_whose_store_read_fails_is_service_unavailable_and_leaves_the_table_at_its_version(
+    served_through_a_proxy: Served,
+    catalogs_store: store_requests.CountedStore,
+    failing: Callable[[Served, str], Callable[[store_requests.StoreRequest], bool]],
+) -> None:
+    """[[LH-545]]: a read the judgment needs that the store cannot serve says nothing about the commit, so it is the
+    spec's 17, which a stock client waits on and retries, never the 13 it takes for its own malformed commit and drops
+    (`lance_docs/ns_catalog/namespace/operations/errors.md`)."""
+    served = served_through_a_proxy
+    stock = _created(served)
+    location = str(stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).location)
+
+    with catalogs_store.answering_unavailable(failing(served, location)):
+        # pylance reports the refused finalize as an OSError; the catalog's own answer is read back below.
+        with contextlib.suppress(OSError):
+            lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=served.storage_options)
+        status, code, detail = _answer_to_the_staged_commit(served, "db$t", 2, location=location)
+
+    assert (status, code) == (503, 17), detail
+    after = _opened(stock, served.storage_options)
+    assert (after.version, _rows(after)) == (1, [(1, "a"), (2, "b"), (3, "c")])
+
+
+def test_a_commit_on_a_table_whose_latest_version_does_not_open_is_refused_as_internal_and_lands_nothing(served: Served) -> None:
+    """[[LH-545]]: only a table that holds no committed version follows version 0 (``dataplane.holds_a_version``). One whose
+    latest committed manifest Lance cannot read is no table with none: read as one, the version after none is the slot a
+    reclaimed version 1 left, which the backend's put-if-not-exists would fill as a create."""
+    stock = _created(served)
+    lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
+    location = str(stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).location)
+    versions = Path(location.removeprefix("file://")) / "_versions"
+    latest = versions / f"{(1 << 64) - 1 - 2}.manifest"
+    staged = versions / f"{(1 << 64) - 1 - 3}.manifest-{uuid.uuid4()}"
+    staged.write_bytes(manifest_bytes.with_manifest_version(latest.read_bytes(), 3))
+    latest.write_bytes(b"not a manifest")
+
+    status, code, detail = _answer_to_the_staged_commit(served, "db$t", 3, location=location)
+
+    assert (status, code) == (500, 18), detail
+    assert sorted(path.name for path in versions.glob("*.manifest")) == sorted({latest.name, f"{(1 << 64) - 1 - 1}.manifest"})
 
 
 def _create_a_branch_with_pylance(stock: lance_namespace.LanceNamespace) -> None:

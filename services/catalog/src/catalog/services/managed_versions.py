@@ -31,6 +31,7 @@ from lance_namespace import (
     ConcurrentModificationError,
     CreateTableVersionRequest,
     CreateTableVersionResponse,
+    InternalError,
     InvalidInputError,
     ServiceUnavailableError,
     TableBranchNotFoundError,
@@ -162,10 +163,24 @@ def _staged_uri(location: str, manifest_path: str) -> str:
 
 
 def _latest_version(location: str, so: StorageOptions) -> int:
-    """The table's latest committed version, 0 for a declared table with none."""
+    """The ref's latest committed version, 0 for a declared table with none.
+
+    Only an open that fails asks the store whether the ref holds a committed version (:func:`dataplane.holds_a_version`,
+    [[LH-528]]), which no staged manifest counts as: a declared table's first commit is staged beside it.
+
+    Raises:
+        ServiceUnavailableError: The object store did not answer, which says nothing about the ref's versions ([[LH-545]]).
+        InternalError: The ref holds a committed version that does not open, a state of the table's own the spec answers
+            18 for (`lance_docs/ns_catalog/namespace/operations/errors.md`). Read as none, the version after it would be
+            the slot a reclaimed version 1 left, which the finalize's put-if-not-exists fills as a create.
+    """
     try:
         return int(lance.dataset(location, storage_options=so.in_clear() or None).version)
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        if reads_as_store_outage(exc):
+            raise ServiceUnavailableError("the object store did not answer reading the table's latest version") from exc
+        if dataplane.holds_a_version(location, so):
+            raise InternalError("commit refused: the table's latest committed version cannot be opened, so no commit can follow it") from exc
         return 0
 
 
@@ -208,6 +223,8 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         InvalidInputError: The manifest path is not a staged manifest under the ref, it is not a Lance manifest, it
             cannot be opened, or its version lies beyond the one after the ref's latest.
         VersionTakenError: Another writer took the version it names: the ref's latest is that version or a later one.
+        ServiceUnavailableError: The object store did not answer reading the ref's latest version or the staged version.
+        InternalError: The ref holds a committed version that does not open, so no version can follow it.
     """
     location = ref.location
     staged = _staged_uri(location, request.manifest_path)
@@ -227,6 +244,8 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         transaction = lance.dataset(location, version=detached_id, storage_options=so.in_clear() or None).read_transaction(detached_id)
     except (OSError, ValueError) as exc:
         _discard(location, so, detached_id, finalize_id)
+        if reads_as_store_outage(exc):
+            raise ServiceUnavailableError("the object store did not answer opening the staged version") from exc
         # A version Lance itself cannot open (an overlay on an appended fragment set reader flags 66, measured on
         # pylance 12.0.0) is the staged manifest's fault, never the catalog's.
         raise InvalidInputError(f"commit refused: the staged manifest cannot be opened: {exc}") from exc

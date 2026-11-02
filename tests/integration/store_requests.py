@@ -1,8 +1,9 @@
-"""What reaches an S3 store: a proxy in front of one that forwards every request unchanged and keeps what each asked.
+"""What reaches an S3 store: a proxy in front of one that forwards every request unchanged and keeps what each asked, and
+that answers the requests a test names 503 ServiceUnavailable, as a store that cannot serve them does.
 
 Lance's and pyarrow's native S3 clients go through no Python hook, so a claim about how many requests a door sends is
-counted on the wire. The Host header is forwarded as sent, so a SigV4 signature made for the proxy's address is the one
-the store reads.
+counted on the wire, and a claim about one read the store cannot serve is made there too. The Host header is
+forwarded as sent, so a SigV4 signature made for the proxy's address is the one the store reads.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import http.client
 import http.server
 import threading
 import urllib.parse
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import cast
 
@@ -30,6 +31,10 @@ class StoreRequest(BaseModel):
         return self.method == "GET" and "list-type" in self.query and self.query.get("prefix", [""])[0] == prefix
 
 
+#: The body S3 answers a request with while it cannot serve it (its ``ServiceUnavailable`` error).
+_UNAVAILABLE = b"<?xml version='1.0' encoding='UTF-8'?><Error><Code>ServiceUnavailable</Code><Message>Service is unable to handle request.</Message></Error>"
+
+
 class _Forwarding(http.server.ThreadingHTTPServer):
     daemon_threads = True
 
@@ -38,6 +43,8 @@ class _Forwarding(http.server.ThreadingHTTPServer):
         self.upstream = upstream
         self.lock = threading.Lock()
         self.seen: list[StoreRequest] = []
+        #: The requests answered 503 rather than forwarded: none unless a test names them (:meth:`CountedStore.answering_unavailable`).
+        self.answered_unavailable: Callable[[StoreRequest], bool] | None = None
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -62,6 +69,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _forward(self) -> None:
         forwarding = cast(_Forwarding, self.server)
         body = self._body()
+        parsed = urllib.parse.urlsplit(self.path)
+        request = StoreRequest(method=self.command, path=urllib.parse.unquote(parsed.path), query=urllib.parse.parse_qs(parsed.query))
+        unavailable = forwarding.answered_unavailable
+        if unavailable is not None and unavailable(request):
+            self._answer_unavailable()
+            return
         headers = {key: value for key, value in self.headers.items() if key.lower() not in ("connection", "content-length", "transfer-encoding", "expect")}
         upstream = http.client.HTTPConnection(*forwarding.upstream, timeout=60)
         try:
@@ -70,9 +83,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             data = answer.read()
         finally:
             upstream.close()
-        parsed = urllib.parse.urlsplit(self.path)
         with forwarding.lock:
-            forwarding.seen.append(StoreRequest(method=self.command, path=urllib.parse.unquote(parsed.path), query=urllib.parse.parse_qs(parsed.query)))
+            forwarding.seen.append(request)
         self.send_response_only(answer.status, answer.reason)
         for key, value in answer.getheaders():
             if key.lower() not in ("connection", "content-length", "transfer-encoding"):
@@ -81,6 +93,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(data)
+
+    def _answer_unavailable(self) -> None:
+        self.send_response_only(503, "Service Unavailable")
+        self.send_header("Content-Type", "application/xml")
+        self.send_header("Content-Length", str(len(_UNAVAILABLE)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(_UNAVAILABLE)
 
     do_GET = do_PUT = do_POST = do_HEAD = do_DELETE = _forward
 
@@ -100,6 +120,16 @@ class CountedStore:
         with self._server.lock:
             seen, self._server.seen = self._server.seen, []
         return seen
+
+    @contextmanager
+    def answering_unavailable(self, requests: Callable[[StoreRequest], bool]) -> Generator[None]:
+        """For the life of the block, answer each of ``requests`` 503 ``ServiceUnavailable`` instead of forwarding it, as a
+        store that cannot serve it answers; every other request is forwarded."""
+        self._server.answered_unavailable = requests
+        try:
+            yield
+        finally:
+            self._server.answered_unavailable = None
 
 
 @contextmanager

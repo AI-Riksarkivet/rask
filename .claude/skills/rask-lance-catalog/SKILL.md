@@ -728,7 +728,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `dir` backend's put-if-not-exists. A refusal leaves the table at its version; pylance reports it as an unknown
   outcome and keeps its staged manifest. A version another writer took since the writer staged it answers 409 code 14
   before it is judged (`managed_versions.VersionTakenError`, the spec's 409 for a version that exists) and hands the
-  writer the ref's next turn ([[LH-259]]); a version beyond the next answers 400. The door admits a writer or a maintainer (`can_create_version`), and the judge
+  writer the ref's next turn ([[LH-259]]); a version beyond the next answers 400. A read the judgment needs that the store
+  cannot serve answers 503 code 17, in Lance's dialect and pyarrow's alike (`service_kit.lancekit.outage`), never the 400
+  code 13 a stock client drops as its own malformed commit; only a ref `dataplane.holds_a_version` finds holding no
+  committed version follows version 0, and one whose latest committed version does not open answers 500 code 18
+  ([[LH-545]], `lance_docs/ns_catalog/namespace/operations/errors.md`). The door admits a writer or a maintainer (`can_create_version`), and the judge
   asks the operation's own rung (`fga_deps.require_staged_operation`: the writer operations and a table's first version `can_write_data`, restore
   `can_restore`, rewrite `can_maintain`, an Overwrite after the first version `can_drop` plus protection,
   `Clone` and unknown operations refused); a create at 2.2 with stable row ids and no later change to either;
