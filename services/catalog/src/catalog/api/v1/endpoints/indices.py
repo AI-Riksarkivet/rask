@@ -30,7 +30,7 @@ from lance_namespace import (
 
 from catalog.api import lineage_deps
 from catalog.api.dependencies import DoorTableDep, LineageEmitterDep, ObjectUuidsDep, SettingsDep, StorageOptionsDep
-from catalog.api.pagination import ListLimit
+from catalog.api.pagination import ListLimit, page_limit
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DROP_INDEX
@@ -87,7 +87,7 @@ def list_table_indices(
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
     if body is not None:
         page_token = body.page_token if "page_token" in sent else page_token
-        limit = body.limit if "limit" in sent else limit
+        limit = page_limit(body.limit) if "limit" in sent else limit
         branch = body.branch if "branch" in sent else branch
     req = ListTableIndicesRequest(id=segments, page_token=page_token, limit=limit, branch=branch, version=body.version if body else None)
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="list_table_indices")

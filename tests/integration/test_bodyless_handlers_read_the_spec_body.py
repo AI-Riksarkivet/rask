@@ -46,6 +46,8 @@ from lance_namespace import (
 from lance_namespace_urllib3_client.models.fragment_stats import FragmentStats
 from lance_namespace_urllib3_client.models.fragment_summary import FragmentSummary
 
+from catalog.api.pagination import MAX_LIST_LIMIT
+
 
 def _sent(mock: MagicMock) -> Any:
     """The request model the ROUTE handed the backend."""
@@ -85,11 +87,26 @@ def test_table_exists_honours_a_body_version(client: TestClient, fake_ns: MagicM
     assert _sent(fake_ns.table_exists).version == 3, "the body's version was dropped, so the answer is about the latest version"
 
 
-def test_list_table_indices_honours_body_paging(client: TestClient, fake_ns: MagicMock) -> None:
+@pytest.mark.parametrize(
+    ("asked", "paged_at"),
+    [
+        pytest.param(1, 1, id="within-the-cap"),
+        # The `dir` backend pages its index listing at the limit it is handed and answers a token that continues it
+        # (measured on pylance 13.0.0: limit=1 over three indices answered one and `a_idx`), so the clamp is the page.
+        pytest.param(5 * MAX_LIST_LIMIT, MAX_LIST_LIMIT, id="past-the-cap"),
+    ],
+)
+def test_list_table_indices_honours_body_paging(client: TestClient, fake_ns: MagicMock, asked: int, paged_at: int) -> None:
     fake_ns.list_table_indices.return_value = ListTableIndicesResponse(indexes=[])
-    assert client.post("/v1/table/db$t/index/list", json={"limit": 1, "page_token": "p2"}).status_code == 200
+    assert client.post("/v1/table/db$t/index/list", json={"limit": asked, "page_token": "p2"}).status_code == 200
     sent = _sent(fake_ns.list_table_indices)
-    assert (sent.limit, sent.page_token) == (1, "p2"), "an unpaged listing was returned for a paged request"
+    assert (sent.limit, sent.page_token) == (paged_at, "p2"), "the body's paging did not reach the backend as the door pages"
+
+
+def test_list_table_indices_refuses_a_body_limit_of_zero(client: TestClient, fake_ns: MagicMock) -> None:
+    resp = client.post("/v1/table/db$t/index/list", json={"limit": 0})
+    assert (resp.status_code, resp.json()["code"]) == (400, 13), resp.text
+    fake_ns.list_table_indices.assert_not_called()
 
 
 def test_list_table_indices_refuses_a_body_branch(client: TestClient, fake_ns: MagicMock) -> None:

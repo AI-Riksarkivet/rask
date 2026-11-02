@@ -11,17 +11,43 @@ from __future__ import annotations
 from typing import Annotated, Final
 
 from fastapi import Query
+from lance_namespace import InvalidInputError
+from pydantic import AfterValidator
 
 
-#: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with `page_token`, so a server
-#: answering fewer rows than asked and handing back a token is SPEC-CORRECT: the cap costs a caller nothing but a
-#: second call. Declared on the parameter rather than clamped in the body so the schema states the real bound.
+#: The most rows one page of a spec listing answers. The spec's `PageLimit` names no maximum and a server that cannot
+#: return every item in one response hands back a `page_token` (`lance_docs/ns_catalog/spec.yaml` PageToken), so a
+#: larger `limit` is answered this many rows and a token: the cap costs a caller a second call, never a refusal.
 MAX_LIST_LIMIT: Final = 1000
 
-#: A spec listing's `limit`: the spec's `PageLimit` is "an inclusive upper bound of the number of results", so a
-#: bound of zero or below asks for nothing a listing can mean, and is refused 400 (code 13) by
-#: `install_problem_handlers` rather than answered as an empty page or as the whole listing.
-ListLimit = Annotated[int | None, Query(ge=1, le=MAX_LIST_LIMIT)]
+
+def page_limit(limit: int | None) -> int | None:
+    """A spec listing's `limit`, clamped to `MAX_LIST_LIMIT`; zero and below are refused 400 (code 13).
+
+    `PageLimit` is "an inclusive upper bound of the number of results", so zero asks for an empty page, and the keyset
+    cursor names the last row a page served: a page serving none has no token to continue from but the caller's own, and
+    on a first request an absent token reads as the end of the listing. A door whose `limit` rides in its spec body
+    (`ListTableIndicesRequest`) reads it through this, as `ListLimit` reads the query's.
+    """
+    if limit is None:
+        return None
+    if limit < 1:
+        raise InvalidInputError(f"limit must be at least 1, got {limit}")
+    return min(limit, MAX_LIST_LIMIT)
+
+
+#: A spec listing's query `limit`, read through `page_limit`; `ge=1` states the refusal in the schema.
+ListLimit = Annotated[
+    int | None,
+    Query(
+        ge=1,
+        description=(
+            f"An inclusive upper bound of the number of results. A limit above {MAX_LIST_LIMIT} is answered at most "
+            f"{MAX_LIST_LIMIT} results and a page_token that continues the listing. Zero and below are refused 400."
+        ),
+    ),
+    AfterValidator(page_limit),
+]
 
 
 def paginate(names: list[str], page_token: str | None, limit: int | None) -> tuple[list[str], str | None]:

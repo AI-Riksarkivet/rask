@@ -12513,6 +12513,7 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
+                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
                 limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -12549,6 +12550,7 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
+                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
                 limit?: number | null;
                 include_declared?: boolean;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
@@ -12586,6 +12588,7 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
+                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
                 limit?: number | null;
                 include_declared?: boolean;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
@@ -12927,6 +12930,7 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
+                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
                 limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -13484,6 +13488,7 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
+                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
                 limit?: number | null;
                 /** @description REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref. */
                 branch?: string | null;
@@ -14030,6 +14035,7 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
+                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
                 limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -14066,6 +14072,7 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
+                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
                 limit?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -14378,6 +14385,7 @@ export interface operations {
         parameters: {
             query?: {
                 page_token?: string | null;
+                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
                 limit?: number | null;
                 descending?: boolean | null;
                 /** @description The ref whose version history to list. Omit for main. */

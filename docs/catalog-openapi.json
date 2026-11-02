@@ -19418,13 +19418,13 @@
             }
           },
           {
+            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 1000,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -19432,6 +19432,7 @@
                   "type": "null"
                 }
               ],
+              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
               "title": "Limit"
             }
           },
@@ -19518,13 +19519,13 @@
             }
           },
           {
+            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 1000,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -19532,6 +19533,7 @@
                   "type": "null"
                 }
               ],
+              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
               "title": "Limit"
             }
           },
@@ -19619,13 +19621,13 @@
             }
           },
           {
+            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 1000,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -19633,6 +19635,7 @@
                   "type": "null"
                 }
               ],
+              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
               "title": "Limit"
             }
           },
@@ -20381,13 +20384,13 @@
             }
           },
           {
+            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 1000,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -20395,6 +20398,7 @@
                   "type": "null"
                 }
               ],
+              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
               "title": "Limit"
             }
           },
@@ -21895,13 +21899,13 @@
             }
           },
           {
+            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 1000,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -21909,6 +21913,7 @@
                   "type": "null"
                 }
               ],
+              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
               "title": "Limit"
             }
           },
@@ -23495,13 +23500,13 @@
             }
           },
           {
+            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 1000,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -23509,6 +23514,7 @@
                   "type": "null"
                 }
               ],
+              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
               "title": "Limit"
             }
           },
@@ -23593,13 +23599,13 @@
             }
           },
           {
+            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 1000,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -23607,6 +23613,7 @@
                   "type": "null"
                 }
               ],
+              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
               "title": "Limit"
             }
           },
@@ -24344,13 +24351,13 @@
             }
           },
           {
+            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "maximum": 1000,
                   "minimum": 1,
                   "type": "integer"
                 },
@@ -24358,6 +24365,7 @@
                   "type": "null"
                 }
               ],
+              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
               "title": "Limit"
             }
           },
