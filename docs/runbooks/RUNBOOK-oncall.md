@@ -38,6 +38,9 @@ these are found by watching the Perses dashboards (`make dashboards`) or a user 
 | `ErasureDerivedAfterRelease` or `ErasureLateDerivedUnwatched` firing | [A table derived from an erased table found after the release](#a-table-derived-from-an-erased-table-found-after-the-release) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
 | FGA failing across the estate | [AGE down](#age-postgres-down--fga) |
+| `DaprConsumerWedge` firing: a sidecar retrying its app's inbound deliveries | [A subscriber retries without end](#a-subscriber-retries-without-end) |
+| `HttpServerMetricsMissing` firing | [No app reports HTTP metrics](#no-app-reports-http-metrics) |
+| `HttpServerErrorRatioHigh`, `HttpServerLatencyHigh` or `MaintenanceSweepRunsLong` firing | [A service answers 5xx or slowly](#a-service-answers-5xx-or-slowly) |
 
 ---
 
@@ -286,3 +289,56 @@ sized via the `resources.age` tier (1Gi in prod).
 **Act.** Recover the pod/volume; OpenFGA reconnects on its own. For
 prod, externalize to a replicated managed Postgres and take real backups
 ([RUNBOOK-restore.md](RUNBOOK-restore.md)).
+
+## A subscriber retries without end
+
+**Symptom.** `DaprConsumerWedge` (critical): an app's sidecar has booked `process_status="retry"` on its inbound bus
+deliveries for 15 minutes, by `app_id`.
+
+**Cause.** The app's handler answers RETRY to every delivery, so its sidecar redelivers instead of moving on. Lineage
+records each event through the catalog's doors, maintenance's arrival lane reads each table's manifest and policy, and
+the catalog's control lane applies governance events, so a retry this long means a step every message needs is failing,
+not one message. A message that can never succeed is parked on its dead-letter topic once the subscription's retry
+policy (`dapr-resiliency.yaml`) is spent.
+
+**Diagnose.** The alert's `app_id` names the app. `kubectl logs deploy/rask-<app> -c daprd | grep -i retry` shows the
+redeliveries, and the app's own log at WARN or ERROR shows the failing step and what it answered. Then the dependency it
+names: [OpenFGA down](#openfga-down--503-everywhere), [Object store down](#object-store-down--data-plane),
+[Lineage not ready](#lineage-not-ready--catalog-unreachable).
+
+**Act.** Restore the dependency; the redeliveries then succeed and the retries stop. What was parked meanwhile is under
+[DLQ parking](#dlq-parking--a-delivery-gave-up).
+
+## No app reports HTTP metrics
+
+**Symptom.** `HttpServerMetricsMissing` (critical): no `http_server_duration_milliseconds_count` series has arrived for
+15 minutes, so `HttpServerErrorRatioHigh` and `HttpServerLatencyHigh` cannot fire.
+
+**Cause.** Usually the telemetry path rather than the apps: the OTel Collector (`rask-otel-collector`) is down or cannot
+export to the store. Every app down at once would do it too, and the other alerts would say so.
+
+**Diagnose.** `kubectl get deploy rask-otel-collector`, and its log for export errors
+(`kubectl logs deploy/rask-otel-collector`). An app's pod names the Collector in `OTEL_EXPORTER_OTLP_ENDPOINT`. The
+store must answer at `observability.export.endpoint` (GreptimeDB in development).
+
+**Act.** Restore the Collector or its export. The apps keep serving meanwhile; only their telemetry is lost.
+
+## A service answers 5xx or slowly
+
+**Symptom.** `HttpServerErrorRatioHigh` (critical: more than 5% of one service's responses are 5xx for 10 minutes),
+`HttpServerLatencyHigh` (warning: one service's p95 is above 15 s for 15 minutes, maintenance left out), or
+`MaintenanceSweepRunsLong` (warning: the sweep's p95 pass reaches five minutes over two hours).
+
+**Cause.** A dependency of that service is failing or slow: every governed door asks OpenFGA, every data door reads the
+object store, lineage records through the catalog, and a pod whose secret store is sealed cannot finish booting. For the
+sweep, the size of what it walks: a pass visits every table it maintains.
+
+**Diagnose.** The alert's `service_name` names the service. Its log at ERROR shows the failing door and the problem+json
+it answered (`status`, `code`). Then its readiness (`kubectl get pods`) and the dependency's section:
+[OpenFGA down](#openfga-down--503-everywhere), [Object store down](#object-store-down--data-plane),
+[Lineage not ready](#lineage-not-ready--catalog-unreachable),
+[The secret store sealed](#the-secret-store-sealed--boot-deadlock). For the sweep, maintenance's log for its passes and
+the tables they reach.
+
+**Act.** Restore the dependency. A sweep that is slow on a large estate is not failing: read which pass takes longest
+before changing the sweep's schedule.

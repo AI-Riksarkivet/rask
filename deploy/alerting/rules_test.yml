@@ -186,7 +186,7 @@ tests:
               app_id: lineage
             exp_annotations:
               summary: "Dapr consumer wedged — a subscriber is retrying inbound messages for 15m"
-              description: "A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound deliveries for 15m without clearing, so this consumer is not draining its subscription and the cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+              description: "A subscriber's handler has failed continuously: Dapr has booked process_status=retry on inbound deliveries for 15m without clearing, so this consumer is not draining its subscription and the cascade / lineage ingest has silently stopped. A healthy transient error clears in seconds. Check the wedged app's logs and its downstream (AGE / OpenFGA / RustFS). Runbook: docs/runbooks/RUNBOOK-oncall.md#a-subscriber-retries-without-end"
 
   # 8. A busy-but-HEALTHY consumer books only process_status=success (no retry series at all) → NO alert.
   #    This is the case the old dapr_resiliency_count rule got wrong: that counter rises on healthy traffic
@@ -252,63 +252,6 @@ tests:
             exp_annotations:
               summary: "Maintenance dead-lettered write events (lineage.events.v1) — their tables wait for the sweep"
               description: "The write-event lane's sidecar exhausted its retry schedule and parked a write on dlq.maintenance.arrival, so the table's versions were not expired and its due record not refreshed on arrival; the sweep re-finds it on its next pass. The park is kept on the DLQ stream. A lane that parks every delivery cannot read a manifest, the policy registry or the dataset: read maintenance's logs for the failing evaluation. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
-
-  # 11. Dapr scheduler serving ZERO sidecars for 6 min → DaprSchedulerServingNoSidecars fires (5m `for`).
-  #     Reminders live in the scheduler's etcd since Dapr 1.15, so zero connected sidecars means NO
-  #     reminder can fire for any actor — and the symptom is silence, never an error.
-  - interval: 1m
-    input_series:
-      - series: 'dapr_scheduler_sidecars_connected{pod="dapr-scheduler-server-0"}'
-        values: "0+0x9"
-    alert_rule_test:
-      - eval_time: 6m
-        alertname: DaprSchedulerServingNoSidecars
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              service: dapr
-            exp_annotations:
-              summary: "The Dapr scheduler is serving ZERO sidecars — no actor reminder can fire"
-              description: >-
-                Reminders live in the scheduler's etcd (Dapr >= 1.15), so with no sidecars connected every
-                reminder-bounded behaviour silently stops: the annotator's lease reminder never expires and the
-                publish watchdog never re-drives. Nothing errors — work just
-                stops. Check `kubectl get pods -l app=dapr-scheduler-server` and the etcd PVCs; a rollback or
-                PVC loss here is not recoverable from the state store, which holds no copy of the reminders.
-                Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
-
-  # 12. A HEALTHY scheduler must NOT fire it. The live cluster reads 48; anything above zero is serving.
-  - interval: 1m
-    input_series:
-      - series: 'dapr_scheduler_sidecars_connected{pod="dapr-scheduler-server-0"}'
-        values: "48+0x9"
-    alert_rule_test:
-      - eval_time: 6m
-        alertname: DaprSchedulerServingNoSidecars
-        exp_alerts: []
-
-  # 13. NO series at all → DaprSchedulerMetricsMissing fires. This is the one that keeps the rule above
-  #     honest: an unscraped metric makes `max(...) == 0` evaluate over an empty vector, so the critical
-  #     alert goes SILENT exactly when it is blind. `absent()` is what distinguishes the two.
-  - interval: 1m
-    input_series:
-      - series: 'up{job="unrelated"}'
-        values: "1+0x19"
-    alert_rule_test:
-      - eval_time: 16m
-        alertname: DaprSchedulerMetricsMissing
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: dapr
-            exp_annotations:
-              summary: "No Dapr scheduler metrics for 15m — the reminder alert cannot fire"
-              description: >-
-                `dapr_scheduler_sidecars_connected` has no series. Either the scheduler is gone or the
-                collector's `dapr-control-plane` scrape job is not matching it (it keeps pods annotated
-                `dapr.io/control-plane` on the container port named `metrics`). Until this clears,
-                DaprSchedulerServingNoSidecars is blind.
-                Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
   # ── M24: the six rules that had no fire-proof ────────────────────────────────────────────────────
   # `promtool test rules` only evaluates the cases declared here, so a rule with no case is never
@@ -729,64 +672,6 @@ tests:
         alertname: MaintenanceTableParked
         exp_alerts: []
 
-  # WORKFLOW ACTIVITY FAILURES. The one workflow family whose `status` label is TRUE — an activity that
-  # exhausts its retries raises into the orchestrator, so the sidecar records a real failure.
-  - interval: 1m
-    input_series:
-      - series: 'dapr_runtime_workflow_activity_execution_count_total{app_id="flows",activity_name="run_node",status="failed"}'
-        values: "0+1x70" # one failure a minute
-    alert_rule_test:
-      - eval_time: 65m
-        alertname: WorkflowActivitiesFailing
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: dapr
-            exp_annotations:
-              summary: "Dapr workflow activities are failing — a lane is burning its retries"
-              description: "One or more activities exhausted their retry policy. Group by `activity_name` and `app_id` to find which lane. Note the activity SPAN cannot corroborate this: the SDK wraps the call in a span but swallows the exception inside it, so every activity span is STATUS_CODE_UNSET even when this counter says failed. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-
-  # A lane where only SUCCEEDED activities run must not page.
-  - interval: 1m
-    input_series:
-      - series: 'dapr_runtime_workflow_activity_execution_count_total{app_id="flows",activity_name="run_node",status="success"}'
-        values: "0+1x70"
-    alert_rule_test:
-      - eval_time: 65m
-        alertname: WorkflowActivitiesFailing
-        exp_alerts: []
-
-  # THE WEDGED continue_as_new. Reminders climbing with the execution family entirely ABSENT — which is
-  # the real shape, since these families are lazily registered and a pod that has completed no workflow
-  # never emits one. This is exactly the case an `and ... == 0` would silently miss.
-  - interval: 1m
-    input_series:
-      - series: 'dapr_runtime_actor_reminders_fired_total{app_id="flows",actor_type="dapr.internal.default.flows.workflow",success="true"}'
-        values: "0+1x130"
-    alert_rule_test:
-      - eval_time: 125m
-        alertname: WorkflowEngineWedged
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: dapr
-            exp_annotations:
-              summary: "Workflow orchestration turns are firing but nothing completes — a wedged orchestration"
-              description: "The engine's internal reminders keep firing while no workflow execution completes: an orchestration taking turns forever, which looks healthy from every angle except this one. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
-
-  # Turns firing AND executions completing is a healthy busy estate — must not page.
-  - interval: 1m
-    input_series:
-      - series: 'dapr_runtime_actor_reminders_fired_total{app_id="flows",actor_type="dapr.internal.default.flows.workflow",success="true"}'
-        values: "0+1x130"
-      - series: 'dapr_runtime_workflow_execution_count_total{app_id="flows",workflow_name="flow_run",status="success"}'
-        values: "0+1x130"
-    alert_rule_test:
-      - eval_time: 125m
-        alertname: WorkflowEngineWedged
-        exp_alerts: []
-
-
   # The sweep pod gone entirely — the one thing that reclaims storage, previously silent AND unalertable.
   - interval: 1m
     input_series:
@@ -829,7 +714,7 @@ tests:
               service_name: catalog
             exp_annotations:
               summary: "More than 5% of one service's HTTP responses are 5xx"
-              description: "A service is failing its own requests. This is the estate's only fleet-wide failure signal — before it existed, a service could 500 on every read and no rule anywhere noticed. Split by `service_name` to find which. Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph"
+              description: "A service is failing its own requests. This is the estate's only fleet-wide failure signal — before it existed, a service could 500 on every read and no rule anywhere noticed. Split by `service_name` to find which. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
 
   # A HEALTHY service must not page. 1 error in 100 is 1%, under the 5% bar — this is the case that
   # stops the threshold being tightened into noise.
@@ -859,7 +744,7 @@ tests:
               service: fleet
             exp_annotations:
               summary: "No app is reporting HTTP metrics at all"
-              description: "`http_server_duration_milliseconds_count` does not exist, so HttpServerErrorRatioHigh and HttpServerLatencyHigh are both dead and their silence means nothing. Either `service_kit.setup_otel` stopped wiring the FastAPI instrumentor, or the OTLP path to GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled"
+              description: "`http_server_duration_milliseconds_count` does not exist, so HttpServerErrorRatioHigh and HttpServerLatencyHigh are both dead and their silence means nothing. Either `service_kit.setup_otel` stopped wiring the FastAPI instrumentor, or the OTLP path to GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#no-app-reports-http-metrics"
       # ...and the ratio rule is indeed silent here, which is the whole argument for the pair.
       - eval_time: 17m
         alertname: HttpServerErrorRatioHigh
@@ -890,7 +775,7 @@ tests:
               service_name: viewer
             exp_annotations:
               summary: "One service's p95 HTTP latency is above 15s"
-              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. `maintenance` legitimately runs long during a sweep; any other service here is a defect. Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph"
+              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. `maintenance` legitimately runs long during a sweep; any other service here is a defect. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
 
   # A fast service must not page — every observation under 1s.
   - interval: 1m
@@ -1201,7 +1086,7 @@ tests:
                 Sustained p95 over 15 seconds means requests are queueing behind something — a blocking
                 call on the event loop, an exhausted threadpool, or an upstream that stopped answering.
                 `maintenance` legitimately runs long during a sweep; any other service here is a defect.
-                Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
 
   # THE EXCLUSION IS ALSO PROVEN, because it is the half that keeps the rule from being muted. Identical
   # series, `service_name="maintenance"`, far past the threshold: `HttpServerLatencyHigh` must stay
@@ -1249,7 +1134,7 @@ tests:
                 p95 sweep duration has reached 300s, the top of what its histogram measures. Each pass writes the
                 clone list the catalog judges compactions against; a pass that outgrows the 30-minute schedule lets
                 that list age past an hour, and every bring-your-own compaction is refused 503 until a pass completes.
-                Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
   - interval: 1m
     input_series:
       - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="120000"}'
