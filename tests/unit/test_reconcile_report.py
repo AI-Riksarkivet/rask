@@ -142,7 +142,7 @@ class _Estate:
         # `bucket` stays `bkt-a` — that is the field the bucket-claim and orphan-bucket categories use.
         self.warehouse_root = f"file://{tmp_path / 'wh-a'}"
         (tmp_path / "wh-a").mkdir(parents=True, exist_ok=True)
-        proj_svc.put_project(self.control_root, StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "alice", "protected": "false"})
+        proj_svc.put_project(self.control_root, StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "alice"})
         wh_svc.put_warehouse(
             self.control_root,
             StorageOptions(),
@@ -244,7 +244,7 @@ def test_unreferenced_projects_fires_on_a_record_with_no_tuples(tmp_path: Path, 
 
     Its admin revision ([[LH-434]]) is bookkeeping and grants no one anything, so it does not count."""
     estate = _Estate(tmp_path)
-    proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone", "protected": "false"})
+    proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone"})
     estate.fga.tuples["project:orphaned"] = [("revision:3", "admin_revision")]
     report = estate.run(monkeypatch)
     assert [p.id for p in report.unreferenced_projects] == ["orphaned"]
@@ -466,7 +466,7 @@ def test_a_full_run_leaves_every_store_byte_identical(tmp_path: Path, monkeypatc
     estate.fga.tuples["project:phantom"] = [("user:mallory", "admin")]
     _Estate.namespace_dir(tmp_path, "legacy_ns")
     wh_svc.bind_namespace(estate.control_root, StorageOptions(), "stranded_ns", "wh-gone", "s3://bkt-gone")
-    proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone", "protected": "false"})
+    proj_svc.put_project(estate.control_root, StorageOptions(), {"id": "orphaned", "created_at": "t", "created_by": "gone"})
     estate.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a", "bkt-orphan"])
 
     before = {name: _tree_fingerprint(tmp_path / name) for name in ("control", "data")}

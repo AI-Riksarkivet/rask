@@ -25,6 +25,7 @@ from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from lakehouse_kit.objectfs import fs_and_base
+from lakehouse_kit.protection import is_protected
 from service_kit.storage_options import StorageOptions
 
 
@@ -135,6 +136,45 @@ class ProjectRecord(_Record):
     """A tenant. Existence lives in the record, so the id is the whole of its identity."""
 
     id: str = Field(min_length=1)
+
+
+#: The record fields deletion protection writes on a warehouse or project record: the flag
+#: `fga_deps.require_not_protected` reads, and who armed it.
+PROTECTION_FIELDS = ("protected", "protected_by")
+
+
+class ProtectionChange(BaseModel):
+    """A request to arm or clear the deletion protection a warehouse or project record carries ([[LH-548]], [[LH-549]]).
+
+    Attributes:
+        protected: Arm the protection when true, clear it when false.
+        by: The principal making the change, ``user:<subject>``, recorded as ``protected_by`` when it arms.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    protected: bool
+    by: str
+
+
+def with_protection(record: dict[str, str], change: ProtectionChange) -> dict[str, str]:
+    """Apply ``change`` to a warehouse or project record.
+
+    Arming an armed record leaves it as it is, so it keeps naming who armed it and a declaration re-applied on every
+    reconcile writes nothing new.
+
+    Args:
+        record: The record as read.
+        change: What to apply.
+
+    Returns:
+        A new record: armed carries the string ``"true"`` beside who armed it, and cleared carries neither field, as a
+        record never armed carries neither.
+    """
+    if change.protected and is_protected(record):
+        return dict(record)
+    unprotected = {key: value for key, value in record.items() if key not in PROTECTION_FIELDS}
+    return {**unprotected, "protected": "true", "protected_by": change.by} if change.protected else unprotected
 
 
 def validated_or_refuse(record: object, model: type[_Record], *, event: str, path: str) -> dict[str, str]:

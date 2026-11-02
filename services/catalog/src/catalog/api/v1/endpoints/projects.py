@@ -32,6 +32,9 @@ INSIDE it, so the tenant's own admins must be able to do it without holding esta
 estate OBSERVER, whose bar is "may watch the whole estate", must not be able to delete a tenant they do not
 administer. The delete itself is bottom-up (`open_hierarchy_lifecycle.md` Decision 3): it refuses 409 while
 the project still holds warehouses, naming them, and carries no ``cascade`` at all (see ``delete_project``).
+Its deletion protection is set and cleared on the same authority, ``POST /management/v1/projects/{id}/protection``
+([[LH-549]]), and both doors read the record and decide through :func:`administered_project`, which answers a caller
+who may not administer the tenant exactly as it answers a missing one.
 
 ``admins`` comes from OpenFGA ``list_users`` (the #51 access-review primitive) on
 ``project:<id>#can_administer`` — EFFECTIVE admins (role assignees, team members, the cascade), not raw
@@ -44,8 +47,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
@@ -56,18 +60,29 @@ from lance_namespace import (
     TableNotFoundError,
 )
 from openfga_sdk import OpenFgaClient
+from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
-from catalog.schemas import CreateProjectRequest, DeleteProjectResponse, ProjectResponse, ProjectWarehouse
+from catalog.schemas import (
+    CreateProjectRequest,
+    DeleteProjectResponse,
+    ProjectResponse,
+    ProjectWarehouse,
+    ProtectionResponse,
+    SetProtectionRequest,
+)
 from catalog.services import projects as project_registry
 from catalog.services import warehouses
+from catalog.services.control_records import ProtectionChange
+from lakehouse_kit import protection
 from lakehouse_kit.control_emit import emit_control
 from lakehouse_kit.records import RecordExistsError, RecordMissingError
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
+from service_kit.governed.deps import ANONYMOUS_SUBJECT
 from service_kit.naming import CONTROL_ID_RE
 from service_kit.storage_options import StorageOptions
 
@@ -137,18 +152,50 @@ async def _admins_for(client: OpenFgaClient | None, settings: Settings, project:
         return []
 
 
-async def _load_grouped(settings: Settings) -> dict[str, list[ProjectWarehouse]]:
+class Tenant(BaseModel):
+    """A tenant as the registries know it: its registry record, if one names it, and the warehouses claiming it.
+
+    Attributes:
+        project: The tenant's id.
+        record: Its registry record; None for a tenant only a warehouse names (pre-registry legacy).
+        warehouses: The warehouses whose records claim it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    project: str
+    record: dict[str, str] | None = None
+    warehouses: list[ProjectWarehouse] = Field(default_factory=list)
+
+    def response(self, admins: list[str]) -> ProjectResponse:
+        """The tenant as its read answers it, with ``admins`` as its effective admins.
+
+        Its deletion protection is its record's, so a tenant no record names is never protected.
+        """
+        record = self.record or {}
+        return ProjectResponse(
+            project=self.project,
+            warehouses=self.warehouses,
+            admins=admins,
+            protected=protection.is_protected(record),
+            protected_by=record.get("protected_by"),
+        )
+
+
+async def _load_tenants(settings: Settings) -> dict[str, Tenant]:
     """The tenant map: PROJECT REGISTRY ∪ warehouse-derived (blocking S3/FS IO → threadpool).
 
     Registry records define the tenants — a fresh project has zero warehouses and must still list.
     Warehouse-derived entries without a registry record are pre-registry legacy: kept visible (the
-    reconciler reports them as drift; a listing that hid them would make the drift undiagnosable)."""
+    reconciler reports them as drift; a listing that hid them would make the drift undiagnosable), and never
+    protected, since protection lives on the record."""
     so = settings.storage_options()
-    records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
-    grouped = _group_by_project(records)
+    grouped = _group_by_project(await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so))
+    tenants = {project: Tenant(project=project, warehouses=held) for project, held in grouped.items()}
     for record in await run_in_threadpool(project_registry.list_projects, settings.registry_root, so):
-        grouped.setdefault(str(record["id"]), [])
-    return grouped
+        project = str(record["id"])
+        tenants[project] = Tenant(project=project, record=record, warehouses=grouped.get(project, []))
+    return tenants
 
 
 async def _converge_project(settings: Settings, so: StorageOptions, record: dict[str, str]) -> dict[str, str]:
@@ -177,8 +224,8 @@ async def create_project(
     """Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.
 
     The gate is ``can_observe_events`` on the fixed root object — the estate-admin bar every whole-estate
-    surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by``/``protected``
-    forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
+    surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion
+    protection forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
     (record written, tuple write failed) converges instead of erroring. The grant is audited and published
     like any other ACL change, only when it was actually written."""
     project_id = body.id
@@ -193,9 +240,6 @@ async def create_project(
         "id": project_id,
         "created_at": (existing.get("created_at") if existing else None) or datetime.now(UTC).isoformat(),
         "created_by": (existing.get("created_by") if existing else None) or (token.subject if token else ""),
-        # Deletion protection (Decision 5): mutable lifecycle field, carried forward on re-create —
-        # an idempotent re-POST must never silently strip protection, same rule as warehouse `status`.
-        "protected": (existing.get("protected") if existing else None) or "false",
     }
     if existing is None:
         # The tenant MINT is conditional (F1): two concurrent creates of one id both read "absent"
@@ -238,7 +282,7 @@ async def create_project(
             actor=actor,
             extra={"relation": "admin", "subject": fga.user_object(admin), "reason": "project_created"},
         )
-    return ProjectResponse(project=project_id, warehouses=[], admins=await _admins_for(client, settings, project_id))
+    return Tenant(project=project_id, record=record).response(await _admins_for(client, settings, project_id))
 
 
 async def _visible_projects(client: OpenFgaClient | None, settings: Settings, token: CurrentToken, candidates: list[str]) -> set[str] | None:
@@ -277,17 +321,15 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
 
     ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
     facts still serve; the visibility decision itself fails closed (``_visible_projects``)."""
-    grouped = await _load_grouped(settings)
-    visible = await _visible_projects(client, settings, token, sorted(grouped))
+    tenants = await _load_tenants(settings)
+    visible = await _visible_projects(client, settings, token, sorted(tenants))
     # The per-project admins lookups run CONCURRENTLY: sequential awaits would stack N × the per-call
     # budget on a slow OpenFGA (a brownout, not an outage) and blow past the BFF's request deadline;
     # gathered, the worst case is ONE _ADMINS_TIMEOUT_SECONDS regardless of tenant count (each call
     # still degrades to [] on its own expiry — see _admins_for).
-    projects = sorted(p for p in grouped if visible is None or p in visible)
+    projects = sorted(p for p in tenants if visible is None or p in visible)
     admins = await asyncio.gather(*(_admins_for(client, settings, project) for project in projects))
-    return [
-        ProjectResponse(project=project, warehouses=grouped[project], admins=project_admins) for project, project_admins in zip(projects, admins, strict=True)
-    ]
+    return [tenants[project].response(project_admins) for project, project_admins in zip(projects, admins, strict=True)]
 
 
 @router.get("/{project_id}")
@@ -296,16 +338,99 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
     await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
-    grouped = await _load_grouped(settings)
-    entries = grouped.get(project_id)
-    if entries is None:
+    tenant = (await _load_tenants(settings)).get(project_id)
+    if tenant is None:
         raise TableNotFoundError(f"project not found: {project_id}")
-    return ProjectResponse(project=project_id, warehouses=entries, admins=await _admins_for(client, settings, project_id))
+    return tenant.response(await _admins_for(client, settings, project_id))
+
+
+async def administered_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
+    """The record of ``project_id``, for a caller who administers it (``project:<id>#can_administer``).
+
+    The record is read first, since the gate is on the tenant it names. NO EXISTENCE ORACLE (audit #4, the rule the
+    warehouse doors follow): a caller who may not administer the project is answered exactly the missing project's 404,
+    so nobody can enumerate the estate's tenants by a 404-versus-403 difference, which estate-observer gating
+    ``GET /management/v1/projects`` exists to prevent; an outage or a missing caller still answers 503 or 401. A create
+    door answers 404 for a missing parent because that is a fix its caller needs; the doors this gates have no such
+    teaching to do.
+
+    Args:
+        project_id: The project the route's path names.
+        settings: The catalog's settings.
+        token: The verified caller.
+        client: The OpenFGA client deciding.
+
+    Returns:
+        The project's registry record.
+
+    Raises:
+        InvalidInputError: The id is not a project id.
+        TableNotFoundError: The project is absent, or its caller does not administer it.
+    """
+    if not _ID_RE.match(project_id):
+        raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
+    record = await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project_id)
+    if record is None:
+        raise TableNotFoundError(f"project not found: {project_id}")
+    try:
+        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project_id}")
+    except PermissionDeniedError as exc:
+        raise TableNotFoundError(f"project not found: {project_id}") from exc
+    return record
+
+
+AdministeredProjectDep = Annotated[dict[str, str], Depends(administered_project)]
+
+
+@router.post("/{project_id}/protection", response_model_exclude_none=True, dependencies=[Depends(administered_project)])
+async def set_project_protection(
+    project_id: str,
+    body: SetProtectionRequest,
+    settings: SettingsDep,
+    token: CurrentToken,
+    control: ControlEmitterDep,
+) -> ProtectionResponse:
+    """Arm or clear the project's deletion protection ([[LH-549]]), the lock its delete turns only with ``force=true``.
+
+    Gated on the project's ``can_administer``: arming or clearing the lock on a tenant's destruction is the authority
+    that destruction needs, as the delete door asks it. A caller without it is answered the missing project's 404, as
+    the delete answers one, so the door tells nobody which tenants exist. The write is conditional on the record as it
+    stands. Re-arming an armed project keeps who armed it. Announced as ``project_protected`` or
+    ``project_unprotected`` on every call, as the warehouse, namespace and table doors announce theirs.
+    \f
+
+    Args:
+        project_id: The project to protect or clear, its caller authorized on it (:func:`administered_project`).
+        body: The protection to set.
+        settings: The catalog's settings.
+        token: The verified caller.
+        control: Where control events go.
+
+    Returns:
+        The project's id and the protection now set.
+
+    Raises:
+        TableNotFoundError: The project is absent, its caller does not administer it, or it was deleted before the write.
+    """
+    actor = f"user:{token.subject}" if token is not None else None
+    change = ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    if await run_in_threadpool(project_registry.set_project_protection, settings.registry_root, settings.storage_options(), project_id, change) is None:
+        raise TableNotFoundError(f"project not found: {project_id}")
+    log.info("project_protection_set", extra={"project": project_id, "protected": body.protected})
+    await emit_control(
+        control,
+        action="project_protected" if body.protected else "project_unprotected",
+        object_type="project",
+        object_id=f"project:{project_id}",
+        actor=actor,
+    )
+    return ProtectionResponse(id=project_id, protected=body.protected)
 
 
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
+    record: AdministeredProjectDep,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
@@ -316,8 +441,8 @@ async def delete_project(
 
     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
     read routes use (module docstring). Order, fail-closed and each step earning the next:
-    id shape (400) → existence (404) → authz (403) → deletion protection (409) → emptiness (409) →
-    revoke tuples → delete record → audit + event.
+    id shape (400) → existence and authz (both 404, :func:`administered_project`) → deletion protection (409) →
+    emptiness (409) → revoke tuples → delete record → audit + event.
 
     **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
     refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
@@ -327,27 +452,28 @@ async def delete_project(
     ``DELETE /management/v1/warehouses/{id}``, where the purge is its own separate opt-in.
 
     ``force=true`` overrides deletion PROTECTION only (Decision 5) — the FGA gate above ran first and runs
-    identically with or without it, so forcing cannot delete a project the caller may not administer."""
-    if not _ID_RE.match(project_id):
-        raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
+    identically with or without it, so forcing cannot delete a project the caller may not administer.
+    \f
+
+    Args:
+        project_id: The project to retire.
+        record: Its registry record, its caller authorized on it (:func:`administered_project`).
+        settings: The catalog's settings.
+        token: The verified caller.
+        client: The OpenFGA client its tuples are revoked through.
+        control: Where control events go.
+        force: Delete it though it is protected.
+
+    Returns:
+        The retired project and how many tuples went with it.
+
+    Raises:
+        NamespaceNotEmptyError: It is protected and ``force`` is false, or it still holds warehouses.
+        ServiceUnavailableError: OpenFGA could not revoke its tuples; nothing was deleted.
+    """
     so = settings.storage_options()
-    # The record is read first because the gate needs the object it belongs to. Both outcomes below then
-    # answer 404: a missing tenant and a caller who may not administer one are made INDISTINGUISHABLE.
-    #
-    # NO EXISTENCE ORACLE (audit #4 — the rule `_set_warehouse_status` established and
-    # `delete_warehouse` follows): without the collapse, any authenticated caller could enumerate the
-    # estate's tenants by the 404-vs-403 difference alone, and `GET /management/v1/projects` is estate-observer
-    # gated precisely so they cannot. A create door legitimately answers 404 ("make the tenant first")
-    # because that is a fix the caller needs; a DESTRUCTIVE door has no such teaching to do.
-    record = await run_in_threadpool(project_registry.get_project, settings.registry_root, so, project_id)
-    if record is None:
-        raise TableNotFoundError(f"project not found: {project_id}")
-    try:
-        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project_id}")
-    except PermissionDeniedError as exc:
-        raise TableNotFoundError(f"project not found: {project_id}") from exc
     # Protection state and the warehouse listing below are both tenant DISCLOSURE, so they run only after
-    # the gate above has proven the caller administers this tenant.
+    # `administered_project` has proven the caller administers this tenant.
     fga_deps.require_not_protected(record, kind="project", obj_id=project_id, force=force)
 
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,

@@ -304,7 +304,7 @@ def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> Non
         asyncio.run(fga_deps.require_project_exists(settings, "ghost"))
     assert "POST /management/v1/projects" in str(exc.value)
     # …and an existing record passes untouched.
-    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x", "protected": "false"})
+    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x"})
     asyncio.run(fga_deps.require_project_exists(settings, "acme"))
 
 
@@ -512,7 +512,7 @@ def test_create_warehouse_rejects_multibase_and_catalog_buckets(tmp_path: Any, m
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: provisioned.append(bucket))
     # The project EXISTS (seeded in the registry) so the refusal below is the reserved-bucket guard
     # itself, not require_project_exists' 404 firing first.
-    proj_svc.put_project(_root(tmp_path), StorageOptions(), {"id": "evil", "created_at": "t", "created_by": "x", "protected": "false"})
+    proj_svc.put_project(_root(tmp_path), StorageOptions(), {"id": "evil", "created_at": "t", "created_by": "x"})
     for bucket in ("lance-data-1", "lance-data-2", "lance-catalog"):
         with pytest.raises(InvalidInputError):
             asyncio.run(
@@ -554,7 +554,7 @@ def _create(settings: Settings, body: Any) -> Any:
     proj_svc.put_project(
         settings.registry_root,
         settings.storage_options(),
-        {"id": body.project, "created_at": "t", "created_by": "unit", "protected": "false"},
+        {"id": body.project, "created_at": "t", "created_by": "unit"},
     )
     return asyncio.run(
         wh_ep.create_warehouse(

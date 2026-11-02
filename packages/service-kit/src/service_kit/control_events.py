@@ -39,6 +39,9 @@ ControlAction = Literal[
     "grant_revoked",
     "project_created",
     "project_deleted",
+    # Deletion protection on a project ([[LH-549]]), the project twin of the warehouse pair below.
+    "project_protected",
+    "project_unprotected",
     "warehouse_created",
     "warehouse_activated",
     "warehouse_deactivated",
@@ -203,6 +206,8 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             | "grant_revoked"
             | "project_created"
             | "project_deleted"
+            | "project_protected"
+            | "project_unprotected"
             | "warehouse_created"
             | "warehouse_activated"
             | "warehouse_deactivated"

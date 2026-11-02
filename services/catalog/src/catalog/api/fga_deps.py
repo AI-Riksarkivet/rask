@@ -1818,7 +1818,7 @@ def require_not_protected(record: dict[str, str], *, kind: str, obj_id: str, for
     container-shaped one is the closest. The table is the rung the spec covers and the rung clients are
     generated against, so it is the one where a wrong code has a reader.
     """
-    if force or (record.get("protected") or "false").lower() != "true":
+    if force or not protection.is_protected(record):
         return
     refusal = InvalidTableStateError if kind == "table" else NamespaceNotEmptyError
     raise refusal(

@@ -1125,12 +1125,17 @@ class ProjectWarehouse(BaseModel):
 
 
 class ProjectResponse(BaseModel):
-    """A derived tenant: its name, the warehouses claiming it, and its effective FGA admins (``[]`` when
-    FGA is off/unavailable — degraded, never fabricated)."""
+    """A derived tenant: its name, the warehouses claiming it, its effective FGA admins (``[]`` when
+    FGA is off/unavailable — degraded, never fabricated), and its deletion protection."""
 
     project: str
     warehouses: list[ProjectWarehouse]
     admins: list[str]
+    #: Whether the project's delete is refused without `force=true` ([[LH-549]]), set and cleared through
+    #: `POST /management/v1/projects/{project_id}/protection`; a tenant no registry record names is never protected.
+    protected: bool = False
+    #: Who armed the protection (`user:<principal>`); None while the project is unprotected.
+    protected_by: str | None = None
 
 
 class CreateProjectRequest(BaseModel):

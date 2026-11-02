@@ -22,16 +22,17 @@ from typing import Any
 
 import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
-from pydantic import BaseModel, ConfigDict
 
 from catalog.services.control_records import (
     BindingRecord,
     BucketClaimRecord,
     DeleteMode,
+    ProtectionChange,
     WarehouseRecord,
     read_json,
     validated,
     validated_or_refuse,
+    with_protection,
     write_json,
 )
 from lakehouse_kit import trash
@@ -182,44 +183,6 @@ class WarehouseProjectConflict(Exception):
     (it produces the better error, earlier, for the ordinary case); this is the one that cannot be
     raced.
     """
-
-
-#: The record fields deletion protection writes: the flag `fga_deps.require_not_protected` reads, and who armed it.
-PROTECTION_FIELDS = ("protected", "protected_by")
-
-
-class ProtectionChange(BaseModel):
-    """A request to arm or clear a warehouse's deletion protection ([[LH-548]]).
-
-    Attributes:
-        protected: Arm the protection when true, clear it when false.
-        by: The principal making the change, ``user:<subject>``, recorded as ``protected_by`` when it arms.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    protected: bool
-    by: str
-
-
-def with_protection(record: dict[str, str], change: ProtectionChange) -> dict[str, str]:
-    """Apply ``change`` to a warehouse record.
-
-    Arming an armed record leaves it as it is, so it keeps naming who armed it and a declaration re-applied on every
-    reconcile writes nothing new.
-
-    Args:
-        record: The warehouse record as read.
-        change: What to apply.
-
-    Returns:
-        A new record: armed carries the string ``"true"`` beside who armed it, and cleared carries neither field, as a
-        warehouse never armed carries neither.
-    """
-    if change.protected and record.get("protected") == "true":
-        return dict(record)
-    unprotected = {key: value for key, value in record.items() if key not in PROTECTION_FIELDS}
-    return {**unprotected, "protected": "true", "protected_by": change.by} if change.protected else unprotected
 
 
 def set_warehouse_protection(

@@ -84,6 +84,8 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
         "promotion_rejected",
         "project_created",
         "project_deleted",
+        "project_protected",
+        "project_unprotected",
         "table_created",
         "table_declared",
         "table_deregistered",

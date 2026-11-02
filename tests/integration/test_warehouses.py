@@ -391,7 +391,7 @@ def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_p
     client.app.dependency_overrides[get_settings] = lambda: s
     # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
     # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
-    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
+    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(
         s.registry_root,
         s.storage_options(),
@@ -422,7 +422,7 @@ def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, monk
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, fga=True)
     # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
     # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
-    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
+    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed"})
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(
         principal=Principal(idp_id="dex", subject="mallory"), claims=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
@@ -616,7 +616,7 @@ def _wh_with_fake_backend(client: TestClient, tmp_path: Any, monkeypatch: pytest
     monkeypatch.setattr(wh_ep, "estate_namespace", estate_root)
     s = _settings(tmp_path, fga=True)
     client.app.dependency_overrides[get_settings] = lambda: s
-    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})
+    proj_svc.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed"})
     wh_svc.put_warehouse(
         s.registry_root,
         s.storage_options(),

@@ -25,6 +25,7 @@ name under ``id``, as it was when the record was set, for display. The store mec
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Final
 
 from lakehouse_kit.record_store import delete_record, get_record, put_record, record_key
@@ -36,6 +37,21 @@ PREFIX: Final = "_protection"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "protection_record"
+
+
+def is_protected(record: Mapping[str, Any]) -> bool:
+    """Whether ``record`` holds deletion protection: its ``protected`` reads ``true`` in any case.
+
+    The one reading of the flag every rung's record carries (a project's and a warehouse's registry record, a table's
+    and a namespace's record here), so the delete guard and a read that answers the flag cannot disagree on a record.
+
+    Args:
+        record: A record as read; one carrying no ``protected`` is unprotected.
+
+    Returns:
+        True when the record is armed.
+    """
+    return str(record.get("protected") or "").lower() == "true"
 
 
 def set_protection(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:

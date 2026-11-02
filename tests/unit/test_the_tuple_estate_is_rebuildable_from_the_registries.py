@@ -51,7 +51,7 @@ def _sources(*, projects: list[dict[str, str]] | None = None, warehouses: list[d
     return Sources(project_records=projects or [], warehouse_records=warehouses or [])
 
 
-_ACME = {"id": "acme", "created_at": "2026-08-07T06:48:27.0329", "created_by": "CiQwOGE4Njg0Yi", "protected": "false"}
+_ACME = {"id": "acme", "created_at": "2026-08-07T06:48:27.0329", "created_by": "CiQwOGE4Njg0Yi"}
 _ACME_WH = {"id": "acme-bucket", "bucket": "acme-bucket", "root_uri": "s3://acme-bucket", "project": "acme", "status": "active"}
 
 

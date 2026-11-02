@@ -982,8 +982,8 @@ export interface paths {
          * @description Mint a tenant: registry record + the creator's ``admin`` tuple, in one operation. Estate-admin gated.
          *
          *     The gate is ``can_observe_events`` on the fixed root object — the estate-admin bar every whole-estate
-         *     surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by``/``protected``
-         *     forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
+         *     surface uses. Idempotent: re-POSTing an existing id carries ``created_at``/``created_by`` and the deletion
+         *     protection forward and re-asserts the admin tuple (a duplicate FGA write is a no-op), so a partial-failure retry
          *     (record written, tuple write failed) converges instead of erroring. The grant is audited and published
          *     like any other ACL change, only when it was actually written.
          */
@@ -1091,8 +1091,8 @@ export interface paths {
          *
          *     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
          *     read routes use (module docstring). Order, fail-closed and each step earning the next:
-         *     id shape (400) → existence (404) → authz (403) → deletion protection (409) → emptiness (409) →
-         *     revoke tuples → delete record → audit + event.
+         *     id shape (400) → existence and authz (both 404, :func:`administered_project`) → deletion protection (409) →
+         *     emptiness (409) → revoke tuples → delete record → audit + event.
          *
          *     **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
          *     refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
@@ -1148,6 +1148,32 @@ export interface paths {
          *     state already holds.
          */
         delete: operations["revoke_member_management_v1_projects__project_id__members_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{project_id}/protection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Project Protection
+         * @description Arm or clear the project's deletion protection ([[LH-549]]), the lock its delete turns only with ``force=true``.
+         *
+         *     Gated on the project's ``can_administer``: arming or clearing the lock on a tenant's destruction is the authority
+         *     that destruction needs, as the delete door asks it. A caller without it is answered the missing project's 404, as
+         *     the delete answers one, so the door tells nobody which tenants exist. The write is conditional on the record as it
+         *     stands. Re-arming an armed project keeps who armed it. Announced as ``project_protected`` or
+         *     ``project_unprotected`` on every call, as the warehouse, namespace and table doors announce theirs.
+         */
+        post: operations["set_project_protection_management_v1_projects__project_id__protection_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4910,7 +4936,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "project_protected" | "project_unprotected" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "promotion_held" | "promotion_rejected" | "promotion_expired" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -7896,14 +7922,21 @@ export interface components {
         };
         /**
          * ProjectResponse
-         * @description A derived tenant: its name, the warehouses claiming it, and its effective FGA admins (``[]`` when
-         *     FGA is off/unavailable — degraded, never fabricated).
+         * @description A derived tenant: its name, the warehouses claiming it, its effective FGA admins (``[]`` when
+         *     FGA is off/unavailable — degraded, never fabricated), and its deletion protection.
          */
         ProjectResponse: {
             /** Admins */
             admins: string[];
             /** Project */
             project: string;
+            /**
+             * Protected
+             * @default false
+             */
+            protected?: boolean;
+            /** Protected By */
+            protected_by?: string | null;
             /** Warehouses */
             warehouses: components["schemas"]["ProjectWarehouse"][];
         };
@@ -10844,6 +10877,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemberList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_project_protection_management_v1_projects__project_id__protection_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                project_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetProtectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
                 };
             };
             /** @description Validation Error */

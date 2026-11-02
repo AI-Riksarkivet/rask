@@ -482,7 +482,12 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   their registry records. A warehouse's is set and cleared through `POST /management/v1/warehouses/{warehouse_id}/protection`
   on its project's `can_administer`, a denial answered the missing warehouse's 404, and recorded beside `protected_by`;
   the create door applies a `protected` it names and carries it forward when it names none ([[LH-548]],
-  `services/catalog/tests/test_a_warehouses_protection_is_set_and_cleared_by_its_project_admin.py`).
+  `services/catalog/tests/test_a_warehouses_protection_is_set_and_cleared_by_its_project_admin.py`). A project's is set
+  and cleared through `POST /management/v1/projects/{project_id}/protection` on the project's own `can_administer`, the
+  gate its delete shares (`administered_project`), a denial answered the missing project's 404; its reads answer
+  `protected` and `protected_by`, and a re-POST of the create carries it forward ([[LH-549]],
+  `services/catalog/tests/test_a_projects_protection_is_set_and_cleared_by_its_admins.py`). Both registries apply one
+  rule, `control_records.with_protection`: arming an armed record keeps its armer, and clearing removes both fields.
   Tables/namespaces carry it as a **control-root `_protection/` record**
   (`lakehouse_kit.protection`) gating drop/deregister/rename and both Overwrite modes,
   `create?mode=Overwrite` over an existing table and `insert?mode=overwrite` on any branch ([[LH-242]]),

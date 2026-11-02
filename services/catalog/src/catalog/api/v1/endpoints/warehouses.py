@@ -91,6 +91,7 @@ from catalog.schemas import (
     WarehouseResponse,
 )
 from catalog.services import native, object_uuids, table_claims, warehouses
+from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from lakehouse_kit import base_registry, data_directories, location_claims, object_records, trash
 from lakehouse_kit.control_emit import ControlEmitter, emit_control
@@ -315,9 +316,9 @@ async def create_warehouse(
     # it inside the conditional write (`upsert_warehouse`), against the record as it stands, since a re-POST that lost
     # the flag it never named would disarm the delete door's only safety catch with no error and no audit signal.
     actor = f"user:{token.subject}" if token is not None else None
-    protection = None if body.protected is None else warehouses.ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
     if protection is not None:
-        record = warehouses.with_protection(record, protection)
+        record = with_protection(record, protection)
     # A new warehouse's record takes the primary marker the request names, as the string `"true"` a re-create's merge
     # writes and `warehouse_registry._is_primary` reads ([[LH-548]]); a re-create takes it inside the merge
     # (`upsert_warehouse`), where a request naming nothing carries the live marker forward.
@@ -642,7 +643,7 @@ async def set_warehouse_protection(
             another project before the write.
     """
     actor = f"user:{token.subject}" if token is not None else None
-    change = warehouses.ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    change = ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
     protect = partial(
         warehouses.set_warehouse_protection, settings.registry_root, settings.storage_options(), warehouse_id, project=record["project"], change=change
     )

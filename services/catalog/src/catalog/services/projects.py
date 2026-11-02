@@ -21,9 +21,17 @@ import logging
 
 import pyarrow.fs as pafs
 
-from catalog.services.control_records import ProjectRecord, read_json, validated, validated_or_refuse, write_json
+from catalog.services.control_records import (
+    ProjectRecord,
+    ProtectionChange,
+    read_json,
+    validated,
+    validated_or_refuse,
+    with_protection,
+    write_json,
+)
 from lakehouse_kit.objectfs import fs_and_base
-from lakehouse_kit.records import create_json, mutate_json
+from lakehouse_kit.records import RecordMissingError, create_json, mutate_json
 from service_kit.storage_options import StorageOptions
 
 
@@ -79,11 +87,30 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
         # Identity fields belong to the ORIGINAL create; a re-POST never resets a tenant's age or author.
         merged["created_at"] = live.get("created_at") or record.get("created_at", "")
         merged["created_by"] = live.get("created_by") or record.get("created_by", "")
-        # Absent on a record written before protection existed, and absent means unprotected.
-        merged.setdefault("protected", "false")
         return merged
 
     return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{record['id']}.json", merge)
+
+
+def set_project_protection(control_root: str, storage_options: StorageOptions, project_id: str, change: ProtectionChange) -> dict[str, str] | None:
+    """Apply ``change`` to project ``project_id``'s record, conditional on its ETag ([[LH-549]]).
+
+    Every other field is the record's as it stands at the write (``mutate_json``).
+
+    Args:
+        control_root: The registry's root.
+        storage_options: How to reach it.
+        project_id: The project to change.
+        change: What to apply.
+
+    Returns:
+        The updated record, or ``None`` when the project's record is gone: a project deleted between the caller's
+        authorization and this write.
+    """
+    try:
+        return mutate_json(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json", lambda record: with_protection(record, change))
+    except RecordMissingError:
+        return None
 
 
 def create_project_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:

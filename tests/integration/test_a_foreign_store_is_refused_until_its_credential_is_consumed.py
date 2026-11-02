@@ -106,7 +106,7 @@ def _control(tmp_path: Path) -> str:
 
 
 def _seed_project(tmp_path: Path) -> None:
-    projects.put_project(_control(tmp_path), StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x", "protected": "false"})
+    projects.put_project(_control(tmp_path), StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x"})
 
 
 def _estate_buckets(moto_url: str) -> set[str]:

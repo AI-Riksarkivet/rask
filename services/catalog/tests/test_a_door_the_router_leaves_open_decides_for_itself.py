@@ -144,6 +144,13 @@ _DOORS: list[_Door] = [
     _Refusing(method="GET", route="/management/v1/projects/{project_id}", params={"project_id": PROJECT}),
     # A tenant's own doors.
     _Refusing(method="DELETE", route="/management/v1/projects/{project_id}", params={"project_id": PROJECT}, refused=_NOT_FOUND),
+    _Refusing(
+        method="POST",
+        route="/management/v1/projects/{project_id}/protection",
+        params={"project_id": PROJECT},
+        body={"protected": True},
+        refused=_NOT_FOUND,
+    ),
     _Refusing(method="GET", route="/management/v1/projects/{project_id}/members", params={"project_id": PROJECT}),
     _Refusing(
         method="PUT",

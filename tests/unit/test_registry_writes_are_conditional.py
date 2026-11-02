@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 from catalog.services import warehouses
+from catalog.services.control_records import ProtectionChange
 from lakehouse_kit.records import RecordChangedError, RecordMissingError
 from service_kit.storage_options import StorageOptions
 
@@ -107,7 +108,7 @@ def test_the_same_hazard_on_protected_and_serving(control_root: str) -> None:
         StorageOptions(),
         {"id": "acme-wh", "bucket": "acme-wh", "root_uri": "s3://acme-wh", "project": "acme"},
         serving="gold",
-        protection=warehouses.ProtectionChange(protected=True, by="user:dex~anna"),
+        protection=ProtectionChange(protected=True, by="user:dex~anna"),
     )
     assert armed["protected"] == "true"
     assert armed["serving"] == "gold"
@@ -153,12 +154,10 @@ def test_sustained_contention_surfaces_as_an_error_rather_than_a_silent_last_wri
 # --------------------------------------------------------------------------- #
 
 
-def _seed_project(control_root: str, **overrides: str) -> dict[str, str]:
+def _seed_project(control_root: str) -> None:
     from catalog.services import projects
 
-    record = {"id": "acme", "created_at": "t0", "created_by": "user:anna", "protected": "false"} | overrides
-    projects.put_project(control_root, StorageOptions(), record)
-    return record
+    projects.put_project(control_root, StorageOptions(), {"id": "acme", "created_at": "t0", "created_by": "user:anna"})
 
 
 def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,8 +182,8 @@ def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: 
     def racing_replace(root: str, so: StorageOptions, key: str, record: dict, *, etag: str) -> None:
         if fired["n"] == 0:
             fired["n"] = 1
-            # An admin arms deletion protection, inside the window this request opened.
-            projects.put_project(root, so, {**_seed_project(root), "protected": "true"})
+            # An admin arms deletion protection through its door's write, inside the window this request opened.
+            projects.set_project_protection(root, so, "acme", ProtectionChange(protected=True, by="user:dex~anna"))
         real_replace(root, so, key, record, etag=etag)
 
     monkeypatch.setattr(rec, "_replace_json", racing_replace)
