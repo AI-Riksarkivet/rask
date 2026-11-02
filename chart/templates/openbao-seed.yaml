@@ -173,11 +173,11 @@ data:
     G=$DEV_CREDENTIALS
     {{- include "lance.scopedSecretFn" . | nindent 4 }}
     fingerprint() {
-      cat "$G/object-store-secret-key" "$G/postgres-password" "$G/dapr-app-token" "$G/ray-auth-token"{{ if .Values.secrets.hfTokenInStore }} "$SUPPLIED_CREDENTIALS/hf-token"{{ end }} \
+      cat "$G/object-store-secret-key" "$G/postgres-password" "$G/dapr-app-token" \
         2>/dev/null | sha256sum | cut -d' ' -f1
     }
     derive() {
-      for k in object-store-secret-key postgres-password dapr-app-token ray-auth-token; do
+      for k in object-store-secret-key postgres-password dapr-app-token; do
         [ -s "$G/$k" ] || { echo "the generated dev credential $k is missing, so this store stays not Ready" >&2; exit 1; }
       done
       root=$(cat "$G/object-store-secret-key")
@@ -192,7 +192,6 @@ data:
     bao kv put secret/postgres password=@"$G/postgres-password" >/dev/null
     bao kv put secret/dapr-state connection-string=@"$HOME/seed/dapr-state-dsn" >/dev/null
     bao kv put secret/dapr-app-token token=@"$G/dapr-app-token" >/dev/null
-    bao kv put secret/ray-auth-token token=@"$G/ray-auth-token" >/dev/null
     {{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "lineage" .Values.objectStore.lineageAccessKey }}
     {{- if $id }}
     bao kv put secret/{{ $plane }}-s3 access_key={{ $id }} secret_key=@"$HOME/seed/scoped-{{ $id }}" >/dev/null
@@ -243,15 +242,6 @@ data:
     {{- range $signers }}
     put_pair {{ . }}
     {{- end }}
-    {{- end }}
-
-    {{- if $.Values.secrets.hfTokenInStore }}
-    if [ -s "$SUPPLIED_CREDENTIALS/hf-token" ]; then
-      bao kv put secret/hf-token token=@"$SUPPLIED_CREDENTIALS/hf-token" >/dev/null
-      echo "seeded secret/hf-token into OpenBao"
-    else
-      echo "secrets.hfTokenInStore is set and no supplied hf-token is mounted: secret/hf-token stays absent" >&2
-    fi
     {{- end }}
     bao auth enable -path={{ $.Values.externalSecrets.kubernetesAuthPath }} kubernetes 2>/dev/null || echo "kubernetes auth already enabled"
     bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/config \

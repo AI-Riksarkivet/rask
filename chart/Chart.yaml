@@ -1,14 +1,13 @@
 apiVersion: v2
 name: rask
 description: >-
-  rask — an agnostic multimodal AI platform as ONE umbrella chart (one `helm install`,
-  one release named `rask`): the service fleet (gateway, compute,
-  the SvelteKit microfrontend zones), the Lance lakehouse
-  REST catalog with in-service lineage (OpenLineage → Apache AGE), the medallion tiers + media plane,
-  governance (Dex OIDC + OpenFGA), event-driven on Dapr pub/sub over NATS JetStream (Dapr's control
-  plane and the NATS bus are prerequisites; the chart carries rask's Components, Configurations,
-  stream definitions and bus users), and the OTel Collector that exports its telemetry to the OTLP
-  endpoint the operator names.
+  rask — an agnostic multimodal Lance lakehouse as one chart (one `helm install`, one release named
+  `rask`): the Lance Namespace REST catalog with tier governance, lineage (its provenance feed,
+  forwarded as OpenLineage), maintenance, authorization on OpenFGA, rask's Dapr Components and
+  Configurations, NATS stream definitions and bus users, and the OTel Collector that exports its
+  telemetry to the OTLP endpoint the operator names. It also ships the notifications inbox, a client
+  of the lakehouse, until that has a release of its own. Dapr's control plane, the NATS bus and the
+  External Secrets Operator are prerequisites, and the compute engine is bring-your-own.
 type: application
 # 0.2.0 (rask) + 0.1.0 (lance-ns) merged into one chart — a whole second system's templates and
 # values landed here, so this is a real minor bump, not a no-op.

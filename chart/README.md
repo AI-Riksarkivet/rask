@@ -184,7 +184,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | nats.url | string | `""` | NATS JetStream address every pub/sub component and the stream Job connect to (e.g. nats://nats.internal:4222). Required: empty fails the render. |
 | networkPolicy.apiServerEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that call the Kubernetes API to its endpoints. Required under networkPolicy.enabled while any such pod renders. |
 | networkPolicy.enabled | bool | `false` | Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI. |
-| networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, Ray, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination. |
+| networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination. |
 | networkPolicy.objectStoreExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the object store. |
 | networkPolicy.openbaoExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the development store (`openbao.enabled`; e.g. the external-secrets namespace). |
 | objectStore.accessKey | string | `"rustfsadmin"` | Access key id of the store's root account (`rustfsadmin` is RustFS's built-in default id); its secret is `object-store-secret-key` in `<release>-object-store-root`, which only the store and the scoped-users hook mount. No service presents it. |
@@ -231,9 +231,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | pubsub.controlName | string | `"catalog-control-pubsub"` | Name of the broadcast (no queue group) Dapr pubsub component for catalog.control.v1; must match the catalog's LANCE_CONTROL_PUBSUB default. Used when `controlEmit` is on. |
 | pubsub.name | string | `"lineage-pubsub"` | Name of the shared lineage publish Dapr pubsub component; each subscriber app gets a derived `<name>-<app-id>` component with its own queue group. |
 | pubsub.topic | string | `"lineage.events.v1"` | Topic OpenLineage run events are published and subscribed on (LANCE_DAPR_TOPIC and siblings). |
-| ray.auth.enabled | bool | `false` | Renders `<release>-ray-auth-token` for the Ray engine and the compute fixture; the engine must enforce the same one. Off for dev. |
-| ray.dashboardUrl | string | `""` | Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265. |
-| ray.enabled | bool | `true` | rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them. |
 | resources.age | object | `{"limits":{"cpu":"1","memory":"2Gi"},"requests":{"cpu":"250m","memory":"512Mi"}}` | CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases). |
 | resources.catalog | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful. |
 | resources.default | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources). |
@@ -243,7 +240,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | route.enabled | bool | `true` | Renders the HTTPRoutes publishing each `/api/*` prefix, and `/dex` with the development Dex, on the Gateway `parentRefs` names. |
 | route.hostnames | list | `[]` | Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts. |
 | route.parentRefs | list | `[]` | Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`. |
-| secrets.hfTokenInStore | bool | `false` | True once the Hugging Face token is in the secret store at `<kvMount>/hf-token`; renders the `<release>-hf-token` ExternalSecret. False starts Ray pods without HF_TOKEN. |
 | security.infraContexts.age | object | `{"fsGroup":999,"runAsUser":999}` | uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999). |
 | security.infraContexts.enabled | bool | `false` | Applies pinned runAsUser/fsGroup securityContexts to the infra pods (the AGE Postgres). Off by default. |
 | security.readOnlyRootFilesystem | bool | `true` | Read-only root filesystem for every first-party app container; each gets a writable /tmp emptyDir. |

@@ -140,7 +140,6 @@ spec:
             - { name: seed-scripts, mountPath: /seed, readOnly: true }
             - { name: store-identities, mountPath: /seed-identities, readOnly: true }
             - { name: dev-credentials, mountPath: /dev-credentials, readOnly: true }
-            - { name: supplied-credentials, mountPath: /supplied, readOnly: true }
             - { name: root-token, mountPath: /run/openbao-root, readOnly: true }
             - { name: store-keys, mountPath: /run/openbao-keys }
             - { name: signing, mountPath: /signing }
@@ -156,7 +155,6 @@ spec:
             - { name: STORE_ROOT_TOKEN, value: /run/openbao-root/token }
             - { name: STORE_KEYS, value: /run/openbao-keys }
             - { name: DEV_CREDENTIALS, value: /dev-credentials }
-            - { name: SUPPLIED_CREDENTIALS, value: /supplied }
             - { name: SIGNING_DIR, value: /signing }
             - { name: NATS_TOOLS, value: /nats-tools }
           # Ready only once this pod's store holds the key the seed writes last; `bao` reads the administrator token the
@@ -175,7 +173,6 @@ spec:
         - { name: seed-scripts, configMap: { name: {{ .Values.seedScripts }}, defaultMode: 0444 } }
         - { name: store-identities, configMap: { name: {{ .Values.storeIdentities }}, defaultMode: 0444 } }
         - { name: dev-credentials, secret: { secretName: {{ .Values.devCredentials }}, defaultMode: 0444 } }
-        - { name: supplied-credentials, secret: { secretName: {{ .Values.suppliedCredentials }}, optional: true, defaultMode: 0444 } }
         # Signing seeds never reach node disk.
         - { name: signing, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
         - { name: nats-tools, emptyDir: { sizeLimit: 64Mi } }

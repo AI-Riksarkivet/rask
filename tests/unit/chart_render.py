@@ -63,27 +63,17 @@ PREREQ_ARGS: tuple[str, ...] = (
     "--set-json", 'auth.fgaEgress=[{"to":[{"ipBlock":{"cidr":"198.51.100.10/32"}}],"ports":[{"protocol":"TCP","port":443}]}]',
 )  # fmt: skip
 
-#: The Ray an estate names ([[CP-041]]): with the cascade's Ray lane on (the default) and no in-cluster
-#: head, a render that names no Ray dashboard refuses. An external one keeps every caller's render free
-#: of a RayCluster it is not testing. A `--set` beats any `-f`, so a gate of the in-cluster derivation
-#: renders without it.
-RAY_ARGS: tuple[str, ...] = ("--set-string", "ray.dashboardUrl=http://ray.example.com:8265")
-
 #: Observability ON with the backend an operator names ([[XC-127]]): off by default, it renders the Collector and the
 #: fleet's OTLP export only with an endpoint to send to. A gate of a pod's telemetry wiring states it.
 OBSERVABILITY_SETS: tuple[str, ...] = ("observability.enabled=true", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp")
 OBSERVABILITY_ARGS: tuple[str, ...] = tuple(arg for value in OBSERVABILITY_SETS for arg in ("--set", value))
 
-#: The fail-closed OIDC guards' dummy inputs plus the ESO APIs, naming no Ray: the base of a gate of the
-#: Ray guard itself.
-UNNAMED_RAY_ARGS: tuple[str, ...] = (
+#: Every input the chart refuses to render without: the fail-closed OIDC guard's issuer and the prerequisites. Every
+#: caller needs them and none of them is testing those guards.
+OIDC_ARGS: tuple[str, ...] = (
     "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
     *PREREQ_ARGS,
 )  # fmt: skip
-
-#: Every input the chart refuses to render without. Every caller needs them and none of them is testing
-#: those guards.
-OIDC_ARGS: tuple[str, ...] = (*UNNAMED_RAY_ARGS, *RAY_ARGS)
 
 #: The local-development overlay: side-loaded images, the object store on.
 DEFAULT_ARGS: tuple[str, ...] = ("--set", "image.localImages=true", "--set", "objectStore.enabled=true")
@@ -108,16 +98,16 @@ PROD_ARGS: tuple[str, ...] = (
 )  # fmt: skip
 
 
-def render_chart_text(chart: pathlib.Path, *extra: str, base: tuple[str, ...] = OIDC_ARGS) -> str:
-    """Helm's raw stdout for the chart at ``chart`` under ``base`` (default `OIDC_ARGS`) plus ``extra``, uncached.
+def render_chart_text(chart: pathlib.Path, *extra: str) -> str:
+    """Helm's raw stdout for the chart at ``chart`` under `OIDC_ARGS` plus ``extra``, uncached.
 
     For a gate that renders a modified COPY of the chart: no `--set` reaches a file the chart reads with `.Files.Get`,
-    and no other gate can share a copy's render. A gate of one of the required inputs passes a ``base`` without it.
+    and no other gate can share a copy's render.
     """
     helm = shutil.which("helm") or str(REPO / ".localbin/helm")
     if not pathlib.Path(helm).exists():
         pytest.skip("helm not available")
-    argv = [helm, "template", "rask", str(chart), *base, *extra]
+    argv = [helm, "template", "rask", str(chart), *OIDC_ARGS, *extra]
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
 
 

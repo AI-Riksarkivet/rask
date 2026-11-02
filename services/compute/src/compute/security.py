@@ -2,8 +2,8 @@
 
 Every route in this service reads the Ray plane: `{prefix}/ray/*` (jobs, actors, tasks, cluster,
 logs, overview) and the root-mounted `/api/serve/*` proxy, which is a `{path:path}` catch-all onto
-the Ray dashboard. The dashboard is itself token-protected — the chart turns `ray.auth.enabled` on and
-injects `RAY_AUTH_TOKEN` — and this service holds that token and forwarded it on behalf of anyone who
+the Ray dashboard. Where the engine enforces Ray's token auth, this service's release turns `rayAuth.enabled` on and
+injects `RAY_AUTH_TOKEN`, and this service holds that token and forwarded it on behalf of anyone who
 could reach the port.
 
 It shipped ungated under the "localhost / trusted network" posture `CLAUDE.md` documented until

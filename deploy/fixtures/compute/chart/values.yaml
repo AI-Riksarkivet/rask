@@ -1,7 +1,7 @@
 # The rask release this service sits beside. Every rask name below derives from it: the Deployment, Service and
 # ServiceAccount `<rask>-compute` / `<rask>-sa-compute` (the account rask's catalog answers decisions for), and the
-# objects rask owns that this pod reads by reference: `<rask>-dapr-app-token`, `<rask>-ray-auth-token`, `<rask>-dex`,
-# `<rask>-catalog` and `<rask>-otel-collector`.
+# objects rask owns that this pod reads by reference: `<rask>-dapr-app-token`, `<rask>-dex`, `<rask>-catalog` and
+# `<rask>-otel-collector`.
 rask:
   release: rask
 
@@ -34,10 +34,10 @@ docs: false
 # Peers whose x-forwarded-* headers uvicorn trusts (rask's `forwardedAllowIps`); `*` is refused.
 forwardedAllowIps: 127.0.0.1
 
-# The Ray dashboard compute reads and prunes (RAY_DASHBOARD_URL): the engine's, the same address rask's
-# `ray.dashboardUrl` names. Required.
+# The Ray dashboard compute reads and prunes (RAY_DASHBOARD_URL): the engine's head Service. Required.
 rayDashboardUrl: http://rask-ray-head-svc:8265
-# Present the token in `<rask>-ray-auth-token` (rask's `ray.auth`); the engine must enforce the same one.
+# Present the Ray auth token in `<rask>-ray-auth-token` (key `auth_token`), the Secret the engine's owner provides and
+# enforces (the ray-cluster fixture's `authSecretName`); rask's chart creates none (ADR 0189).
 rayAuth:
   enabled: false
 

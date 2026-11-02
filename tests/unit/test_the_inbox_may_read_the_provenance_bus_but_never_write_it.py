@@ -30,7 +30,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -49,7 +49,6 @@ def _component() -> dict[str, str]:
     argv = [
         helm, "template", "rask", str(REPO / "chart"),
         *PREREQ_ARGS,
-        *RAY_ARGS,
         "--set-string", "auth.oidc.issuer=http://auth/dex",
         "--set", "image.localImages=true",
     ]  # fmt: skip
@@ -105,7 +104,6 @@ def test_no_sibling_component_carries_these_keys() -> None:
     argv = [
         helm, "template", "rask", str(REPO / "chart"),
         *PREREQ_ARGS,
-        *RAY_ARGS,
         "--set-string", "auth.oidc.issuer=http://auth/dex",
         "--set", "image.localImages=true",
     ]  # fmt: skip

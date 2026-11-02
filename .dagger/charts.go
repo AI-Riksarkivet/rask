@@ -190,14 +190,12 @@ func (m *Rask) Charts(
 // `signing.provisioned` is the operator's attestation that the event-signing keys exist, without which
 // `templates/signing-provisioned.yaml` refuses the platform's store;
 // `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
-// `ray.dashboardUrl` names the estate's Ray, the one address every Ray consumer renders ([[CP-041]]). `nats.url` names the
-// platform's NATS bus the same way: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
+// `nats.url` names the platform's NATS bus: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
 // the routes attach to and the hostnames it routes to this release, which a real deployment refuses to go without
 // ([[XC-146]], ADR 0165). `networkPolicy.apiServerEgress` and `openbao.egress` state the peers the isolation layer admits
 // the API server and the platform's secret store at, which no URL can derive ([[XC-143]]). `objectStore.externalEndpoint` names the platform's S3: a real deployment
 // refuses the development store (`templates/prod-credentials.yaml`), whose root signs every STS token on RustFS.
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
-	"--set-string ray.dashboardUrl=http://ray.example.com:8265 " +
 	"--set-string nats.url=nats://nats.example.com:4222 " +
 	"--set route.parentRefs[0].name=edge --set route.parentRefs[0].namespace=edge-system " +
 	"--set route.hostnames[0]=lance.example.com " +

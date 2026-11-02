@@ -65,15 +65,14 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   `<release>-dapr-app-token` Secret daprd stamps the header from.
 - `dapr-state` (field `connection-string`): the Dapr state store's DSN, read by the logins of the apps the state store
   is scoped to.
-- `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector; `ray-auth-token` (field
-  `token`), read by ESO when `ray.auth` is on.
+- `postgres` (field `password`), read by ESO for the AGE server, OpenFGA and the Collector.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
   every verifier) and then `signing-key-<identity>` (field `seed`, read by that signer alone), described in values.yaml
   `signing:`; the render refuses the platform's store until its operator created them and `signing.provisioned` says so.
 - `nats-user-<user>` per values.yaml `nats.auth` user (read by that app's login, or by ESO for `admin` and `monitor`),
   and `nats-route` (and `nats-server`, in operator mode), attested by `nats.auth.provisioned`.
-- With `secrets.hfTokenInStore`, `hf-token` (field `token`); with the in-chart Collector, `otel-collector-export`
-  (fields username, password), the credential the audit store admits. A multibase data base holds none: it is its
+- With the in-chart Collector, `otel-collector-export` (fields username, password), the credential the audit store
+  admits. A multibase data base holds none: it is its
   tables' storage on the estate's store, reached under the catalog's own identity ([[LH-286]]).
 
 No secret holds a store root: rask presents none in production, and on the dev store the root sits at
@@ -242,17 +241,18 @@ The **`compute` service** (`:8804`, over `ray-kit`) is the companion of a bring-
 lakehouse. It reads that engine's Ray dashboard REST API at `RAY_DASHBOARD_URL` for the jobs board and job-history
 prune, and proxies `/api/serve/*`. It ships in its own chart, `deploy/fixtures/compute` (release `compute` in rask's
 namespace, installed by `make k3s-clients` after `make k3s-up`), which reads the rask release's Dapr app token, `lance-tracing`
-Configuration, Dex, catalog, OTel Collector and Ray auth token by reference; it holds no OpenFGA credential and asks the
+Configuration, Dex, catalog and OTel Collector by reference; it holds no OpenFGA credential and asks the
 catalog's decision door, which answers its service account only when the product chart's `auth.externalDeciders` names
 it ([[LH-442]]). The fixture chart publishes `/api/ray` and `/api/serve`
 with its own HTTPRoute on the same Gateway (`deploy/fixtures/compute/chart/templates/route.yaml`), and a NetworkPolicy
-admitting its app port. The address of the engine's dashboard is `ray.dashboardUrl`
-(`rask.rayDashboardUrl`); the annotator fixture names the same head for its Serve discovery
-(its `serve.discoveryUrl`).
+admitting its app port. The address of the engine's dashboard is the fixture's own `rayDashboardUrl`, and the Ray
+auth token compute presents (its `rayAuth`) is a Secret the engine's owner provides; the annotator fixture names the
+same head for its Serve discovery (its `serve.discoveryUrl`). The product chart names no part of the engine: no
+address, token, scrape job, alert or network peer (ADR 0189).
 
 In development `make k3s-clients` installs the `kuberay-operator`, `ray-cluster` and `compute` fixtures, after `make k3s-up`
-(`deploy/fixtures`, not for production); the head Service is `rask-ray-head-svc`, and `deploy/values-local.yaml`
-names it. GPUs, a device plugin, the `nvidia` RuntimeClass and each Serve replica's GPU fraction belong to the
+(`deploy/fixtures`, not for production); the head Service is `rask-ray-head-svc`, and the compute and annotator
+fixtures name it. GPUs, a device plugin, the `nvidia` RuntimeClass and each Serve replica's GPU fraction belong to the
 engine: the `ray-cluster` fixture's `gpuCount` sizes its head, and the `nvidia-device-plugin` fixture advertises
 `nvidia.com/gpu` on a node where nothing does yet (`deploy/fixtures/README.md`). A runner reaches a remote cluster
 with `--address ray://…:10001`.

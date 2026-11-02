@@ -32,7 +32,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS, containers, env_of, render, render_fixture
+from tests.unit.chart_render import PREREQ_ARGS, containers, env_of, render, render_fixture
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -62,7 +62,6 @@ def _render(*extra: str) -> str:
         "--set",
         "image.localImages=true",
         *PREREQ_ARGS,
-        *RAY_ARGS,
         "--set-string",
         "auth.oidc.issuer=http://localhost:8080/dex",
         *extra,

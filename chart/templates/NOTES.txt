@@ -2,18 +2,15 @@ rask {{ .Chart.AppVersion }} deployed as release "{{ .Release.Name }}" (namespac
 
 
 {{- $root := . }}
-Event-driven path:  catalog --Dapr publish--> [pubsub.jetstream over NATS] --> lineage /lineage-events --> Apache AGE
+Event-driven path:  catalog --Dapr publish--> [pubsub.jetstream over NATS] --> lineage /lineage-events --> the provenance tables (forwarded as OpenLineage to services.lineage.forward.url)
 
 Services (ClusterIP):
 {{- range $name, $svc := .Values.services }}
   - {{ $name }}: {{ include "rask.fullname" $root }}-{{ $name }}:{{ $svc.port }}
 {{- end }}
-  - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Apache AGE — the lineage graph{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})
+  - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Postgres — OpenFGA's database and the Dapr state store{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})
 {{- if .Values.objectStore.enabled }}
   - store:     {{ include "lance.objectStoreHost" $root }}:{{ .Values.objectStore.port }} (the rustfs fixture's development store)
-{{- end }}
-{{- with include "rask.rayDashboardUrl" . }}
-  - ray:       {{ . }} (the engine's; rask installs no Ray)
 {{- end }}
   - nats:      {{ include "lance.natsUrl" . }} (the platform's JetStream; rask installs no NATS)
 {{- if or .Values.openfga.enabled .Values.auth.fgaApiUrl }}

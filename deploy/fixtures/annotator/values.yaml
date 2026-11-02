@@ -5,7 +5,7 @@ route:
   parentRefs: [{name: traefik-gateway, namespace: kube-system, sectionName: web}]
 # The Gateway's data plane runs in the k3s pod CIDR, as rask's `forwardedAllowIps` in deploy/values-local.yaml.
 forwardedAllowIps: 10.42.0.0/16
-# The ray-cluster fixture's head and Serve ingress, for assist producer discovery (deploy/values-local.yaml's `ray.dashboardUrl`).
+# The ray-cluster fixture's head and Serve ingress (`rask-ray-head-svc`), for assist producer discovery.
 serve:
   discoveryUrl: http://rask-ray-head-svc:8265
   proxyUrl: http://rask-ray-head-svc:8265

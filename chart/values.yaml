@@ -35,24 +35,17 @@ singleTenant:
   # -- Renders the single-tenant default workloads (every fleet service). False installs front-door services only; the object store is gated by `objectStore.enabled`.
   enabled: false
 
-# Optional override: if set, this Secret is used verbatim instead of the chart's `<release>-app`
-# (prod with external deps). It carries configuration (the object store's access key ID and endpoint),
-# never a credential.
-# -- Name of a pre-made Secret used instead of the chart's `<release>-app` (object store access key ID and endpoint, never a credential). Empty renders `<release>-app`.
-existingSecret: ""
-
 # NO CREDENTIAL IS A CHART VALUE ([[XC-004]]). Every secret the estate uses lives in the secret store and
 # reaches a pod from it: the Dapr secret store for a sidecar, an ExternalSecret for a pod without one.
 # The dev OpenBao's are generated in-cluster (templates/external-secrets.yaml, `<release>-dev-credentials`);
 # a real deployment's are provisioned in the platform's store by its operator, and the render refuses a
 # credential passed as a value (templates/prod-credentials.yaml).
-secrets:
-  # THE HUGGING FACE TOKEN is a third party's credential, so nothing here can generate it. The operator
-  # writes it to the store at `<kvMount>/hf-token`, field `token` (dev: `make k3s-up` with HF_TOKEN set
-  # writes the bootstrap Secret `<release>-supplied-credentials` the dev OpenBao seeds it from), then sets
-  # this so the `<release>-hf-token` ExternalSecret renders. Off, the Ray pods start without HF_TOKEN.
-  # -- True once the Hugging Face token is in the secret store at `<kvMount>/hf-token`; renders the `<release>-hf-token` ExternalSecret. False starts Ray pods without HF_TOKEN.
-  hfTokenInStore: false
+#
+# Optional override: if set, this Secret is used verbatim instead of the chart's `<release>-app`
+# (prod with external deps). It carries configuration (the object store's access key ID and endpoint),
+# never a credential.
+# -- Name of a pre-made Secret used instead of the chart's `<release>-app` (object store access key ID and endpoint, never a credential). Empty renders `<release>-app`.
+existingSecret: ""
 
 # INTERACTIVE API DOCS — /docs, /redoc and /openapi.json — across every app in the release.
 #
@@ -135,7 +128,7 @@ services:
     # the token had only ever been reachable through `lanceWriter`, which this service is not.
     # -- Renders APP_API_TOKEN for notifications, which refuses to start with Dapr on and no token.
     daprIngest: true
-    # The SECOND ingress (open_notifications.md §2). The bus carries run lifecycle; Ray TRAIN
+    # The SECOND ingress (open_notifications.md §2). The bus carries run lifecycle; a user's pipeline
     # and every external OpenLineage producer emit over HTTP only and never reach the topic,
     # so a subscribe-and-stop plane silently never notifies a whole class of run. This cron ticks the
     # sidecar-only reconcile route, which walks lineage's durable `GET /events` down from a persisted
@@ -507,10 +500,10 @@ networkPolicy:
   # -- List of extra NetworkPolicy `from` peers allowed to reach the object store.
   objectStoreExtraFrom: []
   # Extra egress rules (verbatim NetworkPolicy egress entries) for externalized backends —
-  # off-cluster S3, a NATS outside this namespace (nats.url), the platform's Postgres (age.externalHost), the Ray
-  # dashboard (ray.dashboardUrl), the platform's IdP. The API server, the telemetry backend, the Gateway, an
-  # external OpenFGA and the platform's secret store take rules of their own, scoped to the pods that dial them.
-  # -- List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, Ray, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination.
+  # off-cluster S3, a NATS outside this namespace (nats.url), the platform's Postgres (age.externalHost), the
+  # platform's IdP. The API server, the telemetry backend, the Gateway, an external OpenFGA and the platform's
+  # secret store take rules of their own, scoped to the pods that dial them.
+  # -- List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination.
   extraEgress: []
   # The pods that call the Kubernetes API (the token verifiers, the dev store's login reviews, the Collector's pod metadata,
   # the snapshot CronJob, the Dapr dashboard) reach it through these rules and no other pod does. The API server is
@@ -698,7 +691,7 @@ vending:
   # under a registered base, with the blanket bypass left off — a curated media source without the SSRF door.
   # Empty approves no base, so a create naming one is refused and a plain create registers none.
   # One value, rendered as LANCE_EXTERNAL_BLOB_BASES into every reader of it: the catalog's create and read
-  # doors, maintenance and lineage. A base inside it needs no base-record
+  # doors and maintenance. A base inside it needs no base-record
   # entry ([[LH-279]]), so a reader without it would treat each table's blob base as unrecorded.
   # -- Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty approves no base.
   externalBlobBases: ""
@@ -1436,27 +1429,6 @@ objectStore:
   # No persistence value: the development store's durability is its fixture's (a StatefulSet claim that survives pod
   # rolls and `helm uninstall`), and a production store's is the platform's.
 
-ray:
-  # THE ENGINE SEAM (ADR 0153). rask installs no Ray: no operator, no RayCluster, no RayService. It
-  # names the engine's address, the token its Ray clients present, and the engine identity its doors
-  # trust; how the engine runs Ray is the engine owner's. In development the kuberay-operator and
-  # ray-cluster fixtures provide one (deploy/fixtures, not for production).
-  # -- rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them.
-  enabled: true
-  # THE ONE RAY PLANE ([[CP-041]]): every Ray consumer renders its address from `rask.rayDashboardUrl`.
-  # The compute and annotator fixtures (deploy/fixtures/compute, deploy/fixtures/annotator)
-  # are given the same address as their own values.
-  # -- Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265.
-  dashboardUrl: ""
-  # Ray token auth (RAY_AUTH_MODE=token). The token is the store's `ray-auth-token`, written by ESO into
-  # `<release>-ray-auth-token` (the dev OpenBao generates it in-cluster), never a value. The compute fixture
-  # presents it (its `rayAuth`); the engine enforces the same Secret (the ray-cluster fixture's
-  # `authSecretName`, KubeRay's authOptions).
-  auth:
-    # -- Renders `<release>-ray-auth-token` for the Ray engine and the compute fixture; the engine must enforce the same one. Off for dev.
-    enabled: false
-
-
 route:
   # The edge is the platform's Gateway (Gateway API), not a rask process (ADR 0165): these HTTPRoutes name one backend per
   # public prefix, and each service authenticates every request itself. Only Core matches and the URLRewrite filter are
@@ -2159,7 +2131,7 @@ allocator:
 
 # ==== observability ==========================================================
 # rask's telemetry seam is ONE OpenTelemetry Collector (templates/otel-collector.yaml): it RECEIVES the fleet's
-# OTLP, TAILS infra-pod logs (filelog), SCRAPES the Dapr sidecars, the Dapr control plane, Ray and OpenFGA, and
+# OTLP, TAILS infra-pod logs (filelog), SCRAPES the Dapr sidecars, the Dapr control plane and OpenFGA, and
 # EXPORTS everything over OTLP/HTTP to the endpoint named here. What stores, graphs and alerts on that telemetry is
 # the platform's (ADR 0153): rask installs no store, no dashboards and no alert evaluator. Its alert rules are an
 # artefact of their own (deploy/alerting/rules.yml), and development gets the chain from

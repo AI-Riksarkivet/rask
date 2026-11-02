@@ -1,10 +1,10 @@
 """No credential is minted by, carried in, or accepted into the chart's render ([[XC-004]]).
 
 A render is stored whole in the release (`helm get manifest`, `hooks`, `values`), every revision of it, so
-a credential that passes through one is a secret at rest outside the store. Three ways one used to: a
-template minting it (`randAlphaNum` for the Ray token), a value carrying it (`dapr.appToken`,
+a credential that passes through one is a secret at rest outside the store. A credential could pass through
+three ways: a template minting it (`randAlphaNum`), a value carrying it (`dapr.appToken`,
 `objectStore.secretKey`, ...), and a template rendering it into a Secret or a Job.
-The credentials now live in the store and reach pods through ESO, a prerequisite the chart checks for.
+The credentials live in the store and reach pods through ESO, a prerequisite the chart checks for.
 The dev store's are generated in-cluster; `test_the_dev_openbao_is_seeded_by_its_own_pod.py` runs that half.
 """
 
@@ -13,15 +13,17 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+import yaml
 
 from tests.unit.chart_render import DEFAULT_ARGS, OIDC_ARGS, REPO, SECRET_STORE_URL, render_chart_text, render_text
+from tests.unit.chart_yaml import FAST_LOADER
 
 
-#: The two cluster-less renders an operator makes: the chart's dev defaults and the local estate's overlay,
-#: each with every credential consumer on (the Ray token was the one the chart minted).
+#: The two cluster-less renders an operator makes: the chart's dev defaults and the local estate's overlay, each with
+#: the dev store's credentials generated, which is where a render-time mint would sit.
 _RENDERS = {
-    "dev": (*DEFAULT_ARGS, "--set", "ray.auth.enabled=true", "--set", "singleTenant.enabled=true"),
-    "local": ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"), "--set", "ray.auth.enabled=true"),
+    "dev": (*DEFAULT_ARGS, "--set", "singleTenant.enabled=true"),
+    "local": ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml")),
 }
 
 
@@ -31,7 +33,8 @@ def test_a_cluster_less_render_mints_no_credential(overlay: str) -> None:
     first = render_chart_text(REPO / "chart", *_RENDERS[overlay])
     second = render_chart_text(REPO / "chart", *_RENDERS[overlay])
 
-    assert "name: rask-ray-auth-token" in first, f"{overlay}: the Ray token's consumer is off, so this would pass vacuously"
+    generators = {doc["metadata"]["name"] for doc in yaml.load_all(first, Loader=FAST_LOADER) if isinstance(doc, dict) and doc.get("kind") == "Password"}
+    assert "rask-dev-credentials" in generators, f"{overlay}: the dev credentials are not generated, so this would pass vacuously"
     assert first == second, f"{overlay}: two renders differ, so the render minted something the release then stores"
 
 

@@ -720,13 +720,9 @@ DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 # re-feeds the live values (`-f $$LIVE`). templates/prod-credentials.yaml refuses each of them as a value,
 # and `null` is how Helm removes a key a values file supplies. The two lists name the same keys.
 DROP_CREDENTIAL_VALUES := --set dapr.appToken=null \
-  --set secrets.hfToken=null --set ray.auth.token=null --set age.password=null --set objectStore.secretKey=null \
+  --set age.password=null --set objectStore.secretKey=null \
   --set objectStore.maintenanceSecretKey=null \
   --set objectStore.catalogSecretKey=null --set objectStore.lineageSecretKey=null
-
-# THE ONE BOOTSTRAP SECRET a dev estate is given by hand: the operator-supplied third-party credentials
-# (today the Hugging Face token), which nothing in the cluster can generate. The dev OpenBao seeds the
-# store from it (values.yaml `secrets.hfTokenInStore`); the token reaches kubectl on stdin, never argv.
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
@@ -772,16 +768,6 @@ k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), be
 k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fixtures, vendor deps, then install/upgrade the release and wait for the catalog
 	@case '$(DEV_VENDED_ENDPOINT)' in http://:*|*:) echo "DEV_VENDED_ENDPOINT '$(DEV_VENDED_ENDPOINT)' names no node address or port: is kubectl pointed at the cluster?" >&2; exit 1;; esac
 	@set -a; [ -f .env ] && . ./.env; set +a; \
-	if [ -z "$$HF_TOKEN" ] && [ -r "$${HF_HOME:-$$HOME/.cache/huggingface}/token" ]; then \
-	  HF_TOKEN="$$(cat "$${HF_HOME:-$$HOME/.cache/huggingface}/token")"; \
-	  echo ">> HF_TOKEN from $${HF_HOME:-$$HOME/.cache/huggingface}/token (hf auth login)"; \
-	fi; \
-	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
-	HFARGS=; \
-	if [ -n "$$HF_TOKEN" ]; then \
-	  printf '%s' "$$HF_TOKEN" | $(KUBECTL) create secret generic rask-supplied-credentials --from-file=hf-token=/dev/stdin --dry-run=client -o yaml | $(KUBECTL) apply -f - >/dev/null || exit 1; \
-	  HFARGS="--set secrets.hfTokenInStore=true"; \
-	fi; \
 	: # THE PINS FILE CARRIES TAGS AND NOTHING ELSE, so it LAYERS over the registry rather than replacing
 	: # it. `k3s-pins.sh` strips the registry on purpose ("the chart supplies it from image.repository"),
 	: # so selecting the pins file INSTEAD of the live values left `image.repository` unset and the chart
@@ -806,7 +792,6 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) \
 	  --set-string vending.endpoint=$(DEV_VENDED_ENDPOINT) \
 	  $(DROP_CREDENTIAL_VALUES) \
-	  $$HFARGS \
 	  $${AWS_ACCESS_KEY_ID:+--set-string objectStore.accessKey=$$AWS_ACCESS_KEY_ID}
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
 	@echo "API → http://<node-ip>/api/catalog/livez   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"

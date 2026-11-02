@@ -57,14 +57,6 @@ gates who reads it.
 
 The in-chart Collector's credential for the audit store, mounted as files (otel-collector.yaml).
 
-## `{{- if .Values.ray.auth.enabled }}`
-
-Gated on ray.auth.enabled ALONE, matching `rask.rayAuthEnv`, which emits the consuming
-secretKeyRef on that value by itself. Not on `ray.enabled`/`singleTenant.enabled`: configmap.yaml
-states that "rask's Ray is managed outside this repo, so an external address is the NORMAL case",
-and the fleet must present a bearer token to an external cluster too (measured 2026-08-16: a
-narrower gate left rask-compute in CreateContainerConfigError and the release in pending-upgrade).
-
 ## `{{- if include "lance.backupIdentity" . }}`
 
 THE BACKUPS' IDENTITY, `<release>-backup-s3`, one Secret for both backup CronJobs and rendered when either is on. It

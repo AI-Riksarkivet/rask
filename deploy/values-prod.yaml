@@ -87,9 +87,9 @@ networkPolicy:
   #   - to: [{ipBlock: {cidr: 10.0.0.10/32}}]
   #     ports: [{protocol: TCP, port: 6443}]
   # Every other platform endpoint this overlay names outside the namespace is reached through extraEgress, a rule per
-  # endpoint naming its addresses: the NATS bus (nats.url, 4222), the Postgres (age.externalHost, 5432), the Ray
-  # dashboard (ray.dashboardUrl), the platform's IdP (auth.oidc.issuer) and an off-cluster S3. No other
-  # egress leaves the namespace, so an endpoint missing here is unreachable.
+  # endpoint naming its addresses: the NATS bus (nats.url, 4222), the Postgres (age.externalHost, 5432), the
+  # platform's IdP (auth.oidc.issuer) and an off-cluster S3. No other egress leaves the namespace, so an endpoint
+  # missing here is unreachable.
   # extraEgress:
   #   - to: [{ipBlock: {cidr: 10.0.1.20/32}}]
   #     ports: [{protocol: TCP, port: 5432}]
@@ -133,14 +133,6 @@ openbao:
   # egress:
   #   - to: [{ipBlock: {cidr: 10.0.2.30/32}}]
   #     ports: [{protocol: TCP, port: 8200}]
-
-# --- Ray token auth ON (gate 7 / R3): Ray clients present the store's `ray-auth-token`, which ESO
-# writes into `<release>-ray-auth-token`. Enforcing it is the engine's (KubeRay's spec.authOptions.secretName
-# on the same Secret): an engine serving an unauthenticated dashboard is remote code execution, and rask,
-# which installs no Ray (ADR 0153), cannot refuse that from its own render. ---------------------------------
-ray:
-  auth:
-    enabled: true
 
 # --- The bundled Dex is the dev IdP (its users and client secret are published in this chart, XC-025); a real
 # deployment refuses it (templates/prod-credentials.yaml) and signs in through the platform's IdP, which the deployer

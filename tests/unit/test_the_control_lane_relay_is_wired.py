@@ -32,7 +32,7 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -44,7 +44,7 @@ def _render(*set_values: str) -> list[dict]:
     if not pathlib.Path(helm).exists():
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(CHART), "--set", "image.localImages=true"]
-    argv += [*PREREQ_ARGS, *RAY_ARGS]
+    argv += PREREQ_ARGS
     argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
     for value in set_values:
         argv += ["--set", value]

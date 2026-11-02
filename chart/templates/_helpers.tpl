@@ -334,13 +334,6 @@ dapr.io/sidecar-seccomp-profile-type: RuntimeDefault
 - { name: OTEL_RESOURCE_ATTRIBUTES, value: "{{ include "rask.otelResourceAttrs" $root }}" }
 {{- end -}}
 
-{{- define "lance.lineageEmitEnv" -}}
-{{- $root := index . 0 -}}
-- { name: RASK_LINEAGE_ENDPOINT, value: "http://{{ include "lance.fullname" $root }}-lineage:{{ $root.Values.services.lineage.port }}" }
-- { name: RASK_LINEAGE_ENDPOINT_PATH, value: "api/v1/lineage" }
-
-{{- end -}}
-
 {{- define "lance.preStop" -}}
 lifecycle:
   preStop:
@@ -753,10 +746,8 @@ scoped_secret() {
 {{- $reads := list "postgres" -}}
 {{- if $v.objectStore.enabled }}{{- $reads = append $reads "object-store-root" }}{{- end -}}
 {{- if $v.observability.enabled }}{{- $reads = append $reads "otel-collector-export" }}{{- end -}}
-{{- if $v.ray.auth.enabled }}{{- $reads = append $reads "ray-auth-token" }}{{- end -}}
 {{- if include "lance.backupIdentity" . }}{{- $reads = append $reads "backup-s3" }}{{- end -}}
 {{- if or $v.dapr.enabled $v.auth.enabled }}{{- $reads = append $reads "dapr-app-token" }}{{- end -}}
-{{- if $v.secrets.hfTokenInStore }}{{- $reads = append $reads "hf-token" }}{{- end -}}
 {{- range $files := include "lance.natsFiles" . | fromJson }}{{- $reads = concat $reads $files }}{{- end -}}
 {{- toJson ($reads | uniq | sortAlpha) -}}
 {{- end -}}
@@ -943,12 +934,6 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 {{- define "lance.externalBlobBases" -}}
 {{ .Values.vending.externalBlobBases }}
 {{- end }}
-
-{{- define "rask.rayDashboardUrl" -}}
-{{- if .Values.ray.dashboardUrl -}}
-{{- .Values.ray.dashboardUrl -}}
-{{- end -}}
-{{- end -}}
 
 {{- define "rask.catalogPublicPrefix" -}}/api/catalog{{- end -}}
 

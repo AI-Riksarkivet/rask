@@ -234,17 +234,16 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
 (XC-165). A real-deployment render refuses both the bundled Dex and the dev OpenBao.
 
 - **Dev (the openbao fixture).** `<release>-dev-credentials` holds `object-store-secret-key`,
-  `postgres-password`, `dapr-app-token` and `ray-auth-token`. On a fresh install ESO's
+  `postgres-password` and `dapr-app-token`. On a fresh install ESO's
   Password generator creates it once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`). The OpenBao
   pod mounts it, and its seed writes the root to `secret/object-store-root` and each other generated field to its own
-  secret (`postgres`, `dapr-app-token`, `ray-auth-token`) as `@file`, deriving the scoped storage
+  secret (`postgres`, `dapr-app-token`) as `@file`, deriving the scoped storage
   secrets from the root (`lance.scopedSecretFn`, which
   `object-store-scoped-users` runs too). The Secret outlives an
   OpenBao replacement, so the AGE database and the object store, which keep what they were initialised with, see
   the same values after a re-seed. The seed re-reads the mounted Secret every 5 s and re-seeds when it changes,
-  so a rotation never needs the OpenBao pod replaced. Third-party credentials (the Hugging Face token) are
-  operator-supplied: `make k3s-up` writes the bootstrap Secret `rask-supplied-credentials` from `HF_TOKEN` and sets
-  `secrets.hfTokenInStore`, and the same loop carries a changed token into the store.
+  so a rotation never needs the OpenBao pod replaced. The lakehouse uses no third-party credential; one a client
+  uses (a runner's model-download token) is that client's release's to provide (ADR 0189).
 - **An estate whose stores already exist keeps its credentials.** If the AGE or object-store StatefulSet exists
   and `<release>-dev-credentials` does not, the render refuses (`lookup`, so only against a cluster): generating
   beside live data would lock every consumer out of it. Create the Secret from the credentials the estate holds
@@ -259,7 +258,7 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   1. Change the key of `<release>-dev-credentials` (a real deployment: the field in the store) with a value
      generated in the cluster; wait for the seed's "the mounted credentials changed; seeding again".
   2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `object-store-root`, `observability-s3`,
-     `backup-s3`, `dapr-app-token`, `hf-token`) with the `force-sync`
+     `backup-s3`, `dapr-app-token`) with the `force-sync`
      annotation, and wait for Ready. Their refresh is otherwise `externalSecrets.refreshInterval`, and a pod
      restarted before it takes the old value.
   3. Tell the server, when one holds the credential: `ALTER ROLE` inside AGE from stdin for `postgres-password`;

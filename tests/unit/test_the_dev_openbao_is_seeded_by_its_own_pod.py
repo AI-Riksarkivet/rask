@@ -34,7 +34,7 @@ each scoped storage secret from the root there, so no credential is in the rende
 output stream. The `object-store-scoped-users` Job derives the same scoped secrets for the store users it creates, and a
 service reads its field by name: the field each service is told to read must hold the secret the Job gives
 the user named by that service's access key, or every S3 call is `SignatureDoesNotMatch`. A store missing a
-generated credential is never Ready. A rotated key of the mounted Secret (and the operator's hf-token) reaches the
+generated credential is never Ready. A rotated key of the mounted Secret reaches the
 store through the seed's loop, keeping the signing pairs and the bus root, because replacing the pod to re-seed
 would re-mint them.
 
@@ -80,7 +80,7 @@ _SLEEP = """\
 n=$(cat "$STORES/sleeps" 2>/dev/null || echo 0)
 echo $((n + 1)) > "$STORES/sleeps"
 if [ -e "$STORES/restart" ] && [ "$n" -eq 0 ]; then mv "$STORES/local" "$STORES/before-restart"; rm -f "$STORES/local.state" "$STORES/local.tokens" "$STORES/local.kv"; : > "$STORES/served.refused"; exit 0; fi
-if [ -e "$STORES/rotate" ] && [ "$n" -eq 0 ]; then cp "$STORES/rotate" "$DEV_CREDENTIALS/postgres-password"; cp "$STORES/rotate" "$SUPPLIED_CREDENTIALS/hf-token"; exit 0; fi
+if [ -e "$STORES/rotate" ] && [ "$n" -eq 0 ]; then cp "$STORES/rotate" "$DEV_CREDENTIALS/postgres-password"; exit 0; fi
 if [ -e "$STORES/change" ] && [ "$n" -eq 0 ]; then cp "$STORES/local/secret/nats-server" "$STORES/first-nats-server"; echo "# a later rask render" >> "$SEED_SCRIPT"; exit 0; fi
 exit 1
 """
@@ -93,7 +93,6 @@ _GENERATED = {
     "object-store-secret-key": ("secret/object-store-root", "object-store-secret-key"),
     "postgres-password": ("secret/postgres", "password"),
     "dapr-app-token": ("secret/dapr-app-token", "token"),
-    "ray-auth-token": ("secret/ray-auth-token", "token"),
 }
 
 #: What the stand-in store answers an init with, and the administrator token id the fixture generates: none may reach an
@@ -273,10 +272,7 @@ def _arrange_nats(case: str, stores: Path, tmp_path: Path, env: dict[str, str]) 
         pytest.param(DEFAULT_ARGS, "forbidden", "", False, "minted", id="a-served-store-it-cannot-read-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "lacks", "readonly", False, "minted", id="a-failed-write-stops-the-seed"),
         pytest.param(DEFAULT_ARGS, "lacks", "restart", True, "minted", id="a-server-restarted-in-place-gets-the-same-keys"),
-        pytest.param(
-            (*DEFAULT_ARGS, "--set", "secrets.hfTokenInStore=true"), "lacks", "rotate", True, "minted", id="a-rotated-credential-reaches-the-store-in-place"
-        ),
-        pytest.param(DEFAULT_ARGS, "lacks", "rotate", True, "minted", id="a-rotated-credential-reaches-the-store-with-no-operator-token"),
+        pytest.param(DEFAULT_ARGS, "lacks", "rotate", True, "minted", id="a-rotated-credential-reaches-the-store-in-place"),
         pytest.param(DEFAULT_ARGS, "lacks", "change", True, "minted", id="a-seed-rask-changes-runs-again-in-place-keeping-its-keys-and-bus-root"),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "carried", id="a-signing-pair-behind-the-service-is-carried"),
         pytest.param(DEFAULT_ARGS, "lacks", "", True, "rotated", id="a-list-without-its-key-is-a-rotation-that-keeps-one-previous"),
@@ -348,9 +344,6 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     generated_dir = tmp_path / "dev-credentials"
     generated_dir.mkdir()
     generated = {key: hashlib.sha256(f"{tmp_path}-{key}".encode()).hexdigest()[:40] for key in _GENERATED}
-    supplied_dir = tmp_path / "supplied"
-    supplied_dir.mkdir()
-    (supplied_dir / "hf-token").write_text("an-operator-supplied-hf-token")
     for key, value in generated.items():
         if not (case == "generated-missing" and key == "postgres-password"):
             (generated_dir / key).write_text(value)
@@ -358,7 +351,6 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     nats_tools.mkdir()
     [server_pod] = [d["spec"]["template"]["spec"] for d in docs if f"{d.get('kind')}/{d.get('metadata', {}).get('name')}" == workload]
     generated_dir = _as_mounted(server_pod, container, "dev-credentials", generated_dir, tmp_path / "dev-credentials-mounted")
-    supplied_dir = _as_mounted(server_pod, container, "supplied-credentials", supplied_dir, tmp_path / "supplied-mounted")
     root_dir = tmp_path / "root-token"
     root_dir.mkdir()
     (root_dir / Path(env["STORE_ROOT_TOKEN"]).name).write_text(_ADMIN_TOKEN)
@@ -379,7 +371,6 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         "SERVICE_ADDR": service_addr,
         "SIGNING_DIR": str(signing_dir),
         "DEV_CREDENTIALS": str(generated_dir),
-        "SUPPLIED_CREDENTIALS": str(supplied_dir),
         "NATS_TOOLS": str(nats_tools),
         "NK_PAIRS": str(tmp_path / "pairs"),
         "NK_STATE": str(tmp_path / "nk-calls"),
@@ -461,8 +452,6 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
 
     if local == "rotate":
         generated["postgres-password"] = (stores / "rotate").read_text()
-        if "secrets.hfTokenInStore=true" in overlay:
-            assert _store(stores, "local", "secret/hf-token").get("token") == generated["postgres-password"], "a rotated hf-token never reached the store"
     assert {key: _store(stores, "local", path).get(field) for key, (path, field) in _GENERATED.items()} == generated, (
         "the store does not hold the credentials ESO generated"
     )

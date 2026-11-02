@@ -464,34 +464,6 @@ in the same commit. Covers every path fleet.yaml points a
 probe at, not just the operational pair — including `/api/health`, which remains served as a badge
 even though no probe asks for it. `/healthz` matches no route any service mounts.
 
-## `{{- define "lance.lineageEmitEnv" -}}`
-
-lineage-kit's HTTP transport (call: include "lance.lineageEmitEnv" $root).
-TWO INDEPENDENT lineage paths exist and they are easy to confuse:
-
-  1. Dapr pub/sub — what maintenance and the catalog use TODAY
-     (<APP>_LINEAGE_TOPIC → NATS → the lineage service's subscriber). Wired separately.
-  2. lineage-kit's HTTP transport — a producer builds its emitter with `build_emitter()`, which reads
-     RASK_LINEAGE_ENDPOINT.
-
-Path 2's failure mode is silent by construction: with no endpoint, `build_emitter` logs ONE
-`log.warning("lineage_http_without_endpoint …")` at startup and returns `NoopEmitter`, which then
-drops every event at DEBUG. A pipeline emitting into a no-op is indistinguishable, from outside,
-from a pipeline that never emitted — the graph is simply empty and everything reports success.
-
-So the transport is rendered BEFORE anything emits through it: the first real run must not be the
-moment we discover the wire was never connected. Points at the lineage service's HTTP ingest
-(`POST /api/v1/lineage` — services/lineage/api/v1/endpoints/ingest.py), which is the same graph the
-Dapr subscriber writes to, so both paths converge.
-
-endpoint_path is rendered explicitly rather than left to its in-code default: a drift between the two
-would 404, and ClientEmitter catches-and-logs transport errors, so that too would fail silently.
-
-## `{{- end -}}`
-
-No credential here: a pod that calls lineage over HTTP authenticates with its projected
-`rask-lineage` token (lance.identityTokens), whose subject is its ServiceAccount's (lance.saSubject).
-
 ## `{{- define "lance.preStop" -}}`
 
 Rollout drain: a preStop sleep holds SIGTERM until endpoint removal has propagated to kube-proxy /
@@ -1191,12 +1163,6 @@ the reconcile called it an orphan. Measured live 2026-09-24: `orphan_buckets: 'l
 — declared in this repo's own `values-local.yaml` — was one of the two findings holding
 `trash_purge_blocked`. Declared here rather than in each template, because two copies of a bucket
 list is how the first one drifted.
-
-## `{{- define "rask.rayDashboardUrl" -}}`
-
-THE ONE RAY PLANE ([[CP-041]]): the dashboard every consumer names (the compute and
-annotator fixtures are given the same address as their own values). `ray.dashboardUrl`
-when set, else empty.
 
 ## `{{- define "rask.catalogPublicPrefix" -}}`
 

@@ -6,7 +6,7 @@ the rask-chart line that rendered the setting; the setting itself is in `chart/v
 ## `authOptions:`
 
 Token auth (gate 7 / R3), the NATIVE kuberay >= 1.6.0 wiring: authOptions.secretName
-points the operator at the chart's pre-existing <release>-ray-auth-token Secret
+points the operator at the Secret `authSecretName` names, which the engine's owner provides
 (data key `auth_token` = the operator's RAY_AUTH_TOKEN_SECRET_KEY convention, so the
 operator SKIPS generating its own Secret — raycluster_controller.reconcileAuthSecret
 returns early when secretName is set). The operator then injects RAY_AUTH_MODE=token +
@@ -14,8 +14,8 @@ RAY_AUTH_TOKEN (secretKeyRef) into EVERY Ray container — head, workers, autosc
 and, critically, the RayService controller's dashboard client reads THIS secret to
 authenticate its own /api/serve reconcile calls (utils.GetRayDashboardClientFunc);
 the old manual head-env pattern never told the controller, so it 401-wedged at
-WaitForServeDeploymentReady. Fleet consumers (compute) still get the pair via
-rask.rayAuthEnv — that half stays chart-wired. Requires rayVersion >= 2.52.0
+WaitForServeDeploymentReady. compute presents the same Secret through its own
+`rayAuth`. Requires rayVersion >= 2.52.0
 (operator validation); we pin {{ .Values.ray.rayVersion }}.
 
 ## `tracing-startup-hook: "ray_cluster_env.tracing:setup_tracing"`
@@ -73,8 +73,8 @@ encoding makes them queryable without any shipper work.
 
 The CORE half (task/actor/driver) is different: Ray writes those to files under
 /tmp/ray inside the container, which nothing mounts and nothing tails, so JSON
-alone does not ship them — that needs the log sidecar in open_ray_handover.md
-section 3. Set here anyway so the records are structured the moment a shipper
+alone does not ship them — that needs a log shipper on the engine, which this
+fixture does not run. Set here anyway so the records are structured the moment a shipper
 lands, rather than needing a second rollout to become useful.
 
 Must be set BEFORE `import ray`, which a container env satisfies by construction.
@@ -90,9 +90,9 @@ Ray-container auth env is NOT set here: spec.authOptions above makes the
 kuberay 1.6+ operator inject RAY_AUTH_MODE/RAY_AUTH_TOKEN into every Ray
 container itself (SetContainerTokenAuthEnvVars, skip-if-already-set), head
 AND any future workerGroupSpecs entry — one wiring, zero drift.
-rask.rayAuthEnv remains the FLEET-consumer half (the compute fixture renders its own).
+compute renders its own half (`rayAuth` in the compute fixture).
 
-## `{{- include "lance.lineageEmitEnv" (list .) | nindent 16 }}`
+## `- {name: RASK_LINEAGE_ENDPOINT, value: "http://{{ $r }}-lineage:8000"}`
 
 The lineage transport for a job that emits through lineage-kit. The head is ONE
 account, `-sa-ray`, and no rask door maps it to a subject (ADR 0155), so it projects
@@ -100,14 +100,15 @@ no identity token (`identityAudiences`).
 
 ## `- {containerPort: 8080, name: metrics}`
 
-Ray's Prometheus endpoint. KubeRay injects this containerPort itself, but the
-Collector's `ray-pods` job keeps on the port NAME, and a relabel cannot see a port
+Ray's Prometheus endpoint. KubeRay injects this containerPort itself, but a
+pod-discovery scrape keeps on the port NAME, and a relabel cannot see a port
 the rendered pod spec does not advertise — so an operator-injected default would
-have produced zero targets with nothing to indicate why. Declared here, the head's
+produce zero targets with nothing to indicate why. rask's Collector scrapes no
+engine (ADR 0189); whatever the engine's owner scrapes it with finds the port. Declared here, the head's
 telemetry surface is a property of this manifest rather than of the operator's
 defaults.
 Every future workerGroupSpecs container needs the same entry — workers serve their
-own per-node metrics and are scraped by the same job.
+own per-node metrics and are scraped the same way.
 
 ## `{{- if include "rask.gpuEnabled" . }}`
 

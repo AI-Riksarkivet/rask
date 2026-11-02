@@ -1,5 +1,5 @@
 # The rask release this engine serves. Every rask name below derives from it: the cluster `<rask>-ray` (KubeRay
-# names its head Service `<rask>-ray-head-svc`, what rask's ray.dashboardUrl points at), the identity
+# names its head Service `<rask>-ray-head-svc`, the address compute and the annotator name), the identity
 # `<rask>-sa-ray`, the lineage and OTel endpoints, and the Secrets the head reads by reference.
 rask:
   release: rask
@@ -20,8 +20,8 @@ image:
 # device plugin (the nvidia-device-plugin fixture) and k3s's nvidia RuntimeClass.
 gpuCount: 0
 runtimeClassName: nvidia
-# The Secret holding the Ray auth token (key `auth_token`), the one rask's ray.auth reference names; empty runs Ray
-# with no auth.
+# The Secret holding the Ray auth token (key `auth_token`), which the engine's owner provides and compute's `rayAuth`
+# presents; rask's chart creates none (ADR 0189). Empty runs Ray with no auth.
 authSecretName: ""
 rayStartParams:
   dashboard-host: "0.0.0.0"
@@ -37,6 +37,8 @@ resources:
   requests: {cpu: "2", memory: 8Gi}
   limits: {cpu: "4", memory: 16Gi}
 shmSize: 8Gi
+# The head reads a Hugging Face token from the Secret `<rask>-hf-token` (key `token`) when it exists: a runner's
+# credential the operator creates, which rask's chart creates none of (ADR 0189).
 hfCache:
   size: 10Gi
   # "" leaves storageClassName out, so the cluster's default class provisions.

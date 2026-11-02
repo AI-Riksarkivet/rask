@@ -2,6 +2,7 @@ apiVersion: v2
 name: ray-cluster
 description: >-
   NOT FOR PRODUCTION. A development Ray cluster for rask's Ray consumers: one head, no workers, run by the
-  KubeRay operator. An engine owner runs Ray however they choose; rask reaches it only through ray.dashboardUrl.
+  KubeRay operator. An engine owner runs Ray however they choose; rask's chart names no part of it (ADR 0189), and
+  its clients name the head Service by value.
 type: application
 version: 0.1.0

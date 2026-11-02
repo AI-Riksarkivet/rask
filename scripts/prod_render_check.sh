@@ -40,7 +40,6 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set image.repository=ghcr.io/example/rask
         --set signing.provisioned=true
         --set nats.auth.provisioned=true
-        --set-string ray.dashboardUrl=https://ray.example.com:8265
         --set-string nats.url=nats://nats.example.com:4222
         --set-string observability.export.endpoint=http://otlp.example.com:4318/v1/otlp
         --set-string auth.fgaApiUrl=https://fga.example.com

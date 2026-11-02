@@ -33,14 +33,13 @@ import pytest
 import yaml
 from chart_yaml import FAST_LOADER
 
-from tests.unit.chart_render import PREREQ_ARGS, PROD_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS, PROD_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
 _OIDC_ARGS = [
     *PREREQ_ARGS,
-    *RAY_ARGS,
     "--set-string", "auth.oidc.issuer=https://auth.example.com/dex",
 ]  # fmt: skip
 

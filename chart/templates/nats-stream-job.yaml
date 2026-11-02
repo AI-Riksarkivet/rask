@@ -186,8 +186,8 @@ spec:
               # questions. Drift asks "is this durable's config still the one the component requests"; an
               # orphan's config matches forever, because a Dapr sidecar created it from those same templated
               # values before its app was removed. So the one class of stale durable the comparison can never
-              # see is the class that never changes — measured: `lance-ray` holds four and `pages-to-gold-htr`
-              # two, all reporting the expected MaxDeliver/Backoff, all bound to apps that do not exist.
+              # see is the class that never changes — measured for LH-127: four durables of one removed app and
+              # two of another, all reporting the expected MaxDeliver/Backoff.
               #
               # KEYED ON THE RENDERED NAME SET, never on app-ids. Three durables this chart owns are not
               # `<app-id>-durable` — the dead-letter consumer and both control lanes — so an app-id test

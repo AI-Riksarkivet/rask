@@ -126,7 +126,7 @@ def _documents(*args: str) -> tuple[tuple[str, dict], ...]:
 
 
 def _templates(doc: dict) -> list[dict]:
-    """Every pod template a workload document carries, Ray's CR-owned pods included."""
+    """Every pod template a workload document carries."""
     kind, spec = doc.get("kind"), doc.get("spec") or {}
     if kind in {"Deployment", "StatefulSet", "DaemonSet", "Job"}:
         return [spec["template"]]
@@ -134,10 +134,7 @@ def _templates(doc: dict) -> list[dict]:
         return [spec["jobTemplate"]["spec"]["template"]]
     if kind == "Pod":
         return [{"metadata": doc.get("metadata") or {}, "spec": spec}]
-    ray = spec.get("rayClusterConfig", spec) if kind == "RayService" else spec if kind == "RayCluster" else None
-    if ray is None:
-        return []
-    return [ray["headGroupSpec"]["template"], *(group["template"] for group in ray.get("workerGroupSpecs") or [])]
+    return []
 
 
 def _hook(doc: dict) -> tuple[frozenset[str], int]:
@@ -167,7 +164,7 @@ def _pods(*args: str) -> tuple[_Pod, ...]:
                     service_account=account,
                     token_mounted=automount is not False,
                     first_party=source.startswith(_FIRST_PARTY_SOURCE),
-                    long_running=doc["kind"] in {"Deployment", "StatefulSet", "DaemonSet", "RayCluster", "RayService"},
+                    long_running=doc["kind"] in {"Deployment", "StatefulSet", "DaemonSet"},
                     hook_phases=phases,
                     hook_weight=weight,
                     dapr_injected=str(annotations.get(_DAPR_ENABLED)).lower() == "true",

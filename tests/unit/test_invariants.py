@@ -32,7 +32,7 @@ import yaml
 from chart_yaml import FAST_LOADER
 
 from tests.unit import chart_render
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -56,7 +56,7 @@ def _helm_template(*set_values: str) -> str:
     # chart requires ([[XC-004]]). The chart refuses OIDC without an issuer ON PURPOSE — that refusal
     # is what stops a forgotten values file installing an ungoverned estate. Supplying dev values HERE keeps
     # every other render test testing its own subject rather than re-testing the guard.
-    argv += [*PREREQ_ARGS, *RAY_ARGS]
+    argv += PREREQ_ARGS
     argv += ["--set", "auth.oidc.issuer=http://localhost:8080/dex"]
     for value in set_values:
         argv += ["--set", value]
@@ -292,21 +292,15 @@ def test_an_image_reference_that_helm_parsed_as_a_number_is_refused_at_render(ke
     assert key.rsplit(".", 1)[-1] in refused.value.stderr and "string" in refused.value.stderr, refused.value.stderr
 
 
-@pytest.mark.parametrize("ray_enabled", ["true", "false"])
-def test_no_env_var_is_rendered_TWICE_on_any_workload(ray_enabled: str) -> None:
+def test_no_env_var_is_rendered_twice_on_any_workload() -> None:
     """A duplicated env NAME is not a cosmetic defect — it makes the release unupgradable.
 
     Kubernetes' strategic-merge-patch keys the env list by `name`, so a duplicate makes the patch's
     element order disagree with `$setElementOrder` and helm refuses with
-    `The order in patch list … doesn't match`. On 2026-08-06 `COMPUTE_SERVE_URL` was rendered twice
-    for the compute zone — once ungated, once in the ray-enabled block — and the resulting upgrade
-    aborted AFTER partially applying, taking ~20 deployments to ImagePullBackOff.
-
-    Parametrized over ray because that is precisely the toggle that produced the collision: the pair
-    only overlapped when ray was on, so a single-mode check would have passed while the estate that
-    matters broke.
+    `The order in patch list … doesn't match`. Measured 2026-08-06: an env name rendered twice on one
+    container aborted an upgrade AFTER it partially applied, taking ~20 deployments to ImagePullBackOff.
     """
-    rendered = _helm_template(f"ray.enabled={ray_enabled}")
+    rendered = _helm_template()
     offenders: list[str] = []
     for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if not doc or doc.get("kind") not in {"Deployment", "StatefulSet", "Job", "CronJob"}:
@@ -509,13 +503,6 @@ def _fleet_config(docs: list[dict]) -> dict[str, str]:
     raise AssertionError("no fleet ConfigMap rendered — every fleet address would fall back to a localhost default")
 
 
-def _notifications_container(docs: list[dict]) -> dict:
-    for doc in docs:
-        if doc.get("kind") == "Deployment" and "notifications" in ((doc.get("metadata") or {}).get("name") or ""):
-            return doc["spec"]["template"]["spec"]["containers"][0]
-    raise AssertionError("no notifications Deployment rendered")
-
-
 def test_the_inbox_subscribes_on_a_component_the_chart_actually_renders() -> None:
     """A subscription names its pubsub component by string, and a name that resolves to nothing is a
     STARTUP error the pod survives: daprd logs it, the app serves its health surface and its route,
@@ -540,54 +527,6 @@ def test_the_inbox_subscribes_on_a_component_the_chart_actually_renders() -> Non
     # `scopes` is a ROOT field of a Dapr Component, not part of `spec`: an unscoped app-id gets
     # "component not found" from its sidecar, which is the same silence as a missing component.
     assert "notifications" in (component.get("scopes") or []), f"{configured} is not scoped to notifications — its sidecar refuses to load it"
-
-
-_LOCAL_INPUTS = ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
-_EXTERNAL_RAY = "https://ray.example.com:8265"
-
-
-@pytest.mark.parametrize(
-    "overlay",
-    [
-        pytest.param(("--set", "image.localImages=true"), id="default-names-no-ray"),
-        pytest.param(chart_render.PROD_ARGS, id="prod-names-no-ray"),
-        pytest.param((*chart_render.PROD_ARGS, "--set-string", f"ray.dashboardUrl={_EXTERNAL_RAY}"), id="prod-external-ray"),
-        pytest.param(_LOCAL_INPUTS, id="local-fixture-head"),
-    ],
-)
-def test_every_ray_consumer_names_one_cluster_or_the_render_refuses(overlay: tuple[str, ...]) -> None:
-    """[[CP-041]]: every Ray consumer names the one cluster the estate names, and rask installs none of it.
-
-    A second key naming the Ray plane once split it: compute pruned job history on one head while other pods
-    submitted to a head Service nothing rendered, and a head grown to 81,155 jobs OOMKilled compute that way.
-    Every consumer in the chart renders `rask.rayDashboardUrl` (the zones' Serve origin; compute and the annotator are
-    their own releases and are given the address as a value), so no pod names a Ray address under a key of its own,
-    whether the estate names a Ray or not.
-
-    The address reaches its readers alone (CP-056): a shared ConfigMap would hand a Ray address to every fleet pod that
-    loads it, the lakehouse's controlplane and notifications among them, which never call Ray.
-
-    The engine is bring-your-own ([[XC-125]], ADR 0153): no render holds a `ray.io` object or the KubeRay operator, so
-    the address is always one the estate names (the local overlay names the ray-cluster fixture's head Service).
-    """
-    text = chart_render.render_chart_text(CHART, *overlay, base=chart_render.UNNAMED_RAY_ARGS)
-    docs = [doc for doc in yaml.load_all(text, Loader=FAST_LOADER) if isinstance(doc, dict)]
-    named: dict[str, set[str]] = {}
-    for doc in docs:
-        if doc.get("kind") == "ConfigMap" and "RAY_DASHBOARD_URL" in (doc.get("data") or {}):
-            named.setdefault(f"ConfigMap/{doc['metadata']['name']} RAY_DASHBOARD_URL", set()).add(doc["data"]["RAY_DASHBOARD_URL"])
-    for workload, _, container in chart_render.containers(tuple(docs)):
-        for name, value in chart_render.env_of(container).items():
-            if name in ("RAY_DASHBOARD_URL", "MEDIA_SERVE_DISCOVERY_URL") or "RAY_ADDRESS" in name:
-                named.setdefault(f"{workload} {name}", set()).add(value)
-
-    assert named == {}, f"a pod names a Ray address under a key of its own: {named}"
-    engine = sorted(
-        f"{doc['kind']}/{doc['metadata']['name']}"
-        for doc in docs
-        if str(doc.get("apiVersion", "")).startswith("ray.io/") or "kuberay" in str((doc.get("metadata") or {}).get("labels") or {}).lower()
-    )
-    assert not engine, f"the render installs part of a Ray engine, which is the engine owner's: {engine}"
 
 
 def test_every_bus_client_dials_the_bus_the_estate_names_and_the_render_runs_none() -> None:

@@ -1,29 +1,21 @@
 """Emission must be REAL in a rendered production config — not merely configured somewhere.
 
 A lineage plane fails silently by construction: every emitter in this repo logs and swallows on the
-error path (``ClientEmitter.emit`` catches ``Exception``; ``NoopEmitter`` logs at DEBUG and drops), so
-a misrouted event produces a green deployment, a healthy pod, and an empty graph. Nothing about the
-running system distinguishes "no lineage was emitted" from "nothing has happened yet". That is why
-the wiring has to be asserted at render time rather than observed at runtime.
+error path, so a misrouted event produces a green deployment, a healthy pod, and an empty graph.
+Nothing about the running system distinguishes "no lineage was emitted" from "nothing has happened
+yet". That is why the wiring has to be asserted at render time rather than observed at runtime.
 
-**TWO independent lineage paths exist**, and both are asserted here because either one failing is
-invisible from outside:
+The lakehouse's producers emit through **Dapr pub/sub**: maintenance and the catalog each publish to
+``<APP>_LINEAGE_TOPIC`` through their own per-subscriber pubsub component (``lance.subPubsub``), and
+``services/lineage`` subscribes on ``LINEAGE_DAPR_TOPIC``. Component names differ per app on purpose (each
+carries its own queueGroupName); the TOPIC must match. ``test_invariants._PINNED_TOPICS`` already pins each
+service's in-code DEFAULT, but it cannot see the chart — and the chart overrides those defaults on every
+deployed pod, so a template that stopped deriving from ``.Values.pubsub.topic`` would satisfy that pin while
+dropping every event. A producer outside the estate posts OpenLineage to lineage's HTTP door with its own
+transport (lineage-kit's ``build_emitter``, configured by that producer), which this chart renders nothing for.
 
-1. **Dapr pub/sub** — what maintenance and the catalog use. Each publishes to ``<APP>_LINEAGE_TOPIC``
-   through its own per-subscriber pubsub component (``lance.subPubsub``); ``services/lineage``
-   subscribes on ``LINEAGE_DAPR_TOPIC``. Component names differ per app on purpose (each carries its own
-   queueGroupName); the TOPIC must match. ``test_invariants._PINNED_TOPICS`` already pins each
-   service's in-code DEFAULT, but it cannot see the chart — and the chart overrides those defaults on
-   every deployed pod, so a template that stopped deriving from ``.Values.pubsub.topic`` would satisfy
-   that pin while dropping every event.
-
-2. **lineage-kit's HTTP transport** — ``build_emitter()``, reading ``RASK_LINEAGE_ENDPOINT``. With no
-   endpoint ``build_emitter`` logs one ``log.warning("lineage_http_without_endpoint …")`` at startup and
-   returns ``NoopEmitter``, which drops every subsequent event at DEBUG, so the wiring must land before
-   anything emits through it.
-
-Both are asserted against ``helm template`` output rather than values.yaml, because the rendered
-manifest is what actually runs.
+Asserted against ``helm template`` output rather than values.yaml, because the rendered manifest is what
+actually runs.
 """
 
 from __future__ import annotations
@@ -35,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.unit.chart_render import OBSERVABILITY_SETS, PREREQ_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -68,7 +60,7 @@ def _render(*set_values: str) -> str:
     argv = [helm, "template", "rask", str(CHART)]
     # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
     # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
-    argv += [*PREREQ_ARGS, *RAY_ARGS]
+    argv += PREREQ_ARGS
     argv += ["--set-string", "auth.oidc.issuer=http://localhost:8080/dex"]
     # Side-loaded images: see `rask.image` in _helpers.tpl — the chart refuses a bare
     # `<component>:<tag>` unless this is set, because that is docker.io and not a local image.
@@ -105,76 +97,6 @@ def test_every_lineage_publisher_renders_the_subscribers_topic() -> None:
     assert not mismatched, (
         f"these services publish lineage to a topic nobody subscribes to (subscriber is on {topic!r}): {mismatched} — "
         "every event they emit is silently discarded by the broker, and the emit path logs nothing above DEBUG"
-    )
-
-
-def test_rendered_config_does_not_degrade_to_a_noop_emitter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The condition item-4 names: ``build_emitter()`` under a RENDERED production config is not a no-op.
-
-    Takes the endpoint the chart actually renders and feeds it to the real factory. Asserting the env
-    var "is present" would not be enough — an endpoint that is rendered empty, or a ``transport``
-    default that changed to ``noop``, both leave the var present and the emitter dead.
-    """
-    from lineage_kit.emitter import NoopEmitter, build_emitter
-
-    rendered = _render("singleTenant.enabled=true", "compaction.enabled=true", *OBSERVABILITY_SETS)
-    endpoints = set(_env_values(rendered, "RASK_LINEAGE_ENDPOINT"))
-    assert endpoints, "the chart renders RASK_LINEAGE_ENDPOINT nowhere — lineage-kit's HTTP transport degrades to NoopEmitter on every pod"
-    assert len(endpoints) == 1, f"emitting services disagree on the lineage endpoint: {sorted(endpoints)}"
-
-    # Hermetic: the official client's own alias would otherwise let an ambient value mask a missing render.
-    monkeypatch.delenv("OPENLINEAGE_URL", raising=False)
-    monkeypatch.delenv("RASK_LINEAGE_TRANSPORT", raising=False)
-    for path in set(_env_values(rendered, "RASK_LINEAGE_ENDPOINT_PATH")) or {"api/v1/lineage"}:
-        monkeypatch.setenv("RASK_LINEAGE_ENDPOINT_PATH", path)
-    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", endpoints.pop())
-
-    emitter = build_emitter()
-    assert not isinstance(emitter, NoopEmitter), (
-        "build_emitter() degraded to NoopEmitter under the rendered production config — every event "
-        "lineage-kit's HTTP transport emits would be dropped, announced by one startup log.warning"
-    )
-
-
-def test_every_lineage_producer_renders_the_endpoint() -> None:
-    """Every LINEAGE PRODUCER carries the transport — a producer without it is silently unlineaged.
-
-    "Emitting service" is defined as a container that renders a lineage TOPIC (``_PUBLISHER_TOPICS``),
-    not merely one that renders ``OTEL_SERVICE_NAME``. The distinction is load-bearing in both
-    directions: keying on the OTel name would demand the endpoint from ``gateway`` and
-    ``controlplane``, which emit no lineage at all (a stateless proxy and a read-only CR reader), while
-    an earlier draft of this test keyed on it AND used an inline-only env regex — so it silently
-    exempted exactly those two and looked green either way.
-
-    Self-maintaining: a new producer is caught the moment it renders a lineage topic, which it must do
-    to publish at all.
-    """
-    rendered = _render("singleTenant.enabled=true", "compaction.enabled=true", *OBSERVABILITY_SETS)
-
-    # Walk env in document order so each var is attributed to the container it sits in. OTEL_SERVICE_NAME
-    # is the per-container marker; the topic/endpoint that follow belong to that service.
-    producers: dict[str, dict[str, bool]] = {}
-    current: str | None = None
-    for key, value in _env_pairs(rendered):
-        if key == "OTEL_SERVICE_NAME":
-            current = value
-            producers.setdefault(current, {"emits": False, "transport": False})
-        elif current is None:
-            continue
-        elif key in _PUBLISHER_TOPICS:
-            producers[current]["emits"] = True
-        elif key == "RASK_LINEAGE_ENDPOINT":
-            producers[current]["transport"] = True
-
-    assert producers, "no containers parsed out of the render — the env regex no longer matches the chart"
-    emitting = {name for name, s in producers.items() if s["emits"]}
-    assert emitting, f"no lineage producers found at all; parsed services: {sorted(producers)}"
-
-    missing = sorted(name for name in emitting if not producers[name]["transport"])
-    assert not missing, (
-        f"these lineage producers render no RASK_LINEAGE_ENDPOINT: {missing} — anything they emit "
-        "through lineage-kit's HTTP transport is dropped by a NoopEmitter while their neighbours "
-        "(and their Dapr path) keep reporting success"
     )
 
 

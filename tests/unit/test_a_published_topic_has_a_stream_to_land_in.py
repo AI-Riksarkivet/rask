@@ -31,7 +31,7 @@ import subprocess
 
 import pytest
 
-from tests.unit.chart_render import PREREQ_ARGS, RAY_ARGS
+from tests.unit.chart_render import PREREQ_ARGS
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -64,7 +64,6 @@ def _render() -> str:
         "--set",
         "image.localImages=true",
         *PREREQ_ARGS,
-        *RAY_ARGS,
         "--set-string",
         "auth.oidc.issuer=http://localhost:8080/dex",
     ]

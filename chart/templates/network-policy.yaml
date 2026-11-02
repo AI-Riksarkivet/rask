@@ -324,15 +324,8 @@ spec:
                   - backup-control-root # the control-root backup copies the registries to _backups/control/
                   - object-store-scoped-users # the identity-provisioning hook — blocked, every scoped user is absent
                   # A client reading a governed table on the credential the catalog vends it (the annotator's or the
-                  # media plane's release, a user's pipeline) is admitted by `networkPolicy.objectStoreExtraFrom`.
-        {{- if .Values.ray.enabled }}
-        # The HTR runner executes inside the KubeRay-managed RayService pods (PageLoader reads the
-        # image cache, AltoWriter writes ALTO — s3://images-batch*). The chart's head template stamps
-        # no labels of its own; KubeRay stamps its `ray.io/is-ray-node: "yes"` marker on every Ray
-        # pod, so select that (component-label style can't reach operator-created pods).
-        - podSelector:
-            matchLabels: { ray.io/is-ray-node: "yes" }
-        {{- end }}
+                  # media plane's release, an engine's workers, a user's pipeline) is admitted by
+                  # `networkPolicy.objectStoreExtraFrom`, by a selector its deployment states.
         {{- with .Values.networkPolicy.objectStoreExtraFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

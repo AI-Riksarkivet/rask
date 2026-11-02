@@ -935,7 +935,7 @@
                     "type": "boolean"
                 },
                 "extraEgress": {
-                    "description": "List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, Ray, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination.",
+                    "description": "List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination.",
                     "type": "array"
                 },
                 "objectStoreExtraFrom": {
@@ -1320,28 +1320,6 @@
                 }
             }
         },
-        "ray": {
-            "type": "object",
-            "properties": {
-                "auth": {
-                    "type": "object",
-                    "properties": {
-                        "enabled": {
-                            "description": "Renders `\u003crelease\u003e-ray-auth-token` for the Ray engine and the compute fixture; the engine must enforce the same one. Off for dev.",
-                            "type": "boolean"
-                        }
-                    }
-                },
-                "dashboardUrl": {
-                    "description": "Address of the engine's Ray dashboard, used verbatim by every Ray consumer; the ray-cluster fixture serves http://rask-ray-head-svc:8265.",
-                    "type": "string"
-                },
-                "enabled": {
-                    "description": "rask talks to a Ray engine: the NetworkPolicy admits the pods KubeRay marks `ray.io/is-ray-node`, and the Collector scrapes them.",
-                    "type": "boolean"
-                }
-            }
-        },
         "resources": {
             "type": "object",
             "properties": {
@@ -1529,15 +1507,6 @@
                 "parentRefs": {
                     "description": "Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`.",
                     "type": "array"
-                }
-            }
-        },
-        "secrets": {
-            "type": "object",
-            "properties": {
-                "hfTokenInStore": {
-                    "description": "True once the Hugging Face token is in the secret store at `\u003ckvMount\u003e/hf-token`; renders the `\u003crelease\u003e-hf-token` ExternalSecret. False starts Ray pods without HF_TOKEN.",
-                    "type": "boolean"
                 }
             }
         },
