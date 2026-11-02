@@ -67,18 +67,6 @@
 					"paths": ["/studio", "/studio/:path*"]
 				}
 			]
-		},
-		"models": {
-			"development": {
-				"local": {
-					"port": 5178
-				}
-			},
-			"routing": [
-				{
-					"paths": ["/models", "/models/:path*"]
-				}
-			]
 		}
 	}
 }

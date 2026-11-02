@@ -1,82 +1,36 @@
 # packages/storage
 
-A small, **Ray-free** abstraction over two byte stores — the local filesystem and
-S3-compatible buckets — behind a uniform Source/Sink shape. It also bundles the
-boto3 S3 client factory and the HCP credential derivation.
+A small, **Ray-free** seam over S3-compatible stores: the boto3 S3 client factory, the STS client, key listing with
+timestamped-prefix retention, S3 URI parsing, and the `StorageError` family every S3 call answers in.
 
-**Protocol-agnostic on purpose.** A read-through cache for one image API lived here
-until 2026-08-17 with exactly one consumer and moved to `runners/htr`: a shared
-package carrying a single workload's protocol is how that workload becomes
-privileged.
+**Protocol-agnostic on purpose.** Nothing here knows one workload's source format or where a workload reads its bytes
+from: a workload's sources and sinks live in that workload (the HTR runner's filesystem, S3 and IIIF sources are in
+`runners/htr/src/htr`).
 
 → Auto-generated symbol docs: **[API reference](../reference/storage.md)**.
 
-## The Source/Sink contract
-
-`storage.protocol` states it, as two runtime-checkable Protocols — structural, so an
-adapter that lives in a caller satisfies them without importing anything from here:
-
-- **Source** — `keys() -> Iterable[str]` and `read(key) -> bytes`
-- **Sink** — `existing_keys(suffix="") -> Iterable[str]` and `write(key, data)`
-
-| Implementation | Module | Notes |
-|---|---|---|
-| `FSSource` / `FSSink` | `fs.py` | Local filesystem; `FSSink.__init__` eagerly creates its root. |
-| `S3Source` / `S3Sink` | `s3.py` | S3; keyword-only; needs `client` (tests) or `client_factory` (picklable Ray runs). Both inherit the lazy-client/pickle behaviour from one `_LazyClientAdapter`. `S3Sink` defaults `content_type="application/xml"`. |
-
-Every S3 call is wrapped in `s3_errors`, so a caller meets `BucketNotFoundError` /
-`ObjectNotFoundError` and never a raw botocore `ClientError`.
-
-`build_source(uri, …)` / `build_sink(uri, …)` (in `uri.py`) dispatch on the URI:
-`s3://…` → S3 with an `s3_client` factory; anything else → filesystem.
-
 ## S3 client (`s3_client`)
 
-`s3_client(endpoint=None)` builds a boto3 client tuned for HCP and other S3-compatible stores:
+`s3_client(endpoint=None)` builds a boto3 client for any S3-compatible store:
 
-- **path-style addressing** (required by HCP, and by RustFS unless its server domains are set),
+- **path-style addressing** (required by RustFS unless its server domains are set),
 - s3v4 signing, adaptive retries,
-- checksum calculation/validation set to `when_required` (HCP compatibility),
+- checksum calculation/validation set to `when_required`,
 - 10s connect / 60s read timeouts.
+
+It derives no credential: a key pair (and a vended session token) is passed per client, or the standard AWS chain
+supplies one. A lone `session_token` without its key pair is refused, because botocore would drop it and sign with the
+env chain.
 
 **TLS precedence:** a custom CA (`RASK_S3_CA_BUNDLE`, else `S3_CA_BUNDLE`) wins;
 else insecure (`RASK_S3_INSECURE`, `S3_INSECURE` or `HCP_INSECURE` set to
 `1`/`true`/`yes`) sets `verify=False` and silences urllib3 warnings; else system
-trust. HCP serves a self-signed cert, so dev usually sets `HCP_INSECURE`.
+trust.
 
-## HCP credential derivation
+## Listing and errors
 
-`derive_hcp_creds()` **returns** `{access_key, secret_key}` derived from HCP tenant
-credentials by HCP's fixed convention, or `None`:
+`iter_keys(client, bucket, prefix, suffix)` pages `list_objects_v2`, and `prune_timestamped_prefixes` keeps the newest
+N timestamped prefixes under a base. Every S3 call is wrapped in `s3_errors`, so a caller meets
+`BucketNotFoundError` / `ObjectNotFoundError` and never a raw botocore `ClientError`.
 
-- `access_key = base64(HCP_USERNAME)`
-- `secret_key = md5(HCP_PASSWORD)` (hex)
-
-It returns `None` unless both `HCP_USERNAME` and `HCP_PASSWORD` are set, and also
-when an `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` is already set — so RustFS
-and real AWS are left untouched.
-
-It is **pure: it never writes to `os.environ`**, which is what lets one process
-address more than one backend. `s3_client` applies it per client (`client.py:98`),
-so callers do not invoke it themselves — a bare call is dead code, and anything
-building a raw `boto3.client` must pass the returned pair explicitly or it will run
-unauthenticated. Legacy — drop this bridge once off HCP.
-
-## IIIF read-through cache
-
-`IIIFCachedSource.read(key)` tries S3 first; on a `NoSuchKey`/`404` miss it
-fetches from IIIF (`{base}/arkis!{id}/full/max/0/default.jpg`) with exponential
-backoff and writes the bytes back to the cache bucket. **Non-404 S3 errors
-propagate** (so an `AccessDenied` doesn't trigger an IIIF stampede); **cache-write
-failures are swallowed** (the read still returns the fetched bytes). The default
-timeout is a deliberate 15s so one sticky URL can't freeze an actor for minutes.
-
-## Gotchas
-
-- **Picklability drives the factory pattern** — build S3/IIIF sources with a
-  module-level callable or `functools.partial` (not a lambda); `__getstate__`
-  nulls the live client so it rebuilds on the worker.
-- **md5 password hashing is intentional** (HCP convention, not security).
-- **`S3Sink` content type is `application/xml`** and `build_sink` exposes no
-  override; the IIIF write-through hardcodes `image/jpeg` separately.
-- **No formal Protocol** — a new backend just needs the right method names.
+`split_s3_uri("s3://bucket/prefix/")` returns `("bucket", "prefix/")`.

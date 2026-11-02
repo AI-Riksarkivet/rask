@@ -32,7 +32,7 @@ import * as v from 'valibot';
  *    attach the credential the whole surface is keyed on.
  *  - Home OWNS the OIDC BFF — `src/routes/auth` is where the login round-trip runs and the session
  *    cookie is minted — and it is the catch-all zone (base `''`), so it is the one zone a signed-in
- *    user provably passes through. All seven zones hydrate that same cookie (`makeSessionHandle`,
+ *    user provably passes through. Every zone hydrates that same cookie (`makeSessionHandle`,
  *    directly or through `makeZoneHooks`), so this is a choice about where the seam is PROVEN
  *    first, not about which zone could hold a bearer.
  *  - It is the only zone with a signed-in Playwright fixture (`e2e/session.ts`), and the acceptance

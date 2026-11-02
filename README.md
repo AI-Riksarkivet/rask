@@ -34,7 +34,7 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
 
 - `packages/` — reusable Python libraries (uv workspace members, no entrypoints): `lineage-kit`,
   `ray-kit`, `service-kit` (the lakehouse's kit), `client-kit` (code only the lakehouse's clients run),
-  `storage`, `validate`, plus `ray-cluster-env` (the Ray images' environment and tracing hooks)
+  `storage`, plus `ray-cluster-env` (the Ray images' environment and tracing hooks)
 - `services/` — runnable Python services (uv workspace members):
   - **lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
     tables, and the bronze→silver→gold tier governance a pipeline's writes pass through), `lineage`
@@ -51,9 +51,9 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
   and `uv.lock`, so torch/model pins never enter the fleet's resolution): `htr`, `asr`, `diarize`,
   `voiceprint`, `topics`, `kg`, `assist`, `insid3`, `dummy`
 - `frontend/` — the JS/TS plane; its own Bun + Turborepo workspace root:
-  - `microfrontends/` — **seven SvelteKit 2 + Svelte 5 zones**: `home` (catch-all, owns `/`,
+  - `microfrontends/` — **six SvelteKit 2 + Svelte 5 zones**: `home` (catch-all, owns `/`,
     `/projects`, `/settings` and the OIDC BFF) + `lakehouse`, `explorer`, `annotator`, `compute`,
-    `models`, `studio` — composed by the Turborepo `:3024` proxy in dev, by the cluster route in-cluster
+    `studio` — composed by the Turborepo `:3024` proxy in dev, by the cluster route in-cluster
   - `packages/` — `@rask/ui` (Svelte 5 + Bits UI + Tailwind 4 design system, Storybook), `@rask/api`,
     `@rask/explorer-api`, `@rask/dockview`, `@rask/flow`, `@rask/engine`, `@rask/labeling`,
     `@rask/config`, `@rask/zone-contract` (the estate's shape gates, a vitest suite)
@@ -88,7 +88,7 @@ make check       # fmt + lint + typecheck + knip
 
 ```bash
 make dev-zone ZONE=lakehouse   # ONE zone + its own mock upstreams — no cluster, no containers
-make dev-frontends             # all seven zones behind the :3024 proxy
+make dev-frontends             # every zone behind the :3024 proxy
 make dev-micro                 # the fleet: compute, flows, notifications and the explorer trio (no edge)
 make dev-frontends-k3s         # all zones with /api → the in-cluster Gateway, port-forwarded to :8888
 ```

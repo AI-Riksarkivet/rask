@@ -22,8 +22,8 @@ from http import HTTPStatus
 
 import pytest
 
+from client_kit.lancekit.writer import translate_commit_conflict
 from service_kit.exceptions import ConflictError, DomainError
-from service_kit.lancekit.writer import translate_commit_conflict
 
 
 def _fail_with(exc: OSError | None) -> None:

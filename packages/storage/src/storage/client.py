@@ -1,13 +1,10 @@
 """A generic boto3 S3 client for any S3-compatible backend (RustFS / AWS / any S3).
 
 rask is storage-agnostic: the client below speaks only standard S3, so the
-backend is a runtime choice (endpoint + credentials), never a code one.
-`derive_hcp_creds` is an isolated, opt-in bridge for the current HCP dev backend
-(a no-op for RustFS/AWS); remove it once fully migrated off HCP.
+backend is a runtime choice (endpoint + credentials), never a code one. It derives no
+credential of its own: a key pair is passed per client or comes from the standard AWS chain.
 """
 
-import base64
-import hashlib
 import os
 from typing import Any
 
@@ -17,9 +14,8 @@ from typing import Any
 # reaching past storage's boundary into `mypy_boto3_s3`.
 type S3Client = Any
 
-# Env names for the S3 endpoint/insecure/CA, canonical-first. `HCP_*` are legacy
-# aliases kept while HCP is the current backend (the chart + dev `.env` still set
-# HCP_ENDPOINT/HCP_INSECURE); drop them once everything uses RASK_S3_*.
+# Env names for the S3 endpoint/insecure/CA, canonical-first. `HCP_ENDPOINT`/`HCP_INSECURE` are
+# aliases the chart's secret and values still set; drop them once everything uses RASK_S3_*.
 #
 # RESOLVED BY HAND rather than by a pydantic-settings model, and the reason is dependency weight, not
 # an absence of validation — there IS one coercion here, the insecure flag parsed to a bool at
@@ -54,28 +50,6 @@ def configured_endpoint() -> str | None:
     return _env_first(_ENDPOINT_ENVS)
 
 
-def derive_hcp_creds() -> dict[str, str] | None:
-    """Opt-in HCP credential bridge; returns `{access_key, secret_key}` or None.
-
-    Returns the derived pair when HCP_USERNAME/PASSWORD are set and no AWS_* key
-    already wins (so RustFS/AWS with keys set directly are untouched), else
-    None. Pure — never mutates the process environment, so one process can address
-    more than one backend. The current HCP dev backend issues S3 keys as
-    access_key = base64(username), secret_key = md5(password) hex. `s3_client`
-    applies this per client; callers need not invoke it. Legacy — drop once off HCP.
-    """
-    user = os.getenv("HCP_USERNAME")
-    pwd = os.getenv("HCP_PASSWORD")
-    if not (user and pwd):
-        return None
-    if os.getenv("AWS_ACCESS_KEY_ID") or os.getenv("AWS_SECRET_ACCESS_KEY"):
-        return None
-    return {
-        "access_key": base64.b64encode(user.encode()).decode(),
-        "secret_key": hashlib.md5(pwd.encode()).hexdigest(),  # noqa: S324
-    }
-
-
 def s3_client(
     endpoint: str | None = None,
     *,
@@ -85,10 +59,9 @@ def s3_client(
     region: str | None = None,
     insecure: bool | None = None,
 ) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """Build a boto3 S3 client for any S3-compatible backend (RustFS / AWS / HCP).
+    """Build a boto3 S3 client for any S3-compatible backend (RustFS / AWS / any S3).
 
-    Endpoint/CA/insecure flags resolve from env (RASK_S3_*/S3_*, with HCP_* as the
-    legacy bridge). Path-style + s3v4 are the RustFS-safe, AWS-accepted defaults.
+    Endpoint/CA/insecure flags resolve from env (RASK_S3_*/S3_*, then the HCP_* aliases). Path-style + s3v4 are the RustFS-safe, AWS-accepted defaults.
 
     ``access_key``/``secret_key``/``session_token``/``region``/``insecure`` override the env for THIS
     client only. Env-only credentials are a single global pair, so one process could address exactly
@@ -129,10 +102,6 @@ def s3_client(
         kwargs["aws_secret_access_key"] = secret_key
         if session_token:
             kwargs["aws_session_token"] = session_token
-    elif creds := derive_hcp_creds():
-        # HCP bridge applied to THIS client only — no process-global env mutation.
-        kwargs["aws_access_key_id"] = creds["access_key"]
-        kwargs["aws_secret_access_key"] = creds["secret_key"]
     skip_verify = insecure if insecure is not None else (_env_first(_INSECURE_ENVS) or "").lower() in ("1", "true", "yes")
     if ca := _env_first(_CA_BUNDLE_ENVS):
         kwargs["verify"] = ca

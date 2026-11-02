@@ -23,7 +23,14 @@ from http import HTTPStatus
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from service_kit.exceptions import PROBLEM_JSON, UnprocessableEntityError, register_handlers
+from service_kit.exceptions import PROBLEM_JSON, DomainError, register_handlers
+
+
+class UnprocessableEntityError(DomainError):
+    """A 422 refusal as a service declares one on the hierarchy."""
+
+    status_code = HTTPStatus.UNPROCESSABLE_ENTITY
+    title = "Unprocessable Entity"
 
 
 class _Refused(UnprocessableEntityError):

@@ -1,6 +1,6 @@
-"""The lakehouse control-plane kernel drain — SKG-08, SKG-11, SKG-13, SKG-17.
+"""The lakehouse control-plane kernel drain — SKG-08, SKG-11.
 
-Four findings against `service_kit.lakehouse`, all of them about a seam written more than once:
+Two findings against `service_kit.lakehouse`, both about a seam written more than once:
 
 * **SKG-08** — four hand-rolled object-store record registries (`protection`, `maintenance_policies`,
   `trash`, `warehouse_records`) each carrying their own byte-identical hashed-key helper and their own
@@ -11,11 +11,6 @@ Four findings against `service_kit.lakehouse`, all of them about a seam written 
   eviction: an expired entry is only ever overwritten by a lookup of that same key, so a long-lived
   process accumulates one entry per (control root, project, serving class) it has ever resolved and
   frees none of them.
-* **SKG-13** — `lakehouse.sources.S3Source` / `lakehouse.sinks.S3Sink` shadow `storage.S3Source` /
-  `storage.S3Sink` by name with an incompatible API. `services/medallion` imports BOTH under that one
-  name, in two modules of the same service.
-* **SKG-17** — `S3FileSystemSource.iter_objects` re-derived its own listing-and-sort beside the `_listing` helper
-  its `iter_keys` twin already goes through, so the two enumeration paths can disagree.
 """
 
 from __future__ import annotations
@@ -23,9 +18,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import cast
 
-import pyarrow.fs as pafs
 import pytest
 
 from service_kit.lakehouse import warehouse_registry
@@ -122,53 +115,3 @@ def test_an_expired_entry_is_not_retained(tmp_path: Path) -> None:
 
     held = len(warehouse_registry._cache)
     assert held == 0, f"{held} entries that expire the instant they are written are still resident"
-
-
-# --------------------------------------------------------------------------------------------------
-# SKG-17 — one listing seam behind both enumeration paths
-# --------------------------------------------------------------------------------------------------
-
-
-class _FakeFs:
-    """The slice of ``pyarrow.fs.FileSystem`` the S3 adapter touches, over an in-memory dict."""
-
-    def __init__(self, files: dict[str, bytes]) -> None:
-        self.files = files
-
-    def get_file_info(self, selector: pafs.FileSelector) -> list[pafs.FileInfo]:
-        base = selector.base_dir.rstrip("/") + "/"
-        return [pafs.FileInfo(path, pafs.FileType.File) for path in self.files if path.startswith(base)]
-
-    def open_input_stream(self, path: str) -> _FakeStream:
-        return _FakeStream(self.files[path])
-
-
-class _FakeStream:
-    """``readall`` + the context-manager pair, which is all the adapter uses."""
-
-    def __init__(self, data: bytes) -> None:
-        self._data = data
-
-    def __enter__(self) -> _FakeStream:
-        return self
-
-    def __exit__(self, *_: object) -> bool:
-        return False
-
-    def readall(self) -> bytes:
-        return self._data
-
-
-def test_both_enumeration_paths_go_through_the_one_listing_seam() -> None:
-    """`iter_keys` honours `_listing`; `iter_objects` re-derived its own, so the two can disagree."""
-    from service_kit.lakehouse.sources import S3FileSystemSource
-
-    class _PngOnlySource(S3FileSystemSource):
-        def _listing(self) -> list[pafs.FileInfo]:
-            return [info for info in super()._listing() if info.path.endswith(".png")]
-
-    fs = _FakeFs({"bucket/prefix/a.png": b"AAA", "bucket/prefix/notes.txt": b"TXT"})
-    source = _PngOnlySource(cast("pafs.S3FileSystem", fs), "bucket", "prefix")
-
-    assert list(source.iter_keys()) == ["s3://bucket/prefix/a.png"]
-    assert [obj.uri for obj in source.iter_objects()] == ["s3://bucket/prefix/a.png"]

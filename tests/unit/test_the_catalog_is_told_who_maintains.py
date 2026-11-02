@@ -14,19 +14,19 @@ nothing reported it; a tenant onboarded that day was silently unmaintainable.
 SO THE GATE READS THE RENDER, not the settings class. A test that constructs `Settings(...)` with a
 list proves the seeding works when told; only the render proves anything ever tells it.
 
-The provenance namespace's lists are filled the same way ([[LH-529]]): its retention, and the account of the
-bring-your-own table-maintenance job, whose own release runs it, named in the estate's own values.
+The provenance namespace's lists are filled the same way ([[LH-529]]): its retention, and the ServiceAccounts outside
+this release that compact its tables, named in the estate's own values. That a named account is the one a maintenance
+job runs as is that job's release's to keep.
 """
 
 from __future__ import annotations
 
 import json
-import posixpath
 from typing import Any
 
 import yaml
 
-from tests.unit.chart_render import REPO, env_of, render, render_fixture
+from tests.unit.chart_render import REPO, env_of, render
 from tests.unit.test_invariants import _helm_template
 
 
@@ -60,10 +60,10 @@ def test_the_catalog_seeds_maintenance_no_data_rung() -> None:
     )
 
 
-def test_the_provenance_tables_are_maintained_by_the_account_the_table_maintenance_job_runs_as() -> None:
+def test_the_provenance_tables_are_maintained_by_the_accounts_the_estate_names() -> None:
     """The estate's catalog keeps the provenance tables' declared versions and grants their compaction to exactly the
-    account the table-maintenance fixture's CronJob runs as, whose projected token is for the catalog's audience and
-    is the file the job reads. A name that differs grants a subject no pod is, and the tables grow unbounded."""
+    ServiceAccount the estate's values name, `<namespace>:<name>` rendered as that account's subject. A list rendered
+    empty grants nobody, and the tables grow unbounded with nothing reporting it."""
     estate = render("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
     catalog = next(
         env_of(container)
@@ -72,19 +72,6 @@ def test_the_provenance_tables_are_maintained_by_the_account_the_table_maintenan
         for container in doc["spec"]["template"]["spec"]["containers"]
         if container["name"] == "catalog"
     )
-    (job,) = (doc for doc in render_fixture("table-maintenance") if doc.get("kind") == "CronJob")
-    # The release's namespace, which the fixture installs into and so its pods run in (`scripts/fixtures.sh`).
-    fixture = (REPO / "deploy/fixtures/table-maintenance/fixture.env").read_text().splitlines()
-    namespace = next(line.removeprefix("NAMESPACE=") for line in fixture if line.startswith("NAMESPACE="))
-    pod = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
-    (container,) = pod["containers"]
-    token_file = env_of(container)["TABLE_MAINTENANCE_TOKEN_FILE"]
-    mounted = {mount["mountPath"]: mount["name"] for mount in container["volumeMounts"]}
-    (projected,) = next(v["projected"]["sources"] for v in pod["volumes"] if v["name"] == mounted[posixpath.dirname(token_file)])
 
-    assert json.loads(catalog["LANCE_PROVENANCE_MAINTAINERS"]) == [f"kubernetes~system:serviceaccount:{namespace}:{pod['serviceAccountName']}"]
+    assert json.loads(catalog["LANCE_PROVENANCE_MAINTAINERS"]) == ["kubernetes~system:serviceaccount:default:rask-sa-table-maintenance"]
     assert catalog["LANCE_PROVENANCE_RETAIN_VERSIONS"] == "20"
-    assert (projected["serviceAccountToken"]["audience"], posixpath.basename(token_file)) == (
-        catalog["RASK_SA_AUDIENCE"],
-        projected["serviceAccountToken"]["path"],
-    )

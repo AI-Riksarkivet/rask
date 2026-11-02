@@ -139,7 +139,7 @@ from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lakehouse.stage_stamp import declare_dataset_id
 from service_kit.lakehouse.version_retention import MAIN_BRANCH, recorded_branch
-from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_stream, encode_arrow_stream
+from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 from service_kit.lancekit.outage import reads_as_store_outage
 from service_kit.lancekit.versions import committed_at
@@ -504,7 +504,7 @@ def read_arrow_body(data: bytes, *, max_bytes: int) -> pa.Table:
     re-encodes to the same cap.
     """
     try:
-        return decode_arrow_stream(data, max_bytes=max_bytes)
+        return decode_arrow_body(data, max_bytes=max_bytes, framing="stream")
     except ArrowBodyTooLargeError as exc:
         raise InvalidInputError(
             f"the request body is too large once decoded: {exc}; write large payloads directly to object storage with vended credentials"

@@ -23,3 +23,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/table_maintenance"]
+
+# A bring-your-own job reaches the lakehouse through its doors alone ([[LH-529]], ADR 0162): it compacts what the
+# catalog lists as due with stock clients, so what it does is what any client may do, and it runs as a release of its
+# own. Its own import rule, run by `make lint-imports`, so it travels with the job.
+[tool.importlinter]
+root_packages = ["table_maintenance"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "LH-529: the table-maintenance job imports no rask package"
+type = "forbidden"
+source_modules = ["table_maintenance"]
+forbidden_modules = ["catalog", "lineage", "maintenance", "notifications", "service_kit", "lineage_kit", "storage"]

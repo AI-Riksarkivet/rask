@@ -408,7 +408,7 @@ def project_for_namespace(control_root: str, storage_options: StorageOptions, to
     HERE because both halves already live in this module and a caller assembling them itself would be
     the third place that knows the shape.
 
-    **Why this is not a string split.** ``project_namespace`` joins with ``-``
+    **Why this is not a string split.** A project-qualified name joins with ``-``
     (``("acme", "bronze")`` → ``"acme-bronze"``), but ``PROJECT_PATTERN`` permits ``-`` INSIDE a project
     id — so ``acme-bronze`` is genuinely ambiguous between project ``acme`` and project ``acme-bronze``,
     and a namespace a user named freely follows no convention at all. The binding is the only sound

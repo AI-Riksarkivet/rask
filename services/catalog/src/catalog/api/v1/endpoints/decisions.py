@@ -1,8 +1,8 @@
 """The decision door (``/management/v1/decisions``): the authorization questions a check-only service asks ([[LH-442]]).
 
 OpenFGA authenticates its callers and authorizes none of them, so a service holding an OpenFGA token can write any
-tuple. The services that only CHECK (lineage, notifications, the viewer and search, flows, compute) therefore hold no
-OpenFGA credential and ask here, as Lakekeeper is OpenFGA's only client and its OPA bridge asks Lakekeeper's
+tuple. The services that only CHECK (lineage, and each client the estate grants a decision rung by name) therefore
+hold no OpenFGA credential and ask here, as Lakekeeper is OpenFGA's only client and its OPA bridge asks Lakekeeper's
 ``/management/v1/action/batch-check`` (authz/opa-bridge/policies/lakekeeper/check.rego). The wire contract is
 :mod:`service_kit.governed.decider`, which the client and this door share.
 

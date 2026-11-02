@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Iterable
 from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict
@@ -189,45 +188,6 @@ def processing_engine_facet(producer: str, *, name: str, version: str) -> dict[s
 
 
 #: Standard ``ColumnLineageDatasetFacet`` schema URL — field-to-field provenance (#24 store / #1 emit).
-#: One builder so the ``_schemaURL`` version can never drift between emitters (the medallion cascade + the
-#: catalog DDL path). Lineage keeps the facet inside the recorded event, its ingest authorizer and ``/events`` gate
-#: on the column sources it names, and a forwarded graph backend draws its column edges from it.
-COLUMN_LINEAGE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-2-0/ColumnLineageDatasetFacet.json#/$defs/ColumnLineageDatasetFacet"
-
-#: One flattened input→output column dependency, as the emitters declare it:
-#: ``(out_field, in_namespace, in_name, in_field, transformation_type, transformation_subtype, masking)``.
-ColumnEdge = tuple[str, str, str, str, str, str, bool]
-
-
-def column_lineage_facet(producer: str, edges: Iterable[ColumnEdge]) -> dict[str, object]:
-    """The standard ``ColumnLineageDatasetFacet`` payload for an output dataset's field-to-field provenance.
-
-    ``edges`` is an iterable of :data:`ColumnEdge` tuples; they are grouped by ``out_field`` into the
-    spec's ``fields[out].inputFields[].transformations[]`` shape (``lineage.models.Dataset.column_edges``
-    parses exactly this back out). Returns ``{}`` when there are no well-formed edges — an empty facet must
-    not materialise junk ``(:Column {field:""})`` on the consumer. One builder so the ``_schemaURL``
-    version stays consistent across every emitter; a per-emitter copy would silently drift (#24).
-    """
-    grouped: dict[str, list[dict[str, object]]] = {}
-    for out_field, ns, name, in_field, ttype, subtype, masking in edges:
-        # Guard the three identity keys (symmetric with the consumer's name/field/out guards): a malformed
-        # edge with an empty output or source column must not create a junk vertex on ingest.
-        if not out_field or not name or not in_field:
-            continue
-        grouped.setdefault(str(out_field), []).append(
-            {
-                "namespace": str(ns or ""),
-                "name": str(name),
-                "field": str(in_field),
-                "transformations": [{"type": ttype or "DIRECT", "subtype": subtype or "", "masking": bool(masking)}],
-            }
-        )
-    if not grouped:
-        return {}
-    fields = {out_field: {"inputFields": inputs} for out_field, inputs in grouped.items()}
-    return {"_producer": producer, "_schemaURL": COLUMN_LINEAGE_FACET_SCHEMA_URL, "fields": fields}
-
-
 #: Standard ``CatalogDatasetFacet`` schema URL — WHICH CATALOG governs this dataset.
 #:
 #: A lakehouse that publishes lineage to a shared consumer has to say whose catalog a dataset belongs

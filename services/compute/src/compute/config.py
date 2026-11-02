@@ -26,6 +26,8 @@ from service_kit.governed.settings import GovernedAuthSettings
 class ComputeSettings(GovernedAuthSettings, Settings):
     """The shared settings plus the estate's auth knobs. Every added field defaults OFF."""
 
+    #: The timeout of the HTTP client this service reaches the Ray dashboard through.
+    http_timeout: float = Field(default=15.0, alias="RASK_HTTP_TIMEOUT")
     ray_dashboard_url: str = Field(
         default="http://localhost:8265",
         alias="RAY_DASHBOARD_URL",

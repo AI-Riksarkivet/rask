@@ -29,6 +29,7 @@ catalog Context, and the catalog commits both with the table and records the der
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any, Final
@@ -38,6 +39,7 @@ from pydantic import BaseModel, Field
 
 from annotator.projects.models import AnnotationProject, Draft, Link, Shape, Task, TaskState
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lakehouse.warehouse_registry import is_safe_project
 
 
 #: The only state that contributes SHAPES. Every other terminal state contributes a sentinel row.
@@ -409,3 +411,38 @@ def table_properties(project: AnnotationProject, plan: PublishPlan) -> dict[str,
         # "bbox-detection" for it would be a claim nothing made.
         "annotation.task_kind": project.ontology.kind,
     }
+
+
+def project_namespace(project: str, name: str) -> str:
+    """Project-qualify a lineage namespace or dataset name — ``("acme", "bronze")`` → ``"acme-bronze"``.
+
+    Empty ``project`` → ``name`` unchanged (the single-tenant default, byte-identical). Qualification
+    keeps per-project lineage under DISTINCT names — lineage's edge list keys a governed dataset on its
+    name alone, so two tenants both emitting ``bronze$events`` would otherwise collide onto one identity
+    (#84 risk 1) — and the ``-`` join keeps the result inside the established ``[A-Za-z0-9_-]`` segment
+    shape (``acme-bronze$events`` is still a valid ``stage$name`` dataset id).
+    """
+    return f"{project}-{name}" if project else name
+
+
+def tier_namespace(tier: str) -> str:
+    """The namespace NAME a governed tier writes into, overridable per tier by ``MEDALLION_<TIER>_NAMESPACE``.
+
+    Not a constant, because a tier name every writer and reader must agree on is configuration: a tier
+    two of them disagree about is a write nothing downstream ever sees.
+    """
+    return os.getenv(f"MEDALLION_{tier.upper()}_NAMESPACE", tier)
+
+
+def namespace_for(project: str, tier: str) -> str:
+    """The namespace a write for ``project`` into ``tier`` lands in — ``acme-silver``, or ``silver``
+    untenanted.
+
+    A writer that composes the bare literal ``"silver"`` instead puts two annotating tenants in one namespace —
+    one FGA parent, one set of grants, both tenants' labels.
+
+    The ``is_safe_project`` guard is applied HERE rather than by each caller, because applying it on
+    only one side is how a garbage project produces a write that is refused for a reason invisible
+    from the writer.
+    """
+    return project_namespace(project if is_safe_project(project) else "", tier_namespace(tier))

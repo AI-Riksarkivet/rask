@@ -11,8 +11,8 @@ from pathlib import Path
 
 import ray
 
+from htr.sources import FSSink, FSSource
 from runner.pipeline import htr_pipeline
-from storage import FSSink, FSSource
 
 
 def main() -> None:

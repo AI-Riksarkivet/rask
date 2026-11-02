@@ -109,12 +109,6 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 			},
 		],
 	},
-	// NO 'Models' GROUP. The registry and its experiments were `/lakehouse/models/*` until they moved
-	// to the MODELS zone, which owns what a model IS — training, registry, blessing. (Two surfaces that
-	// moved with them have since gone: inference to `/compute/inference` at #131, and the `/pipeline`
-	// cascade-trigger door deleted outright.) A cross-zone leaf pointing at /models was considered and rejected — the top navbar owns
-	// cross-zone hops (it is the one surface that applies `data-sveltekit-reload` itself), and the
-	// sidebar has been kept zone-local for exactly that reason.
 	{
 		// OPERATIONS, not "Admin", and without Tenants — by ruling (2026-08-03). The shared navbar's
 		// panel has said Governance = [Access, Tenants, Audit] and Operations = [Events, Streams, DLQ]

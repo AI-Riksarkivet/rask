@@ -1,7 +1,7 @@
-"""Pydantic OpenLineage schemas — THE standard emission shape for all Ray compute (R21).
+"""Pydantic OpenLineage schemas: one emission shape for any producer, on any compute engine.
 
-Every plane that runs on Ray (a sealed runner's pipeline and its online Ray Serve deployments)
-authors its lineage through these models instead of hand-building wire dicts. The models convert to the
+A producer authors its lineage through these models instead of hand-building wire dicts, and names its own engine
+where the spec asks for one (``JobTypeJobFacet.integration``). The models convert to the
 official ``openlineage-python`` ``event_v2`` classes (:meth:`RunEvent.to_openlineage`),
 and the wire form (:meth:`RunEvent.to_wire`) is produced BY the official serializer —
 spec fidelity is by construction, not by mirroring.
@@ -208,7 +208,7 @@ class DatasetVersionFacet(Facet):
 
 
 class JobTypeJobFacet(Facet):
-    """``jobType`` job facet — what KIND of job this is, which every Ray lane stamps.
+    """``jobType`` job facet — what KIND of job this is, and the engine (``integration``) that ran it.
 
     Modelled here rather than written out per producer because it is a STANDARD facet with a
     published schema of its own, so it must not point at ``BaseFacet`` the way `custom_facet` does.
@@ -217,7 +217,7 @@ class JobTypeJobFacet(Facet):
 
     schema_url: str = Field(default=JOB_TYPE_FACET_SCHEMA_URL, alias="_schemaURL")
     processing_type: str = Field(default="BATCH", alias="processingType")
-    integration: str = "RAY"
+    integration: str
     job_type: str = Field(default="JOB", alias="jobType")
 
     def to_openlineage(self) -> job_type_job.JobTypeJobFacet:

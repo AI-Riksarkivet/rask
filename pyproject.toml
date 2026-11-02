@@ -52,7 +52,6 @@ dev = [
     # The third stock client criterion 2 reads a governed table through (tests/e2e-py/test_the_catalog_is_correct.py):
     # a distributed read resolves the table through the catalog's namespace, as lancedb's open does.
     "lance-ray>=0.5.0",
-    "validate",
     # pytest-timeout — the only tool that can DIAGNOSE a hung suite in Dagger, which is where this
     # suite hangs and a developer box does not. Two dead ends were paid for before it was added, and
     # both are properties of the environment rather than of the bug:
@@ -69,9 +68,6 @@ dev = [
     "pytest-timeout>=2.3",
     "pytest-xdist>=3.6",
 ]
-
-[tool.uv.sources]
-validate = { workspace = true }
 
 [tool.ruff]
 line-length = 160
@@ -153,6 +149,7 @@ extend-select = ["TID251", "FAST001"]
 "packages/service-kit/src/service_kit/governed/**" = ["ANN401", "ANN202", "C901", "PERF401"]
 "packages/service-kit/src/service_kit/lakehouse/**" = ["RUF002", "RUF003", "RUF100", "PERF401"]
 "packages/service-kit/src/service_kit/lancekit/**" = ["A002"]
+"packages/client-kit/src/client_kit/lancekit/reader.py" = ["A002"]  # `filter=` is the lance dataset API's own parameter name
 "packages/client-kit/src/client_kit/lancekit/**" = ["ANN401", "C901", "PERF401"]
 # No ANN exemption under media/: `dataset_handle` is the entry point every media and annotator route
 # passes through to reach a dataset, and an untyped return there is an `Any` in every one of them.
@@ -240,7 +237,7 @@ indent-style = "space"
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 # COMPLETE, and it is meant to stay that way: every first-party import name on disk is here — the
-# seven code-shipping packages (client_kit, lineage_kit, ray_cluster_env, ray_kit, service_kit, storage, validate) and
+# six code-shipping packages (client_kit, lineage_kit, ray_cluster_env, ray_kit, service_kit, storage) and
 # the services. A missing name is not a metadata gap: ruff sorts that module into
 # the THIRD-PARTY block, so `from catalog.core.config import ...` sat beside `import httpx` in every
 # file that imported it.
@@ -269,7 +266,6 @@ known-first-party = [
     "service_kit",
     "storage",
     "table_maintenance",
-    "validate",
     "viewer",
 ]
 

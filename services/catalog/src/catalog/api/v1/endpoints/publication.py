@@ -190,13 +190,13 @@ async def publication_extra(
     # design — it is a registry read. So a TENANT-LESS lane namespace like `silver`, bound to a
     # warehouse that belongs to a project, resolves to that project. Stamping it there is not a
     # cosmetic error: the medallion's publication head reads this field verbatim and composes the next
-    # tier as `project_namespace(project, dataset)`, so the hop targets `<project>-gold$catalog` — a
+    # tier as `<project>-<dataset>`, so the hop targets `<project>-gold$catalog` — a
     # table the runner never wrote — and silver->gold refuses every tabular-lane publication.
     #
     # A CHECK, NOT A PARSE, which is why this is sound where a string rule is not. This module's
     # docstring records that `acme-bronze` cannot be DECOMPOSED into a project, because
     # `PROJECT_PATTERN` permits `-` inside a project id. It can still be verified against a project the
-    # registry already answered: `project_namespace` joins with `-` and nothing else, so a qualified
+    # registry already answered: a project-qualified name joins with `-` and nothing else, so a qualified
     # namespace always starts with `f"{project}-"`. Nothing here has to choose between `acme` and
     # `acme-eu` — the registry chose, and this only confirms the id agrees.
     #

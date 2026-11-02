@@ -77,7 +77,7 @@ on `RASK_EDGE_URL` (default `http://localhost:8888`):
   `RASK_EDGE_URL` both :8888). Needs `make k3s-up`.
 - **`make dev-zone ZONE=<z>`** runs one zone against its own mock upstreams, with no cluster and no fleet.
 
-The Vite dev `/api` proxies are per zone: `compute`/`studio`/`models` → `VIEWER_BACKEND` (:8888);
+The Vite dev `/api` proxies are per zone: `compute`/`studio` → `VIEWER_BACKEND` (:8888);
 `home`/`lakehouse` → `LANCE_BACKEND` (:8001, lineage's dev port, which `dev-micro.sh` does not start);
 `explorer`/`annotator` have no `/api` proxy and reach :8101/:8102/:8103 through their own BFF. The zones' SSR
 reads one `RASK_EDGE_URL`. See `rask-frontend`.

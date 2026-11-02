@@ -2395,9 +2395,8 @@ export interface paths {
          *     holder of one leaf table checked ``can_get_metadata`` True on the parent and False on its sibling,
          *     and the sibling's NAME came back regardless.
          *
-         *     A namespace name is not a harmless header. ``viewer.api.security`` states the estate's position —
-         *     "A corpus LIST is itself sensitive: it names data someone may not know exists" — and a namespace
-         *     name additionally leaks how a tenant organises data.
+         *     A namespace name is not a harmless header: a listing names data someone may not know exists, and a
+         *     namespace name additionally leaks how a tenant organises data.
          *
          *     So: the ROUTE still opens (narrowing it to 403 would restore the broken breadcrumb C1 fixed) and
          *     each ITEM is checked on the object itself, on ``can_get_metadata`` — the relation that governs
@@ -2437,9 +2436,8 @@ export interface paths {
          *     it a grantee could not resolve the breadcrumb to their own table and every list above it 403'd —
          *     but it means holding ``reader`` on ONE table opens this route, and the route used to answer with
          *     every SIBLING table's name. Measured against both compiled models: before ``14a84022`` the check
-         *     was ``false`` (403); after it, ``true`` (200, full listing). A table list is not a harmless header;
-         *     ``viewer.api.security`` states the estate's position outright — "A corpus LIST is itself sensitive:
-         *     it names data someone may not know exists."
+         *     was ``false`` (403); after it, ``true`` (200, full listing). A table list is not a harmless header:
+         *     it names data someone may not know exists.
          *
          *     So the split ``open_notifications.md`` §3.1 already settled applies verbatim: the ROUTE may open on
          *     ``can_get_metadata``, each ITEM is checked on the object itself. ``list_all_tables`` (``tables.py``)

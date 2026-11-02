@@ -50,10 +50,10 @@ from annotator.projects.machines import (
 from annotator.projects.models import AnnotationProject, ItemSource, MediaRef, ProjectState, Shape, Task, TaskState, new_id
 from annotator.projects.ontology import LabelOntology, ShapeLike, membership_violation
 from annotator.projects.project_actor import AnnotationProjectActorInterface
+from annotator.projects.publish import namespace_for
 from client_kit.media.deps import StateDep
 from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError
 from service_kit.governed.audit import AuditOutcome, audit
-from service_kit.lakehouse.warehouse_registry import namespace_for
 
 
 if TYPE_CHECKING:

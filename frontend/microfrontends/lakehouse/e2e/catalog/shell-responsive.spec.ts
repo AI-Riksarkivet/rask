@@ -157,16 +157,15 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 	// truth: a zone missing here is the R15 defect (a zone absent from the navbar), not a stale test.
 	// Projects LEADS it and Settings CLOSES it — the two groups that are not zones, both from the IA
 	// ZONES ONLY. This page is inside a project, so the collapsed bar folds the IN-PROJECT bar — the
-	// same seven zones the wide bar carries. Home, Projects and Settings are the estate level and are
+	// same zones the wide bar carries. Home, Projects and Settings are the estate level and are
 	// not in this bar at either width; collapsing must not smuggle them back in, which is what pinning
 	// the exact list here catches. Their overflow behaviour belongs to the main menu, where they live.
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
 	await expect(panel.locator('[data-slot="navbar-overflow-group"]')).toHaveText([
 		' Lakehouse',
 		' Compute',
-		' Search',
+		' Explorer',
 		' Annotate',
-		' Train',
 		' Studio',
 	]);
 	// One row per destination the wide bar reaches — including each zone's own root and the
@@ -177,9 +176,6 @@ test('below the breakpoint the zone links collapse into one overflow menu that s
 		'/lakehouse/catalog',
 		'/lakehouse/catalog/tables',
 		'/lakehouse/catalog/warehouses',
-		// The MODELS zone's root — a zone entry in this bar now, not a `/lakehouse/models` row. Zone
-		// roots carry the trailing slash for the same 308 reason as the two below.
-		'/models/',
 		// Zone-root hrefs carry the TRAILING SLASH — load-bearing (a bare /explorer costs a 308 per hop;
 		// nav-config.test pins it). The old bare forms predated that convention landing here.
 		'/explorer/',
@@ -268,7 +264,7 @@ test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows 
 	// inactive siblings', which is how "alice sees the Governance column" passed against a 69px panel.
 	// innerText reflects RENDERED text, and the group labels are CSS-uppercased, so compare case-insensitively.
 	const visible = (await panel.innerText()).toLowerCase();
-	for (const group of ['catalog', 'models']) {
+	for (const group of ['workspace', 'catalog']) {
 		expect(visible, `the ${group} column is not visible in the panel`).toContain(group);
 	}
 });

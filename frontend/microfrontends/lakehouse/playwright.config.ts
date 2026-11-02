@@ -15,8 +15,7 @@ import {
 } from './e2e/ports';
 
 // Hermetic e2e for the whole lakehouse zone — its areas (e2e/catalog, e2e/lineage, e2e/admin), which
-// used to be separate zones each running their own dev server and browser. (`e2e/models` left with
-// the models area itself; see microfrontends/models/e2e.)
+// used to be separate zones each running their own dev server and browser.
 // Every `/capi/**` + `/api/**` response is mocked via page.route, so no live backend is needed: the dev
 // server runs the real SSR + client hydration under this zone's `/lakehouse` base path, and the
 // browser's backend calls are the only thing stubbed. Specs `goto` the base-prefixed routes
@@ -102,11 +101,6 @@ export default defineConfig({
 				CATALOG_API: `http://localhost:${MOCK_CATALOG_PORT}`,
 				// The two NON-catalog upstreams the ported admin remote functions reach — one combined
 				// seed-driven mock (paths never collide). See e2e/admin/mock-observability.ts.
-				//
-				// MEDALLION_API was a third. Nothing in THIS zone ever read it: it arrived with the
-				// models surfaces that were ported out to `/models`, and the only reader went with them
-				// (and has since been deleted with `/models/pipeline`). Removed rather than kept as
-				// harmless — an env pointing a mock at an upstream no code calls reads as coverage.
 				GREPTIME_API: MOCK_OBS,
 				// The cluster EDGE, for the promotions surface. Pointed at the same seed-driven mock for
 				// the reason the comment above gives: paths never collide, and this one is

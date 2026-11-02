@@ -21,13 +21,11 @@ and hands THAT to the actor, so one string crosses the gate and reaches the tabl
 
 from __future__ import annotations
 
-from service_kit.lakehouse.warehouse_registry import namespace_for
+from annotator.projects.publish import namespace_for
 
 
 class TestTheSharedHelper:
-    """It lives in service-kit beside `project_namespace`, not in the annotator — the same reason
-    `project_namespace` itself moved out of the medallion: a convention two services must agree on
-    cannot live inside one of them."""
+    """The annotator's one composition of a tenant's tier namespace, which every publish path calls."""
 
     def test_a_tenant_qualifies_the_tier(self) -> None:
         assert namespace_for("acme", "silver") == "acme-silver"

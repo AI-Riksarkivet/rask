@@ -123,7 +123,7 @@ describe('transport matches the payload kind', () => {
 	});
 
 	it('the BFF JSON residual only ever SHRINKS', () => {
-		// `requestJSON` is the BFF's JSON helper. Six zones are converged and hold zero call sites;
+		// `requestJSON` is the BFF's JSON helper. Five zones are converged and hold zero call sites;
 		// the lakehouse is the residual. Pinning the count as a CEILING is what makes convergence
 		// irreversible without a visible edit: a new BFF JSON route anywhere fails here, and when a
 		// residual is converged the number comes down with it.
@@ -133,8 +133,8 @@ describe('transport matches the payload kind', () => {
 			if (n > 0) counts.set(zoneOf(p), (counts.get(zoneOf(p)) ?? 0) + n);
 		}
 
-		// The six converged zones must stay at zero — that is the half worth protecting hardest.
-		for (const zone of ['home', 'explorer', 'annotator', 'compute', 'models', 'studio']) {
+		// The five converged zones must stay at zero — that is the half worth protecting hardest.
+		for (const zone of ['home', 'explorer', 'annotator', 'compute', 'studio']) {
 			expect(
 				counts.get(zone) ?? 0,
 				`${zone} was converged off requestJSON — do not add a BFF JSON route`,
@@ -172,7 +172,7 @@ describe('a remote function declared in two zones declares the same input schema
 	/**
 	 * Ten remote-function names exist in more than one zone, and that is CORRECT rather than
 	 * duplication: `command`/`query.live` must be declared inside an app to get its own endpoint, so
-	 * the per-zone shim is structural. `lineageFeed` lives in all seven zones for that reason.
+	 * the per-zone shim is structural. `lineageFeed` lives in every zone for that reason.
 	 *
 	 * What is NOT structural is the SCHEMA. `createWarehouse` is declared in `home` and `lakehouse`
 	 * with a hand-copied valibot object each. Main's #73 made `protected` required on

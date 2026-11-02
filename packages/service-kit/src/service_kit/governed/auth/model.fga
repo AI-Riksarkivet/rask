@@ -150,9 +150,8 @@ type estate
         #     (`endpoints/access_admin.py:199`)
         #   * the `estate_admin` flag `/management/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather
         #     than a door, listed because it is a consumer
-        #   * every estate-wide surface a CLIENT gates on it through the decision door (a raw object-store browser,
-        #     a compute engine's dashboard, a flow runner), which the lakehouse does not name: a client asks a
-        #     lakehouse verb rather than carrying a relation of its own here
+        #   * every estate-wide surface a client gates on it through the decision door: a client asks a lakehouse
+        #     verb rather than carrying a relation of its own here
         # So this is not an observer rung wearing an admin's name — it IS the admin rung, and "observe"
         # is the weakest thing it permits. Renaming it is [[LH-076]]'s other half and needs an owner
         # call, because the string appears in seeded tuples; correcting what it CLAIMS needs nobody's.
@@ -175,10 +174,10 @@ type estate
         # `rask_lance` facets, and the output names (`lineage/api/v1/endpoints/events.py::targeting_view`).
         define can_read_event_feed: owner or event_reader
         # Asking the catalog's decision door (`/management/v1/decisions`, [[LH-442]]) what another subject may
-        # do, checked ONLY on the root object. The holders are the check-only services (lineage, notifications,
-        # the viewer and search, flows, compute): they hold no credential to the authorization store, so a
-        # compromised one cannot write a tuple, read the tuple store or enumerate a subject's reach, and asks
-        # the catalog every question its gates need. The catalog is the store's client, as Lakekeeper is
+        # do, checked ONLY on the root object. The holders are the check-only services (lineage, and each client
+        # the estate grants it by name): they hold no credential to the authorization store, so a compromised one
+        # cannot write a tuple, read the tuple store or enumerate a subject's reach, and asks the catalog every
+        # question its gates need. The catalog is the store's client, as Lakekeeper is
         # OpenFGA's only client and its OPA bridge asks Lakekeeper's batch-check
         # (authz/opa-bridge/policies/lakekeeper/check.rego).
         #
@@ -187,10 +186,10 @@ type estate
         # surface, gated and audited as the disclosure it is.
         #
         # ONE ROLE PER ROUTE, each granted only to the service that calls it: `decider` opens `check` (every
-        # check-only service), `member_expander` opens `list-users` over a membership userset (notifications,
-        # resolving a task's role or team to people), `governance_prober` opens `governed` (lineage, deciding
-        # whether a refused output can ever be granted). A compromised viewer then cannot enumerate members,
-        # and a compromised lineage cannot either. Lakekeeper gates its own on-behalf-of checks per object on
+        # check-only service), `member_expander` opens `list-users` over a membership userset (a service resolving
+        # a project's members to people), `governance_prober` opens `governed` (lineage, deciding whether a refused
+        # output can ever be granted). A compromised decider then cannot enumerate members, and a compromised
+        # lineage cannot either. Lakekeeper gates its own on-behalf-of checks per object on
         # `can_read_assignments` (crates/authz-openfga/src/authorizer.rs:456-464), which for a caller serving
         # every tenant means `project_admin` or the server `operator`; these roles grant the asking and nothing else.
         define decider: [user]

@@ -330,7 +330,7 @@ def is_external_source(namespace: str, name: str) -> bool:
     configuration causes were investigated before the service's own message was read.
 
     The discriminator has TWO forms and lives in `service_kit.lakehouse.naming`, because it is a
-    convention this service and every producer must agree on — the `project_namespace` precedent. A
+    convention this service and every producer must agree on. A
     store URI carrying a scheme (``s3://bucket``) is external by shape. A BARE identifier cannot be
     decided by shape at all, since that is exactly what a catalog namespace looks like (``bronze``,
     ``bind86-bronze``), so the bare external namespaces are DECLARED: ``file`` and ``lance``.

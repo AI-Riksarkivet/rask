@@ -154,47 +154,6 @@ def is_safe_project(value: object) -> bool:
     return isinstance(value, str) and _PROJECT_RE.fullmatch(value) is not None
 
 
-def tier_namespace(tier: str) -> str:
-    """The namespace NAME a governed tier writes into, overridable per tier by ``MEDALLION_<TIER>_NAMESPACE``.
-
-    Not a constant, because a tier name every writer and reader must agree on is configuration: a tier
-    two of them disagree about is a write nothing downstream ever sees.
-    """
-    import os
-
-    return os.getenv(f"MEDALLION_{tier.upper()}_NAMESPACE", tier)
-
-
-def namespace_for(project: str, tier: str) -> str:
-    """The namespace a write for ``project`` into ``tier`` lands in — ``acme-silver``, or ``silver``
-    untenanted.
-
-    LIVES HERE for the same reason :func:`project_namespace` does: a writer that composes the bare literal
-    ``"silver"`` instead puts two annotating tenants in one namespace — one FGA parent, one set of grants,
-    both tenants' labels.
-
-    The ``is_safe_project`` guard is applied HERE rather than by each caller, because applying it on
-    only one side is how a garbage project produces a write that is refused for a reason invisible
-    from the writer.
-    """
-    return project_namespace(project if is_safe_project(project) else "", tier_namespace(tier))
-
-
-def project_namespace(project: str, name: str) -> str:
-    """Project-qualify a lineage namespace or dataset name — ``("acme", "bronze")`` → ``"acme-bronze"``.
-
-    Empty ``project`` → ``name`` unchanged (the single-tenant default, byte-identical). Qualification
-    keeps per-project lineage under DISTINCT names — lineage's edge list keys a governed dataset on its
-    name alone, so two tenants both emitting ``bronze$events`` would otherwise collide onto one identity
-    (#84 risk 1) — and the ``-`` join keeps the result inside the established ``[A-Za-z0-9_-]`` segment
-    shape (``acme-bronze$events`` is still a valid ``stage$name`` dataset id).
-
-    LIVES HERE, beside :func:`is_safe_project`, because it is the SAME concern and more than one plane
-    needs it: a naming convention that two services must agree on cannot live inside one of them.
-    """
-    return f"{project}-{name}" if project else name
-
-
 def clear_cache() -> None:
     """Drop every cached resolution (tests + explicit invalidation)."""
     _cache.clear()

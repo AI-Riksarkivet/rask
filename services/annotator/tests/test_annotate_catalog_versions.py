@@ -115,7 +115,7 @@ def _make_client(settings: Settings, handle: object) -> TestClient:
 def catalog_harness(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _FakeTransport]:
     """The annotations routes in FULL catalog mode, REST transport mocked at the seam."""
     transport = _FakeTransport()
-    monkeypatch.setattr("service_kit.lancekit.reader.RestCatalogTransport", lambda *a, **k: transport)
+    monkeypatch.setattr("client_kit.lancekit.reader.RestCatalogTransport", lambda *a, **k: transport)
     corpus = Corpus(id="ds1", declared=_DECLARED)
     for module in (versions, wire):
         monkeypatch.setattr(module, "resolve", lambda *_a, **_k: corpus)

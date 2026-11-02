@@ -30,7 +30,7 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         # auth_headers(): Bearer token as client-default headers when the cluster runs
         # RAY_AUTH_MODE=token (RASK_RAY_AUTH_TOKEN / RAY_AUTH_TOKEN); {} otherwise. The
         # proxy strips inbound Authorization so this default is what reaches Ray.
-        app.state.http = httpx.AsyncClient(timeout=settings.http_timeout, headers=auth_headers())
+        app.state.http = httpx.AsyncClient(timeout=get_compute_settings().http_timeout, headers=auth_headers())
         # Stamp the attempt so get_ray_client's negative cache dates from boot: if Ray is down now,
         # the first request waits out the cooldown rather than immediately restorming the dashboard.
         app.state.ray_client_last_attempt = time.monotonic()

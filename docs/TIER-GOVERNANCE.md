@@ -73,11 +73,9 @@ default path) for the work it does, and notifications target a person from those
 - **Reading blob bytes back.** A client without storage credentials (a browser, a notebook) reads blob bytes through
   the catalog: `GET /management/v1/table/{id}/blobs?column=payload&row=N[&version=]`, Range-capable (206/416) and
   governed at `can_read_data` ([ADR 0019](adr/0019-feature-gap-1-serving-blob-serving-is-a-governed-proxy-not.md)).
-- **Sources and sinks.** `service_kit.lakehouse.sources` (`SourceAdapter`, with `LocalDirSource` and
-  `S3FileSystemSource`) and `service_kit.lakehouse.sinks` (`SinkAdapter`, with `LocalDirSink` and
-  `S3FileSystemSink`) are provider-agnostic adapters a pipeline may use for its two edges to the outside world; the
-  S3 pair takes a configured `pyarrow.fs.S3FileSystem`, so any S3 store is a different filesystem, not different
-  code.
+- **Sources and sinks are the pipeline's.** Where a pipeline reads its bytes from and writes its outputs to outside
+  the catalog is its own code; the lakehouse ships no source or sink adapter and takes data only through the
+  catalog's doors.
 
 ## Try it
 

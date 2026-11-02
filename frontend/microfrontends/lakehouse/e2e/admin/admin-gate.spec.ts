@@ -64,7 +64,7 @@ test('a non-estate-admin sees ForbiddenPage on every admin route + no admin nav 
 	// The bar itself is identity-independent — one trigger per zone, no Admin entry in any shape…
 	await expect(nav.getByRole('button', { name: 'Lakehouse', exact: true })).toBeVisible();
 	// THREE triggers (Lakehouse, Compute, Search) — the ones whose zone owns several sub-areas.
-	// Annotate, Workbench, Train and Studio are plain links, not buttons: a single-surface zone with a
+	// Annotate, Workbench and Studio are plain links, not buttons: a single-surface zone with a
 	// one-row dropdown would be noise. This said TWO and named the third as pending ("Compute joins
 	// when the rask zone lands"); the rask zone DID land (R16/db15ea8 — the overview zone folded into
 	// Compute and it carries COMPUTE_ITEMS), so the pending clause is now the stale half. The
@@ -75,12 +75,11 @@ test('a non-estate-admin sees ForbiddenPage on every admin route + no admin nav 
 	await expect(nav.getByRole('link', { name: 'Admin', exact: true })).toHaveCount(0);
 	await expect(nav.getByText('Access')).toHaveCount(0);
 	// …and the real guarantee: opening the trigger that WOULD carry them shows the tighter
-	// non-admin panel — Catalog, Models, Lineage and nothing else. No Governance column, no
+	// non-admin panel — Catalog, Lineage and nothing else. No Governance column, no
 	// Operations column, and not one /admin row: the IA never even hints at a surface this identity
 	// is barred from.
 	const panel = await openPanel(page, 'Lakehouse');
 	await expect(panel.getByText('Catalog', { exact: true })).toBeVisible();
-	await expect(panel.getByText('Models', { exact: true })).toBeVisible();
 	// Lineage is an AREA of this zone, not a privilege — a non-admin gets it too. Asserted so the
 	// "tighter panel" claim above names the columns that DO render, not just the ones that don't.
 	await expect(panel.getByText('Lineage', { exact: true })).toBeVisible();

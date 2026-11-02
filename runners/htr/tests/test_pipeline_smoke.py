@@ -43,7 +43,7 @@ def test_fake_pipeline_via_ray_data(tmp_buckets, monkeypatch):
 
     from htr.actors.fake import FakeAltoActor
     from htr.actors.io import AltoWriterActor, PageLoaderActor
-    from storage import FSSink, FSSource
+    from htr.sources import FSSink, FSSource
 
     # Start Ray with enough CPUs for the actor pool. The pipeline has 3 stages
     # each with concurrency=1 + the driver, so num_cpus must be >= 4 — with fewer

@@ -9,7 +9,7 @@ def test_page_loader_actor_reads_bytes(tmp_path: Path):
     from PIL import Image
 
     from htr.actors.io import PageLoaderActor
-    from storage import FSSource
+    from htr.sources import FSSource
 
     # PageLoaderActor validates each page with Image.verify(), so the fixture
     # must be a real image rather than arbitrary bytes. Use a tiny valid JPEG and
@@ -30,7 +30,7 @@ def test_page_loader_actor_reads_bytes(tmp_path: Path):
 
 def test_alto_writer_actor_writes(tmp_path: Path):
     from htr.actors.io import AltoWriterActor
-    from storage import FSSink
+    from htr.sources import FSSink
 
     actor = AltoWriterActor(sink=FSSink(root=tmp_path))
     batch = {

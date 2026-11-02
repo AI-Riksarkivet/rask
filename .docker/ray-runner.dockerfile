@@ -30,7 +30,7 @@
 # together by tests/unit/test_invariants.py, which compares them rather than trusting them.
 #
 # `ARG RUNNER` follows the estate's own precedent for "one definition, N images":
-# `.docker/frontend.dockerfile` builds all seven zones from `ARG APP`. A tenth runner is a new
+# `.docker/frontend.dockerfile` builds every zone from `ARG APP`. A tenth runner is a new
 # `--runner=` value and changes NO file here — which is what keeps the platform workload-agnostic.
 #
 # ── HOW A CLUSTER CONSUMES IT ─────────────────────────────────────────────────────────────────────

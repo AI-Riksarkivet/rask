@@ -1,15 +1,4 @@
-"""The catalog seam carries the CALLER's identity, and 401 stays 401.
-
-Two defects met here and produced one very misleading symptom. Opening the annotate canvas returned
-`403` to the browser; the catalog's own log said `401 Unauthorized`. So the estate reported "you lack
-a grant" for a request that had never presented a credential at all, and the obvious next move —
-hunting for a missing FGA tuple — could not possibly have worked.
-
-1. The read path had no way to carry a credential. `open_reader`/`open_writer` took only
-   `settings.catalog_token`, which the chart leaves empty (`values.yaml: catalogToken: ""`), so the
-   transport's single header line was skipped and the client went out bare.
-2. `translate_catalog_errors` collapsed `UnauthorizedException` and `ForbiddenException` into one
-   `ForbiddenError`, laundering authentication failure into authorization failure.
+"""A client's catalog read path carries the CALLER's identity, and never a service token in its place.
 
 Why the CALLER's bearer and not a service account: the catalog checks one relation on one `table:`
 object and injects no row predicate, so a service credential answers 200 for a user who has no grant
@@ -17,11 +6,8 @@ object and injects no row predicate, so a service credential answers 200 for a u
 service account is scoped to the publish saga, whose stated reason ("outlives any user request")
 does not apply to a request-scoped read.
 
-UPDATED 2026-08-26: the seam no longer falls back AT ALL. This file argued the principle from the
-start and still encoded the exception, and the exception was the whole hole — `caller_token or
-settings.catalog_token` fires exactly when a request arrives with no bearer. `MEDIA_CATALOG_TOKEN` is
-removed from the media settings and the chart with it; the stage runners' `MEDALLION_CATALOG_TOKEN` stays,
-because they genuinely have no caller to forward.
+A caller with no bearer sends none: `caller_token or settings.catalog_token` would fire exactly when a request
+arrives anonymous, re-issuing it under the estate's own identity.
 """
 
 from __future__ import annotations
@@ -30,8 +16,7 @@ from typing import Any
 
 import pytest
 
-from service_kit.exceptions import ForbiddenError, UnauthorizedError
-from service_kit.lancekit.reader import open_reader, translate_catalog_errors
+from client_kit.lancekit.reader import open_reader
 
 
 class _Settings:
@@ -57,8 +42,8 @@ def _token_of(reader: Any) -> str | None:
     `default_headers` would be sent for the NEXT caller too. The assertion below therefore also pins
     that the shared client carries no `Authorization` of its own.
     """
-    transport = reader._transport  # noqa: SLF001 - asserting the wire is the point of this test
-    assert "Authorization" not in transport._api.api_client.default_headers, (  # noqa: SLF001
+    transport = reader._transport
+    assert "Authorization" not in transport._api.api_client.default_headers, (
         "a caller's bearer is pinned on the SHARED client, so the next caller would send it"
     )
     header = transport.request_headers().get("Authorization")
@@ -91,18 +76,3 @@ def test_the_reader_sends_the_callers_bearer_and_NEVER_substitutes_a_service_tok
         caller_token=caller_token,
     )
     assert _token_of(reader) == expected
-
-
-def test_a_catalog_401_is_not_reported_as_403() -> None:
-    """The laundering that made the symptom unreadable.
-
-    A 401 says "I do not know who you are"; a 403 says "I know, and no". Collapsing them told the
-    browser the second when the truth was the first.
-    """
-    api_exc = pytest.importorskip("lance_namespace_urllib3_client.exceptions")
-
-    with pytest.raises(UnauthorizedError, match="rejected the credential"), translate_catalog_errors():
-        raise api_exc.UnauthorizedException(status=401, reason="Unauthorized")
-
-    with pytest.raises(ForbiddenError, match="denied the request"), translate_catalog_errors():
-        raise api_exc.ForbiddenException(status=403, reason="Forbidden")

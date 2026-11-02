@@ -20,8 +20,8 @@ from typing import cast
 import lance
 import pytest
 
+from client_kit.lancekit.reader import LocalCatalogTransport
 from service_kit.exceptions import NotFoundError
-from service_kit.lancekit.reader import LocalCatalogTransport
 
 
 class _RaisingDataset:

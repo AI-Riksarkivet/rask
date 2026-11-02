@@ -3,8 +3,8 @@
  * Serve app. Bytes ride a `+server.ts`, never a remote function (the estate's
  * transport ruling), and the gateway's `/api/serve` row is read-only by design,
  * so the zone reaches Serve's own HTTP ingress (`:8000`) directly — the same
- * lane as the models zone's `/api/infer`, through the same shared @rask/api
- * helper so the two proxies cannot drift.
+ * lane every Serve proxy takes, through the shared @rask/api helper so no two
+ * proxies can drift.
  *
  * `?app=<slug>` picks the Serve app (the Model node fills it from live
  * discovery); the slug is validated here so this stays an inference door, not

@@ -1,11 +1,8 @@
-"""SK-03 — one urllib3 connection pool per catalog, not one per `open_reader`/`open_writer` call.
+"""SK-03 — one urllib3 connection pool per catalog, not one per transport.
 
-`RestCatalogTransport.__init__` / `RestCatalogWriteTransport.__init__` each built a fresh generated
-`ApiClient`, and an `ApiClient` builds a fresh `urllib3.PoolManager`. Both ctors run once per
-`open_reader` / `open_writer` call — i.e. per REQUEST on the annotator's read and write paths — so
-every catalog call opened a brand-new pool, connected, and threw the connection away. The generated
-client's `__exit__` is `pass`, so even `with ApiClient(...)` closes nothing: the pools were released
-only by the garbage collector.
+A transport may be constructed once per REQUEST, and an `ApiClient` builds a fresh `urllib3.PoolManager`, so a
+client per transport would open a pool and a connection for every catalog call and throw it away. The generated
+client's `__exit__` is `pass`, so even `with ApiClient(...)` closes nothing.
 
 The remedy is one client per (catalog host, retry policy), which means the caller's bearer can no
 longer be a DEFAULT header on a shared object — it rides each request instead. That is the part with

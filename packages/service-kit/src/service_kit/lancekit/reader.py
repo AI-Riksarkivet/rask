@@ -1,33 +1,12 @@
-"""Read-path abstraction: direct Lance today, lance-ns catalog tomorrow.
+"""The catalog's read transport: a table read through the spec's REST doors.
 
-The backend opens Lance tables directly — fast, S3-capable, blob-seekable. The
-lance-ns merge target instead expects reads to go through the catalog's
-``POST /v1/table/{id}/query`` endpoint so the lakehouse owns credentials + authz
-(see docs/LANCE_NS_INTEGRATION.md). This module puts both behind ONE duck-typed
-:class:`TableReader` so call sites don't change; a flag (``MEDIA_READ_BACKEND``)
-selects which.
+:class:`CatalogTableReader` reads a table through ``POST /v1/table/{id}/query`` (a scan, paged and pinned to one
+version), ``/count_rows``, ``describe`` (the current version) and ``/version/list``, over a :class:`CatalogTransport`;
+:class:`RestCatalogTransport` is that transport over HTTP. The base URL comes from the caller, never a hard-coded host,
+and the transport carries a urllib3 ``Retry``, so it runs behind a Dapr service invocation or a proxy unchanged.
 
-Designed host-agnostic + retry-friendly so the catalog path drops into a Dapr
-service-invocation or a proxy-fronted catalog without touching callers
-(project_merge_runtime_stack): the base URL comes from settings, never a
-hard-coded host, and the transport carries a urllib3 ``Retry``.
-
-Scope (prototype): the dominant read pattern — a scan
-``to_table(columns=, filter=, limit=, offset=, with_row_id=)`` plus
-``count_rows`` — is covered end to end, and so is the VERSION surface the
-comparison of two versions needs: version listing (``POST /v1/table/{id}/version/list``,
-reader-tier governed) and time-travel (the ``version`` pin on ``/query`` /
-``count_rows``, both honored by the native backend). Blob serving (``take_blobs``
-by stable ``_rowid``) and hybrid ``search`` are the riskier phases the analysis
-flags and stay ``direct`` (they can remain direct per-call even when the flag is
-``catalog``); wiring them is follow-up.
-
-The catalog ``/query`` endpoint is vector-search-first: it requires a ``vector``
-and ``k`` and has no plain-scan verb, so a scan is expressed as an EMPTY vector +
-a large ``k`` + the filter. Whether a live REST server accepts an empty vector as
-a scan is the open item to probe against a running catalog; the in-process
-:class:`LocalCatalogTransport` (the catalog's native behavior) implements exactly
-that, which is what the parity test exercises.
+The ``/query`` door is vector-search-first: it requires a ``vector`` and ``k`` and has no plain-scan verb, so a scan
+is an EMPTY vector, a bounded ``k`` and the filter.
 """
 
 from __future__ import annotations
@@ -35,9 +14,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol
 
-import lance
 import pyarrow as pa
 from pydantic import BaseModel
 
@@ -50,7 +28,6 @@ from service_kit.exceptions import (
     ValidationError,
 )
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.arrow_ipc import decode_arrow_response
 from service_kit.lancekit.catalog_client import catalog_api_client
 from service_kit.lancekit.catalog_client import request_headers as _request_headers
@@ -61,67 +38,6 @@ log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from lance_namespace_urllib3_client import QueryTableRequest
-
-
-@runtime_checkable
-class TableReader(Protocol):
-    """The read surface every backend read path uses — the seam we can swap.
-
-    Deliberately the SUBSET of the ``lance.LanceDataset`` API our scan paths call,
-    so :class:`LanceTableReader` is a zero-cost pass-through and the catalog reader
-    is duck-type compatible.
-    """
-
-    def to_table(
-        self,
-        *,
-        columns: list[str] | None = None,
-        filter: str | None = None,
-        limit: int | None = None,
-        offset: int | None = None,
-        with_row_id: bool = False,
-    ) -> pa.Table: ...
-
-    def count_rows(self, filter: str | None = None) -> int: ...
-
-    def table_version(self) -> int: ...
-
-    @property
-    def schema(self) -> pa.Schema: ...
-
-
-class LanceTableReader:
-    """Direct Lance open — verbatim today's behavior (the byte-identical default)."""
-
-    def __init__(self, ds: lance.LanceDataset) -> None:
-        self._ds = ds
-
-    def to_table(
-        self,
-        *,
-        columns: list[str] | None = None,
-        filter: str | None = None,
-        limit: int | None = None,
-        offset: int | None = None,
-        with_row_id: bool = False,
-    ) -> pa.Table:
-        return self._ds.to_table(
-            columns=columns,
-            filter=filter,
-            limit=limit,
-            offset=offset,
-            with_row_id=with_row_id,
-        )
-
-    def count_rows(self, filter: str | None = None) -> int:
-        return self._ds.count_rows(filter)
-
-    def table_version(self) -> int:
-        return int(self._ds.version)
-
-    @property
-    def schema(self) -> pa.Schema:
-        return self._ds.schema
 
 
 class CatalogVersion(BaseModel):
@@ -137,10 +53,8 @@ class CatalogTransport(Protocol):
     """Executes the catalog reads :class:`CatalogTableReader` needs — ``/query``
     (Arrow IPC **file** bytes), ``/count_rows`` and ``/version/list``.
 
-    Mirrors the calls the reader makes on the lance-ns ``DataApi``/``TableApi``;
-    abstracted so the same reader runs against a live REST catalog
-    (:class:`RestCatalogTransport`) or an in-process namespace
-    (:class:`LocalCatalogTransport`) with no code change.
+    Mirrors the calls the reader makes on the lance-ns ``DataApi``/``TableApi``, so the same reader runs over any
+    transport that answers them as the catalog does.
     """
 
     def query(self, request: QueryTableRequest) -> bytes: ...
@@ -219,7 +133,7 @@ class CatalogTableReader:
         """Scan the table, page by page — ``version`` pins a HISTORICAL snapshot (catalog time-travel;
         a bad/reclaimed version is the catalog's 404, translated to ``NotFoundError``), and an unpinned
         read pins the version current when it starts, so its pages cannot straddle a commit.
-        The extra defaulted kwarg keeps this a :class:`TableReader`."""
+        """
         pinned = version if version is not None else self.table_version()
         start = offset or 0
         pages: list[pa.Table] = []
@@ -254,71 +168,6 @@ class CatalogTableReader:
     @property
     def schema(self) -> pa.Schema:
         return self.to_table(limit=0).schema
-
-
-class LocalCatalogTransport:
-    """In-process catalog transport — the catalog's native read behavior over a
-    local ``lance.LanceDataset``, no HTTP server.
-
-    Faithful to what the native ``DirectoryNamespace`` does server-side: translate
-    the :class:`QueryTableRequest` into a ``to_table`` scan (empty vector ⇒ scan)
-    and serialize the result as an Arrow IPC **file** — the exact wire encoding the
-    REST ``/query`` returns. Useful for offline/dev and as the reference the parity
-    test checks the direct path against.
-    """
-
-    def __init__(self, ds: lance.LanceDataset) -> None:
-        self._ds = ds
-
-    def _at_version(self, version: int | None) -> lance.LanceDataset:
-        """Time-travel to ``version`` (``None`` = current), translating Lance's raw
-        not-found into ``NotFoundError`` — the native backend raises
-        ``TableVersionNotFoundError`` (→ REST 404 → ``NotFoundError``), so the
-        in-process transport must surface the same shape."""
-        if version is None:
-            return self._ds
-        try:
-            return self._ds.checkout_version(version)
-        except (ValueError, FileNotFoundError) as exc:
-            raise NotFoundError(f"table version {version} not found") from exc
-        except OSError as exc:
-            if reads_as_absent(exc):
-                raise NotFoundError(f"table version {version} not found") from exc
-            raise
-
-    def query(self, request: QueryTableRequest) -> bytes:
-        columns = request.columns.column_names if request.columns else None
-        table = self._at_version(request.version).to_table(
-            columns=columns,
-            filter=request.filter,
-            limit=request.k,
-            offset=request.offset,
-            with_row_id=bool(request.with_row_id),
-        )
-        return _to_arrow_file(table)
-
-    def count(self, table_id: list[str], filter: str | None, *, version: int | None = None) -> int:
-        del table_id  # bound to a single ds; the id is implied
-        return self._at_version(version).count_rows(filter)
-
-    def table_version(self, table_id: list[str]) -> int:
-        del table_id
-        return int(self._ds.version)
-
-    def list_versions(self, table_id: list[str], *, limit: int | None = None) -> list[CatalogVersion]:
-        del table_id
-        entries = [
-            CatalogVersion(version=int(v["version"]), timestamp_millis=_epoch_millis(v.get("timestamp")))
-            for v in reversed(self._ds.versions())  # descending, like the REST listing
-        ]
-        return entries[:limit] if limit is not None else entries
-
-
-def _epoch_millis(ts: object) -> int | None:
-    """A Lance ``versions()`` timestamp (a datetime) → epoch millis; ``None`` when
-    absent or not datetime-shaped (the listing survives an odd manifest)."""
-    to_epoch = getattr(ts, "timestamp", None)
-    return int(to_epoch() * 1000) if callable(to_epoch) else None
 
 
 @contextmanager
@@ -367,9 +216,8 @@ class RestCatalogTransport:
 
     Host-agnostic (base URL from settings, never hard-coded) + retry-friendly
     (urllib3 ``Retry`` via the generated ``Configuration``) so it drops into a Dapr
-    service-invocation or proxy-fronted catalog unchanged. Exercised live
-    against the lance-ns catalog over RustFS by ``services/annotator/tests/live/test_catalog_live.py``
-    (empty-vector scan accepted; responses are Arrow-IPC files).
+    service-invocation or proxy-fronted catalog unchanged. Exercised against the catalog app over HTTP by
+    ``tests/integration/test_a_catalog_reader_reads_a_whole_table_in_bounded_pages.py``.
     """
 
     def __init__(
@@ -384,7 +232,7 @@ class RestCatalogTransport:
         from lance_namespace_urllib3_client.api.data_api import DataApi
 
         # ONE client (and so one connection pool) per catalog, shared with every other transport
-        # aimed at it — this ctor runs per `open_reader` call, i.e. per request.
+        # aimed at it — this ctor may run once per request.
         self._api = DataApi(catalog_api_client(base_url, retries=retries))
         self._token = token
         self._delimiter = delimiter
@@ -453,95 +301,3 @@ class RestCatalogTransport:
                 _headers=self.request_headers(),
             )
         return [CatalogVersion(version=int(v.version), timestamp_millis=v.timestamp_millis) for v in response.versions or []]
-
-
-class TablePathSettings(Protocol):
-    """What the path-selecting seams read: which path a table's reads and writes take, and the catalog that path
-    goes through.
-
-    A Protocol, so this kit depends on no service's settings class: a caller passes its own settings, and they fit by
-    shape. Read-only members, so a settings field typed with a ``str`` subclass (a ``StrEnum`` backend) fits too.
-    """
-
-    @property
-    def read_backend(self) -> str: ...
-
-    @property
-    def write_backend(self) -> str: ...
-
-    @property
-    def rest_catalog_mode(self) -> bool: ...
-
-    @property
-    def catalog_uri(self) -> str | None: ...
-
-    @property
-    def catalog_delimiter(self) -> str: ...
-
-
-def open_reader(
-    *,
-    dataset: lance.LanceDataset | None,
-    table_id: list[str],
-    settings: TablePathSettings,
-    caller_token: str | None = None,
-) -> TableReader:
-    """Select the read path from settings — the single host-agnostic seam.
-
-    ``MEDIA_READ_BACKEND=direct`` (default) ⇒ :class:`LanceTableReader` (byte-identical
-    to today). ``=catalog`` ⇒ :class:`CatalogTableReader` over the live REST catalog
-    when ``MEDIA_CATALOG_URI`` is set, else the in-process
-    :class:`LocalCatalogTransport`. ``dataset`` is the already-opened Lance table
-    (the caller keeps ``table_dataset``'s 404 semantics); it backs the direct + local
-    paths and is unused by the REST path.
-
-    ``caller_token`` is the END USER's bearer, forwarded so the catalog's answer is about the
-    CALLER — and it is the ONLY token this seam will send. A service credential would make every
-    reader a confused deputy, because the catalog checks a relation on the `table:` object and
-    injects no row predicate: an ungranted user gets 200 instead of 403.
-
-    THERE IS NO FALLBACK, and this docstring used to promise one — "the settings token remains the
-    fallback for callers with no request context (the publish saga, which outlives any request)".
-    That saga does not exist in the tree. Every call site of this function is a request-scoped
-    route, so `caller_token or settings.catalog_token` fired only for the case it must not
-    serve: an ANONYMOUS request, re-issued to the catalog under MEDIA_CATALOG_TOKEN. Absent now means
-    absent; the catalog decides what an unauthenticated read is worth.
-
-    A settings token is right only for a process with no caller at all. It is wrong on a request path.
-    """
-    if settings.read_backend != "catalog":
-        if dataset is None:
-            raise ValueError("direct read path requires an opened dataset")
-        return LanceTableReader(dataset)
-    if settings.catalog_uri:
-        transport: CatalogTransport = RestCatalogTransport(
-            settings.catalog_uri,
-            delimiter=settings.catalog_delimiter,
-            token=caller_token,
-        )
-    else:
-        if dataset is None:
-            raise ValueError("in-process catalog fallback requires an opened dataset")
-        transport = LocalCatalogTransport(dataset)
-    return CatalogTableReader(transport, list(table_id))
-
-
-def open_catalog_reader(*, table_id: list[str], settings: TablePathSettings, caller_token: str | None = None) -> CatalogTableReader:
-    """The catalog-native reader, for surfaces only the catalog exposes (version
-    listing + time-travel) — the seam behind paths gated on
-    ``settings.rest_catalog_mode``, where the LIVE catalog owns the version
-    number-space. Refuses any other configuration so a mixed/local deployment can
-    never read history from the wrong number-space.
-    """
-    uri = settings.catalog_uri
-    if not settings.rest_catalog_mode or not uri:
-        raise ValueError("catalog version surface requires full catalog mode (MEDIA_CATALOG_URI set + both MEDIA_*_BACKEND=catalog)")
-    transport = RestCatalogTransport(uri, delimiter=settings.catalog_delimiter, token=caller_token)
-    return CatalogTableReader(transport, list(table_id))
-
-
-def _to_arrow_file(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_file(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()

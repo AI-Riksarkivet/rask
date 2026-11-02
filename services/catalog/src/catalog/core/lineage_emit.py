@@ -471,7 +471,7 @@ def build_write_event(
 #: builder stays pure and testable, and a deployment with no warehouse registry supplies nothing rather
 #: than a stub that lies. Wired once in `main.py`, where the app-level binding cache lives.
 #:
-#: IT CANNOT BE A STRING SPLIT. `project_namespace` joins with `-` ("acme", "bronze") -> "acme-bronze",
+#: IT CANNOT BE A STRING SPLIT. A project-qualified name joins with `-` ("acme", "bronze") -> "acme-bronze",
 #: but `PROJECT_PATTERN` ALLOWS `-` inside a project id — so "acme-bronze" is ambiguous between project
 #: `acme` and project `acme-bronze`, and guessing wrong notifies the wrong tenant's watchers. The
 #: registry binding is the only sound answer.

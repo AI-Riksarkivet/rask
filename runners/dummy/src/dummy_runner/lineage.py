@@ -58,7 +58,7 @@ _NOT_A_PERSON = frozenset({"", "*", "user:*", "ray", "data_eng", "analyst", "htr
 #: The job facet every Ray lane stamps. `jobType` is a STANDARD facet with its own published schema,
 #: so it carries that schema's URL rather than `BaseFacet` — and the model lives in `lineage_kit`,
 #: where the package's conformance test holds the URL equal to the installed client's.
-_JOB_TYPE_FACET = JobTypeJobFacet().model_dump(by_alias=True)
+_JOB_TYPE_FACET = JobTypeJobFacet(integration="RAY").model_dump(by_alias=True)
 
 
 def _dataset_ref(identifier: str) -> tuple[str, str]:

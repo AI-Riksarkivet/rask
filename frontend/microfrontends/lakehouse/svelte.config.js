@@ -7,7 +7,7 @@ const config = {
 	compilerOptions: { experimental: { async: true } },
 	kit: {
 		adapter: adapter(),
-		// The merged estate zone (catalog + lineage + models + admin). A STATIC per-app asset prefix so the
+		// The merged estate zone (catalog + lineage + admin). A STATIC per-app asset prefix so the
 		// routes this zone's built assets + /@vite in dev.
 		paths: { base: '/lakehouse' },
 		experimental: { remoteFunctions: true },

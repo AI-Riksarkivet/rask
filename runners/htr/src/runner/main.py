@@ -19,9 +19,9 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from htr.iiif import DEFAULT_IIIF_BASE, IIIFCachedSource
+from htr.sources import build_sink, build_source
 from runner.lineage import build_run_event, emit, originator_and_project
 from runner.pipeline import PIPELINES
-from storage import build_sink, build_source
 
 
 load_dotenv()

@@ -363,13 +363,13 @@ jobs:
           diff -u /tmp/model.b.json /tmp/model.a.json || { echo "model.json drifted from model.fga"; exit 1; }
 
   # ── THE FRONTEND PLANE (web-*) ────────────────────────────────────────────────────────────────
-  # Everything under frontend/ — the seven zones and the packages they share. Named `web-*` to match
+  # Everything under frontend/ — the zones and the packages they share. Named `web-*` to match
   # what the artefacts are actually called elsewhere: `make frontend-images` tags `web-<zone>:dev` and
   # the chart names the deployments `rask-web-<zone>`.
 
   # §7 "not in CI" gap, closed 2026-07-11. Turborepo workspace bun gates — svelte-check (types over the
   # runes store + generated OpenAPI types), TypeScript 7 (tsgo), unit tests, lint and fmt:check — fan out
-  # over packages/* AND microfrontends/* (the 7 zones). All five are PACKAGE tasks, so turbo parallelises
+  # over packages/* AND microfrontends/* (the zones). All five are PACKAGE tasks, so turbo parallelises
   # and caches them instead of running lint/fmt once repo-wide over a hand-maintained path list. ONE
   # linter and ONE formatter cover every extension: oxlint (with @rsvelte/oxlint-plugin for .svelte) and
   # rsvelte-fmt (which delegates everything that is not .svelte to oxfmt) — see frontend/TOOLING.md.
@@ -439,17 +439,9 @@ jobs:
         working-directory: frontend/microfrontends/home
         run: bunx playwright install --with-deps chromium
 
-      # e2e for the FIVE zones that define `test:e2e` — home, lakehouse, explorer, annotator, models —
-      # fanned by turbo, which discovers the task rather than reading a list here. `compute` and
-      # `studio` ship no e2e at all, so this leg is 5-of-7 coverage, not full coverage — a real gap, not
-      # a naming leftover (the "four zone" counts elsewhere in this workflow WERE leftovers; there are
-      # seven zone images, and they have been corrected).
-      #
-      # `models` CLOSED (#112). Its registry/experiments/pipeline/shell specs used to sit in
-      # `lakehouse/e2e` pointing at `/lakehouse/models` routes that had already moved, so they failed on
-      # a 404; they now live in `microfrontends/models/e2e` with a harness of their own — one auth-ON
-      # dev server plus ONE seed-driven mock upstream standing in for the catalog, GreptimeDB, the
-      # medallion head and the lineage probe (they share a port because their paths never collide).
+      # e2e for the zones that define `test:e2e` — home, lakehouse, explorer, annotator — fanned by
+      # turbo, which discovers the task rather than reading a list here. `compute` and `studio` ship no
+      # e2e at all, so this leg is partial coverage, not full coverage — a real gap.
       #
       # Run SERIALLY (--concurrency=1): each zone spins its own vite SSR dev server + a chromium
       # instance, and running every first-compile at once blows the per-server startup window on a
@@ -457,12 +449,11 @@ jobs:
       # admin — each with its own warmup.)
       #
       # `--continue` because SERIAL + FAIL-FAST is the worst pairing available: turbo cancels every zone
-      # it has not started, and at --concurrency=1 that is "all the ones after the first failure". With
-      # `models#test:e2e` exiting 1 on `Error: No tests found` (its harness is untracked at HEAD), the
-      # zones that happen to be ordered after it have been reporting nothing at all. The exit code is
-      # unchanged — any failing zone still reds the job — so this buys a complete report, not leniency.
+      # it has not started, and at --concurrency=1 that is "all the ones after the first failure": the
+      # zones ordered after a failing one would report nothing at all. The exit code is unchanged — any
+      # failing zone still reds the job — so this buys a complete report, not leniency.
       # Same reasoning, and the same measurement, as `.dagger/frontend.go`'s Frontend().
-      - name: Playwright e2e — 5 of 7 zones (hermetic — upstreams mocked in-page or as a seed server)
+      - name: Playwright e2e — every zone with an e2e suite (hermetic — upstreams mocked in-page or as a seed server)
         working-directory: frontend
         run: bunx turbo run test:e2e --concurrency=1 --continue
 
@@ -474,7 +465,7 @@ jobs:
           path: frontend/microfrontends/*/test-results/
           retention-days: 7
 
-  # The seven micro-frontend zone images. Until now `.docker/frontend.dockerfile` was hand-run only, out
+  # The micro-frontend zone images. Until now `.docker/frontend.dockerfile` was hand-run only, out
   # of `make frontend-images`, so a break in it stayed invisible until somebody deployed by hand — and
   # that has already happened once (the `eslint-rules` workspace member the COPY lines never included
   # broke every zone build for as long as it existed). @repo/zone-contract regex-scrapes the COPY lines
@@ -483,14 +474,14 @@ jobs:
   # a yanked base-image digest. Only a real build catches those.
   #
   # Cost, measured on a 4 vCPU / 16 GB buildx builder (a public-repo ubuntu-latest runner) against a
-  # clean `git archive` checkout, all seven zones sequential (measured at four: 4m53s), of which ~29s per zone is a tarball
+  # clean `git archive` checkout, every zone sequential (measured at four: 4m53s), of which ~29s per zone is a tarball
   # export that `docker build` on the runner's own builder does not pay. The critical path of this
   # workflow is `frontend` at 12m16s (8m11s of it the serial Playwright fan-out), so this job finishes
   # inside the shadow of a job that was already there and adds ZERO wall clock.
   #
   # Every push, not just main: catching a broken dockerfile after it lands on main is the failure mode,
   # not the fix. No paths filter and no `turbo --affected` gating either — `packages/ui` is a dependency
-  # of all seven zones, so the common frontend change affects all seven anyway, and a hand-written paths
+  # of every zone, so the common frontend change affects all of them anyway, and a hand-written paths
   # list would be a sixth hand-maintained statement about the monorepo's shape. This repo has been bitten
   # three times by exactly that (Makefile ZONES listing seven dead zones, the dockerfile COPY lines,
   # microfrontends.json keys vs package names) — @repo/zone-contract exists because of it.

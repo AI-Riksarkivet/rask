@@ -111,7 +111,7 @@
 	const canvasArea = $derived(area === 'workbench');
 
 	// Animate soft navs via the View Transitions API; SSR-safe. Since the four lakehouse areas merged
-	// into this one zone, a hop between them (catalog -> lineage -> models -> admin) is a soft nav and
+	// into this one zone, a hop between them (catalog -> lineage -> admin) is a soft nav and
 	// gets the transition; only a hop to media/annotator/home is still a full document reload.
 	onNavigate((navigation) => {
 		if (!document.startViewTransition) return;

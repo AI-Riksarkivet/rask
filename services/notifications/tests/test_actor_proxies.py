@@ -2,13 +2,8 @@
 
 Dapr's `ActorProxy.__getattr__` dispatches from a map keyed by the WIRE name (`@actormethod(name=
 "MarkSeen")`), not the Python attribute. Unit-test fakes implement the Python names, so a plane can be
-green at every gate while every real cross-actor call raises `AttributeError` against the sidecar —
-which is precisely what the annotator's first live drive found. These tests pin the translation AND
-sweep this service's own tree onto it.
-
-The estate-wide sweep in `services/annotator/tests/test_actor_proxy_names.py` walks
-`services/annotator/src/annotator` by path, so it does NOT cover this module: the equivalent gate has
-to live here until that root is widened.
+green at every gate while every real cross-actor call raises `AttributeError` against the sidecar.
+These tests pin the translation AND sweep this service's own tree onto it.
 """
 
 from typing import Any

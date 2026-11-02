@@ -5,7 +5,7 @@ import { makeZoneLayoutLoad } from '@rask/api/bff';
 const zoneLoad = makeZoneLayoutLoad(env);
 
 // The estate-wide zone layout contract (identity, auth flag, active project, and the RESOLVED
-// /management/v1/me) — owned by @rask/api so all seven zones render one shell by construction, including the
+// /management/v1/me) — owned by @rask/api so every zone renders one shell by construction, including the
 // active-project precedence (route param wins over the cookie on a project's first open, #103).
 //
 // Home adds ONE field the contract cannot carry: whether a SESSION exists, separate from whether

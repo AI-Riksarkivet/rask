@@ -28,7 +28,7 @@ import logging
 
 import pytest
 
-from service_kit.exceptions import ConflictError, NotFoundError, ServiceUnavailableError, UnauthorizedError
+from service_kit.exceptions import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
 from service_kit.lancekit import reader
 
 
@@ -61,6 +61,7 @@ def test_the_catch_all_does_not_relay_the_upstream_body(caplog: pytest.LogCaptur
     [
         ("ConflictException", ConflictError),
         ("UnauthorizedException", UnauthorizedError),
+        ("ForbiddenException", ForbiddenError),
         ("NotFoundException", NotFoundError),
     ],
 )

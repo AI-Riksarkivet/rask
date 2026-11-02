@@ -1,6 +1,6 @@
 ---
 name: rask-frontend
-description: Zones, routes, navbars, data-fetching and gates in rask's `frontend/` plane — seven SvelteKit 2 + Svelte 5 microfrontends on a Turborepo proxy, remote functions vs the Arrow/binary BFF, `@rask/dockview` workbenches, oxlint/oxfmt/zone-contract/Playwright. Use when touching any `.svelte`, a zone, `@rask/api`, `@rask/dockview`, `@rask/zone-contract` or `microfrontends.json`; when adding a route, a zone or a frontend dependency; when writing a `.remote.ts` or choosing a transport; when wiring nav, sidebar or cross-zone links; when building a dock, panel or workbench; or when a panel loses state on drag, a cross-zone link 404s, an SSR fetch hairpins, or a zone e2e/vitest gate fails.
+description: Zones, routes, navbars, data-fetching and gates in rask's `frontend/` plane — six SvelteKit 2 + Svelte 5 microfrontends on a Turborepo proxy, remote functions vs the Arrow/binary BFF, `@rask/dockview` workbenches, oxlint/oxfmt/zone-contract/Playwright. Use when touching any `.svelte`, a zone, `@rask/api`, `@rask/dockview`, `@rask/zone-contract` or `microfrontends.json`; when adding a route, a zone or a frontend dependency; when writing a `.remote.ts` or choosing a transport; when wiring nav, sidebar or cross-zone links; when building a dock, panel or workbench; or when a panel loses state on drag, a cross-zone link 404s, an SSR fetch hairpins, or a zone e2e/vitest gate fails.
 ---
 
 # rask frontend
@@ -11,23 +11,25 @@ Workspace membership is **globbed** (`microfrontends/*`, `packages/*`), so a dir
 
 Styling and component authoring live in **`rask-styling`**. Svelte 5 and SvelteKit idioms live in `svelte-skills:*` and the `svelte` MCP. This skill is the plane above them: zones, data, composition, gates.
 
-## The seven zones
+## The zones
 
 > The roster DRIFTED once and cost a wrong estate-wide audit: this table listed `train` and omitted
 > `models` after the swap. It is now checkable in one line — `git ls-files frontend/microfrontends | cut -d/ -f3 | sort -u` —
-> and must agree with `Makefile` `ZONES` and `home/microfrontends.json`. The product chart renders no zone (the zones are a
+> and must agree with `Makefile` `ZONES` and `home/microfrontends.json`. A stale untracked `microfrontends/train/`,
+> `media/` or `models/` may still sit on a dev host as `build/` + `node_modules/` residue; none is a workspace member (no
+> `package.json`, so bun skips it SILENTLY) and none reaches an image (`frontend.dockerfile` copies one named zone). `git
+> clean` them, do not read them as zones. The product chart renders no zone (the zones are a
 > client of the lakehouse, XC-181).
 
-Package name equals directory name for all seven (`manifest.test.ts:53`). Base is a bare `/<zone>` — **no `/default/` segment exists**, and `cross-zone-reload.test.ts:38` asserts `/default/lakehouse` is not a zone path.
+Package name equals directory name for every zone (`manifest.test.ts:53`). Base is a bare `/<zone>` — **no `/default/` segment exists**, and `cross-zone-reload.test.ts:38` asserts `/default/lakehouse` is not a zone path.
 
 | zone | base | dev port | nav label | what it is |
 |---|---|---|---|---|
 | `home` | `''` catch-all | 5273 | Home | The ESTATE LEVEL: `/` (an insights landing, scaffold-badged), `/projects` (+ `/projects/<id>`, the gallery/table list, create, and one project's overview) and `/settings` (estate config, admin-gated SERVER-side) — plus the **OIDC BFF** (`/auth/{login,callback,logout}`) |
-| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — areas `catalog`, `models`, `admin`, `workbench` (`governance` went to home's `/settings/` at #105); **storage is not an area**, it is `/lakehouse/catalog/storage`. The zone ROOT is an **Overview of the active project** (#109 — hierarchy + its warehouses, `ZoneNav.root`, the compute precedent), not the 307 into `/lakehouse/catalog` it used to be. 36 route files (measured 2026-10-16), **7 `+server.ts` routes** — 4 keep-bytes (Arrow query/insert, blob bytes + the #113 commit log, the `/api/explorer/**` storage-browser seam), 1 keep-flow (`capi/management/v1/me`), 2 catch-alls; 11 `.remote.ts` modules (measured 2026-10-16) carry the rest; the estate's only `requestJSON` residual — see § Fetching data (b) |
+| `lakehouse` | `/lakehouse` | 5174 | Lakehouse | The big one (dock at `/lakehouse/workbench`) — areas `catalog`, `admin`, `workbench` (`governance` went to home's `/settings/` at #105); **storage is not an area**, it is `/lakehouse/catalog/storage`. The zone ROOT is an **Overview of the active project** (#109 — hierarchy + its warehouses, `ZoneNav.root`, the compute precedent), not the 307 into `/lakehouse/catalog` it used to be. 36 route files (measured 2026-10-16), **7 `+server.ts` routes** — 4 keep-bytes (Arrow query/insert, blob bytes + the #113 commit log, the `/api/explorer/**` storage-browser seam), 1 keep-flow (`capi/management/v1/me`), 2 catch-alls; 11 `.remote.ts` modules (measured 2026-10-16) carry the rest; the estate's only `requestJSON` residual — see § Fetching data (b) |
 | `explorer` | `/explorer` | 5173 | **Explorer** | Corpus search workbench (with a dock at `/explorer/workbench`): FTS/vector/hybrid, WebGPU atlas, Cypher KG, Svelte-Flow editor; **6 `+server.ts` routes** (was 13) — 4 keep-bytes + `api/search`/`api/atlas/chunks`, which keep their route (multipart / rowid-list POST) but answer **Arrow IPC**; every JSON value surface rides one of 5 `.remote.ts` modules (the transport ruling area 3) |
 | `annotator` | `/annotator` | 5177 | **Annotate** | PixiJS/WebGPU canvas over Arrow-backed rows, plus a `/browse` corpus surface; **4 `+server.ts` routes** (was 9) — the Arrow annotations transport, the Arrow annotation-IMPORT proxy (`api/tasks/[task_id]/import`, `requireSession`), `capi/management/v1/me`, the viewer catch-all; every JSON value surface rides one of 6 `.remote.ts` modules |
-| `compute` | `/compute` | 5175 | Compute | Ray/Serve observability + a dock at `/compute/workbench`. **Observability only — it runs nothing.** Its one *acting* surface, the `/compute/inference` playground (#131's move of `/models/playground`), was deleted 2026-08-07 along with its `api/infer` route and `COMPUTE_SERVE_URL`: it could reach exactly ONE Serve app and its UI was HTR end to end, so studio's flow canvas — `?app=&path=` + a typed payload, against the external Ray cluster — was already its general form. Inference now has one door, studio's. Deliberately NOT replaced by a cross-zone leaf: the top navbar owns cross-zone hops and `nav-truth.test.ts` pins the cross-zone sidebar set as EMPTY |
-| `models` | `/models` | 5178 | Models | The model plane: the registry at the zone root plus `experiments`, `submit`, `runs`, `monitoring`, `analysis` (**6 pages**). It carried two more and carries neither now: **`playground` never existed as a route in this zone** (#131 moved inference to `/compute/inference`, itself deleted 2026-08-07 — the navbar advertised `/models/playground` into a 404 the whole time), and **`pipeline` was DELETED** 2026-08-07 (a button that fired the medallion cascade head + a train request — an operation on the lakehouse, not a fact about a model, and a second manual writer to an event-driven plane; its `medallion.remote.ts`, the `MEDALLION_API` env and the chart row all went with it). **It replaced `train`, on train's own port** — `train` has zero tracked files and is gone from `ZONES`, `microfrontends.json` and the chart. A stale untracked `microfrontends/train/` (and `microfrontends/media/`) may still sit on a dev host as `build/` + `node_modules/` residue; neither is a workspace member (no `package.json`, so bun skips them SILENTLY) and neither reaches an image (`frontend.dockerfile` copies one named zone). `git clean` them, do not read them as zones |
+| `compute` | `/compute` | 5175 | Compute | Ray/Serve observability + a dock at `/compute/workbench`. **Observability only — it runs nothing.** Its one *acting* surface, the `/compute/inference` playground, was deleted 2026-08-07 along with its `api/infer` route and `COMPUTE_SERVE_URL`: it could reach exactly ONE Serve app and its UI was HTR end to end, so studio's flow canvas — `?app=&path=` + a typed payload, against the external Ray cluster — was already its general form. Inference now has one door, studio's. Deliberately NOT replaced by a cross-zone leaf: the top navbar owns cross-zone hops and `nav-truth.test.ts` pins the cross-zone sidebar set as EMPTY |
 | `studio` | `/studio` | 5176 | Studio | **The flow builder, and nothing else** — a node-based online sandbox over live Ray Serve endpoints AT THE ZONE ROOT (`$lib/flows`, `ssr = false`, one `+server.ts` keep-bytes inference route over `@rask/api/serve-proxy`, two `.remote.ts` for Serve/engine discovery). Three panes: the RAIL is the node library (shell `sidebarContent`, RAY SERVE's live deployments first — each drops a Model node preset to that app), the CANVAS is the graph, the RIGHT pane is the per-node inspector (metadata, wiring, payload preview). The mini-app launcher and the GSAP animation A/B were **deleted** 2026-08-05, so the zone is ONE surface and its navbar entry is a plain link again — and its `nav.ts` carries ONE leaf, which is why `zone-shell.test.ts`'s leaf gate now reads the shell's real condition (`leaves > 1 \|\| sidebarContent !== undefined`) |
 
 Nav labels name the JOB, not the directory — but they agree with it wherever they can: `explorer` was relabelled from Search once the directory itself was renamed (`nav-config.ts:480-491`). `annotator` → **Annotate** is the one deliberate split left.
@@ -70,7 +72,7 @@ its own stores and remotes:
 | `/compute/workbench` | jobs · cluster · actors · serve | the zone's own `getRayJobs`/`getRayCluster`/`getActors`/`getServe` remotes on the zone's own poll clock |
 
 **ZONE level is load-bearing.** The lakehouse's briefly sat at `/lakehouse/lineage/workbench`, which
-buried a zone surface inside one AREA and hid it from anyone standing in catalog or models — it was
+buried a zone surface inside one AREA and hid it from anyone standing in catalog or admin — it was
 reverted for exactly that. `dock-reachability.test.ts` pins the set EXACTLY, so a nested path is
 simply not in the list. A dock is still EARNED by a real multi-panel workflow, never granted by
 symmetry: studio is a sandbox, home is the catch-all, the annotator is already
@@ -185,13 +187,13 @@ Both halves are idiomatic SvelteKit — `+server.ts` is the framework's own tool
 
 **(a) Remote `query()`/`command()` — every zone's JSON value plane** (the transport-ruling convergence, landed 2026-08-03). A `.remote.ts` function runs on the zone server and reaches its upstream with the session bearer via `getRequestEvent()`. On every polled refresh, `.refresh().catch(() => {})` is **mandatory**: one uncaught rejection evicts the query from cache and silently kills the poll loop (`compute/src/lib/remote/compute.remote.ts:25-40`). The FGA workbench (`home/src/lib/remote/access.remote.ts`) is the reference migration — it moved to **home** with the governance surface at #105 and this line pointed at its old lakehouse path until 2026-08-16, where there is no `access.remote.ts` at all (`lakehouse/src/lib/admin/remote/` holds `admin.remote.ts` + `jetstream.remote.ts`): queries + a write/delete-tuple `command()` pair with a single-flight `fetchStore().refresh()`, `ApiResult<T>` union returns on the dock-layout precedent (status-driven UI states, not exception flow), valibot parsing at the wire boundary, contracts kept in a sibling non-remote module (a `.remote.ts` may export only remote functions).
 
-**(b) Same-origin BFF — permanently the binary/Arrow planes and the OIDC flow.** The JSON convergence is done in **six** zones: `requestJSON` has zero call sites in `home`, `explorer`, `annotator`, `compute`, `models`, `studio`. The **lakehouse is the residual** — THREE `requestJSON` call sites: the object browser's `listObjects`/`headObject` (`lib/storage/storage.ts:91,97`, over the `/api/explorer/**` seam) and `fetchTableHistory` (`lib/data/catalog.ts:125`, the #113 commit log over the `capi/v1/table/[id]/[...rest]` proxy). `insertRows` was a fourth and is not one any more — it converged onto `requestBytes` (bytes up, JSON ack down), which is what that write always was; its sibling `createTableWithRows` (`catalog.ts`, `POST /v1/table/{id}/create`, the FIRST write of a table) was born on that helper. Converge the remaining three when you touch them; do not add new BFF JSON routes. Elsewhere `createBffClient` survives only where the payload is bytes (Arrow, blobs, multipart).
+**(b) Same-origin BFF — permanently the binary/Arrow planes and the OIDC flow.** The JSON convergence is done in **five** zones: `requestJSON` has zero call sites in `home`, `explorer`, `annotator`, `compute`, `studio`. The **lakehouse is the residual** — THREE `requestJSON` call sites: the object browser's `listObjects`/`headObject` (`lib/storage/storage.ts:91,97`, over the `/api/explorer/**` seam) and `fetchTableHistory` (`lib/data/catalog.ts:125`, the #113 commit log over the `capi/v1/table/[id]/[...rest]` proxy). `insertRows` was a fourth and is not one any more — it converged onto `requestBytes` (bytes up, JSON ack down), which is what that write always was; its sibling `createTableWithRows` (`catalog.ts`, `POST /v1/table/{id}/create`, the FIRST write of a table) was born on that helper. Converge the remaining three when you touch them; do not add new BFF JSON routes. Elsewhere `createBffClient` survives only where the payload is bytes (Arrow, blobs, multipart).
 
-**(c) Bell only — none left.** `train` held this row and no longer exists; `models` carries real remotes. The shape it described was: `lib/live/feeds.remote.ts`, the estate-wide `query.live` bell. **`studio` left this row when Flows landed**: it now carries the bell plus `lib/flows/remote/{serve,engine}.remote.ts` (Serve-app discovery over `/api/serve`, the flows engine's catalog) and ONE keep-bytes `+server.ts` (`api/infer`, raw image bytes → ALTO XML through `@rask/api/serve-proxy`), so it is a normal two-transport zone — and it grew the `hooks.server.ts` it had been the only zone without, because that BFF's 401 guard reads `locals` the hook populates.
+**(c) Bell only — none left.** The shape it described was: `lib/live/feeds.remote.ts`, the estate-wide `query.live` bell. **`studio` left this row when Flows landed**: it now carries the bell plus `lib/flows/remote/{serve,engine}.remote.ts` (Serve-app discovery over `/api/serve`, the flows engine's catalog) and ONE keep-bytes `+server.ts` (`api/infer`, raw image bytes → ALTO XML through `@rask/api/serve-proxy`), so it is a normal two-transport zone — and it grew the `hooks.server.ts` it had been the only zone without, because that BFF's 401 guard reads `locals` the hook populates.
 
 **The media-plane BFF reads are AUTHORIZED now, not just proxied (2026-08-04).** `makeViewerProxy` — the `api/[...path]` catch-all that explorer and annotator both mount — carries `requireSession: true` (`packages/api/src/bff.ts:307-322`), so a bearer-less page-image or atlas read 401s at the BFF on an auth-enabled stack. The bearer path is sealed cookie → the zone's session handle → `makeBackendProxy` (`authorization: Bearer …`) → viewer (`VIEWER_API`, in-cluster), where `/api/page` checks `can_read_data` and `/api/pages` `can_get_metadata` on `table:<catalog id>`, and the S3 object routes behind `/api/explorer/**` check the estate-admin verb `can_observe_events`. The lakehouse's `/api/explorer/[...rest]` forwards the caller's bearer but does **not** `requireSession`, so an empty `/lakehouse/catalog/storage` on a governed stack is an authz answer, not an outage.
 
-**(d) The bell renders a SUBJECT'S INBOX, and it does so in all seven zones (S3, 2026-08-10).** The
+**(d) The bell renders a SUBJECT'S INBOX, and it does so in every zone (S3, 2026-08-10).** The
 surface is the inbox alone: rows addressed to you, durable per subject, and the badge counts them.
 A dataset-governed feed in the bell would count *everyone's* work, and a read state a zone persisted
 for it would speak for rows the inbox never heard of: mark one read and it comes back unread on the
@@ -234,7 +236,7 @@ illegitimate case.** Three reasons are legitimate:
 | reason | example | why no cursor |
 |---|---|---|
 | **No publisher** | the Ray plane (dashboard REST is snapshot-only introspection, no subscribe verb, Event Export deferred to NATS and unwired); liveness probes | nothing emits the change. Riding `lineageFeed` is actively WORSE: on an idle estate it never moves, so a board renders a dead node alive under a pulsing "live" dot — a surface that LIES beats one that blanks |
-| **Time itself is the change** | `LeaseChip` (a lease countdown), `models` `Experiments` (`rate(...[5m])` over a MOVING window) | the value decays as the clock advances with nothing happening; no event could mean "the window moved" |
+| **Time itself is the change** | `LeaseChip` (a lease countdown) | the value decays as the clock advances with nothing happening; no event could mean "the window moved" |
 | **Progress inside a unit of work** | ingest `units_done`, the annotator's publish saga | climbs between commits and commits once, so no cursor moves for it |
 
 **Every surviving timer carries a `POLL REASON:` marker**, enforced by
@@ -277,7 +279,7 @@ nothing else. Measured 2026-08-07: zone serving in **7 s**, every route 200 (`/l
 `catalog/tables`, `workbench`), styled (OKLCH tokens loaded, 13 sidebar links) — with
 **no k3s, no uvicorn fleet, no container runtime**. That last part is the point: it is the only
 frontend loop that runs in a cloud sandbox (claude.ai/code, CI), and it is how CI already exercises
-5 of 7 zones on a stock `ubuntu-latest` runner.
+every zone with an e2e suite on a stock `ubuntu-latest` runner.
 
 **`make frontend-<zone>` is NOT isolated, despite its name.** It calls `bun run dev:<zone>` →
 `turbo run dev --filter=<zone>...`, and turbo 2.10.7 answers that by also starting its built-in
@@ -287,31 +289,22 @@ frontend loop that runs in a cloud sandbox (claude.ai/code, CI), and it is how C
 `make dev-frontends` filters out. `dev-zone` runs the zone's own `vite dev` instead: one port, no
 proxy, no watcher, safe beside a running composition.
 
-The five zones with mocks are `home`, `lakehouse`, `explorer`, `annotator` and — since
-2026-08-22 — `models`. **`compute` and `studio` have no `e2e/` and no `test:e2e`** — `dev-zone` still
+The zones with mocks are `home`, `lakehouse`, `explorer` and `annotator`. **`compute` and `studio` have no `e2e/` and no `test:e2e`** — `dev-zone` still
 starts them and says so, but their `/api` is unmocked, and it is the same gap that leaves them outside
-every local gate.
-
-**`models` was the worst of the three and is now the best-documented fix of the class.** Its
-`package.json` declared `"test:e2e": "playwright test"` against a directory that did not exist in the
-tracked tree, so CI ran the script over zero files and PASSED — worse than no gate, because it read as
-coverage. `dev-zone.ts` meanwhile already referenced `e2e/mock-upstreams.ts`, a file only present on a
-dev host. Committing the harness (17 specs, one seed-driven mock upstream on 5284) immediately earned
-its first real gate failure: **APP_PORT 5285 was already `home`'s notifications mock**, and because
-`reuseExistingServer` is on locally that is silent ADOPTION — the suite would have driven a real
-server while calling it a mock. Moved to 5298. The lesson generalises: a `test:e2e` script is not a
-gate until something asserts it has files, and a port is not free until the manifest says so.
+every local gate. A `test:e2e` script is not a gate until something asserts it has files, and a port is not
+free until the manifest says so (`reuseExistingServer` is on locally, so a port collision is silent ADOPTION of
+another zone's server).
 
 Four things it deliberately does not give you — none is a bug:
 
 | | |
 |---|---|
-| **Populated data is per zone** | Mocks answer 404 until seeded (by design — a mock with baked-in fixtures cannot tell a live surface from a dead one), so a zone renders EMPTY unless it ships `e2e/dev-seed.ts`. **`lakehouse`, `annotator`, `explorer` and `models` have one**, all verified rendering real rows (explorer additionally needed `VIEWER_API` pointed at the mock — its descriptor boot gate rides the `[...path]` catch-all to a dead `:8101` nothing sets, masked in e2e by `page.route`). The launcher announces a zone with none rather than leaving blank ambiguous. **A seed cannot supply the ACTIVE PROJECT**, though: it is the host-wide `rask_active_project` cookie (#103) that opening `/projects/<slug>` in the HOME zone stamps, and a one-zone stack has no home zone — so the annotator's landing renders its honest "No project is active" card under `dev-zone` until you set the cookie by hand (`document.cookie = 'rask_active_project=default;path=/'`); its other surfaces are seeded as before. |
+| **Populated data is per zone** | Mocks answer 404 until seeded (by design — a mock with baked-in fixtures cannot tell a live surface from a dead one), so a zone renders EMPTY unless it ships `e2e/dev-seed.ts`. **`lakehouse`, `annotator` and `explorer` have one**, all verified rendering real rows (explorer additionally needed `VIEWER_API` pointed at the mock — its descriptor boot gate rides the `[...path]` catch-all to a dead `:8101` nothing sets, masked in e2e by `page.route`). The launcher announces a zone with none rather than leaving blank ambiguous. **A seed cannot supply the ACTIVE PROJECT**, though: it is the host-wide `rask_active_project` cookie (#103) that opening `/projects/<slug>` in the HOME zone stamps, and a one-zone stack has no home zone — so the annotator's landing renders its honest "No project is active" card under `dev-zone` until you set the cookie by hand (`document.cookie = 'rask_active_project=default;path=/'`); its other surfaces are seeded as before. |
 | **SEED THE CURSOR OR NOTHING LOADS** | The trap, and it cost a debugging round. Most surfaces read on the **lineage cursor**, not on page load (`liveRead(lineageTick, () => refresh())`). The cursor is `@rask/api/runs-feed`'s `lineagePulse`, which probes `GET /events?limit=1&summary=true` — contract `LineageProbeSchema` = `{events:[{seq:number}]}` — and yields only `{cursor}`. Unseeded, the cursor never opens, `liveRead` never fires, and the zone requests **nothing** while showing "Loading…": five correct data seeds, empty page. The cursor env also defaults to a dead `:8001`, so a zone's stack must set `LINEAGE_API` to its own mock. **`curl` cannot diagnose this** — no hydration, no mount, no requests; only a real browser shows it. |
 | **`home` is not seedable** | Not a gap in the launcher — a zone decision. Its project gallery is identity-scoped, so under auth-off it answers *"No projects to show — sign-in is not configured on this stack"* **without reading**. Its mock served the seeds correctly; the page declined to ask. Needs a real session, not a fixture. |
 | **Auth is OFF — but mocks still see an identity** | `dev-zone` omits `OIDC_*`, so `locals.authEnabled` is false and the zone forwards **no bearer** — which the mocks 401 by design ("exactly like the real catalog"), so seeded reads would resolve to nothing. The launcher hands the *mocks* `MOCK_DEV_BEARER` out of band; **unset, every mock behaves exactly as under Playwright** (proven: full lakehouse suite, 182 passed, after the patch). For the real governed path — sealed cookie, login-first redirect — run the zone's Playwright suite. |
 | **A mock may not take the generic envelope** | `routes` uses `POST /__mock/seed` `{bearer, routes}`, which the catalog and observability mocks implement. The lakehouse's **lineage** mock is stateful with its own API (`POST /__mock/bump` advances its cursor) and 502s anything else, so a seed group can override `path`/`body`. Assuming one envelope for all of them earned that 502 on the first run. |
-| **Cross-zone links 404** | The shared navbar renders all seven entries with `data-sveltekit-reload`; one zone is listening. Use `make dev-frontends` + :3024 to cross a boundary. |
+| **Cross-zone links 404** | The shared navbar renders every zone entry with `data-sveltekit-reload`; one zone is listening. Use `make dev-frontends` + :3024 to cross a boundary. |
 | **No Dapr / FGA** | Cluster-only. Dapr *logic* is sandbox-friendly (`flows` degrades to an inline lane when `DAPR_GRPC_PORT` is unset); Dapr *wiring* — component `scopes:` per app-id, `actorStateStore`, JetStream delivery — fails silently and fail-closed, and only in-cluster. |
 
 Port numbers are **not** restated in the launcher: each mock reads its own from `<zone>/e2e/ports.ts`,
@@ -326,7 +319,7 @@ locally, so without it Playwright silently ADOPTS a foreign dev server and calls
 ## Composition — dev and prod share only the base path
 
 **One local loop for UI: `make dev-frontends`** — Vite HMR, sub-second, `/api` mocked or proxied.
-(For a single zone use `make dev-zone ZONE=<z>` above — `make dev-frontends` binds :3024 and all seven.)
+(For a single zone use `make dev-zone ZONE=<z>` above — `make dev-frontends` binds :3024 and every zone.)
 For anything only reproducible IN-CLUSTER (auth/OIDC, FGA, Dapr, the cluster route) there is
 no hot loop: build the zone image with `dagger call zone-image --zone=<zone> publish …` and roll it
 out. That costs minutes, not seconds, and it is the deliberate trade — the in-cluster hot-reload
@@ -434,7 +427,7 @@ and `cross-zone-reload` emit one test per anchor they find, so the total tracks 
 estate has and moves between runs — two consecutive green runs measured 954 and 1115. Its guards used to be two counters. **`nav-truth.test.ts`'s is not one any more**, and why it
 stopped being one is the lesson: a `ALL.length > 30` floor sat under a scanner that saw **80 of the
 estate's 90** nav hrefs, and a floor cannot know what it is missing — ten leaves were unasserted,
-including `/` and `/settings`, which the estate navbar renders in all seven zones. It now asserts,
+including `/` and `/settings`, which the estate navbar renders in every zone. It now asserts,
 per nav source, that the parse reproduces that file's own `href: '…'` literals **exactly** (45 zone
 leaves + 45 shell today), so a scanner regression reds naming the specific hrefs that fell out. The
 old scan was a bounded-window regex whose window had already been widened 200 → 900 once for this
@@ -447,7 +440,7 @@ assertion below it vacuous while staying green — the opposite failure to a red
 
 | Layer | What | How it runs |
 |---|---|---|
-| Per-zone Playwright | `home`, `lakehouse`, `explorer`, `annotator` and `models` each ship `e2e/` + `"test:e2e": "playwright test"`. **Hermetic**, in TWO stand-in styles now: a read the BROWSER makes is mocked with `page.route`; a read the ZONE SERVER makes (every remote function, and a route that builds its own Arrow body) cannot be — those get a **mock upstream**, a tiny seed/ledger Bun server started as a second `webServer` with the dev server's `*_API` pointed at it (`lakehouse/e2e/admin/mock-catalog.ts`, `explorer/e2e/mock-media-services.ts`). Ports are declared once per zone in `e2e/ports.ts` and gated for collisions by `@rask/zone-contract` | `bun --cwd=frontend run test:e2e`, and in CI as *"Playwright e2e — all zones"* with `--concurrency=1` (each zone spins a dev server + chromium; parallel first-compiles blow the startup window, and `lakehouse` runs **two** servers — auth-off and auth-on) |
+| Per-zone Playwright | `home`, `lakehouse`, `explorer` and `annotator` each ship `e2e/` + `"test:e2e": "playwright test"`. **Hermetic**, in TWO stand-in styles now: a read the BROWSER makes is mocked with `page.route`; a read the ZONE SERVER makes (every remote function, and a route that builds its own Arrow body) cannot be — those get a **mock upstream**, a tiny seed/ledger Bun server started as a second `webServer` with the dev server's `*_API` pointed at it (`lakehouse/e2e/admin/mock-catalog.ts`, `explorer/e2e/mock-media-services.ts`). Ports are declared once per zone in `e2e/ports.ts` and gated for collisions by `@rask/zone-contract` | `bun --cwd=frontend run test:e2e`, and in CI as *"Playwright e2e — all zones"* with `--concurrency=1` (each zone spins a dev server + chromium; parallel first-compiles blow the startup window, and `lakehouse` runs **two** servers — auth-off and auth-on) |
 | `tests/e2e` | A standalone Playwright project with its **own lockfile**, driving a **running deploy** | `make e2e` (`RASK_E2E_BASE_URL`, default `http://localhost`) |
 
 So `make e2e` never touches the zone suites, and the zone suites never touch a real backend. `home`'s `auth.spec.ts` (4 tests) is the MAIN-MENU contract now — Home + Projects and no zone, no Settings, for an anonymous visitor. The cross-zone `data-sveltekit-reload` contract it used to carry moved to the lakehouse and explorer suites, which run INSIDE a zone where the bar exists; `@rask/zone-contract`'s `cross-zone-reload.test.ts` is the static half. A fresh worktree needs `bun install` first — `svelte-package` is not on `PATH` otherwise and `@rask/ui#build` fails with exit 127 before any test runs.

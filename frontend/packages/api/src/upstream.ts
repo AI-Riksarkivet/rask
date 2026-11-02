@@ -2,7 +2,7 @@
  * The ONE producer of `ApiResult` for a zone's server-side JSON reads (#93).
  *
  * Before this existed, `@rask/api` shipped the `ApiResult<T>` TYPE with no producer — so sixteen
- * remote modules across all seven zones hand-rolled the same try/fetch/status ladder, and the
+ * remote modules across every zone hand-rolled the same try/fetch/status ladder, and the
  * copies drifted exactly as predicted: nine returned `status: 0` for an unreachable upstream, four
  * returned `502`, `models` rendered an "unreachable" branch its own transport could never produce,
  * and home's `catalog-fetch.ts` — whose header says it exists BECAUSE it was three copies — gained

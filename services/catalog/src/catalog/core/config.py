@@ -267,9 +267,8 @@ class CatalogDaprSettings(BaseSettings):
     secrets_from_dapr: bool = Field(default=False, alias="LANCE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
-    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
-    #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
-    #: still be moved on its own.
+    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name; the
+    #: per-service alias stays FIRST so a single service can still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
     # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).

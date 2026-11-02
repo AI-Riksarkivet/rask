@@ -2,9 +2,9 @@
 
 The shared half of lineage emission, for a media client's own write path: ``WriteResult``, the schema/columnLineage facets,
 and the standalone ``build_run_event`` mirror. The spec constants (``SCHEMA_URL``, the facet
-``_schemaURL``s, ``run_id_for``) and the columnLineage BUILDER are IMPORTED from
-``service_kit.openlineage``, not re-declared — one definition, so two emitters cannot describe
-the same run differently.
+``_schemaURL``s, ``run_id_for``) are IMPORTED from ``service_kit.openlineage``, not re-declared — one
+definition, so two emitters cannot describe the same run differently. The columnLineage builder is
+this module's: the lakehouse emits no column lineage of its own.
 
 Kernel layer: pure over a pyarrow schema + measured stats, no pipeline import. The batch
 derivers that once sat above this (a ``Stage``-aware ``measure_stage`` / ``emit_stage_lineage``
@@ -14,6 +14,7 @@ emits it from its own sealed runner.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 import pyarrow as pa
@@ -25,10 +26,47 @@ from service_kit.openlineage import (
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
     SCHEMA_FACET_SCHEMA_URL,
-    ColumnEdge,
-    column_lineage_facet,
 )
 from service_kit.openlineage import run_id_for as _run_id_for
+
+
+#: The standard ``ColumnLineageDatasetFacet`` a client's write emits. Lineage keeps the facet inside the recorded
+#: event, its ingest authorizer and ``/events`` gate on the column sources it names, and a forwarded graph backend
+#: draws its column edges from it.
+COLUMN_LINEAGE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-2-0/ColumnLineageDatasetFacet.json#/$defs/ColumnLineageDatasetFacet"
+
+#: One flattened input→output column dependency, as the emitters declare it:
+#: ``(out_field, in_namespace, in_name, in_field, transformation_type, transformation_subtype, masking)``.
+ColumnEdge = tuple[str, str, str, str, str, str, bool]
+
+
+def column_lineage_facet(producer: str, edges: Iterable[ColumnEdge]) -> dict[str, object]:
+    """The standard ``ColumnLineageDatasetFacet`` payload for an output dataset's field-to-field provenance.
+
+    ``edges`` is an iterable of :data:`ColumnEdge` tuples; they are grouped by ``out_field`` into the
+    spec's ``fields[out].inputFields[].transformations[]`` shape (``lineage.models.Dataset.column_edges``
+    parses exactly this back out). Returns ``{}`` when there are no well-formed edges — an empty facet must
+    not materialise junk ``(:Column {field:""})`` on the consumer. One builder so the ``_schemaURL``
+    version stays consistent across every emitter; a per-emitter copy would silently drift (#24).
+    """
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for out_field, ns, name, in_field, ttype, subtype, masking in edges:
+        # Guard the three identity keys (symmetric with the consumer's name/field/out guards): a malformed
+        # edge with an empty output or source column must not create a junk vertex on ingest.
+        if not out_field or not name or not in_field:
+            continue
+        grouped.setdefault(str(out_field), []).append(
+            {
+                "namespace": str(ns or ""),
+                "name": str(name),
+                "field": str(in_field),
+                "transformations": [{"type": ttype or "DIRECT", "subtype": subtype or "", "masking": bool(masking)}],
+            }
+        )
+    if not grouped:
+        return {}
+    fields = {out_field: {"inputFields": inputs} for out_field, inputs in grouped.items()}
+    return {"_producer": producer, "_schemaURL": COLUMN_LINEAGE_FACET_SCHEMA_URL, "fields": fields}
 
 
 # ── Spec constants — IMPORTED from service_kit/openlineage.py, not re-declared ──
@@ -53,7 +91,7 @@ PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/packages/service-ki
 #: One field→field edge as a WRITE measures it: (output_field, input_field, transformation_subtype).
 #: Carried columns are "IDENTITY"; derived artifacts are "TRANSFORMATION".
 #:
-#: NAMED APART from ``service_kit.openlineage.ColumnEdge``, which is the SEVEN-tuple the wire builder
+#: NAMED APART from :data:`ColumnEdge`, which is the SEVEN-tuple the wire builder
 #: consumes. Both were called ``ColumnEdge`` in one distribution, so which shape a `list[ColumnEdge]`
 #: held depended on which module the reader had open — and the two are structurally compatible enough
 #: that mixing them fails at runtime, not at the import. This one is the narrow measurement shape; it
@@ -175,7 +213,7 @@ def _widen(edges: list[ColumnMapEdge], inputs: list[tuple[str, str]]) -> list[Co
 
     THERE IS ONE columnLineage BUILDER, and this module no longer carries a second. Its private copy
     grouped the same edges into the same ``fields[out].inputFields[].transformations[]`` shape as
-    ``service_kit.openlineage.column_lineage_facet`` — with two differences that were both bugs, not
+    :func:`column_lineage_facet` — with two differences that were both bugs, not
     choices: it emitted a facet for edges with an empty output or input field (a junk
     ``(:Column {field:""})`` on the consumer, which the shared builder exists to refuse), and it
     pinned ``_schemaURL`` from its own alias, so a spec bump applied to one emitter and not the other.

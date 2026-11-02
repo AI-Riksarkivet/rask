@@ -18,7 +18,6 @@
 		"dev:explorer": "turbo run dev --filter=explorer...",
 		"dev:home": "turbo run dev --filter=home...",
 		"dev:lakehouse": "turbo run dev --filter=lakehouse...",
-		"dev:models": "turbo run dev --filter=models...",
 		"dev:studio": "turbo run dev --filter=studio...",
 		"dev:ui": "turbo run dev --filter=@rask/ui",
 		"dev:zones": "turbo run dev --filter='./microfrontends/*'",

@@ -36,7 +36,7 @@ function leavesOf(zone: string): Leaf[] {
 const zoneNavPath = (zone: string) =>
 	resolve(FRONTEND_ROOT, 'microfrontends', zone, 'src', 'lib', 'nav.ts');
 
-/** The estate navbar — a nav surface in its own right, rendered in all seven zones. */
+/** The estate navbar — a nav surface in its own right, rendered in every zone. */
 const SHELL_NAV = resolve(FRONTEND_ROOT, 'packages/ui/src/lib/shell/nav-config.ts');
 
 /** Every nav source this gate reads: each zone's sidebar, plus the shared navbar. */
@@ -57,8 +57,8 @@ type Frame = { start: number; own: string };
  * window went 200 -> 900 once, which moved the threshold and left the defect; measured at 900, ten
  * hrefs were still invisible across four files (compute's `/compute/gpu` + `/compute/serve`,
  * lakehouse's `/lakehouse/lineage/columns` + `/lakehouse/workbench`, explorer's `/explorer/graph`,
- * and the shell's `/explorer/workflow`, `/models/runs`, `/lakehouse/admin/dlq` and — rendered in all
- * seven zones — `/` and `/settings`).
+ * and the shell's `/explorer/workflow`, `/models/runs`, `/lakehouse/admin/dlq` and — rendered in every
+ * zone — `/` and `/settings`).
  *
  * Worse than dropping, it MIS-PAIRED: compute's ZoneNav carries its own `title: 'Compute'` above the
  * `root` leaf, so the scan glued that label to the Overview leaf's href and reported a leaf named
@@ -312,7 +312,7 @@ describe('R15: every zone has a SHELL navbar entry', () => {
 });
 
 describe('every SHELL navbar href resolves to a real route', () => {
-	// The estate navbar (`@rask/ui`'s nav-config.ts) renders in all seven zones — and sat outside
+	// The estate navbar (`@rask/ui`'s nav-config.ts) renders in every zone — and sat outside
 	// every resolution gate: `link-targets` deliberately checks only a link's FIRST segment, which is
 	// exactly how `/models/playground` stayed a live navbar 404 after #131 moved inference out (the
 	// removal comment in nav-config.ts:293-301 names this gap verbatim). Same scanner, same resolver
@@ -328,7 +328,7 @@ describe('every SHELL navbar href resolves to a real route', () => {
 			expect(
 				routeExists(owner, href),
 				`the estate navbar links "${title}" to ${href}, but the ${owner || 'home'} zone serves no ` +
-					`such route — a navbar 404 in all seven zones.`,
+					`such route — a navbar 404 in every zone.`,
 			).toBe(true);
 		},
 	);

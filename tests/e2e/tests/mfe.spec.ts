@@ -9,13 +9,6 @@ import { test, expect } from '@playwright/test';
 // Catch-all `/` + every zone's root. Keep this in step with `git ls-files frontend/microfrontends |
 // cut -d/ -f3 | sort -u` — the roster is the same one `@rask/zone-contract`'s manifest test pins.
 //
-// It had DRIFTED (audit M3): it listed `/media` and `/train`, neither of which is a zone. `models`
-// REPLACED `train` (on train's own port) and `media` was never one — a leftover
-// `frontend/microfrontends/media/` on a dev host is untracked build residue. Both 404 against the
-// live deploy, so the two of them were the only routes here that could fail, and they would have
-// failed for being wrong rather than for finding anything. `explorer` and `models` — two zones that
-// DO exist — were not covered at all.
-//
 // TRAILING SLASH on the zone roots, deliberately: measured against the live ingress, `/compute`
 // answers 308 and `/compute/` answers 200 directly. `page.goto` follows the redirect either way, so
 // the bare form still passes — it just spends a round trip per zone and hides which form the
@@ -29,7 +22,6 @@ const ROUTES = [
 	'/explorer/',
 	'/annotator/',
 	'/compute/',
-	'/models/',
 	'/studio/',
 ];
 

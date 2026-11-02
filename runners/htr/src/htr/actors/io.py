@@ -1,4 +1,4 @@
-"""I/O actors — bridge `storage.Source`/`Sink` to Ray Data columns.
+"""I/O actors — bridge `htr.sources.Source`/`Sink` to Ray Data columns.
 
 Use these as the first/last `map_batches` calls when you don't want to use
 `ray.data.read_binary_files` / `write_*` directly (e.g. when you need

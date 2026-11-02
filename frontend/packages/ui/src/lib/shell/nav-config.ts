@@ -1,5 +1,4 @@
 import {
-	Brain,
 	Cpu,
 	Database,
 	FlaskConical,
@@ -97,7 +96,7 @@ export type ZoneNavRoot = ZoneNavLeaf;
  *
  *  GROUPED, not flat. This was `{ title, leaves[] }` — one unlabelled list — which forced Lakehouse
  *  to swap the WHOLE sidebar per area, keyed off the pathname, so standing in the catalog you
- *  could not see models, governance or admin at all. Storage was reachable only by typing
+ *  could not see governance or admin at all. Storage was reachable only by typing
  *  its URL, because no area's flat list could mention another area's route. Groups let one zone
  *  present its whole surface at once, which is what the shadcn sidebar primitives were built for
  *  and what the estate already had installed but never used. */
@@ -161,15 +160,15 @@ export type Me = {
 };
 
 /** Drop a single trailing slash (except on root "/"). A zone served under a base path reports its ROOT
- *  as `page.url.pathname === '/models/'` (trailing slash), which would fail an exact compare against
- *  '/models'; normalizing here makes every matcher trailing-slash-robust. */
+ *  as `page.url.pathname === '/lakehouse/'` (trailing slash), which would fail an exact compare against
+ *  '/lakehouse'; normalizing here makes every matcher trailing-slash-robust. */
 export const norm = (p: string) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p);
 /** prefix-segment match: active when the path equals the href or is nested under it. */
 export const seg = (href: string) => (p: string) =>
 	norm(p) === href || norm(p).startsWith(href + '/');
 /** exact match: active ONLY on this exact path. Used for a root leaf whose href equals its own
- *  zone's href (e.g. Registry=/models) — `seg` there would over-match every sibling
- *  sub-route (/models/experiments would light up Registry too), so those leaves match exactly. */
+ *  zone's href (e.g. Overview=/lakehouse) — `seg` there would over-match every sibling
+ *  sub-route (/lakehouse/catalog would light up Overview too), so those leaves match exactly. */
 export const exact = (href: string) => (p: string) => norm(p) === href;
 /** domain match: active when the path is under any of the given prefixes. */
 export const under =
@@ -182,7 +181,7 @@ export const under =
 export type TopNavItem = { title: string; href: string; description: string };
 
 /** A labelled column inside a navbar panel. A trigger that gathers SEVERAL concerns (Lakehouse:
- *  catalog + models + operations) needs its rows grouped under headings, or the panel is just a
+ *  catalog + operations) needs its rows grouped under headings, or the panel is just a
  *  long undifferentiated list — the multi-column NavigationMenu.Content shape. */
 export type TopNavGroup = { label: string; items: TopNavItem[] };
 
@@ -199,7 +198,7 @@ export type TopNavEntry = {
 	 *  this is the cross-zone jump list, not a mirror of in-zone navigation. */
 	items?: TopNavItem[];
 	/** Grouped alternative to `items` — rendered as labelled columns. Used by Lakehouse, whose panel
-	 *  spans the catalog, the model registry and the operational surfaces. */
+	 *  spans the catalog and the operational surfaces. */
 	groups?: TopNavGroup[];
 	/** Visual weight in the ZONE bar. 'primary' is where the work happens — the lakehouse you govern
 	 *  and the compute that fills it — and those lead the bar. Everything else is a real zone but a
@@ -275,45 +274,6 @@ const EXPLORER_ITEMS: TopNavItem[] = [
 		description: 'Results, atlas and player in one arrangeable dock.',
 	},
 	{ title: 'Workflow', href: '/explorer/workflow', description: 'The derivation pipeline.' },
-];
-
-/** The MODELS zone's panel rows — one model's whole life.
- *
- *  These were a COLUMN OF THE LAKEHOUSE PANEL (`/lakehouse/models/*`) until the surface itself moved.
- *  They now name the zone's own routes: the registry that training produces sits in the same place as
- *  the training that fills it, instead of one zone away from it.
- *
- *  TWO ROWS WERE DELETED HERE, and both had rotted the same way — a navbar row outliving its route:
- *
- *   - `Playground` → `/models/playground`. #131 moved inference to `/compute/inference` and the models
- *     zone never had (or kept) a playground route, so this row had been a 404 since that move.
- *   - `Pipeline` → `/models/pipeline`. The route existed but was a manual trigger for the medallion
- *     cascade head + train request — an operation on the lakehouse, not a fact about a model — and the
- *     cascade is event-driven, so the button was a second manual writer. Deleted 2026-08-07.
- *
- *  NOTHING CAUGHT EITHER ONE, and that is the part worth keeping. `nav-truth.test.ts` walked every
- *  zone's `ZoneNav` sidebar leaves and resolved each href against the route tree — but it did not see
- *  `TopNavItem` rows at all; `link-targets.ts` checks only a link's FIRST segment (`models` is served,
- *  so `/models/playground` passed); and the per-zone Playwright shell specs assert each row's `href`
- *  ATTRIBUTE, which a row pointing at a 404 satisfies perfectly. Three gates, all green, over a dead
- *  link in all seven zones.
- *
- *  So this stays a STANDING WARNING, not a note about the past: adding a row here is currently
- *  unguarded, and the fix is to run THIS file through `nav-truth.test.ts`'s existing scanner and route
- *  resolver — the same two it already applies to every zone's sidebar leaves. Until that lands, the
- *  only thing standing between a new `TopNavItem` and a seven-zone 404 is whoever writes it. */
-const MODEL_ITEMS: TopNavItem[] = [
-	{ title: 'Registry', href: '/models/', description: 'Candidate → blessed, per model.' },
-	{
-		title: 'Experiments',
-		href: '/models/experiments',
-		description: 'Training runs and their metrics.',
-	},
-	{
-		title: 'Training runs',
-		href: '/models/runs',
-		description: 'Every submitted run, live state first.',
-	},
 ];
 
 // NO `STUDIO_ITEMS`. Studio briefly panelled (Apps + Flows) and is a plain link again, because the
@@ -411,7 +371,7 @@ const OPERATIONS_ITEMS: TopNavItem[] = [
 ];
 
 /**
- * The top-navbar IA. Seven zones — home, lakehouse, explorer, annotator, compute, models, studio — and
+ * The top-navbar IA. The zones — home, lakehouse, explorer, annotator, compute, studio — and
  * the bar carries an entry for EVERY one of them (R15: a zone missing from the shared navbar is a
  * defect, regardless of scaffold status). A hop from the catalog to the DLQ is a soft navigation
  * inside one router; every OTHER entry crosses a zone boundary and
@@ -507,10 +467,7 @@ export function isMainMenu(pathname: string): boolean {
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
 	// LAKEHOUSE gathers everything that describes or governs the one governed estate: the catalog
 	// (projects → warehouses → namespaces → tables) and, for an estate admin,
-	// the operational surfaces on top. The model registry used to be a column here — models ARE
-	// catalog objects (models$<model> carries the same rungs), which is why it sat here at all — but
-	// R17's migration has now happened: the routes physically moved, so the column moved with them and
-	// the MODELS zone owns it. A trigger claims a ZONE; it must not keep advertising another one's
+	// the operational surfaces on top. A trigger claims a ZONE; it must not advertise another one's
 	// routes. Grouping by DOMAIN rather than by zone is what
 	// keeps a growing product from growing the bar: a new ROUTE becomes a row in a panel column —
 	// only a new ZONE earns a new entry (R15). The project switcher sits at the head of the bar on
@@ -521,8 +478,7 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 		// under one area is what made it invisible from the others — the placement that was reverted.
 		{ label: 'Workspace', items: WORKSPACE_ITEMS },
 		{ label: 'Catalog', items: DATA_ITEMS },
-		// NO 'Models' COLUMN — the area left this zone for the MODELS zone, which is its own trigger
-		// below. Trigger = zone, column = area: a new route is a row in a column.
+		// Trigger = zone, column = area: a new route is a row in a column.
 	];
 	// OPERATIONS stays with the lakehouse; GOVERNANCE does not — by ruling (2026-08-03): "governance
 	// and other setting stuff, more in terms of auth, should be part of the topnavbar when in main
@@ -597,23 +553,6 @@ export function topNav(estateAdmin: boolean): TopNavEntry[] {
 			icon: PenLine,
 			match: under('/annotator'),
 			items: [...ANNOTATE_ITEMS],
-		},
-		{
-			// MODELS — the model-lifecycle zone. It began as R17's `train` (submit / runs / monitoring /
-			// analysis, all scaffold) and was a PLAIN LINK on the reasoning that a one-row dropdown is
-			// noise. It earns a panel now, because the migration R17 promised actually happened: the
-			// registry and its experiments moved out of the lakehouse, so the zone has real destinations
-			// rather than four placeholders. (It briefly had five rows; the pipeline door and the
-			// playground are gone — see MODEL_ITEMS.)
-			//
-			// The label is the JOB, not the directory — and here they agree. "Train" named one AREA of
-			// this zone and would now under-describe it: you come here to see what a model IS, not only
-			// to make one.
-			title: 'Models',
-			href: '/models/',
-			icon: Brain,
-			match: under('/models'),
-			items: [...MODEL_ITEMS],
 		},
 		{
 			// STUDIO is the sandbox zone (R17) and a PLAIN LINK — one surface, the node-based flow

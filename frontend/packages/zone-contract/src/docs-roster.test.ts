@@ -47,7 +47,7 @@ function trackedZones(): string[] {
 const read = (rel: string) => readFileSync(join(REPO, rel), 'utf8');
 
 /** Which of the real zones a document mentions as a ZONE — matched on its base path, which is how
- *  both documents write them (`/models`, `/annotator`, …). `home` is the catch-all with base `''`
+ *  both documents write them (`/lakehouse`, `/annotator`, …). `home` is the catch-all with base `''`
  *  and is named in prose instead, so it is matched by name. */
 function zonesNamedIn(text: string, zones: string[]): string[] {
 	return zones.filter((z) => (z === 'home' ? /`home`/.test(text) : text.includes(`\`/${z}\``)));

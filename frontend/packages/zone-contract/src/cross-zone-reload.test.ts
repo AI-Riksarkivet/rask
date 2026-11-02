@@ -27,22 +27,6 @@ describe('isCrossZonePath', () => {
 		expect(isCrossZonePath('/admin/dlq')).toBe(false);
 	});
 
-	it('DOES match /models again — it is a zone once more, not a lakehouse area', () => {
-		// `/models/experiments` was asserted above as a same-zone hop, on the reading that models was
-		// one of the four pre-merge roots folded under /lakehouse. That reading expired: the model
-		// surfaces moved OUT of the lakehouse into a zone of their own, so these are separate
-		// SvelteKit apps again and a link between them must hard-navigate or it 404s.
-		//
-		// This is the exact bug class the gate exists for, arriving from the opposite direction — a
-		// segment that stopped being an area and became a zone. The old assertion would have told a
-		// lakehouse → models link that it needed no reload.
-		expect(isCrossZonePath('/models')).toBe(true);
-		expect(isCrossZonePath('/models/experiments')).toBe(true);
-		// …and from INSIDE the models zone its own routes stay soft.
-		expect(isCrossZonePath('/models/experiments', 'models')).toBe(false);
-		expect(isCrossZonePath('/lakehouse/lineage', 'models')).toBe(true);
-	});
-
 	it('ignores same-zone / non-zone and opaque-expression hrefs', () => {
 		expect(isCrossZonePath('/')).toBe(false);
 		expect(isCrossZonePath('/api/runs')).toBe(false);
@@ -120,7 +104,7 @@ describe('findViolations reads the markup, not a regex', () => {
 describe('every cross-zone link in the estate hard-navigates', () => {
 	// The gate itself. A soft nav into another zone resolves against a route manifest that does not
 	// contain the target — a 404 that type-checks, unit-tests and renders fine.
-	// @rask/ui is IN the gate (#92): the shell renders in all seven zones, so a shell link to any
+	// @rask/ui is IN the gate (#92): the shell renders in every zone, so a shell link to any
 	// zone's base is cross-zone from six of them — which is exactly where two defects hid while the
 	// glob stopped at microfrontends/*. A shell component has no owning zone, so it gets none: every
 	// statically-readable zone-base href in it must hard-navigate, the same rule the `__project`

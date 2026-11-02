@@ -134,7 +134,7 @@
 	const centred = $derived(inMainMenu && !collapsed);
 
 	// The overflow panel is FLAT — one heading per zone, then its destinations. The desktop panels'
-	// group columns (Lakehouse's Catalog/Models/Governance/Operations) and the row descriptions are
+	// group columns (Lakehouse's Workspace/Catalog/Operations) and the row descriptions are
 	// dropped: on a phone-width panel they cost a screenful of scrolling and buy nothing. The zone
 	// root is prepended when no row already is it, exactly like the desktop panel, so a trigger is
 	// never the only way into a zone.

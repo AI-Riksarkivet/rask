@@ -11,7 +11,6 @@ the root `packages/`, TS/Svelte libraries in `frontend/packages/`.
 | `packages/service-kit` | Python | every service (the lakehouse's `governed`/`lakehouse`/`lancekit` kernel; compute, flows and the media clients build on its factory) | — |
 | `packages/client-kit` | Python | viewer, search and the annotator (`client_kit.media`, `client_kit.lancekit`, `client_kit.rate_limit`) | — |
 | `packages/ray-kit` | Python | the compute service | — |
-| `packages/validate` | Python | (standalone; not yet wired into a component) | — |
 | `frontend/packages/ui` (`@rask/ui`) | TS / Svelte | all 7 frontend apps | — |
 | `frontend/packages/api` (`@rask/api`) | TS | overview, compute, discover | — |
 | `frontend/packages/zone-contract` (`@rask/zone-contract`) | TS | the cross-zone-reload gate (a test, not a lint rule) | — |
@@ -20,8 +19,8 @@ the root `packages/`, TS/Svelte libraries in `frontend/packages/`.
 
 - **No entrypoints.** A package never defines a CLI or service; it exposes
   functions and classes via its top-level `__init__`.
-- **Picklable by design.** Anything shipped into a Ray actor (storage sources,
-  HTR actors) drops live clients in `__getstate__` and rebuilds them lazily from
+- **Picklable by design.** Anything shipped into a Ray actor (a runner's
+  sources and actors) drops live clients in `__getstate__` and rebuilds them lazily from
   a factory, so it survives pickling across the cluster.
 - **Membership is globbed, per plane.** The uv workspace takes
   `members = ["packages/*", "services/*"]` in the root `pyproject.toml`; the Bun

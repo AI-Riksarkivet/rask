@@ -1,6 +1,6 @@
 """SK-11 — two columnLineage builders and two different tuples both called `ColumnEdge`.
 
-`service_kit.openlineage` owns the shared builder over a SEVEN-tuple; `client_kit.lancekit.openlineage`
+`client_kit.lancekit.openlineage` owns the one builder over a SEVEN-tuple, and it
 carried a private `_column_lineage_facet` over a THREE-tuple that it also called `ColumnEdge`. One
 distribution, one name, two incompatible shapes — which one a `list[ColumnEdge]` held depended on
 which module the reader had open.
@@ -17,9 +17,8 @@ from typing import Any
 
 import pyarrow as pa
 
-from client_kit.lancekit.openlineage import PRODUCER, WriteResult, build_run_event, facet_fields
+from client_kit.lancekit.openlineage import COLUMN_LINEAGE_FACET_SCHEMA_URL, PRODUCER, WriteResult, build_run_event, column_lineage_facet, facet_fields
 from service_kit.lakehouse import schema
-from service_kit.openlineage import COLUMN_LINEAGE_FACET_SCHEMA_URL, column_lineage_facet
 
 
 def _event(column_map: list[tuple[str, str, str]], inputs: list[tuple[str, str]] | None = None) -> dict[str, Any]:

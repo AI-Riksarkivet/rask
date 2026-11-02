@@ -48,8 +48,8 @@ class DomainError(HTTPException):
 
     #: The RFC 9457 `type` URI. `None` means "derive it from the class name", which is what every
     #: refusal in the estate answered before this attribute existed. A subclass sets it when the
-    #: DOMAIN has a better name for the failure than the generic status class does — a flow whose
-    #: graph does not validate is `about:blank#flow-invalid`, not `#unprocessableentityerror`, and a
+    #: DOMAIN has a better name for the failure than its class name does — a graph that does not
+    #: validate is `about:blank#flow-invalid`, not one derived from its exception class, and a
     #: client dispatching on `type` wants the specific one. Naming the failure is the taxonomy
     #: working, not a departure from it.
     problem_type: str | None = None
@@ -112,11 +112,6 @@ class NotFoundError(DomainError):
 class ConflictError(DomainError):
     status_code = HTTPStatus.CONFLICT
     title = "Conflict"
-
-
-class UnprocessableEntityError(DomainError):
-    status_code = HTTPStatus.UNPROCESSABLE_ENTITY
-    title = "Unprocessable Entity"
 
 
 class ServiceUnavailableError(DomainError):

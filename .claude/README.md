@@ -8,7 +8,7 @@ rask's **own project skills** live in `.claude/skills/` — they describe rask's
 | --- | --- |
 | `rask-architecture` | Workspace planes, globbed membership, the `make_service_app` seam, deployables |
 | `rask-services-fleet` | Gateway routing, ports, `RASK_*_URL`, the 404/502/403 contracts |
-| `rask-frontend` | The 7 zones, three data dialects, MFE composition, the gates |
+| `rask-frontend` | The zones, three data dialects, MFE composition, the gates |
 | `rask-styling` | `@rask/ui` — OKLCH tokens, Tailwind 4 `@source`, component authoring |
 | `rask-htr-pipeline` | `runners/htr` Ray Data + Ray Serve GPU packing and the OOM lessons |
 | `openfga` | Authorization modelling (a vendored copy of OpenFGA's upstream skill, v1.2.1 — edits fork it) |

@@ -33,3 +33,15 @@ packages = ["src/annotator"]
 [tool.uv.sources]
 client-kit = { workspace = true }
 service-kit = { workspace = true }
+
+# The annotator's own import-layer rule, run by `make lint-imports` beside the lakehouse's `.importlinter`, so it
+# travels with the annotator and the lakehouse's contracts name no annotator module.
+[tool.importlinter]
+root_packages = ["annotator", "service_kit", "client_kit"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "importing annotator.projects pulls in no lancekit / registry"
+type = "forbidden"
+source_modules = ["annotator.projects.machines", "annotator.projects.models", "annotator.projects.ontology"]
+forbidden_modules = ["service_kit.lancekit", "client_kit.lancekit"]

@@ -11,7 +11,7 @@ import { FRONTEND_ROOT } from './manifest';
 // comment predicted, and then worse:
 //
 //   1. Opting in crossfades the WHOLE viewport on every cross-zone nav — including the sidebar and
-//      navbar, which are identical in all seven zones. Nothing moves and every pixel animates, which
+//      navbar, which are identical in every zone. Nothing moves and every pixel animates, which
 //      reads as a flash OF THE CHROME. (The original report said, verbatim, "everything flashes even
 //      the sidebar and topnavbar".)
 //   2. Naming the shell to hold it still made it WORSE: per spec a `view-transition-name` turns its

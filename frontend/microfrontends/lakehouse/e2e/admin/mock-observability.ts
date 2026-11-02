@@ -3,10 +3,6 @@
 // the streams panel). Their paths never collide, so GREPTIME_API and NATS_MONITOR_API both point at
 // this one port (playwright.config.ts, the auth-ON server).
 //
-// The medallion head (`/produce`, `/train`) was a third. No lakehouse code ever called it — the reader
-// moved out with the models surfaces and was deleted with `/models/pipeline` — so MEDALLION_API is gone
-// from the config rather than left pointing here.
-//
 // PURELY seed-driven — no baked-in fixtures: a spec seeds exactly the upstream response its old
 // page.route served, keyed per bearer like mock-catalog's generic mechanism (same shape: `__mock/seed`
 // {bearer, routes:{"METHOD /path?query": body|{status,body}}}, matched with-query first; mutating

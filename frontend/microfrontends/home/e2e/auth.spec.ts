@@ -21,7 +21,6 @@ const ZONE_ENTRIES: Record<string, { title: string; kind: 'trigger' | 'link' }> 
 	explorer: { title: 'Explorer', kind: 'trigger' }, // the corpus read plane; 'Search' died with the `media` directory
 	annotator: { title: 'Annotate', kind: 'link' },
 	compute: { title: 'Compute', kind: 'trigger' }, // the merged rask zone (R16)
-	models: { title: 'Models', kind: 'trigger' }, // REPLACED `train` (R17 → #108), on train's own port
 	studio: { title: 'Studio', kind: 'link' }, // the sandbox/PoC zone (R17)
 };
 

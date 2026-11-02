@@ -52,9 +52,8 @@ plane, and language purity is what lets both workspaces glob their members.
 | `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, plus the governed (`service_kit.governed`) and lakehouse (`service_kit.lakehouse`) seams. Dependency-light (no lancedb/ray/sqlmodel), and carries no code only a client runs. |
 | `packages/client-kit` | Python | Code the lakehouse's clients share and the lakehouse never runs: the media app factory and lifespan, the lancedb dataset registry and descriptors, the per-route rate limiter. Used by viewer, search and the annotator; the lakehouse may not import it. |
 | `packages/lineage-kit` | Python | The OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used by catalog, lineage, maintenance and notifications. |
-| [`packages/storage`](../packages/storage.md) | Python | The S3 client seam (`s3_client`, `configured_endpoint`, STS, the `StorageError` family) plus `FSSource/Sink`, `S3Source/Sink`, `iter_keys` and `build_source`/`build_sink`. |
+| [`packages/storage`](../packages/storage.md) | Python | The S3 client seam (`s3_client`, `configured_endpoint`, STS, `iter_keys`, `split_s3_uri`, the `StorageError` family). |
 | `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Used by the `compute` service only; the lakehouse may not import it. |
-| `packages/validate` | Python | Pre-upload image validation over bytes or paths. |
 | `packages/ray-cluster-env` | Python | The Ray images' platform environment and the tracing hooks the head and Serve are configured with (`ray_cluster_env.tracing`). |
 | `frontend/packages/ui` | TS / Svelte | `@rask/ui`: Svelte 5 + Bits UI + Tailwind 4 component library with Storybook; `@rask/ui/shell` exports the shared `AppShell` every zone renders. |
 | `frontend/packages/api` | TS | `@rask/api`: the typed `/api/*` client (relative paths; SSR rewrites them to `RASK_EDGE_URL`) plus the OIDC/BFF plane and the lineage client. |
@@ -72,7 +71,7 @@ plane, and language purity is what lets both workspaces glob their members.
 | `services/flows` | FastAPI | The studio flow-builder's server half (`/api/flows`). |
 | `services/compute` | FastAPI | Ray dashboard introspection + `/api/serve/*` proxy on `:8804`, the companion of a bring-your-own Ray engine; deployed by its own chart, `deploy/fixtures/compute`, not the product chart. |
 | `frontend/microfrontends/home` | SvelteKit 2 + Svelte 5 (SSR) | The catch-all zone (`:5273`) on `svelte-adapter-bun`; owns `/` and the OIDC BFF. |
-| `frontend/microfrontends/{lakehouse,explorer,annotator,compute,models,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The six domain zones, each pinned to a bare base `/<zone>` and rendering the shared `@rask/ui/shell`; composed by Turborepo's microfrontends proxy on `:3024` in dev and the cluster route in-cluster. |
+| `frontend/microfrontends/{lakehouse,explorer,annotator,compute,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The five domain zones, each pinned to a bare base `/<zone>` and rendering the shared `@rask/ui/shell`; composed by Turborepo's microfrontends proxy on `:3024` in dev and the cluster route in-cluster. |
 | `scripts/` | Python + shell | Every dev/ops tool in one place: `dev-micro.sh`, `k3s-install.sh`, the e2e stack drivers, … No production-state-changing CLIs — data enters and moves only through the catalog's namespace doors. |
 
 ## `runners/` — sealed model environments, deliberately NOT workspace members

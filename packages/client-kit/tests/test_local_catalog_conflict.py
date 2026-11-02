@@ -20,8 +20,8 @@ import lance
 import pyarrow as pa
 import pytest
 
+from client_kit.lancekit.writer import LocalCatalogWriteTransport
 from service_kit.exceptions import ConflictError
-from service_kit.lancekit.writer import LocalCatalogWriteTransport
 
 
 class _RaisingMerge:

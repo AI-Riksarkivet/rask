@@ -292,7 +292,7 @@ export const zoneLayoutLoad = ({
 
 /**
  * The WHOLE zone layout contract, as a factory — identity, auth flag, active project AND the
- * RESOLVED `me` — owned here so all seven zones render one shell BY CONSTRUCTION.
+ * RESOLVED `me` — owned here so every zone renders one shell BY CONSTRUCTION.
  *
  * `zoneLayoutLoad` above carries no `me`, so every zone that wanted a truthful navbar bolted on its
  * own byte-identical `CATALOG_API` + `fetchMe` block — and the three that did not (compute, models,
@@ -340,7 +340,7 @@ export function makeZoneHooks(env: Env, opts: { edge?: boolean; zone?: string } 
 	// hangs is exactly the kind of slow request this exists to explain, and a span opened after it would
 	// measure everything except the part that was slow.
 	//
-	// Wired HERE rather than in each zone because all seven zones go through this one function: a
+	// Wired HERE rather than in each zone because every zone goes through this one function: a
 	// per-zone opt-in is a per-zone chance to forget, and the estate has already paid for that shape
 	// (see the notification-surface gate, which exists because zones can bind everything and still hand
 	// the bell nothing).

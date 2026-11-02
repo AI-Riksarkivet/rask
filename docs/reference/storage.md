@@ -3,7 +3,7 @@
 Auto-generated from source docstrings in `packages/storage/src`. For a narrative
 overview see [Packages → Storage](../packages/storage.md).
 
-## Client & credentials
+## Client
 
 ::: storage.client
 
@@ -11,19 +11,11 @@ overview see [Packages → Storage](../packages/storage.md).
 
 ::: storage.sts
 
-## The Source/Sink contract
-
-::: storage.protocol
-
 ## Errors
 
 ::: storage.errors
 
-## Filesystem
-
-::: storage.fs
-
-## S3 / HCP
+## Listing and retention
 
 ::: storage.s3
 

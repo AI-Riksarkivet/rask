@@ -51,8 +51,8 @@ from annotator.projects.models import (
     new_id,
 )
 from annotator.projects.ontology import LabelOntology
+from annotator.projects.publish import namespace_for
 from annotator.projects.roles import ADMINISTRATIVE, MemberGrant, highest
-from service_kit.lakehouse.warehouse_registry import namespace_for
 
 
 logger = logging.getLogger(__name__)

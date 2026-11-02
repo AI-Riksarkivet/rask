@@ -27,11 +27,11 @@ from annotator.api.security import CurrentSubject, RawBearerToken
 from annotator.corpus import resolve
 from client_kit.lancekit.descriptor import Declared
 from client_kit.lancekit.keys import validate_doc_key
+from client_kit.lancekit.reader import open_reader
 from client_kit.lancekit.registry import table_dataset
+from client_kit.lancekit.writer import open_writer
 from client_kit.media.deps import DatasetParam, StateDep
 from service_kit.exceptions import ValidationError
-from service_kit.lancekit.reader import open_reader
-from service_kit.lancekit.writer import open_writer
 
 
 logger = logging.getLogger(__name__)

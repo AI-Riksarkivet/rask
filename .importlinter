@@ -12,18 +12,11 @@ root_packages =
     lineage
     maintenance
     notifications
-    annotator
-    flows
-    search
-    viewer
     service_kit
     lineage_kit
-    client_kit
     storage
     ray_kit
     ray_cluster_env
-    compute
-    table_maintenance
     dapr
 include_external_packages = True
 
@@ -36,10 +29,11 @@ forbidden_modules =
     service_kit.exceptions
 allow_indirect_imports = True
 
-# The lakehouse knows no client (XC-175): flows, search, the viewer, the annotator (ADR 0171), compute and the engine it
-# fronts (ADR 0155) reach the lakehouse only through its public doors, so deleting every client changes nothing in the
-# lakehouse. A client may import the lakehouse's kits; no lakehouse service and no kit it runs imports a client, the
-# kit the clients share (client_kit) or the engine image's own package (ray_cluster_env), by any chain.
+# The lakehouse knows no client (XC-175): a client and the engine it fronts (ADR 0155) reach the lakehouse only through
+# its public doors, so deleting every client changes nothing in the lakehouse. A client may import the lakehouse's kits;
+# no lakehouse service and no kit it runs imports a client, the kit the clients share (client_kit) or the engine image's
+# own package (ray_cluster_env), by any chain. The clients are forbidden as external names, not root packages, so this
+# file holds with every client tree deleted; a client's own layer rules live in its own config.
 [importlinter:contract:the-lakehouse-knows-no-client]
 name = Phase 1 (3), XC-176, XC-178: no lakehouse service and no lakehouse kit imports a client, the client kit, an engine or an engine's kit
 type = forbidden
@@ -99,17 +93,6 @@ forbidden_modules =
     service_kit.app
     dotenv
 
-[importlinter:contract:the-annotation-domain-core-never-reaches-the-lakehouse]
-name = importing annotator.projects pulls in no lancekit / registry
-type = forbidden
-source_modules =
-    annotator.projects.machines
-    annotator.projects.models
-    annotator.projects.ontology
-forbidden_modules =
-    service_kit.lancekit
-    client_kit.lancekit
-
 # Neither kit declares the other, so an import across would pass in the root venv and fail in an image whose closure
 # lacks the package. What crosses between them is a callable (a key loader, a key parser, a secret fetch) or a name
 # spelled out on both sides (the door modes).
@@ -119,20 +102,3 @@ type = independence
 modules =
     service_kit
     lineage_kit
-
-# A bring-your-own job reaches the lakehouse through its doors alone ([[LH-529]], ADR 0162): the table-maintenance job
-# compacts what the catalog lists as due with stock clients, so what it does is what any client may do, and it runs as
-# a release of its own.
-[importlinter:contract:a-bring-your-own-job-imports-no-rask-package]
-name = LH-529: the table-maintenance job imports no rask package
-type = forbidden
-source_modules =
-    table_maintenance
-forbidden_modules =
-    catalog
-    lineage
-    maintenance
-    notifications
-    service_kit
-    lineage_kit
-    storage

@@ -3,10 +3,9 @@
 	import { Card } from '@rask/ui/card';
 	import { CircuitBoard } from '@lucide/svelte';
 
-	// GPU METRICS (DCGM) — the owner's ruling (2026-08-05): the dcgm-exporter view embeds HERE
-	// (and a sibling summary in the models zone's Analysis). Wired as an HONEST dummy until the
-	// exporter + a Perses/Grafana panel URL exist to embed — a placeholder that names its data
-	// source beats an empty iframe pretending.
+	// GPU METRICS (DCGM) — the owner's ruling (2026-08-05): the dcgm-exporter view embeds HERE.
+	// Wired as an HONEST dummy until the exporter + a Perses/Grafana panel URL exist to embed — a
+	// placeholder that names its data source beats an empty iframe pretending.
 </script>
 
 <svelte:head><title>GPU · compute · rask</title></svelte:head>

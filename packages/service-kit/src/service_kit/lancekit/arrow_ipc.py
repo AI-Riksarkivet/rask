@@ -17,9 +17,8 @@ A caller's body is also held to what its bytes can carry, before any batch is re
 declares any count it likes, and a compressed buffer is inflated as it is read, so the door passes
 the limit its own body cap sets. A response from a rask service is not held to that, because an
 honest projection of such a field is dense too.
-Every service that reads Arrow bytes reads them through this module — the catalog's write doors
-through :func:`decode_arrow_stream`, a client's import through
-:func:`decode_arrow_stream_or_file`, the catalog's ``/query`` response through
+Every service that reads Arrow bytes reads them through this module — a caller's body through
+:func:`decode_arrow_body` in the framing its door takes, the catalog's ``/query`` response through
 :func:`decode_arrow_response`; pinned by the TID251 banned-api entries on the ``pyarrow.ipc``
 readers in the root ``pyproject.toml``.
 
@@ -34,7 +33,7 @@ import struct
 from collections import Counter
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 
 if TYPE_CHECKING:
@@ -46,6 +45,9 @@ if TYPE_CHECKING:
 #: The Arrow-IPC **stream** media type — the ``Content-Type`` every catalog write body carries and the
 #: type the ``/points`` / annotations read responses are served as. One spelling, one import.
 ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
+
+#: The two Arrow IPC framings a caller's body can arrive in.
+type ArrowFraming = Literal["stream", "file"]
 
 #: The IPC file format's leading magic. A stream opens with a message length instead, so the framing
 #: of a body is read from its first six bytes rather than guessed by trying one reader after another.
@@ -103,52 +105,38 @@ def encode_arrow_stream(table: pa.Table) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
-def decode_arrow_stream(data: bytes, *, max_bytes: int) -> pa.Table:
-    """A caller's Arrow IPC **stream** as a table validated in full, or :class:`ArrowBodyError`.
+def decode_arrow_body(data: bytes, *, max_bytes: int, framing: ArrowFraming) -> pa.Table:
+    """A caller's Arrow IPC body, in the named ``framing``, as a table validated in full, or :class:`ArrowBodyError`.
 
-    Held to what its bytes can carry, and to ``max_bytes`` once inflated, before any batch is read.
-    Read whole, because a stream cut inside a batch parses its schema and fails only on the batch, and
-    refused unless the stream is the whole body: a reader stops at the first end-of-stream marker, so
-    a second stream or trailing bytes would be dropped while the door answers for the rest.
+    Held to what its bytes can carry, and to ``max_bytes`` once inflated, before any batch is read. A stream is read
+    whole, because a stream cut inside a batch parses its schema and fails only on the batch, and refused unless the
+    stream is the whole body: a reader stops at the first end-of-stream marker, so a second stream or trailing bytes
+    would be dropped while the door answers for the rest. The framing is the door's to name, not the body's: the
+    catalog's write doors take a stream (``spec.yaml``'s ``application/vnd.apache.arrow.stream`` bodies), so a file
+    there is refused rather than read.
 
     Args:
         data: the request body.
         max_bytes: the door's own body cap, which the body may not exceed once its buffers inflate.
+        framing: the IPC framing the door takes, ``"stream"`` or ``"file"``.
 
     Raises:
         TypeError: ``data`` is not bytes, or ``max_bytes`` is not an int.
-        ValueError: ``max_bytes`` is below 1.
+        ValueError: ``max_bytes`` is below 1, or ``framing`` names neither framing.
         ArrowBodyTooLargeError: the body is over ``max_bytes`` once inflated.
-        ArrowBodyError: the body is not a valid Arrow IPC stream, or declares more than its bytes carry.
+        ArrowBodyError: the body is not a valid Arrow IPC body in that framing, or declares more than its bytes carry.
     """
     _require_bytes(data)
     _require_cap(max_bytes)
-    with _refused_as_arrow_body_error():
-        _refuse_what_its_bytes_cannot_carry(data, _stream_messages(data), max_bytes=max_bytes)
-    return _decoded_stream(data)
-
-
-def decode_arrow_stream_or_file(data: bytes, *, max_bytes: int) -> pa.Table:
-    """:func:`decode_arrow_stream`, for a door that also takes the IPC **file** framing.
-
-    Both are what pyarrow writes depending on which writer a caller reached for; the file magic tells
-    them apart, so a stream whose buffers fail validation is refused for its buffers, not re-read as a
-    file and refused for the wrong reason.
-
-    Raises:
-        TypeError: ``data`` is not bytes, or ``max_bytes`` is not an int.
-        ValueError: ``max_bytes`` is below 1.
-        ArrowBodyTooLargeError: the body is over ``max_bytes`` once inflated.
-        ArrowBodyError: the body is not a valid Arrow IPC stream or file, or declares more than its
-            bytes carry.
-    """
-    _require_bytes(data)
-    _require_cap(max_bytes)
-    if not data.startswith(_FILE_MAGIC):
-        return decode_arrow_stream(data, max_bytes=max_bytes)
-    with _refused_as_arrow_body_error():
-        _refuse_what_its_bytes_cannot_carry(data, _file_messages(data), max_bytes=max_bytes)
-    return _decoded_file(data)
+    if framing == "stream":
+        with _refused_as_arrow_body_error():
+            _refuse_what_its_bytes_cannot_carry(data, _stream_messages(data), max_bytes=max_bytes)
+        return _decoded_stream(data)
+    if framing == "file":
+        with _refused_as_arrow_body_error():
+            _refuse_what_its_bytes_cannot_carry(data, _file_messages(data), max_bytes=max_bytes)
+        return _decoded_file(data)
+    raise ValueError(f"framing must be 'stream' or 'file', got {framing!r}")
 
 
 def decode_arrow_response(data: bytes) -> pa.Table:

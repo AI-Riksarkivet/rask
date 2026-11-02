@@ -4,8 +4,8 @@
  * Sixteen hand-rolled copies of this logic drifted on exactly the cases below — nine said
  * unreachable = 0, four said 502, and the non-JSON-200 guard existed in one copy out of sixteen.
  * These pin the ONE implementation so the drift class cannot re-open: every consumer's
- * honest-state branch keys on these statuses, so a change here is a wire-visible change to all
- * seven zones at once.
+ * honest-state branch keys on these statuses, so a change here is a wire-visible change to every
+ * zone at once.
  */
 
 import { describe, expect, it } from 'vitest';

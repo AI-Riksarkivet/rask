@@ -53,7 +53,7 @@ Migration is opportunistic: when you touch a component still on a legacy name, s
 
 ## Per-zone `@source`
 
-All seven zones import the same three stylesheets and point `@source` at `../../../packages/ui/dist` (three `../`). Variance:
+Every zone imports the same three stylesheets and points `@source` at `../../../packages/ui/dist` (three `../`). Variance:
 
 | Zone | Extra |
 |---|---|

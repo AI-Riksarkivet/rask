@@ -61,7 +61,7 @@ describe('readInbox', () => {
 	it('sends only the query params the caller actually set', async () => {
 		// The service owns the default filter and the default page size (a settings field, so
 		// measuring it later is a config change). A client that always spelled them out would pin
-		// today's defaults into seven zones.
+		// today's defaults into every zone.
 		const rec = recorder({ notifications: [], next_cursor: null, unread: 0 });
 
 		await readInbox(req(rec.fetch), { state: 'all', limit: 100 });

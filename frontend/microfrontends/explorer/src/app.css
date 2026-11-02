@@ -2,9 +2,8 @@
  * The media zone's stylesheet — the ESTATE design system, nothing zone-private.
  *
  * Palette, radius, typography and the shadcn semantic names all come from
- * `@rask/ui/styles/tokens.css`, exactly like the data / admin / lineage /
- * models zones. This file used to carry a forked copy of those tokens
- * (lance-audio's indigo-on-near-black palette, a 0.375rem radius and a
+ * `@rask/ui/styles/tokens.css`, exactly like every other zone. This file used
+ * to carry a forked copy of those tokens (lance-audio's indigo-on-near-black palette, a 0.375rem radius and a
  * 13.5px body scale), which is why the zone read as a different product
  * once it moved under the shared shell. Do not re-fork it: a token that
  * belongs to the design language belongs in @rask/ui.

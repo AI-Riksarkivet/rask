@@ -29,7 +29,6 @@ frontend/
     home/           # catch-all zone (base '/'); owns the OIDC /auth/{login,callback,logout} routes
     lakehouse/      # /lakehouse — the governed estate, its AREAS in one router:
                     #     /lakehouse/catalog     projects, tables, namespaces, warehouses
-                    #     /lakehouse/models   model registry, experiments, pipeline
                     #     /lakehouse/admin    access, tenants, audit, events, streams, DLQ
                     #                         (estate-admin gated, fail-closed, in the root layout)
     media/          # /explorer — semantic search, the embedding atlas, the derivation workflow

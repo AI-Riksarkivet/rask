@@ -55,7 +55,7 @@ The rewrite is Gateway API `URLRewrite` `ReplacePrefixMatch`. An unmatched `/api
 Locally there is no router: `make dev-micro` runs the fleet only. The zones' SSR reads `RASK_EDGE_URL` (default
 `http://localhost:8888`), and `make dev-frontends-k3s` puts the in-cluster Gateway there by port-forwarding k3s
 Traefik's Service to `:8888`; `make dev-zone ZONE=<z>` runs one zone against its own mocks instead. The zones' Vite
-dev `/api` proxies are per zone: `compute`/`studio`/`models` → `VIEWER_BACKEND` (`:8888`), `home`/`lakehouse` →
+dev `/api` proxies are per zone: `compute`/`studio` → `VIEWER_BACKEND` (`:8888`), `home`/`lakehouse` →
 `LANCE_BACKEND` (`:8001`).
 
 ## Storage

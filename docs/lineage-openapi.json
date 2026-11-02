@@ -740,7 +740,7 @@
                       },
                       "job": {
                         "additionalProperties": true,
-                        "description": "The compute job that produced a run \u2014 for us a Ray job (Ray is the compute engine).\n\n``facets`` carries the standard ``ownership`` (who owns the job) and ``jobType``\n(``processingType`` BATCH/STREAMING, ``integration`` = RAY, ``jobType`` = ETL /\nTRANSFORMATION) facets.",
+                        "description": "The job that produced a run, on whatever engine its producer ran.\n\n``facets`` carries the standard ``ownership`` (who owns the job) and ``jobType``\n(``processingType`` BATCH/STREAMING, ``integration`` the producer's engine, ``jobType`` = ETL /\nTRANSFORMATION) facets.",
                         "properties": {
                           "facets": {
                             "additionalProperties": true,

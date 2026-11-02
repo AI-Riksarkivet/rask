@@ -56,8 +56,7 @@ CONTROL_ID_RE = re.compile(rf"^{CONTROL_ID_PATTERN}\Z")
 
 #: The lineage namespaces that denote a source OUTSIDE the governed estate.
 #:
-#: A convention two services must agree on cannot live inside one of them — the reason
-#: `project_namespace` moved here. A PRODUCER names these on a run's input dataset; LINEAGE decides from
+#: A convention two services must agree on cannot live inside one of them. A PRODUCER names these on a run's input dataset; LINEAGE decides from
 #: them whether to authorize that input at all. When the two disagree the failure is silent and
 #: one-sided: the START event is refused 403, the terminal event carries no inputs and is accepted, so
 #: the run reaches the feed missing exactly half of itself.

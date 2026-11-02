@@ -15,13 +15,13 @@
  * WHY THIS EXISTS. The estate already had everything needed to develop a single zone against fake
  * backends — seed-driven `Bun.serve` mocks, sealed dev cookies, per-zone port registries — but it
  * lived exclusively INSIDE each zone's `playwright.config.ts`. So the capability was real and
- * invisible: the documented loops were `make dev-frontends` (all 7 zones + the :3024 proxy) and
+ * invisible: the documented loops were `make dev-frontends` (every zone + the :3024 proxy) and
  * `make dev-micro` (the uvicorn fleet), and a developer who wanted "just the lakehouse" had to
  * reverse-engineer a Playwright config to find out which mocks to start and which env to set.
  *
  * It matters most where there is NO cluster: a cloud sandbox (claude.ai/code, CI) cannot run k3s or
- * build a Dagger image, but it runs this fine — which is exactly how CI already exercises 5 of the 7
- * zones on a stock `ubuntu-latest` runner.
+ * build a Dagger image, but it runs this fine — which is exactly how CI already exercises the zones
+ * that ship an e2e suite on a stock `ubuntu-latest` runner.
  *
  * WHAT IT DOES NOT DO — read this before assuming a blank page is a bug:
  *
@@ -33,8 +33,8 @@
  *     launcher SAYS so, rather than leaving blank ambiguous between "no data" and "broken".
  *
  *     SEED THE CURSOR OR NOTHING LOADS. This is the trap, and it cost a full debugging round: most
- *     surfaces do not read on page load, they read on the LINEAGE CURSOR — `ModelRegistry.svelte` ends
- *     with `liveRead(lineageTick, () => refresh())`, and its siblings do the same. A hydrated browser
+ *     surfaces do not read on page load, they read on the LINEAGE CURSOR — explorer's `routes/+page.svelte`
+ *     calls `liveRead(lineageTick, () => refreshHits())`, and its siblings do the same. A hydrated browser
  *     showed the very first two requests are `GET /events?limit=1&summary=true` (the probe, whose
  *     contract is `LineageProbeSchema` = `{events:[{seq:number}]}`) and `GET /runs`. Leave those
  *     unseeded and the cursor never opens, `liveRead` never fires, and the zone asks its upstream for
@@ -61,7 +61,7 @@
  *     would resolve to nothing. The launcher therefore hands the MOCKS `MOCK_DEV_BEARER` out of band;
  *     unset, every mock behaves exactly as it does under Playwright. To develop the real governed
  *     path (sealed cookie, login-first redirect), run the zone's Playwright suite instead.
- *   - CROSS-ZONE LINKS 404. The shared navbar renders all seven zone entries with
+ *   - CROSS-ZONE LINKS 404. The shared navbar renders every zone entry with
  *     `data-sveltekit-reload`; only one zone is listening. That is inherent to the isolation, not a
  *     defect — use `make dev-frontends` and :3024 when you need to cross a zone boundary.
  *
@@ -177,15 +177,6 @@ export const ZONE_STACKS: Record<string, ZoneStack> = {
 			// See home: the cursor defaults to a dead :8001, and a zone whose cursor never opens
 			// never fires the reads hanging off `liveRead`.
 			LINEAGE_API: url(port('MOCK_ANNOTATOR_PORT')),
-		}),
-	},
-	models: {
-		mocks: ['e2e/mock-upstreams.ts'],
-		env: (port) => ({
-			CATALOG_API: url(port('MOCK_UPSTREAMS_PORT')),
-			GREPTIME_API: url(port('MOCK_UPSTREAMS_PORT')),
-			LINEAGE_API: url(port('MOCK_UPSTREAMS_PORT')),
-			VIEWER_BACKEND: url(port('MOCK_UPSTREAMS_PORT')),
 		}),
 	},
 };

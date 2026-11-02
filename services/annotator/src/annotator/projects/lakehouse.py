@@ -41,11 +41,10 @@ from typing import Any
 from pydantic import BaseModel
 
 from annotator.core.config import get_annotator_settings
-from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA, PublishPlan
+from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA, PublishPlan, namespace_for
 from annotator.projects.saga import PublishOutcome, run_publish
 from service_kit.governed.machine_identity import identity_bearer
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.lakehouse.warehouse_registry import namespace_for
 from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 

@@ -1,11 +1,9 @@
 """ONE urllib3 client per catalog, shared by every transport that talks to it.
 
-`RestCatalogTransport` and `RestCatalogWriteTransport` each built their own generated `ApiClient`
-in `__init__`, and an `ApiClient` builds a `urllib3.PoolManager`. Those ctors run once per
-`open_reader` / `open_writer` call — per REQUEST on a caller's read and write paths — so every
-catalog call stood up a fresh pool, opened a fresh connection, and dropped it. Nothing closed them
-either: the generated `ApiClient.__exit__` is `pass`, so `with ApiClient(...)` releases nothing and
-the sockets went back only when the garbage collector got there.
+An `ApiClient` builds a `urllib3.PoolManager`, and a transport may be constructed once per REQUEST, so a client per
+transport would stand up a fresh pool and connection for every catalog call and drop it. Nothing would close them
+either: the generated `ApiClient.__exit__` is `pass`, so `with ApiClient(...)` releases nothing and the sockets go back
+only when the garbage collector gets there.
 
 Keyed on (base URL, retry policy) because those are the only two things that shape the pool. NOT on
 the caller's bearer: a per-token cache would be a process-global store of end-user credentials, and

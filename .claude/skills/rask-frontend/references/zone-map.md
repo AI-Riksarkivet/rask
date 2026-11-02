@@ -2,7 +2,7 @@
 
 Per-zone routes, data sources, and local libs.
 
-The composition manifest is `microfrontends/home/microfrontends.json`, owned by `home` as the default app. Home has no `routing` block, so anything not matching the six zone prefixes falls through to it.
+The composition manifest is `microfrontends/home/microfrontends.json`, owned by `home` as the default app. Home has no `routing` block, so anything not matching the five zone prefixes falls through to it.
 
 ## `home` — catch-all, base `''`, port 5273
 
@@ -23,11 +23,11 @@ Data: `+layout.server.ts` awaits `fetchMe({catalogUrl: CATALOG_API})` — `env.C
 
 `lib/nav.ts` declares **one** leaf, so `AppShell` renders no sidebar (`hasNav = leaves.length > 1`) — deliberate. `lib/remote/home.remote.ts`'s `getProjects` is **dead code**; `knip.json:13` ignores `src/**/*.remote.ts`, so the gate cannot see it.
 
-`home/e2e/auth.spec.ts` (4 tests) is the MAIN-MENU contract and still the most current source of truth on the estate's shape: `ZONE_ENTRIES` maps the **six non-home dirs** → navbar title/kind (home is deliberately absent — its reachability is the brand header's), `:68` asserts the key set equals `zoneDirs().filter((z) => z !== 'home')`, and `:83-90` pins every zone entry as an **ABSENCE** at `/`, because the estate root renders `mainMenuNav()`. So a zone scaffolded without an entry still fails here, and a zone panel reappearing at the root fails too. Its `networkidle` wait was replaced with a click-retry `toPass` because **every zone now holds a live query open for the bell**, so networkidle can never fire.
+`home/e2e/auth.spec.ts` (4 tests) is the MAIN-MENU contract and still the most current source of truth on the estate's shape: `ZONE_ENTRIES` maps the **five non-home dirs** → navbar title/kind (home is deliberately absent — its reachability is the brand header's), `:68` asserts the key set equals `zoneDirs().filter((z) => z !== 'home')`, and `:83-90` pins every zone entry as an **ABSENCE** at `/`, because the estate root renders `mainMenuNav()`. So a zone scaffolded without an entry still fails here, and a zone panel reappearing at the root fails too. Its `networkidle` wait was replaced with a click-retry `toPass` because **every zone now holds a live query open for the bell**, so networkidle can never fire.
 
 ## `lakehouse` — base `/lakehouse`, port 5174
 
-Five areas that used to be separate apps, merged under one router: `catalog`, `models`, `admin`, `governance`, `workbench`. Area resolution is path-segment-based, so a hop between areas is a soft nav. 36 route files (measured 2026-10-16); `+layout.ts` sets `ssr = true, prerender = false` zone-wide.
+Four areas that used to be separate apps, merged under one router: `catalog`, `admin`, `governance`, `workbench`. Area resolution is path-segment-based, so a hop between areas is a soft nav. 36 route files (measured 2026-10-16); `+layout.ts` sets `ssr = true, prerender = false` zone-wide.
 
 **`data` was renamed `catalog`** — `/lakehouse/data` no longer resolves anywhere in the estate. The zone root's `+page.ts` 307s to `${base}/catalog`; that redirect was missed during the rename, so `/lakehouse` 404'd for every visitor (and so did the "Lakehouse" breadcrumb on every page beneath it) while `nav-truth.test.ts` stayed green — a redirect target is not a nav entry. `redirect-truth.test.ts` exists to cover exactly that gap.
 
@@ -35,7 +35,7 @@ Five areas that used to be separate apps, merged under one router: `catalog`, `m
 
 **`catalog`** — table registry, table detail (`TableDetail.svelte`, 1821 lines, tabs derived from `?tab=`), namespaces (derived from `<ns>$<table>` ids — there is no list endpoint), projects, warehouses, and the **object browser at `catalog/storage`** (+ `catalog/storage/tiers`). The **warehouse + project** registry (list/describe/create/activate/bind) rides `lib/data/remote/warehouses.remote.ts`; its three `/capi/v1/warehouses*` routes are gone. The **table lifecycle** rides `lib/data/remote/catalog.remote.ts` (the transport ruling area 1): the registry list, the `fetchTableDetail` aggregate (still a six-read server-side fan-out — just no longer a route), policy/GC/compaction, tags/branches/restore, schema evolution, indexes, drop/deregister/rename/declare and the row update/delete; 17 `/capi/v1/table*` routes are gone with it, allowlist segments and all. Tabular reads (table preview/query, insert) stay Arrow on `+server.ts`, as does the `[id]/[...rest]` GET proxy that serves blob `<img>` bytes and the #113 commit log.
 
-**`models`** is an area here, not a zone; **storage is not even an area** — it is `catalog/storage`. **`governance`** (access, audit) split out of `admin` (events, streams, dlq, tenants) so the breadcrumb stops contradicting the rail, but both sit behind the same estate-admin door (`PRIVILEGED_AREAS` in `+layout.svelte:32`). The model registry (list/describe/**promote**) rides `lib/models/remote/models.remote.ts` — the `capi/v1/model/[model]/promote` route is gone.
+**Storage is not an area** — it is `catalog/storage`. **`governance`** (access, audit) split out of `admin` (events, streams, dlq, tenants) so the breadcrumb stops contradicting the rail, but both sit behind the same estate-admin door (`PRIVILEGED_AREAS` in `+layout.svelte:32`).
 
 7 `+server.ts` routes — 4 keep-bytes (`capi/v1/table/[id]/query` + `/insert` Arrow, `capi/v1/table/[id]/[...rest]` for blob bytes and the #113 commit log, and `api/explorer/[...rest]`, the R18 storage-browser seam that rides to the cluster EDGE (`RASK_EDGE_URL`) with its path unchanged, where the `/api/explorer` route rewrites it onto the viewer), 1 keep-flow (`capi/management/v1/me`), 2 catch-alls (`api/[...path]` → lineage, `capi/[...path]` → catalog). The `/api/audit` shim is **gone**; its logic survives in `lib/server/audit-core.ts`, consumed only by `admin/remote/audit.remote.ts`.
 
@@ -73,9 +73,9 @@ Endpoints (`packages/api/src/ray.ts`): `/api/ray/{health,jobs,cluster,actors,tas
 
 ## Doors with no backend (ADR 0155)
 
-The lakehouse runs no stage, no training and no engine, so three frontend callers name routes no service
-serves: the `models` zone's `train.remote.ts` (`POST /api/train`) and the `lakehouse` zone's
-`promotions.remote.ts` (`/api/promotions`) have no route row, so the cluster route answers 404; the `compute` zone's `/transforms` page reaches the catalog through
+The lakehouse runs no stage, no training and no engine, so two frontend callers name routes no service
+serves: the `lakehouse` zone's
+`promotions.remote.ts` (`/api/promotions`) has no route row, so the cluster route answers 404; the `compute` zone's `/transforms` page reaches the catalog through
 `/api/catalog`, and the catalog serves no transforms door, so it 404s there. `/api/ray` and `/api/serve` are
 routed only where the compute fixture chart is installed (its own HTTPRoute); without it the `compute` zone's
 `packages/api/src/ray.ts` calls and `studio`'s Serve-app discovery 404 the same way. The frontend is outside
@@ -87,7 +87,7 @@ Mini-app launcher with exactly one tenant: a GSAP vs `svelte/transition` A/B.
 
 ## The nav contract
 
-`topNav(estateAdmin)` (`nav-config.ts:414-520`) returns **six** entries — one per zone, home excluded — order pinned by `packages/ui/tests/nav-config.test.ts:27-64`.
+`topNav(estateAdmin)` (`nav-config.ts:414-520`) returns **five** entries — one per zone, home excluded — order pinned by `packages/ui/tests/nav-config.test.ts:27-64`.
 
 | title | href | panel |
 |---|---|---|
@@ -95,14 +95,13 @@ Mini-app launcher with exactly one tenant: a GSAP vs `svelte/transition` A/B.
 | Compute | `/compute/` | items: Overview, Workbench, Jobs, Cluster, Actors, Serve, Logs, API docs |
 | Explorer | `/explorer/` | items: Search, Atlas, Tree, Graph, Workbench, Workflow |
 | Annotate | `/annotator/` | plain link |
-| Train | `/train/` | plain link |
 | Studio | `/studio/` | plain link |
 
 `mainMenuNav(estateAdmin)` (`nav-config.ts:374-393`) is the OTHER bar — Home · Projects · Settings, the last admin-only. **Governance is no longer a Lakehouse column**: Access, Tenants and Audit are rows of the main menu's Settings entry (`GOVERNANCE_ITEMS` at `:280-296`, hung off `SETTINGS_ENTRY` at `:540-549`), and the Lakehouse panel asserts `Governance` as an ABSENCE.
 
 Two-level IA: the **top navbar is cross-zone** (one entry per zone; a zone with sub-areas becomes a `NavigationMenu` trigger + panel), the **sidebar is in-zone only** and never lists other zones. The admin columns append only for `me.estate_admin` and fail closed — `topNav(false)` when `me` is null; `packages/ui/tests/nav-config.test.ts:76-106` asserts both polarities and that `/lakehouse/governance/access` (the FGA workbench's real route) never appears in a non-admin's href set, in **either** bar.
 
-Matchers exported for zones to build configs: `norm` (drops one trailing slash), `seg` (prefix-segment), `exact` (root-leaf, so `/lakehouse/models` does not stay lit on `/models/experiments`), `under(...prefixes)`.
+Matchers exported for zones to build configs: `norm` (drops one trailing slash), `seg` (prefix-segment), `exact` (root-leaf, so an Overview at `/lakehouse` does not stay lit on `/lakehouse/catalog`), `under(...prefixes)`.
 
 `prefetchDocument(href)` / `prefetchOnIntent(href)` inject `<link rel="prefetch">` on pointerenter/focus, once per href, SSR no-op — honoured by Chromium and Firefox, not Safari. Implemented as a native `addEventListener` inside an `{@attach}` so Bits UI's own pointer handlers on the node survive.
 

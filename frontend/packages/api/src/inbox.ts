@@ -95,7 +95,7 @@ export interface InboxPanel {
 	unread: number;
 }
 
-/** Project a feed onto the panel's shape. Trivial, and shared anyway: seven zones derive this, and
+/** Project a feed onto the panel's shape. Trivial, and shared anyway: every zone derives this, and
  *  the one that derived it differently would be the one whose badge disagreed with the others. */
 export function inboxPanel(feed: InboxFeed): InboxPanel {
 	return { rows: feed.notifications, unread: feed.unread };

@@ -658,8 +658,7 @@ def describe_compaction_unsupported_flags(reader: int, writer: int, bases: Compa
       it, so compaction materialises the shared data into the clone's own root (a pristine clone went
       1,072 -> 108,199 bytes against a 119,693-byte base). Still refused, and this is a COST refusal:
       it never damages the base, it just defeats the point of cloning behind an operator's back.
-    * an **external blob base** — ``ingest/lander.py::create_empty`` and
-      ``medallion/services/compute.py`` register one plain object-store prefix through
+    * an **external blob base** — a table created with one plain object-store prefix in
       ``initial_bases``, naming where this table's payload bytes already live. Its own data files sit
       under its own root like any other table's, so compaction merges its own fragments and copies
       nothing. MEASURED on pylance 10.0.0: 4 fragments -> 1, 9,445 -> 14,366 bytes locally, the base

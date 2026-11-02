@@ -199,7 +199,7 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
-`compute`, `notifications` and `flows`, the seven zone images (`web-<zone>`), `annotator` (the client
+`compute`, `notifications` and `flows`, the six zone images (`web-<zone>`), `annotator` (the client
 the annotator fixture runs), `media` (the viewer and search, which the explorer runs), `lance-rest-catalog` (the
 lakehouse image that serves catalog, lineage and maintenance) and the `ray-cluster` image the
 development engine fixture runs. `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
@@ -219,7 +219,7 @@ locally and in CI.
 | `lance-rest-catalog` | `rest-catalog.dockerfile` | The lakehouse image, one image for several deployments: `catalog`, `lineage` and `maintenance`, plus the chart's Jobs and hooks. It installs no client, so deleting a client changes nothing it builds. |
 | `media` | `media.dockerfile` | The viewer and search, clients of the lakehouse, one image for both; the product chart deploys neither. |
 | `flows`, `notifications`, `compute`, `annotator` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` and `annotator` each ship in their own chart (`deploy/fixtures/compute`, `deploy/fixtures/annotator`). |
-| `web-<zone>` (7 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the six domain zones (lakehouse, explorer, annotator, compute, models, studio) each pin a bare base `/<zone>`. The zones are a client of the lakehouse, and the product chart deploys none of them (XC-181). tini as PID 1, non-root UID 10001. |
+| `web-<zone>` (6 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the five domain zones (lakehouse, explorer, annotator, compute, studio) each pin a bare base `/<zone>`. The zones are a client of the lakehouse, and the product chart deploys none of them (XC-181). tini as PID 1, non-root UID 10001. |
 | `ray-cluster`, `ray-<runner>` | `ray-cluster.dockerfile`, `ray-runner.dockerfile` | The development engine's head image and one image per sealed runner (`--runner <runner>`); neither is part of the product chart. |
 
 The one frontend dockerfile encodes a non-obvious build contract (documented in its header): `svelte-adapter-bun`

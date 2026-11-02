@@ -29,8 +29,9 @@ import pyarrow as pa
 
 from annotator.projects.models import Link, Shape
 from annotator.projects.ontology import ShapeLike, membership_violation
+from client_kit.lancekit.arrow_body import decode_arrow_stream_or_file
 from service_kit.exceptions import ValidationError
-from service_kit.lancekit.arrow_ipc import ArrowBodyError, decode_arrow_stream_or_file
+from service_kit.lancekit.arrow_ipc import ArrowBodyError
 
 
 if TYPE_CHECKING:

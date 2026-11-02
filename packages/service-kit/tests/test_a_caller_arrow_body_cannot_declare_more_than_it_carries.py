@@ -20,7 +20,7 @@ from typing import cast
 import pyarrow as pa
 import pytest
 
-from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_stream, decode_arrow_stream_or_file
+from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, ArrowFraming, decode_arrow_body
 
 
 #: A cap far above every body below unless a test says otherwise.
@@ -100,19 +100,19 @@ DECLARING_MORE = [
 @pytest.mark.parametrize("body", DECLARING_MORE)
 def test_a_body_declaring_more_values_than_its_bytes_carry_is_refused(body: bytes) -> None:
     with pytest.raises(ArrowBodyError, match="can carry at most"):
-        decode_arrow_stream(body, max_bytes=_LIMIT)
+        decode_arrow_body(body, max_bytes=_LIMIT, framing="stream")
 
 
 def test_a_file_whose_footer_names_one_batch_again_is_refused() -> None:
     """The file reader decodes what the footer names, so a block named 101 times is 101 batches from one's bytes."""
     with pytest.raises(ArrowBodyError, match="can carry at most"):
-        decode_arrow_stream_or_file(_a_footer_naming_one_batch_again(100, 10**5), max_bytes=_LIMIT)
+        decode_arrow_body(_a_footer_naming_one_batch_again(100, 10**5), max_bytes=_LIMIT, framing="file")
 
 
 def test_a_batch_declaring_a_negative_length_is_refused() -> None:
     """Read as zero rows, a negative length would cancel another batch's count in the sum the bound is taken over."""
     with pytest.raises(ArrowBodyError, match="negative"):
-        decode_arrow_stream(_rewritten(_stream(_no_columns(12345)), 12345, -1), max_bytes=_LIMIT)
+        decode_arrow_body(_rewritten(_stream(_no_columns(12345)), 12345, -1), max_bytes=_LIMIT, framing="stream")
 
 
 _TEXT = pa.table({"s": ["x" * 100_000] * 10})
@@ -122,7 +122,7 @@ _LIMIT_BELOW_INFLATED = _TEXT.nbytes // 2
 def test_an_uncompressed_body_over_the_limit_is_refused() -> None:
     """The door's own middleware counts the bytes sent too; the decoder holds the limit wherever it is called."""
     with pytest.raises(ArrowBodyTooLargeError, match=r"over the .*-byte limit"):
-        decode_arrow_stream(_stream(_TEXT), max_bytes=_LIMIT_BELOW_INFLATED)
+        decode_arrow_body(_stream(_TEXT), max_bytes=_LIMIT_BELOW_INFLATED, framing="stream")
 
 
 def test_a_compressed_buffer_declaring_a_negative_length_is_refused() -> None:
@@ -131,7 +131,7 @@ def test_a_compressed_buffer_declaring_a_negative_length_is_refused() -> None:
     prefix = body.rindex(struct.pack("<q", 1003))  # the values buffer's; the offsets buffer ends in 1003 too
 
     with pytest.raises(ArrowBodyError, match="negative"):
-        decode_arrow_stream(body[:prefix] + struct.pack("<q", -2) + body[prefix + 8 :], max_bytes=_LIMIT)
+        decode_arrow_body(body[:prefix] + struct.pack("<q", -2) + body[prefix + 8 :], max_bytes=_LIMIT, framing="stream")
 
 
 def test_a_buffer_left_uncompressed_in_a_compressed_body_is_read() -> None:
@@ -144,8 +144,11 @@ def test_a_buffer_left_uncompressed_in_a_compressed_body_is_read() -> None:
     assert body.count(compressed) == 1 and len(frame) > len(raw), "the values buffer is not where this test rewrites it"
     as_is = struct.pack("<q", -1) + raw + b"\0" * (len(frame) - len(raw))
 
-    assert decode_arrow_stream(body.replace(compressed, as_is), max_bytes=_LIMIT).equals(table)
+    assert decode_arrow_body(body.replace(compressed, as_is), max_bytes=_LIMIT, framing="stream").equals(table)
 
+
+#: The writer each framing is built with.
+_FRAMED: dict[str, Callable[[pa.Table, str | None], bytes]] = {"stream": _stream, "file": _file}
 
 _BOOLEANS = pa.array([True, False] * 50_000)
 
@@ -154,26 +157,26 @@ _BOOLEANS = pa.array([True, False] * 50_000)
 @pytest.mark.parametrize(
     ("framing", "compression"),
     [
-        pytest.param(_stream, None, id="stream-uncompressed"),
-        pytest.param(_stream, "lz4", id="stream-lz4"),
-        pytest.param(_file, "lz4", id="file-lz4"),
+        pytest.param("stream", None, id="stream-uncompressed"),
+        pytest.param("stream", "lz4", id="stream-lz4"),
+        pytest.param("file", "lz4", id="file-lz4"),
     ],
 )
-def test_an_honest_body_at_its_densest_is_decoded(table: pa.Table, compression: str | None, framing: Callable[[pa.Table, str | None], bytes]) -> None:
+def test_an_honest_body_at_its_densest_is_decoded(table: pa.Table, compression: str | None, framing: ArrowFraming) -> None:
     """A boolean is one bit per value, the densest a stored value gets; compressed, it is judged by what it inflates to."""
-    assert decode_arrow_stream_or_file(framing(table, compression), max_bytes=_LIMIT).equals(table)
+    assert decode_arrow_body(_FRAMED[framing](table, compression), max_bytes=_LIMIT, framing=framing).equals(table)
 
 
-@pytest.mark.parametrize("framing", [_stream, _file], ids=["stream", "file"])
-def test_a_body_refused_for_its_size_is_refused_before_anything_inflates(framing: Callable[[pa.Table, str | None], bytes]) -> None:
+@pytest.mark.parametrize("framing", ["stream", "file"])
+def test_a_body_refused_for_its_size_is_refused_before_anything_inflates(framing: ArrowFraming) -> None:
     """The bound is a MEMORY bound only if it runs before the read: refused after inflating, the refusal
     would cost what the body inflates to. Measured on a pool of its own, so no earlier allocation hides it."""
-    body = framing(pa.table({"s": ["x" * (16 * 1024 * 1024)] * 3}), "lz4")
+    body = _FRAMED[framing](pa.table({"s": ["x" * (16 * 1024 * 1024)] * 3}), "lz4")
     pool, previous = _a_pool_of_its_own(), pa.default_memory_pool()
     pa.set_memory_pool(pool)
     try:
         with pytest.raises(ArrowBodyTooLargeError):
-            decode_arrow_stream_or_file(body, max_bytes=1024 * 1024)
+            decode_arrow_body(body, max_bytes=1024 * 1024, framing=framing)
     finally:
         pa.set_memory_pool(previous)
 
@@ -187,4 +190,4 @@ def test_a_body_refused_for_its_size_is_refused_before_anything_inflates(framing
 def test_a_misconfigured_cap_is_the_doors_error_not_the_bodys(cap: object, raised: type[Exception]) -> None:
     """A cap that is not a positive byte count is a wiring fault, and must not answer 400 blaming the body."""
     with pytest.raises(raised):
-        decode_arrow_stream(_stream(pa.table({"v": [1]})), max_bytes=cast("int", cap))
+        decode_arrow_body(_stream(pa.table({"v": [1]})), max_bytes=cast("int", cap), framing="stream")

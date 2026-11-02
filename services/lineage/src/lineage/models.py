@@ -141,10 +141,10 @@ class Dataset(BaseModel):
 
 
 class Job(BaseModel):
-    """The compute job that produced a run — for us a Ray job (Ray is the compute engine).
+    """The job that produced a run, on whatever engine its producer ran.
 
     ``facets`` carries the standard ``ownership`` (who owns the job) and ``jobType``
-    (``processingType`` BATCH/STREAMING, ``integration`` = RAY, ``jobType`` = ETL /
+    (``processingType`` BATCH/STREAMING, ``integration`` the producer's engine, ``jobType`` = ETL /
     TRANSFORMATION) facets.
     """
 

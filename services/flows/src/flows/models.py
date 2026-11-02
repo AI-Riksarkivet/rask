@@ -6,11 +6,12 @@ owns. Pydantic v2 throughout (no dataclasses) — the frontend parses these bodi
 response shape in particular is PINNED (see `catalog.py`).
 """
 
+from http import HTTPStatus
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from service_kit.exceptions import UnprocessableEntityError
+from service_kit.exceptions import DomainError
 
 
 #: A node's `output_text` is truncated to this many characters before it leaves the service.
@@ -169,6 +170,8 @@ class ValidateResponse(BaseModel):
 #: The RFC 9457 `type` a refused graph answers. One constant, spent by the exception that RAISES the
 #: refusal and by the model that DOCUMENTS it, so the wire and the OpenAPI cannot drift apart.
 FLOW_INVALID_TYPE = "about:blank#flow-invalid"
+#: The title a refused run answers with, in the OpenAPI model and on the wire alike.
+REFUSED_TITLE = "Unprocessable Entity"
 
 
 class RunRefused(BaseModel):
@@ -183,13 +186,13 @@ class RunRefused(BaseModel):
     """
 
     type: str = FLOW_INVALID_TYPE
-    title: str = "Unprocessable Entity"
+    title: str = REFUSED_TITLE
     status: int = 422
     detail: str
     problems: list[str] = Field(default_factory=list)
 
 
-class RunRefusedError(UnprocessableEntityError):
+class RunRefusedError(DomainError):
     """A graph that does not validate, RAISED rather than returned.
 
     The reason this could not exist before is recorded in `service_kit.exceptions`: `_problem` built
@@ -202,6 +205,8 @@ class RunRefusedError(UnprocessableEntityError):
     problems})`.
     """
 
+    status_code = HTTPStatus.UNPROCESSABLE_ENTITY
+    title = REFUSED_TITLE
     problem_type = FLOW_INVALID_TYPE
 
 

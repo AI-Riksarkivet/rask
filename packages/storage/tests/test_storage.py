@@ -1,48 +1,5 @@
-from pathlib import Path
-
-from moto import mock_aws
-
-
-def test_fs_source_lists_jpg(tmp_path: Path):
-    from storage import FSSource
-
-    (tmp_path / "a.jpg").write_bytes(b"x")
-    (tmp_path / "b.txt").write_bytes(b"y")
-    src = FSSource(root=tmp_path)
-    keys = sorted(src.keys())
-    assert keys == ["a.jpg"]
-    assert src.read("a.jpg") == b"x"
-
-
-def test_fs_sink_writes(tmp_path: Path):
-    from storage import FSSink
-
-    sink = FSSink(root=tmp_path)
-    sink.write("foo/bar.xml", b"<alto/>")
-    assert (tmp_path / "foo" / "bar.xml").read_bytes() == b"<alto/>"
-    assert "foo/bar.xml" in list(sink.existing_keys())
-
-
-def test_s3_source_round_trip():
-    import boto3
-
-    from storage import S3Source
-
-    with mock_aws():
-        c = boto3.client("s3", region_name="us-east-1")
-        c.create_bucket(Bucket="bucket-in")
-        c.put_object(Bucket="bucket-in", Key="A0060198/00001.jpg", Body=b"img")
-
-        src = S3Source(bucket="bucket-in", prefix="A0060198/", client=c)
-        assert list(src.keys()) == ["A0060198/00001.jpg"]
-        assert src.read("A0060198/00001.jpg") == b"img"
-
-
-def test_split_s3_uri_and_merge_prefix():
-    from storage import merge_prefix, split_s3_uri
+def test_split_s3_uri_splits_bucket_from_prefix() -> None:
+    from storage import split_s3_uri
 
     assert split_s3_uri("s3://bucket/foo/bar/") == ("bucket", "foo/bar/")
     assert split_s3_uri("s3://bucket") == ("bucket", "")
-    assert merge_prefix("foo/", "bar/") == "foo/bar/"
-    assert merge_prefix("", "bar/") == "bar/"
-    assert merge_prefix("", "") == ""
