@@ -12,6 +12,9 @@ dependencies = [
     # in the image, whose venv is `uv sync --frozen --package notifications` alone: that is the exact
     # crash-loop the ingest door and then the flows door each paid for once.
     "service-kit[governed]",
+    # The lakehouse's event vocabularies the inbox reads (`control_events`, `openlineage`, `subjects`) and the
+    # signature door settings, without the data plane.
+    "lakehouse-kit",
     # The signature doors on both bus routes ([[XC-078]]): `lineage_kit.signing` verifies an event's
     # `rask_signature`, `lineage_kit.keys` reads and caches each signer's published keys, and
     # `lineage_kit.door` turns the outcome into deliver, refuse or retry. Declared rather than borrowed:
@@ -41,5 +44,6 @@ build-backend = "hatchling.build"
 packages = ["src/notifications"]
 
 [tool.uv.sources]
+lakehouse-kit = { workspace = true }
 service-kit = { workspace = true }
 lineage-kit = { workspace = true }

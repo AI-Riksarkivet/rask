@@ -24,8 +24,9 @@ import pyarrow as pa
 import pytest
 from lance.dataset import DatasetBasePath
 
-from service_kit.lakehouse import features
-from service_kit.lakehouse.objectfs import StorageOptions, dataset_root_probe, is_lance_dataset_root, same_store_uri
+from lakehouse_kit import features
+from lakehouse_kit.objectfs import dataset_root_probe, is_lance_dataset_root, same_store_uri
+from service_kit.storage_options import StorageOptions
 
 
 def _table(n: int = 20) -> pa.Table:

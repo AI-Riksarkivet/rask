@@ -24,7 +24,7 @@ THE OTHER SIX COME OUT OF A FACTORY TOO, because copied boots drift: each repeat
 boot in copied comments (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit"
 DUP-12), and one lost its request-id layer in the copying. `viewer`, `search` and `annotator` build through
 `client_kit.media.app.build_media_app` over one shared `client_kit.media.lifespan`; `catalog`, `lineage` and
-`maintenance` build through `service_kit.lance_app.build_lance_service_app`. Both still read their own
+`maintenance` build through `lakehouse_kit.lance_app.build_lance_service_app`. Both still read their own
 `core/config.py` settings and keep the `api/v1/endpoints/` layout — the factory owns the boot, not
 the layout. See rask-architecture's "Three factories are sanctioned".
 
@@ -51,8 +51,8 @@ query; the graph is bring-your-own, fed by its forwarder (ADR 0158).
 ## Why the fleet services never grow heavy deps
 
 `compute` depends only on `service-kit` + `ray-kit` — **no DB**. `service-kit`'s
-core stays dependency-light (no `ray`/`sqlmodel`; lance deps live behind the
-`[lancekit]` extra): pulling a heavy dep into the core would force it onto every service and every test
+core stays dependency-light (no `ray`/`sqlmodel`; the lakehouse's lance deps live in `lakehouse-kit`,
+which no client installs): pulling a heavy dep into the core would force it onto every service and every test
 that imports the factory. What only a client needs (lancedb, slowapi) is in `client-kit`, which no
 lakehouse service installs.
 

@@ -17,6 +17,7 @@ members = [
     "client-kit",
     "compute",
     "flows",
+    "lakehouse-kit",
     "lineage",
     "lineage-kit",
     "maintenance",
@@ -175,7 +176,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pylance", extra = ["otel"] },
-    { name = "service-kit", extra = ["governed", "lancekit"] },
+    { name = "service-kit", extra = ["arrow", "governed"] },
     { name = "shapely" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -189,7 +190,7 @@ requires-dist = [
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
-    { name = "service-kit", extras = ["lancekit", "governed"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed", "arrow"], editable = "packages/service-kit" },
     { name = "shapely", specifier = ">=2.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
@@ -338,6 +339,7 @@ dependencies = [
     { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "lakehouse-kit", extra = ["data"] },
     { name = "lance-namespace" },
     { name = "lineage-kit" },
     { name = "openfga-sdk" },
@@ -346,7 +348,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pylance", extra = ["otel"] },
-    { name = "service-kit", extra = ["governed", "lakehouse"] },
+    { name = "service-kit", extra = ["arrow", "governed"] },
     { name = "storage" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -358,6 +360,7 @@ requires-dist = [
     { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "lakehouse-kit", extras = ["data"], editable = "packages/lakehouse-kit" },
     { name = "lance-namespace", specifier = ">=0.11.0,<0.12" },
     { name = "lineage-kit", editable = "packages/lineage-kit" },
     { name = "openfga-sdk", specifier = ">=0.10.4" },
@@ -366,7 +369,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
-    { name = "service-kit", extras = ["governed", "lakehouse"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed", "arrow"], editable = "packages/service-kit" },
     { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
@@ -538,12 +541,13 @@ source = { editable = "packages/client-kit" }
 dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
+    { name = "lance-namespace" },
     { name = "lancedb" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pylance", extra = ["otel"] },
-    { name = "service-kit", extra = ["governed", "lancekit"] },
+    { name = "service-kit", extra = ["arrow", "governed"] },
 ]
 
 [package.optional-dependencies]
@@ -555,12 +559,13 @@ ratelimit = [
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "lance-namespace", specifier = ">=0.11.1,<0.12" },
     { name = "lancedb", specifier = ">=0.40.0" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
-    { name = "service-kit", extras = ["governed", "lancekit"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed", "arrow"], editable = "packages/service-kit" },
     { name = "slowapi", marker = "extra == 'ratelimit'", specifier = ">=0.1.10" },
 ]
 provides-extras = ["ratelimit"]
@@ -1566,6 +1571,44 @@ wheels = [
 ]
 
 [[package]]
+name = "lakehouse-kit"
+version = "0.1.0"
+source = { editable = "packages/lakehouse-kit" }
+dependencies = [
+    { name = "dapr" },
+    { name = "fastapi" },
+    { name = "opentelemetry-sdk" },
+    { name = "pydantic" },
+    { name = "service-kit", extra = ["governed"] },
+    { name = "storage" },
+]
+
+[package.optional-dependencies]
+data = [
+    { name = "lance-namespace" },
+    { name = "lance-namespace-urllib3-client" },
+    { name = "pyarrow" },
+    { name = "pylance", extra = ["otel"] },
+    { name = "service-kit", extra = ["arrow", "governed"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dapr", specifier = ">=1.18.1" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "lance-namespace", marker = "extra == 'data'", specifier = ">=0.11.0,<0.12" },
+    { name = "lance-namespace-urllib3-client", marker = "extra == 'data'", specifier = ">=0.11.0,<0.12" },
+    { name = "opentelemetry-sdk", specifier = ">=1.44.0" },
+    { name = "pyarrow", marker = "extra == 'data'" },
+    { name = "pydantic", specifier = ">=2.7" },
+    { name = "pylance", extras = ["otel"], marker = "extra == 'data'", specifier = ">=13.0.0" },
+    { name = "service-kit", extras = ["governed"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed", "arrow"], marker = "extra == 'data'", editable = "packages/service-kit" },
+    { name = "storage", editable = "packages/storage" },
+]
+provides-extras = ["data"]
+
+[[package]]
 name = "lance-graph"
 version = "0.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1696,6 +1739,7 @@ dependencies = [
     { name = "dapr" },
     { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
+    { name = "lakehouse-kit", extra = ["data"] },
     { name = "lance-namespace" },
     { name = "lineage-kit" },
     { name = "opentelemetry-distro" },
@@ -1704,7 +1748,7 @@ dependencies = [
     { name = "opentelemetry-instrumentation-logging" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
-    { name = "service-kit", extra = ["governed", "lakehouse", "lancekit"] },
+    { name = "service-kit", extra = ["arrow", "governed"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1713,6 +1757,7 @@ requires-dist = [
     { name = "dapr", specifier = ">=1.18.1" },
     { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "lakehouse-kit", extras = ["data"], editable = "packages/lakehouse-kit" },
     { name = "lance-namespace", specifier = ">=0.11.0,<0.12" },
     { name = "lineage-kit", editable = "packages/lineage-kit" },
     { name = "opentelemetry-distro", specifier = ">=0.65b0" },
@@ -1721,7 +1766,7 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-logging", specifier = ">=0.65b0" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
-    { name = "service-kit", extras = ["governed", "lakehouse", "lancekit"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed", "arrow"], editable = "packages/service-kit" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 
@@ -1753,6 +1798,7 @@ source = { editable = "services/maintenance" }
 dependencies = [
     { name = "dapr" },
     { name = "fastapi" },
+    { name = "lakehouse-kit", extra = ["data"] },
     { name = "lance-namespace" },
     { name = "lineage-kit" },
     { name = "opentelemetry-api" },
@@ -1760,7 +1806,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pylance", extra = ["otel"] },
-    { name = "service-kit", extra = ["governed", "lakehouse"] },
+    { name = "service-kit", extra = ["arrow", "governed"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -1768,6 +1814,7 @@ dependencies = [
 requires-dist = [
     { name = "dapr", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "lakehouse-kit", extras = ["data"], editable = "packages/lakehouse-kit" },
     { name = "lance-namespace", specifier = ">=0.11.0,<0.12" },
     { name = "lineage-kit", editable = "packages/lineage-kit" },
     { name = "opentelemetry-api", specifier = ">=1.44.0" },
@@ -1775,7 +1822,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
-    { name = "service-kit", extras = ["governed", "lakehouse"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed", "arrow"], editable = "packages/service-kit" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 
@@ -2120,6 +2167,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "dapr-ext-fastapi" },
     { name = "fastapi" },
+    { name = "lakehouse-kit" },
     { name = "lineage-kit" },
     { name = "pydantic" },
     { name = "service-kit", extra = ["governed"] },
@@ -2131,6 +2179,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "lakehouse-kit", editable = "packages/lakehouse-kit" },
     { name = "lineage-kit", editable = "packages/lineage-kit" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "service-kit", extras = ["governed"], editable = "packages/service-kit" },
@@ -3713,7 +3762,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pylance", extra = ["otel"] },
     { name = "python-multipart" },
-    { name = "service-kit", extra = ["governed", "lancekit"] },
+    { name = "service-kit", extra = ["governed"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -3730,7 +3779,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "service-kit", extras = ["governed", "lancekit"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed"], editable = "packages/service-kit" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
 
@@ -3754,10 +3803,18 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
-    { name = "storage" },
 ]
 
 [package.optional-dependencies]
+arrow = [
+    { name = "aiohttp" },
+    { name = "httpx" },
+    { name = "lance-namespace" },
+    { name = "openfga-sdk" },
+    { name = "pyarrow" },
+    { name = "pyjwt", extra = ["crypto"] },
+    { name = "tenacity" },
+]
 governed = [
     { name = "aiohttp" },
     { name = "httpx" },
@@ -3765,16 +3822,6 @@ governed = [
     { name = "openfga-sdk" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "tenacity" },
-]
-lakehouse = [
-    { name = "lance-namespace" },
-    { name = "pyarrow" },
-]
-lancekit = [
-    { name = "lance-namespace" },
-    { name = "lance-namespace-urllib3-client" },
-    { name = "pyarrow" },
-    { name = "pylance", extra = ["otel"] },
 ]
 
 [package.metadata]
@@ -3784,9 +3831,6 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'governed'", specifier = ">=0.27" },
     { name = "lance-namespace", marker = "extra == 'governed'", specifier = ">=0.11.0,<0.12" },
-    { name = "lance-namespace", marker = "extra == 'lakehouse'", specifier = ">=0.11.0,<0.12" },
-    { name = "lance-namespace", marker = "extra == 'lancekit'", specifier = ">=0.11.0,<0.12" },
-    { name = "lance-namespace-urllib3-client", marker = "extra == 'lancekit'", specifier = ">=0.11.0,<0.12" },
     { name = "openfga-sdk", marker = "extra == 'governed'", specifier = ">=0.10.4" },
     { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.44.0" },
     { name = "opentelemetry-instrumentation-aiohttp-client", specifier = ">=0.65b0" },
@@ -3798,17 +3842,15 @@ requires-dist = [
     { name = "opentelemetry-instrumentation-requests", specifier = ">=0.65b0" },
     { name = "opentelemetry-instrumentation-urllib3", specifier = ">=0.65b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.44.0" },
-    { name = "pyarrow", marker = "extra == 'lakehouse'" },
-    { name = "pyarrow", marker = "extra == 'lancekit'" },
+    { name = "pyarrow", marker = "extra == 'arrow'" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "pyjwt", extras = ["crypto"], marker = "extra == 'governed'", specifier = ">=2.8" },
-    { name = "pylance", extras = ["otel"], marker = "extra == 'lancekit'", specifier = ">=13.0.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "storage", editable = "packages/storage" },
+    { name = "service-kit", extras = ["governed"], marker = "extra == 'arrow'" },
     { name = "tenacity", marker = "extra == 'governed'", specifier = ">=9.1.4" },
 ]
-provides-extras = ["governed", "lakehouse", "lancekit"]
+provides-extras = ["governed", "arrow"]
 
 [[package]]
 name = "setuptools"
@@ -4136,7 +4178,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pylance", extra = ["otel"] },
     { name = "python-multipart" },
-    { name = "service-kit", extra = ["governed", "lancekit"] },
+    { name = "service-kit", extra = ["arrow", "governed"] },
     { name = "storage" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -4154,7 +4196,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pylance", extras = ["otel"], specifier = ">=13.0.0" },
     { name = "python-multipart", specifier = ">=0.0.9" },
-    { name = "service-kit", extras = ["governed", "lancekit"], editable = "packages/service-kit" },
+    { name = "service-kit", extras = ["governed", "arrow"], editable = "packages/service-kit" },
     { name = "storage", editable = "packages/storage" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]

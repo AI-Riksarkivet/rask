@@ -8,9 +8,9 @@ import time
 from types import SimpleNamespace
 from typing import Any, cast
 
+from lakehouse_kit import outbox
 from lineage.core.config import Signing
-from service_kit.lakehouse import outbox
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 def _uri(tmp_path: Any) -> str:
@@ -209,9 +209,9 @@ def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_
     publish that fails leaves the event for the next tick. The re-ingest then is a no-op (MERGE on run_id).
     """
     from catalog.core.lineage_emit import INSERT, build_write_event
+    from lakehouse_kit.openlineage import run_id_for
     from lineage.api import relay_cron
     from lineage.services import staged
-    from service_kit.openlineage import run_id_for
 
     uri = _uri(tmp_path)
     event = build_write_event(

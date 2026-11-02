@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from lance import blob_array, blob_field
 from lance_namespace import CreateNamespaceRequest, connect
 
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 def _blob_table(payloads: list[bytes | None]) -> pa.Table:

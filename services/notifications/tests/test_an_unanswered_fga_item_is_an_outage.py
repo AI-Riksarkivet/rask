@@ -33,7 +33,7 @@ from notifications.models import InboxPointer, InboxQuery, NotificationReason
 from notifications.proxies import TypedActorProxy
 from service_kit.exceptions import register_handlers
 from service_kit.governed.decider import OpenFgaDecider
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 if TYPE_CHECKING:

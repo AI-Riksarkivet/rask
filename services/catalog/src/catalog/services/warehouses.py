@@ -7,7 +7,7 @@ physically isolated bucket**, so a table created under warehouse A lands in buck
 bucket-b — physical multi-tenancy, provisioned through an admin API rather than a bucket list fixed in the
 chart's values.
 
-Stateless-over-object-store, the same shape as ``service_kit/lakehouse/outbox.py``: the registry IS a set of JSON
+Stateless-over-object-store, the same shape as ``lakehouse_kit/outbox.py``: the registry IS a set of JSON
 objects under ``<control_root>/_warehouses/`` — there is no DB to add. A warehouse record lives at
 ``_warehouses/<id>.json``; a namespace→warehouse binding at ``_warehouses/bindings/<top_ns>.json`` (so any
 op on a bound namespace can resolve its physical root). Bucket creation uses boto3 ``create_bucket``, idempotent:
@@ -33,10 +33,11 @@ from catalog.services.control_records import (
     validated_or_refuse,
     write_json,
 )
-from service_kit.lakehouse import trash
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
-from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
+from lakehouse_kit import trash
+from lakehouse_kit.objectfs import fs_and_base
+from lakehouse_kit.records import RecordExistsError, RecordMissingError, create_json, mutate_json
+from service_kit.naming import CATALOG_DELIMITER
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -248,7 +249,7 @@ def upsert_warehouse(
 def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
     """Mint ``_warehouses/<id>.json`` iff absent — the STORE arbitrates (F1).
 
-    Raises :class:`service_kit.lakehouse.records.RecordExistsError` on a lost race. The caller
+    Raises :class:`lakehouse_kit.records.RecordExistsError` on a lost race. The caller
     re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
     guard's read may predate the rival's write; this refusal is what closes that window).
     """
@@ -409,7 +410,7 @@ def project_for_namespace(control_root: str, storage_options: StorageOptions, to
     the third place that knows the shape.
 
     **Why this is not a string split.** A project-qualified name joins with ``-``
-    (``("acme", "bronze")`` → ``"acme-bronze"``), but ``PROJECT_PATTERN`` permits ``-`` INSIDE a project
+    (``("acme", "bronze")`` → ``"acme-bronze"``), but ``CONTROL_ID_PATTERN`` permits ``-`` INSIDE a project
     id — so ``acme-bronze`` is genuinely ambiguous between project ``acme`` and project ``acme-bronze``,
     and a namespace a user named freely follows no convention at all. The binding is the only sound
     answer, and guessing wrong would attribute a write to the wrong tenant.

@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, DropNamespaceRequest, connect
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 BINDING = "catalog-manifest-reclaim-cron"

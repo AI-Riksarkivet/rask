@@ -27,8 +27,8 @@ from typing import Any, cast
 
 import pytest
 
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.openlineage import DatasetUuids
+from lakehouse_kit.openlineage import DatasetUuids
+from service_kit.storage_options import StorageOptions
 
 
 class _NoUuids:

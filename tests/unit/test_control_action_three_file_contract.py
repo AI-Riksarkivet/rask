@@ -2,7 +2,7 @@
 
 `.claude/skills/rask-notifications` spells the contract out and says why each file is load-bearing:
 
-  1. `service_kit/control_events.py` — add the member to `ControlAction`, "or the envelope will not
+  1. `lakehouse_kit/control_events.py` — add the member to `ControlAction`, "or the envelope will not
      validate".
   2. `notifications/api/control_events.py` — add it to `NAMED_ACTIONS`, "or the lane files it IGNORED".
   3. `notifications/models.py` — add the matching `NotificationReason`, "because `as_delivery`
@@ -37,8 +37,8 @@ person and tells them nothing: the lane erases what it holds for them (`principa
 
 from __future__ import annotations
 
+from lakehouse_kit.control_events import ControlAction
 from notifications.api.control_events import ERASING_ACTIONS, NAMED_ACTIONS
-from service_kit.control_events import ControlAction
 
 
 def _control_actions() -> set[str]:

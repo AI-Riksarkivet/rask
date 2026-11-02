@@ -20,8 +20,8 @@ from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, LanceNamespace
 from moto.server import ThreadedMotoServer
 
-from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.naming import UUID_PROPERTY
+from service_kit.storage_options import StorageOptions
 
 
 @pytest.fixture(scope="module")
@@ -121,7 +121,7 @@ def claim_described(client: TestClient, fake_ns: MagicMock) -> Callable[[str], s
     return the uuid it records (ADR 0173 §2): a door keeping a record for a table, or acting on it, reads it there."""
     from catalog.core.config import get_settings
     from catalog.services import table_claims
-    from service_kit.lakehouse import location_claims
+    from lakehouse_kit import location_claims
 
     def _claim(table: str) -> str:
         minted = str(uuid4())

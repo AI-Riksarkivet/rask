@@ -43,7 +43,7 @@ from lineage.core.metrics import Door
 from lineage.models import DatasetEvent, RunEvent
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import ProvenanceStore
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 

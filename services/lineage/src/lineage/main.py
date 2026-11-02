@@ -14,6 +14,7 @@ from typing import Final
 import httpx
 from fastapi import FastAPI, Request
 
+from lakehouse_kit.lance_app import build_lance_service_app
 from lineage.api.dapr import register_dapr
 from lineage.api.v1.router import api_router
 from lineage.core.config import get_settings
@@ -27,7 +28,6 @@ from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.settings import assert_authentication_configured
 from service_kit.governed.store_credential import make_store_credential
-from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
@@ -168,7 +168,7 @@ async def _feed_ready(request: Request) -> Readiness:
 
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
 # gate, the handler pair in the order that makes it work, one request id, and the probes — see
-# `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
+# `lakehouse_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
 app = build_lance_service_app(
     title="Lance Lineage Service",
     docs_enabled=get_settings().docs_enabled,

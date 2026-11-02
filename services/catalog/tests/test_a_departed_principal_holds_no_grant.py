@@ -25,7 +25,7 @@ import pytest
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
-from service_kit.control_events import CatalogControlEvent
+from lakehouse_kit.control_events import CatalogControlEvent
 from service_kit.governed import fga
 
 

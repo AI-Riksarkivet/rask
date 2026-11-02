@@ -15,8 +15,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from catalog.services import warehouses
-from service_kit.lakehouse import trash
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import trash
+from service_kit.storage_options import StorageOptions
 
 
 def _trash(control: str, canonical_id: str, location: str = "", *, kind: str = "table", warehouse: str | None = None) -> None:

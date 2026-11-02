@@ -11,7 +11,7 @@ import pyarrow.fs as pafs
 import pytest
 
 from catalog.services import dataplane
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 class _CountingFS:

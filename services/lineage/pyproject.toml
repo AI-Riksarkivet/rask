@@ -5,9 +5,10 @@ description = "Lineage service — the authenticated OpenLineage intake, the com
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    # `lancekit` carries the spec's REST client the feed is read and written through (the catalog's own
-    # `query` and `merge_insert` doors, `lineage.services.provenance`).
-    "service-kit[governed,lakehouse,lancekit]",
+    "service-kit[governed,arrow]",
+    # `[data]` carries the spec's REST client the feed is read and written through (the catalog's own `query` and
+    # `merge_insert` doors, `lineage.services.provenance`), on the kernel's catalog transports.
+    "lakehouse-kit[data]",
     # The producer-signature seam ([[LH-064]]): `services/signature.py` verifies an event's Ed25519
     # signature with `lineage_kit.signing`, and the verifier has to share the producer's definition of
     # what was signed (canon-1, the facet's members) — a second implementation here would disagree the
@@ -34,5 +35,6 @@ build-backend = "hatchling.build"
 packages = ["src/lineage"]
 
 [tool.uv.sources]
+lakehouse-kit = { workspace = true }
 service-kit = { workspace = true }
 lineage-kit = { workspace = true }

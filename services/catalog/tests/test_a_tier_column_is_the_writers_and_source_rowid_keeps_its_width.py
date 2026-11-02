@@ -32,13 +32,13 @@ from catalog.core.lineage_emit import NoopEmitter
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from catalog.services.publication import published_version
+from lakehouse_kit.base_registry import BaseRegistry
+from lakehouse_kit.location_claims import ClaimStore
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.base_registry import BaseRegistry
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.ns_errors import install_problem_handlers
+from service_kit.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

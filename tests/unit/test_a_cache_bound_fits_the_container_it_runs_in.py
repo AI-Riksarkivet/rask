@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from service_kit.lakehouse.lance_session import cache_budget_bytes
+from lakehouse_kit.lance_session import cache_budget_bytes
 
 
 def test_an_UNLIMITED_container_gets_no_derived_budget(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -32,14 +32,14 @@ def test_an_UNLIMITED_container_gets_no_derived_budget(tmp_path, monkeypatch: py
     """
     limit = tmp_path / "memory.max"
     limit.write_text("max\n")
-    monkeypatch.setattr("service_kit.lakehouse.lance_session._CGROUP_V2", limit)
+    monkeypatch.setattr("lakehouse_kit.lance_session._CGROUP_V2", limit)
     assert cache_budget_bytes() is None
 
 
 def test_no_cgroup_at_all_is_not_an_error(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Off a container — a developer laptop, a CI runner — there is nothing to read and that is fine."""
-    monkeypatch.setattr("service_kit.lakehouse.lance_session._CGROUP_V2", tmp_path / "absent")
-    monkeypatch.setattr("service_kit.lakehouse.lance_session._CGROUP_V1", tmp_path / "absent-too")
+    monkeypatch.setattr("lakehouse_kit.lance_session._CGROUP_V2", tmp_path / "absent")
+    monkeypatch.setattr("lakehouse_kit.lance_session._CGROUP_V1", tmp_path / "absent-too")
     assert cache_budget_bytes() is None
 
 
@@ -49,11 +49,11 @@ def test_the_budget_CLAMPS_a_configured_cap_it_cannot_afford(tmp_path, monkeypat
     An operator may always ask for LESS than the container allows. What they may not do is ask for more
     and have the process agree — that is the shape that OOMKilled maintenance.
     """
-    from service_kit.lakehouse.lance_session import affordable_cache_bytes
+    from lakehouse_kit.lance_session import affordable_cache_bytes
 
     limit = tmp_path / "memory.max"
     limit.write_text("536870912\n")  # 512Mi
-    monkeypatch.setattr("service_kit.lakehouse.lance_session._CGROUP_V2", limit)
+    monkeypatch.setattr("lakehouse_kit.lance_session._CGROUP_V2", limit)
 
     metadata, index = affordable_cache_bytes(128 << 20, 256 << 20, fraction=0.5)
     assert metadata + index <= 536870912 // 2, "the clamped total still exceeds the affordable share"
@@ -64,11 +64,11 @@ def test_the_budget_CLAMPS_a_configured_cap_it_cannot_afford(tmp_path, monkeypat
 
 def test_a_cap_that_already_fits_is_left_alone(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Clamping must not become a second, invisible policy for configurations that were always fine."""
-    from service_kit.lakehouse.lance_session import affordable_cache_bytes
+    from lakehouse_kit.lance_session import affordable_cache_bytes
 
     limit = tmp_path / "memory.max"
     limit.write_text("2147483648\n")  # 2Gi
-    monkeypatch.setattr("service_kit.lakehouse.lance_session._CGROUP_V2", limit)
+    monkeypatch.setattr("lakehouse_kit.lance_session._CGROUP_V2", limit)
 
     assert affordable_cache_bytes(128 << 20, 256 << 20, fraction=0.5) == (128 << 20, 256 << 20)
 
@@ -86,7 +86,7 @@ def test_the_LIMIT_is_re_read_and_never_cached(tmp_path, monkeypatch: pytest.Mon
     where repetition is the only thing at stake.
     """
     limit = tmp_path / "memory.max"
-    monkeypatch.setattr("service_kit.lakehouse.lance_session._CGROUP_V2", limit)
+    monkeypatch.setattr("lakehouse_kit.lance_session._CGROUP_V2", limit)
 
     limit.write_text("536870912\n")  # 512Mi
     assert cache_budget_bytes(fraction=0.5) == 536870912 // 2

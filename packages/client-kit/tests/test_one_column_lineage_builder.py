@@ -18,7 +18,6 @@ from typing import Any
 import pyarrow as pa
 
 from client_kit.lancekit.openlineage import COLUMN_LINEAGE_FACET_SCHEMA_URL, PRODUCER, WriteResult, build_run_event, column_lineage_facet, facet_fields
-from service_kit.lakehouse import schema
 
 
 def _event(column_map: list[tuple[str, str, str]], inputs: list[tuple[str, str]] | None = None) -> dict[str, Any]:
@@ -65,10 +64,8 @@ def test_a_good_edge_still_survives_beside_a_malformed_one() -> None:
     assert list(facet["fields"]) == ["shape"]
 
 
-def test_the_client_facet_labels_json_as_the_catalog_does() -> None:
-    # ASSERTS the vendored mirror stays in step: the same column labelled by
-    # ``client_kit.lancekit.openlineage`` (the annotation emit path) and by ``service_kit.lakehouse.schema``
-    # (the catalog's emit path) must reach the lineage graph as the SAME type string.
+def test_a_json_column_is_labelled_json() -> None:
+    # The labels the lakehouse's own schema facets give the same columns, so a column reaches the lineage graph as one
+    # type string whichever side wrote it.
     arrow_schema = pa.schema([pa.field("id", pa.int64()), pa.field("alignments_json", pa.json_())])
-    assert facet_fields(arrow_schema) == schema.facet_fields(arrow_schema)
-    assert facet_fields(arrow_schema)[1]["type"] == "json"
+    assert facet_fields(arrow_schema) == [{"name": "id", "type": "int64"}, {"name": "alignments_json", "type": "json"}]

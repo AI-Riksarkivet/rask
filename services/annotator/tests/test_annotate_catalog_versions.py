@@ -29,16 +29,16 @@ from fastapi.testclient import TestClient
 from annotator.annotations import versions, wire
 from annotator.annotations.router import router as annotations_router
 from annotator.corpus import Corpus
+from client_kit.lancekit.catalog import CatalogVersion
 from client_kit.lancekit.descriptor import DatasetDescriptor, Declared
 from client_kit.lancekit.registry import DatasetHandle
 from client_kit.media.config import Settings
 from client_kit.media.state import AppState
 from service_kit.exceptions import NotFoundError, register_handlers
-from service_kit.lancekit.reader import CatalogVersion
 
 
 if TYPE_CHECKING:
-    from lance_namespace_urllib3_client import QueryTableRequest
+    from lance_namespace import QueryTableRequest
 
 DOC = "a" * 16
 _DECLARED = Declared.model_validate({"identity": {"key_fields": ["doc_id", "speech_id", "chunk_id"]}})
@@ -115,7 +115,7 @@ def _make_client(settings: Settings, handle: object) -> TestClient:
 def catalog_harness(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, _FakeTransport]:
     """The annotations routes in FULL catalog mode, REST transport mocked at the seam."""
     transport = _FakeTransport()
-    monkeypatch.setattr("client_kit.lancekit.reader.RestCatalogTransport", lambda *a, **k: transport)
+    monkeypatch.setattr("client_kit.lancekit.reader.NamespaceCatalogTransport", lambda *a, **k: transport)
     corpus = Corpus(id="ds1", declared=_DECLARED)
     for module in (versions, wire):
         monkeypatch.setattr(module, "resolve", lambda *_a, **_k: corpus)

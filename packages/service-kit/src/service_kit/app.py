@@ -5,13 +5,12 @@ and logging. Both the lifespan and the settings are injectable: stateless servic
 `default_lifespan` (settings only); services needing resources (Lance, S3) pass their own
 factory.
 
-THIS IS A SUBMODULE, and it used to be `service_kit/__init__.py` itself. Being the package `__init__`
-meant that importing ANYTHING under `service_kit` — `service_kit.config` for a `Settings`,
-`service_kit.exceptions` for an error type, `service_kit.lakehouse.*` from a writer's job — first executed
-this module and therefore imported FastAPI, python-dotenv, the OTel wiring, the middleware stack and
-the probe router. Every consumer paid for the app factory whether it wanted an app or not, and the
-package had no way to say what its surface was. `service_kit/__init__.py` now re-exports these names
-lazily; `from service_kit import make_service_app` is unchanged.
+THIS IS A SUBMODULE, not the package `__init__`: as the `__init__`, importing ANYTHING under
+`service_kit` — `service_kit.config` for a `Settings`, `service_kit.exceptions` for an error type —
+would first execute this module and so import FastAPI, python-dotenv, the OTel wiring, the middleware
+stack and the probe router, and every consumer would pay for the app factory whether it wanted an app
+or not. `service_kit/__init__.py` re-exports these names lazily, so `from service_kit import
+make_service_app` resolves here.
 """
 
 import logging
@@ -127,7 +126,7 @@ def _install_ns_problem_handlers(app: FastAPI) -> None:
     """Install the Lance-Namespace problem-detail translators, IF this deployable has them.
 
     THE IMPORT IS DEFERRED, and that is a packaging constraint rather than a performance one.
-    `lance_namespace` lives behind service-kit's `[governed]` / `[lakehouse]` extras and MUST stay
+    `lance_namespace` lives behind service-kit's `[governed]` extra and MUST stay
     there: this library is shared by every service including the storeless ones, so a Lance dependency
     in its base is a Lance dependency in every one of them. Importing it at module scope makes
     `import service_kit` itself require the extra, and an image built without it fails at import —
@@ -146,7 +145,7 @@ def _install_ns_problem_handlers(app: FastAPI) -> None:
     quietly unhandled error class.
     """
     try:
-        from service_kit.lakehouse.ns_errors import install_problem_handlers
+        from service_kit.ns_errors import install_problem_handlers
     except ModuleNotFoundError as exc:
         if exc.name != "lance_namespace":
             raise

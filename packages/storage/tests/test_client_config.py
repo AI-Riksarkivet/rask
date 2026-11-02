@@ -46,7 +46,7 @@ def test_s3_client_retries_transient_errors_to_the_configured_attempts(monkeypat
 def test_s3_client_region_overrides_the_env_for_this_client_only(monkeypatch):
     """A per-store region must reach the client, or every backend is pinned to `AWS_REGION`.
 
-    The callers holding a region of their own (`service_kit.lakehouse.records`, whose
+    The callers holding a region of their own (`lakehouse_kit.records`, whose
     `storage_options` carry one per warehouse) had no way to pass it through this seam, which is
     exactly what kept them on a hand-rolled `boto3.client`. Omitted still resolves from the env.
     """

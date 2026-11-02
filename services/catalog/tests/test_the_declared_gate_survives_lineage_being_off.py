@@ -28,9 +28,9 @@ from typing import Any, cast
 import pytest
 
 from catalog.api.v1.endpoints.publication import resolve_effective_gate
-from service_kit.lakehouse import gate_specs
-from service_kit.lakehouse.gate_specs import GateSpec
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import gate_specs
+from lakehouse_kit.gate_specs import GateSpec
+from service_kit.storage_options import StorageOptions
 
 
 PROJECT = "acme"

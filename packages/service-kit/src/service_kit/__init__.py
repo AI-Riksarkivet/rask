@@ -1,19 +1,20 @@
-"""The rask platform library: the service app factory, config, DI, middleware and the lakehouse kernel.
+"""The rask platform library: the service app factory, config, DI, middleware, the auth plane and the naming grammar.
 
-NOTHING IS IMPORTED EAGERLY HERE, and that is the point. This module WAS the app factory
-(`make_service_app` and its whole import graph: FastAPI, python-dotenv, the OTel wiring, the
-middleware stack, the probe router), so `from service_kit.config import Settings` — or any import of
-`service_kit.exceptions`, `service_kit.lakehouse.*`, `service_kit.governed.*` — executed the factory
-first. A writer's job that wanted one Arrow helper imported a web framework; a package of ~80 modules with
-no `__all__` anywhere had no statement of what was public and what was internal.
+It is what a client of the lakehouse may pin. The lakehouse's own kernel is ``lakehouse_kit``, which imports this
+package and which this package never imports.
+
+NOTHING IS IMPORTED EAGERLY HERE, and that is the point. The app factory imports FastAPI, python-dotenv, the OTel
+wiring, the middleware stack and the probe router, so a package `__init__` holding it would make
+`from service_kit.config import Settings`, or any import of `service_kit.exceptions` or `service_kit.governed.*`, pay
+for all of it first: a writer's job that wanted one helper would import a web framework.
 
 The factory lives in :mod:`service_kit.app`. The names below are resolved on FIRST ACCESS through
 PEP 562's module `__getattr__`, so `from service_kit import make_service_app` and
-`from service_kit import setup_logging` keep working unchanged while `import service_kit.config`
+`from service_kit import setup_logging` resolve to the factory's names while `import service_kit.config`
 costs a config module.
 
-Submodules are unaffected — `from service_kit import dapr_publish` is an import-system lookup, not an
-attribute one, and never went through this file.
+Submodules are unaffected — `from service_kit import naming` is an import-system lookup, not an
+attribute one, and never goes through this file.
 """
 
 from typing import TYPE_CHECKING

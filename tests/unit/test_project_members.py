@@ -19,7 +19,7 @@ import pytest
 
 from catalog.api.v1.endpoints import members
 from catalog.core.config import Settings
-from service_kit.control_emit import NoopControlEmitter
+from lakehouse_kit.control_emit import NoopControlEmitter
 from service_kit.exceptions import ForbiddenError
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken

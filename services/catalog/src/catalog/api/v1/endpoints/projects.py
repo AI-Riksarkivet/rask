@@ -64,12 +64,12 @@ from catalog.core.config import Settings
 from catalog.schemas import CreateProjectRequest, DeleteProjectResponse, ProjectResponse, ProjectWarehouse
 from catalog.services import projects as project_registry
 from catalog.services import warehouses
-from service_kit.control_emit import emit_control
+from lakehouse_kit.control_emit import emit_control
+from lakehouse_kit.records import RecordExistsError, RecordMissingError
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.lakehouse.naming import CONTROL_ID_RE
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
+from service_kit.naming import CONTROL_ID_RE
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

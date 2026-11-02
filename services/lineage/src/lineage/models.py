@@ -11,8 +11,8 @@ from typing import Any, Final
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lakehouse_kit.openlineage import AUTHOR_FACET, BRANCH_IDENTIFIER, LANCE_FACET, static_event_id
 from lineage_kit.signing import SIGNATURE_FACET, RefusalReason
-from service_kit.openlineage import AUTHOR_FACET, BRANCH_IDENTIFIER, LANCE_FACET, static_event_id
 
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
@@ -330,7 +330,7 @@ class DatasetEvent(BaseModel):
     def feed_id(self) -> str:
         """The id the durable feed stores this change under — derived from its content, never minted.
 
-        A static change has no run id, so the feed keys it under :func:`service_kit.openlineage.static_event_id`.
+        A static change has no run id, so the feed keys it under :func:`lakehouse_kit.openlineage.static_event_id`.
         ONE derivation for the writer (`services.provenance.feed_key`) and the reader that asks whether this
         exact event is already there (`api.fga_deps._is_replay`), so the two cannot look in different places.
         """

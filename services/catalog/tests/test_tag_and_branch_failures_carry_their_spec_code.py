@@ -73,9 +73,9 @@ from catalog.services.dataplane import (
     update_tag,
 )
 from catalog.services.table_claims import DoorTable
-from service_kit.lakehouse.history_fences import HistoryWork, TableHistory
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit.history_fences import HistoryWork, TableHistory
+from lakehouse_kit.location_claims import ClaimStore
+from service_kit.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

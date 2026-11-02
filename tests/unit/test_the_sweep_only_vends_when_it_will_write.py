@@ -34,10 +34,10 @@ import lance
 import pyarrow as pa
 import pytest
 
+from lakehouse_kit.base_registry import BaseOrigin, BaseRole, RecordedBase
 from maintenance.services.expiry import ExpiryPolicy
 from maintenance.services.sweep import _probe_before_vending
-from service_kit.lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 #: Keep the newest version, so every superseded one is reclaimable.

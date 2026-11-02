@@ -51,7 +51,7 @@ from catalog.schemas import (
     MyPermissionsResponse,
     RelationGrants,
 )
-from service_kit.control_emit import ControlEmitter, emit_control
+from lakehouse_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 

@@ -33,9 +33,9 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import maintenance
 from catalog.services.dataplane import create_table
-from service_kit.lakehouse import base_registry
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import base_registry
+from service_kit.ns_errors import install_problem_handlers
+from service_kit.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

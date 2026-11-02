@@ -22,10 +22,10 @@ from typing import Any, cast
 import httpx
 import respx
 
+from lakehouse_kit import outbox
 from lineage.api import relay_cron
 from lineage.core.config import LineageSettings, Signing
-from service_kit.lakehouse import outbox
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 IDENTITY = "service-medallion"

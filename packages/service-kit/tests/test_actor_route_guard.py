@@ -28,7 +28,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from service_kit.governed.dapr_auth import guard_actor_routes
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 ALICE = "YWxpY2U"  # base64url("alice"), exactly as the exploit would compose it

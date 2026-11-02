@@ -31,11 +31,11 @@ from catalog.api.v1.endpoints import credentials, tables
 from catalog.core.config import Settings
 from catalog.core.vending import EncryptionAtRest, VendFacts, WebIdentityVendor
 from catalog.services import table_claims
+from lakehouse_kit import location_claims
+from lakehouse_kit.store_session import IssuedSession, WebIdentity
 from service_kit.context import DiagnosticFormatter
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.governed.store_session import IssuedSession, WebIdentity
-from service_kit.lakehouse import location_claims
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 log = logging.getLogger(__name__)

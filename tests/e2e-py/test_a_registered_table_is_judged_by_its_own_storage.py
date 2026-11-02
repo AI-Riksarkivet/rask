@@ -30,8 +30,8 @@ import pytest
 from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned
 
 from maintenance.services.purge import objects_held
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+from service_kit.arrow_ipc import encode_arrow_stream
+from service_kit.naming import CATALOG_DELIMITER
 
 
 pytestmark = [

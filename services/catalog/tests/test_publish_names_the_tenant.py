@@ -5,7 +5,7 @@ The medallion's `/publication-arrival` head needs a project to route the cascade
 one by taking the first segment of the table id — and for `acme-bronze$pages` that is `acme-bronze`,
 the qualified NAMESPACE, not the project.
 
-No fix on that side can be sound. `project_namespace` joins with `-` and `PROJECT_PATTERN` permits `-`
+No fix on that side can be sound. `project_namespace` joins with `-` and `CONTROL_ID_PATTERN` permits `-`
 inside a project id, so `acme-bronze` is genuinely ambiguous between project `acme` and project
 `acme-bronze` (`warehouses.project_for_namespace` says so, and `lineage_emit`'s `ProjectResolver` note
 says it again). The catalog is the only component holding the registry binding that answers it, and it
@@ -75,7 +75,7 @@ class TestTheStampMustMATCHTheIdItIsStampedOn:
 
     THE GATE IS A VERIFICATION, NOT A DERIVATION, which is why it is sound where a string rule is not.
     This module's own header records that `acme-bronze` cannot be DECOMPOSED into a project, because
-    `PROJECT_PATTERN` permits `-` inside a project id. It can still be CHECKED against a project the
+    `CONTROL_ID_PATTERN` permits `-` inside a project id. It can still be CHECKED against a project the
     registry already answered: `project_namespace` joins with `-` and nothing else, so a
     project-qualified namespace always starts with `f"{project}-"`. Asking "does this id carry that
     tenant?" needs no parsing.

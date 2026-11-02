@@ -16,10 +16,10 @@ import pyarrow as pa
 import pytest
 from pydantic import SecretStr
 
+from lakehouse_kit import maintenance_policies
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import DatasetPlan
-from service_kit.lakehouse import maintenance_policies
 
 
 @pytest.mark.parametrize(

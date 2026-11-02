@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from maintenance.services import credentials
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:

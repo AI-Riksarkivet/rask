@@ -71,7 +71,7 @@ RECONNECT_WINDOW_SECONDS = 120.0
 #: The container the Dapr injector adds to every annotated pod, an ordinary container while rask sets no native sidecar.
 SIDECAR = "daprd"
 #: How many times Lance issues a failed listing per dataset open, whatever `client_max_retries` says (measured on
-#: pylance 12.0.0, `service_kit.lakehouse.objectfs.StoreTimeouts`).
+#: pylance 12.0.0, `lakehouse_kit.objectfs.StoreTimeouts`).
 LISTINGS_PER_OPEN = 6
 
 

@@ -37,8 +37,8 @@ from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, Inva
 
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table, insert_into_table
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit.location_claims import ClaimStore
+from service_kit.storage_options import StorageOptions
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.

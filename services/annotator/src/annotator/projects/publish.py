@@ -38,8 +38,7 @@ import pyarrow as pa
 from pydantic import BaseModel, Field
 
 from annotator.projects.models import AnnotationProject, Draft, Link, Shape, Task, TaskState
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.lakehouse.warehouse_registry import is_safe_project
+from service_kit.naming import CATALOG_DELIMITER, is_safe_project
 
 
 #: The only state that contributes SHAPES. Every other terminal state contributes a sentinel row.

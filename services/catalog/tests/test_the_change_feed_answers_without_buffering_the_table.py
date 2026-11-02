@@ -24,8 +24,8 @@ from catalog.api.dependencies import get_namespace, get_settings, get_storage_op
 from catalog.api.v1.endpoints import data as door
 from catalog.core.config import Settings
 from catalog.services.dataplane import create_table
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.ns_errors import install_problem_handlers
+from service_kit.storage_options import StorageOptions
 
 
 _ROWS = 10

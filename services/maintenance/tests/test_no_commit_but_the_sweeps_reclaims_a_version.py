@@ -22,10 +22,10 @@ import lance
 import pyarrow as pa
 import pytest
 
+from lakehouse_kit.base_refs import BaseRefs, normalise
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import DatasetPlan
-from service_kit.lakehouse.base_refs import BaseRefs, normalise
 
 
 #: The keys an armed table carries. `retain_versions` included, because pylance's own

@@ -9,7 +9,7 @@ dependencies = [
     # openfga-sdk and tenacity. The image's venv is `uv sync --package viewer --package search` alone, so a transitive dep
     # from another workspace member is present locally and ABSENT in the image — the dockerfile's import gate catches
     # it, but only after a build. Same trap compute and controlplane paid for on 2026-08-26.
-    "service-kit[governed,lancekit]",
+    "service-kit[governed]",
     # [ratelimit] because `search.core.rate_limit` imports `client_kit.rate_limit` -> slowapi, for the same reason.
     "client-kit[ratelimit]",
     # The chart launches this service under `opentelemetry-instrument` (chart/templates/explorer.yaml), whose distro
@@ -37,3 +37,17 @@ packages = ["src/search"]
 [tool.uv.sources]
 client-kit = { workspace = true }
 service-kit = { workspace = true }
+
+# Search's own import-layer rule, run by `make lint-imports` beside the lakehouse's `.importlinter`, so it travels with search
+# when it leaves this repository. A client depends on the lakehouse only through the platform package (`service_kit`) and the
+# published doors, never on the kernel only the lakehouse runs (XC-186); the shared kits are root packages here, so a chain
+# through one of them into the kernel breaks this contract too.
+[tool.importlinter]
+root_packages = ["search", "service_kit", "client_kit"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "XC-186: search imports nothing from lakehouse_kit, the lakehouse's kernel, by any chain"
+type = "forbidden"
+source_modules = ["search", "client_kit"]
+forbidden_modules = ["lakehouse_kit"]

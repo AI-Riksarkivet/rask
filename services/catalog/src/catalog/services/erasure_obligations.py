@@ -7,7 +7,7 @@ release keeps a residual. The catalog never does the job's work and never retrie
 the obligation, and nothing acts on it.
 
 **ONE RECORD PER OBLIGATION ON THE CONTROL ROOT** (`_erasure_obligations/<id>.json`), created put-if-not-exists and
-changed only through an ETag-guarded replace (`service_kit.lakehouse.records.mutate_json`), so two verifications of one
+changed only through an ETag-guarded replace (`lakehouse_kit.records.mutate_json`), so two verifications of one
 obligation cannot lose each other's write, and a released obligation never goes back to open.
 
 **AN OBLIGATION ON A DERIVED TABLE NAMES THE ONE IT FOLLOWS** ([[LH-332]], ADR 0178). A verification holds its obligation
@@ -38,9 +38,9 @@ from lance_namespace import InvalidInputError, InvalidTableStateError
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services.erasure import OPEN_OUTCOMES, ErasureReport, PinRelease, SurfaceResult, shown
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.record_store import list_records
-from service_kit.lakehouse.records import RecordMissingError, create_json, mutate_json, read_json
+from lakehouse_kit.record_store import list_records
+from lakehouse_kit.records import RecordMissingError, create_json, mutate_json, read_json
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

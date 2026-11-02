@@ -34,10 +34,10 @@ from lance_namespace import InternalError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from catalog.core.run_context import RunInput
-from service_kit.lakehouse import derived_tables
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.record_store import list_records, record_key
-from service_kit.lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json_at, replace_json
+from lakehouse_kit import derived_tables
+from lakehouse_kit.record_store import list_records, record_key
+from lakehouse_kit.records import RecordChangedError, RecordExistsError, create_json, read_json_at, replace_json
+from service_kit.storage_options import StorageOptions
 
 
 PREFIX: Final = "_table_inputs"
@@ -132,7 +132,7 @@ def every_record(control_root: str, storage_options: StorageOptions) -> list[Tab
 
 
 def as_edges(records: Sequence[TableInputs]) -> derived_tables.EdgeRows:
-    """``records`` read as the walk's edges (:mod:`service_kit.lakehouse.derived_tables`): one per declared input, received
+    """``records`` read as the walk's edges (:mod:`lakehouse_kit.derived_tables`): one per declared input, received
     when it was first declared."""
     by_input: dict[str, list[dict[str, Any]]] = {}
     for entry in records:

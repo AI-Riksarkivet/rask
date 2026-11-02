@@ -26,9 +26,9 @@ from lance_namespace import (
 
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table
-from service_kit.lakehouse import blobs
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import blobs
+from lakehouse_kit.location_claims import ClaimStore
+from service_kit.storage_options import StorageOptions
 
 
 def _declare_namespace(ns: object, name: str) -> None:

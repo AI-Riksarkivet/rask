@@ -90,13 +90,13 @@ from catalog.schemas import (
 )
 from catalog.services import native, object_uuids, table_claims, warehouses
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
-from service_kit.control_emit import emit_control
+from lakehouse_kit import base_registry, data_directories, location_claims, object_records, trash
+from lakehouse_kit.control_emit import emit_control
+from lakehouse_kit.records import RecordExistsError, RecordMissingError
 from service_kit.governed import fga
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
-from service_kit.lakehouse import base_registry, data_directories, location_claims, object_records, trash
-from service_kit.lakehouse.naming import CONTROL_ID_RE
-from service_kit.lakehouse.ns_errors import PartiallyApplied
-from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
+from service_kit.naming import CONTROL_ID_RE
+from service_kit.ns_errors import PartiallyApplied
 from storage import s3_client, split_s3_uri
 
 

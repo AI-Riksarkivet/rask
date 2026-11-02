@@ -30,8 +30,8 @@ from lance_namespace import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services.table_claims import DoorTable
-from service_kit.lakehouse import blobs
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import blobs
+from service_kit.storage_options import StorageOptions
 
 
 # Streaming window for the blob serving path: each chunk is one ``read_range`` call against

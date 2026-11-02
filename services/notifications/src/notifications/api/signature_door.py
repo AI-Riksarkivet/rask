@@ -39,6 +39,7 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import ValidationError
 
+from lakehouse_kit.control_events import CatalogControlEvent, control_signer_role
 from lineage_kit.door import DoorMode, DoorVerdict, judge
 from lineage_kit.keys import PublishedKeys
 from lineage_kit.signing import VerifiedSignature, control_signature_of, signature_of, verify_control_signature, verify_signature
@@ -47,7 +48,6 @@ from notifications.api.ingest import DAPR_RETRY, DAPR_SUCCESS
 from notifications.api.lineage_events import LineageRunEvent, notifiable
 from notifications.api.metrics import Door, Lane, Outcome, record_ingress, record_signature_refused, record_signature_would_refuse
 from notifications.api.settings import IngressSettings
-from service_kit.control_events import CatalogControlEvent, control_signer_role
 from service_kit.governed.signing_key import published_key_fetch
 
 

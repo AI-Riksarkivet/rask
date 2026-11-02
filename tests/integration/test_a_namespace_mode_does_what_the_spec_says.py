@@ -29,9 +29,9 @@ from openfga_sdk.models import CheckResponse, ReadRequestTupleKey, ReadResponse,
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
-from service_kit.control_emit import CatalogControlEvent
-from service_kit.lakehouse import maintenance_policies
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import maintenance_policies
+from lakehouse_kit.control_emit import CatalogControlEvent
+from service_kit.storage_options import StorageOptions
 from tests.integration.openfga_grants import act_as
 
 

@@ -361,7 +361,7 @@ def guard_actor_routes(app: FastAPI) -> None:
     from starlette.concurrency import run_in_threadpool
     from starlette.middleware.base import BaseHTTPMiddleware
 
-    from service_kit.lakehouse.ns_errors import problem_detail
+    from service_kit.ns_errors import problem_detail
 
     async def _guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
         if request.url.path.startswith(ACTOR_PATH_PREFIXES):

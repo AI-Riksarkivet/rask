@@ -22,15 +22,15 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 from lance_namespace import InvalidInputError, InvalidTableStateError, UnsupportedOperationError
 
-from service_kit.lakehouse import branch_layout
-from service_kit.lakehouse.base_refs import BaseRefs
-from service_kit.lakehouse.compaction_gate import compaction_refusal
-from service_kit.lakehouse.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
-from service_kit.lakehouse.version_retention import Retention, fork_versions, reclaimable_versions, recorded_branch, tag_versions
+from lakehouse_kit import branch_layout
+from lakehouse_kit.base_refs import BaseRefs
+from lakehouse_kit.compaction_gate import compaction_refusal
+from lakehouse_kit.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
+from lakehouse_kit.version_retention import Retention, fork_versions, reclaimable_versions, recorded_branch, tag_versions
 
 
 if TYPE_CHECKING:
-    from service_kit.lakehouse.objectfs import StorageOptions
+    from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 # The dataset surface these doors need, stated (CAT-CORE-15). Structural, not nominal
 # `lance.LanceDataset`: the module docstring promises these are "pure over a Lance dataset handle, so
 # both are unit-testable with a fake ``ds``", and a nominal type would make that promise unkeepable.
-# Split per verb, mirroring `service_kit.lakehouse.features`' ManifestCarrier/FragmentCarrier: a door
+# Split per verb, mirroring `lakehouse_kit.features`' ManifestCarrier/FragmentCarrier: a door
 # that only previews must not claim it can reclaim.
 #
 # `uri` is deliberately ABSENT from all of them and still read through `getattr(ds, "uri", "")`. A
@@ -95,8 +95,8 @@ def require_compactable(ds: FragmentCarrier, table_location: str, storage_option
     """Refuse compacting a dataset whose layout makes a rewrite copy bytes it does not own (#121).
 
     The gate maintenance asks before it lists a table as due for compaction, one function
-    (:func:`~service_kit.lakehouse.compaction_gate.compaction_refusal`), so a compaction is judged by the evidence that
-    listed it: :func:`~service_kit.lakehouse.features.describe_compaction_unsupported_flags` over three readings
+    (:func:`~lakehouse_kit.compaction_gate.compaction_refusal`), so a compaction is judged by the evidence that
+    listed it: :func:`~lakehouse_kit.features.describe_compaction_unsupported_flags` over three readings
     (the manifest's ``BasePath.is_dataset_root``, an object-store probe of each base, and whether any ``DataFile``
     resolves through one). It fails closed on every unknown and refuses a real shallow clone, whose compaction
     materialises the shared data into its own root (measured: 1,072 -> 108,199 bytes against a 119,693-byte base).
@@ -114,7 +114,7 @@ def require_compactable(ds: FragmentCarrier, table_location: str, storage_option
 def require_reclaimable(ds: ManifestCarrier, protected: BaseRefs | None = None) -> None:
     """#121 + #114 for the GC door: refuse a dataset whose versions this button must not reclaim.
 
-    **THE GATE IS THE SWEEP'S, per verb** — :func:`~service_kit.lakehouse.features.describe_gc_unsupported_flags`,
+    **THE GATE IS THE SWEEP'S, per verb** — :func:`~lakehouse_kit.features.describe_gc_unsupported_flags`,
     which is what ``maintenance.services.expiry`` asks before its own ``cleanup_old_versions``.
     Version reclamation and index maintenance are ROOT-SCOPED, so ``base_paths`` (16) does not
     endanger them: measured on pylance 9.0.0 across six cleanup shapes and ten repeat cycles, one

@@ -2064,7 +2064,7 @@ signing:
   # whose doors take control events (notifications, and the catalog under catalog.controlEmit) also carry RASK_CONTROL_SIGNER_ROLES, a JSON object
   # from each service that emits control events to the identities it signs as (lance.signers' `role`): catalog -> the
   # catalog, maintenance -> maintenance (its purge, under maintenance.controlEmit). The keys are
-  # exactly service_kit.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
+  # exactly lakehouse_kit.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
   # every key is present, and a role whose service is not deployed is an empty list. A door's per-action policy
   # (control_signer_role) resolves every action's allowed signers from it. Without the store or auth nothing is rendered and the doors
   # verify nothing, as lineage does.

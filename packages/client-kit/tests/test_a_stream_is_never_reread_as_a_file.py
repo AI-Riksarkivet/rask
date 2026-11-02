@@ -11,7 +11,7 @@ import pyarrow as pa
 import pytest
 
 from client_kit.lancekit.arrow_body import decode_arrow_stream_or_file
-from service_kit.lancekit.arrow_ipc import ArrowBodyError, encode_arrow_stream
+from service_kit.arrow_ipc import ArrowBodyError, encode_arrow_stream
 
 
 _LIMIT = 1024 * 1024

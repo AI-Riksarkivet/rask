@@ -20,7 +20,7 @@ fail a catalog write. Two transports sit behind the same :class:`LineageEmitter`
   ``dapr.resiliency.enabled`` chart resiliency; the subscriber's ``/dlq-event`` route ERROR-logs + acks —
   park-and-alert, not replay — docs/RESILIENCE.md gap #2, fixed 2026-07-12). The lineage
   service subscribes via its own sidecar. With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
-  object-store outbox (``service_kit.lakehouse.outbox``) before the publish, which narrows the loss window
+  object-store outbox (``lakehouse_kit.outbox``) before the publish, which narrows the loss window
   to commit→stage; the catalog's reconcile cron announces a version whose event a crash in that window lost,
   from the version log (``catalog.api.commit_reconcile``, [[LH-497]]).
 
@@ -46,15 +46,8 @@ from pydantic import BaseModel
 
 from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, tag_move_run_id
 from catalog.core.run_context import RunContext
-from lineage_kit import CanonError, SigningKey, attach_signature, author_of
-from service_kit.governed import fga
-from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
-from service_kit.lakehouse import outbox
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.schema import SchemaFields
-from service_kit.lakehouse.subjects import is_person_subject
-from service_kit.lakehouse.warehouse_registry import is_safe_project
-from service_kit.openlineage import (
+from lakehouse_kit import outbox
+from lakehouse_kit.openlineage import (
     AUTHOR_FACET,
     BRANCH_IDENTIFIER,
     DATASET_EVENT_SCHEMA_URL,
@@ -74,6 +67,13 @@ from service_kit.openlineage import (
     schema_facet,
     with_dataset_uuids,
 )
+from lakehouse_kit.schema import SchemaFields
+from lakehouse_kit.subjects import is_person_subject
+from lineage_kit import CanonError, SigningKey, attach_signature, author_of
+from service_kit.governed import fga
+from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
+from service_kit.naming import is_safe_project
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -426,7 +426,7 @@ def build_write_event(
     if schema_fields:
         # Standard schema facet → the per-version column schema (blob/vector-aware) (#24), so a
         # catalog-written table carries its real columns in the feed and in a forwarded graph backend.
-        # Built by the SHARED service_kit.openlineage helper — one spec version across all emitters.
+        # Built by the SHARED lakehouse_kit.openlineage helper — one spec version across all emitters.
         facets["schema"] = schema_facet(_PRODUCER, schema_fields)
     # WHICH CATALOG GOVERNS THIS, so two estates writing `bronze$events` are not one dataset in a shared
     # graph backend. `job_namespace` is reused as the catalog's NAME rather than taking a second parameter:
@@ -472,7 +472,7 @@ def build_write_event(
 #: than a stub that lies. Wired once in `main.py`, where the app-level binding cache lives.
 #:
 #: IT CANNOT BE A STRING SPLIT. A project-qualified name joins with `-` ("acme", "bronze") -> "acme-bronze",
-#: but `PROJECT_PATTERN` ALLOWS `-` inside a project id — so "acme-bronze" is ambiguous between project
+#: but `CONTROL_ID_PATTERN` ALLOWS `-` inside a project id — so "acme-bronze" is ambiguous between project
 #: `acme` and project `acme-bronze`, and guessing wrong notifies the wrong tenant's watchers. The
 #: registry binding is the only sound answer.
 type ProjectResolver = Callable[[str], Awaitable[str | None]]

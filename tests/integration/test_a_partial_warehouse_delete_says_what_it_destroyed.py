@@ -17,7 +17,7 @@ These pin the carrier. The door's own report, from a failure forced mid-cascade 
 
 from __future__ import annotations
 
-from service_kit.lakehouse.ns_errors import PartiallyApplied, problem_detail
+from service_kit.ns_errors import PartiallyApplied, problem_detail
 
 
 def test_an_extension_member_cannot_redefine_a_reserved_field() -> None:

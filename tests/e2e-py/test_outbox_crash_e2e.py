@@ -43,10 +43,10 @@ import requests
 from outbox_probe import bearer, owned_output_table, table_uuids
 
 from catalog.core.lineage_emit import INSERT, InputRef, build_write_event
+from lakehouse_kit import outbox
 from lineage_kit.signing import SigningKey, attach_signature
 from service_kit.governed.signing_key import signing_key_secret
-from service_kit.lakehouse import outbox
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
@@ -161,8 +161,8 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
     child = textwrap.dedent(f"""
         import json, sys, time
         sys.path.insert(0, {os.path.join(os.getcwd(), "services")!r})
-        from service_kit.lakehouse import outbox
-        from service_kit.lakehouse.objectfs import StorageOptions
+        from lakehouse_kit import outbox
+        from service_kit.storage_options import StorageOptions
         so = StorageOptions.from_flat(json.loads(sys.stdin.readline()))
         outbox.stage_event({OUTBOX_URI!r}, so, {run_id!r}, {event_json!r})
         print("STAGED", flush=True)          # the commit→publish window is now OPEN

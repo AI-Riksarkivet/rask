@@ -32,7 +32,7 @@ from service_kit.problem import problem_body
 #:
 #: SPELLED AS A LITERAL because this middleware is registered for EVERY app `make_service_app` builds,
 #: including storeless ones — importing the enum here would make `import service_kit` require the
-#: `[governed]`/`[lakehouse]` extras, and an image built without them fails `.docker/import-gate.py`.
+#: `[governed]` extra, and an image built without it fails `.docker/import-gate.py`.
 #: Deferring the import into the reject path would be worse, not better: it would turn a build-time
 #: failure into a request-time one, on the exact request that is already going wrong.
 #:

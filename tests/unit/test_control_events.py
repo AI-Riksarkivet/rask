@@ -12,13 +12,13 @@ import asyncio
 from typing import Any, cast
 
 from catalog.core.control_buffer import ControlEventBuffer
-from service_kit.control_emit import (
+from lakehouse_kit.control_emit import (
     DaprControlEmitter,
     NoopControlEmitter,
     emit_control,
     make_control_emitter,
 )
-from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent, ControlAction
+from lakehouse_kit.control_events import CONTROL_TOPIC, CatalogControlEvent, ControlAction
 
 
 class _FakeDapr:

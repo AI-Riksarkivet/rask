@@ -8,7 +8,7 @@ dependencies = [
     # [governed] because the doors import `service_kit.governed` (deps, audit, settings, secrets) and the media
     # lifespan imports its `fga` module. The media image's venv is `uv sync --package viewer --package search`,
     # so nothing else in it carries openfga-sdk or tenacity: its import gate refused 17 modules without it.
-    "service-kit[governed,lancekit]",
+    "service-kit[governed,arrow]",
     # The media app factory, its lifespan and the dataset registry the doors serve from.
     "client-kit",
     # The chart launches this service under `opentelemetry-instrument` (chart/templates/explorer.yaml), whose distro
@@ -53,20 +53,20 @@ extend = "../../pyproject.toml"
 "lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (catalog dataplane, medallion compute/ingest)."
 "catalog.services.warehouses.put_warehouse".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
 "catalog.services.projects.put_project".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
-"service_kit.dapr_publish.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
+"lakehouse_kit.dapr_publish.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
 "signal.signal".msg = "SIGTERM is taken only by service_kit.draining; a second handler replaces the drain."
-"pyarrow.ipc.open_stream".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.open_file".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.MessageReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.read_message".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.read_record_batch".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.read_schema".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.feather".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"service_kit.lancekit.arrow_ipc.decode_arrow_response".msg = "Only the catalog /query reader may skip the size bound."
+"pyarrow.ipc.open_stream".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.open_file".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.MessageReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_message".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_record_batch".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_schema".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.feather".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"service_kit.arrow_ipc.decode_arrow_response".msg = "Only the catalog /query reader may skip the size bound."
 "dapr.actor.ActorProxy".msg = "Build an actor proxy through the service's proxies module: it translates the wire method names."
 "notifications.subjects.encode_subject".msg = "An inbox actor id is derived only in notifications.proxies."
 "service_kit.governed.fga.write_tuples".msg = "Tuple grants happen only at the registered granting sites."
@@ -82,3 +82,17 @@ extend = "../../pyproject.toml"
 "ray_kit.await_success".msg = "Poll a Ray job through the shared submit-or-reattach kernel."
 "os.getenv".msg = "Declare the value on ViewerSettings."
 "os.environ".msg = "Declare the value on ViewerSettings."
+
+# The viewer's own import-layer rule, run by `make lint-imports` beside the lakehouse's `.importlinter`, so it travels with the viewer
+# when it leaves this repository. A client depends on the lakehouse only through the platform package (`service_kit`) and the
+# published doors, never on the kernel only the lakehouse runs (XC-186); the shared kits are root packages here, so a chain
+# through one of them into the kernel breaks this contract too.
+[tool.importlinter]
+root_packages = ["viewer", "service_kit", "client_kit"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "XC-186: viewer imports nothing from lakehouse_kit, the lakehouse's kernel, by any chain"
+type = "forbidden"
+source_modules = ["viewer", "client_kit"]
+forbidden_modules = ["lakehouse_kit"]

@@ -1,8 +1,8 @@
-"""`import service_kit` must not require the optional Lance extras.
+"""`import service_kit` must not require its optional Lance extra.
 
 WHY. `service-kit` is shared by every service, including the storeless ones — the estate's rule is
-that the heavy Lance/Ray deps stay behind `[governed]` / `[lakehouse]` / `[lancekit]` and the base
-stays light. Two module-scope imports quietly broke that: `service_kit/__init__.py` imported
+that its one Lance dependency stays behind `[governed]`, the lakehouse's own Lance stack is
+`lakehouse-kit`'s, and the base stays light. Two module-scope imports quietly broke that: `service_kit/__init__.py` imported
 `lakehouse.ns_errors`, and `service_kit.body_limit` — middleware EVERY app gets — imported
 `lance_namespace.ErrorCode` and `ns_errors.problem_body`.
 
@@ -26,9 +26,8 @@ import sys
 import pytest
 
 
-#: Modules the BASE import path must not need. `service_kit.lakehouse` is the optional layer and may
-#: import what it likes; so may a module nothing in `__init__` reaches (`control_emit`, imported only
-#: by services that emit control events and therefore hold the extra). The rule is about the CLOSURE
+#: Modules the BASE import path must not need. A module nothing in `__init__` reaches may import what
+#: it likes, and so may the lakehouse's kernel, a package of its own (`lakehouse_kit`). The rule is about the CLOSURE
 #: of `import service_kit`, not about every file in the directory — which is why the first test below
 #: simulates the absence rather than grepping for it.
 _OPTIONAL = "lance_namespace"
@@ -81,7 +80,7 @@ def test_the_body_limit_code_still_matches_the_lance_namespace_enum() -> None:
     test runs where the extra IS installed and is the only thing standing between that literal and a
     silent divergence from the spec's own code.
     """
-    lance_namespace = pytest.importorskip("lance_namespace", reason="the [lakehouse] extra is absent, so there is no enum to compare against")
+    lance_namespace = pytest.importorskip("lance_namespace", reason="the [governed] extra is absent, so there is no enum to compare against")
     from service_kit.body_limit import _INVALID_INPUT
 
     assert int(lance_namespace.ErrorCode.INVALID_INPUT) == _INVALID_INPUT, (

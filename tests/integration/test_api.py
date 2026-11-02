@@ -664,8 +664,8 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
     from catalog.core.config import get_settings
     from catalog.services import table_claims
     from catalog.services import warehouses as wh_svc
-    from service_kit.lakehouse import location_claims
-    from service_kit.lakehouse import maintenance_policies as pol_svc
+    from lakehouse_kit import location_claims
+    from lakehouse_kit import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
@@ -690,7 +690,7 @@ def test_project_policies_list_finds_a_warehouse_bound_namespace_policy(client: 
     # through the BINDING of the namespace it names.
     from catalog.core.config import get_settings
     from catalog.services import warehouses as wh_svc
-    from service_kit.lakehouse import maintenance_policies as pol_svc
+    from lakehouse_kit import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
@@ -713,8 +713,8 @@ def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: 
     from catalog.core.config import get_settings
     from catalog.services import table_claims
     from catalog.services import warehouses as wh_svc
-    from service_kit.lakehouse import location_claims
-    from service_kit.lakehouse import maintenance_policies as pol_svc
+    from lakehouse_kit import location_claims
+    from lakehouse_kit import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
@@ -736,7 +736,7 @@ def test_project_policies_list_returns_only_its_own_project_record(client: TestC
     # surface another tenant's project policy inside acme's view.
     from catalog.core.config import get_settings
     from catalog.services import warehouses as wh_svc
-    from service_kit.lakehouse import maintenance_policies as pol_svc
+    from lakehouse_kit import maintenance_policies as pol_svc
 
     s = _project_policy_settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s

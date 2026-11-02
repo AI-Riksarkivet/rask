@@ -16,9 +16,9 @@ import lance
 import pyarrow as pa
 import pytest
 
+from lakehouse_kit.maintenance_due import IndexDue
 from maintenance.services import index_health
 from maintenance.services.index_health import due_indices
-from service_kit.lakehouse.maintenance_due import IndexDue
 
 
 def _indexed(tmp_path: Path, *, rows: int = 200) -> str:

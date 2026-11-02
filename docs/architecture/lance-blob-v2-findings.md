@@ -91,7 +91,7 @@ class, exactly the kind this estate's gates exist to catch.
 
 1. Use `scanner(columns=[…], blob_handling="all_binary")` — it preserves cardinality correctly, nulls
    included, and it returns the tabular columns in the SAME scan, so alignment holds by construction with
-   no mask to maintain. In this repo that is `service_kit.lakehouse.blobs.read_aligned_table`, which the
+   no mask to maintain. In this repo that is `lakehouse_kit.blobs.read_aligned_table`, which the
    viewer's page reads use.
 2. Key off the row address the API already returns — `read_blobs` yields `(row_address, payload)` and
    `read_blob_ranges` yields `(request_index, row_address, payload)`; map results back by that

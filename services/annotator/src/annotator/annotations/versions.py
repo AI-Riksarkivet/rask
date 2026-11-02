@@ -30,11 +30,10 @@ from annotator.annotations.schema import ANNOTATIONS_TABLE
 from annotator.api.security import RawBearerToken
 from annotator.corpus import resolve
 from client_kit.lancekit.keys import chunk_key_filter, validate_doc_key
-from client_kit.lancekit.reader import open_catalog_reader
+from client_kit.lancekit.reader import CatalogTableReader, open_catalog_reader
 from client_kit.lancekit.registry import table_dataset
 from client_kit.media.deps import DatasetParam, StateDep
 from service_kit.exceptions import NotFoundError
-from service_kit.lancekit.reader import CatalogTableReader
 
 
 router = APIRouter(tags=["annotate"])

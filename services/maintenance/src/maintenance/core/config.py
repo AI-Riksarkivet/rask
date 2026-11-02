@@ -17,9 +17,11 @@ from typing import TYPE_CHECKING
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from service_kit.governed.settings import FgaSettings, SignatureDoorSettings
+from lakehouse_kit.objectfs import lance_storage_options
+from lakehouse_kit.signature_doors import SignatureDoorSettings
+from service_kit.governed.settings import FgaSettings
 from service_kit.governed.store_credential import S3KeyPair, store_key_pair
-from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
+from service_kit.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:
@@ -90,7 +92,7 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: Expire a table's versions only once at least this many are RECLAIMABLE under its policy — Lakekeeper's
     #: `min-snapshots-to-expire`. Both lanes ask it: an expiry pass that reclaims one version a tick costs a vend, a
     #: manifest commit read and a listing for almost nothing. Eligibility is
-    #: :func:`service_kit.lakehouse.version_retention.reclaimable_versions`, the rule the catalog's GC preview shows.
+    #: :func:`lakehouse_kit.version_retention.reclaimable_versions`, the rule the catalog's GC preview shows.
     min_versions_to_expire: int = Field(default=20, ge=1, alias="MAINTENANCE_MIN_VERSIONS_TO_EXPIRE")
     #: How old a manifest a stock writer staged for a version its table already holds must be before expiry removes it
     #: ([[LH-529]]): one whose commit lost its version is garbage Lance's own cleanup never lists, and the grace outlasts any
@@ -427,8 +429,8 @@ def shared_lance_session() -> lance.Session:
     minting and discarding Lance's default 1 GiB + 6 GiB ceilings per open — ceilings that dwarf
     the pod's own 512Mi limit. Caps are LRU soft bounds; session keys carry (uri, version, etag),
     so a commit bumping a version writes new keys and a new version is never served stale. An old
-    version whose data files were reclaimed can be (`service_kit.lakehouse.lance_session`)."""
-    from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
+    version whose data files were reclaimed can be (`lakehouse_kit.lance_session`)."""
+    from lakehouse_kit.lance_session import affordable_cache_bytes, lance_session
 
     settings = get_settings()
     # CLAMPED TO WHAT THIS CONTAINER HOLDS, because the configured pair did not fit it. 128 + 256 MB

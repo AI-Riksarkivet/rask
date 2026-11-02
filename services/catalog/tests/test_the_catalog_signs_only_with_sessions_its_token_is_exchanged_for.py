@@ -5,7 +5,7 @@ temporary credential under the policy the store binds to the token's subject (AD
 enforcing IAM policy (`conftest.two_stores`): a request signed with a session moto no longer holds is refused, which is how
 a session's expiry at the store is played. moto checks no token, so what each exchange asked for is read back from moto's
 STS backend in this process: the session's name, its policy and its expiry. The catalog's clock is its session cache's
-(`service_kit.governed.store_session.SESSIONS`), moved forward, and the catalog's holder is asked whether its session is
+(`lakehouse_kit.store_session.SESSIONS`), moved forward, and the catalog's holder is asked whether its session is
 due, the call its background loop makes on every wake. The store's clock is moto's (`moto.sts.models.utcnow`), which
 dates the expiry STS answers, so a store whose clock disagrees with the catalog's is played by shifting it.
 """
@@ -26,7 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 from moto.sts import models as sts_models
 
-from service_kit.governed import store_session
+from lakehouse_kit import store_session
 from service_kit.governed.machine_identity import ServicePrincipal
 
 

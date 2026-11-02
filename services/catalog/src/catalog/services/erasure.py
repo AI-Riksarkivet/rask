@@ -121,11 +121,12 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
 from catalog.services.maintenance import ReferredSourceError, refuse_a_referring_datasets_source
-from service_kit.lakehouse.base_refs import BaseRefs, normalise
-from service_kit.lakehouse.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
-from service_kit.lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
-from service_kit.lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from lakehouse_kit.base_refs import BaseRefs, normalise
+from lakehouse_kit.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
+from lakehouse_kit.features import describe_gc_unsupported_flags, manifest_feature_flags
+from lakehouse_kit.history_fences import HistoryFencedError, HistoryWork, TableHistory
+from lakehouse_kit.objectfs import fs_and_base
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

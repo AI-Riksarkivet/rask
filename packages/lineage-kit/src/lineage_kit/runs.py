@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 
 
-#: uuid5 namespace for deterministic run ids. ALIGNED to the lance-ns URL: ``service_kit.openlineage.run_id_for``
+#: uuid5 namespace for deterministic run ids. ALIGNED to the lance-ns URL: ``lakehouse_kit.openlineage.run_id_for``
 #: seeds from the same URL, and every deterministic run id already in the lineage graph derives from it, so a
 #: different namespace here would break redelivery MERGE for every producer that moves between the two.
 _RUN_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Borg93/lance-ns")

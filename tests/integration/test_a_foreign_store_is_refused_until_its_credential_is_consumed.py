@@ -26,7 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.services import projects, warehouses
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 from storage import s3_client
 
 

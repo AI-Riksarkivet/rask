@@ -55,12 +55,12 @@ from catalog.core.lineage_emit import PUBLISH_TABLE, RESTORE_TABLE, LineageEmitt
 from catalog.schemas import PromotionDecision, PromotionDecisionRequest, PromotionHold, PromotionsListResponse, PublishRequest, PublishResult
 from catalog.services import dataplane, promotions, publication, table_claims, warehouses
 from catalog.services.table_claims import DoorTable
-from service_kit.control_emit import ControlEmitter, emit_control
+from lakehouse_kit import commit_records
+from lakehouse_kit.control_emit import ControlEmitter, emit_control
+from lakehouse_kit.records import RecordChangedError
 from service_kit.governed import fga
 from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.lakehouse import commit_records
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.records import RecordChangedError
+from service_kit.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:
@@ -159,7 +159,7 @@ async def publication_extra(
     """The `table_published` payload: the version RANGE, the vended location, and the TENANT.
 
     The tenant is here because the catalog is the only component that can answer it — the binding
-    (namespace → warehouse → project) is a registry read, and `PROJECT_PATTERN` permits `-` inside a
+    (namespace → warehouse → project) is a registry read, and `CONTROL_ID_PATTERN` permits `-` inside a
     project id, so no string rule can recover `acme` from `acme-bronze`. The medallion's publication
     head took segment 0 and got the namespace instead. Resolved through the emitter so this names the
     same tenant the lineage facet does, off the same request-scoped cache.
@@ -195,7 +195,7 @@ async def publication_extra(
     #
     # A CHECK, NOT A PARSE, which is why this is sound where a string rule is not. This module's
     # docstring records that `acme-bronze` cannot be DECOMPOSED into a project, because
-    # `PROJECT_PATTERN` permits `-` inside a project id. It can still be verified against a project the
+    # `CONTROL_ID_PATTERN` permits `-` inside a project id. It can still be verified against a project the
     # registry already answered: a project-qualified name joins with `-` and nothing else, so a qualified
     # namespace always starts with `f"{project}-"`. Nothing here has to choose between `acme` and
     # `acme-eu` — the registry chose, and this only confirms the id agrees.
@@ -243,7 +243,7 @@ async def resolve_effective_gate(
     compose differently live on `publication.EffectiveGate`.
 
     The project comes from the same request-scoped binding `publication_extra` names the tenant with,
-    for the same reason: `PROJECT_PATTERN` permits `-` inside a project id, so no string rule recovers
+    for the same reason: `CONTROL_ID_PATTERN` permits `-` inside a project id, so no string rule recovers
     `acme` from `acme-bronze`, and a declaration is keyed by project. An unresolvable binding leaves
     the request governing — there is no declaration to find without a project id.
     """

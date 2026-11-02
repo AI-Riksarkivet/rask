@@ -27,7 +27,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import DatasetPlan
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 CATALOG = "http://catalog.test"

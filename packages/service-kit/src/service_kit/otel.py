@@ -261,7 +261,7 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings) -> bool:
 
     # botocore — THE OBJECT STORE. Every S3 call in the estate rode this uninstrumented: vending
     # (`catalog/core/vending.py`), the warehouse registry (`catalog/services/warehouses.py`), the
-    # records plane (`service_kit/lakehouse/records.py`) and `storage/client.py`. boto3 is built on
+    # records plane (`lakehouse_kit/records.py`) and `storage/client.py`. boto3 is built on
     # botocore, so instrumenting the lower layer covers every client the estate constructs without
     # any of them changing.
     #

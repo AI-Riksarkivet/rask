@@ -18,7 +18,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))

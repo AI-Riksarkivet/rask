@@ -1,9 +1,9 @@
 """The lakehouse side of the publish saga — the concrete :class:`~annotator.projects.saga.Publisher`.
 
-Posts through the catalog's REST API over the same ``lance_namespace_urllib3_client`` stack the
-media plane's merge transport uses (`service_kit.lancekit.writer.RestCatalogWriteTransport`) — **the
-annotator never writes Lance directly** (§7.1): the catalog is what places the new table in its
-namespace's authorization graph and emits the ``CREATE`` RunEvent.
+Posts through the catalog's REST API over the stock Lance Namespace SDK, the stack the media plane's
+merge transport uses (`client_kit.lancekit.catalog`) — **the annotator never writes Lance directly**
+(§7.1): the catalog is what places the new table in its namespace's authorization graph and emits the
+``CREATE`` RunEvent.
 
 Retry safety maps onto the catalog's own contract: ``create`` posts ``mode=exist_ok``. Fresh id ⇒ the
 catalog creates and emits the event. Replayed id ⇒ the catalog KEEPS the existing table and returns its
@@ -15,8 +15,8 @@ owner of what it creates, and its grant is writer on the target. The version the
 the project records and whose commit names the publish as its run, is the publish's reference; blessing
 it is the tenant's act at the catalog's publish door.
 
-The create goes over :func:`publish_client`, one pooled, retrying client per publisher, released by
-:meth:`CatalogPublisher.close`.
+A create the catalog does not answer is sent again (:data:`CREATE_ATTEMPTS`), which ``mode=exist_ok``
+makes safe.
 
 **The saga publishes as the annotator's own ServiceAccount** (ADR 0171): its projected token, which the
 catalog verifies like any service's, read again on every call because the kubelet replaces it before it
@@ -35,17 +35,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
-
-from pydantic import BaseModel
 
 from annotator.core.config import get_annotator_settings
 from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA, PublishPlan, namespace_for
 from annotator.projects.saga import PublishOutcome, run_publish
+from client_kit.lancekit.catalog import NamespaceCatalogWriteTransport, connect_catalog
+from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.machine_identity import identity_bearer
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from service_kit.naming import CATALOG_DELIMITER
 
 
 logger = logging.getLogger(__name__)
@@ -54,23 +54,13 @@ logger = logging.getLogger(__name__)
 RUN_ID_HEADER = "x-rask-run-id"
 INPUTS_HEADER = "x-rask-inputs"
 
-#: Connect-failure retries for the publish transport. A transient reset that is not retried fires
-#: `publish_failed` and leaves the project waiting for a watchdog tick. Retrying `create` is safe by
-#: construction, not by hope: it posts `mode=exist_ok`, which is the same property the whole
-#: retry-safety argument in this module's docstring rests on.
-CATALOG_TRANSPORT_RETRIES = 3
-
-
-def publish_client(timeout: float) -> Any:
-    """One pooled, retrying `httpx.Client` for the publish path's direct-HTTP calls.
-
-    A `Client` (and therefore a connection) per call was the other half of the same finding: the
-    module-level `httpx.post` helper builds one, uses it once and throws it away. Callers own the
-    returned client and must close it.
-    """
-    import httpx  # noqa: PLC0415 - publish path only, like every other httpx use in this module
-
-    return httpx.Client(transport=httpx.HTTPTransport(retries=CATALOG_TRANSPORT_RETRIES), timeout=timeout)
+#: Attempts at the publish's create before it fails the saga run. A dropped connection or an unanswered call is retried
+#: here rather than left to the watchdog's next tick, and retrying is safe by construction, not by hope: `create` posts
+#: `mode=exist_ok`, the property this module's retry-safety argument rests on. pylance 13.0.0's REST client retries
+#: nothing itself (measured 2026-11-02: one attempt against a reset connection, then an error).
+CREATE_ATTEMPTS = 3
+#: The pause before the second attempt, doubled before each later one.
+CREATE_BACKOFF_S = 0.5
 
 
 def _arrow_stream_bytes(plan: PublishPlan) -> bytes:
@@ -78,76 +68,16 @@ def _arrow_stream_bytes(plan: PublishPlan) -> bytes:
     all-sentinel publish still produces correctly-typed columns."""
     import pyarrow as pa  # noqa: PLC0415 - heavy import, publish path only
 
-    from service_kit.lancekit.arrow_ipc import encode_arrow_stream  # noqa: PLC0415 - keeps pyarrow off module import
+    from service_kit.arrow_ipc import encode_arrow_stream  # noqa: PLC0415 - keeps pyarrow off module import
 
     return encode_arrow_stream(pa.Table.from_pylist(plan.rows, schema=PUBLISHED_LABELS_SCHEMA))
 
 
-class CreateTableResult(BaseModel):
-    """What the catalog's create answers with, as far as the saga cares: the table version.
-
-    ``version`` mirrors the SDK response's attribute of the same name, so `CatalogPublisher` reads
-    an injected SDK-shaped fake and this model through one `getattr`."""
-
-    version: int | None = None
-
-
-class _HttpCreateApi:
-    """The create call over direct HTTP — same signature as the SDK's ``DataApi.create_table`` so
-    the injectable test seam is unchanged, plus the S4 params the generated client cannot send.
-
-    Holds ONE pooled, retrying client for the life of the publisher (see
-    :data:`CATALOG_TRANSPORT_RETRIES`); `close` releases it, and `CatalogPublisher.close` is what
-    calls that.
-    """
-
-    def __init__(self, base_url: str) -> None:
-        self._base = base_url.rstrip("/")
-        self._client = publish_client(60.0)
-
-    def close(self) -> None:
-        """Release the pooled connection. Called by `CatalogPublisher.close`."""
-        self._client.close()
-
-    def create_table(
-        self,
-        table_id: str,
-        body: bytes,
-        *,
-        delimiter: str = CATALOG_DELIMITER,
-        mode: str | None = None,
-        properties: str | None = None,
-        _headers: dict[str, str] | None = None,
-        _request_timeout: float = 60.0,
-    ) -> CreateTableResult:
-        from urllib.parse import quote  # noqa: PLC0415
-
-        params: dict[str, str] = {"delimiter": delimiter}
-        if mode:
-            params["mode"] = mode
-        if properties:
-            params["properties"] = properties
-        response = self._client.post(
-            f"{self._base}/v1/table/{quote(table_id, safe='')}/create",
-            params=params,
-            content=body,
-            headers={"content-type": ARROW_STREAM_MEDIA_TYPE, **(_headers or {})},
-            timeout=_request_timeout,
-        )
-        if response.status_code >= 400:
-            # Same failure surface the SDK raises — translate_catalog_errors maps it onward.
-            from lance_namespace_urllib3_client.exceptions import ApiException  # noqa: PLC0415
-
-            raise ApiException(status=response.status_code, reason=response.text[:500])
-
-        return CreateTableResult(version=response.json().get("version"))
-
-
 class CatalogPublisher:
-    """`saga.Publisher` over the catalog's REST API.
+    """`saga.Publisher` over the catalog's REST API, through the stock Lance Namespace SDK.
 
-    The create is synchronous (a pooled httpx client), so it runs in a worker thread. ``data_api`` is
-    injectable for tests — the structural-fake pattern the estate uses for Ray."""
+    The create is a blocking SDK call, so it runs in a worker thread; a namespace is built per call, carrying that call's
+    bearer and context headers."""
 
     def __init__(
         self,
@@ -156,15 +86,11 @@ class CatalogPublisher:
         delimiter: str = CATALOG_DELIMITER,
         token_file: Path | None = None,
         originator: str | None = None,
-        timeout: float = 60.0,
-        data_api: Any | None = None,
     ) -> None:
+        self._base_url = base_url
         self._delimiter = delimiter
-        self._timeout = timeout
         self._token_file = token_file
         self._originator = originator
-        # Create goes over direct HTTP on the pooled, retrying client, posting the Arrow stream body itself.
-        self._data = data_api if data_api is not None else _HttpCreateApi(base_url)
 
     def _headers(self) -> dict[str, str]:
         """This call's headers: the annotator's own token read now, and the person the publish is for.
@@ -179,20 +105,6 @@ class CatalogPublisher:
             headers["x-lance-originator"] = self._originator
         return headers
 
-    def close(self) -> None:
-        """Release the transport's connections.
-
-        Only what THIS publisher opened: an injected `data_api` belongs to its injector, and closing it
-        here would be ownership this object does not have (the same reasoning the annotator's lifespan
-        applies to `AppState`'s slots).
-        """
-        if not isinstance(self._data, _HttpCreateApi):
-            return
-        try:
-            self._data.close()
-        except Exception:  # noqa: BLE001 - a shutdown that raises hides whatever came after it
-            logger.warning("error closing the publish transport")
-
     async def create_table(
         self,
         table_id: str,
@@ -204,27 +116,27 @@ class CatalogPublisher:
         source_version: int | None = None,
     ) -> int:
         """Create (or converge on) the published table; return its version."""
-        from service_kit.lancekit.reader import translate_catalog_errors  # noqa: PLC0415 - keeps import-time light
-
         body = _arrow_stream_bytes(plan)
         headers = {**self._headers(), RUN_ID_HEADER: run_id}
         if source is not None and source_version is not None:
             headers[INPUTS_HEADER] = json.dumps([{"table": source.split(self._delimiter), "version": source_version}])
+        catalog = NamespaceCatalogWriteTransport(
+            connect_catalog(self._base_url, token=None, delimiter=self._delimiter, headers=headers),
+            table_id.split(self._delimiter),
+        )
+        version = await asyncio.to_thread(_create_with_retries, catalog, body, properties)
+        return version or 1
 
-        def _call() -> Any:
-            with translate_catalog_errors():
-                return self._data.create_table(
-                    table_id,
-                    body,
-                    delimiter=self._delimiter,
-                    mode="exist_ok",
-                    properties=json.dumps(properties),
-                    _headers=headers,
-                    _request_timeout=self._timeout,
-                )
 
-        response = await asyncio.to_thread(_call)
-        return int(getattr(response, "version", None) or 1)
+def _create_with_retries(catalog: NamespaceCatalogWriteTransport, body: bytes, properties: dict[str, str]) -> int | None:
+    """The create, sent again after an unavailable answer until :data:`CREATE_ATTEMPTS` are spent."""
+    for attempt in range(1, CREATE_ATTEMPTS):
+        try:
+            return catalog.create(body, mode="exist_ok", properties=properties)
+        except ServiceUnavailableError:
+            logger.warning("the catalog did not take the publish's create (attempt %d of %d); sending it again", attempt, CREATE_ATTEMPTS)
+            time.sleep(CREATE_BACKOFF_S * 2 ** (attempt - 1))
+    return catalog.create(body, mode="exist_ok", properties=properties)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -331,16 +243,10 @@ async def run_publish_for(project_id: str) -> PublishOutcome | None:
         token_file=settings.catalog_token_file,
         originator=subject,
     )
-    try:
-        return await run_publish(
-            project_handle=project_handle,
-            task_handle=task_handle,
-            publisher=publisher,
-            namespace=namespace,
-            subject=subject,
-        )
-    finally:
-        # The publisher holds pooled connections to the catalog (and the SDK's own client). One
-        # publisher is built per saga run, so leaving them to the collector leaks a connection per
-        # publish.
-        publisher.close()
+    return await run_publish(
+        project_handle=project_handle,
+        task_handle=task_handle,
+        publisher=publisher,
+        namespace=namespace,
+        subject=subject,
+    )

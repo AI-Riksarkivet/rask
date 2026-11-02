@@ -65,7 +65,7 @@ estate) while `rask-maintenance`, on its scoped identity, was denied the same ca
 the widest storage credential in the estate was mounted into the
 notifications inbox, the compute shell and the flows backend — none of which
 constructs an S3 client at all: zero imports of lance, pyarrow, boto3, storage or any
-service_kit.lakehouse storage module, no HF code, and no HF/boto dependency. Nothing
+lakehouse_kit storage module, no HF code, and no HF/boto dependency. Nothing
 in them can make the call the credential authorises.
 
 IT IS ALSO THE FORBIDDEN MECHANISM. Owner ruling 2026-09-08: "Never secret through

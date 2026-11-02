@@ -20,8 +20,8 @@ from client_kit.lancekit.keys import chunk_key_filter, validate_doc_key
 from client_kit.lancekit.reader import open_catalog_reader, open_reader
 from client_kit.lancekit.registry import table_dataset
 from client_kit.media.deps import DatasetParam, StateDep
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.exceptions import NotFoundError
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 if TYPE_CHECKING:

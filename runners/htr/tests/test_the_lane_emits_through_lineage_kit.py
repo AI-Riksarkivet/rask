@@ -69,7 +69,7 @@ def _event(
 )
 def test_a_store_uri_becomes_an_external_dataset_ref(uri: str, expected: tuple[str, str]) -> None:
     """`s3://bucket` and the bare `file` identifier are the two shapes
-    `service_kit.lakehouse.naming.is_external_source_namespace` recognises as outside the estate."""
+    `service_kit.naming.is_external_source_namespace` recognises as outside the estate."""
     assert dataset_ref(uri) == expected
 
 

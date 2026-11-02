@@ -29,8 +29,8 @@ from catalog.api.v1.endpoints import versions as version_door
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.ns_errors import install_problem_handlers
+from service_kit.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

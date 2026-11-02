@@ -19,7 +19,7 @@ from lance_namespace import CreateTableResponse
 
 from catalog.core.config import Settings, get_settings
 from catalog.services import dataplane, table_claims
-from service_kit.lakehouse import location_claims
+from lakehouse_kit import location_claims
 
 
 ARROW_STREAM = "application/vnd.apache.arrow.stream"

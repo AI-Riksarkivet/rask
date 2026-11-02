@@ -24,7 +24,7 @@ its recreated parent (``a1b_child_branch_release.py``). The descendants' own com
 the grace period to copy them out (owner, 2026-10-10).
 
 **ONE CLAIM PER RELEASE ACROSS REPLICAS.** A cron binding fires on every replica, so a tick claims a record by
-an ETag-guarded write (:func:`service_kit.lakehouse.records.mutate_json`) carrying a lease; a replica that
+an ETag-guarded write (:func:`lakehouse_kit.records.mutate_json`) carrying a lease; a replica that
 loses the write, or finds the lease live, leaves the record alone.
 
 **THE PREDICATE IS NEVER STORED.** It names the subject, and a record on the control root would be one more
@@ -42,10 +42,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.services.dataplane import recorded_branch
 from catalog.services.erasure import Pin
-from service_kit.lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.record_store import delete_record, list_records
-from service_kit.lakehouse.records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
+from lakehouse_kit.history_fences import HistoryFencedError, HistoryWork, TableHistory
+from lakehouse_kit.record_store import delete_record, list_records
+from lakehouse_kit.records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

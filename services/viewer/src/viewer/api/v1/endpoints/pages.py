@@ -45,13 +45,13 @@ from fastapi.responses import StreamingResponse
 from lance.blob import BlobFile
 from pydantic import BaseModel, computed_field
 
+from client_kit.lancekit.blobs import is_blob_field
 from client_kit.lancekit.predicate import eq
 from client_kit.media.authz import table_object
 from client_kit.media.deps import StateDep
 from service_kit.exceptions import ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
 from service_kit.governed.audit import AuditOutcome, audit
 from service_kit.governed.deps import RawBearerToken
-from service_kit.lakehouse.blobs import is_blob_field
 from viewer.api.security import READ_DATA, READ_METADATA, CheckerDep, CurrentSubject
 from viewer.api.v1.endpoints.media import MAX_BUFFERED_BLOB_BYTES, _handle_size, _stream_handle
 from viewer.audit_actions import ViewerAuditAction
@@ -79,9 +79,8 @@ class Page(BaseModel):
     #: TWO CASES WHERE THAT IS NOT A BYTE COUNT, stated rather than smuggled, and both report 0:
     #:
     #: * an EXTERNAL descriptor (``kind == EXTERNAL_KIND``), where ``size == 0`` means THE WHOLE
-    #:   OBJECT, whose length the dataset does not carry — see ``carry_external_descriptor`` in
-    #:   ``service_kit.lakehouse.blobs``. Resolving it would mean a per-row HEAD against the object
-    #:   store.
+    #:   OBJECT, whose length the dataset does not carry (`lance_docs/lance/format/table/blob.md`). Resolving it would
+    #:   mean a per-row HEAD against the object store.
     #: * a payload column that is plain ``large_binary`` rather than blob-v2, which carries no
     #:   descriptor at all. Resolving it would mean reading the payload of every listed row.
     #:

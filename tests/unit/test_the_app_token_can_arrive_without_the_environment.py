@@ -28,7 +28,7 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 
 from service_kit.governed import secret_cache
 from service_kit.governed.dapr_auth import assert_app_token_configured, expected_app_tokens, require_dapr_token
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 @pytest.fixture(autouse=True)

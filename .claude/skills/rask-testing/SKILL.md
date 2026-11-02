@@ -115,7 +115,8 @@ consequences it does not spell out.
   whose nested map replaces the root one. A sanctioned use takes a line-level
   `# noqa: TID251`, and only a module that IS the seam takes a per-file ignore. A layer rule is a
   contract in `.importlinter` (the lakehouse's, which names no client module) or, for a client, in its own
-  `pyproject.toml` `[tool.importlinter]` (`services/annotator`, `services/table-maintenance`); `make lint-imports`
+  `pyproject.toml` `[tool.importlinter]` (`services/annotator`, `services/viewer`, `services/search`, `packages/client-kit`,
+  `services/table-maintenance`); `make lint-imports`
   (part of `make check`) runs each.
 
 ### Lanes

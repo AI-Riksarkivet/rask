@@ -31,7 +31,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_emit import HttpLineageEmitter
-from service_kit.control_events import CatalogControlEvent
+from lakehouse_kit.control_events import CatalogControlEvent
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

@@ -175,7 +175,7 @@ republishes a staged event verbatim only when it verifies as signed by the catal
 else as poison, so a staged forgery never becomes a catalog-signed event.
 
 **Under `RASK_SIGNATURE_DOORS=enforce` a named action reaches nobody unless the role that emits it signed it.**
-`service_kit.control_events.control_signer_role(action)` names that role, and the `/control-events` door
+`lakehouse_kit.control_events.control_signer_role(action)` names that role, and the `/control-events` door
 verifies the envelope's top-level `rask_signature` against the role's identities in `RASK_CONTROL_SIGNER_ROLES`, so a
 valid signature from another service is refused. A person actor (`user:<sub>`) verifies only under a delegation from a
 delegator, `onBehalfOf` equal to the whole actor. No action is exempt, so the lane carries only the lakehouse's own
@@ -205,7 +205,7 @@ the erasure and write rows again, never an enrolment.
 
 **A new named action is a THREE-file change, and all three are load-bearing:**
 
-1. `service_kit/control_events.py` — add the member to `ControlAction`, or the envelope will not validate, and
+1. `lakehouse_kit/control_events.py` — add the member to `ControlAction`, or the envelope will not validate, and
    its case to `control_signer_role` (ty fails the `assert_never` until it has one), which names the role whose
    signature the doors require.
 2. `notifications/api/control_events.py` — add it to `NAMED_ACTIONS`, or the lane files it IGNORED.

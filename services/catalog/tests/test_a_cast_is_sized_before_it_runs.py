@@ -17,9 +17,9 @@ from lance_namespace import CreateNamespaceRequest, InvalidInputError, connect
 from catalog.services import table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.dataplane import coerce_insert_arrow, create_table
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+from lakehouse_kit.location_claims import ClaimStore
+from service_kit.arrow_ipc import encode_arrow_stream
+from service_kit.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:

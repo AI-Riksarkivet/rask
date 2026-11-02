@@ -29,7 +29,7 @@ from notifications.api.reconciler import LineageCursor, LineageCursorStore, Line
 from notifications.api.settings import IngressSettings, get_ingress_settings
 from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 LINEAGE = "http://lineage.invalid"

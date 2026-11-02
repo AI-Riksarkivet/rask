@@ -33,7 +33,7 @@ from catalog.schemas import (
     AccessTuple,
     TupleCondition,
 )
-from service_kit.control_emit import NoopControlEmitter
+from lakehouse_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken

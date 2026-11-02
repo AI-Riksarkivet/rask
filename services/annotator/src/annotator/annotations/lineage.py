@@ -2,8 +2,8 @@
 
 The catalog emits lineage for a write that routes through it, so on a live catalog this emits nothing
 (``AnnotatorSettings.effective_lineage_sink``). A local stack's write does not route through one, so it
-logs its own, using the kernel's OpenLineage primitives (``client_kit.lancekit.openlineage``, whose spec
-constants match ``service_kit.openlineage``) so it describes the run as the catalog would. Configurable
+logs its own, using the clients' OpenLineage primitives (``client_kit.lancekit.openlineage``, on the OpenLineage spec's own
+constants) so it describes the run as the catalog would. Configurable
 sink (``ANNOTATOR_LINEAGE_SINK=log|none``), with no external dependency.
 """
 

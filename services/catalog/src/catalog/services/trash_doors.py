@@ -17,7 +17,7 @@ from lance_namespace import InvalidTableStateError
 
 from catalog.core.config import Settings
 from catalog.services import warehouses
-from service_kit.lakehouse import trash
+from lakehouse_kit import trash
 
 
 async def drop_grace_days(settings: Settings, segments: list[str]) -> float:

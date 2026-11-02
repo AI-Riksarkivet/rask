@@ -106,7 +106,7 @@ derived from any version of it, under any name it has had, counts), at most `dep
 a derived table the caller cannot see is dropped from the answer while the walk still passes through it, and
 `complete` is `false` when the walk stopped at the depth cap with tables left to follow. This is how an erasure's
 requester finds every table built from a subject's source. The catalog's erasure verification walks the same edge list
-in-process with the same walk (`service_kit.lakehouse.derived_tables`), to its last table, and holds the obligation open
+in-process with the same walk (`lakehouse_kit.derived_tables`), to its last table, and holds the obligation open
 until each derived table holds an obligation following it (ADR 0178).
 
 **Authz.** Two layers, the same the catalog applies to `describe table`: OIDC (a valid bearer verified against Dex,
@@ -144,7 +144,7 @@ backend's. Development runs Marquez from `deploy/fixtures/marquez` (Service `ras
 ## OpenLineage facets
 
 The catalog and maintenance build each `RunEvent` by hand and keep it spec-true through one shared helper
-(`service_kit.openlineage`): a UUID `runId`, the top-level `schemaURL`, and `_producer`/`_schemaURL` on every facet,
+(`lakehouse_kit.openlineage`): a UUID `runId`, the top-level `schemaURL`, and `_producer`/`_schemaURL` on every facet,
 so a forwarded backend ingests them unchanged. Intake tolerates every facet, stores the whole event in the feed's
 `event` column, and reads these:
 
@@ -176,8 +176,8 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
   `rask_signature.signature` removed. The envelope's `actor` plays the author: a `user:<sub>` actor verifies only under a
   delegation (`onBehalfOf` equal to the whole actor) declared by a delegator, and an absent or non-`user:` actor is a
   service acting for itself, signed with no delegation. The emitting service signs at emit, before the event is staged
-  (`service_kit.control_emit`, its signer injected). Who signs which action is
-  `service_kit.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
+  (`lakehouse_kit.control_emit`, its signer injected). Who signs which action is
+  `lakehouse_kit.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
   authenticated; maintenance signs `table_purged` and `namespace_purged` as itself. No action is exempt: the lane carries only the
   lakehouse's own signed events, and a client tool publishes nothing on it (ADR 0171). A signer whose key
   is unresolved publishes and stages nothing unsigned: it withholds the event, counts it under

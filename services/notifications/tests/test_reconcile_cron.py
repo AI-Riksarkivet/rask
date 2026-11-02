@@ -41,7 +41,7 @@ from notifications.api.reconciler import (
 )
 from notifications.api.settings import IngressSettings, get_ingress_settings
 from notifications.config import get_notifications_settings
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 TOKEN = "cron-token"

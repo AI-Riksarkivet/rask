@@ -88,7 +88,7 @@ from tenacity import (
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.machine_identity import read_identity_token
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.naming import CATALOG_DELIMITER
 
 
 log = logging.getLogger(__name__)

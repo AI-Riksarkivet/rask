@@ -58,7 +58,7 @@ from service_kit.governed.audit import AUDIT_LOGGER
 from service_kit.governed.deps import make_auth_deps
 from service_kit.governed.idp_identity import IdpVerifier
 from service_kit.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 AUDIENCE = "rask"

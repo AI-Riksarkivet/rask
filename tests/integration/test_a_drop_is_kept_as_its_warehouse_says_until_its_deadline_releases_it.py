@@ -25,10 +25,10 @@ import pyarrow as pa
 import pytest
 
 from catalog.core.config import get_settings as catalog_settings
-from service_kit.control_events import CatalogControlEvent
+from lakehouse_kit import trash
+from lakehouse_kit.control_events import CatalogControlEvent
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed.fga import user_object
-from service_kit.lakehouse import trash
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance
 from tests.integration.openfga_grants import principal_key
 

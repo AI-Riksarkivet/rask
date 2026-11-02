@@ -9,8 +9,8 @@ from __future__ import annotations
 import pyarrow.fs as pafs
 from pydantic import BaseModel
 
-from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_REFS_DIR, branch_name_from_ref_file
-from service_kit.lakehouse.control_prefixes import CONTROL_PREFIXES
+from lakehouse_kit.branch_layout import BRANCH_CONTAINER, BRANCH_REFS_DIR, branch_name_from_ref_file
+from lakehouse_kit.control_prefixes import CONTROL_PREFIXES
 
 
 class Discovery(BaseModel):
@@ -51,7 +51,7 @@ class Discovery(BaseModel):
 #: backup snapshots, against 932 orphan files across 8 datasets the purge could not touch.
 #: `_bases` holds the catalog's per-table base records ([[LH-279]]) and `_maintenance_due` the sweep's own due records
 #: (ADR 0162): control-root JSON, never a dataset.
-#: The set is the estate's one list (:data:`service_kit.lakehouse.control_prefixes.CONTROL_PREFIXES`), which the
+#: The set is the estate's one list (:data:`lakehouse_kit.control_prefixes.CONTROL_PREFIXES`), which the
 #: catalog's destructive drop and the purge refuse a location crossing.
 
 

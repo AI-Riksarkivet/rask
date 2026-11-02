@@ -21,7 +21,7 @@ import pytest
 from lance_namespace import CreateNamespaceRequest, LanceNamespace, connect
 
 from catalog.services import dataplane
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 @pytest.fixture

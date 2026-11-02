@@ -97,7 +97,7 @@ other app-id governs nothing on this hop. Pinned by
 answer will not change, and a missing `event_reader` grant is a 403 on every tick that no retry can fix.
 `invokeTimeout` is 300 s. The only target is app `lineage`. No policy targets the catalog: no service
 invokes it through Dapr, so its write doors are replayed only by their own callers (see
-`service_kit.lakehouse.idempotency`).
+`lakehouse_kit.idempotency`).
 
 A pass that exhausts the retries leaves the reconciler's cursor where it was (it advances only on a pass
 that completes), so the next cron tick re-walks it.

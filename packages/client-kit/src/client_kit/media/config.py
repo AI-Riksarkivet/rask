@@ -18,8 +18,8 @@ from pathlib import Path
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from service_kit.lakehouse.endpoint_scheme import allow_http_for
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.endpoint_scheme import allow_http_for
+from service_kit.naming import CATALOG_DELIMITER
 
 
 class TableBackend(StrEnum):

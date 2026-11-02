@@ -12,7 +12,7 @@ from typing import Any
 from lance_namespace import LanceNamespace, UnsupportedOperationError
 from opentelemetry import trace
 
-from service_kit.lakehouse.ns_errors import as_unsupported_if_stub
+from service_kit.ns_errors import as_unsupported_if_stub
 
 
 # ``describe_table_version`` on the native ``DirectoryNamespace`` is typed ``request: dict`` and forwards to

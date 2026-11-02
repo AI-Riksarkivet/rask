@@ -39,8 +39,8 @@ from lance_namespace import DescribeNamespaceResponse, DropNamespaceRequest, Dro
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
 from catalog.core.modes import DropMode
-from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.naming import UUID_PROPERTY
+from service_kit.storage_options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 

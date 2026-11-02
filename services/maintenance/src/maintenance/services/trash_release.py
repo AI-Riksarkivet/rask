@@ -32,13 +32,13 @@ from typing import Any
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
+from lakehouse_kit import trash, warehouse_records
+from lakehouse_kit.base_refs import location_within
+from lakehouse_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import ACTOR, Liveness, liveness_across, still_registered
-from service_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from service_kit.governed import fga
-from service_kit.lakehouse import trash, warehouse_records
-from service_kit.lakehouse.base_refs import location_within
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

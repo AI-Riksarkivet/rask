@@ -25,11 +25,11 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, CreateTableRequest, DeregisterTableRequest, DescribeTableRequest, RegisterTableRequest, connect
 from pydantic import SecretStr
 
+from lakehouse_kit import trash
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
-from service_kit.lakehouse import trash
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_path: Path) -> None:

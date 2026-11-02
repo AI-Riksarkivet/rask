@@ -25,7 +25,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from annotator.api.v1.endpoints import jobs as jobs_ep
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 BODY = {"producer": "grounding-dino", "op": "predict", "scope": {"level": "corpus", "keys": []}}

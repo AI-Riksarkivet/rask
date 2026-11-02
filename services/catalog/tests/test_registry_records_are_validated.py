@@ -25,7 +25,7 @@ from pathlib import Path
 
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 def _root(tmp_path: Path) -> str:

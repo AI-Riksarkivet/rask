@@ -17,23 +17,25 @@ flowchart TD
             annot["annotator (a client, own release)"]
         end
         subgraph packages["packages/ · reusable libraries (no entrypoints)"]
-            psk["service-kit"]
+            psk["service-kit (the platform a client pins)"]
+            phk["lakehouse-kit (the lakehouse's kernel)"]
             pck["client-kit"]
             plk["lineage-kit"]
             pst["storage"]
             prk["ray-kit"]
-            ptv["validate"]
             prc["ray-cluster-env (Ray env + tracing hooks)"]
         end
         cx["scripts/ · dev + ops tools"]
     end
     subgraph js["frontend/ · JS/TS plane · bun + turbo workspace"]
-        mf["microfrontends/ · home · lakehouse · explorer<br/>annotator · compute · models · studio"]
+        mf["microfrontends/ · home · lakehouse · explorer<br/>annotator · compute · studio"]
         fpk["packages/ · ui · api · explorer-api · dockview<br/>flow · engine · labeling · config · zone-contract"]
     end
     rn["runners/&lt;workload&gt; · SEALED<br/><sub>own pyproject, NOT a workspace member</sub>"] --> pst
-    lake --> psk
+    lake --> phk
     lake --> plk
+    phk --> psk
+    phk --> pst
     fleet --> psk
     media --> pck
     annot --> pck
@@ -49,7 +51,8 @@ plane, and language purity is what lets both workspaces glob their members.
 
 | Package | Language | Purpose |
 |---|---|---|
-| `packages/service-kit` | Python | Platform library: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, plus the governed (`service_kit.governed`) and lakehouse (`service_kit.lakehouse`) seams. Dependency-light (no lancedb/ray/sqlmodel), and carries no code only a client runs. |
+| `packages/service-kit` | Python | The platform package a client pins by lakehouse tag: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, health and probes, telemetry, the auth plane (`service_kit.governed`), the naming a client needs and the input and credential guards (`service_kit.arrow_ipc`, `service_kit.storage_options`). Dependency-light (no lancedb/ray/sqlmodel), carries no code only a client runs, and imports nothing from the lakehouse's kernel. |
+| `packages/lakehouse-kit` | Python | The lakehouse's kernel: the lance app factory, the catalog's records, registries and governance guards, the namespace clients, the OpenLineage, control-event and outbox seams and the store session. Imported by catalog, lineage, maintenance and notifications; every client's import contract forbids it. |
 | `packages/client-kit` | Python | Code the lakehouse's clients share and the lakehouse never runs: the media app factory and lifespan, the lancedb dataset registry and descriptors, the per-route rate limiter. Used by viewer, search and the annotator; the lakehouse may not import it. |
 | `packages/lineage-kit` | Python | The OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used by catalog, lineage, maintenance and notifications. |
 | [`packages/storage`](../packages/storage.md) | Python | The S3 client seam (`s3_client`, `configured_endpoint`, STS, `iter_keys`, `split_s3_uri`, the `StorageError` family). |

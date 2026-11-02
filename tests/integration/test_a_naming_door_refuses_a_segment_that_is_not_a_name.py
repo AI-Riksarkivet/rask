@@ -21,7 +21,7 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 #: The spec's code for a malformed request (`lance_docs/ns_catalog/spec.yaml`), which a stock client reads.

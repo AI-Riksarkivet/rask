@@ -45,7 +45,7 @@ _REREAD_BACKOFF: Final = 0.25
 class S3KeyPair(BaseModel):
     """An object-store access key: its id and its secret, which sign only together, and the session token a temporary one carries.
 
-    A store-held pair has no token. A session STS issued (`service_kit.governed.store_session`) signs only with its token
+    A store-held pair has no token. A session STS issued (`lakehouse_kit.store_session`) signs only with its token
     beside the pair, and the store refuses the pair without it.
     """
 

@@ -23,13 +23,15 @@ from typing import Any
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 
+from lakehouse_kit.control_emit import ControlSign, make_control_emitter
+from lakehouse_kit.lance_app import build_lance_service_app
+from lakehouse_kit.lance_metrics import instrument_lance_if_available
 from lineage_kit import SigningKey, attach_control_signature, parse_published_keys
 from maintenance.api.arrival import register_arrival_route
 from maintenance.api.routes import build_router
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import make_emitter
 from service_kit.bus_watchdog import start_bus_watchdog
-from service_kit.control_emit import ControlSign, make_control_emitter
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import build_fga_client
 from service_kit.governed.dapr_auth import assert_app_token_configured
@@ -37,8 +39,6 @@ from service_kit.governed.fga import OpenFgaCredentialRefusedError
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, signing_ready_check
 from service_kit.governed.store_credential import make_store_credential
-from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
-from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
 
 
@@ -203,7 +203,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
 # gate, the handler pair in the order that makes it work, one request id, and the probes — see
-# `service_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
+# `lakehouse_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
 app = build_lance_service_app(
     title="Lance table maintenance",
     docs_enabled=get_settings().docs_enabled,

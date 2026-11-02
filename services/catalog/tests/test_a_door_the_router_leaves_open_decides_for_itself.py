@@ -42,10 +42,10 @@ from catalog.api.dependencies import get_fga_client
 from catalog.api.security import authenticate
 from catalog.core.config import get_settings
 from catalog.services import promotions, warehouses
+from lakehouse_kit import maintenance_due
+from lakehouse_kit.maintenance_due import CompactionDue, DueRecord
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
-from service_kit.lakehouse import maintenance_due
-from service_kit.lakehouse.maintenance_due import CompactionDue, DueRecord
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 #: The estate the doors name: acme's warehouse, the two namespaces bound to it, and a table in one.

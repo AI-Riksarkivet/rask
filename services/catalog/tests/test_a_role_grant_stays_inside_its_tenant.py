@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 
 from catalog.services import warehouses
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 @pytest.mark.parametrize(

@@ -39,6 +39,11 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from lakehouse_kit import base_registry, data_directories, location_claims, trash
+from lakehouse_kit.base_refs import normalise
+from lakehouse_kit.base_registry import BaseOrigin, BaseRole, RecordedBase
+from lakehouse_kit.maintenance_due import CloneList
+from lakehouse_kit.objectfs import lance_storage_options
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.due import TableIds
@@ -46,14 +51,10 @@ from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import PlanContext
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.lakehouse import base_registry, data_directories, location_claims, trash
-from service_kit.lakehouse.base_refs import normalise
-from service_kit.lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
-from service_kit.lakehouse.maintenance_due import CloneList
-from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.naming import UUID_PROPERTY
+from service_kit.storage_options import StorageOptions
 from storage import S3Client
 
 

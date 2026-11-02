@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch) -> None:
@@ -37,7 +37,7 @@ def test_a_concurrent_FIRST_publication_converges_instead_of_409ing(monkeypatch)
 
     from catalog.services import publication
     from catalog.services.table_claims import DoorTable, ResolvedTable
-    from service_kit.lakehouse.location_claims import ClaimStore
+    from lakehouse_kit.location_claims import ClaimStore
 
     calls: list[str] = []
 

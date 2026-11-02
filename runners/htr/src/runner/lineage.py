@@ -10,7 +10,7 @@ client's `2-0-4` — each a stale pointer that fails at the consumer, about a pr
 
 **THIS LANE'S DATASETS ARE OUTSIDE THE GOVERNED ESTATE, and that is why its refs look different from
 the medallion's.** `runner.main` takes `--input`/`--output` as store URIs, not catalog table ids: it
-reads an object-store prefix and writes one. `service_kit.lakehouse.naming.is_external_source_namespace`
+reads an object-store prefix and writes one. `service_kit.naming.is_external_source_namespace`
 already recognises that shape — "a store URI carrying a scheme (``s3://bucket``), which is the
 convention for a namespaced external system" — so the namespace is the bucket URI and the name is the
 key prefix. Minting a bare `stage$name` here instead would claim a governed table this lane never

@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from lakehouse_kit.control_emit import ControlSign
 from lineage_kit import SigningKey, attach_control_signature
-from service_kit.control_emit import ControlSign
 from service_kit.governed.signing_key import SigningKeyHolder
 
 

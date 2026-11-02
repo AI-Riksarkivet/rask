@@ -26,10 +26,10 @@ from lance_namespace import DeregisterTableRequest, DeregisterTableResponse, Lan
 
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
+from lakehouse_kit import maintenance_policies
 from maintenance.services.purge import objects_held
-from service_kit.lakehouse import maintenance_policies
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.storage_options import StorageOptions
 from tests.integration.openfga_grants import TupleStore, act_as
 
 

@@ -41,9 +41,9 @@ from lance.blob import Blob
 from lance.dataset import Transaction
 from pydantic import SecretStr
 
+from lakehouse_kit.objectfs import lance_storage_options
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.lakehouse.objectfs import lance_storage_options
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from storage import S3Client
 
 

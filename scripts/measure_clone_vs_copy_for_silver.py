@@ -19,7 +19,7 @@ is the trade the row turns on -- and `compute.py`'s claim is a comment, not a me
 
 THE RECLAIM OBJECTION IS ALREADY ANSWERED, which is why this is worth measuring at all. The row was
 parked on "the sweep refuses reclaim on shallow clones"; it does not.
-`service_kit/lakehouse/features.py:172` is ``SUPPORTED_FOR_GC = SUPPORTED | FLAG_BASE_PATHS`` and
+`lakehouse_kit/features.py:172` is ``SUPPORTED_FOR_GC = SUPPORTED | FLAG_BASE_PATHS`` and
 `:617-623` states the reason -- version reclamation and index maintenance touch only the dataset's own
 root. The constraint that DOES exist is on the source, and this script measures that too: a clone
 pinning bronze@N is a reason bronze cannot reclaim N, and that is the real cost to weigh.
@@ -38,7 +38,7 @@ import lance
 import pyarrow as pa
 from lance import blob_array, blob_field
 
-from service_kit.lakehouse import blobs
+from lakehouse_kit import blobs
 
 
 ROOT = pathlib.Path(tempfile.mkdtemp(prefix="clone_vs_copy_"))

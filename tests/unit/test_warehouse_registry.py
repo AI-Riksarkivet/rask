@@ -16,15 +16,15 @@ from typing import Any
 
 import pytest
 
-from service_kit.lakehouse import warehouse_registry
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.warehouse_registry import (
+from lakehouse_kit import warehouse_registry
+from lakehouse_kit.warehouse_registry import (
     AmbiguousProjectWarehouseError,
     clear_cache,
-    is_safe_project,
     project_gold_root,
     project_root,
 )
+from service_kit.naming import is_safe_project
+from service_kit.storage_options import StorageOptions
 
 
 @pytest.fixture(autouse=True)

@@ -170,9 +170,9 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001
         record("denied" in str(exc).lower() or "403" in str(exc), "Lance is refused a dataset outside the vended prefix", f"{type(exc).__name__}: {str(exc)[:120]}")
     # The record store is pyarrow's S3FileSystem, and rask writes it with a service's own scoped pair (the catalog's,
-    # maintenance's), never a vended session: `service_kit.lakehouse.record_store.put_record`.
-    from service_kit.lakehouse.objectfs import StorageOptions
-    from service_kit.lakehouse.record_store import get_record, put_record
+    # maintenance's), never a vended session: `lakehouse_kit.record_store.put_record`.
+    from service_kit.storage_options import StorageOptions
+    from lakehouse_kit.record_store import get_record, put_record
 
     own = StorageOptions.from_flat(
         {"endpoint": ENDPOINT, "aws_access_key_id": "catalog", "aws_secret_access_key": "catalog-secret-1", "region": REGION, "allow_http": "true"}

@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import pytest
 
+from lakehouse_kit.openlineage import DatasetUuids
 from lineage.models import RunEvent
 from maintenance.core.lineage_emit import (
     EXPIRE_VERSIONS,
@@ -34,8 +35,7 @@ from maintenance.core.lineage_emit import (
 )
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_lineage
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.openlineage import DatasetUuids
+from service_kit.storage_options import StorageOptions
 
 
 # --------------------------------------------------------------------------- #
@@ -350,7 +350,7 @@ def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:
     """A replace would destroy the #21 self-describing coordinates other producers write. Merge only."""
     import pyarrow as pa
 
-    from service_kit.lakehouse.stage_stamp import declare_dataset_id
+    from lakehouse_kit.stage_stamp import declare_dataset_id
 
     table = pa.table({"v": [1]}).replace_schema_metadata({"lineage.run_id": "r-1", "owner": "data_eng"})
     out = declare_dataset_id(table, "gold$catalog")
@@ -373,8 +373,8 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
     import lance
     import pyarrow as pa
 
+    from lakehouse_kit.stage_stamp import declare_dataset_id
     from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
-    from service_kit.lakehouse.stage_stamp import declare_dataset_id
 
     forged = "victim$payroll"
     named, unnamed = str(tmp_path / "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"), str(tmp_path / "medallion" / "gold")

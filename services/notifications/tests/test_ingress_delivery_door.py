@@ -42,7 +42,7 @@ from notifications.api.metrics import Door
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
 from notifications.proxies import TypedActorProxy
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 TOKEN = "the-sidecars-app-token"

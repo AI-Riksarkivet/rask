@@ -24,7 +24,7 @@ from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses as wh_svc
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -207,7 +207,7 @@ def test_a_recoverable_cascade_unbinds_and_undrop_rebinds_the_same_warehouse(
     estate's DEFAULT root — and rebuilding through it would silently re-create the whole subtree in the
     shared bucket. That is a tenant-isolation break, not an error, so it is asserted physically.
     """
-    from service_kit.lakehouse import trash
+    from lakehouse_kit import trash
 
     client, default_root, warehouse_root, registry = routing_recoverable
     control = f"file://{registry}"

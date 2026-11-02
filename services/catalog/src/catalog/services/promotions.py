@@ -13,7 +13,7 @@ the held version closes it as superseded. The last decision stays on the record 
 so "who approved this" has an answer.
 
 **A DECISION NAMES THE VERSION IT DECIDES, AND IS RECORDED BEFORE IT ACTS.** A record leaves ``open`` only through
-an ETag-guarded write that finds it still open at that version (:func:`service_kit.lakehouse.records.mutate_json`).
+an ETag-guarded write that finds it still open at that version (:func:`lakehouse_kit.records.mutate_json`).
 So an approval cannot land on a newer hold the approver never reviewed, two people deciding one hold cannot both act,
 and two replicas' sweeps expire one hold once.
 
@@ -33,15 +33,15 @@ from lance_namespace import InvalidTableStateError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from catalog.services import publication
-from service_kit.lakehouse.record_store import get_record, list_records, record_key
-from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
+from lakehouse_kit.record_store import get_record, list_records, record_key
+from lakehouse_kit.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from catalog.services.table_claims import DoorTable
-    from service_kit.lakehouse.objectfs import StorageOptions
+    from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

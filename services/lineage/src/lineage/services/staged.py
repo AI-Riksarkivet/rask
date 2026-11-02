@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import json
 
+from lakehouse_kit import dapr_publish
 from lineage.core.config import LineageSettings
 from lineage.models import DatasetEvent, RunEvent, parse_event
-from service_kit import dapr_publish
 
 
 class UnparseableEventError(ValueError):

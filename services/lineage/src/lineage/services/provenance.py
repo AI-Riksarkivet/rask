@@ -52,19 +52,19 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanContext
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from lakehouse_kit import derived_tables
+from lakehouse_kit.derived_tables import EDGES
+from lakehouse_kit.lancekit.catalog_client import catalog_api_client, request_headers
+from lakehouse_kit.lancekit.filters import in_lists, sql_literal
+from lakehouse_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
+from lakehouse_kit.lancekit.writer import RestCatalogWriteTransport
+from lakehouse_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, dataset_uuids
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
+from service_kit.arrow_ipc import encode_arrow_stream
 from service_kit.governed.machine_identity import read_identity_token
-from service_kit.lakehouse import derived_tables
-from service_kit.lakehouse.derived_tables import EDGES
-from service_kit.lakehouse.naming import CATALOG_DELIMITER, is_external_source_namespace
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
-from service_kit.lancekit.catalog_client import catalog_api_client, request_headers
-from service_kit.lancekit.filters import in_lists, sql_literal
-from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
-from service_kit.lancekit.writer import RestCatalogWriteTransport
-from service_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, dataset_uuids
+from service_kit.naming import CATALOG_DELIMITER, is_external_source_namespace
 
 
 log = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 """[[LH-543]] A service's object-store credential is in clear only at the call that signs with it, so no model holding one prints it.
 
-Every model that reaches the object store holds `service_kit.lakehouse.objectfs.StorageOptions`: the key pair as
+Every model that reaches the object store holds `service_kit.storage_options.StorageOptions`: the key pair as
 `S3KeyPair`, its secret and session token `SecretStr`, beside every other option in clear. The flat map Lance takes
 (`lance_docs/lance/guide/object_store.md:122-136`) is built only at the Lance, boto3 or pyarrow call, so a repr, a str, a
 model dump, a log line or an error that echoes one of these models carries neither, as a vend carries neither
@@ -29,14 +29,14 @@ from pydantic import BaseModel, SecretStr
 from catalog.api import idempotency
 from catalog.core.config import Settings
 from catalog.services import table_claims
+from lakehouse_kit import store_session
+from lakehouse_kit.base_registry import BaseRegistry
+from lakehouse_kit.history_fences import TableHistory
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.expiry import ExpiryTarget
 from service_kit.context import DiagnosticFormatter
-from service_kit.governed import store_session
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.lakehouse.base_registry import BaseRegistry
-from service_kit.lakehouse.history_fences import TableHistory
 
 
 log = logging.getLogger(__name__)

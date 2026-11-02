@@ -22,7 +22,7 @@ build a problem body beside this module: that is what one route doing it cost
 
 The lakehouse services (catalog, lineage, medallion, compaction) deliberately use a DIFFERENT
 taxonomy — the ``lance_namespace`` error hierarchy via
-:func:`service_kit.lakehouse.ns_errors.install_problem_handlers` — because the Lance Namespace
+:func:`service_kit.ns_errors.install_problem_handlers` — because the Lance Namespace
 REST spec pins a numeric ``code`` in the error body. That is an external contract, not drift.
 """
 

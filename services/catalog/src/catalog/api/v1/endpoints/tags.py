@@ -23,7 +23,7 @@ from catalog.api.pagination import ListLimit
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, publication
-from service_kit.control_emit import emit_control
+from lakehouse_kit.control_emit import emit_control
 from service_kit.governed import fga
 
 

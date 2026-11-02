@@ -143,7 +143,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
     from catalog.api import commit_reconcile
     from catalog.core.config import get_settings
     from catalog.services import commit_authors
-    from service_kit.lakehouse import commit_records
+    from lakehouse_kit import commit_records
 
     counted, unrecorded = _Counter(), _Counter()
     monkeypatch.setattr(commit_reconcile, "_reannounced", counted)

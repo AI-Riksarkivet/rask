@@ -38,7 +38,7 @@ from notifications.feed import paginate, unread_count
 from notifications.models import INBOX_PAGE_LIMIT_MAX, InboxDismiss, InboxMark, InboxPointer, InboxQuery, NotificationReason
 from notifications.proxies import TypedActorProxy
 from service_kit.exceptions import register_handlers
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 NOW = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)

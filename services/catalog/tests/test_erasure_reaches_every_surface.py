@@ -26,7 +26,7 @@ import pyarrow as pa
 import pytest
 
 from catalog.services.erasure import ErasureReport, Pin, ref_heads, verify
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 _SUBJECT = "alice"

@@ -17,7 +17,7 @@ from lance_namespace import TableNotFoundError
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"

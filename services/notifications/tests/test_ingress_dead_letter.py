@@ -38,7 +38,7 @@ from notifications.api.control_parks import INDEX_KEY, PARK_HORIZON, ControlPark
 from notifications.api.reconciler import FeedPage, LineageCursor, LineageCursorStore, LineageFeedClient
 from notifications.api.settings import get_ingress_settings
 from notifications.config import get_notifications_settings
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 DLQ_TOPIC = "dlq.notifications"

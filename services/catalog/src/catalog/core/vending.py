@@ -40,16 +40,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
-from service_kit.governed import store_session
+from lakehouse_kit import store_session
+from lakehouse_kit.base_refs import decoded_path, location_within
+from lakehouse_kit.base_registry import BaseJudgement, BaseRole, BaseStanding
+from lakehouse_kit.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
+from lakehouse_kit.features import BasePathRef
+from lakehouse_kit.objectfs import lance_storage_options
+from lakehouse_kit.store_session import IssuedSession, WebIdentity
+from lakehouse_kit.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, WRITER_PUT_GLOBS
 from service_kit.governed.machine_identity import IdentityTokenUnavailableError
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.governed.store_session import IssuedSession, WebIdentity
-from service_kit.lakehouse.base_refs import decoded_path, location_within
-from service_kit.lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
-from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
-from service_kit.lakehouse.features import BasePathRef
-from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
-from service_kit.lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, WRITER_PUT_GLOBS
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -514,8 +515,8 @@ def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str
         ServiceUnavailableError: The dataset opened and its base list could not be read. Answering "no
             bases" here would vend without judging them, which the base judge exists to refuse.
     """
-    from service_kit.lakehouse.features import manifest_base_path_refs
-    from service_kit.lakehouse.objectfs import same_store_uri
+    from lakehouse_kit.features import manifest_base_path_refs
+    from lakehouse_kit.objectfs import same_store_uri
 
     try:
         ds = open_location(location, storage_options, branch=branch or None)
@@ -638,7 +639,7 @@ def build_session_policy(
 
     * ``read``: nothing else.
     * ``write`` (``can_write_data``): put and abort-upload on what a managed-versioning writer stages under
-      the ref it writes (``service_kit.lakehouse.table_layout.WRITER_PUT_GLOBS``: ``data/``,
+      the ref it writes (``lakehouse_kit.table_layout.WRITER_PUT_GLOBS``: ``data/``,
       ``_transactions/``, ``_deletions/``, ``_indices/`` and a staged ``_versions/<n>.manifest-<uuid>``), and
       an explicit Deny on every final manifest under it, at any depth (``FINAL_MANIFEST_GLOB``). The table's
       own credential (no ``branch``) also puts under ``tree/`` ([[LH-490]]): a stock client opens a branch
@@ -891,7 +892,7 @@ class WebIdentityVendor:
     its own exchange, never the catalog's own session, so what a client holds is scoped to the table it was vended
     for, and its name (:func:`role_session_name`) says who it was vended for.
 
-    ``exchange`` is :func:`service_kit.governed.store_session.exchange` and is injectable for tests.
+    ``exchange`` is :func:`lakehouse_kit.store_session.exchange` and is injectable for tests.
     """
 
     def __init__(

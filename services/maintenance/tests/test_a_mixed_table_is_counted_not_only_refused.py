@@ -21,11 +21,11 @@ import lance
 import pyarrow as pa
 import pytest
 
+from lakehouse_kit.features import manifest_feature_flags, mixes_data_file_versions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials, expiry, sweep
 from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
-from service_kit.lakehouse.features import manifest_feature_flags, mixes_data_file_versions
 
 
 def _ids(start: int, stop: int) -> pa.Table:

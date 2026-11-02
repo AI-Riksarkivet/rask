@@ -5,7 +5,7 @@ description = "The annotator: a labeling tool that works on the lakehouse throug
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    "service-kit[lancekit,governed]",
+    "service-kit[governed,arrow]",
     # The media app factory and lifespan the annotator is built on, and the dataset registry it reads.
     "client-kit",
     "fastapi>=0.115",
@@ -44,4 +44,10 @@ include_external_packages = true
 name = "importing annotator.projects pulls in no lancekit / registry"
 type = "forbidden"
 source_modules = ["annotator.projects.machines", "annotator.projects.models", "annotator.projects.ontology"]
-forbidden_modules = ["service_kit.lancekit", "client_kit.lancekit"]
+forbidden_modules = ["client_kit.lancekit"]
+
+[[tool.importlinter.contracts]]
+name = "XC-186: annotator imports nothing from lakehouse_kit, the lakehouse's kernel, by any chain"
+type = "forbidden"
+source_modules = ["annotator", "client_kit"]
+forbidden_modules = ["lakehouse_kit"]

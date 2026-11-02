@@ -33,7 +33,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
-from service_kit.control_emit import emit_control
+from lakehouse_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 

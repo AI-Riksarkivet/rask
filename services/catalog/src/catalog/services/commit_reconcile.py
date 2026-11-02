@@ -2,7 +2,7 @@
 
 The catalog announces a write after its commit, by staging the event in its object-store outbox and publishing it, and a
 crash between the commit and the stage loses the announcement. The version itself is not lost: the catalog recorded the
-caller it authorized every commit for (:mod:`service_kit.lakehouse.commit_records`, ADR 0187), a catalog door's commit
+caller it authorized every commit for (:mod:`lakehouse_kit.commit_records`, ADR 0187), a catalog door's commit
 names its lineage operation (``rask.operation``), and an announcement's run id is derived from the commit itself
 (:mod:`catalog.core.commit_ids`). So each table's own version log is the outbox: a pass reads each ref's versions after
 its mark, looks for each on the feed, and hands the caller every version the feed lacks, rebuilt from the version log and
@@ -49,12 +49,12 @@ from catalog.core import lineage_emit, run_context
 from catalog.core.config import Settings
 from catalog.services import dataplane, managed_versions, provenance_namespace
 from catalog.services.publication import PUBLISHED_TAG
+from lakehouse_kit import commit_records
+from lakehouse_kit.features import flags_from_open_error
+from lakehouse_kit.lancekit.filters import sql_literal
+from lakehouse_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, dataset_uuids
 from service_kit.governed import fga
-from service_kit.lakehouse import commit_records
-from service_kit.lakehouse.features import flags_from_open_error
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lancekit.filters import sql_literal
-from service_kit.openlineage import BRANCH_IDENTIFIER, LANCE_FACET, dataset_uuids
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

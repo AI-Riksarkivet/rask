@@ -9,7 +9,7 @@ we assert only that the spec is a SUBSET of what's served, on (method, structura
 THE OTHER DIRECTION ([[LH-021]], LH-476): every route under ``/v1`` must be a spec operation, because a
 spec client meets it there; rask's own routes live under ``/management/v1``, the way Lakekeeper separates
 ``/management`` from ``/catalog``. The spec side of that check is
-``service_kit.lakehouse.spec_routes.SPEC_ROUTES``, committed because no image carries ``lance_docs/``.
+``service_kit.spec_routes.SPEC_ROUTES``, committed because no image carries ``lance_docs/``.
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ import yaml
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from service_kit.lakehouse.spec_routes import SPEC_ROUTES
+from service_kit.spec_routes import SPEC_ROUTES
 
 
 _SPEC = Path(__file__).resolve().parents[2] / "lance_docs" / "ns_catalog" / "spec.yaml"

@@ -178,7 +178,7 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
 
     hosts = _door_hosts(docs)
     assert hosts.keys() == door_hosts, f"the pods whose app hosts a door are not the ones this case names: {sorted(hosts)}"
-    # Each service that emits control events (service_kit.control_events.ControlSigner), mapped to the identities its pods sign as.
+    # Each service that emits control events (lakehouse_kit.control_events.ControlSigner), mapped to the identities its pods sign as.
     roles = {
         "catalog": _identities_running(docs, "catalog.main:app"),
         "maintenance": _identities_running(docs, "maintenance.service:app"),

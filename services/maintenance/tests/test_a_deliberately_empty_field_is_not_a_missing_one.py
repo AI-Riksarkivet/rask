@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 from maintenance.services.reconcile import _list_json_records
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 def _write(tmp_path: Path, name: str, payload: dict[str, object]) -> None:

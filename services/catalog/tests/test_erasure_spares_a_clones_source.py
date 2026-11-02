@@ -34,10 +34,10 @@ from catalog.core.identifiers import with_minted_uuid
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
-from service_kit.lakehouse import base_registry, location_claims
-from service_kit.lakehouse.base_refs import BaseRefs, normalise
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import base_registry, location_claims
+from lakehouse_kit.base_refs import BaseRefs, normalise
+from service_kit.ns_errors import install_problem_handlers
+from service_kit.storage_options import StorageOptions
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.

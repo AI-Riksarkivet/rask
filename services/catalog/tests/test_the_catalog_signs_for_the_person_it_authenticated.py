@@ -47,15 +47,15 @@ from lance_namespace import (
     connect,
 )
 
+from lakehouse_kit import location_claims, outbox
+from lakehouse_kit.control_events import CONTROL_TOPIC
 from lineage_kit import SIGNATURE_FACET, RefusalReason, SignatureError, verify_control_signature, verify_signature
-from service_kit.control_events import CONTROL_TOPIC
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.governed.signing_key import signing_key_name
-from service_kit.lakehouse import location_claims, outbox
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 #: The catalog's own service account, whose principal it signs as on the estate (`lance.saSubject`).

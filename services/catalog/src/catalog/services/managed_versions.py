@@ -42,10 +42,10 @@ from pydantic import BaseModel, InstanceOf
 from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, table_claims
-from service_kit.lakehouse import base_refs, base_registry, commit_records, commit_turns, features, file_identities, maintenance_due
-from service_kit.lakehouse.branch_layout import BRANCH_CONTAINER
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lancekit.outage import reads_as_store_outage
+from lakehouse_kit import base_refs, base_registry, commit_records, commit_turns, features, file_identities, maintenance_due
+from lakehouse_kit.branch_layout import BRANCH_CONTAINER
+from service_kit.outage import reads_as_store_outage
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

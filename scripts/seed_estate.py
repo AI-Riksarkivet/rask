@@ -82,7 +82,7 @@ from types import MappingProxyType
 
 import httpx
 
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.naming import CATALOG_DELIMITER
 
 
 #: The catalog's own port (``rask-catalog``), not the edge's — the seed drives the service directly so

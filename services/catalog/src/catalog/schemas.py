@@ -18,8 +18,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from catalog.services.changes import ChangeKind
 from catalog.services.control_records import DeleteMode
-from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
-from service_kit.lakehouse.maintenance_due import CompactionDue, IndexDue
+from lakehouse_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
+from lakehouse_kit.maintenance_due import CompactionDue, IndexDue
 
 
 # --------------------------------------------------------------------------- #
@@ -954,7 +954,7 @@ class GateSpecRequest(BaseModel):
     Omitting ``project`` is the security half: a body-supplied project would let an admin of one
     tenant pass ``can_administer`` on their own project while rewriting somebody else's gate.
 
-    Field semantics live on ``service_kit.lakehouse.gate_specs.GateSpec``, which is the model this
+    Field semantics live on ``lakehouse_kit.gate_specs.GateSpec``, which is the model this
     validates into.
     """
 

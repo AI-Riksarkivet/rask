@@ -1,0 +1,107 @@
+"""THE lance-plane app factory — one assembly for catalog, lineage and maintenance.
+
+Two factories, two planes, and the split is deliberate rather than accidental:
+
+* ``service_kit.make_service_app`` — the FLEET plane (notifications). Routers mount under
+  ``RASK_API_PREFIX``; config is ``service_kit.config.Settings``.
+* this — the LANCE plane. Routers mount at the root under each service's own paths (``/v1/...``,
+  ``/events``, a cron binding's ``/<name>``), config is each service's own ``*Settings``, and the middleware order
+  is per-service because the catalog's Arrow-IPC data plane carries load-shedding and a body cap that
+  the others do not.
+
+docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12 counted eight module-level ``app = FastAPI(...)`` entrypoints
+hand-assembling
+the same boot and asked for a ``make_lance_service_app``. This serves catalog, lineage and maintenance, and
+what it owns is the part that is identical in all of them:
+
+1. ``setup_logging()`` BEFORE the app exists. Every module in these services uses
+   ``getLogger(__name__)``, and without this they propagate to a root logger with no handlers and are
+   DISCARDED — which is not hypothetical, it hid a two-day lineage feed outage.
+2. The ``FastAPI`` construction with docs OPT-IN. ``/docs``, ``/redoc`` and ``/openapi.json`` are all
+   gated on the service's own ``docs_enabled``; a service that sets none of the three serves all
+   three, which is how the schemas shipped openly once.
+3. ``register_handlers`` THEN ``install_problem_handlers``. ``service_kit.exceptions.DomainError``
+   subclasses ``HTTPException``, so without the first, starlette's built-in handler renders it —
+   status and headers intact, ``{"detail": ...}`` body — which is how the draining 503 came to declare
+   problem+json over a body that was not one. Registered FIRST so the lance translator still wins for
+   ``RequestValidationError``, exactly the order ``make_service_app`` uses. Getting this pair the
+   wrong way round is silent: both orders answer, and only one answers correctly.
+4. ``RequestIDMiddleware``. One id per request, minted or echoed, published to the context var
+   ``setup_logging``'s filter reads — so a caller can quote an id from a failed request and an
+   operator can grep for it. PURE ASGI, so it passes streaming bodies through untouched, which is what
+   makes it safe on a plane that serves Arrow IPC. One factory is what keeps every lance service carrying it.
+5. ``/livez`` + ``/readyz`` at the ROOT — a kubelet does not know a service's prefix.
+
+WHAT IT DOES NOT OWN, and why. ``inner_middleware`` is the escape hatch, and it exists for exactly
+one reason: middleware added LATER is OUTER, and the catalog's read-only maintenance gate must sit
+INSIDE the request-id layer or its 503 goes out without an ``X-Request-ID`` header — a refusal an
+operator cannot then correlate. Middleware that must be OUTER (the catalog's body cap and its
+write-concurrency shed) is added by the caller after this returns, which is where it already was.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable, Sequence
+from contextlib import AbstractAsyncContextManager
+from typing import Any
+
+from fastapi import APIRouter, FastAPI
+
+from service_kit.app import setup_logging
+from service_kit.exceptions import register_handlers
+from service_kit.governed.audit import configure_audit
+from service_kit.middleware import RequestIDMiddleware
+from service_kit.ns_errors import install_problem_handlers
+from service_kit.probes import ReadyCheck, make_probes_router
+
+
+def build_lance_service_app(
+    *,
+    title: str,
+    version: str = "0.1.0",
+    docs_enabled: bool,
+    audit_enabled: bool,
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
+    log: logging.Logger,
+    routers: Sequence[APIRouter] = (),
+    ready_check: ReadyCheck | None = None,
+    inner_middleware: Sequence[Callable[[Any, Any], Any]] = (),
+) -> FastAPI:
+    """Assemble one lance-plane service's FastAPI app. See the module docstring for what and why.
+
+    ``log`` is the SERVICE's logger, not this module's: the problem handlers log an unhandled error
+    with a traceback, and that record must carry the name of the service it happened in.
+
+    ``inner_middleware`` are ``http`` middleware functions that must run INSIDE the request-id layer
+    (see the module docstring). Everything else the caller adds after this returns, which keeps it
+    outer — the order those middlewares already had.
+
+    ``audit_enabled`` arms the `lance.audit` compliance stream, and is REQUIRED for the same reason
+    ``docs_enabled`` beside it is: a keyword with no default is enforced at every call site by the type
+    checker, so a new lakehouse service has to ANSWER rather than inherit. `governed/audit.py` gates
+    the stream by the dedicated logger's LEVEL, so a service that never calls `configure_audit` leaves
+    it at NOTSET and follows whatever `RASK_LOG_LEVEL` set — which meant the volume lever doubled as a
+    compliance lever. Three of this factory's four callers armed it in their own lifespans and two did
+    not; it was missing where it matters most, on `services/maintenance`, the component that rewrites
+    bytes.
+    """
+    setup_logging()
+    configure_audit(enabled=audit_enabled)
+    app = FastAPI(
+        title=title,
+        version=version,
+        lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+    )
+    register_handlers(app)
+    install_problem_handlers(app, log)
+    for middleware in inner_middleware:
+        app.middleware("http")(middleware)
+    app.add_middleware(RequestIDMiddleware)
+    for router in routers:
+        app.include_router(router)
+    app.include_router(make_probes_router(ready_check))
+    return app

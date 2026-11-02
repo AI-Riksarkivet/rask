@@ -13,17 +13,17 @@ from fastapi.testclient import TestClient
 from lance_namespace import connect
 from moto.server import ThreadedMotoServer
 
+from lakehouse_kit import location_claims
+from lakehouse_kit.base_refs import BaseRefs, normalise
+from lakehouse_kit.maintenance_due import CloneList
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.naming import TableIds
 from maintenance.services.plan import DatasetPlan, PlanContext
-from service_kit.lakehouse import location_claims
-from service_kit.lakehouse.base_refs import BaseRefs, normalise
-from service_kit.lakehouse.maintenance_due import CloneList
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.naming import CATALOG_DELIMITER
+from service_kit.storage_options import StorageOptions
 
 
 @pytest.fixture(scope="module")

@@ -22,8 +22,9 @@ import logging
 import pyarrow.fs as pafs
 
 from catalog.services.control_records import ProjectRecord, read_json, validated, validated_or_refuse, write_json
-from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
-from service_kit.lakehouse.records import create_json, mutate_json
+from lakehouse_kit.objectfs import fs_and_base
+from lakehouse_kit.records import create_json, mutate_json
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -88,7 +89,7 @@ def upsert_project(control_root: str, storage_options: StorageOptions, record: d
 def create_project_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
     """Mint ``_projects/<id>.json`` iff absent — the STORE arbitrates (F1).
 
-    Raises :class:`service_kit.lakehouse.records.RecordExistsError` on a lost race; the caller
+    Raises :class:`lakehouse_kit.records.RecordExistsError` on a lost race; the caller
     re-reads and converges on the winner's identity fields (``created_at``/``created_by``), exactly
     like the sequential idempotent re-POST path.
     """

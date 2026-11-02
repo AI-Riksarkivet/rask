@@ -34,7 +34,7 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import FgaClientDep, ResolverDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.services import table_claims
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 _ARROW = {"Content-Type": ARROW_STREAM_MEDIA_TYPE}

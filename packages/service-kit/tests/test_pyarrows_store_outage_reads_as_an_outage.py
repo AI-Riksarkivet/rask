@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from service_kit.lancekit.outage import reads_as_store_outage
+from service_kit.outage import reads_as_store_outage
 
 
 _KEY = "When reading information for key 't/_versions/1.manifest' in bucket 'b': "

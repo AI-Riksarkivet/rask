@@ -35,8 +35,8 @@ from botocore.exceptions import ClientError
 
 import storage
 from catalog.services import warehouses
-from service_kit.lakehouse import records
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import records
+from service_kit.storage_options import StorageOptions
 
 
 def _root(tmp_path: Any) -> str:

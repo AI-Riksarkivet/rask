@@ -32,6 +32,7 @@ from openfga_sdk.models.read_request_tuple_key import ReadRequestTupleKey
 from openfga_sdk.models.read_response import ReadResponse
 from starlette.testclient import TestClient
 
+from lakehouse_kit.openlineage import DatasetUuids, with_dataset_uuids
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
@@ -40,8 +41,7 @@ from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.openlineage import DatasetUuids, with_dataset_uuids
+from service_kit.ns_errors import install_problem_handlers
 
 
 def _uuid(name: str) -> str:

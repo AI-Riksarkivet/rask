@@ -42,8 +42,8 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
 
+from lakehouse_kit.lancekit.versions import committed_at
 from maintenance.services.orphans import scan_dataset
-from service_kit.lancekit.versions import committed_at
 
 
 def _dataset_with_orphan(offset_s: float, rel: str = "_transactions/99-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.txn") -> tuple[str, str]:

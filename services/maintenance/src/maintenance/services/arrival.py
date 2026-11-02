@@ -22,15 +22,15 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from lakehouse_kit import trash
+from lakehouse_kit.base_refs import decoded_path
+from lakehouse_kit.maintenance_due import CloneList, read_clone_list
+from lakehouse_kit.openlineage import LANCE_FACET, dataset_uuids
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import TableIds, refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict
 from maintenance.services.plan import PlanContext, buckets_to_sweep, load_policies, resolve_plan
 from maintenance.services.sweep import NamedDataset, SweepPlan, expire_dataset, name_dataset, trashed_locations, why_in_trash
-from service_kit.lakehouse import trash
-from service_kit.lakehouse.base_refs import decoded_path
-from service_kit.lakehouse.maintenance_due import CloneList, read_clone_list
-from service_kit.openlineage import LANCE_FACET, dataset_uuids
 
 
 log = logging.getLogger(__name__)

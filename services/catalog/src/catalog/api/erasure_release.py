@@ -31,11 +31,11 @@ from catalog.api.cron import mount_cron
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, StorageOptionsDep
 from catalog.core.config import fresh_lance_session
 from catalog.services import erasure_release, table_claims
-from service_kit.control_emit import emit_control
+from lakehouse_kit.control_emit import emit_control
+from lakehouse_kit.location_claims import ClaimStore
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

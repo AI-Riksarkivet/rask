@@ -11,10 +11,10 @@ from typing import Any, cast
 
 import pytest
 
+from lakehouse_kit.control_events import CatalogControlEvent
 from notifications.api import control_events as control_events_module
 from notifications.api.control_events import as_delivery, ingest_control_event, named_subjects
 from notifications.errors import InboxUnreadable
-from service_kit.control_events import CatalogControlEvent
 
 
 #: The uuid the catalog minted for `acme$gold`, which a grant on it names beside the name (ADR 0173 §10).

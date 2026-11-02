@@ -16,9 +16,9 @@ from typing import Any
 from lance_namespace import NamespaceNotFoundError
 
 from catalog.api.fga_deps import GovernedObject
-from service_kit.lakehouse import base_registry
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import base_registry
+from lakehouse_kit.location_claims import ClaimStore
+from service_kit.storage_options import StorageOptions
 
 
 #: A registry and claim store the cascade's record-forget and claim release may be pointed at; nothing is kept there.

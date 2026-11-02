@@ -18,7 +18,7 @@ import pytest
 from fastapi import FastAPI
 
 from catalog.api.v1.endpoints import data as door
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 _JSON = "application/json"

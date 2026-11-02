@@ -29,7 +29,7 @@ from catalog.services import warehouses as wh_svc
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
 from service_kit.governed import fga as fga_module
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 _PRIMARY_BUCKET = "lance-catalog"

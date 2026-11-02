@@ -90,7 +90,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    response returns, but its errors are swallowed so a lineage outage never fails the write. If the catalog
    crashes (or its sidecar is down) **between the S3 write and the publish**, the data exists on storage but
    **the lineage event is lost** — the feed under-reports that write. No corruption, but a provenance hole.
-   *Mitigation (shipped):* the **object-store outbox** (`service_kit.lakehouse.outbox`, opt-in via the
+   *Mitigation (shipped):* the **object-store outbox** (`lakehouse_kit.outbox`, opt-in via the
    catalog's `LANCE_LINEAGE_OUTBOX_URI` and the relay's `LINEAGE_OUTBOX_URI`) narrows the window to commit→stage
    for producers that stage the event before publishing. A crash between the write and the stage is not detected:
    nothing compares on-disk versions with the feed (parked as LH-497, "the commit is the outbox"). *Ops surface (#83):* the outbox
@@ -201,7 +201,7 @@ chart and live-verified on kind.
   (maintenance gets a longer budget for an in-flight sweep) so endpoint removal propagates before SIGTERM —
   in-flight requests drain instead of connection-refusing (`lance.preStop`, `lifecycle.*`).
 - **Bounded Dapr publishes.** Every `publish_event` is wrapped in `asyncio.timeout`
-  (`service_kit/dapr_publish.py`) so a wedged sidecar/NATS can't hang a write handler past its ack window.
+  (`lakehouse_kit/dapr_publish.py`) so a wedged sidecar/NATS can't hang a write handler past its ack window.
 - **Liveness + readiness probes on every workload.** App pods get an HTTP `readinessProbe` (`/readyz`,
   dependency-aware) **and** `livenessProbe` (`/livez`, process-up only — never restarts on a slow backend);
   the zones get `tcpSocket` probes (`lance.appProbes` / `lance.tcpProbes`).

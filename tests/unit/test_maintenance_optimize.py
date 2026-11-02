@@ -18,10 +18,10 @@ import lance
 import pyarrow as pa
 from lance.blob import Blob
 
+from lakehouse_kit.maintenance_due import CompactionDue
 from maintenance.services.due import DueQuestion, compaction_due
 from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
-from service_kit.lakehouse.maintenance_due import CompactionDue
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 def _expire(uri: str, *, older_than: timedelta | None = None, retain_versions: int | None = None) -> DatasetResult:
@@ -152,7 +152,7 @@ def test_a_registered_base_that_IS_A_LANCE_DATASET_ROOT_is_not_due_for_compactio
     for i in range(3):
         lance.write_dataset(pa.table({"id": pa.array(range(20 + i * 5, 25 + i * 5), pa.int64())}), uri, mode="append")
     lance.dataset(uri).add_bases([lance.DatasetBasePath(path=source, name="src")])
-    from service_kit.lakehouse import features
+    from lakehouse_kit import features
 
     assert [ref.is_dataset_root for ref in features.manifest_base_path_refs(lance.dataset(uri))] == [False], (
         "fixture assumption broken: the manifest bit would have been enough after all"
@@ -186,7 +186,7 @@ def test_an_UNKNOWN_flag_still_refuses_everything(tmp_path: Path) -> None:
     """Splitting the gate must not weaken it. `SUPPORTED_FOR_GC` adds base_paths and nothing else, so
     data overlays (flag 64) and any future unknown flag still refuse the whole pass — the narrow gate
     is a per-operation exception, not a general relaxation."""
-    from service_kit.lakehouse import features
+    from lakehouse_kit import features
 
     assert features.describe_gc_unsupported_flags(features.FLAG_DATA_OVERLAYS, 0) is not None
     assert features.describe_gc_unsupported_flags(1 << 20, 0) is not None

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
+from lakehouse_kit.openlineage import DatasetUuids, with_dataset_uuids
 from maintenance.services.arrival import should_replan
-from service_kit.openlineage import DatasetUuids, with_dataset_uuids
 
 
 TABLE_UUID = "0a6f3c8e-5b1d-4e2a-9c7f-3d8b2e1a4f60"

@@ -20,10 +20,10 @@ from typing import Any
 import pytest
 
 from catalog.core.config import get_settings
+from lakehouse_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport
 from lineage.core.metrics import Door
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import EDGES, FEED, RUNS, ProvenanceStore
-from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport
 from tests.integration.lineage_app import ensure_tables, live_catalog, run_event
 
 

@@ -15,7 +15,7 @@ TypeError for a storage type it refuses. Lance refuses metadata that is not UTF-
 ValueError on write (pylance 12.0.0).
 
 So both doors decode through `dataplane.read_arrow_body`, over the fleet's one validating decoder in
-`service_kit.lancekit.arrow_ipc`, and every such body answers 400 code 13 with nothing written. Driven
+`service_kit.arrow_ipc`, and every such body answers 400 code 13 with nothing written. Driven
 over HTTP against a real `dir` backend.
 """
 

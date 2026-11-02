@@ -33,7 +33,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned
 from service_kit.context import DiagnosticFormatter
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 pytestmark = pytest.mark.usefixtures("catalog_identity_token")

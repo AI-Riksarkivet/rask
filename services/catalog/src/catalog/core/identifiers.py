@@ -5,7 +5,7 @@ segment. The root namespace is represented by the delimiter itself.
 
 Joining segments back into the string identifier lives in :mod:`service_kit.governed.fga`
 (``canonical_object_id`` / ``parent_namespace_id``), so one spelling serves every door, record and event. The
-control-plane id SHAPE (``CONTROL_ID_RE``) lives in :mod:`service_kit.lakehouse.naming` because the planes that
+control-plane id SHAPE (``CONTROL_ID_RE``) lives in :mod:`service_kit.naming` because the planes that
 CONSUME a project id decide with that rule too, and one the issuer owns alone is one the consumers copy and then
 diverge from. This module owns the structural shape of a Lance object identifier: splitting it into segments, and the
 rule a segment must meet to be a name (ADR 0173 §4). It also owns the key the catalog mints for a table or namespace
@@ -22,7 +22,7 @@ from uuid import uuid4
 
 from lance_namespace import InvalidInputError
 
-from service_kit.lakehouse.naming import CATALOG_DELIMITER, UUID_PROPERTY
+from service_kit.naming import CATALOG_DELIMITER, UUID_PROPERTY
 
 
 #: A uuid in its canonical 8-4-4-4-12 hex spelling, in either case: the name of the directory a table the catalog makes

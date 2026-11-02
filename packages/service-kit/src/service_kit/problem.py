@@ -1,10 +1,11 @@
 """The RFC 9457 problem envelope, with no Lance dependency.
 
-WHY THIS IS NOT IN ``service_kit.lakehouse.ns_errors``, where it used to live. That module imports
-``lance_namespace`` at module scope, and ``service_kit.body_limit`` — a middleware every app this
-library builds gets — imported ``problem_body`` from it. So ``import service_kit`` transitively
-required a package that lives behind the ``[governed]`` / ``[lakehouse]`` extras, and the estate's own
-rule is that those stay optional because this library is shared by storeless services too.
+WHY THIS IS ITS OWN MODULE, not part of ``service_kit.ns_errors``: that module imports
+``lance_namespace`` at module scope, and ``service_kit.body_limit``, a middleware every app this
+library builds gets, needs ``problem_body``. Taken from ``ns_errors``, it would make ``import
+service_kit`` transitively require a package that lives behind the ``[governed]`` extra, and the
+estate's own rule is that the extra stays optional because this library is shared by storeless
+services too.
 
 The consequence is not theoretical: an image whose member declares ``service-kit`` bare resolves no
 ``lance_namespace`` and fails ``.docker/import-gate.py`` —

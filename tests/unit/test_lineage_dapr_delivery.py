@@ -36,7 +36,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lineage.models import RunEvent
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 _VALID = {

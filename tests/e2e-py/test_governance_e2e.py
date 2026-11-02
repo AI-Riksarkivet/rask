@@ -38,10 +38,10 @@ from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 from refusals import assert_refused, described, namespace_uuid
 from topology import OUTSIDER, WAREHOUSE, assert_parent_exists, create_top_level
 
+from lakehouse_kit.openlineage import RUN_EVENT_SCHEMA_URL, author_facet, run_id_for
 from lineage.models import author_sub_from_payload
 from service_kit.governed import fga
 from service_kit.governed.principal import is_principal
-from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, author_facet, run_id_for
 
 
 #: OpenLineage ``producer`` URI for the promote event this suite emits — the spec requires one, and a

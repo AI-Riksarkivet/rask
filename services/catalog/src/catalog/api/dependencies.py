@@ -28,12 +28,12 @@ from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor, ModeBVendor
 from catalog.services import dataplane, object_uuids, provenance_namespace, table_claims, warehouses
 from catalog.services.table_claims import DoorTable, ResolvedTable
-from service_kit.control_emit import ControlEmitter, NoopControlEmitter
-from service_kit.control_events import CatalogControlEvent, ControlUuids
+from lakehouse_kit import trash
+from lakehouse_kit.control_emit import ControlEmitter, NoopControlEmitter
+from lakehouse_kit.control_events import CatalogControlEvent, ControlUuids
+from lakehouse_kit.openlineage import DatasetUuids
 from service_kit.governed import fga
-from service_kit.lakehouse import trash
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.openlineage import DatasetUuids
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

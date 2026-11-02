@@ -1,6 +1,6 @@
 """#83 DLQ ops — the transactional-outbox view + on-demand replay endpoints.
 
-Driven against a REAL local outbox (a tmp dir): stage events with ``service_kit.lakehouse.outbox``, then exercise the
+Driven against a REAL local outbox (a tmp dir): stage events with ``lakehouse_kit.outbox``, then exercise the
 handlers directly. Covers the happy path (list summaries oldest-first, replay re-ingests + drops), the
 poison object (surfaced in the view, un-replayable), the fail-closed auth ladder (FGA on + no token → 401),
 per-dataset governance of the list, and the replay writer gate (a non-writer of the event's outputs is 403).
@@ -25,6 +25,7 @@ from lance_namespace import (
     UnsupportedOperationError,
 )
 
+from lakehouse_kit import outbox
 from lineage.api.fga_deps import DatasetFilter
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, storage_options
@@ -34,7 +35,6 @@ from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse import outbox
 
 
 _FULL_AUTH = {

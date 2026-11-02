@@ -24,9 +24,9 @@ from typing import Any, cast
 
 import pytest
 
-from service_kit.control_emit import DaprControlEmitter
-from service_kit.control_events import CatalogControlEvent
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit.control_emit import DaprControlEmitter
+from lakehouse_kit.control_events import CatalogControlEvent
+from service_kit.storage_options import StorageOptions
 
 
 def _event() -> CatalogControlEvent:
@@ -36,7 +36,7 @@ def _event() -> CatalogControlEvent:
 @pytest.mark.asyncio
 async def test_a_SUCCESSFUL_publish_drops_the_staged_copy(tmp_path: Any) -> None:
     """Drop-on-ack. A staged object that outlives its delivery is one the relay re-publishes forever."""
-    from service_kit.lakehouse import outbox
+    from lakehouse_kit import outbox
 
     class _Ok:
         async def publish_event(self, **_kw: Any) -> None:

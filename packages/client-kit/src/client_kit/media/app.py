@@ -27,7 +27,7 @@ from fastapi import APIRouter, FastAPI
 from client_kit.media.config import MediaSettings
 from client_kit.media.middleware import register_media_middleware
 from service_kit.exceptions import register_handlers
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 from service_kit.probes import ReadyCheck, make_probes_router
 
 

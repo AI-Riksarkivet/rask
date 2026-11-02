@@ -147,9 +147,18 @@ extend-select = ["TID251", "FAST001"]
 # (.dagger/checks.go linted `services tests` only), so no automated check read the kernel for the
 # rule classes it most needs. Adding a rule back here now requires saying which site needs it.
 "packages/service-kit/src/service_kit/governed/**" = ["ANN401", "ANN202", "C901", "PERF401"]
-"packages/service-kit/src/service_kit/lakehouse/**" = ["RUF002", "RUF003", "RUF100", "PERF401"]
-"packages/service-kit/src/service_kit/lancekit/**" = ["A002"]
+# The kernel's measured sites, one file each (2026-11-02, every module under packages/lakehouse-kit/src): the
+# typographic minus sign in `lance_session`'s prose, the two loops PERF401 reads as a comprehension, and the four files
+# whose `# noqa: BLE001` / `SLF001` directives carry their written reason (RUF100, as the note above records).
+"packages/lakehouse-kit/src/lakehouse_kit/lance_session.py" = ["RUF002"]
+"packages/lakehouse-kit/src/lakehouse_kit/object_records.py" = ["PERF401"]
+"packages/lakehouse-kit/src/lakehouse_kit/quality.py" = ["PERF401"]
+"packages/lakehouse-kit/src/lakehouse_kit/commit_turns.py" = ["RUF100"]
+"packages/lakehouse-kit/src/lakehouse_kit/compaction_gate.py" = ["RUF100"]
+"packages/lakehouse-kit/src/lakehouse_kit/features.py" = ["RUF100"]
+"packages/lakehouse-kit/src/lakehouse_kit/history_fences.py" = ["RUF100"]
 "packages/client-kit/src/client_kit/lancekit/reader.py" = ["A002"]  # `filter=` is the lance dataset API's own parameter name
+"packages/client-kit/src/client_kit/lancekit/catalog.py" = ["A002"]  # `filter=` is the lance dataset API's own parameter name
 "packages/client-kit/src/client_kit/lancekit/**" = ["ANN401", "C901", "PERF401"]
 # No ANN exemption under media/: `dataset_handle` is the entry point every media and annotator route
 # passes through to reach a dataset, and an untyped return there is an `Any` in every one of them.
@@ -157,7 +166,7 @@ extend-select = ["TID251", "FAST001"]
 # `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
 # `service_kit/obs.py` measured identically and went the same way 2026-09-10.
-"packages/service-kit/src/service_kit/dapr_publish.py" = ["ANN401"]
+"packages/lakehouse-kit/src/lakehouse_kit/dapr_publish.py" = ["ANN401"]
 # TID251: a sealed runner is where a model framework and a workload's own Lance writes belong, outside
 # the platform seams the banned-api rules guard (htr and dummy carry their own ruff config and never
 # read this map).
@@ -179,15 +188,15 @@ extend-select = ["TID251", "FAST001"]
 "packages/storage/src/storage/client.py" = ["TID251"]  # boto3: the S3 client seam
 "packages/storage/src/storage/sts.py" = ["TID251"]  # boto3: the STS client seam
 "packages/service-kit/src/service_kit/draining.py" = ["TID251"]  # signal: the drain seam
-"packages/service-kit/src/service_kit/lancekit/arrow_ipc.py" = ["TID251"]  # arrow ipc: the validating decoder
-"packages/service-kit/src/service_kit/lancekit/reader.py" = ["TID251"]  # decode_arrow_response: the /query reader
+"packages/service-kit/src/service_kit/arrow_ipc.py" = ["TID251"]  # arrow ipc: the validating decoder
+"packages/lakehouse-kit/src/lakehouse_kit/lancekit/reader.py" = ["TID251", "A002"]  # decode_arrow_response: the /query reader; `filter=` is the request's own field
 "services/annotator/src/annotator/projects/proxies.py" = ["TID251"]  # ActorProxy: the proxies module
 "services/notifications/src/notifications/proxies.py" = ["TID251"]  # ActorProxy + encode_subject: the proxies module
 
 # The code-shape bans. Each message names the seam a caller goes through instead; the sanctioned sites
 # are the per-file ignores above and the line-level `# noqa: TID251` at each call site.
 # Five `dataclasses.dataclass` noqa lines are DEBT against the Pydantic-only rule, not sanctioned uses:
-# service_kit/lakehouse/idempotency.py, catalog/api/idempotency.py, catalog/core/lineage_emit.py,
+# lakehouse_kit/idempotency.py, catalog/api/idempotency.py, catalog/core/lineage_emit.py,
 # maintenance/services/credentials.py and maintenance/services/sweep.py.
 # services/viewer RESTATES this whole map in its own pyproject.toml: a nested banned-api table replaces
 # the root one rather than merging with it (measured, ruff 0.16.0), so a ban added here is added there too.
@@ -198,20 +207,20 @@ extend-select = ["TID251", "FAST001"]
 "lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
 "catalog.services.warehouses.put_warehouse".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
 "catalog.services.projects.put_project".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
-"service_kit.dapr_publish.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
+"lakehouse_kit.dapr_publish.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
 "signal.signal".msg = "SIGTERM is taken only by service_kit.draining; a second handler replaces the drain."
-"pyarrow.ipc.open_stream".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.open_file".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.MessageReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.read_message".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.read_record_batch".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.ipc.read_schema".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"pyarrow.feather".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
-"service_kit.lancekit.arrow_ipc.decode_arrow_response".msg = "Only the catalog /query reader may skip the size bound."
+"pyarrow.ipc.open_stream".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.open_file".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.MessageReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_message".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_record_batch".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_schema".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.feather".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
+"service_kit.arrow_ipc.decode_arrow_response".msg = "Only the catalog /query reader may skip the size bound."
 "dapr.actor.ActorProxy".msg = "Build an actor proxy through the service's proxies module: it translates the wire method names."
 "notifications.subjects.encode_subject".msg = "An inbox actor id is derived only in notifications.proxies."
 "service_kit.governed.fga.write_tuples".msg = "Tuple grants happen only at the registered granting sites."
@@ -237,7 +246,7 @@ indent-style = "space"
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 # COMPLETE, and it is meant to stay that way: every first-party import name on disk is here — the
-# six code-shipping packages (client_kit, lineage_kit, ray_cluster_env, ray_kit, service_kit, storage) and
+# seven code-shipping packages (client_kit, lakehouse_kit, lineage_kit, ray_cluster_env, ray_kit, service_kit, storage) and
 # the services. A missing name is not a metadata gap: ruff sorts that module into
 # the THIRD-PARTY block, so `from catalog.core.config import ...` sat beside `import httpx` in every
 # file that imported it.
@@ -256,6 +265,7 @@ known-first-party = [
     "client_kit",
     "compute",
     "flows",
+    "lakehouse_kit",
     "lineage",
     "lineage_kit",
     "maintenance",

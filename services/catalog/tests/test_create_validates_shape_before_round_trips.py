@@ -23,7 +23,7 @@ from catalog.api import fga_deps
 from catalog.api.idempotency import KeyedDoor
 from catalog.api.v1.endpoints import data as ep
 from catalog.core.config import Settings
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+from service_kit.arrow_ipc import encode_arrow_stream
 
 
 def _settings() -> Settings:

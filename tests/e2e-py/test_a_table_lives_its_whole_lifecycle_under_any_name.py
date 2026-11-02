@@ -37,7 +37,7 @@ from refusals import assert_refused, namespace_uuid
 from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
 
 from service_kit.governed import fga
-from service_kit.lakehouse.naming import CATALOG_DELIMITER, uuid_of
+from service_kit.naming import CATALOG_DELIMITER, uuid_of
 
 
 pytestmark = [

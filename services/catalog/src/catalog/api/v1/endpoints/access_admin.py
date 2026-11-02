@@ -56,7 +56,7 @@ from catalog.schemas import (
     TupleCondition,
 )
 from catalog.services import principals, project_admins
-from service_kit.control_emit import ControlEmitter, emit_control
+from lakehouse_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.principal import is_principal

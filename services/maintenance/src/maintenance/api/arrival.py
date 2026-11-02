@@ -26,6 +26,7 @@ from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 
+from lakehouse_kit import maintenance_policies
 from lineage_kit.door import DoorMode, DoorVerdict, judge
 from lineage_kit.keys import PublishedKeys
 from lineage_kit.signing import signature_of, verify_signature
@@ -38,7 +39,6 @@ from maintenance.services.sweep import emit_sweep_lineage
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.governed.signing_key import published_key_fetch, retry_until_signed
-from service_kit.lakehouse import maintenance_policies
 
 
 log = logging.getLogger(__name__)

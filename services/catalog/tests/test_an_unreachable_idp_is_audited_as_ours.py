@@ -30,7 +30,7 @@ from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import AUDIT_LOGGER
 from service_kit.governed.idp_identity import IdpVerifier
 from service_kit.governed.oidc import OIDCVerifier
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 AUDIENCE = "lance-catalog"

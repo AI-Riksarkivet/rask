@@ -20,7 +20,7 @@ from typing import Self
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from service_kit.governed.settings import SignatureDoorSettings
+from lakehouse_kit.signature_doors import SignatureDoorSettings
 
 
 class IngressSettings(SignatureDoorSettings, BaseSettings):

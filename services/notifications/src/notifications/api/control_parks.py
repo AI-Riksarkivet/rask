@@ -32,9 +32,9 @@ import httpx
 from fastapi import Request
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from lakehouse_kit.control_events import CatalogControlEvent
 from notifications.api.control_events import ParkForgetter, named_person
 from notifications.api.metrics import ParkOutcome, record_control_park
-from service_kit.control_events import CatalogControlEvent
 from service_kit.exceptions import ServiceUnavailableError
 
 

@@ -14,7 +14,7 @@ from lance_namespace import (
 
 from catalog.api.dependencies import ResolverDep, TransactionTableDep
 from catalog.core.identifiers import parse_identifier, reconcile_body_id, transaction_table
-from service_kit.lakehouse import trash
+from lakehouse_kit import trash
 
 
 router = APIRouter(prefix="/v1/transaction", tags=["transaction"])

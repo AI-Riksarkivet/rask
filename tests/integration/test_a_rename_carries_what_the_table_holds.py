@@ -28,14 +28,14 @@ from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings
 from catalog.services import promotions, warehouses
+from lakehouse_kit import location_claims, maintenance_due, object_records
+from lakehouse_kit.maintenance_due import CompactionDue, DueRecord
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import table_ids
 from maintenance.services.naming import policy_owners
 from maintenance.services.plan import PlanContext, load_policies, resolve_plan
-from service_kit.lakehouse import location_claims, maintenance_due, object_records
-from service_kit.lakehouse.maintenance_due import CompactionDue, DueRecord
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.storage_options import StorageOptions
 from tests.integration.openfga_grants import TupleStore, act_as
 
 

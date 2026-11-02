@@ -1,7 +1,7 @@
 """The registry's ``table_dataset`` reads a missing table as the estate's one absence, a 404.
 
 pylance exposes no typed error for a missing table, so the registry classifies by message substring through
-``service_kit.lancekit.absence.reads_as_absent``, the vocabulary every plane shares.
+``client_kit.lancekit.absence.reads_as_absent``, the vocabulary the client's read paths share.
 """
 
 from __future__ import annotations

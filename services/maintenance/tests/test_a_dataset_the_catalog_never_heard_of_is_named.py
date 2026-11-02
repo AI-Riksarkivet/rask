@@ -33,11 +33,11 @@ from types import SimpleNamespace
 import pytest
 from pydantic import SecretStr
 
+from lakehouse_kit.base_refs import normalise
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
 from maintenance.services.naming import TableIds
 from maintenance.services.reconcile import _unregistered_datasets
-from service_kit.lakehouse.base_refs import normalise
 
 
 _TABLE = "s3://acme-wh/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"

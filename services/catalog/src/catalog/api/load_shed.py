@@ -5,7 +5,7 @@ handler runs (up to ``max_body_bytes`` = 256MiB, see body_limit.py), so N concur
 the OOM that the per-workload memory tier (catalog=1Gi in values-prod) only PARTLY bounds. Under a write
 burst the pod OOMs and takes every in-flight request with it. This sheds the overflow: once
 ``max_concurrent`` writes are in flight, the next is rejected with **429** (the ``THROTTLING`` → 429
-mapping in service_kit/lakehouse/ns_errors.py that had no producer) + a ``Retry-After``, BEFORE a single body byte is
+mapping in service_kit/ns_errors.py that had no producer) + a ``Retry-After``, BEFORE a single body byte is
 buffered — so shedding actually relieves
 memory pressure rather than adding to it. Reads and non-bulk writes (``version/create``, ``update``, ``delete``)
 pass through untouched. ``max_concurrent=0`` disables it entirely.
@@ -23,8 +23,8 @@ from lance_namespace import ErrorCode
 from opentelemetry import metrics
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from service_kit.lakehouse.ns_errors import problem_body
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from service_kit.ns_errors import problem_body
 
 
 _PROBLEM_JSON = b"application/problem+json"

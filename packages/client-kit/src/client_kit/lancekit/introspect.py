@@ -17,8 +17,8 @@ import pyarrow as pa
 from pydantic import BaseModel
 
 from client_kit.lancekit import store
-from service_kit.lancekit.absence import reads_as_absent
-from service_kit.lancekit.blobs import is_blob_field
+from client_kit.lancekit.absence import reads_as_absent
+from client_kit.lancekit.blobs import is_blob_field
 
 
 logger = logging.getLogger(__name__)

@@ -26,7 +26,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from lance_namespace import ErrorCode
 
-from service_kit.lakehouse.ns_errors import PROBLEM_JSON, install_problem_handlers
+from service_kit.ns_errors import PROBLEM_JSON, install_problem_handlers
 
 
 @pytest.fixture

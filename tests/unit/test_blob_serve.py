@@ -27,8 +27,8 @@ from catalog.services import blob_serving, table_claims
 from catalog.services.blob_serving import BlobStream, read_blob
 from catalog.services.dataplane import create_table
 from catalog.services.table_claims import DoorTable
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit.location_claims import ClaimStore
+from service_kit.storage_options import StorageOptions
 
 
 def _blob_schema() -> pa.Schema:

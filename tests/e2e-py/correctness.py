@@ -47,10 +47,10 @@ import requests
 from byo_scenario import Commit, Identity, ScenarioRun, Tenant
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.lakehouse import outbox
-from service_kit.lakehouse.naming import uuid_of
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.openlineage import event_identity
+from lakehouse_kit import outbox
+from lakehouse_kit.openlineage import event_identity
+from service_kit.naming import uuid_of
+from service_kit.storage_options import StorageOptions
 
 
 #: The namespace the catalog keeps lineage's tables in (`services.lineage.provenanceNamespace`).

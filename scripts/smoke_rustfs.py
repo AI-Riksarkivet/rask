@@ -26,7 +26,7 @@ from collections.abc import Callable
 
 from dotenv import load_dotenv
 
-from service_kit.lakehouse.endpoint_scheme import allow_http_for
+from service_kit.endpoint_scheme import allow_http_for
 
 
 def _check(label: str, fn: Callable[[], object]) -> bool:

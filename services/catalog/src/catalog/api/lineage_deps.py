@@ -30,7 +30,7 @@ from catalog.core.run_context import RunContext
 from catalog.services import dataplane, table_inputs
 from catalog.services.table_claims import ResolvedTable
 from service_kit.governed import fga
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 def door_stamp(token: Caller | None, operation: str, run: RunContext | None = None) -> dict[str, str]:

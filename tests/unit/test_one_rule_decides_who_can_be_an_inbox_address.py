@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from service_kit.lakehouse.subjects import is_person_subject
+from lakehouse_kit.subjects import is_person_subject
 
 
 # NO WORKLOAD NAME is asserted here, deliberately: the platform is forbidden to know about one, so a

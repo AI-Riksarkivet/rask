@@ -89,7 +89,7 @@ def test_the_installed_handlers_also_carry_a_code(path: str, expected: int) -> N
 
     from pydantic import BaseModel
 
-    from service_kit.lakehouse.ns_errors import install_problem_handlers
+    from service_kit.ns_errors import install_problem_handlers
 
     class _Body(BaseModel):
         n: int

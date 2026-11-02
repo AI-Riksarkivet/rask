@@ -37,11 +37,8 @@ from typing import Any, Final, Protocol, runtime_checkable
 
 from dapr.aio.clients import DaprClient
 
-from lineage_kit import CanonError, SigningKey, attach_signature
-from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
-from service_kit.lakehouse import outbox
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.openlineage import (
+from lakehouse_kit import outbox
+from lakehouse_kit.openlineage import (
     AUTHOR_FACET,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     LANCE_FACET,
@@ -52,6 +49,9 @@ from service_kit.openlineage import (
     run_id_for,
     with_dataset_uuids,
 )
+from lineage_kit import CanonError, SigningKey, attach_signature
+from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

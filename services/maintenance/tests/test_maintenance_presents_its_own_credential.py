@@ -19,7 +19,7 @@ import respx
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceUnauthenticated
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 _CATALOG = "http://catalog:2333"

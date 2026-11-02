@@ -64,12 +64,12 @@ from catalog.api.v1.endpoints.access import _can_relations as _model_can_relatio
 from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims
 from catalog.services.table_claims import ResolvedTable
+from service_kit.arrow_ipc import encode_arrow_stream
 from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+from service_kit.naming import UUID_PROPERTY
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 

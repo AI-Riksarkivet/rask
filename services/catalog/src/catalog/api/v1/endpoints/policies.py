@@ -45,11 +45,11 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyRequest, PolicyResponse, ProjectPoliciesResponse
 from catalog.services import table_claims, warehouses
-from service_kit.control_emit import ControlEmitter, emit_control
+from lakehouse_kit import maintenance_policies as policies
+from lakehouse_kit.control_emit import ControlEmitter, emit_control
+from lakehouse_kit.location_claims import ClaimStore
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies as policies
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.naming import CONTROL_ID_RE
+from service_kit.naming import CONTROL_ID_RE
 
 
 log = logging.getLogger(__name__)

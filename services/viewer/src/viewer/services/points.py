@@ -22,8 +22,8 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from client_kit.lancekit.descriptor import AtlasSpace, Declared
+from service_kit.arrow_ipc import encode_arrow_stream
 from service_kit.exceptions import ValidationError
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
 def _dictionary(column: pa.ChunkedArray) -> pa.Array:

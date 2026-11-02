@@ -1,7 +1,7 @@
 """Whether a table needs compacting or reindexing: maintenance's decision, written as the table's due record (ADR 0162).
 
 Read-only over the dataset. A compaction is due when the winning policy leaves it enabled, the layout passes the
-compaction gate (:func:`service_kit.lakehouse.features.describe_compaction_unsupported_flags`, fed the three base
+compaction gate (:func:`lakehouse_kit.features.describe_compaction_unsupported_flags`, fed the three base
 readings exactly as a rewrite would be judged), and Lance's own planner has a task under the policy's fragment size.
 An index optimize is due when the policy leaves it enabled and an index has unindexed rows or too many deltas
 (:func:`maintenance.services.index_health.due_indices`). Due on either writes the record; due on neither deletes it.
@@ -20,15 +20,15 @@ import lance
 from lance.optimize import Compaction, CompactionOptions
 from pydantic import BaseModel, Field
 
+from lakehouse_kit.base_refs import normalise
+from lakehouse_kit.compaction_gate import compaction_refusal
+from lakehouse_kit.maintenance_due import CompactionDue, DueRecord, IndexDue, delete_due, write_due
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.expiry import DueVerdict
 from maintenance.services.index_health import due_indices
 from maintenance.services.naming import TableIds, manifest_uuid
 from maintenance.services.purge import manifest_rows, table_location
-from service_kit.lakehouse.base_refs import normalise
-from service_kit.lakehouse.compaction_gate import compaction_refusal
-from service_kit.lakehouse.maintenance_due import CompactionDue, DueRecord, IndexDue, delete_due, write_due
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

@@ -32,7 +32,7 @@ from tables_by_name import open_by_name
 
 from catalog.services.dataplane import create_table
 from catalog.services.publication import gate
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

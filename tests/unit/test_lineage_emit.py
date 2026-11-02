@@ -32,8 +32,8 @@ from catalog.core.lineage_emit import (
     emit_write_event,
     make_emitter,
 )
+from lakehouse_kit.openlineage import DatasetUuids
 from lineage.models import RunEvent
-from service_kit.openlineage import DatasetUuids
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 

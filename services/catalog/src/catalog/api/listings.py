@@ -15,7 +15,7 @@ from fastapi.concurrency import run_in_threadpool
 from catalog.api.dependencies import Resolver
 from catalog.services import dataplane
 from catalog.services.table_claims import ResolvedTable
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 async def holding_a_version(resolver: Resolver, so: StorageOptions, candidates: Sequence[tuple[str, Sequence[str]]]) -> list[tuple[str, list[str]]]:

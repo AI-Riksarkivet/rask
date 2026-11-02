@@ -3,14 +3,14 @@
 pyarrow writes a stream or a file depending on which writer a caller reached for, and a client door may take both.
 The framing is read from the file magic, so a stream whose buffers fail validation is refused for its buffers, not
 re-read as a file and refused for the wrong reason; the decoding itself is the one validator,
-:func:`service_kit.lancekit.arrow_ipc.decode_arrow_body`.
+:func:`service_kit.arrow_ipc.decode_arrow_body`.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from service_kit.lancekit.arrow_ipc import decode_arrow_body
+from service_kit.arrow_ipc import decode_arrow_body
 
 
 if TYPE_CHECKING:

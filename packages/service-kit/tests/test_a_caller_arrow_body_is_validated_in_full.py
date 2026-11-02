@@ -22,7 +22,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowFraming, decode_arrow_body, encode_arrow_stream
+from service_kit.arrow_ipc import ArrowBodyError, ArrowFraming, decode_arrow_body, encode_arrow_stream
 
 
 #: A caller's body cap, far above every body here: these bodies are refused for what they hold, not their size.

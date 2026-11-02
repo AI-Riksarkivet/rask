@@ -19,10 +19,10 @@ import lancedb
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from client_kit.lancekit import store
+from client_kit.lancekit.absence import reads_as_absent
 from client_kit.lancekit.descriptor import DatasetDescriptor, load_dataset_descriptor
 from client_kit.lancekit.introspect import table_info
 from service_kit.exceptions import NotFoundError
-from service_kit.lancekit.absence import reads_as_absent
 
 
 logger = logging.getLogger(__name__)

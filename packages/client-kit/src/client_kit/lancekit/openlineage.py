@@ -1,9 +1,10 @@
 """OpenLineage facet primitives — the spec-2-0-2 RunEvent contract, kernel-owned.
 
 The shared half of lineage emission, for a media client's own write path: ``WriteResult``, the schema/columnLineage facets,
-and the standalone ``build_run_event`` mirror. The spec constants (``SCHEMA_URL``, the facet
-``_schemaURL``s, ``run_id_for``) are IMPORTED from ``service_kit.openlineage``, not re-declared — one
-definition, so two emitters cannot describe the same run differently. The columnLineage builder is
+and the standalone ``build_run_event`` mirror. The spec constants (``SCHEMA_URL``, the facet ``_schemaURL``s) are the
+OpenLineage spec's own, the contract a client's events and the lakehouse's both answer to, pinned by
+``test_openlineage_spec_conformance.py``. ``run_id_for`` derives a run's id under the same uuid namespace the lakehouse's
+emitters use, so an at-least-once redelivery of a client's run lands on the same feed key. The columnLineage builder is
 this module's: the lakehouse emits no column lineage of its own.
 
 Kernel layer: pure over a pyarrow schema + measured stats, no pipeline import. The batch
@@ -14,20 +15,30 @@ emits it from its own sealed runner.
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Iterable
 from typing import Any
 
 import pyarrow as pa
 from pydantic import BaseModel, Field
 
-from service_kit.lancekit.blobs import blob_field_names
-from service_kit.openlineage import (
-    DATASOURCE_FACET_SCHEMA_URL,
-    ERROR_MESSAGE_FACET_SCHEMA_URL,
-    RUN_EVENT_SCHEMA_URL,
-    SCHEMA_FACET_SCHEMA_URL,
-)
-from service_kit.openlineage import run_id_for as _run_id_for
+from client_kit.lancekit.blobs import blob_field_names
+
+
+#: The OpenLineage spec's ``_schemaURL``s for the event and the facets a client's write emits.
+RUN_EVENT_SCHEMA_URL = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
+SCHEMA_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-2-0/SchemaDatasetFacet.json#/$defs/SchemaDatasetFacet"
+DATASOURCE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet"
+ERROR_MESSAGE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/ErrorMessageRunFacet.json#/$defs/ErrorMessageRunFacet"
+
+#: The uuid namespace run ids are derived under: ``uuid5`` of the project URL, the namespace the lakehouse's emitters use.
+_RUN_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://github.com/Borg93/lance-ns")
+
+
+def run_id_for(seed: str) -> str:
+    """A spec-valid UUID ``runId`` that is stable for ``seed`` (e.g. ``"<stage>-<token>"``): OpenLineage requires a UUID,
+    and a redelivered run must land on the same feed key, which the feed's insert-only merge keeps once."""
+    return str(uuid.uuid5(_RUN_ID_NAMESPACE, seed))
 
 
 #: The standard ``ColumnLineageDatasetFacet`` a client's write emits. Lineage keeps the facet inside the recorded
@@ -69,17 +80,14 @@ def column_lineage_facet(producer: str, edges: Iterable[ColumnEdge]) -> dict[str
     return {"_producer": producer, "_schemaURL": COLUMN_LINEAGE_FACET_SCHEMA_URL, "fields": fields}
 
 
-# ── Spec constants — IMPORTED from service_kit/openlineage.py, not re-declared ──
-# The merge landed, so "mirroring" the constants by hand is now pure drift risk: the copies here had
-# already diverged (SchemaDatasetFacet pinned at 1-1-1 vs 1-2-0, DatasourceDatasetFacet at 1-0-1 vs
-# 1-0-0) and every URL dropped the ``#/$defs/<Facet>`` JSON pointer the spec and the official client
-# both carry. One import, one spec version, one place to bump.
+# ── Spec constants: the published versions declared at the top of this module ──
+# Each URL carries the ``#/$defs/<Facet>`` JSON pointer the spec and the official client both carry, and
+# `test_openlineage_spec_conformance.py` validates a built event against the published schemas.
 SCHEMA_URL = RUN_EVENT_SCHEMA_URL
 _SCHEMA_FACET_URL = SCHEMA_FACET_SCHEMA_URL
 _DATASOURCE_FACET_URL = DATASOURCE_FACET_SCHEMA_URL
 _ERROR_MESSAGE_FACET_URL = ERROR_MESSAGE_FACET_SCHEMA_URL
-#: ``OutputStatisticsOutputDatasetFacet`` has no ``service_kit.openlineage`` constant yet — the lance-ns
-#: emitters build it inline in ``medallion/schemas/events.py``. Pinned to the same published version.
+#: ``OutputStatisticsOutputDatasetFacet``, pinned to the same published version as the facets above.
 _OUTPUT_STATS_FACET_URL = "https://openlineage.io/spec/facets/1-0-2/OutputStatisticsOutputDatasetFacet.json#/$defs/OutputStatisticsOutputDatasetFacet"
 # The URI identifying the EMITTING CODE in every event (spec: `producer`). It named a path in the
 # repo this kernel was merged FROM, inside a package that has since been dissolved — so every event
@@ -115,8 +123,8 @@ class WriteResult(BaseModel):
 
 #: Extension names a JSON column can carry — ``pa.json_()`` (the chunk schema's ``alignments_json``,
 #: the topic-tree ``hierarchy``) reads back as ``arrow.json``; Lance's docs name it ``lance.json``.
-#: pyarrow 24 has no ``pa.types.is_json``, so match the extension name. MUST match
-#: ``service_kit/lakehouse/schema.py`` — the same column has to carry the same label on both sides of the merge.
+#: pyarrow 24 has no ``pa.types.is_json``, so match the extension name. The lakehouse's own schema facets label a JSON
+#: column the same way, so a column carries one label whichever side wrote it.
 _JSON_EXTENSION_NAMES = frozenset({"arrow.json", "lance.json"})
 
 
@@ -134,16 +142,9 @@ def _type_label(dtype: pa.DataType) -> str:
 
 def facet_fields(schema: pa.Schema) -> list[dict[str, str]]:
     """``SchemaDatasetFacet.fields`` — ``[{"name","type"}]`` per column, blob-aware.
-    Mirrors service_kit.lakehouse.schema.facet_fields (blob → "blob")."""
+    Labels a blob column "blob", as the lakehouse's own schema facets do."""
     blobs = set(blob_field_names(schema))
     return [{"name": f.name, "type": "blob" if f.name in blobs else _type_label(f.type)} for f in schema]
-
-
-#: Deterministic spec-valid UUID runId for a seed (e.g. ``"<stage>-<token>"``) — re-exported from
-#: ``service_kit.openlineage`` rather than recomputing the uuid5 namespace, so the id a pre-merge run mints
-#: is byte-identical to the merged one and a redelivery lands on the same feed key, which the feed's insert-only
-#: merge keeps once.
-run_id_for = _run_id_for
 
 
 def build_run_event(

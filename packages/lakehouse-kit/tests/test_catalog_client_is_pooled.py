@@ -1,0 +1,67 @@
+"""SK-03 — one urllib3 connection pool per catalog, not one per transport.
+
+A transport may be constructed once per REQUEST, and an `ApiClient` builds a fresh `urllib3.PoolManager`, so a
+client per transport would open a pool and a connection for every catalog call and throw it away. The generated
+client's `__exit__` is `pass`, so even `with ApiClient(...)` closes nothing.
+
+The remedy is one client per (catalog host, retry policy), which means the caller's bearer can no
+longer be a DEFAULT header on a shared object — it rides each request instead. That is the part with
+teeth: a token that leaked between transports would authorize one user's read as another's.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from lakehouse_kit.lancekit.catalog_client import reset_catalog_clients
+
+
+pytest.importorskip("lance_namespace_urllib3_client")
+
+from lakehouse_kit.lancekit.reader import RestCatalogTransport
+from lakehouse_kit.lancekit.writer import RestCatalogWriteTransport
+
+
+@pytest.fixture(autouse=True)
+def _fresh_cache() -> None:
+    reset_catalog_clients()
+
+
+def _pool(transport: RestCatalogTransport | RestCatalogWriteTransport) -> object:
+    api = transport._api.api_client  # the generated DataApi's ApiClient
+    return api.rest_client.pool_manager
+
+
+def test_the_reader_and_the_writer_share_the_pool_for_one_catalog() -> None:
+    reader = RestCatalogTransport("http://catalog:2333")
+    writer = RestCatalogWriteTransport("http://catalog:2333", ["ns", "t"])
+    assert _pool(reader) is _pool(writer)
+
+
+def test_two_catalogs_do_not_share_a_pool() -> None:
+    assert _pool(RestCatalogTransport("http://a:2333")) is not _pool(RestCatalogTransport("http://b:2333"))
+
+
+def test_the_caller_token_never_becomes_a_default_header_on_the_shared_client() -> None:
+    """The whole reason the token moved off the client: the client is shared."""
+    alice = RestCatalogTransport("http://catalog:2333", token="alice")
+    bob = RestCatalogTransport("http://catalog:2333", token="bob")
+    shared = alice._api.api_client
+    assert shared is bob._api.api_client
+    assert "Authorization" not in shared.default_headers, "a shared client carrying one caller's bearer authorizes every other caller as them"
+    assert alice.request_headers()["Authorization"] == "Bearer alice"
+    assert bob.request_headers()["Authorization"] == "Bearer bob"
+
+
+def test_an_anonymous_transport_sends_no_authorization_header() -> None:
+    assert "Authorization" not in RestCatalogTransport("http://catalog:2333").request_headers()
+
+
+def test_the_per_call_headers_are_a_fresh_mapping_each_time() -> None:
+    """The generated serializer MUTATES the `_headers` dict it is handed (it writes `Accept` and
+    `Content-Type` into it), so handing it the transport's own dict would accumulate one operation's
+    content type onto the next."""
+    transport = RestCatalogTransport("http://catalog:2333", token="alice")
+    first = transport.request_headers()
+    first["Content-Type"] = "application/vnd.made-up"
+    assert "Content-Type" not in transport.request_headers()

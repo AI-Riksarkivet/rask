@@ -2,9 +2,9 @@
 
 Importing anything under this library executed `make_service_app`'s whole graph first: FastAPI,
 python-dotenv, the OTel wiring, the middleware stack, the probe router. `from service_kit.config
-import Settings` imported a web framework. A Ray job reaching for one Arrow helper in
-`service_kit.lakehouse` did too. And with no `__all__` anywhere in ~80 modules there was nothing
-saying which names were the library's surface and which were internals.
+import Settings` imported a web framework, and so did a job reaching for one Arrow helper. And
+with no `__all__` anywhere in ~80 modules there was nothing saying which names were the library's
+surface and which were internals.
 
 The factory moved to `service_kit.app`; the package root re-exports its names lazily (PEP 562), so
 the public spelling is unchanged and the cost is not paid until somebody actually builds an app.

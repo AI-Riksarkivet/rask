@@ -66,16 +66,16 @@ from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
 from pydantic import BaseModel
 
+from lakehouse_kit import location_claims
+from lakehouse_kit.base_refs import normalise
+from lakehouse_kit.maintenance_due import list_due
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.reconcile import ReconcileReport, reconcile
 from maintenance.services.sweep import run_sweep, summarize
-from service_kit.lakehouse import location_claims
-from service_kit.lakehouse.base_refs import normalise
-from service_kit.lakehouse.maintenance_due import list_due
-from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lakehouse.objectfs import s3_filesystem
+from service_kit.naming import UUID_PROPERTY
+from service_kit.storage_options import s3_filesystem
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")

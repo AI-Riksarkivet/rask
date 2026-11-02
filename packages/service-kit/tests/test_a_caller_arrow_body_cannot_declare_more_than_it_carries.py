@@ -20,7 +20,7 @@ from typing import cast
 import pyarrow as pa
 import pytest
 
-from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, ArrowFraming, decode_arrow_body
+from service_kit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, ArrowFraming, decode_arrow_body
 
 
 #: A cap far above every body below unless a test says otherwise.

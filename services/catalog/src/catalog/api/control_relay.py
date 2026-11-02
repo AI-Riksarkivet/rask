@@ -12,7 +12,7 @@ lane, so a dropped event is a person never told, with the route 200, every pod g
 wrote it: anything that can write under the prefix can stage an object that parses as a control event. A relay that signed
 what it found would sign that object as the catalog, declaring whatever person it named as the one the catalog
 authenticated, and every enforcing door would admit it. So the catalog's emitter signs each event before it stages it and
-withholds what it cannot sign (`service_kit.control_emit`), and the relay verifies each staged object as a control event
+withholds what it cannot sign (`lakehouse_kit.control_emit`), and the relay verifies each staged object as a control event
 signed by THIS catalog's own identity, against the keys that identity publishes, and republishes the staged bytes as they
 are:
 
@@ -39,7 +39,7 @@ Component config in the chart, so this module keeps no scheduler thread and noth
 shutdown.
 
 **Delivered at the POD ROOT.** A Dapr input binding arrives as ``POST /<component name>``, never under a
-prefix, and this app's routers already mount at the root (``service_kit.lance_app``). The Component's
+prefix, and this app's routers already mount at the root (``lakehouse_kit.lance_app``). The Component's
 name, ``LANCE_CONTROL_RELAY_BINDING_NAME`` and the served path are ONE string — see
 :func:`build_control_relay_router`.
 """
@@ -58,14 +58,13 @@ from pydantic import BaseModel, ValidationError
 
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
+from lakehouse_kit import dapr_publish, outbox, outbox_metrics
+from lakehouse_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
 from lineage_kit import SigningKey
 from lineage_kit.keys import PublishedKeys
 from lineage_kit.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature, control_signature_of, verify_control_signature
-from service_kit import dapr_publish
-from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
-from service_kit.lakehouse import outbox, outbox_metrics
 
 
 log = logging.getLogger(__name__)

@@ -35,6 +35,12 @@ from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, Field
 
+from lakehouse_kit import auto_cleanup, base_refs, base_registry, data_directories, location_claims, maintenance_policies, trash
+from lakehouse_kit.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
+from lakehouse_kit.history_fences import TableHistory
+from lakehouse_kit.lance_session import affordable_cache_bytes
+from lakehouse_kit.maintenance_due import CloneList, DueRecord, delete_due, list_due, write_clone_list
+from lakehouse_kit.openlineage import DatasetUuids
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
@@ -59,13 +65,7 @@ from maintenance.services.naming import PolicyOwners, TableIds, policy_owners, r
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.lakehouse import auto_cleanup, base_refs, base_registry, data_directories, location_claims, maintenance_policies, trash
-from service_kit.lakehouse.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
-from service_kit.lakehouse.history_fences import TableHistory
-from service_kit.lakehouse.lance_session import affordable_cache_bytes
-from service_kit.lakehouse.maintenance_due import CloneList, DueRecord, delete_due, list_due, write_clone_list
-from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
-from service_kit.openlineage import DatasetUuids
+from service_kit.storage_options import StorageOptions, s3_filesystem
 
 
 log = logging.getLogger(__name__)

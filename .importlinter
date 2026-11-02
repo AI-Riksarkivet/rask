@@ -13,6 +13,7 @@ root_packages =
     maintenance
     notifications
     service_kit
+    lakehouse_kit
     lineage_kit
     storage
     ray_kit
@@ -43,6 +44,7 @@ source_modules =
     maintenance
     notifications
     service_kit
+    lakehouse_kit
     lineage_kit
     storage
 forbidden_modules =
@@ -66,6 +68,7 @@ source_modules =
     maintenance
     notifications
     service_kit
+    lakehouse_kit
     lineage_kit
 forbidden_modules =
     dapr.ext.workflow
@@ -101,4 +104,22 @@ name = service_kit and lineage_kit never import each other
 type = independence
 modules =
     service_kit
+    lineage_kit
+
+# The platform a client pins never reaches into the kernel only the lakehouse runs (XC-186): the kernel builds on the
+# platform, never the other way, so a refactor of the kernel cannot change what a client pinned.
+[importlinter:contract:the-platform-knows-no-kernel]
+name = XC-186: service_kit, the platform a client may pin, imports nothing from lakehouse_kit, the lakehouse's kernel
+type = forbidden
+source_modules =
+    service_kit
+forbidden_modules =
+    lakehouse_kit
+
+# Neither declares the other, as for the platform above.
+[importlinter:contract:the-kernel-and-lineage-kit-import-neither-way]
+name = lakehouse_kit and lineage_kit never import each other
+type = independence
+modules =
+    lakehouse_kit
     lineage_kit

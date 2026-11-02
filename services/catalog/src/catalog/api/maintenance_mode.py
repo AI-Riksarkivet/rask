@@ -20,7 +20,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode
 
-from service_kit.lakehouse.ns_errors import problem_body
+from service_kit.ns_errors import problem_body
 
 
 PROBLEM_JSON = "application/problem+json"

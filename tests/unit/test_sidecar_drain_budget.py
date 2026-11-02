@@ -13,7 +13,7 @@ THE CONCRETE FAILURE, and it is silent. A stage runner or the producer that is m
 starts finishes its Lance write and then calls `publish_event` to fire the next stage against a
 sidecar that has already stopped: the write landed, the cascade trigger did not, and nothing
 distinguishes that from a stage that simply had no successor. The estate has already paid for this
-class of mismatch once — `service_kit.dapr_publish` exists because "the bare publish_event is
+class of mismatch once — `lakehouse_kit.dapr_publish` exists because "the bare publish_event is
 unbounded, so a wedged sidecar hangs this activity forever", which bounds the hang without making the
 publish succeed. It also undermines the drain gate on `/bronze-arrival`, whose RETRY verdict has to
 travel back through the sidecar to reach the broker.

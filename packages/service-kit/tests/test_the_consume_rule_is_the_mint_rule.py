@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from service_kit.lakehouse.warehouse_registry import is_safe_project
+from service_kit.naming import is_safe_project
 
 
 #: Ids the loose rule admitted that the catalog could never have minted.

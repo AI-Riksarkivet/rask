@@ -70,7 +70,7 @@ def test_local_root_needs_no_store_at_all() -> None:
 @pytest.mark.parametrize(("endpoint", "expected"), [("HTTP://rustfs:9000", "true"), ("HTTPS://s3.example.com", "false")])
 def test_allow_http_follows_the_scheme_in_any_case(endpoint: str, expected: str) -> None:
     """The media builder derives `allow_http` by the lakehouse's one case-insensitive rule
-    (`service_kit.lakehouse.endpoint_scheme`): object_store lowercases the scheme, so a case-sensitive check would
+    (`service_kit.endpoint_scheme`): object_store lowercases the scheme, so a case-sensitive check would
     hand an upper-case plaintext endpoint `false` and the client would never be built."""
     # Both static fields set, so the builder takes its no-secret-store branch.
     options = _settings(MEDIA_S3_ENDPOINT=endpoint, MEDIA_S3_SECRET_ACCESS_KEY="SK").storage_options()

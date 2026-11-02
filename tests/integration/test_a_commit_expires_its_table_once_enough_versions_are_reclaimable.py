@@ -30,11 +30,12 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest, Descri
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
+from lakehouse_kit import location_claims, maintenance_policies
+from lakehouse_kit.maintenance_due import CloneList, write_clone_list
+from lakehouse_kit.objectfs import lance_storage_options
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.lakehouse import location_claims, maintenance_policies
-from service_kit.lakehouse.maintenance_due import CloneList, write_clone_list
-from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options
+from service_kit.naming import UUID_PROPERTY
+from service_kit.storage_options import StorageOptions
 
 
 TABLE = "db$räksmörgås"

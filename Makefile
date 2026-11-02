@@ -104,6 +104,9 @@ lint:
 lint-imports:
 	uv run --with import-linter==2.15 lint-imports
 	uv run --with import-linter==2.15 lint-imports --config services/annotator/pyproject.toml
+	uv run --with import-linter==2.15 lint-imports --config services/viewer/pyproject.toml
+	uv run --with import-linter==2.15 lint-imports --config services/search/pyproject.toml
+	uv run --with import-linter==2.15 lint-imports --config packages/client-kit/pyproject.toml
 	uv run --with import-linter==2.15 lint-imports --config services/table-maintenance/pyproject.toml
 
 fmt:

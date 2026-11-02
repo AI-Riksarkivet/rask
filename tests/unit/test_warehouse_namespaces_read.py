@@ -146,7 +146,7 @@ def test_an_unreadable_binding_refuses_rather_than_reporting_a_partial_estate(tm
     settings = _settings(tmp_path)
     _seed(settings, warehouse_id="ok-wh", bindings=("fine",))
     # A binding object the reader cannot parse — the corrupt-record case, written straight to the store.
-    fs, base = __import__("service_kit.lakehouse.objectfs", fromlist=["x"]).fs_and_base(settings.registry_root, settings.storage_options())
+    fs, base = __import__("lakehouse_kit.objectfs", fromlist=["x"]).fs_and_base(settings.registry_root, settings.storage_options())
     with fs.open_output_stream(f"{base}/_warehouses/bindings/broken.json") as stream:
         stream.write(b"{not json")
 

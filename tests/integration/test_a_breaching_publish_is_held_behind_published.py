@@ -33,13 +33,13 @@ from catalog.api.promotion_expiry import mount_promotion_expiry
 from catalog.core.config import Settings, get_settings
 from catalog.core.lineage_emit import make_emitter
 from catalog.services import object_uuids, table_claims, warehouses
+from lakehouse_kit.location_claims import ClaimStore
 from notifications.api.ingest import ingest_run_event
 from notifications.api.metrics import Lane
 from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
 from service_kit.governed import fga
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 from tests.integration.openfga_grants import Grants, act_as
 
 

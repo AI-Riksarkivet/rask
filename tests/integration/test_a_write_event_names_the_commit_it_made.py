@@ -37,10 +37,10 @@ from lance_namespace import connect
 
 from catalog.core.lineage_emit import HttpLineageEmitter
 from catalog.services import dataplane
+from lakehouse_kit.control_emit import CatalogControlEvent
 from lineage.models import parse_event
 from lineage.services.provenance import edges_of
-from service_kit.control_emit import CatalogControlEvent
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

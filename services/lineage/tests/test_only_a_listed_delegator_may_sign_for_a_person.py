@@ -115,7 +115,7 @@ def _door(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], gover
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
     from service_kit.governed import fga
-    from service_kit.lakehouse.ns_errors import install_problem_handlers
+    from service_kit.ns_errors import install_problem_handlers
 
     async def answer(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
         del user, relation

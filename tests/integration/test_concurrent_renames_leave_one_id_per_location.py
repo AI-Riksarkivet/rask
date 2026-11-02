@@ -31,8 +31,8 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ConcurrentModificationError, LanceNamespace, TableAlreadyExistsError
 
-from service_kit.lakehouse import location_claims, records
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import location_claims, records
+from service_kit.storage_options import StorageOptions
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

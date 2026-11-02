@@ -14,7 +14,7 @@ A SESSION IS NOT A HANDLE CACHE, and the distinction is the whole reason this is
 DATASET HANDLE pins a version and needs a freshness contract; a `lance.Session`'s keys carry
 `(uri, version, etag)`, so a compaction writes NEW keys and a new version is never served stale. An old
 version whose data files were reclaimed can be, which is why evidence reads open on
-`fresh_lance_session`. Both are recorded in `service_kit.lakehouse.lance_session`, with its
+`fresh_lance_session`. Both are recorded in `lakehouse_kit.lance_session`, with its
 thread-safety under concurrent opens.
 
 What this file pins is what is specific to the catalog's own session.

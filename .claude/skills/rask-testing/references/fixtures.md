@@ -112,7 +112,7 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
   count is taken on the wire (`tests/integration/test_a_door_judges_whether_a_table_is_only_declared_by_its_storage.py`).
 - To fail one read a door makes, the same proxy's `answering_unavailable(<predicate over StoreRequest>)` answers each
   matching request 503 `ServiceUnavailable` for the life of the block and forwards the rest: pylance then raises the
-  object-store outage `service_kit.lancekit.outage` reads. A client that must keep reaching the store is pointed past the
+  object-store outage `service_kit.outage` reads. A client that must keep reaching the store is pointed past the
   proxy with `LANCE_S3_VENDED_ENDPOINT`. The catalog suite imports the helper as `tests.integration.store_requests`, which
   its conftest makes resolvable by putting the repository root on `sys.path`
   (`services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py`, [[LH-545]]).

@@ -5,7 +5,7 @@ DUP-12: "The lance-service entrypoint is hand-assembled eight times; there is no
 steps in prose comments copied between them.
 
 The media three moved first, onto `client_kit.media.app.build_media_app` (see
-`test_one_media_service_seam.py`). This pins what `service_kit.lance_app` gives catalog, lineage and
+`test_one_media_service_seam.py`). This pins what `lakehouse_kit.lance_app` gives catalog, lineage and
 maintenance: the copies had drifted, one service serving no `RequestIDMiddleware` at all, and nothing
 compared them.
 """

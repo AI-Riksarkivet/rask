@@ -17,10 +17,10 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from lakehouse_kit.control_emit import NoopControlEmitter
 from maintenance.api import routes
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.reconcile import ReconcileReport
-from service_kit.control_emit import NoopControlEmitter
 
 
 #: A HAND-ROLLED MIRROR OF THE REPORT DRIFTED, so these stubs return the real model. `_orphans_by_dataset`

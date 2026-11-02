@@ -32,7 +32,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from catalog.core.config import Settings
-from service_kit.lakehouse.ns_errors import problem_detail
+from service_kit.ns_errors import problem_detail
 from service_kit.problem import PROBLEM_JSON
 
 

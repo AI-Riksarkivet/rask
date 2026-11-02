@@ -1,7 +1,7 @@
 """What a create or a register may leave a table declaring, and where a table may be registered ([[LH-279]]).
 
 The catalog's two table-making doors are the only writers of the ``_bases/`` record
-(:mod:`service_kit.lakehouse.base_registry`), and this is their half of it: the entries each door records,
+(:mod:`lakehouse_kit.base_registry`), and this is their half of it: the entries each door records,
 the register door's judge of the bases a dataset arrives declaring, and the location-exclusivity rule
 that keeps every table prefix — and so every vended session policy — off the control root.
 
@@ -30,10 +30,11 @@ from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.core.namespace import registered_dataset_facts
 from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import native, table_claims
-from service_kit.lakehouse import base_registry, blobs, location_claims
-from service_kit.lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise
-from service_kit.lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
-from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from lakehouse_kit import base_registry, blobs, location_claims
+from lakehouse_kit.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise
+from lakehouse_kit.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
+from lakehouse_kit.objectfs import fs_and_base
+from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -116,7 +117,7 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
 
     - it must be relative (the backend refuses an absolute one too; this door refuses it first);
     - its spelling must name the location the store opens, by the rule the base judge applies
-      (:func:`~service_kit.lakehouse.base_refs.names_a_location`): each segment, percent-decoded once, is
+      (:func:`~lakehouse_kit.base_refs.names_a_location`): each segment, percent-decoded once, is
       not empty, ``.`` or ``..`` (which also refuses the namespace root itself), holds no ASCII control
       character, no ``?`` and no ``/`` or ``\\`` the decode added. The store keeps a ``?`` under a re-encoded name
       that holds no table, so an id registered there finds no table on query or count (measured on pylance 13.0.0

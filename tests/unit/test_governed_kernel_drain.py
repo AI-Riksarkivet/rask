@@ -42,7 +42,7 @@ from service_kit.exceptions import register_handlers
 from service_kit.governed import fga, oidc, secrets
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 from service_kit.governed.deps import make_auth_deps
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 def _client(c: object) -> OpenFgaClient:

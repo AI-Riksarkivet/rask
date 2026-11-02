@@ -12,7 +12,7 @@ could select a non-Lance format through four of the five doors that accept one. 
 what lets every door call the same rule instead of re-deriving it or forgetting to.
 
 The same doors refuse ``lance.auto_cleanup.*`` ([[LH-245]]). Those keys arm Lance to delete versions inside
-whichever commit next lands, past every legal hold and protected base (:mod:`service_kit.lakehouse.auto_cleanup`).
+whichever commit next lands, past every legal hold and protected base (:mod:`lakehouse_kit.auto_cleanup`).
 No property a door accepts reaches the manifest config those keys live in (create stamps properties into the
 schema metadata, which arms nothing: measured on pylance 12.0.0), so honouring one is impossible and echoing
 it back would let a client believe it had armed the table.
@@ -31,7 +31,7 @@ from collections.abc import Iterable
 
 from lance_namespace import InvalidInputError
 
-from service_kit.lakehouse import auto_cleanup
+from lakehouse_kit import auto_cleanup
 
 
 #: Every manifest config key Lance reads to plan a compaction (`lance_docs/lance/format/table/table_config.md`). A PREFIX:

@@ -172,7 +172,7 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
     monkeypatch.setattr("lineage_kit.keys.MAX_UNKNOWN_KEY_IDS", 1, raising=False)
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
-    from service_kit.lakehouse.ns_errors import install_problem_handlers
+    from service_kit.ns_errors import install_problem_handlers
 
     get_settings.cache_clear()
     app = FastAPI()

@@ -14,8 +14,8 @@ from datetime import UTC, datetime
 
 from catalog.core.lineage_emit import build_write_event
 from catalog.core.run_context import RunContext
+from lakehouse_kit.openlineage import DatasetUuids
 from notifications.api.lineage_events import LineageRunEvent, notifiable
-from service_kit.openlineage import DatasetUuids
 
 
 def test_a_catalog_writes_notification_carries_the_run_its_writer_named() -> None:

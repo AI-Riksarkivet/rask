@@ -44,7 +44,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   arbitrates only object-id ADDs, so a register at an occupied location commits and two deregisters of one
   id both succeed (measured on pylance 12.0.0: eight barrier-threaded renames left eight live ids on one
   dataset, where `drop_table` on any destroys the others' bytes). The rename hands the location's claim
-  (`service_kit.lakehouse.location_claims`, `_locations/` on the control root, put-if-not-exists then
+  (`lakehouse_kit.location_claims`, `_locations/` on the control root, put-if-not-exists then
   ETag) from source to destination before either backend call, stamped with a per-request token so two
   renames into ONE destination are not each other's retry; the losers answer 409 code 14, and a failed
   retire or destination register hands it back (unless the destination already resolves to the location:
@@ -161,7 +161,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   `object_store_path`, so `version/create` too) uses the key it decodes to once, and so does a destructive drop: the
   table door and the namespace cascade judge the bytes, remove the row with DeregisterTable and delete under the decoded
   key and the spelling themselves (`dataplane.destroy_table`, [[LH-532]]), since the backend's own drop deletes where
-  `Path::join` percent-encodes the location. A location holding a `_versions/` tree gets a residue trash record (`trash.make_record(residue=True)`, grace 0) before the row goes, cleared once the bytes are; a delete that fails leaves it, so the claim stays held (`table_claims.kept_in_trash`), undrop refuses it and the trash purge reclaims the bytes. `_versions/` is deleted last. The control prefixes a drop, the purge and discovery refuse are one set, `service_kit.lakehouse.control_prefixes`. The register door refuses a location in
+  `Path::join` percent-encodes the location. A location holding a `_versions/` tree gets a residue trash record (`trash.make_record(residue=True)`, grace 0) before the row goes, cleared once the bytes are; a delete that fails leaves it, so the claim stays held (`table_claims.kept_in_trash`), undrop refuses it and the trash purge reclaims the bytes. `_versions/` is deleted last. The control prefixes a drop, the purge and discovery refuse are one set, `lakehouse_kit.control_prefixes`. The register door refuses a location in
   a uuid-spelled directory directly under the namespace root (`identifiers.is_spelled_as_a_uuid`): that is the catalog's
   layout. Pinned by `tests/integration/test_warehouse_routing.py`,
   `services/catalog/tests/test_a_stock_client_opens_on_the_vended_credential.py` and
@@ -196,7 +196,7 @@ bodies** (`application/problem+json`).
 
 **The one rule:** an endpoint raises `lance_namespace` typed errors
 (`InvalidInputError`, `NamespaceNotFoundError`, …) and lets
-`service_kit/lakehouse/ns_errors.py::install_problem_handlers` translate — it maps all 24 codes
+`service_kit/ns_errors.py::install_problem_handlers` translate — it maps all 24 codes
 (not-founds → 404, already-exists/not-empty/concurrent → 409, `InvalidInput` → 400,
 `PermissionDenied` → 403, `Unauthenticated` → 401, `Unsupported` → **406** (the spec's own status; Q3, 2026-09-02), `Throttling` → 429).
 The branch codes were MISSING until 2026-08-04 — a missing branch answered 500 on endpoints rask
@@ -291,7 +291,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   and on every branch, through `dataplane.commit_stamped`: the door's transaction is planned on the ref's latest version,
   committed detached with the stamp and finalized as exactly the next version by the backend's put-if-not-exists, and a
   writer that lost that version plans again. **A commit that lost its race takes its ref's commit turn** for its
-  remaining attempts ([[LH-259]], ADR 0186, `service_kit.lakehouse.commit_turns`, `_commit_turns/` per table uuid), and a
+  remaining attempts ([[LH-259]], ADR 0186, `lakehouse_kit.commit_turns`, `_commit_turns/` per table uuid), and a
   stock writer that lost its race, its staged version found taken by `version/create` (409 code 14) or its finalize lost,
   is handed the ref's next turn under its verified caller and its transaction's uuid, which pylance keeps when it stages
   again, unless it staged a Merge, which Lance never retries (`transaction.md` § Merge Compatibility); a handed turn that
@@ -317,7 +317,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   restore is planned as Lance's `Restore`, and `drop_index` keeps the `dir` backend's own refusals (a system index 406,
   a missing one 404). **Every commit of an operation the doors announce records the caller it was authorized for**
   ([[LH-550]], ADR 0187), at `_commit_authors/<table uuid>/<transaction uuid>/<version>.json`
-  (`service_kit.lakehouse.commit_records`) naming the ref's key (`ref_key`: the branch and its incarnation, `""` for
+  (`lakehouse_kit.commit_records`) naming the ref's key (`ref_key`: the branch and its incarnation, `""` for
   main), so a version put past every door under another commit's transaction uuid (pylance 13.0.0 commits any uuid it is
   given, measured) matches no record; a record written before its finalize also names the SHA-256 of the manifest the
   catalog judged, which the backend lands unchanged (measured), and the reconciler signs only when that manifest is the
@@ -371,7 +371,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
 | State | Store |
 | --- | --- |
 | table data + versions | Lance datasets on object storage (rustfs) |
-| project registry (`_projects/<id>.json`), warehouse registry + namespace bindings | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `service_kit.lakehouse.records.create_json`): project mint, warehouse mint and the write-once bindings are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. `put_warehouse` / `put_project` remain as SEEDING primitives with no production caller, pinned by `tests/unit/test_registry_writes_are_conditional.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
+| project registry (`_projects/<id>.json`), warehouse registry + namespace bindings | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `lakehouse_kit.records.create_json`): project mint, warehouse mint and the write-once bindings are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. `put_warehouse` / `put_project` remain as SEEDING primitives with no production caller, pinned by `tests/unit/test_registry_writes_are_conditional.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
 | authz | OpenFGA on its chart-managed Postgres |
 | lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `provenance`): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer` and each `LANCE_PROVENANCE_MAINTAINERS` subject (a bring-your-own compaction job's account) `reader` and `maintainer`, revokes a `writer` or `maintainer` the settings no longer name (with that maintainer's `reader`), writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane expires the table (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
 
@@ -387,7 +387,7 @@ suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
 
 Reclamation, scheduling and the GC design live in `services/maintenance` itself — read
 `services/maintenance/services/{sweep,expiry,arrival,due,plan,purge,reconcile,index_health}.py` — plus
-`packages/service-kit/src/service_kit/lakehouse/base_refs.py`, the shallow-clone-source pre-pass, which
+`packages/lakehouse-kit/src/lakehouse_kit/base_refs.py`, the shallow-clone-source pre-pass, which
 lives in service-kit rather than the service because the catalog (`maintenance/run` and the `version/create`
 judge, `catalog/services/maintenance.py`) must apply the same refusal and cannot import the sweep. Read
 them before changing anything the sweep, the reconciler or the orphan scan touches. The
@@ -480,7 +480,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   were lost.
 - **Protection covers EVERY rung since #73** (2026-08-04): warehouses/projects carry `protected` on
   their registry records; tables/namespaces carry it as a **control-root `_protection/` record**
-  (`service_kit.lakehouse.protection`) gating drop/deregister/rename and both Overwrite modes,
+  (`lakehouse_kit.protection`) gating drop/deregister/rename and both Overwrite modes,
   `create?mode=Overwrite` over an existing table and `insert?mode=overwrite` on any branch ([[LH-242]]),
   (table) and drop (namespace). It guards no history reclaim (ADR 0150, [[LH-300]]): `version/delete`, `tags/delete`,
   `branches/delete` and `maintenance/run` are governed by authorization alone, since deleting a tag or a branch is what
@@ -497,7 +497,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `_META_READ_ACTIONS`/`_DATA_READ_ACTIONS`/`_MAINTENANCE_ACTIONS`) —
   `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and fails
   on one that has none. **Every control-root record kept for a table or namespace is keyed by its uuid** ([[LH-523]],
-  ADR 0173 §8): protection and maintenance policy (`service_kit.lakehouse.object_records.OBJECT_RECORD_PREFIXES`), a
+  ADR 0173 §8): protection and maintenance policy (`lakehouse_kit.object_records.OBJECT_RECORD_PREFIXES`), a
   promotion hold, maintenance's due record, an erasure obligation and its release (each naming `uuid`/`table_uuid`),
   and the cadence and debounce stamps. A door resolves the uuid from the name it is addressed by
   (`ResolvedTable.require_uuid`, `fga_deps.identify`) and refuses `InternalError` for an object that records none,
@@ -540,11 +540,11 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   version expiry (`cleanup_old_versions`, tags EXEMPT), trash purge, the orphan scan and cross-store reconcile, and
   writes the DUE LIST: one record per table that needs compacting or an index optimize, under `_maintenance_due/` on
   the control root, with the estate's clone list (`_maintenance_due/state/clones.json`) beside it
-  (`service_kit.lakehouse.maintenance_due`). The catalog lists the records on `GET /management/v1/maintenance/due` to
+  (`lakehouse_kit.maintenance_due`). The catalog lists the records on `GET /management/v1/maintenance/due` to
   a caller holding `can_maintain`; the list is advisory. **Expiry is commit-driven**: the write-event lane
   (`/maintenance-arrival`) expires the table just written once it has `minVersionsToExpire` (20) reclaimable
   versions, and the sweep, every 30 minutes, is the backstop that also writes the clone list and the due records. The same pass deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
-  Both ask one eligibility rule, `service_kit.lakehouse.version_retention`, which the catalog's GC preview shares.
+  Both ask one eligibility rule, `lakehouse_kit.version_retention`, which the catalog's GC preview shares.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
   `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,
   [[LH-493]], below). The maintain vend tier goes to the maintenance identity only (LH-473, #599).
@@ -650,7 +650,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
 - **A vend's tier is one FGA rung's allow-list over the Lance layout** ([[LH-202]], [[LH-229]],
   `vending.build_session_policy`). Every tier lists and gets `<prefix>/*`. `write` (`can_write_data`) is a
   managed-versioning writer (ADR 0157): put on what a commit needs under the ref it writes
-  (`service_kit.lakehouse.table_layout.WRITER_PUT_GLOBS`: `data/`, `_transactions/`, `_deletions/`, `_indices/` and a
+  (`lakehouse_kit.table_layout.WRITER_PUT_GLOBS`: `data/`, `_transactions/`, `_deletions/`, `_indices/` and a
   staged `_versions/<n>.manifest-<uuid>`) and an explicit Deny on every final manifest under it at any depth
   (`*.manifest`); nothing under `_refs/`, no version hint, no delete. The table's own write credential also puts
   under `tree/*` ([[LH-490]], ADR 0164): a stock client opens a branch with the table's `DescribeTable` and stages
@@ -668,7 +668,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   tier names, never either. A put over an existing key is the residue no session policy can refuse, so it is DETECTED
   ([[LH-419]], ADR 0184): every catalog commit records each file it adds under the table's root (data files, blob sidecars,
   deletion files, index files and its transaction file), with the ETag and size the store answers, before its version is
-  announced (`service_kit.lakehouse.file_identities`, `_file_identities/<table
+  announced (`lakehouse_kit.file_identities`, `_file_identities/<table
   uuid>/<transaction uuid>.json`, written by `version/create` before it judges a stock commit's files, by
   `commit_stamped` before its finalize, and by the create door and an unkeyed `/insert`, which Lance commits itself,
   just after it lands, logging `committed_files_unrecorded` at ERROR and counting `catalog.committed_files.unrecorded`,
@@ -683,7 +683,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   token through STS `AssumeRoleWithWebIdentity` with that session policy, named for the verified caller
   (`vending.role_session_name`), and a refused or unanswered exchange answers 503 code 17 (`vending.vend_or_refuse`).
   The catalog holds no store key: its own IO signs with an hour's session of the same token, renewed at half life
-  (`service_kit.governed.store_session`), so a running catalog never needs a restart for its credential.
+  (`lakehouse_kit.store_session`), so a running catalog never needs a restart for its credential.
   **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):
   `DescribeTable` and `DeclareTable` vend unless the request sets `vend_credentials` false (unset, the spec lets the
   server decide), write on `can_write_data` (judged by the tier judge) or on `can_read_data` with `can_maintain` (a
@@ -729,7 +729,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   outcome and keeps its staged manifest. A version another writer took since the writer staged it answers 409 code 14
   before it is judged (`managed_versions.VersionTakenError`, the spec's 409 for a version that exists) and hands the
   writer the ref's next turn ([[LH-259]]); a version beyond the next answers 400. A read the judgment needs that the store
-  cannot serve answers 503 code 17, in Lance's dialect and pyarrow's alike (`service_kit.lancekit.outage`), never the 400
+  cannot serve answers 503 code 17, in Lance's dialect and pyarrow's alike (`service_kit.outage`), never the 400
   code 13 a stock client drops as its own malformed commit; only a ref `dataplane.holds_a_version` finds holding no
   committed version follows version 0, and one whose latest committed version does not open answers 500 code 18
   ([[LH-545]], `lance_docs/ns_catalog/namespace/operations/errors.md`). The door admits a writer or a maintainer (`can_create_version`), and the judge
@@ -752,7 +752,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   bases against the table's root, and finalizes with `branch`. A branch is created through `CreateTableBranch`
   (`branches/create`), which writes its ref: Lance's own `create_branch` commits a `Clone` and then writes
   `_refs/branches/<name>.json` itself, which no writer is vended, so `version/create` answers it 404 (code 22) naming
-  the door. The compaction gate (`service_kit.lakehouse.compaction_gate`, shared with maintenance's due list) weighs
+  the door. The compaction gate (`lakehouse_kit.compaction_gate`, shared with maintenance's due list) weighs
   only bases outside the table, because a branch reads its parent through a dataset-root base on the table's own
   root. Pinned by
   `services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py` and
@@ -792,7 +792,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   referring clone names each clone (as its claim names it now, with its uuid) only to a caller holding `can_get_metadata`
   on it and counts the rest (`fga_deps.referring_datasets`, at the GC run, `version/delete` and the erasure report).
   **A ref written during a reclaim is held off by the table's history fence** ([[LH-308]], ADR 0176,
-  `service_kit.lakehouse.history_fences`). Lance reads tags and branches once per `cleanup_old_versions`
+  `lakehouse_kit.history_fences`). Lance reads tags and branches once per `cleanup_old_versions`
   (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in
   20 of 60 races and a branch could not be read in 9 of 60. So every reclaim (`maintenance/run`, `version/delete`, the
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
@@ -830,7 +830,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   verification's step 5 (`catalog.services.erasure_derived`) walks the catalog's input record (`table_inputs`, written
   before each declaring commit, so a write is named while lineage is down) together with `provenance$edges`, located
   through DescribeTable on the provenance namespace and read in-process, to the last table with lineage's own walk
-  (`service_kit.lakehouse.derived_tables`, which `GET /tables/{name}/derived` shares). A release stays final: the commit
+  (`lakehouse_kit.derived_tables`, which `GET /tables/{name}/derived` shares). A release stays final: the commit
   reconciler's tick lists a late derived table (found after the release, its write declared before it) in the
   obligation's `late_derived` and counts `catalog.erasure.late_derived`, which pages (`ErasureDerivedAfterRelease`). Each derived table is a
   `derived:<uuid>` surface: `followed` while an obligation recorded on it names this one in `follows`, directly or through
@@ -884,7 +884,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   reached through the UI cannot be seeded either. A grant whose create failed is SKIPPED rather than
   written; writing it is exactly how a ghost is made.
 - **The control-event vocabulary is a wire contract in three files.** `ControlAction` /
-  `ControlObjectType` (`service_kit/control_events.py`) reach the frontend through
+  `ControlObjectType` (`lakehouse_kit/control_events.py`) reach the frontend through
   `docs/catalog-openapi.json` → `frontend/packages/api/src/generated/catalog.ts`. Adding an action
   without `make openapi` + `bun --cwd=frontend run gen:types:catalog` leaves the TS client unable to
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
@@ -913,7 +913,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`compaction.base_fragments.holding_deleted_rows`) and the compaction gate keeps refusing the table, since
   `CompactionOptions` has no `target_bases` and a rewrite would move the rows into the root (owner, 2026-10-24). The
   trash purge deletes a dropped table's data directories after its root and before it forgets its base record, and
-  so does every catalog door that ends a table with its bytes (`service_kit.lakehouse.data_directories`, one rule for
+  so does every catalog door that ends a table with its bytes (`lakehouse_kit.data_directories`, one rule for
   which directories: a `data` entry on a plain base whose claim names the table, held or released by it): a destructive
   drop and namespace cascade (`dataplane.destroy_table`, after the root, inside its residue record), a purging
   warehouse cascade (`_detach_table` before the deregister, so a failed delete leaves the table for the re-issue;
@@ -998,7 +998,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   names a dataset by it, and `lineage.dataset_id` is schema METADATA, which survives `set_column` / `append_column` /
   `drop_columns` — so a silver table derived from bronze declares bronze's id unless something
   re-declares it (measured 2026-09-09: silver's compactions and FAIL events were filed against bronze's
-  node). `service_kit.lakehouse.stage_stamp.stamp_stage(..., dataset_id=...)` re-declares the destination
+  node). `lakehouse_kit.stage_stamp.stamp_stage(..., dataset_id=...)` re-declares the destination
   and DROPS an inherited id when none is given, the same rule it applies to the `lineage` document. No
   lakehouse service calls it; it is the helper a pipeline writing a derived tier uses. When
   you check a declared-id chain, ask not "is an id stamped" but "whose uuid, on the tier that derived it": the catalog
@@ -1054,7 +1054,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   as garbage. Branches are caught by the `tree/` directory probe; base_paths by TWO checks, and both
   are needed — the consequence (a referenced path not present locally) plus the MANIFEST FLAG.
 - **A branch's directory holds only that branch's files, and that is rask's rule, not Lance's**
-  ([[LH-203]], `service_kit.lakehouse.branch_layout`). The format joins the name verbatim, so `a/b`
+  ([[LH-203]], `lakehouse_kit.branch_layout`). The format joins the name verbatim, so `a/b`
   lives inside `tree/a/` and `a/_versions` inside `a`'s own version directory, and Lance reads
   whatever lies under a branch's directory as that branch's (measured on pylance 12.0.0: a reclaim of
   `a` deleted `a/_versions`'s manifests; deleting `a/_versions` deleted `a`'s history). So the create
@@ -1076,7 +1076,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   code 19. Pinned by `tests/integration/test_moto_s3.py::test_describe_at_tag_resolves_via_the_catalog` and
   `tests/unit/test_publication.py`.
 - **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**
-  `packages/service-kit/src/service_kit/lakehouse/features.py` reads
+  `packages/lakehouse-kit/src/lakehouse_kit/features.py` reads
   `reader_feature_flags`/`writer_feature_flags` as varints at
   protobuf fields 9/10 of `LanceDataset._ds.serialized_manifest()` — pylance exposes neither field
   but its own pickle path uses that blob. The masks live in service-kit because `services/maintenance`

@@ -23,11 +23,11 @@ import pytest
 from lance_namespace import PermissionDeniedError
 from openfga_sdk import OpenFgaClient
 
+from lakehouse_kit.openlineage import DatasetUuids, with_dataset_uuids
 from lineage.api.fga_deps import relations_for_operation
 from lineage.core.config import Signing
 from lineage.models import RunEvent
 from service_kit.governed.decider import OpenFgaDecider
-from service_kit.openlineage import DatasetUuids, with_dataset_uuids
 
 
 #: The uuids the catalog minted for the tables the events below name, which it stamps on every event it emits.
@@ -111,7 +111,7 @@ def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.M
     from starlette.testclient import TestClient
 
     from service_kit.governed import fga
-    from service_kit.lakehouse.ns_errors import install_problem_handlers
+    from service_kit.ns_errors import install_problem_handlers
 
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
     monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")

@@ -36,8 +36,8 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 
+from lakehouse_kit.base_refs import BaseRefs, containment_of
 from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
-from service_kit.lakehouse.base_refs import BaseRefs, containment_of
 
 
 def _parent_with_branch(tmp_path: Path) -> tuple[str, str]:

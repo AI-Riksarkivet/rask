@@ -44,8 +44,8 @@ from moto.iam.access_control import IAMPolicy, PermissionResult
 from moto.sts.models import sts_backends
 from pydantic import BaseModel
 
-from service_kit.lakehouse.base_refs import decoded_path
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse_kit.base_refs import decoded_path
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 _REGION = "us-east-1"

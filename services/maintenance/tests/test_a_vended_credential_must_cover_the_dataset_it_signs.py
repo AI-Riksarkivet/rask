@@ -32,7 +32,7 @@ from pydantic import SecretStr
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 AMBIENT = StorageOptions.from_flat({"aws_access_key_id": "rustfsadmin", "aws_secret_access_key": "rustfsadmin"})

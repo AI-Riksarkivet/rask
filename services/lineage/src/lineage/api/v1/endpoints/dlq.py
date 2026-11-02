@@ -2,7 +2,7 @@
 
 The lineage delivery path has two failure backstops (see ``docs/RESILIENCE.md``): the Dapr-native DLQ on a
 NATS JetStream stream (park-and-alert, replayed from the stream on restart — not app-queryable, by design),
-and the **transactional outbox** (``service_kit.lakehouse.outbox``) — an object-store of events staged BEFORE publish and
+and the **transactional outbox** (``lakehouse_kit.outbox``) — an object-store of events staged BEFORE publish and
 dropped on ack. A surviving outbox object is a committed write whose lineage was not yet confirmed delivered:
 the at-risk set the reconcile relay drains on a timer. This module surfaces that set for an operator and lets
 them replay one on demand instead of waiting for the next reconcile tick.
@@ -24,6 +24,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, ServiceUnavailableError, TransactionNotFoundError, UnauthenticatedError, UnsupportedOperationError
 
+from lakehouse_kit import outbox
+from lakehouse_kit.openlineage import dataset_uuids
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, Governed, enforce_bus_authz, enforce_output_authz, governed, governed_refs, require_estate_admin
 from lineage.api.security import CurrentToken
@@ -35,8 +37,6 @@ from lineage.services.consumer import RETRY, handle_cloud_event
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 from service_kit.governed import audit, fga
 from service_kit.governed.audit import AuditAction, AuditOutcome
-from service_kit.lakehouse import outbox
-from service_kit.openlineage import dataset_uuids
 
 
 log = logging.getLogger(__name__)

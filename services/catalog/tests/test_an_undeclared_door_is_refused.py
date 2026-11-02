@@ -43,7 +43,7 @@ from service_kit.governed.audit import AUDIT_LOGGER, AuditOutcome
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 _ID = "acme$events"

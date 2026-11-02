@@ -8,7 +8,7 @@ lineage's feed serves it, and holds them to six claims:
    `rask_signature` facet against `spec/facets/rask/RaskSignatureRunFacet.json`, and each `rask_lance` and `rask_author`
    facet, in any facet bag, against `RaskLanceFacet.json` and `RaskAuthorFacet.json` and the `_schemaURL` naming it
    ([[LH-500]]); a control event parses strictly as
-   the control envelope (`service_kit.control_events.CatalogControlEvent`);
+   the control envelope (`lakehouse_kit.control_events.CatalogControlEvent`);
 2. lineage recorded each as the person who called the catalog's door: the author is that person's principal, the
    project is the tenant, and the catalog signed it on their behalf;
 3. each reached exactly the people it names (`rask-notifications`);
@@ -58,9 +58,9 @@ from pydantic import BaseModel, ValidationError
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
-from service_kit.control_events import CatalogControlEvent
+from lakehouse_kit.control_events import CatalogControlEvent
+from lakehouse_kit.openlineage import event_identity
 from service_kit.governed.fga import user_object
-from service_kit.openlineage import event_identity
 from tests.unit.rask_facets import rask_facet_errors
 
 

@@ -37,6 +37,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse_kit.openlineage import AUTHOR_FACET, author_facet, dataset_uuids, lifecycle_state
 from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep
 from lineage.api.security import Caller, CurrentToken
 from lineage.core.config import LineageSettings
@@ -55,7 +56,6 @@ from lineage_kit.signing import VerifiedSignature
 from service_kit.governed import fga
 from service_kit.governed.decider import AccessDecider
 from service_kit.governed.principal import is_principal
-from service_kit.openlineage import AUTHOR_FACET, author_facet, dataset_uuids, lifecycle_state
 
 
 log = logging.getLogger(__name__)
@@ -329,7 +329,7 @@ def is_external_source(namespace: str, name: str) -> bool:
     data, the terminal event was authorized fine, and the run was never recorded as opened. Ten
     configuration causes were investigated before the service's own message was read.
 
-    The discriminator has TWO forms and lives in `service_kit.lakehouse.naming`, because it is a
+    The discriminator has TWO forms and lives in `service_kit.naming`, because it is a
     convention this service and every producer must agree on. A
     store URI carrying a scheme (``s3://bucket``) is external by shape. A BARE identifier cannot be
     decided by shape at all, since that is exactly what a catalog namespace looks like (``bronze``,
@@ -354,7 +354,7 @@ def is_external_source(namespace: str, name: str) -> bool:
     and this plane never writes outside it — an output naming an external namespace is a producer
     claiming to have written the outside world, which is not a case to make permissive.
     """
-    from service_kit.lakehouse.naming import is_external_source_namespace
+    from service_kit.naming import is_external_source_namespace
 
     return is_external_source_namespace(namespace, name)
 

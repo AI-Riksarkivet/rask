@@ -34,8 +34,8 @@ from client_kit.lancekit.registry import DatasetHandle, table_dataset
 from client_kit.media.cache_bounds import evict_to_bounds
 from client_kit.media.deps import DatasetParam, StateDep
 from client_kit.media.state import dataset_handle
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from service_kit.exceptions import NotFoundError, ValidationError
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from viewer.api.security import REQUIRE_CORPUS_DATA, REQUIRE_CORPUS_METADATA
 from viewer.api.v1.endpoints.chunks import alignments_binding
 from viewer.api.v1.endpoints.media import FRAME_INDEX_COLUMN

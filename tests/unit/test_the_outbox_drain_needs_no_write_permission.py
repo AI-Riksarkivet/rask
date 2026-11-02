@@ -28,8 +28,8 @@ from typing import Any
 
 import pytest
 
-from service_kit.lakehouse import outbox
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import outbox
+from service_kit.storage_options import StorageOptions
 
 
 class _RecordingS3:

@@ -32,8 +32,8 @@ import pytest
 from fastapi.testclient import TestClient
 from lance.optimize import Compaction
 
-from service_kit.lakehouse import base_refs, maintenance_due
-from service_kit.openlineage import DatasetUuids, with_dataset_uuids
+from lakehouse_kit import base_refs, maintenance_due
+from lakehouse_kit.openlineage import DatasetUuids, with_dataset_uuids
 from tests.integration.lineage_app import SUBJECT_HEADER, free_port, governed_lineage, live_catalog, live_lineage, run_event
 
 

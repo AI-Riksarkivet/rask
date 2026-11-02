@@ -26,6 +26,7 @@ import pytest_asyncio
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
+from lakehouse_kit.openlineage import DatasetUuids
 from lineage.api.fga_deps import enforce_bus_authz, enforce_output_authz
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent, parse_event
@@ -34,13 +35,12 @@ from notifications.api.fanout import audience_for, fan_out
 from notifications.api.lineage_events import LineageRunEvent, notifiable
 from notifications.api.visibility import Visibility
 from notifications.proxies import TypedActorProxy
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed import fga
 from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.openlineage import DatasetUuids
 from tests.integration.lineage_app import live_catalog
 
 

@@ -41,15 +41,15 @@ from catalog.core.identifiers import with_minted_uuid
 from catalog.services import erasure_release, table_claims
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import Pin
-from service_kit.control_events import CatalogControlEvent
+from lakehouse_kit.base_registry import BaseRegistry
+from lakehouse_kit.control_events import CatalogControlEvent
+from lakehouse_kit.history_fences import HistoryWork, TableHistory
+from lakehouse_kit.location_claims import ClaimStore
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.base_registry import BaseRegistry
-from service_kit.lakehouse.history_fences import HistoryWork, TableHistory
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.ns_errors import install_problem_handlers
+from service_kit.storage_options import StorageOptions
 
 
 _PREDICATE = "pii = 'alice'"

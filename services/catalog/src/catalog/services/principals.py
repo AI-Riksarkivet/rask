@@ -14,9 +14,9 @@ from hashlib import blake2s
 from typing import Final
 
 from catalog.schemas import PrincipalRecord
+from lakehouse_kit.records import RecordExistsError, create_json, read_json
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.records import RecordExistsError, create_json, read_json
+from service_kit.storage_options import StorageOptions
 
 
 _PRINCIPALS_PREFIX: Final = "_principals"

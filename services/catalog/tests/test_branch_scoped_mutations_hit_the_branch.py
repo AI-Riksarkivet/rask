@@ -30,9 +30,9 @@ from tables_by_name import open_by_name
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table, delete_from_table, update_table
 from catalog.services.table_claims import DoorTable
-from service_kit.lakehouse import base_registry
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import base_registry
+from lakehouse_kit.location_claims import ClaimStore
+from service_kit.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -85,7 +85,7 @@ def test_a_branch_commit_the_store_cannot_key_is_refused_before_it_lands(ns, tab
     rather than recording it under a key no pass reads."""
 
     def unanswered(_branches: object) -> dict[str, object]:
-        # pylance's own text for a store that accepted the request and never answered (`service_kit.lancekit.outage`).
+        # pylance's own text for a store that accepted the request and never answered (`service_kit.outage`).
         raise OSError("LanceError(IO): Error performing GET http://store/rows/_refs/branches/ in 3.0s - HTTP error: error sending request")
 
     monkeypatch.setattr(Branches, "list", unanswered)

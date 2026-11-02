@@ -24,7 +24,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims, warehouses
 from service_kit.governed import fga
 from service_kit.governed.audit import AUDIT_LOGGER
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 from tests.integration.openfga_grants import Grants, act_as
 
 

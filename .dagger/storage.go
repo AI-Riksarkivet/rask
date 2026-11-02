@@ -12,7 +12,7 @@ import (
 // lanes run against: the development fixture's tag and digest (deploy/fixtures/rustfs/chart/values.yaml), so CI runs the
 // server the estate runs. Pinned rather than `:latest`: a smoke test whose backend version changes underneath it cannot
 // tell a rask regression from an upstream one. The pin must take a multipart upload from pyarrow, the writer of the
-// catalog's record store (`service_kit.lakehouse.record_store`): measured with pyarrow 25.0.0, 1.0.1 (2026-10-17) and
+// catalog's record store (`lakehouse_kit.record_store`): measured with pyarrow 25.0.0, 1.0.1 (2026-10-17) and
 // 1.0.3 (2026-10-18) take it, and 1.0.0-alpha.60 answers its `UploadPart` with `XAmzContentSHA256Mismatch`, which stops
 // the catalog's boot before it grants lineage its provenance tables.
 const rustfsImage = "rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b"

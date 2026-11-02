@@ -41,7 +41,7 @@ import uvicorn
 from moto.iam.access_control import IAMPolicy, PermissionResult
 from moto.sts.models import sts_backends
 
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 _SCHEMA = pa.schema([("id", pa.int64()), lance.blob_field("payload")])

@@ -1,6 +1,6 @@
 # Commit-turn waiting: what a waiter should hold, and for how long
 
-> Findings for ADR 0186 (the commit turn, `packages/service-kit/src/service_kit/lakehouse/commit_turns.py`). This
+> Findings for ADR 0186 (the commit turn, `packages/lakehouse-kit/src/lakehouse_kit/commit_turns.py`). This
 > note answers one question: while a writer waits on a held turn, what resource does it hold, and how do comparable
 > systems bound that? Every claim cites a primary source (source at a named commit or tag, or an official doc page
 > at a named version), read 2026-10-31. Claims I could not confirm are marked **unconfirmed** with where I looked.

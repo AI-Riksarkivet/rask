@@ -1,6 +1,6 @@
 """``DELETE /management/v1/warehouses/{id}`` — the bottom-up delete door (`open_hierarchy_lifecycle.md` Decision 3).
 
-The registry round-trips against a LOCAL filesystem control root (``service_kit.lakehouse.objectfs.fs_and_base``
+The registry round-trips against a LOCAL filesystem control root (``lakehouse_kit.objectfs.fs_and_base``
 falls back to the local FS for a non-``s3://`` uri), so no object storage is needed; the warehouse's
 bucket-rooted connection is a recording stand-in pre-seeded into the request's connection cache, so a
 cascade exercises the REAL ``native.call`` path without reaching S3, and the bucket purge is asserted by
@@ -39,13 +39,13 @@ from catalog.core.config import Settings
 from catalog.core.lineage_emit import NoopEmitter
 from catalog.core.vending import ModeBVendor
 from catalog.services import warehouses
-from service_kit.control_emit import NoopControlEmitter
+from lakehouse_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.naming import UUID_PROPERTY
+from service_kit.storage_options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 

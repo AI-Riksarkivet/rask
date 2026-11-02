@@ -16,11 +16,11 @@ import lance
 import pyarrow as pa
 import pytest
 
+from lakehouse_kit import maintenance_policies as mp
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 from maintenance.services.plan import cadence_skip
-from service_kit.lakehouse import maintenance_policies as mp
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 TABLE_UUID = "0b1e5c1a-0000-4000-8000-000000000001"
@@ -162,7 +162,7 @@ def test_resolve_overlapping_project_claims_warns_and_matches_nothing(
         _project_policy(id_="acme", buckets=["shared-bkt"], retention_days=365),
         _project_policy(id_="evil", buckets=["shared-bkt", "evil-wh"], retention_days=1),
     ]
-    with caplog.at_level("WARNING", logger="service_kit.lakehouse.maintenance_policies"):
+    with caplog.at_level("WARNING", logger="lakehouse_kit.maintenance_policies"):
         assert mp.resolve_policy(contested, "s3://shared-bkt/t", table_uuid="t", namespace_uuids=["ns-db"]) is None
     assert any(r.message == "maintenance_policy_project_overlap" for r in caplog.records)
     # The uncontested bucket in the same records still resolves its (single) claimant.

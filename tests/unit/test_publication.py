@@ -39,10 +39,10 @@ from catalog.services.publication import (
     published_version,
 )
 from catalog.services.table_claims import DoorTable
-from service_kit.lakehouse import base_registry
-from service_kit.lakehouse.location_claims import ClaimStore
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lakehouse.quality import Assertion
+from lakehouse_kit import base_registry
+from lakehouse_kit.location_claims import ClaimStore
+from lakehouse_kit.quality import Assertion
+from service_kit.storage_options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 

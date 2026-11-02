@@ -49,19 +49,19 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 import storage
+from lakehouse_kit import base_registry
+from lakehouse_kit.base_refs import BaseRefs, normalise
+from lakehouse_kit.features import manifest_base_path_refs
+from lakehouse_kit.maintenance_due import CloneList
+from lakehouse_kit.objectfs import lance_storage_options
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge, sweep
 from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
 from maintenance.services.plan import PlanContext
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.lakehouse import base_registry
-from service_kit.lakehouse.base_refs import BaseRefs, normalise
-from service_kit.lakehouse.features import manifest_base_path_refs
-from service_kit.lakehouse.maintenance_due import CloneList
-from service_kit.lakehouse.naming import UUID_PROPERTY
-from service_kit.lakehouse.objectfs import lance_storage_options
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.naming import UUID_PROPERTY
 from storage import S3Client
 
 
@@ -440,8 +440,8 @@ def _registered(estate: _Estate, table: str, location: str) -> str:
 
 def _purge_expired(estate: _Estate, table: str, location: str) -> None:
     """The maintenance purge of the trash record ``table``'s recoverable drop filed, re-stamped long expired, under a clean drift report."""
+    from lakehouse_kit import trash
     from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
-    from service_kit.lakehouse import trash
 
     (filed,) = trash.named(estate.root, estate.key, table)
     trash.put(

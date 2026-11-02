@@ -38,9 +38,9 @@ from catalog.api.control_relay import bounded, published_keys
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
+from lakehouse_kit.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
 from lineage_kit.door import DoorMode, judge
 from lineage_kit.signing import RefusalReason, control_signature_of, verify_control_signature
-from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
 from service_kit.governed.dapr_auth import require_dapr_token
 
 

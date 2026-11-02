@@ -48,8 +48,8 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
 from lineage.services.provenance import ProvenanceStore
-from service_kit.lakehouse.objectfs import StorageOptions
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.storage_options import StorageOptions
 from tests.integration import store_requests
 from tests.integration.lineage_app import ensure_tables, serve
 

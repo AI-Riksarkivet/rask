@@ -2,8 +2,8 @@
 
 Auto-skips unless ``MEDIA_CATALOG_URL`` points at a running catalog (e.g.
 ``http://127.0.0.1:8180`` booted from the lance-ns checkout against RustFS).
-Everything here drives OUR seams — ``RestCatalogTransport`` /
-``RestCatalogWriteTransport`` behind ``MEDIA_READ/WRITE_BACKEND`` and the real
+Everything here drives OUR seams — ``NamespaceCatalogTransport`` /
+``NamespaceCatalogWriteTransport`` (the stock Lance Namespace SDK) behind ``MEDIA_READ/WRITE_BACKEND`` and the real
 ``check_base_version_value`` conflict check — against THEIR wire: table create
 (Arrow-IPC stream), query (empty-vector scan → Arrow-IPC file), merge_insert
 (stream body), delete, and the version primitive
@@ -29,10 +29,10 @@ import pytest
 
 from annotator.annotations.commit import check_base_version_value
 from annotator.annotations.schema import EMPTY_SCHEMA
+from client_kit.lancekit.catalog import NamespaceCatalogTransport, NamespaceCatalogWriteTransport, connect_catalog
+from client_kit.lancekit.reader import CatalogTableReader
 from client_kit.lancekit.writer import CatalogTableWriter
 from service_kit.exceptions import ConflictError, NotFoundError
-from service_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport
-from service_kit.lancekit.writer import RestCatalogWriteTransport
 
 
 CATALOG_URL = os.environ.get("MEDIA_CATALOG_URL", "")
@@ -142,12 +142,12 @@ def table_id() -> list[str]:
 
 @pytest.fixture(scope="module")
 def reader(table_id: list[str]) -> CatalogTableReader:
-    return CatalogTableReader(RestCatalogTransport(CATALOG_URL, token=CATALOG_TOKEN or None), table_id)
+    return CatalogTableReader(NamespaceCatalogTransport(connect_catalog(CATALOG_URL, token=CATALOG_TOKEN or None)), table_id)
 
 
 @pytest.fixture(scope="module")
 def writer(table_id: list[str]) -> CatalogTableWriter:
-    return CatalogTableWriter(RestCatalogWriteTransport(CATALOG_URL, table_id, token=CATALOG_TOKEN or None), table_id)
+    return CatalogTableWriter(NamespaceCatalogWriteTransport(connect_catalog(CATALOG_URL, token=CATALOG_TOKEN or None), table_id), table_id)
 
 
 def test_milestone_loop(reader: CatalogTableReader, writer: CatalogTableWriter) -> None:
@@ -222,6 +222,6 @@ def test_catalog_errors_translate_to_domain_errors() -> None:
     holds it on a real OpenFGA, including `a-table-the-caller-cannot-see-answers-as-an-absent-one` (a hidden object
     answers as an absent one does) and `no-parent-rung-no-answer` (no probe from outside the hierarchy).
     """
-    missing = CatalogTableReader(RestCatalogTransport(CATALOG_URL, token=CATALOG_TOKEN or None), [NAMESPACE, "no_such_table"])
+    missing = CatalogTableReader(NamespaceCatalogTransport(connect_catalog(CATALOG_URL, token=CATALOG_TOKEN or None)), [NAMESPACE, "no_such_table"])
     with pytest.raises(NotFoundError):
         missing.to_table(limit=1)

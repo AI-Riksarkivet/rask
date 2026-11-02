@@ -42,7 +42,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 
 
 class _Repo:

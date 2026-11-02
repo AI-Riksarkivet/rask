@@ -43,9 +43,9 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings, get_settings
 from catalog.services.dataplane import create_table
-from service_kit.lakehouse import base_registry
-from service_kit.lakehouse.ns_errors import install_problem_handlers
-from service_kit.lakehouse.objectfs import StorageOptions
+from lakehouse_kit import base_registry
+from service_kit.ns_errors import install_problem_handlers
+from service_kit.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

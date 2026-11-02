@@ -24,8 +24,8 @@ from lance_namespace import DescribeNamespaceRequest, LanceNamespace, connect
 
 from catalog.core.config import Settings, get_settings
 from catalog.services.provenance_namespace import ensure_provenance_namespace
+from lakehouse_kit import maintenance_policies
 from service_kit.governed import fga
-from service_kit.lakehouse import maintenance_policies
 
 
 #: Lineage's service-account principal, the namespace's writer, as the chart names it.

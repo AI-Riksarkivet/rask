@@ -12,9 +12,9 @@ from typing import Any
 
 import pytest
 
+from lakehouse_kit.base_refs import BaseRefs
 from maintenance.services import sweep as sweep_module
 from maintenance.services.due import TableIds
-from service_kit.lakehouse.base_refs import BaseRefs
 
 
 _LISTED = [f"s3://wh/t{i:02d}" for i in range(12)]

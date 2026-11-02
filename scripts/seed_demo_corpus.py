@@ -41,7 +41,7 @@ import lancedb.index
 import pyarrow as pa
 from PIL import Image, ImageDraw
 
-from service_kit.lakehouse.endpoint_scheme import allow_http_for
+from service_kit.endpoint_scheme import allow_http_for
 
 
 #: The dataset the fixture is written as. It must MATCH what the deployment asks for — the chart

@@ -25,8 +25,8 @@ import pyarrow as pa
 import pytest
 from pydantic import BaseModel
 
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed import fga
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event
 
 

@@ -23,7 +23,7 @@ import pyarrow as pa
 import pytest
 from lance_namespace import RegisterTableRequest, connect
 
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))

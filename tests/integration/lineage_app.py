@@ -34,7 +34,7 @@ from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.machine_identity import ServicePrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.ns_errors import install_problem_handlers
 from tests.integration.openfga_grants import Grants
 
 

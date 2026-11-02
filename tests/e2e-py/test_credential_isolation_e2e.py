@@ -32,7 +32,7 @@ import requests
 from botocore.client import Config
 from botocore.exceptions import ClientError
 
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.naming import CATALOG_DELIMITER
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")

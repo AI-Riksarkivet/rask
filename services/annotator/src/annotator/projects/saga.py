@@ -43,7 +43,7 @@ from pydantic import BaseModel, ConfigDict
 from annotator.projects.machines import IllegalTransition
 from annotator.projects.models import AnnotationProject, Draft, ProjectState, Task, TaskState
 from annotator.projects.publish import PublishPlan, PublishRefusal, build_plan, source_pin, table_properties
-from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.naming import CATALOG_DELIMITER
 
 
 logger = logging.getLogger(__name__)

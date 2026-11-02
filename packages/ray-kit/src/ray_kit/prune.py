@@ -80,7 +80,7 @@ class PruneResult(BaseModel):
 #: Substrings that prove a delete found NOTHING TO DELETE. Ray flattens three distinct causes into one
 #: ``RuntimeError`` — the job does not exist, the request to the job server failed, or the job is not
 #: terminal (its own docstring) — and only the first is convergence. Matching on the message is the only
-#: discrimination available, and it is the same shape ``service_kit.lancekit.absence`` uses for the same
+#: discrimination available, and it is the same shape ``lakehouse_kit.lancekit.absence`` uses for the same
 #: reason: the layer below flattens absence into a generic error with the cause only in the text. The
 #: VOCABULARY is deliberately not shared with it — that one answers "is this Lance dataset there?" and
 #: had to drop ``does not exist`` because it matches S3's ``NoSuchBucket``; this one asks Ray about a

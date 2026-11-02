@@ -1363,7 +1363,7 @@ export interface paths {
          *     available, not a metadata lookup.
          *
          *     THE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find
-         *     it. That `ControlAction` (`service_kit/control_events.py:101`) announces a version advance and
+         *     it. That `ControlAction` (`lakehouse_kit/control_events.py:101`) announces a version advance and
          *     carries `{from_version, to_version}` — "the RANGE (D-R3) the notification carries, so a consumer
          *     resolves the delta" (`catalog/services/publication.py:245-254`) — which is exactly the window this
          *     door takes. Its emitter is a DIFFERENT `publication.py`, the route module
@@ -6745,7 +6745,7 @@ export interface components {
          *     Omitting ``project`` is the security half: a body-supplied project would let an admin of one
          *     tenant pass ``can_administer`` on their own project while rewriting somebody else's gate.
          *
-         *     Field semantics live on ``service_kit.lakehouse.gate_specs.GateSpec``, which is the model this
+         *     Field semantics live on ``lakehouse_kit.gate_specs.GateSpec``, which is the model this
          *     validates into.
          */
         GateSpecRequest: {

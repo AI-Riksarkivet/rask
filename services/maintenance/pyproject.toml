@@ -8,7 +8,8 @@ dependencies = [
     # Signs the lineage events the sweep publishes ([[LH-064]]); the verifier in `services/lineage`
     # uses the same module, so both sides share one definition of what was signed.
     "lineage-kit",
-    "service-kit[governed,lakehouse]",
+    "service-kit[governed,arrow]",
+    "lakehouse-kit[data]",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "pydantic-settings>=2.5",
@@ -29,6 +30,7 @@ build-backend = "hatchling.build"
 packages = ["src/maintenance"]
 
 [tool.uv.sources]
+lakehouse-kit = { workspace = true }
 lineage-kit = { workspace = true }
 service-kit = { workspace = true }
 

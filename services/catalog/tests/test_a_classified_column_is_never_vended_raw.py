@@ -27,8 +27,8 @@ from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import VendedSession
+from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed.store_credential import S3KeyPair
-from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).

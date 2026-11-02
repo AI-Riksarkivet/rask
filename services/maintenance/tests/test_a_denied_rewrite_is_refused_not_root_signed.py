@@ -24,7 +24,7 @@ import pytest
 
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceDenied, MaintenanceUnauthenticated, denial_remedy
-from service_kit.lakehouse.objectfs import StorageOptions
+from service_kit.storage_options import StorageOptions
 
 
 class _Settings:

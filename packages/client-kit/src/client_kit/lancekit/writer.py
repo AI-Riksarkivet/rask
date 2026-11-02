@@ -1,10 +1,11 @@
 """A client's table write path, selected by its settings: the table written directly, or through the catalog.
 
 ``MEDIA_WRITE_BACKEND=direct`` writes an opened Lance dataset (:class:`LanceTableWriter`); ``=catalog`` writes through
-the catalog's ``merge_insert`` and ``delete`` doors (:class:`~service_kit.lancekit.writer.RestCatalogWriteTransport`)
-when ``MEDIA_CATALOG_URI`` is set, else through :class:`LocalCatalogWriteTransport`, the catalog's own write behaviour
-in process. Every path answers the one :class:`TableWriter` surface: a merge upsert keyed on ``on``, an insert-only
-merge that leaves a matched row as it is, and a delete by predicate.
+the catalog's ``merge_insert`` and ``delete`` doors, through the stock Lance Namespace SDK
+(:class:`~client_kit.lancekit.catalog.NamespaceCatalogWriteTransport`) when ``MEDIA_CATALOG_URI`` is set, else through
+:class:`LocalCatalogWriteTransport`, the catalog's own write behaviour in process. Every path answers the one
+:class:`TableWriter` surface: a merge upsert keyed on ``on``, an insert-only merge that leaves a matched row as it is,
+and a delete by predicate.
 """
 
 from __future__ import annotations
@@ -15,9 +16,9 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import lance
 
+from client_kit.lancekit.catalog import NamespaceCatalogWriteTransport, connect_catalog
+from client_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 from service_kit.exceptions import ConflictError, ValidationError
-from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
-from service_kit.lancekit.writer import RestCatalogWriteTransport
 
 
 if TYPE_CHECKING:
@@ -98,7 +99,7 @@ class LanceTableWriter:
 
 class CatalogWriteTransport(Protocol):
     """Executes a catalog write. Abstracted so the same writer runs against a live
-    REST catalog (:class:`RestCatalogWriteTransport`) or an in-process namespace
+    REST catalog (:class:`~client_kit.lancekit.catalog.NamespaceCatalogWriteTransport`) or an in-process namespace
     (:class:`LocalCatalogWriteTransport`) unchanged."""
 
     def merge_upsert(self, delta: pa.Table, on: str) -> None: ...
@@ -170,11 +171,9 @@ def open_writer(
             raise ValueError("direct write path requires an opened dataset")
         return LanceTableWriter(dataset)
     if settings.catalog_uri:
-        transport: CatalogWriteTransport = RestCatalogWriteTransport(
-            settings.catalog_uri,
+        transport: CatalogWriteTransport = NamespaceCatalogWriteTransport(
+            connect_catalog(settings.catalog_uri, token=caller_token, delimiter=settings.catalog_delimiter),
             list(table_id),
-            delimiter=settings.catalog_delimiter,
-            token=caller_token,
         )
     else:
         if dataset is None:
