@@ -45,23 +45,27 @@ durable as well. Naming the stream also makes Dapr skip its subject lookup, whic
 captures no subject). The catalog still publishes through this component onto CATALOG_CONTROL, since a publish names
 only its subject.
 
+## `{{- include "lance.brokerWindows" . | nindent 4 }}`
+
+The broadcast's broker windows, the ones every retried subscriber carries ([[LH-559]]). The subscription parks a
+delivery its retries cannot get taken on `catalog.controlDlqTopic` (`LANCE_CONTROL_DLQ_TOPIC`), and the Resiliency CR retries
+this component, so while the sidecar spends its 480 s schedule the broker must hold the delivery: unset, components-contrib
+v1.19.0 sets no `AckWait` or `MaxDeliver` on the consumer (`pubsub/jetstream/jetstream.go:174-181`), nats-server's 30 s
+ack window redelivers underneath the retry, and its unlimited `MaxDeliver` redelivers a poison event without end. The park
+is published through this component like the catalog's own events; a publish names only its subject, so it lands on the
+DLQ stream (`dlq.>`), and `CatalogControlLaneDeadLettering` pages on the sidecar's count of it.
+
 ## `{{- if and .Values.maintenance.enabled .Values.maintenance.controlEmit }}`
 
 The control topic's other publisher, on its own component and so as its own NATS user: maintenance's #79 purge
 announcements. A publisher a component does not scope is refused by its sidecar, silently.
 
-## `{{- if .Values.dapr.resiliency.enabled }}`
+## `{{- include "lance.brokerWindows" . | nindent 4 }}`
 
-Redelivery timing, on the SAME schedule the per-subscriber components below carry and for the same
+Redelivery timing, on the schedule the per-subscriber components below carry and for the same
 invariant: the broker's first backOff step must exceed the sidecar's total retry span, or the broker
 redelivers while the sidecar is still mid-retry and one publication is handled twice, concurrently.
-This component shipped with none of these and rode jetstream's defaults — so the subscriber whose
-message is the most expensive in the estate to duplicate was the only one without the guard.
-
-Duplicated rather than shared because the block below renders inside a `range` over $subscribers,
-which this component is deliberately not part of (it carries the CONTROL topic, not the lineage
-one). .dagger/charts.go asserts the rendered numbers, so drift between the two copies fails the
-build rather than going unnoticed.
+One helper renders it for every subscriber component, so the schedule has one copy (`_helpers.tpl.md`).
 
 Changing these on an EXISTING cluster mutates a live durable's config — the §2.11 hazard, in its
 benign form: the durable NAME and its filter subject are unchanged, so the sidecar reconfigures
@@ -79,9 +83,9 @@ precisely to reach every replica.
 `deliverPolicy: new` for the same reason the lineage subscriber carries it: an inbox that replayed
 the retained backlog on every pod restart would re-notify a week of grants on every rollout.
 
-## `{{- if .Values.dapr.resiliency.enabled }}`
+## `{{- include "lance.brokerWindows" . | nindent 4 }}`
 
-Same redelivery schedule as its two siblings, and the same invariant: the broker's first backOff
+Same redelivery schedule as its siblings, and the same invariant: the broker's first backOff
 step must exceed the sidecar's total retry span, or the broker redelivers while the sidecar is
 still mid-retry and one event is handled twice, concurrently.
 
@@ -180,22 +184,9 @@ caused the outage) while withholding the provenance topic, which is the whole po
 
 One durable per subscriber app-id, for the reasons in the block above.
 
-## `{{- if $.Values.dapr.resiliency.enabled }}`
+## `{{- include "lance.brokerWindows" $ | nindent 4 }}`
 
-backOff supersedes ackWait for redelivery timing (NATS consumer semantics): its FIRST value is the
-effective ack window, so it must not undercut the slowest handler (one doing real S3 reads+writes,
-like a maintenance work unit) — a 1s first step would concurrently redeliver mid-handling even at 1 replica.
-
-## `- { name: ackWait, value: "720s" }`
-
-Resiliency ON: the SIDECAR owns delivery retries (Resiliency CRD, 450s = 7.5 min total: 30+60+
-120+240, jitter pinned off) and parks exhausted messages on the DLQ — so broker redelivery
-becomes the CRASH-RECOVERY layer only. Its first step must exceed the sidecar's total retry
-span, else the broker would redeliver while the sidecar still holds the message mid-retry
-(concurrent duplicate handling). 720s > 450s holds with 270s of margin.
-(This comment said "~10.5 min" until 2026-07-28 and dapr-resiliency.yaml said "~7.5 min" — two
-different numbers for one schedule, neither of which the chart rendered. Both now state 7.5,
-and .dagger/charts.go asserts the rendered value so they cannot drift apart again.)
+The subscriber's broker windows, from the one helper every retried component uses (`_helpers.tpl.md`).
 
 ## `apiVersion: dapr.io/v1alpha1`
 

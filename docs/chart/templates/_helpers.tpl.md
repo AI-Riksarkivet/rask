@@ -361,7 +361,23 @@ component (dapr-component.yaml) and the app's *_PUBSUB env must agree on this na
 
 ## `{{- define "lance.natsTable" -}}`
 
-The NATS permission table as issued (values.yaml `nats.auth`): `users`, plus each `flagged` grant whose value path is true.
+The NATS permission table as issued (values.yaml `nats.auth`): `users`, plus each `flagged` grant whose key holds. A key
+is one value path, or several joined by `,` that must all be true, so a grant whose call site exists only under two
+switches is issued under both ([[LH-559]]: a lane's dead-letter topic exists only with the lane and the retry policy).
+
+## `{{- define "lance.brokerWindows" -}}`
+
+The broker's redelivery windows for a pub/sub component the sidecar retries, rendered by every subscriber component so
+the schedule has one copy. backOff supersedes ackWait for redelivery timing (NATS consumer semantics): its first value is
+the effective ack window, so it must not undercut the slowest handler (one doing real S3 reads and writes).
+
+With `dapr.resiliency.enabled` the sidecar owns delivery retries (the Resiliency CR's constant 120 s x 4 = 480 s over five
+attempts) and parks an exhausted message on the subscription's dead-letter topic, so broker redelivery is the
+crash-recovery layer only: its first step (720 s) must exceed the sidecar's whole span plus the handler's own time per
+attempt, or the broker redelivers while the sidecar still holds the message mid-retry. Pinned by
+tests/unit/test_the_pubsub_retry_window_is_the_one_the_chart_states.py, which reads the rendered `ackWait` of every
+component the Resiliency CR targets (NATS's 30 s default where a component names none), and by .dagger/charts.go's
+resiliency gate. Off, the broker alone redelivers (30 s up to 300 s, five deliveries) and nothing parks.
 
 ## `{{- define "lance.natsUsers" -}}`
 

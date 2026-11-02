@@ -62,6 +62,11 @@ MINIMUM_USEFUL_WINDOW_SECONDS = 300.0
 #: this was driven live. It exists so the ack-window check counts attempts, not only backoff.
 HANDLER_ATTEMPT_BUDGET_SECONDS = 30.0
 
+#: The ack window of a consumer whose component names no `ackWait`: components-contrib v1.19.0's jetstream component
+#: sets `AckWait` on the consumer only when the metadata carries one (`pubsub/jetstream/jetstream.go:174`), so the
+#: consumer takes nats-server's default, 30s.
+NATS_DEFAULT_ACK_WAIT_SECONDS = 30.0
+
 _DURATION = re.compile(r"^(\d+(?:\.\d+)?)(ms|s|m)$")
 
 
@@ -147,6 +152,9 @@ def test_the_retry_window_stays_under_the_ack_window_of_every_component_it_targe
     concurrently. `ackWait` is read off the rendered components the Resiliency CR names, so raising one
     without the other cannot pass here.
 
+    A targeted component that names no `ackWait` is held to nats-server's default, so leaving the key off a component
+    the policy retries reads as the 30s window it is rather than passing unread.
+
     THE HANDLER'S OWN TIME IS PART OF THE SCHEDULE, and counting only the backoff is how a window that
     fits on paper overruns in the cluster: every attempt also occupies the app for as long as it takes
     to fail. So the budget checked here is backoff PLUS one attempt-budget per attempt — which is also
@@ -155,13 +163,14 @@ def test_the_retry_window_stays_under_the_ack_window_of_every_component_it_targe
     """
     targeted = {name for doc in rendered if doc.get("kind") == "Resiliency" for name in doc["spec"].get("targets", {}).get("components", {})}
     ack_waits = {
-        doc["metadata"]["name"]: _seconds(entry["value"])
+        doc["metadata"]["name"]: next(
+            (_seconds(entry["value"]) for entry in doc["spec"].get("metadata", []) if entry["name"] == "ackWait"),
+            NATS_DEFAULT_ACK_WAIT_SECONDS,
+        )
         for doc in rendered
         if doc.get("kind") == "Component" and doc["metadata"]["name"] in targeted
-        for entry in doc["spec"].get("metadata", [])
-        if entry["name"] == "ackWait"
     }
-    assert ack_waits, "no targeted component declares an ackWait, so this test would pass vacuously"
+    assert ack_waits, "the Resiliency CR targets no rendered component, so this test would pass vacuously"
 
     policy = retry_policies["pubsubDeliveryRetry"]
     attempts = int(policy["maxRetries"]) + 1

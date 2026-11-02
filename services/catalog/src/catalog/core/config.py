@@ -229,6 +229,10 @@ class CatalogControlBusSettings(BaseSettings):
     # catalog's own subscription is a BROADCAST — every replica receives every event → each replica's ring
     # buffer stays complete. The chart renders it (dapr-component.yaml) + a NATS stream (nats-stream-job).
     control_pubsub: str = Field(default="catalog-control-pubsub", alias="LANCE_CONTROL_PUBSUB")
+    #: Where a control event this replica could not take parks once the sidecar's retry schedule is spent, so a poison
+    #: delivery leaves the subscription and the sidecar's dead-letter count records it. Empty = no dead-lettering: the
+    #: chart sets it only beside the retry policy, since a dead-letter topic with none parks on the first failure.
+    control_dlq_topic: str = Field(default="", alias="LANCE_CONTROL_DLQ_TOPIC")
     # The bounded per-replica ring buffer size (events retained for `GET /management/v1/events`); a client whose cursor
     # fell off the end (overflow) gets `reset: true` → the console `invalidateAll()`s.
     control_buffer_size: int = Field(default=512, ge=1, alias="LANCE_CONTROL_BUFFER_SIZE")

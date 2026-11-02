@@ -37,6 +37,7 @@ spec:
     - { name: streamName, value: "CATALOG_CONTROL_BROADCAST" }
     - { name: durableName, value: "catalog-control-{podName}" }
     - { name: deliverPolicy, value: "new" }
+    {{- include "lance.brokerWindows" . | nindent 4 }}
     {{- with include "lance.natsCreds" (list . .Values.services.catalog.daprAppId) }}{{ . | nindent 4 }}{{- end }}
 {{- include "lance.natsAuth" . }}
 scopes:
@@ -63,15 +64,7 @@ spec:
     - { name: deliverPolicy, value: "new" }
     - { name: durableName, value: "notifications-control-durable" }
 
-    {{- if .Values.dapr.resiliency.enabled }}
-    - { name: ackWait, value: "720s" }
-    - { name: maxDeliver, value: "3" }
-    - { name: backOff, value: "720s,720s" }
-    {{- else }}
-    - { name: ackWait, value: "30s" }
-    - { name: maxDeliver, value: "5" }
-    - { name: backOff, value: "30s,60s,120s,300s" }
-    {{- end }}
+    {{- include "lance.brokerWindows" . | nindent 4 }}
     {{- with include "lance.natsCreds" (list . "notifications") }}{{ . | nindent 4 }}{{- end }}
 {{- include "lance.natsAuth" . }}
 scopes:
@@ -113,15 +106,7 @@ spec:
     {{- end }}
     - { name: durableName, value: "{{ .appId }}-durable" }
 
-    {{- if $.Values.dapr.resiliency.enabled }}
-    - { name: ackWait, value: "720s" }
-    - { name: maxDeliver, value: "3" }
-    - { name: backOff, value: "720s,720s" }
-    {{- else }}
-    - { name: ackWait, value: "30s" }
-    - { name: maxDeliver, value: "5" }
-    - { name: backOff, value: "30s,60s,120s,300s" }
-    {{- end }}
+    {{- include "lance.brokerWindows" $ | nindent 4 }}
     {{- with include "lance.natsCreds" (list $ .appId) }}{{ . | nindent 4 }}{{- end }}
 {{- include "lance.natsAuth" $ }}
 scopes:

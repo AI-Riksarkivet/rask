@@ -101,6 +101,7 @@ PUBLISHERS: dict[str, frozenset[str]] = {
     "dlq.lineage.events": frozenset({"lineage"}),
     "dlq.notifications": frozenset({"notifications"}),
     "dlq.maintenance.arrival": frozenset({"maintenance"}),
+    "dlq.catalog.control": frozenset({"catalog"}),
     **{f"probe.{app}": frozenset({app}) for app in ("catalog", "lineage", "maintenance", "notifications")},
 }
 #: The subjects no stream captures, so an owner's publish is acknowledged by nobody and only the broker's log says
@@ -297,7 +298,9 @@ async def _daprd_shapes(tools: Tools, broker: Broker, mint_: Mint, components: l
     )
     publisher_app, broadcast_app = (
         SubscriberApp([]),
-        SubscriberApp([{"pubsubname": "catalog-control-pubsub", "topic": "catalog.control.v1", "route": "/control-events"}]),
+        SubscriberApp(
+            [{"pubsubname": "catalog-control-pubsub", "topic": "catalog.control.v1", "route": "/control-events", "deadLetterTopic": "dlq.catalog.control"}]
+        ),
     )
     link = Link(broker.port)
     await link.start()

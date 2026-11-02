@@ -229,10 +229,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{- define "lance.natsTable" -}}
 {{- $t := deepCopy (.Values.nats.auth.users | default dict) -}}
-{{- range $path, $grants := (.Values.nats.auth.flagged | default dict) -}}
+{{- range $paths, $grants := (.Values.nats.auth.flagged | default dict) -}}
+{{- $on := true -}}
+{{- range $path := splitList "," $paths -}}
 {{- $v := $.Values -}}
 {{- range $k := splitList "." $path }}{{- if kindIs "map" $v }}{{- $v = get $v $k }}{{- else }}{{- $v = false }}{{- end }}{{- end -}}
-{{- if $v -}}
+{{- if not $v }}{{- $on = false }}{{- end -}}
+{{- end -}}
+{{- if $on -}}
 {{- range $u, $g := $grants -}}
 {{- $row := get $t $u | default dict -}}
 {{- $_ := set $t $u (dict "publish" (concat ($row.publish | default list) ($g.publish | default list) | uniq) "subscribe" (concat ($row.subscribe | default list) ($g.subscribe | default list) | uniq)) -}}
@@ -240,6 +244,18 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 {{- toJson $t -}}
+{{- end -}}
+
+{{- define "lance.brokerWindows" -}}
+{{- if .Values.dapr.resiliency.enabled -}}
+- { name: ackWait, value: "720s" }
+- { name: maxDeliver, value: "3" }
+- { name: backOff, value: "720s,720s" }
+{{- else -}}
+- { name: ackWait, value: "30s" }
+- { name: maxDeliver, value: "5" }
+- { name: backOff, value: "30s,60s,120s,300s" }
+{{- end -}}
 {{- end -}}
 
 {{- define "lance.natsUsers" -}}

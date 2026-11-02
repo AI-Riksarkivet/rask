@@ -104,7 +104,9 @@ or its projected `rask-catalog` token (`RASK_CATALOG_IDENTITY_TOKEN_FILE`) is no
 ## DLQ parking → a delivery gave up
 
 **Symptom.** `dapr_dead_letter_parked` ERROR logs (and `LineageIngestDeadLettering` or `NotificationsDeadLettering`
-for those subscribers). A specific event was not processed after exhausting its retry schedule.
+for those subscribers), or `CatalogControlLaneDeadLettering` / `MaintenanceArrivalDeadLettering`, which read the
+sidecar's own count (`dapr_component_pubsub_ingress_count_total{status="drop"}`) because no route reads those two lanes'
+parks. A specific event was not processed after exhausting its retry schedule.
 
 **Cause.** Dapr's Resiliency retry policy was exhausted for a delivery, so the sidecar published it to the
 DLQ topic and acked the original (no infinite retry loop). The message is retained in JetStream.
@@ -113,7 +115,10 @@ DLQ topic and acked the original (no infinite retry loop). The message is retain
 service's logs to the root failure (a bad payload, a persistent downstream outage).
 
 **Act.** Fix the root cause, then **replay** from the retained JetStream stream. Deliberately no auto-requeue —
-re-firing a poison message blind would loop it through the same failure.
+re-firing a poison message blind would loop it through the same failure. The catalog's and maintenance's parks
+(`dlq.catalog.control`, `dlq.maintenance.arrival`) need no replay: a control event is a hint the console re-reads past, and
+the sweep re-finds a parked write's table on its next pass. For those two, the alert alone says the lane is failing; the
+cause is in the app's log for the delivery (`catalog` or `maintenance` container, the alert's `topic`).
 
 ## Lineage refusing a signer's events
 

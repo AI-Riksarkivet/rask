@@ -257,6 +257,10 @@
                     "type": "integer",
                     "minimum": 121
                 },
+                "controlDlqTopic": {
+                    "description": "Dead-letter topic of the catalog's control subscription, for deliveries that exhaust their retries; set only with `controlEmit` and `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.",
+                    "type": "string"
+                },
                 "controlEmit": {
                     "description": "Publish catalog control events (catalog.control.v1) on a broadcast Dapr topic; renders the control pubsub component, CATALOG_CONTROL stream and subscription. Best-effort.",
                     "type": "boolean"
@@ -601,7 +605,7 @@
             "type": "object",
             "properties": {
                 "arrivalDlqTopic": {
-                    "description": "Dead-letter topic of the write-event lane, for deliveries that exhaust their retries.",
+                    "description": "Dead-letter topic of the write-event lane, for deliveries that exhaust their retries; set only with `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.",
                     "type": "string"
                 },
                 "arrivalEnabled": {
@@ -762,10 +766,42 @@
                     "type": "object",
                     "properties": {
                         "flagged": {
-                            "description": "Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable).",
+                            "description": "Extra user grants keyed by a values flag path, or several joined by `,` that must all be true, merged into `nats.auth.users` only while the key holds (lance.natsTable).",
                             "type": "object",
                             "properties": {
+                                "catalog.controlEmit,dapr.resiliency.enabled": {
+                                    "type": "object",
+                                    "properties": {
+                                        "catalog": {
+                                            "type": "object",
+                                            "properties": {
+                                                "publish": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
                                 "maintenance.arrivalEnabled": {
+                                    "type": "object",
+                                    "properties": {
+                                        "maintenance": {
+                                            "type": "object",
+                                            "properties": {
+                                                "publish": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "type": "string"
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                "maintenance.arrivalEnabled,dapr.resiliency.enabled": {
                                     "type": "object",
                                     "properties": {
                                         "maintenance": {

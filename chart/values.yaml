@@ -757,6 +757,8 @@ catalog:
   # inconsistent cursors and degrades to noisy `reset`s (safe, since events are hints, but wasteful).
   # -- Publish catalog control events (catalog.control.v1) on a broadcast Dapr topic; renders the control pubsub component, CATALOG_CONTROL stream and subscription. Best-effort.
   controlEmit: true
+  # -- Dead-letter topic of the catalog's control subscription, for deliveries that exhaust their retries; set only with `controlEmit` and `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.
+  controlDlqTopic: dlq.catalog.control
   # Each replica hears the broadcast through a durable consumer of its own, `catalog-control-<pod>` on the mirror stream
   # CATALOG_CONTROL_BROADCAST ([[LH-305]]): an ephemeral one is deleted after 5 s without interest and Dapr never re-creates
   # it, so a replica whose connection drops for longer is deaf until it restarts. A durable outlives a lapse up to this threshold,
@@ -926,7 +928,7 @@ maintenance:
   # backstop tick alone expires versions and writes the due records.
   # -- Subscribe the write-event lane: expire the written table and refresh its due record between sweep ticks.
   arrivalEnabled: true
-  # -- Dead-letter topic of the write-event lane, for deliveries that exhaust their retries.
+  # -- Dead-letter topic of the write-event lane, for deliveries that exhaust their retries; set only with `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.
   arrivalDlqTopic: dlq.maintenance.arrival
   # Sign each of maintenance's WRITES with a credential vended per table by the catalog, instead of the
   # deployment's ambient root key. Version expiry IS a write — it deletes data files and commits a
@@ -1533,15 +1535,20 @@ nats:
   auth:
     # -- Attests the platform's store holds every `nats-user-<user>`; required when the store is the platform's (`openbao.enabled` false).
     provisioned: false
-    # -- Extra user grants keyed by a values flag path, merged into `nats.auth.users` only while that flag is true (lance.natsTable).
+    # -- Extra user grants keyed by a values flag path, or several joined by `,` that must all be true, merged into `nats.auth.users` only while the key holds (lance.natsTable).
     flagged:
+      catalog.controlEmit,dapr.resiliency.enabled:
+        catalog:
+          publish: [dlq.catalog.control] # catalog.controlDlqTopic, where its sidecar parks a control event its retries could not deliver
       maintenance.controlEmit:
         maintenance:
           publish: [catalog.control.v1]
+      maintenance.arrivalEnabled,dapr.resiliency.enabled:
+        maintenance:
+          publish: [dlq.maintenance.arrival] # maintenance.arrivalDlqTopic
       maintenance.arrivalEnabled:
         maintenance:
           publish:
-            - dlq.maintenance.arrival
             - $JS.API.CONSUMER.INFO.LINEAGE.maintenance-durable
             - $JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.>
             - $JS.ACK.LINEAGE.maintenance-durable.>

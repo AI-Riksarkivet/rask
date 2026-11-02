@@ -256,7 +256,7 @@ def test_a_pubsub_component_edit_rolls_exactly_the_pods_whose_app_it_scopes() ->
     """daprd loads its Components once, at boot, and only a changed pod spec starts a rollout ([[LH-305]]): a Component edit
     that changed no pod would reach a sidecar only when something else restarted it, which no reconcile does."""
     before = _loaded_pubsub(chart_render.render(*DEFAULT_ARGS))
-    after = _loaded_pubsub(chart_render.render(*DEFAULT_ARGS, "--set", "dapr.resiliency.enabled=false"))
+    after = _loaded_pubsub(chart_render.render(*DEFAULT_ARGS, "--set", "services.lineage.deliveriesInFlight=32"))
 
     assert before.keys() == after.keys() and len(before) >= 4, f"the Dapr pods are {sorted(before)}"
     edited = {pod for pod in before if before[pod][1] != after[pod][1]}

@@ -31,10 +31,18 @@ spec:
         inbound:
           retry: pubsubDeliveryRetry
 {{- end }}
+{{- if .Values.catalog.controlEmit }}
+      {{ .Values.pubsub.controlName | default "catalog-control-pubsub" }}:
+        inbound:
+          retry: pubsubDeliveryRetry
+{{- end }}
 
 scopes:
 {{- range $subscribers }}
   - {{ .appId }}
+{{- end }}
+{{- if .Values.catalog.controlEmit }}
+  - {{ .Values.services.catalog.daprAppId }}
 {{- end }}
 {{- $notifications := .Values.services.notifications }}
 {{- if or $notifications.frontDoor .Values.singleTenant.enabled }}

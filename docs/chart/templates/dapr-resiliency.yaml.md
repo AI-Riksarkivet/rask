@@ -76,6 +76,14 @@ expression, so a rename of `pubsub.controlName` cannot leave the policy pointing
 that is gone. Gated by tests/unit/test_invariants.py's durable-component sweep, which is what
 caught this one before it shipped.
 
+## `{{- if .Values.catalog.controlEmit }}`
+
+The catalog's own broadcast subscriber, which `$subscribers` misses for the reason the notifications control target
+above gives: it rides the control component, not a `lance.subPubsub` one. Its subscription names a dead-letter topic
+(`LANCE_CONTROL_DLQ_TOPIC`, rendered under `dapr.resiliency.enabled`), so without this target the first transient failure
+would park the event ([[LH-559]]). Rendered under the condition that renders the component and its subscription, and the
+catalog's app-id joins `scopes:` under it.
+
 ## `{{- if or $notifications.frontDoor .Values.singleTenant.enabled }}` — `<release>-invocation-resiliency`
 
 The service-invocation policy, rendered only when notifications renders, because notifications is the

@@ -114,6 +114,9 @@ spec:
             {{- end }}
             - { name: LANCE_CONTROL_EMIT_ENABLED, value: {{ hasKey .Values.catalog "controlEmit" | ternary .Values.catalog.controlEmit false | quote }} }
             - { name: LANCE_CONTROL_PUBSUB, value: {{ .Values.pubsub.controlName | default "catalog-control-pubsub" | quote }} }
+            {{- if and .Values.catalog.controlEmit .Values.dapr.resiliency.enabled }}
+            - { name: LANCE_CONTROL_DLQ_TOPIC, value: {{ .Values.catalog.controlDlqTopic | quote }} }
+            {{- end }}
             {{- if and .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
             - { name: LANCE_CONTROL_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_control_outbox" }
             - { name: LANCE_CONTROL_RELAY_BINDING_NAME, value: {{ .Values.catalog.controlOutbox.bindingName | quote }} }

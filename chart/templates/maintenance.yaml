@@ -95,7 +95,9 @@ spec:
             {{- end }}
             - { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ .Values.maintenance.arrivalEnabled | quote }} }
             {{- if .Values.maintenance.arrivalEnabled }}
+            {{- if .Values.dapr.resiliency.enabled }}
             - { name: MAINTENANCE_ARRIVAL_DLQ_TOPIC, value: {{ .Values.maintenance.arrivalDlqTopic | quote }} }
+            {{- end }}
             {{- with include "lance.doorEnv" (list $root false) }}{{ . | nindent 12 }}{{- end }}
             {{- end }}
             {{- if .Values.maintenance.lineageEmit }}

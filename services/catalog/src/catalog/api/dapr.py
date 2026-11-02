@@ -152,9 +152,12 @@ def register_control_dapr(app: FastAPI) -> None:
     ``DaprApp(app)`` is always constructed (it adds GET ``/dapr/subscribe``). The subscription is registered
     **only** when control eventing is enabled (``control_emit_enabled``), matching the emitter gate in
     ``main.py``, so an HTTP-only / control-off deployment carries no always-live ingest route. There is **no**
-    ``queueGroupName`` (broadcast: every replica buffers every event) and **no** dead-letter topic — the ring
-    buffer tolerates loss by design (drop-oldest + ``reset`` on a cursor gap), so a parked delivery would add
-    nothing over the client's next re-read."""
+    ``queueGroupName`` (broadcast: every replica buffers every event).
+
+    A delivery the sidecar's retry schedule cannot get taken parks on ``control_dlq_topic``, whose park the sidecar
+    counts (``dapr_component_pubsub_ingress_count`` at ``status="drop"``) and ``CatalogControlLaneDeadLettering``
+    pages on. Nothing reads the park back: the ring buffer is a hint (drop-oldest + ``reset`` on a cursor gap), so
+    what the park buys is that the loss is recorded rather than redelivered without end."""
     # NOT injectable, and deliberately so: this runs at STARTUP wiring time, where there is no request
     # and therefore no dependency graph to resolve against. `app.dependency_overrides` cannot reach it
     # by construction, so a test that needs different settings here monkeypatches — which is the honest
@@ -163,5 +166,10 @@ def register_control_dapr(app: FastAPI) -> None:
     settings = get_settings()
     dapr_app = DaprApp(app)
     if settings.control_emit_enabled:
-        dapr_app.subscribe(pubsub=settings.control_pubsub, topic=CONTROL_TOPIC, route="/control-events")(on_control_event)
+        dapr_app.subscribe(
+            pubsub=settings.control_pubsub,
+            topic=CONTROL_TOPIC,
+            route="/control-events",
+            dead_letter_topic=settings.control_dlq_topic or None,
+        )(on_control_event)
         create_signature_refused_series()

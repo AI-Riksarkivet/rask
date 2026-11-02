@@ -224,6 +224,48 @@ tests:
         alertname: DaprConsumerWedge
         exp_alerts: []
 
+  # 9b. [[LH-559]] The two lakehouse lanes whose parks nothing reads: daprd's own count is the record. A pod's first park
+  #     is a series appearing at 1 (daprd creates it on the first event it books), so the alert must fire on it, and a
+  #     second park later on the same series fires through `increase`. An app's own DROP answer (`status="success"`)
+  #     and retries are not parks.
+  - interval: 1m
+    input_series:
+      - series: 'dapr_component_pubsub_ingress_count_total{app_id="catalog",process_status="drop",status="drop",topic="catalog.control.v1"}'
+        values: "_x3 1x6" # the replica's first park, at 3m
+      - series: 'dapr_component_pubsub_ingress_count_total{app_id="maintenance",process_status="drop",status="drop",topic="lineage.events.v1"}'
+        values: "1x20 2x10" # a park 20m ago that has stopped paging, then a second one at 20m
+      - series: 'dapr_component_pubsub_ingress_count_total{app_id="maintenance",process_status="drop",status="success",topic="lineage.events.v1"}'
+        values: "0+1x30" # the app answering DROP: not a park
+      - series: 'dapr_component_pubsub_ingress_count_total{app_id="catalog",process_status="retry",status="retry",topic="catalog.control.v1"}'
+        values: "0+1x30" # retries still in flight: not a park
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CatalogControlLaneDeadLettering
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: catalog
+              topic: catalog.control.v1
+            exp_annotations:
+              summary: "The catalog dead-lettered control events (catalog.control.v1) — its feed and binding cache missed them"
+              description: "A catalog replica's sidecar exhausted its retry schedule on a control event and parked it on dlq.catalog.control, so that replica's change-event feed lacks it and a binding the event names may stay cached until it expires. The park is kept on the DLQ stream. Read the replica's logs for the failing delivery (keys unavailable, a crash in the handler). Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+      - eval_time: 15m
+        alertname: CatalogControlLaneDeadLettering
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: MaintenanceArrivalDeadLettering
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: MaintenanceArrivalDeadLettering
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              topic: lineage.events.v1
+            exp_annotations:
+              summary: "Maintenance dead-lettered write events (lineage.events.v1) — their tables wait for the sweep"
+              description: "The write-event lane's sidecar exhausted its retry schedule and parked a write on dlq.maintenance.arrival, so the table's versions were not expired and its due record not refreshed on arrival; the sweep re-finds it on its next pass. The park is kept on the DLQ stream. A lane that parks every delivery cannot read a manifest, the policy registry or the dataset: read maintenance's logs for the failing evaluation. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+
   # ── the notification plane (S6) ────────────────────────────────────────────────────────────────
   # Each of the three rules gets a FIRING case and a QUIET case. The quiet cases are the ones worth
   # having: a rule that only ever fires is a rule nobody can distinguish from a broken one.

@@ -9,12 +9,14 @@ visibility, not auto-requeue.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from tests.unit import chart_render
 
 
 def _subs(client: TestClient) -> list[dict]:
@@ -54,6 +56,76 @@ def test_lineage_parking_rides_its_OWN_durable_component_never_the_replay_one(mo
     get_settings.cache_clear()
     subs2 = {s["topic"]: s for s in _subs(TestClient(app2))}
     assert subs2["dlq.lineage.events"]["pubsubname"] == subs2["lineage.events.v1"]["pubsubname"], "unset -> dev fallback to the main component"
+
+
+def _catalog_control_lane(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+    from catalog.api.dapr import register_control_dapr
+    from catalog.core.config import get_settings
+
+    for key in ("LANCE_CONTROL_EMIT_ENABLED", "LANCE_CONTROL_PUBSUB", "LANCE_CONTROL_DLQ_TOPIC"):
+        if key in env:
+            monkeypatch.setenv(key, env[key])
+        else:
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "k")
+    monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "s")
+    get_settings.cache_clear()
+    app = FastAPI()
+    register_control_dapr(app)
+    get_settings.cache_clear()
+    return app
+
+
+def _maintenance_arrival_lane(env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> FastAPI:
+    from maintenance.api.arrival import register_arrival_route
+    from maintenance.core.config import MaintenanceSettings
+
+    keys = ("MAINTENANCE_ARRIVAL_ENABLED", "MAINTENANCE_LINEAGE_PUBSUB", "MAINTENANCE_LINEAGE_TOPIC", "MAINTENANCE_ARRIVAL_DLQ_TOPIC")
+    for key in keys:
+        monkeypatch.delenv(key, raising=False)
+    app = FastAPI()
+    register_arrival_route(app, MaintenanceSettings.model_validate({**{key: env[key] for key in keys if key in env}, "MAINTENANCE_S3_ACCESS_KEY_ID": "test"}))
+    return app
+
+
+@pytest.mark.parametrize("resiliency", ["true", "false"], ids=["retried", "broker-only"])
+@pytest.mark.parametrize(
+    ("deployment", "route", "dlq_env", "build"),
+    [
+        pytest.param("Deployment/rask-catalog", "/control-events", "LANCE_CONTROL_DLQ_TOPIC", _catalog_control_lane, id="catalog-control"),
+        pytest.param(
+            "Deployment/rask-maintenance", "/maintenance-arrival", "MAINTENANCE_ARRIVAL_DLQ_TOPIC", _maintenance_arrival_lane, id="maintenance-arrival"
+        ),
+    ],
+)
+def test_a_lakehouse_lane_parks_what_its_retries_cannot_deliver_on_the_topic_the_chart_names(
+    deployment: str,
+    route: str,
+    dlq_env: str,
+    build: Callable[[dict[str, str], pytest.MonkeyPatch], FastAPI],
+    resiliency: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[[LH-559]] A delivery a lane's retries cannot get taken leaves the subscription on the lane's own dead-letter topic.
+
+    The app is built from the env the chart renders on its Deployment, and the subscription it advertises names that
+    topic exactly when its component is one the chart's Resiliency retries: a dead-letter topic with no retry policy
+    parks on the first failure, and with the retries on, a subscription with no dead-letter topic leaves a poison event
+    to the broker's redelivery. The sidecar's own count of each park (`dapr_component_pubsub_ingress_count{status="drop"}`)
+    is what `CatalogControlLaneDeadLettering` and `MaintenanceArrivalDeadLettering` page on, proved by promtool in
+    deploy/alerting/rules_test.yml.
+    """
+    docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", f"dapr.resiliency.enabled={resiliency}")
+    env = next(chart_render.env_of(c) for workload, _, c in chart_render.containers(docs) if workload == deployment and chart_render.uvicorn_target(c))
+    retried = {name for d in docs if d.get("kind") == "Resiliency" for name in d["spec"]["targets"].get("components", {})}
+
+    subscription = next(s for s in _subs(TestClient(build(env, monkeypatch))) if s["route"] == route)
+
+    parked = subscription.get("deadLetterTopic")
+    assert parked == env.get(dlq_env), "the subscription must park on the topic the chart renders for it"
+    assert (parked is not None) == (subscription["pubsubname"] in retried) == (resiliency == "true"), (
+        "a lane names a dead-letter topic exactly when the chart's Resiliency retries its component, which is when the retries are on"
+    )
 
 
 # --------------------------------------------------------------------------------------------------

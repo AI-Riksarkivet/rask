@@ -298,9 +298,9 @@ def test_a_stale_binding_cache_entry_expires_instead_of_lasting_until_restart(
     """The cache is POSITIVE-FOREVER, and #46's broadcast eviction is best-effort.
 
     A binding is immutable, so caching a resolved one forever is sound — until one of the three
-    mutations that break that premise happens and the control event announcing it is dropped. That
-    broadcast rides a pub/sub subscription with no dead-lettering, so a lost event leaves an entry
-    nothing will ever evict, and the consequence lasts for the life of the PROCESS.
+    mutations that break that premise happens and the control event announcing it is dropped. A
+    broadcast its retries cannot deliver is parked on the dead-letter topic and never read back, so a
+    lost event leaves an entry nothing will ever evict, and the consequence lasts for the life of the PROCESS.
 
     Live warehouse-status reads mean the stale entry cannot route at a deleted bucket (the finding's
     own text corrects that), so what the TTL bounds is the rest: persistent 403s on a since-re-bound
