@@ -727,8 +727,10 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
     # BOTH CHANNELS. `ExplainTableQueryPlanRequest` nests the whole query, so a branch can arrive at
     # the top level OR inside `query` — and guarding only the outer one left the inner one serving
     # main's plan with a 200 for a branch that had never been created. A guard that covers one of two
-    # channels reads as a guard while being none.
-    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch or (body.query.branch if body.query else None), door="explain_table_query_plan")
+    # channels reads as a guard while being none. Each channel is judged on its own, since `main` in one says nothing
+    # about the branch the other names ([[LH-547]]).
+    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="explain_table_query_plan")
+    dataplane.refuse_a_branch_this_door_cannot_honour(body.query.branch if body.query else None, door="explain_table_query_plan")
     dataplane.refuse_an_unbounded_boolean_chain(body.query.filter if body.query else None, field="query.filter")
     judged = int(table.open(so, version=body.query.version if body.query else None).version)
     if body.query is not None:

@@ -479,10 +479,8 @@ def _refuse_a_branch_describe_cannot_honour(branch: str | None, *, named_by: str
     names a branch too, the one its version lives on, and ``named_by`` says so: the response has no field
     to name a branch, so a branch tag described at its number reads as main's version to its caller.
 
-    `main` is permitted: naming the branch you are already on is not a request this door cannot honour.
+    `main` is read as no branch by `refuse_a_branch_this_door_cannot_honour` itself, as at every door it guards.
     """
-    if dataplane.recorded_branch(branch) is None:
-        return
     remedy = f"Use the branch operations under /v1/table/{{id}}/branches, or read the branch through `count_rows`. (got {branch!r})"
     dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="describe", remedy=f"{named_by}. {remedy}" if named_by else remedy)
 

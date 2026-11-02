@@ -2702,8 +2702,12 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, re
 
     Both implementations are real work with their own tests; they are named in the lakehouse register, row O1 (drained 2026-09-10; in git history), not
     smuggled in behind a door that currently lies.
+
+    `main` names the branch every one of these doors serves: "The exact name `main` is a virtual name for the default
+    branch. It may appear in API reference contexts as an alias for the default branch"
+    (`lance_docs/lance/format/table/branch_tag.md` § Branch Naming), so it is read as no branch ([[LH-547]]).
     """
-    if branch is not None:
+    if recorded_branch(branch) is not None:
         # ONE EXPRESSION DECIDES THE CODE, and `remedy` exists so that staying inside it costs a door
         # nothing. `describe_table` refused this same condition inline with `InvalidInputError` (13)
         # while fifteen doors answered `UnsupportedOperationError` (0) — the spec calls 13 "Malformed

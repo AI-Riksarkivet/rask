@@ -66,6 +66,14 @@ def table(real_ns_client: TestClient) -> tuple[TestClient, str]:
     [
         pytest.param("/query", {"json": {"branch": "ghost", "k": 1, "vector": _VECTOR}}, 406, _UNSUPPORTED, id="query"),
         pytest.param("/explain_plan", {"json": {"branch": "ghost", "query": {"k": 1, "vector": _VECTOR}}}, 406, _UNSUPPORTED, id="explain_plan"),
+        # Each channel is judged on its own: `main` outside does not stand for the branch the query names inside.
+        pytest.param(
+            "/explain_plan",
+            {"json": {"branch": "main", "query": {"branch": "ghost", "k": 1, "vector": _VECTOR, "vector_column": "vec"}}},
+            406,
+            _UNSUPPORTED,
+            id="explain_plan_inner",
+        ),
         pytest.param("/analyze_plan", {"json": {"branch": "ghost", "k": 1, "vector": _VECTOR}}, 406, _UNSUPPORTED, id="analyze_plan"),
         pytest.param("/backfill_column", {"json": {"branch": "ghost", "column": "v"}}, 406, _UNSUPPORTED, id="backfill_column"),
         pytest.param("/create_index", {"json": {"branch": "ghost", "column": "vec", "index_type": "IVF_FLAT"}}, 406, _UNSUPPORTED, id="create_index"),
@@ -89,5 +97,36 @@ def test_a_branch_the_table_lacks_is_never_answered_from_main(
 
     r = client.post(f"{_T}{path}", **request_kwargs)
 
-    assert (r.status_code, r.json().get("code")) == (status, code), r.text
+    assert r.status_code == status, r.text
+    assert r.json()["code"] == code, r.text
     assert lance.dataset(location).version == main_version, "main took a commit the request scoped to a branch"
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "answered"),
+    [
+        pytest.param("/describe", {}, "byte_for_byte", id="describe"),
+        pytest.param("/query", {"k": 1, "vector": _VECTOR, "vector_column": "vec"}, "byte_for_byte", id="query"),
+        pytest.param("/explain_plan", {"query": {"k": 1, "vector": _VECTOR, "vector_column": "vec"}}, "byte_for_byte", id="explain_plan"),
+        # An analyzed plan reports the elapsed time of the run it made, so two runs never answer the same bytes.
+        pytest.param("/analyze_plan", {"k": 1, "vector": _VECTOR, "vector_column": "vec"}, "timed", id="analyze_plan"),
+        pytest.param("/index/list", {}, "byte_for_byte", id="index_list"),
+        pytest.param("/index/id_idx/stats", {}, "byte_for_byte", id="index_stats"),
+        pytest.param("/stats", {}, "byte_for_byte", id="stats"),
+        # A drop is answered once, so what it is held to is its effect: main holds the index no longer.
+        pytest.param("/index/id_idx/drop", {}, "dropping_id_idx", id="index_drop"),
+    ],
+)
+def test_the_main_branch_named_is_answered_as_main(table: tuple[TestClient, str], path: str, body: dict[str, Any], answered: str) -> None:
+    """`main` is the default branch's name (`lance_docs/lance/format/table/branch_tag.md` § Branch Naming), so a door
+    that refuses a branch it cannot serve answers `branch: "main"` as it answers no branch ([[LH-547]])."""
+    client, location = table
+
+    named = client.post(f"{_T}{path}", json={**body, "branch": "main"})
+
+    assert named.status_code == 200, named.text
+    match answered:
+        case "byte_for_byte":
+            assert named.content == client.post(f"{_T}{path}", json=body).content
+        case "dropping_id_idx":
+            assert [index.name for index in lance.dataset(location).describe_indices()] == []

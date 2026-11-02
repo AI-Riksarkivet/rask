@@ -164,10 +164,3 @@ def test_a_non_main_branch_is_refused_rather_than_answered_off_main(client: Test
     assert resp.status_code == 406, resp.text
     assert resp.json()["code"] == 0, resp.text
     assert "branch" in resp.text
-
-
-def test_naming_the_main_branch_explicitly_is_accepted(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
-    # The spec says an unspecified branch means main, so a body naming main asks for exactly what this door
-    # already does — refusing it would reject a spec-conformant client for agreeing with us.
-    resp = client.post("/v1/table/db$t/describe", json={"branch": "main"})
-    assert resp.status_code == 200, resp.text
