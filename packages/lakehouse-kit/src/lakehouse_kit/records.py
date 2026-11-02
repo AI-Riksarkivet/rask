@@ -257,6 +257,36 @@ def mutate_json(
     Raises :class:`RecordMissingError` if the key is absent, and :class:`RecordChangedError` if
     ``attempts`` rounds all lose the race.
     """
+    return exchange_json(root_uri, storage_options, key, mutate, attempts=attempts)[1]
+
+
+def exchange_json(
+    root_uri: str,
+    storage_options: StorageOptions,
+    key: str,
+    mutate: Callable[[dict[str, Any]], dict[str, Any]],
+    *,
+    attempts: int = _MUTATE_ATTEMPTS,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply ``mutate`` to ``key`` as :func:`mutate_json` does, and also return the record the write replaced.
+
+    A caller that reports what its write changed compares the two, never a record it read earlier,
+    which another writer may have changed before the write landed.
+
+    Args:
+        root_uri: The control root the record lives under.
+        storage_options: How to reach that root.
+        key: The record's key under the root.
+        mutate: A pure function from the record as read to the record to write; it may run once per attempt.
+        attempts: How many read, apply and write rounds to run before giving up.
+
+    Returns:
+        The record the landed write replaced, and the record it wrote.
+
+    Raises:
+        RecordMissingError: The key is absent.
+        RecordChangedError: Every attempt lost the race.
+    """
     for _ in range(attempts):
         current = read_json(root_uri, storage_options, key)
         if current is None:
@@ -267,7 +297,7 @@ def mutate_json(
             _replace_json(root_uri, storage_options, key, updated, etag=etag)
         except RecordChangedError:
             continue  # somebody else wrote; re-read and re-apply to THEIR record
-        return updated
+        return record, updated
     raise RecordChangedError(f"record {key!r} under {root_uri!r} kept changing across {attempts} attempts")
 
 

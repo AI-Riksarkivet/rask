@@ -72,11 +72,12 @@ def test_create_list_get_warehouse(client: TestClient, tmp_path: Any, monkeypatc
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path)
     _mk_projects(client, "acme")
 
-    # A new warehouse declared primary is primary from its first write, as its project's routing reads it ([[LH-548]]).
+    # A new warehouse declared primary is primary from its first write, as its project's routing reads it ([[LH-548]]);
+    # one declaring no protection carries none, so the answer omits it rather than stating `false`.
     resp = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "primary": True})
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert (body["id"], body["bucket"], body["root_uri"], body.get("primary")) == ("wh-a", "wh-a", "s3://wh-a", True)
+    assert (body["id"], body["bucket"], body["root_uri"], body.get("primary"), "protected" in body) == ("wh-a", "wh-a", "s3://wh-a", True, False)
     assert provisioned == ["wh-a"]  # the physical bucket was provisioned at runtime
 
     listed = client.get("/management/v1/warehouses")
@@ -315,8 +316,16 @@ def test_recreate_does_not_reactivate_a_deactivated_warehouse(client: TestClient
     assert re.json()["created_at"] == created_at, "re-create reset created_at"
 
 
+@pytest.mark.parametrize(
+    ("armed", "declared", "protected"),
+    [
+        pytest.param(False, {"protected": True}, True, id="naming-true-arms-it"),
+        pytest.param(True, {}, True, id="naming-nothing-carries-it"),
+        pytest.param(True, {"protected": False}, None, id="naming-false-clears-it"),
+    ],
+)
 def test_a_re_create_applies_the_protection_it_names_and_carries_it_when_it_names_none(
-    client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch, armed: bool, declared: dict[str, bool], protected: bool | None
 ) -> None:
     """[[LH-548]] The create door is a declaration a reconciler re-POSTs, so it converges on the protection it names
     either way, and a re-POST naming none leaves it as it stands: absent carried forward, never read as `false`."""
@@ -324,13 +333,34 @@ def test_a_re_create_applies_the_protection_it_names_and_carries_it_when_it_name
     s = _settings(tmp_path)
     client.app.dependency_overrides[get_settings] = lambda: s
     _mk_projects(client, "acme")
+    assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "protected": armed}).status_code == 200
 
-    declared = [
-        client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"} | protection)
-        for protection in ({"protected": True}, {}, {"protected": False}, {})
-    ]
+    answer = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"} | declared)
 
-    assert [(answer.status_code, answer.json().get("protected")) for answer in declared] == [(200, True), (200, True), (200, None), (200, None)]
+    assert (answer.status_code, answer.json().get("protected")) == (200, protected)
+
+
+def test_a_warehouse_declared_protected_refuses_its_delete(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The protection a create declares is the flag the delete door's guard reads (#123), so even a purging delete is
+    refused 409 code 3, naming `force=true`, before anything irreversible: the warehouse stands and no byte is purged."""
+    monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
+    purged: list[str] = []
+    monkeypatch.setattr(wh_svc, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
+    s = _settings(tmp_path)
+    client.app.dependency_overrides[get_settings] = lambda: s
+    _mk_projects(client, "acme")
+    assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "protected": True}).status_code == 200
+
+    refused = client.delete("/management/v1/warehouses/wh-a", params={"purge_bucket": "true"})
+
+    problem = refused.json()
+    assert (refused.status_code, refused.headers["content-type"], problem["code"], "force=true" in problem["detail"]) == (
+        409,
+        "application/problem+json",
+        3,
+        True,
+    )
+    assert (client.get("/management/v1/warehouses/wh-a").status_code, purged) == (200, [])
 
 
 def test_namespace_create_refused_on_deactivated_warehouse(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

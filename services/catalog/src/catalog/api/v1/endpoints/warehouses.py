@@ -31,7 +31,7 @@ from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
@@ -565,13 +565,55 @@ async def activate_warehouse(
     return result
 
 
+async def _require_project_admin(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str) -> None:
+    """Refuse a caller without ``can_administer`` on ``project``: the authority over its warehouses' destruction, and so
+    over the lock on it."""
+    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+
+
+async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> dict[str, str]:
+    """The record of ``warehouse_id``, for a caller who administers its project (:func:`_require_project_admin`).
+
+    The record is read first, since the gate is on the warehouse's own project and never on one the caller names. NO
+    EXISTENCE ORACLE (audit #4): a caller who is not the project's admin is answered exactly the missing warehouse's 404,
+    so nobody can probe which warehouse ids exist; an outage or a missing caller still answers 503 or 401.
+
+    Args:
+        warehouse_id: The warehouse the route's path names.
+        settings: The catalog's settings.
+        token: The verified caller.
+        client: The OpenFGA client deciding.
+
+    Returns:
+        The warehouse's registry record.
+
+    Raises:
+        UnsupportedOperationError: Warehouses are disabled.
+        InvalidInputError: The id is not a warehouse id.
+        TableNotFoundError: The warehouse is absent, or its caller does not administer its project.
+    """
+    _require_enabled(settings)
+    _validate_id(warehouse_id, what="warehouse id")
+    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
+    if record is None:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
+    try:
+        await _require_project_admin(client, settings, token, project=record["project"])
+    except PermissionDeniedError as exc:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
+    return record
+
+
+AdministeredWarehouseDep = Annotated[dict[str, str], Depends(administered_warehouse)]
+
+
 @router.post("/{warehouse_id}/protection", response_model_exclude_none=True)
 async def set_warehouse_protection(
     warehouse_id: str,
     body: SetProtectionRequest,
+    record: AdministeredWarehouseDep,
     settings: SettingsDep,
     token: CurrentToken,
-    client: FgaClientDep,
     control: ControlEmitterDep,
 ) -> ProtectionResponse:
     """Arm or clear the warehouse's deletion protection ([[LH-548]]), the lock its delete turns only with ``force=true``.
@@ -582,10 +624,23 @@ async def set_warehouse_protection(
     nobody which ids exist. The write is conditional on the record as it stands and refuses a record that moved to
     another project since the decision. Re-arming an armed warehouse keeps who armed it. Announced as
     ``warehouse_protected`` or ``warehouse_unprotected`` on every call, as the table and namespace doors announce theirs.
+    \f
+
+    Args:
+        warehouse_id: The warehouse to protect or clear.
+        body: The protection to set.
+        record: The warehouse's record, its caller authorized on its project (:func:`administered_warehouse`).
+        settings: The catalog's settings.
+        token: The verified caller.
+        control: Where control events go.
+
+    Returns:
+        The warehouse's id and the protection now set.
+
+    Raises:
+        TableNotFoundError: The warehouse is absent, its caller does not administer its project, or it moved to
+            another project before the write.
     """
-    _require_enabled(settings)
-    _validate_id(warehouse_id, what="warehouse id")
-    record = await _administered_warehouse(warehouse_id, settings=settings, token=token, client=client)
     actor = f"user:{token.subject}" if token is not None else None
     change = warehouses.ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
     protect = partial(
@@ -596,29 +651,6 @@ async def set_warehouse_protection(
     log.info("warehouse_protection_set", extra={"warehouse": warehouse_id, "protected": body.protected})
     await _announce_protection(control, warehouse_id, actor, protected=body.protected)
     return ProtectionResponse(id=warehouse_id, protected=body.protected)
-
-
-async def _require_project_admin(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, project: str) -> None:
-    """Refuse a caller without ``can_administer`` on ``project``: the authority over its warehouses' destruction, and so
-    over the lock on it."""
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-
-
-async def _administered_warehouse(warehouse_id: str, *, settings: Settings, token: Caller | None, client: OpenFgaClient | None) -> dict[str, str]:
-    """The record of ``warehouse_id``, for a caller who administers its project (:func:`_require_project_admin`).
-
-    The record is read first, since the gate is on the warehouse's own project and never on one the caller names. NO
-    EXISTENCE ORACLE (audit #4): a caller who is not the project's admin is answered exactly the missing warehouse's 404,
-    so nobody can probe which warehouse ids exist; an outage or a missing caller still answers 503 or 401.
-    """
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
-    if record is None:
-        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    try:
-        await _require_project_admin(client, settings, token, project=record["project"])
-    except PermissionDeniedError as exc:
-        raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
-    return record
 
 
 async def _announce_protection(control: ControlEmitter, warehouse_id: str, actor: str | None, *, protected: bool) -> None:
@@ -1042,6 +1074,7 @@ def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]],
 @router.delete("/{warehouse_id}")
 async def delete_warehouse(
     warehouse_id: str,
+    record: AdministeredWarehouseDep,
     request: Request,
     settings: SettingsDep,
     token: CurrentToken,
@@ -1062,8 +1095,8 @@ async def delete_warehouse(
 
     Order, and every step is load-bearing:
 
-    1. The record must exist (404).
-    2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized
+    1. The record must exist (404), read by :func:`administered_warehouse`.
+    2. **Authorize first**, in that same dependency. The gate runs before the protection and emptiness checks, so an unauthorized
        caller never learns whether the warehouse is protected or what it holds — a 409 listing another
        tenant's namespace names is a disclosure a 403 must beat to.
     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
@@ -1096,12 +1129,7 @@ async def delete_warehouse(
     POSITIVELY and forever (they are immutable while they exist), so a binding deleted here but left in the
     cache would keep routing that namespace into a warehouse that no longer exists.
     """
-    _require_enabled(settings)
-    _validate_id(warehouse_id, what="warehouse id")
     so = settings.storage_options()
-    # NO EXISTENCE ORACLE (audit #4), as `_set_warehouse_status` in this same module answers: delete is strictly MORE
-    # sensitive than the deactivate that established the rule, so the quieter door must not leak what this one guards.
-    record = await _administered_warehouse(warehouse_id, settings=settings, token=token, client=client)
     project = record["project"]
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
     # state, so it runs strictly after the gate above.

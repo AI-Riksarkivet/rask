@@ -24,8 +24,8 @@ from catalog.services import warehouses
 PROJECT, WAREHOUSE = "acme", "wh-acme"
 #: acme's admin, who made it; a second admin of acme; the warehouse's direct owner; a member of acme.
 ADMIN, CO_ADMIN, OWNER, MEMBER = "alice", "dave", "bob", "carol"
-#: The spec code a missing warehouse is answered with (`lance_docs/ns_catalog/namespace/operations/errors.md`).
-TABLE_NOT_FOUND = 4
+#: What a missing warehouse is answered: its status, media type and spec code (`lance_docs/ns_catalog/namespace/operations/errors.md`).
+NOT_FOUND = (404, "application/problem+json", 4)
 
 
 @pytest.fixture
@@ -57,32 +57,30 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> A
     return catalog
 
 
-def test_its_project_admins_arm_and_clear_it_and_anyone_else_is_answered_not_found(estate: Any) -> None:
-    client = estate.client
+@pytest.mark.parametrize(
+    ("armed", "caller", "protected", "answered", "after"),
+    [
+        pytest.param(False, OWNER, True, NOT_FOUND, (None, None), id="the-warehouse-owner-is-refused-arming"),
+        pytest.param(False, MEMBER, True, NOT_FOUND, (None, None), id="a-project-member-is-refused-arming"),
+        pytest.param(True, OWNER, False, NOT_FOUND, (True, ADMIN), id="the-warehouse-owner-is-refused-clearing"),
+        pytest.param(False, ADMIN, True, (200, {"id": WAREHOUSE, "protected": True}), (True, ADMIN), id="an-admin-arms-it"),
+        pytest.param(True, CO_ADMIN, True, (200, {"id": WAREHOUSE, "protected": True}), (True, ADMIN), id="re-arming-keeps-the-armer"),
+        pytest.param(True, CO_ADMIN, False, (200, {"id": WAREHOUSE, "protected": False}), (None, None), id="another-admin-clears-it"),
+    ],
+)
+def test_only_its_project_admins_arm_and_clear_it(
+    estate: Any, armed: bool, caller: str, protected: bool, answered: tuple[Any, ...], after: tuple[bool | None, str | None]
+) -> None:
+    client, door = estate.client, f"/management/v1/warehouses/{WAREHOUSE}/protection"
+    if armed:
+        assert client.post(door, json={"protected": True}, headers=estate.bearer(ADMIN)).status_code == 200
 
-    def protect(caller: str, protected: bool) -> tuple[int, Any, bool | None, str | None]:
-        """What ``caller`` is answered, and the warehouse's protection afterwards, as its admin reads it."""
-        answer = client.post(f"/management/v1/warehouses/{WAREHOUSE}/protection", json={"protected": protected}, headers=estate.bearer(caller))
-        read = client.get(f"/management/v1/warehouses/{WAREHOUSE}", headers=estate.bearer(ADMIN))
-        assert read.status_code == 200, read.text
-        body, after = answer.json(), read.json()
-        return answer.status_code, body.get("code", body), after.get("protected"), after.get("protected_by")
+    answer = client.post(door, json={"protected": protected}, headers=estate.bearer(caller))
 
-    answers = [
-        protect(OWNER, True),
-        protect(MEMBER, True),
-        protect(ADMIN, True),
-        protect(CO_ADMIN, True),
-        protect(OWNER, False),
-        protect(CO_ADMIN, False),
-    ]
-
-    armed_by = estate.person(ADMIN)
-    assert answers == [
-        (404, TABLE_NOT_FOUND, None, None),
-        (404, TABLE_NOT_FOUND, None, None),
-        (200, {"id": WAREHOUSE, "protected": True}, True, armed_by),
-        (200, {"id": WAREHOUSE, "protected": True}, True, armed_by),
-        (404, TABLE_NOT_FOUND, True, armed_by),
-        (200, {"id": WAREHOUSE, "protected": False}, None, None),
-    ]
+    if answer.status_code == 200:
+        assert (answer.status_code, answer.json()) == answered
+    else:
+        assert (answer.status_code, answer.headers["content-type"], answer.json()["code"]) == answered
+    read = client.get(f"/management/v1/warehouses/{WAREHOUSE}", headers=estate.bearer(ADMIN)).json()
+    flag, armer = after
+    assert (read.get("protected"), read.get("protected_by")) == (flag, armer and estate.person(armer))

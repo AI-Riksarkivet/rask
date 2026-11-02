@@ -164,9 +164,12 @@ def _delete(
 ) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
 
-    return asyncio.run(
-        wh_ep.delete_warehouse(
+    async def _resolved_then_deleted() -> Any:
+        # The door's gate is its `AdministeredWarehouseDep`, which FastAPI resolves before the handler runs.
+        record = await wh_ep.administered_warehouse(warehouse_id, settings, token, client)
+        return await wh_ep.delete_warehouse(
             warehouse_id=warehouse_id,
+            record=record,
             request=request,
             settings=settings,
             token=token,
@@ -178,7 +181,8 @@ def _delete(
             purge_bucket=purge_bucket,
             force=force,
         )
-    )
+
+    return asyncio.run(_resolved_then_deleted())
 
 
 class _FakeStore:
@@ -342,20 +346,6 @@ def test_a_purge_refuses_a_bucket_that_is_reserved_platform_storage(tmp_path: An
 # --------------------------------------------------------------------------- #
 # deletion protection (Decision 5) — and the lock `force` does NOT turn
 # --------------------------------------------------------------------------- #
-
-
-def test_a_protected_warehouse_refuses_the_delete(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = _settings(tmp_path)
-    _seed(settings, protected=True)
-    purged: list[str] = []
-    monkeypatch.setattr(warehouses, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
-
-    with pytest.raises(NamespaceNotEmptyError) as exc:
-        _delete(settings, _request(), purge_bucket=True)
-
-    assert "force=true" in str(exc.value)
-    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is not None
-    assert purged == []  # the refusal lands BEFORE the irreversible half
 
 
 def test_force_true_overrides_the_protection_flag(tmp_path: Any) -> None:

@@ -36,7 +36,7 @@ from catalog.services.control_records import (
 )
 from lakehouse_kit import trash
 from lakehouse_kit.objectfs import fs_and_base
-from lakehouse_kit.records import RecordExistsError, RecordMissingError, create_json, mutate_json
+from lakehouse_kit.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from service_kit.naming import CATALOG_DELIMITER
 from service_kit.storage_options import StorageOptions
 
@@ -189,19 +189,33 @@ PROTECTION_FIELDS = ("protected", "protected_by")
 
 
 class ProtectionChange(BaseModel):
-    """Deletion protection armed by ``by`` when ``protected``, else cleared ([[LH-548]])."""
+    """A request to arm or clear a warehouse's deletion protection ([[LH-548]]).
+
+    Attributes:
+        protected: Arm the protection when true, clear it when false.
+        by: The principal making the change, ``user:<subject>``, recorded as ``protected_by`` when it arms.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     protected: bool
-    #: The principal making the change, `user:<subject>`, recorded as `protected_by` when it arms.
     by: str
 
 
 def with_protection(record: dict[str, str], change: ProtectionChange) -> dict[str, str]:
-    """``record`` with ``change`` applied: armed is the string ``"true"`` beside who armed it, and a cleared record
-    carries neither field, as a warehouse never armed carries neither. Arming an armed record leaves it as it is, so it
-    keeps naming who armed it and a declaration re-applied on every reconcile writes nothing new."""
+    """Apply ``change`` to a warehouse record.
+
+    Arming an armed record leaves it as it is, so it keeps naming who armed it and a declaration re-applied on every
+    reconcile writes nothing new.
+
+    Args:
+        record: The warehouse record as read.
+        change: What to apply.
+
+    Returns:
+        A new record: armed carries the string ``"true"`` beside who armed it, and cleared carries neither field, as a
+        warehouse never armed carries neither.
+    """
     if change.protected and record.get("protected") == "true":
         return dict(record)
     unprotected = {key: value for key, value in record.items() if key not in PROTECTION_FIELDS}
@@ -213,9 +227,18 @@ def set_warehouse_protection(
 ) -> dict[str, str] | None:
     """Apply ``change`` to ``project``'s warehouse ``warehouse_id``, conditional on the record's ETag.
 
-    Returns the updated record, or ``None`` when no such warehouse of ``project`` exists: the caller was authorized on
-    ``project``, so a record that went to another project between that decision and this write is not the warehouse
-    the caller may protect. Every other field is the record's as it stands at the write (``mutate_json``).
+    Every other field is the record's as it stands at the write (``mutate_json``).
+
+    Args:
+        control_root: The registry's root.
+        storage_options: How to reach it.
+        warehouse_id: The warehouse to change.
+        project: The project the caller was authorized on.
+        change: What to apply.
+
+    Returns:
+        The updated record, or ``None`` when no such warehouse of ``project`` exists: a record that went to another
+        project between the caller's authorization and this write is not the warehouse the caller may protect.
     """
 
     def protect(record: dict[str, str]) -> dict[str, str]:
@@ -240,9 +263,6 @@ def upsert_warehouse(
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Idempotent re-create of an EXISTING warehouse, CONDITIONAL on the record's ETag (diff2 F4).
 
-    Returns the record as it stood when the write landed and the record written, so a caller announces what the write
-    changed rather than what it read earlier.
-
     THE BUG THIS CLOSES. The re-create used to build a whole record from a read taken at the top of
     the handler, then `put_warehouse` it unconditionally. Between those two points sit the project
     guard, the reserved-bucket guard, the bucket-claim scan AND `provision_bucket` — a network round
@@ -261,18 +281,28 @@ def upsert_warehouse(
     `_CALLER_OWNED` fields come from the caller, every other field is carried from live, and
     `serving`/`primary` are honoured as REQUESTS (they may arm, never disarm). `protection` is what the
     request names ([[LH-548]]), armed or cleared, and `None`, a request naming nothing, carries the live
-    value forward. `mutate_json` re-reads and re-applies on a lost race, so a
+    value forward. `exchange_json` re-reads and re-applies on a lost race, so a
     concurrent deactivate is preserved instead of clobbered.
 
-    Raises :class:`WarehouseProjectConflict` if the live record moved to another project, and
-    ``RecordMissingError`` if it vanished (a concurrent delete — retryable, never a blind create).
+    Args:
+        control_root: The registry's root.
+        storage_options: How to reach it.
+        record: The record the request builds; only its `_CALLER_OWNED` fields are taken.
+        serving: A serving class to mark, or None to carry the live one.
+        protection: Deletion protection to apply, or None to carry the live one.
+        primary: Mark the warehouse its project's primary; false carries the live marker.
+
+    Returns:
+        The record the landed write replaced and the record it wrote, so a caller announces what the write changed
+        rather than what it read earlier.
+
+    Raises:
+        WarehouseProjectConflict: The live record moved to another project.
+        RecordMissingError: The record vanished (a concurrent delete, retryable, never a blind create).
     """
     project = record["project"]
-    # The record each attempt merged against; the last one is the record the landed write replaced.
-    stood: list[dict[str, str]] = []
 
     def merge(live: dict[str, str]) -> dict[str, str]:
-        stood.append(dict(live))
         if live.get("project") != project:
             raise WarehouseProjectConflict(f"warehouse {record['id']!r} is registered to another project")
         if DELETE_MODE in record:
@@ -296,8 +326,7 @@ def upsert_warehouse(
             merged["primary"] = "true"
         return merged
 
-    written = mutate_json(control_root, storage_options, _warehouse_key(record["id"]), merge)
-    return stood[-1], written
+    return exchange_json(control_root, storage_options, _warehouse_key(record["id"]), merge)
 
 
 def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:

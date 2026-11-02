@@ -2016,8 +2016,8 @@ export interface paths {
          *
          *     Order, and every step is load-bearing:
          *
-         *     1. The record must exist (404).
-         *     2. **Authorize first.** The gate runs before the protection and emptiness checks, so an unauthorized
+         *     1. The record must exist (404), read by :func:`administered_warehouse`.
+         *     2. **Authorize first**, in that same dependency. The gate runs before the protection and emptiness checks, so an unauthorized
          *        caller never learns whether the warehouse is protected or what it holds — a 409 listing another
          *        tenant's namespace names is a disclosure a 403 must beat to.
          *     3. Deletion protection (Decision 5) refuses 409 unless ``force=true``. ``force`` overrides the
