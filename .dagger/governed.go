@@ -337,9 +337,9 @@ func (m *Rask) GovernanceChain(
 		WithEnvVariable("LANCE_E2E_LINEAGE_URL", "http://lineage-api:8000").
 		WithEnvVariable("LANCE_E2E_DEX", "http://dex:5556/dex").
 		// THE OUTSIDER IS THIS STACK'S, not the live estate's, and the default is not portable between
-		// them. `topology.OUTSIDER` names `publisher@rask.internal` because on k3s `team:eng` is bound
-		// to `project:acme`, which makes bob a project admin and therefore a dishonest 403 subject.
-		// Neither binding exists here — this stack seeds no teams and no projects, and its Dex
+		// them. `topology.OUTSIDER` names `publisher@rask.internal` because on k3s the seed assigns bob
+		// to acme's admins role, which makes him a project admin and therefore a dishonest 403 subject.
+		// Neither exists here — this stack seeds no roles and no projects, and its Dex
 		// (`.docker/dex.config.yaml`) knows exactly alice and bob. Measured 2026-09-24: the inherited
 		// default failed both outsider legs at the TOKEN GRANT (`access_denied: Invalid username or
 		// password`), so the lane reported an authorization result it had never reached.

@@ -60,7 +60,7 @@ def estate(governed_catalog: Any) -> tuple[Any, _Recorder]:  # noqa: ANN401 — 
     _ok(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")))
     for user, relation in (("dex~alice", "admin"), ("dex~bob", "admin"), ("dex~gina", "member")):
         _ok(catalog.client.put("/management/v1/projects/acme/members", json={"user": user, "relation": relation}, headers=catalog.bearer("root")))
-    for relation, obj in (("member", "team:stewards"), ("curator", "classification:pii")):
+    for relation, obj in (("assignee", "role:stewards"), ("curator", "classification:pii")):
         tuple_body = {"user": fga.user_object(ALICE), "relation": relation, "object": obj}
         _ok(catalog.client.post("/management/v1/access/tuples", json=tuple_body, headers=catalog.bearer("root")))
     return catalog, recorder
@@ -75,7 +75,7 @@ def test_the_door_revokes_every_grant_naming_the_principal_and_records_it_delete
     before = catalog.store.tuples()
     assert _naming(catalog, ALICE) == {
         (fga.user_object(ALICE), "admin", "project:acme"),
-        (fga.user_object(ALICE), "member", "team:stewards"),
+        (fga.user_object(ALICE), "assignee", "role:stewards"),
         (fga.user_object(ALICE), "curator", "classification:pii"),
     }
 

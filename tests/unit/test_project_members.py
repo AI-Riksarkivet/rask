@@ -124,22 +124,3 @@ def test_regranting_what_someone_already_holds_is_a_noop(monkeypatch: pytest.Mon
     h.install(monkeypatch)
     _grant(h, "dex~bob", "member")
     assert h.written == []
-
-
-# --------------------------------------------------------------------------- #
-# Shape
-# --------------------------------------------------------------------------- #
-
-
-def test_the_team_edge_is_never_listed_as_a_member(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`team` makes every member of a team an admin (`admin: … or member from team`). Listing it as a
-    row would invite someone to revoke the thing that makes the tenant resolvable at all."""
-    h = _Harness(
-        [
-            _tuple("user:dex~alice", "admin", "project:acme"),
-            _tuple("team:eng", "team", "project:acme"),
-        ]
-    )
-    h.install(monkeypatch)
-    out = asyncio.run(members.list_members("acme", _client(), _settings(), _token()))
-    assert [m.relation for m in out.members] == ["admin"]

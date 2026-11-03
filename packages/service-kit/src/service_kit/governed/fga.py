@@ -1,15 +1,15 @@
 """Fine-grained authorization via OpenFGA (Zanzibar-style relationship checks).
 
 The authorization model (``service_kit/governed/auth/model.fga`` / ``model.json``) defines TEN types —
-``user``, ``team`` (with ``team#member`` as a group subject), ``role`` (``role#assignee``), ``project``,
-``estate`` (the estate root), ``warehouse`` (the S3-bucket root), a self-nesting ``namespace``, ``table``,
-``materialized_view`` and ``transaction`` (both hanging off namespace/warehouse and inheriting the same rungs
-via ``parent``). Every one is a lakehouse object or a subject of one: a tool that works on the lakehouse
+``user``, ``role`` (``role#assignee``, the one group subject), ``revision`` (bookkeeping of a project's admins),
+``project``, ``estate`` (the estate root), ``warehouse`` (the S3-bucket root), a self-nesting ``namespace``,
+``table``, ``classification`` and ``materialized_view`` (hanging off namespace/warehouse and inheriting the same
+rungs via ``parent``). Every one is a lakehouse object or a subject of one: a tool that works on the lakehouse
 authorizes its own objects itself (ADR 0171). The count is worth keeping honest because it is the first thing
 a reader checks this docstring against.
 Privileges are concentric (``owner`` ⊇ ``writer`` ⊇ ``reader``, plus a separate ``validator`` rung gating
-``can_promote``) and cascade DOWN the hierarchy via ``parent`` (team → project → warehouse → namespace →
-nested namespace → table / materialized_view / transaction). Every API operation is checked against a
+``can_promote``) and cascade DOWN the hierarchy via ``parent`` (project → warehouse → namespace →
+nested namespace → table / materialized_view). Every API operation is checked against a
 ``can_*`` ACTION relation — the model owns the op→privilege map, the app just names the action (see
 ``services/catalog/api/fga_deps.py``). Tuples persist in the OpenFGA datastore (Postgres in the deployed
 stack; SQLite for the auth-e2e).
@@ -214,7 +214,7 @@ def subject_of(user_id: str) -> str:
 def grantee_object(grantee: str) -> str:
     """The OpenFGA user a grant names: an object of another model type passes, a principal becomes its ``user``.
 
-    ``team:eng#member``, ``role:validators#assignee``, ``project:p`` and the typed wildcard ``user:*`` name objects of
+    ``role:validators#assignee``, ``project:p`` and the typed wildcard ``user:*`` name objects of
     the model's own grammar and pass as written. ``user:<id>`` is an OpenFGA user id, the form the store hands back,
     so it is decoded and encoded again (:func:`subject_of`, :func:`user_object`): a stored id a reader echoes back names
     the tuple it came from. A bare value is a principal key (``<idp-id>~<subject>``), a service account's included, and
@@ -1266,9 +1266,8 @@ async def list_objects(
     Callers pass a principal key (the caller's ``subject``) and this sends the user it is (:func:`user_object`). Pass
     ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
     userset — exactly as :func:`check` does. Without that hatch an estate admin's access review could only ask
-    "what can this *user* reach", never "what can ``team:eng#member`` reach", and in THIS model the
-    resource rungs deliberately refuse ``team#member`` directly (a team reaches data through a role), so
-    the userset question is the one that explains a real grant.
+    "what can this *user* reach", never "what can ``role:<id>#assignee`` reach", and a grant to a role is
+    the userset question that explains a real grant.
 
     ``context`` is defaulted through :func:`condition_context`. It matters MORE here than on a single
     check: a listing that omits the clock silently drops every object reachable only through a
@@ -1413,12 +1412,12 @@ async def list_users(
     hold this", a different question from "which users". The default keeps the review contract every
     existing caller relies on: bare ``user:`` ids.
 
-    ``qualified=True`` returns FULL subjects (``user:alice``, ``team:eng#member``, ``user:*``) instead of
+    ``qualified=True`` returns FULL subjects (``user:alice``, ``role:<id>#assignee``, ``user:*``) instead of
     bare ids. Off by default because the access-review callers built their output around bare ids; an
     estate-wide access view needs the qualified form, since a bare ``eng`` is ambiguous once the filter is not
     ``user``.
 
-    ListUsers *expands* the model (role assignees, team members, the parent cascade), so the answer is
+    ListUsers *expands* the model (role assignees, nested roles, the parent cascade), so the answer is
     effective access, not just direct tuples — exactly what a reviewer needs. A public ``user:*``
     wildcard surfaces as ``"*"`` (the model doesn't write one today, but a review must never hide it).
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as :func:`check`
@@ -1573,7 +1572,7 @@ async def expand(
 
 
 #: How many hops :func:`expand_tree` will follow. The model's deepest real chain is
-#: team → project → warehouse → namespace → nested namespace → table, i.e. 5 hops, so this covers it with
+#: role → project → warehouse → namespace → nested namespace → table, i.e. 5 hops, so this covers it with
 #: no room for a pathological store to turn one request into an unbounded fan-out.
 MAX_EXPAND_TREE_DEPTH = 6
 
@@ -2238,8 +2237,8 @@ async def commit_unless_changed(
 def names_someone(user: str) -> bool:
     """Whether a tuple's ``user`` names someone a notifier can address: a person or a group of them.
 
-    ``user:<principal>`` is a person; ``role:x#assignee`` and ``team:y#member`` are usersets a notifier expands into
-    people (the decision door's list-users). Every other user a revoke removes is an object-to-object edge (``team``, ``parent``,
+    ``user:<principal>`` is a person; ``role:<id>#assignee`` is a userset a notifier expands into people (the decision
+    door's list-users). Every other user a revoke removes is an object-to-object edge (``project``, ``parent``,
     ``child``), which names no one, so a ``grant_revoked`` for it would address an inbox named after an object.
     """
     return user.startswith("user:") or "#" in user

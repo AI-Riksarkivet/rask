@@ -957,8 +957,8 @@ maintenance:
   #
   # THE BOUND, so this is not mistaken for a backup: project records carry `created_by` and warehouse
   # records do not (measured live 2026-09-19, 93/93 and 0/97). So a tenant's admin seed and its
-  # warehouses' tenancy pointers come back; every grant made after creation — other admins, roles, team
-  # edges, per-table owners, the cascade identities — is in no registry and comes back from none of
+  # warehouses' tenancy pointers come back; every grant made after creation — other admins, role
+  # assignments, per-table owners, the cascade identities — is in no registry and comes back from none of
   # them. A rebuilt estate is one an admin can start repairing, not one that is repaired.
   # -- Recreate OpenFGA tuples the control-plane registries still justify (project admin seed, warehouse tenancy); additive only. Off by default.
   tupleRebuild: false

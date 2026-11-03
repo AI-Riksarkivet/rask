@@ -63,7 +63,7 @@ ERASING_ACTIONS: frozenset[str] = frozenset({"principal_deleted"})
 #: How the lane addresses one project's `WatchIndexActor`. A callable for the reason `InboxOpener` is one.
 type WatchIndexOpener = Callable[[str], TypedActorProxy]
 
-#: How a USERSET (`role:reviewers#assignee`, `team:eng#member`) resolves to the people in it.
+#: How a USERSET (`role:<id>#assignee`) resolves to the people in it.
 #:
 #: A callable rather than an FGA import, for the reason every seam in this plane is one: the lane stays
 #: exercisable with no FGA behind it, and a deployment with authorization off supplies nothing rather
@@ -97,8 +97,8 @@ def userset_expander(decider: "AccessDecider | None") -> UsersetExpander | None:
 
 def _is_userset(principal: str) -> bool:
     """`type:id#relation` — a GROUP, not a person. `model.fga` permits these on nearly every grantable
-    relation (`role#assignee` on owner/writer/reader/validator/manage_grants, `team#member` on a
-    project), so they are the estate's ordinary way to grant, not an edge case."""
+    relation (`role#assignee` on owner/writer/reader/validator/manage_grants and on a project's admin
+    and member), so they are the estate's ordinary way to grant, not an edge case."""
     return "#" in principal
 
 

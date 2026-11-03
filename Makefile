@@ -962,7 +962,7 @@ e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled s
 # pinning is the refusal, and a customer's bucket is not recoverable.
 #
 # The disclosure leg needs an identity that administers NOTHING here, and `scripts/e2e_live.sh` is what
-# picks one: bob is in `team:eng`, bound to `project:acme`, so he holds `can_administer` and would make
+# picks one: bob is in acme's admins role, which administers `project:acme`, so he holds `can_administer` and would make
 # that leg allege a property the estate does not have. Prefer `bash scripts/e2e_live.sh <file>`, which
 # discovers the whole environment from the running release.
 e2e-fga-model: ## The DEPLOYED OpenFGA model matches this repo's — the third copy `fga-test` cannot see

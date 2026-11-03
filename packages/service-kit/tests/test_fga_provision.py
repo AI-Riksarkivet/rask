@@ -95,7 +95,7 @@ MODEL: dict[str, Any] = {
         {
             "type": "role",
             "relations": {"assignee": {"this": {}}},
-            "metadata": {"relations": {"assignee": {"directly_related_user_types": [{"type": "user"}, {"relation": "member", "type": "team"}]}}},
+            "metadata": {"relations": {"assignee": {"directly_related_user_types": [{"type": "user"}, {"relation": "assignee", "type": "role"}]}}},
         },
     ],
     "conditions": {},
@@ -192,7 +192,9 @@ def _install(monkeypatch: pytest.MonkeyPatch, *, desired: dict[str, Any], stored
 def _with_wildcard_assignee(model: dict[str, Any]) -> dict[str, Any]:
     """``model`` with ``role#assignee``'s ``[user]`` widened to ``[user:*]`` — only the ``wildcard: {}`` marker differs."""
     role = {**model["type_definitions"][1]}
-    role["metadata"] = {"relations": {"assignee": {"directly_related_user_types": [{"type": "user", "wildcard": {}}, {"relation": "member", "type": "team"}]}}}
+    role["metadata"] = {
+        "relations": {"assignee": {"directly_related_user_types": [{"type": "user", "wildcard": {}}, {"relation": "assignee", "type": "role"}]}}
+    }
     return {**model, "type_definitions": [model["type_definitions"][0], role]}
 
 

@@ -2,7 +2,7 @@
 
 ``POST …/access/list`` answers the standing-access question the #41 audit trail cannot ("who *can*
 read this?", not "who *did*"): for every ``can_*`` action the compiled model defines on the type, it
-asks OpenFGA ListUsers — which expands role assignees, team members, and the parent cascade, so the
+asks OpenFGA ListUsers — which expands role assignees, nested roles, and the parent cascade, so the
 answer is effective access, not just direct tuples. The relation set comes from the model the app
 actually loads (never a hand-kept list), so a model edit is reflected here automatically and
 ``test_fga_model_contract`` proves every queried pair exists.
@@ -16,7 +16,7 @@ grant list that reads as "nobody has access".
 
 Two properties of "effective access" are accepted by design and worth knowing when reading a review:
 the expansion follows the parent cascade, so a leaf-table owner sees individual grantees who hold
-access only via namespace/warehouse/project team or role grants (within-tenant upward visibility —
+access only via namespace/warehouse/project role grants (within-tenant upward visibility —
 the cascade never crosses projects); and OpenFGA's ListUsers has no pagination, so a relation held
 by more subjects than the server's ``listUsersMaxResults`` cap returns a partial list (the wrapper
 logs a warning when a result looks capped).
@@ -236,7 +236,7 @@ async def _access_check(
     obj, name = await _target(resolver, fga_type, segments)
     subject = token.subject if token else "anonymous"
     # Resolve to a FULL subject (`fga.grantee_object`): a subject is the user it is; a qualified userset
-    # (``role:…#member`` / ``team:…#member``) is passed through as-is. Then check with qualify=False so
+    # (``role:…#assignee``) is passed through as-is. Then check with qualify=False so
     # fga.check sends it verbatim — otherwise its default ``user:`` prefix would double to ``user:user:…``
     # and every simulated Check would falsely deny (audit 2026-07-20 caught exactly this).
     user = fga.grantee_object(body.user)
@@ -410,7 +410,7 @@ async def _access_mutate(
     obj, name = await _target(resolver, fga_type, segments)
     actor = token.subject if token else "anonymous"
     # Resolve the grantee to a FULL subject (qualify=False semantics, mirroring access/check): a subject is the
-    # user it is; a qualified userset (``role:…#assignee`` / ``team:…#member``) is passed through verbatim.
+    # user it is; a qualified userset (``role:…#assignee``) is passed through verbatim.
     grantee = fga.grantee_object(body.user)
     if grant:
         await fga_deps.refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=settings)

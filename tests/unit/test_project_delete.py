@@ -162,13 +162,13 @@ def test_project_holding_warehouses_refuses_409_naming_every_one(monkeypatch: py
 
 
 def test_empty_project_is_deleted_and_its_tuples_revoked(monkeypatch: pytest.MonkeyPatch) -> None:
-    world = _world(monkeypatch, tuples=[_grant("user:a", "admin"), _grant("user:b", "member"), _grant("team:t", "team")])
+    world = _world(monkeypatch, tuples=[_grant("user:a", "admin"), _grant("user:b", "member"), _grant("role:r#assignee", "member")])
     control = _Emitter()
     result = _delete("acme", _settings(fga_enabled=True), client=object(), control=control)
 
     assert result == ep.DeleteProjectResponse(project="acme", tuples_revoked=3)
     assert world.deleted == ["acme"]
-    # Revoked on the PROJECT object (the admin/member/team-edge tuples), stamped as a lifecycle delete so
+    # Revoked on the PROJECT object (the admin/member tuples), stamped as a lifecycle delete so
     # the tuple-level audit rows say why the grants went away.
     assert world.revoked == [{"obj": "project:acme", "actor": "dex~alice", "origin": "lifecycle_delete"}]
     event = control.events[0]

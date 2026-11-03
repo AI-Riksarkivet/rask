@@ -239,9 +239,8 @@ class _CapturingList:
 def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:
     """`qualify=False` is what lets the estate-admin explorer ask a USERSET question.
 
-    The wrapper's own docstring states why it must exist: "in THIS model the resource rungs
-    deliberately refuse `team#member` directly (a team reaches data through a role), so the userset
-    question is the one that explains a real grant". Prefixing it would make that question unaskable.
+    A grant to a role is the userset question that explains a real grant, so prefixing it would make that
+    question unaskable.
     """
     client = _CapturingList()
     asyncio.run(

@@ -123,13 +123,18 @@ ControlAction = Literal[
     # `extra.subject` are the OpenFGA user it was (`fga.user_object`). Not a delivery: a notifier erases what it keeps
     # for the person on it (an inbox, preferences, watches), since nobody is left to tell (CTL-022).
     "principal_deleted",
+    # A project's role minted or ended through its role doors ([[LH-557]]). `object_id` is the role's OpenFGA object
+    # (`role:<uuid>`), `extra` its `project` and `name`. Untargeted: what an assignee gains or loses rides
+    # `grant_added` / `grant_revoked` naming them, the role's `deleted` the tuples it took along.
+    "role_created",
+    "role_deleted",
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the
 #: top of rask's hierarchy (project > warehouse > namespace > table) and became a first-class control object
 #: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1). Every member is a lakehouse
 #: object: a tool that works on the lakehouse keeps its own objects and its own channel for them (ADR 0171).
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "gate", "principal"]
+ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "gate", "principal", "role"]
 
 #: The caps on the two cascade CLAIMS a publication echoes onto `table_published`'s `extra`: the batch
 #: id and the person the batch is for. The catalog's publish door enforces them, and a door that takes
@@ -245,6 +250,8 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             | "table_tag_deleted"
             | "erasure_release_scheduled"
             | "principal_deleted"
+            | "role_created"
+            | "role_deleted"
         ):
             return "catalog"
         case "table_purged" | "namespace_purged":

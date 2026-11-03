@@ -12,14 +12,18 @@
 model_file: ./model.fga
 
 tuples:
-  # teams + members
-  - { user: user:alice, relation: member, object: team:eng }
-  - { user: user:bob, relation: member, object: team:eng }
-  - { user: user:frank, relation: member, object: team:partners }
-  # team:eng owns TWO projects; team:partners owns one
-  - { user: team:eng, relation: team, object: project:acme }
-  - { user: team:eng, relation: team, object: project:research }
-  - { user: team:partners, relation: team, object: project:beta }
+  # each project's admins are a role of that project: alice and bob administer acme and research, frank beta
+  - { user: project:acme, relation: project, object: role:acme_admins }
+  - { user: user:alice, relation: assignee, object: role:acme_admins }
+  - { user: user:bob, relation: assignee, object: role:acme_admins }
+  - { user: "role:acme_admins#assignee", relation: admin, object: project:acme }
+  - { user: project:research, relation: project, object: role:research_admins }
+  - { user: user:alice, relation: assignee, object: role:research_admins }
+  - { user: user:bob, relation: assignee, object: role:research_admins }
+  - { user: "role:research_admins#assignee", relation: admin, object: project:research }
+  - { user: project:beta, relation: project, object: role:beta_admins }
+  - { user: user:frank, relation: assignee, object: role:beta_admins }
+  - { user: "role:beta_admins#assignee", relation: admin, object: project:beta }
   # one warehouse (bucket) per project
   - { user: project:acme, relation: project, object: warehouse:acme_bucket }
   - { user: project:research, relation: project, object: warehouse:research_bucket }
@@ -88,7 +92,7 @@ tuples:
   - { user: user:leo, relation: pass_grants, object: namespace:acme_silver }
   # ---- MANAGED ACCESS (C4) ---------------------------------------------------------------------
   # A separate warehouse on purpose: the flag changes who may grant, so setting it on acme_bucket
-  # would silently rewrite every grant-axis expectation above. beta is team:partners' tenant.
+  # would silently rewrite every grant-axis expectation above. beta is frank's tenant, through role:beta_admins.
   - { user: "user:*", relation: managed_access, object: warehouse:beta_bucket }
   - { user: warehouse:beta_bucket, relation: parent, object: namespace:beta_locked }
   - { user: namespace:beta_locked, relation: parent, object: table:beta_locked_records }
@@ -134,7 +138,7 @@ tuples:
   - { user: user:root_admin, relation: owner, object: estate:rask }
 
 
-  # gina is a PLAIN project member (not via team:eng, so not an admin). frank belongs to a different tenant entirely.
+  # gina is a PLAIN project member (not via role:acme_admins, so not an admin). frank belongs to a different tenant entirely.
   - { user: user:gina, relation: member, object: project:acme }
 
   # MUTATION-DETECTING FIXTURES (openfga skill: references/test-check-assertions.md distinguishes a
@@ -144,8 +148,8 @@ tuples:
   # here holds the rung IMMEDIATELY BELOW the action's required rung, so a slip flips them.
   - { user: user:olive, relation: reader, object: warehouse:lance_catalog }
   - { user: user:peter, relation: writer, object: table:acme_gold_catalog }
-  # rita: a DIRECT project member. Every other member in this file arrives via `member from team`, and
-  # `admin` includes that edge — so alice and bob are admins, and no subject existed at the plain-member
+  # rita: a DIRECT project member. alice and bob are admins through role:acme_admins, so without her no
+  # subject would stand at the plain-member
   # rung at all. Without one, `can_administer: admin` could be widened to `member` unnoticed.
   - { user: user:rita, relation: member, object: project:acme }
   # ---- the DEPTH-CEILING probe (catalog.core.identifiers.MAX_NAMESPACE_DEPTH) ----
@@ -193,7 +197,7 @@ tests:
     # Two claims, and the second is the one worth a test: `admin` reaching every rung is what makes
     # this safe to add, and a security_admin NOT reaching data_admin is what makes it worth adding.
     check:
-      - user: user:alice # acme admin via team:eng
+      - user: user:alice # acme admin via role:acme_admins
         object: project:acme
         assertions:
           admin: true
@@ -207,6 +211,37 @@ tests:
           role_creator: true
           data_admin: false
           admin: false
+  - name: a role is filled and deleted by its project's security admins, and read by its members
+    # [[LH-557]]. Lakekeeper's `can_grant_assignee` (role.fga) without its per-role ownership: role_creator mints a
+    # role and does not decide who is in it. Each negative holds the rung just below the one asked.
+    check:
+      - user: user:alice # admin, so security_admin
+        object: role:validators
+        assertions: { can_manage_assignees: true, can_delete: true, can_read: true }
+      - user: user:grace # security_admin only
+        object: role:validators
+        assertions: { can_manage_assignees: true, can_delete: true, can_read: true }
+      - user: user:rita # a plain member reads the project's roles and changes none
+        object: role:validators
+        assertions: { can_manage_assignees: false, can_delete: false, can_read: true }
+      - user: user:carol # an assignee is not its manager
+        object: role:validators
+        assertions: { can_manage_assignees: false, can_delete: false, can_read: false }
+      - user: user:frank # beta's admin manages no acme role
+        object: role:validators
+        assertions: { can_manage_assignees: false, can_delete: false, can_read: false }
+      - user: user:alice # an unscoped role has no project, so no project's admin manages it
+        object: role:estate_auditors
+        assertions: { can_manage_assignees: false, can_delete: false }
+      - user: user:grace
+        object: project:acme
+        assertions: { can_create_role: true, can_list_roles: true }
+      - user: user:rita
+        object: project:acme
+        assertions: { can_create_role: false, can_list_roles: true }
+      - user: user:frank
+        object: project:acme
+        assertions: { can_create_role: false, can_list_roles: false }
   - name: a role carries its tenant, and an unscoped role carries none
     # The edge exists so a grant door can tell `role:validators` (acme's) from an estate-wide role.
     # Nothing in the model GRANTS through it — the refusal is the door's — so this pins the fact the
@@ -258,7 +293,7 @@ tests:
       - user: user:root_admin
         object: estate:rask
         assertions: { can_observe_events: true }
-      # alice is a full project admin (owns acme_bucket via her team) but holds nothing on the estate →
+      # alice is a full project admin (owns acme_bucket via role:acme_admins) but holds nothing on the estate →
       # denied the feed. This is the #12 fix: authz scope == data scope (per-project admin ≠ estate
       # observer), and the estate being its own TYPE is what makes it structural rather than a habit.
       - user: user:alice
@@ -415,13 +450,13 @@ tests:
           member: true                        # the tuple is live
           can_administer: false               # admin-tier: a plain member never administers
           can_create_warehouse: false
-  - name: team-owned project admins get full warehouse access (and a team owns MANY projects)
+  - name: a project admin role's assignees get full warehouse access, in each project that role's twin administers
     check:
       - user: user:alice
         object: warehouse:acme_bucket
         assertions: { can_get_metadata: true, can_create_table: true }
       - user: user:alice
-        object: warehouse:research_bucket # same team, second project — still admin/owner
+        object: warehouse:research_bucket # role:research_admins, second project — still admin/owner
         assertions: { can_get_metadata: true, can_create_table: true }
       - user: user:alice
         object: table:acme_gold_catalog # owner cascades all the way down
@@ -552,7 +587,7 @@ tests:
     # — and `list_users` is the only form that can prove an absence. IVAN'S ABSENCE IS THE FINDING: the
     # same query against `can_get_metadata` returns him, because C1's `child` edge lights every
     # container above his one table. Everyone listed holds a real stake in the container:
-    #   alice/bob — team:eng admins of project:acme, so warehouse owners
+    #   alice/bob — role:acme_admins assignees, admins of project:acme, so warehouse owners
     #   carol     — reader granted on warehouse:acme_bucket directly
     #   dave      — writer on the warehouse (writer implies reader, concentrically)
     #   gina      — member of project:acme, which `warehouse#reader` includes via `member from project`
@@ -574,11 +609,11 @@ tests:
 
   - name: create-on-parent — create perms are gated on the PARENT object (design-create-on-parent)
     check:
-      # warehouse creation is gated on the project: a project admin (alice, via team:eng) may; an outsider may not.
+      # warehouse creation is gated on the project: a project admin (alice, via role:acme_admins) may; an outsider may not.
       - user: user:alice
         object: project:acme
         assertions: { can_administer: true, can_create_warehouse: true }
-      - user: user:frank # partners-team member, no grant on project:acme
+      - user: user:frank # beta's admin, no grant on project:acme
         object: project:acme
         assertions: { can_administer: false, can_create_warehouse: false }
       # namespace creation is gated on the warehouse AND a parent namespace: a writer (dave) may; an outsider (eve) may not.
@@ -695,7 +730,7 @@ tests:
             can_create_tag: false,
             can_update_tag: false,
           }
-      - user: user:alice # owner (team:eng → project admin → warehouse owner cascade) — all allowed
+      - user: user:alice # owner (role:acme_admins → project admin → warehouse owner cascade) — all allowed
         object: table:acme_silver_features
         assertions:
           {
@@ -958,7 +993,7 @@ tests:
   # not invite anyone into their own tenant.
   - name: a project ADMIN may grant both tenant rungs — the tenant self-governs
     check:
-      - user: user:alice # admin via team:eng
+      - user: user:alice # admin via role:acme_admins
         object: project:acme
         assertions:
           can_grant_admin: true
@@ -974,7 +1009,7 @@ tests:
           can_grant_member: false
           can_read_assignments: false
       # …and someone else's tenant stays entirely closed. Membership grants must never cross projects.
-      - user: user:frank # team:partners, project:beta
+      - user: user:frank # role:beta_admins, project:beta
         object: project:acme
         assertions:
           can_grant_admin: false
@@ -1102,7 +1137,7 @@ tests:
       # THE ESCAPE HATCH, and the reason `can_administer from project` is required rather than tidy.
       # `can_set_managed_access` is `manage_grants`, so without a path from ABOVE the flag would
       # withdraw the only relation that can clear it and freeze this bucket's access administration
-      # forever. frank is project:beta's admin (through team:partners), and he already reached
+      # forever. frank is project:beta's admin (through role:beta_admins), and he already reached
       # `manage_grants` here via `owner: [...] or admin from project` — so this preserves authority
       # rather than adding any.
       - user: user:frank
@@ -1334,7 +1369,7 @@ tests:
     # against the real evaluator rather than read off the model text, because "a human still owns it"
     # is the entire argument for the withdrawal being a withdrawal and not an orphaning.
     check:
-      # alice is admin of project:acme via team:eng. She holds NO direct tuple on this table.
+      # alice is admin of project:acme via role:acme_admins. She holds NO direct tuple on this table.
       - user: user:alice
         object: table:acme_gold_catalog
         assertions:
@@ -1354,10 +1389,10 @@ tests:
           can_restore: false
           manage_grants: false
 
-  - name: a USERSET is a subject too — `role:validators#assignee` and `team:eng#member` asked directly
+  - name: a USERSET is a subject too — `role:validators#assignee` and `role:acme_admins#assignee` asked directly
     # [[XC-018]]. Measured 2026-09-20 before writing this: of 169 `check` cases in this file, **zero**
     # named a userset as the subject — every one asked about a `user:`. That is a hole under exactly the
-    # thing the model is built out of: `role#assignee`, `team#member` and `user:*` appear in fourteen
+    # thing the model is built out of: `role#assignee` and `user:*` appear in fourteen
     # relation definitions, and the tuple four hundred lines up (`role:validators#assignee` → validator
     # on `namespace:acme_gold`) is a userset SUBJECT the file stored and then never asked about.
     #
@@ -1383,18 +1418,17 @@ tests:
           can_delete: false # validator is not owner
           can_get_metadata: false # validator is not reader — the promoter cannot list the stage
           can_be_notified: false # and is not in its audience, for the same reason
-      # A userset resolving through an INHERITED edge rather than a stored one: nothing grants
-      # `team:eng#member` anything on project:acme — `admin` is `member from team`, so the answer is
-      # computed. It then cascades to the warehouse exactly as a `user:` subject's would.
-      - user: "team:eng#member"
+      # A userset holding `admin` on the project: the answer cascades to the warehouse exactly as a
+      # `user:` subject's would.
+      - user: "role:acme_admins#assignee"
         object: project:acme
         assertions: { can_administer: true, can_create_warehouse: true }
-      - user: "team:eng#member"
+      - user: "role:acme_admins#assignee"
         object: warehouse:acme_bucket
         assertions: { can_get_metadata: true }
-      # Tenant isolation holds for userset subjects. team:partners owns project:beta and this must not
-      # widen merely because the subject is a set rather than a person.
-      - user: "team:partners#member"
+      # Tenant isolation holds for userset subjects. role:beta_admins administers project:beta and this must
+      # not widen merely because the subject is a set rather than a person.
+      - user: "role:beta_admins#assignee"
         object: project:acme
         assertions: { can_administer: false }
       # A userset with NO grant on the object answers false — the vacuity check. Without it every
@@ -1402,7 +1436,7 @@ tests:
       - user: "role:estate_auditors#assignee"
         object: namespace:acme_gold
         assertions: { can_promote: false, can_get_metadata: false }
-      # THE SELF-REFERENTIAL CASE: `role#assignee: [user, team#member, role#assignee]` — a role may be
+      # THE SELF-REFERENTIAL CASE: `role#assignee: [user, role#assignee]` — a role may be
       # assigned to a role, so the subject graph recurses through itself. `role:senior_validators` holds
       # nothing on any namespace; it is an assignee of `role:validators`, which holds `validator` on
       # gold. The rung separation survives the recursion intact — two hops in, it still cannot read.
@@ -1420,21 +1454,20 @@ tests:
       - object: namespace:acme_gold
         user_filter: [{ type: role, relation: assignee }]
         assertions:
-          # The grant, seen from the object's side.
+          # The grant, seen from the object's side, beside the project admins' role, which owns the stage.
           can_promote:
-            users: ["role:validators#assignee", "role:senior_validators#assignee"]
-          # The two rungs it does NOT carry, enumerated to prove the filter is not simply returning
-          # every role that appears anywhere.
+            users: ["role:validators#assignee", "role:acme_admins#assignee", "role:senior_validators#assignee"]
+          # The two rungs the validator roles do NOT carry, enumerated to prove the filter is not simply
+          # returning every role that appears anywhere: only the owning admins' role holds them.
           can_delete:
-            users: []
+            users: ["role:acme_admins#assignee"]
           can_get_metadata:
-            users: []
+            users: ["role:acme_admins#assignee"]
       - object: project:acme
-        user_filter: [{ type: team, relation: member }]
+        user_filter: [{ type: role, relation: assignee }]
         assertions:
-          # Computed rather than stored: no tuple grants team:eng#member anything here.
           can_administer:
-            users: ["team:eng#member"]
+            users: ["role:acme_admins#assignee"]
 
   # ── THE ESTATE ROOT ────────────────────────────────────────────────────────────────────────────
   # [[LH-055]], owner ruling `docs/adr/0070-four-owner-answers-and-the-reference-implementation-that.md` — "the FGA model shape is a PORT, not a

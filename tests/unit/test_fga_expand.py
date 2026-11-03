@@ -12,9 +12,8 @@ What these pin, and why each matters more than it looks:
   are MARKED in the tree, not pruned — a partial derivation that reads as complete is worse than no
   derivation, because it is the one an operator will act on.
 * **The subject widenings.** ``list_objects`` could only ever ask about a ``user:``, and ``list_users``
-  discarded every userset arm of the response. In THIS model the resource rungs deliberately refuse
-  ``team#member`` directly — access travels through ``role#assignee`` — so the userset arm is not an
-  edge case, it is where the answers live.
+  discarded every userset arm of the response. In THIS model access travels through ``role#assignee``,
+  so the userset arm is not an edge case, it is where the answers live.
 
 stdlib ``asyncio.run`` throughout, so no pytest-asyncio dependency, matching ``test_fga_resilience.py``.
 """

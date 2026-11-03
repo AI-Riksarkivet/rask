@@ -37,7 +37,7 @@ Its deletion protection is set and cleared on the same authority, ``POST /manage
 who may not administer the tenant exactly as it answers a missing one.
 
 ``admins`` comes from OpenFGA ``list_users`` (the #51 access-review primitive) on
-``project:<id>#can_administer`` — EFFECTIVE admins (role assignees, team members, the cascade), not raw
+``project:<id>#can_administer`` — EFFECTIVE admins (role assignees, nested roles, the cascade), not raw
 tuples. It degrades to ``[]`` when FGA is off or unavailable (the registry-derived facts still serve;
 an authz-lookup outage must not 500 the tenant list — the gate above already failed closed for callers).
 """
@@ -64,7 +64,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import Caller, CurrentToken
+from catalog.api.v1.endpoints.roles import announce_role_ended
 from catalog.core.config import Settings
 from catalog.schemas import (
     CreateProjectRequest,
@@ -75,7 +76,7 @@ from catalog.schemas import (
     SetProtectionRequest,
 )
 from catalog.services import projects as project_registry
-from catalog.services import warehouses
+from catalog.services import role_grants, roles, warehouses
 from catalog.services.control_records import ProtectionChange
 from lakehouse_kit import protection
 from lakehouse_kit.control_emit import emit_control
@@ -427,6 +428,10 @@ async def set_project_protection(
     return ProtectionResponse(id=project_id, protected=body.protected)
 
 
+def _actor_of(token: Caller | None) -> str:
+    return token.subject if token is not None else "system:catalog"
+
+
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
@@ -437,12 +442,16 @@ async def delete_project(
     control: ControlEmitterDep,
     force: bool = False,
 ) -> DeleteProjectResponse:
-    """Retire a tenant: refuse while it still holds warehouses, else revoke its tuples and drop its record.
+    """Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and drop its record.
 
     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
     read routes use (module docstring). Order, fail-closed and each step earning the next:
     id shape (400) → existence and authz (both 404, :func:`administered_project`) → deletion protection (409) →
-    emptiness (409) → revoke tuples → delete record → audit + event.
+    emptiness (409) → revoke tuples → end its roles → delete record → audit + event.
+
+    **Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to
+    empty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so
+    no role of a retired tenant keeps a grant.
 
     **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
     refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
@@ -498,15 +507,20 @@ async def delete_project(
             f"project:{project_id}",
             # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off
             # stack, where there genuinely is no principal — never a stand-in for one we failed to thread.
-            actor=token.subject if token is not None else "system:catalog",
+            actor=_actor_of(token),
             origin="lifecycle_delete",
         )
         revoked = True
-    # That call removes every tuple whose OBJECT is `project:<id>` — the admin/member grants and the
-    # `team` edge. Tuples where the project is the USER are a different set, and the one that would matter
-    # is `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above
-    # proves no warehouse record claims this project, and a warehouse's delete revokes its own tuples (that
-    # edge among them) before its record goes.
+    # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
+    for role in await run_in_threadpool(roles.list_roles, settings.registry_root, so, project_id):
+        role_fga = client if settings.fga_enabled else None
+        ended = await role_grants.end_role(role_fga, role, control_root=settings.registry_root, storage_options=so, actor=_actor_of(token))
+        await announce_role_ended(control, role, ended, token=token, reason="project_deleted")
+    # The revoke removes every tuple whose OBJECT is `project:<id>` (the admin/member grants), and each role's end every
+    # tuple on and naming that role, its `project` edge among them. Tuples where the project is the USER are otherwise
+    # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse
+    # record claims this project, and a warehouse's delete revokes its own tuples (that edge among them) before its
+    # record goes.
     await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
 
     actor = f"user:{token.subject}" if token else None
@@ -538,8 +552,8 @@ async def delete_project(
     # failure `grant_revoked` exists to prevent. The revoke already read these tuples in order to
     # delete them; the only thing missing was saying so.
     #
-    # STRUCTURAL EDGES ARE NOT PEOPLE: the same call removes `team`/`parent`/`child` tuples whose USER
-    # is another OBJECT, and announcing one would address an inbox named `team:writers`. A principal is
+    # STRUCTURAL EDGES ARE NOT PEOPLE: the same calls remove `project`/`parent`/`child` tuples whose USER
+    # is another OBJECT, and announcing one would address an inbox named after it. A principal is
     # `user:<principal>` or a userset (`role:x#assignee`, which the lane expands); anything else is plumbing.
     for tup in removed:
         if fga.names_someone(tup.user):
@@ -547,7 +561,7 @@ async def delete_project(
                 control,
                 action="grant_revoked",
                 object_type="grant",
-                object_id=f"project:{project_id}",
+                object_id=tup.object,
                 actor=actor,
                 extra={"relation": tup.relation, "subject": tup.user, "reason": "project_deleted"},
             )

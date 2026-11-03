@@ -1,11 +1,10 @@
 """Who belongs to one TENANT — read, grant, revoke. (P6)
 
 The gap this closes was the only one in the tenancy audit that blocked real users. ``type project``
-has had ``admin``/``member``/``team`` rungs and a whole cascade built on them since the beginning, and
+has had ``admin``/``member`` rungs and a whole cascade built on them since the beginning, and
 exactly two things in the estate could write them: ``seed_project_admin`` at create time, and
 ``POST /management/v1/access/tuples`` — the raw tuple editor, which is estate-admin gated. So the person who
-created a project, and holds ``admin`` on it, could not invite a single colleague into it. Adding a
-second admin, adding a member, or attaching a team was a platform ticket.
+created a project, and holds ``admin`` on it, could not invite a single colleague into it.
 
 The per-object grant surface could not substitute, and the reason is precise: ``_GRANTABLE_BASE`` in
 ``access.py`` is the DATA rungs, and ``type project`` defines none of them, so the grantable set on a
@@ -64,11 +63,7 @@ def _user_string(raw: str) -> str:
 
 
 def _direct_grants(tuples: list[Any], obj: str) -> list[Member]:
-    """The membership rungs, filtered out of every tuple on the object.
-
-    ``team`` is excluded: it is the parent EDGE, not a person. Listing ``team:eng`` as a member would
-    invite someone to revoke the thing that makes every one of its members an admin.
-    """
+    """The membership rungs, filtered out of every tuple on the object (``admin_revision`` is bookkeeping)."""
     return [Member(user=t.user, relation=t.relation) for t in tuples if t.object == obj and t.relation in GRANTABLE]
 
 
@@ -91,9 +86,8 @@ def _client_or_conflict(client: OpenFgaClient | None, settings: Settings) -> Ope
 async def list_members(project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> MemberList:
     """Who holds which rung directly on this tenant — gated on ``can_read_assignments``.
 
-    DIRECT grants only. An admin who holds it through ``member from team`` is not listed, because they
-    are not revocable here and a remove button that cannot work is worse than no row. The team edge is
-    where that access lives and where it is removed.
+    DIRECT grants only. A person who holds a rung through a role is not listed: the role is, and it is revoked
+    here; who is in it is the role's assignees door.
     """
     obj = f"project:{project_id}"
     await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=obj)
@@ -111,6 +105,10 @@ async def grant_member(
 ) -> MemberList:
     """Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
 
+    A role is granted only on its own project: one another project owns is refused 400 (code 13), as every grant door
+    refuses it (:func:`fga_deps.refuse_a_cross_tenant_role_grant`), since that project's security admins decide who is
+    in it ([[LH-557]]).
+
     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
     OpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400
     on the second call.
@@ -120,6 +118,7 @@ async def grant_member(
     wired = _client_or_conflict(client, settings)
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
+    await fga_deps.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
 
     existing = await fga.read_object_tuples(wired, obj)
     granted = not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing)

@@ -41,7 +41,7 @@
         "type": "object"
       },
       "AccessCheckRequest": {
-        "description": "A simulated authorization question \u2014 does ``user`` hold ``relation`` on this object? The\n``user`` may be a bare subject (``alice``, taken as ``user:alice``) or a fully-qualified userset\n(``role:project_admin``, ``team:acme#member``).",
+        "description": "A simulated authorization question \u2014 does ``user`` hold ``relation`` on this object? The\n``user`` may be a bare subject (``alice``, taken as ``user:alice``) or a fully-qualified userset\n(``role:<id>#assignee``).",
         "properties": {
           "relation": {
             "title": "Relation",
@@ -384,7 +384,7 @@
         "type": "object"
       },
       "AccessGrantRequest": {
-        "description": "Grant or revoke ONE base rung to a subject. ``user`` may be a bare id (``alice`` \u2192 ``user:alice``)\nor a fully-qualified userset (``role:project_admin#assignee``, ``team:acme#member``); ``relation`` must\nbe a grantable base rung the compiled model defines on the type (owner/writer/reader/validator) \u2014 never\na derived ``can_*`` action nor the structural ``parent`` edge.",
+        "description": "Grant or revoke ONE base rung to a subject. ``user`` may be a bare id (``alice`` \u2192 ``user:alice``)\nor a fully-qualified userset (``role:<id>#assignee``); ``relation`` must\nbe a grantable base rung the compiled model defines on the type (owner/writer/reader/validator) \u2014 never\na derived ``can_*`` action nor the structural ``parent`` edge.",
         "properties": {
           "relation": {
             "title": "Relation",
@@ -610,7 +610,7 @@
         "type": "object"
       },
       "AccessListUsersResponse": {
-        "description": "The effective subject set (ListUsers EXPANDS the model \u2014 role assignees, team members and the\nparent cascade are included, so this is effective access, not stored tuples). ``\"*\"`` is a public\nwildcard. ``truncated`` flags the server's silent ``listUsersMaxResults`` ceiling: an under-reported\naccess review must never read as a complete one.",
+        "description": "The effective subject set (ListUsers EXPANDS the model \u2014 role assignees and the\nparent cascade are included, so this is effective access, not stored tuples). ``\"*\"`` is a public\nwildcard. ``truncated`` flags the server's silent ``listUsersMaxResults`` ceiling: an under-reported\naccess review must never read as a complete one.",
         "properties": {
           "object": {
             "title": "Object",
@@ -751,7 +751,7 @@
         "type": "object"
       },
       "AccessTuple": {
-        "description": "One raw relationship tuple, verbatim (``user`` is a full subject \u2014 ``user:<id>`` or a userset like\n``team:acme#member``). The estate-admin tuple API's unit: the read page lists these, write/delete take\none as the body and echo it back, and a check verdict carries the exact tuple it probed.",
+        "description": "One raw relationship tuple, verbatim (``user`` is a full subject \u2014 ``user:<id>`` or a userset like\n``role:<id>#assignee``). The estate-admin tuple API's unit: the read page lists these, write/delete take\none as the body and echo it back, and a check verdict carries the exact tuple it probed.",
         "properties": {
           "condition": {
             "anyOf": [
@@ -2294,6 +2294,23 @@
         "title": "AnalyzeTableQueryPlanRequest",
         "type": "object"
       },
+      "AssigneeRequest": {
+        "additionalProperties": false,
+        "description": "One assignee of a role: a principal (``dex~gina``), its ``user:`` id, or another role of the same project\n(``role:<id>#assignee``).",
+        "properties": {
+          "user": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "User",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user"
+        ],
+        "title": "AssigneeRequest",
+        "type": "object"
+      },
       "BatchCommitTablesRequest": {
         "description": "Request to atomically commit a batch of table operations. This replaces `BatchCreateTableVersionsRequest` with a more general interface that supports mixed operations (DeclareTable, CreateTableVersion, DeleteTableVersions, DeregisterTable) within a single atomic transaction at the metadata layer.  All operations are committed atomically: either all succeed or none are applied. ",
         "properties": {
@@ -2762,7 +2779,9 @@
               "table_tag_updated",
               "table_tag_deleted",
               "erasure_release_scheduled",
-              "principal_deleted"
+              "principal_deleted",
+              "role_created",
+              "role_deleted"
             ],
             "title": "Action",
             "type": "string"
@@ -2822,7 +2841,8 @@
               "namespace",
               "table",
               "gate",
-              "principal"
+              "principal",
+              "role"
             ],
             "title": "Object Type",
             "type": "string"
@@ -7507,7 +7527,7 @@
         "type": "object"
       },
       "GraphNode": {
-        "description": "One node in the authorization graph \u2014 an FGA object or subject. ``type`` is the FGA type\n(user/role/team/table/namespace/warehouse/project), ``label`` the id without its ``type:`` prefix.",
+        "description": "One node in the authorization graph \u2014 an FGA object or subject. ``type`` is the FGA type\n(user/role/table/namespace/warehouse/project), ``label`` the id without its ``type:`` prefix.",
         "properties": {
           "id": {
             "title": "Id",
@@ -10918,6 +10938,177 @@
         "title": "RestoreTableResponse",
         "type": "object"
       },
+      "Role": {
+        "description": "A role and its direct assignees, each the FGA user string a revoke sends back (``user:<principal>``, or\n``role:<id>#assignee`` for a nested role). The assignees are left out of a listing.",
+        "properties": {
+          "assignees": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignees"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project",
+          "name",
+          "created_at",
+          "created_by"
+        ],
+        "title": "Role",
+        "type": "object"
+      },
+      "RoleCreateRequest": {
+        "additionalProperties": false,
+        "description": "A role to mint in a project ([[LH-557]]): its name, unique in the project, and what it is for.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RoleCreateRequest",
+        "type": "object"
+      },
+      "RoleDeleted": {
+        "description": "What one delete of a role did: the role, and how many tuples on it and naming it went with it.",
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/RoleRecord"
+          },
+          "tuples_revoked": {
+            "title": "Tuples Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "role",
+          "tuples_revoked"
+        ],
+        "title": "RoleDeleted",
+        "type": "object"
+      },
+      "RoleList": {
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/Role"
+            },
+            "title": "Roles",
+            "type": "array"
+          }
+        },
+        "required": [
+          "roles"
+        ],
+        "title": "RoleList",
+        "type": "object"
+      },
+      "RoleRecord": {
+        "description": "A project's role: ``role:<id>`` in OpenFGA is this ``id``.",
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project": {
+            "title": "Project",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "project",
+          "name",
+          "created_at",
+          "created_by"
+        ],
+        "title": "RoleRecord",
+        "type": "object"
+      },
       "SetProtectionRequest": {
         "description": "The one field the protection doors write. Setting is idempotent; clearing removes the flag.\n\nONE definition for the table, namespace and warehouse doors, so the contract names one schema: a copy per\nendpoint module makes FastAPI qualify each name with its module path\n(``catalog__api__v1__endpoints__tables__SetProtectionRequest``), which every generated client then carries.",
         "properties": {
@@ -12272,7 +12463,7 @@
     },
     "/management/v1/access/list-objects": {
       "post": {
-        "description": "\"What can this subject reach?\" \u2014 every ``type`` object on which ``user`` holds ``relation``.\n\nThe forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs\nan object type per call and returns only STORED tuples, so enumerating a subject meant one audited\nread per model type and still missed everything derived. ListObjects expands the model, so a table\nreached through team \u2192 project \u2192 warehouse \u2192 namespace shows up here and nowhere else.\n\nThe subject may be a userset (``team:eng#member``, ``role:validators#assignee``), which matters\nbecause this model deliberately refuses ``team#member`` on resource rungs \u2014 a team reaches data\nthrough a role, and only the userset question shows that.",
+        "description": "\"What can this subject reach?\" \u2014 every ``type`` object on which ``user`` holds ``relation``.\n\nThe forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs\nan object type per call and returns only STORED tuples, so enumerating a subject meant one audited\nread per model type and still missed everything derived. ListObjects expands the model, so a table\nreached through role \u2192 project \u2192 warehouse \u2192 namespace shows up here and nowhere else.\n\nThe subject may be a userset (``role:<id>#assignee``), which matters because a grant to a role reaches\ndata through the role, and only the userset question shows that.",
         "operationId": "list_access_objects_management_v1_access_list_objects_post",
         "parameters": [
           {
@@ -12463,7 +12654,7 @@
     },
     "/management/v1/access/principals/{principal}": {
       "delete": {
-        "description": "Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).\n\nA grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door\nreads them type by type rather than trusting any one door's list. It never strands an administration: a principal\nholding the only direct ``admin`` of a project is refused before anything is revoked (:func:`_refuse_stranding`), and\neach project ``admin`` goes through the members door's store-arbitrated revoke, which refuses again should another\nrevoke leave the principal a project's last admin meanwhile; what was revoked before that stays revoked, and calling\nthe door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with\nthem, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door\nrevokes whatever was granted since, keeps the first deletion's record and announces again, so a lost announcement is\nrecovered by calling it again. ``revoked`` counts the tuples this call removed.",
+        "description": "Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).\n\nA grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door\nreads them type by type rather than trusting any one door's list. It never strands an administration: a principal\nholding the only direct ``admin`` of a project, or the last assignee of a role that is, is refused before anything\nis revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the\nstore-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;\nwhat was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with\nthem, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door\nrevokes whatever was granted since, keeps the first deletion's record and announces again, so a lost announcement is\nrecovered by calling it again. ``revoked`` counts the tuples this call removed.",
         "operationId": "delete_principal_management_v1_access_principals__principal__delete",
         "parameters": [
           {
@@ -13293,7 +13484,7 @@
     },
     "/management/v1/decisions/list-users": {
       "post": {
-        "description": "The people in a membership userset (``role:<id>#assignee``, ``team:<id>#member``, ``project:<id>#member``).",
+        "description": "The people in a membership userset (``role:<id>#assignee``, ``project:<id>#member``).",
         "operationId": "decide_list_users_management_v1_decisions_list_users_post",
         "parameters": [
           {
@@ -15534,7 +15725,7 @@
     },
     "/management/v1/projects/{project_id}": {
       "delete": {
-        "description": "Retire a tenant: refuse while it still holds warehouses, else revoke its tuples and drop its record.\n\nGated on ``project:<id>#can_administer`` \u2014 the tenant's OWN admin bar, not the estate-observer gate the\nread routes use (module docstring). Order, fail-closed and each step earning the next:\nid shape (400) \u2192 existence and authz (both 404, :func:`administered_project`) \u2192 deletion protection (409) \u2192\nemptiness (409) \u2192 revoke tuples \u2192 delete record \u2192 audit + event.\n\n**Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses\nrefuses 409 and NAMES them \u2014 a refusal that does not say what blocks it just moves the search to the\nuser. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would\nreach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to\ndestroy a tenant's storage transitively. Emptying goes one rung at a time through\n``DELETE /management/v1/warehouses/{id}``, where the purge is its own separate opt-in.\n\n``force=true`` overrides deletion PROTECTION only (Decision 5) \u2014 the FGA gate above ran first and runs\nidentically with or without it, so forcing cannot delete a project the caller may not administer.",
+        "description": "Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and drop its record.\n\nGated on ``project:<id>#can_administer`` \u2014 the tenant's OWN admin bar, not the estate-observer gate the\nread routes use (module docstring). Order, fail-closed and each step earning the next:\nid shape (400) \u2192 existence and authz (both 404, :func:`administered_project`) \u2192 deletion protection (409) \u2192\nemptiness (409) \u2192 revoke tuples \u2192 end its roles \u2192 delete record \u2192 audit + event.\n\n**Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to\nempty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so\nno role of a retired tenant keeps a grant.\n\n**Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses\nrefuses 409 and NAMES them \u2014 a refusal that does not say what blocks it just moves the search to the\nuser. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would\nreach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to\ndestroy a tenant's storage transitively. Emptying goes one rung at a time through\n``DELETE /management/v1/warehouses/{id}``, where the purge is its own separate opt-in.\n\n``force=true`` overrides deletion PROTECTION only (Decision 5) \u2014 the FGA gate above ran first and runs\nidentically with or without it, so forcing cannot delete a project the caller may not administer.",
         "operationId": "delete_project_management_v1_projects__project_id__delete",
         "parameters": [
           {
@@ -15751,7 +15942,7 @@
         ]
       },
       "get": {
-        "description": "Who holds which rung directly on this tenant \u2014 gated on ``can_read_assignments``.\n\nDIRECT grants only. An admin who holds it through ``member from team`` is not listed, because they\nare not revocable here and a remove button that cannot work is worse than no row. The team edge is\nwhere that access lives and where it is removed.",
+        "description": "Who holds which rung directly on this tenant \u2014 gated on ``can_read_assignments``.\n\nDIRECT grants only. A person who holds a rung through a role is not listed: the role is, and it is revoked\nhere; who is in it is the role's assignees door.",
         "operationId": "list_members_management_v1_projects__project_id__members_get",
         "parameters": [
           {
@@ -15818,7 +16009,7 @@
         ]
       },
       "put": {
-        "description": "Grant one tenant rung to one subject \u2014 gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).\n\nIdempotent: re-granting what someone already holds is a no-op. That is not an optimisation \u2014 an\nOpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400\non the second call.",
+        "description": "Grant one tenant rung to one subject \u2014 gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).\n\nA role is granted only on its own project: one another project owns is refused 400 (code 13), as every grant door\nrefuses it (:func:`fga_deps.refuse_a_cross_tenant_role_grant`), since that project's security admins decide who is\nin it ([[LH-557]]).\n\nIdempotent: re-granting what someone already holds is a no-op. That is not an optimisation \u2014 an\nOpenFGA Write is transactional and REJECTS an existing tuple, so without the read this would 400\non the second call.",
         "operationId": "grant_member_management_v1_projects__project_id__members_put",
         "parameters": [
           {
@@ -15968,6 +16159,484 @@
         "summary": "Set Project Protection",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/management/v1/projects/{project_id}/roles": {
+      "get": {
+        "description": "The project's standing roles, ordered by name, gated on ``can_list_roles``; a role's assignees are its own read.",
+        "operationId": "list_roles_management_v1_projects__project_id__roles_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 63,
+              "minLength": 3,
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Roles",
+        "tags": [
+          "roles"
+        ]
+      },
+      "post": {
+        "description": "Mint a role in the project, gated on ``can_create_role``: its ``project`` edge, then its record.\n\nA name a standing role of the project holds is refused 409 (code 2). The edge is written first, and removed again\nwhen the record cannot be written, so a role is listed only once it can be governed; an edge left by a request that\ndied between the two names a uuid no record holds, which grants nothing. The role starts with no assignee: filling\nit is the security admins' (``can_manage_assignees``), a different authority from minting it.",
+        "operationId": "create_role_management_v1_projects__project_id__roles_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 63,
+              "minLength": 3,
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Role",
+        "tags": [
+          "roles"
+        ]
+      }
+    },
+    "/management/v1/projects/{project_id}/roles/{role_id}": {
+      "delete": {
+        "description": "End a role, gated on its ``can_delete``: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).\n\nRefused 409 (code 14) while ending it would leave a project with no direct admin, before anything is revoked. An\nending that fails part-way leaves the role listed and deletable, so calling the door again finishes it.",
+        "operationId": "delete_role_management_v1_projects__project_id__roles__role_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 63,
+              "minLength": 3,
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Role Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoleDeleted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Role",
+        "tags": [
+          "roles"
+        ]
+      },
+      "get": {
+        "description": "One role and its direct assignees, gated on the role's ``can_read``.",
+        "operationId": "get_role_management_v1_projects__project_id__roles__role_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 63,
+              "minLength": 3,
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Role Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Role",
+        "tags": [
+          "roles"
+        ]
+      }
+    },
+    "/management/v1/projects/{project_id}/roles/{role_id}/assignees": {
+      "delete": {
+        "description": "Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.\n\nRefused 409 (code 14) for the last assignee of a role that is its project's only direct admin\n(:func:`subject_tuples.unassign`, arbitrated by the store as the members door's revoke is).",
+        "operationId": "unassign_role_management_v1_projects__project_id__roles__role_id__assignees_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 63,
+              "minLength": 3,
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Role Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssigneeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Unassign Role",
+        "tags": [
+          "roles"
+        ]
+      },
+      "put": {
+        "description": "Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on\nthe project's ``can_grant_admin`` while the role holds the project's ``admin``. Idempotent.",
+        "operationId": "assign_role_management_v1_projects__project_id__roles__role_id__assignees_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "maxLength": 63,
+              "minLength": 3,
+              "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "role_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Role Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssigneeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Role"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Assign Role",
+        "tags": [
+          "roles"
         ]
       }
     },
@@ -19341,7 +20010,7 @@
     },
     "/management/v1/warehouses/{warehouse_id}/trash": {
       "get": {
-        "description": "Every recoverable drop under this warehouse its caller holds a grant on: the way back to a dropped object whose\nname is lost, and what is waiting to be purged ([[LH-556]]).\n\nThe undrop and tasks doors are addressed by name, so without this a caller had to know the name to find the drop.\nLakekeeper answers the same question per warehouse (`list_deleted_tabulars`): the route opens on the warehouse and\neach item is judged on itself. Here the route asks ``can_get_metadata`` on the warehouse, as its namespace listing\ndoes, and each trashed table and namespace is judged on its own uuid (``table:<uuid>``, ``namespace:<uuid>``), the\nobject its grants are held by and the undrop and tasks doors ask on (``fga_deps._require_trashed``): the warehouse's\nrung opens upward from any one child, so it says nothing about the siblings.\n\nThe candidates are the trash a delete of this warehouse would end (``warehouses.trash_owned_by``), so a sibling\nwarehouse's drops on a shared bucket are never listed. Sorted by name and then uuid, the key the page token resumes\nafter (``trash_doors.listing_key``).",
+        "description": "Every recoverable drop under this warehouse its caller holds a grant on: the way back to a dropped object whose\nname is lost, and what is waiting to be purged ([[LH-556]]).\n\nThe undrop and tasks doors are addressed by name; this is the door that answers the names. The route asks\n``can_get_metadata`` on the warehouse, as its namespace listing does, and each trashed table and namespace is judged\non its own uuid (``table:<uuid>``, ``namespace:<uuid>``), the object its grants are held by and the undrop and tasks\ndoors ask on (``fga_deps._require_trashed``): the warehouse's rung opens upward from any one child, so it says nothing\nabout the siblings, and a listing judges its own candidates ([[LH-223]]). A record naming no uuid holds no grant and\nis listed to no one ([[LH-534]]).\n\nThe candidates are the trash a delete of this warehouse would end (``warehouses.trash_owned_by``), so a sibling\nwarehouse's drops on a shared bucket are never listed. They sort by name and then uuid, the key the opaque page token\nresumes after (``trash_doors.listing_key``, `lance_docs/ns_catalog/spec.yaml` PageToken).",
         "operationId": "list_warehouse_trash_management_v1_warehouses__warehouse_id__trash_get",
         "parameters": [
           {

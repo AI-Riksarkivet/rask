@@ -1,7 +1,7 @@
 """Who may be addressed — the ONE rule deciding whether a value names a person.
 
 `rask_lance.originator` and a control event's `extra.subject` are ADDRESSES: a notifier tells the person they name. So
-a value that is not one person's subject is not a weaker address — it addresses a role, a team, or `*`, which no one
+a value that is not one person's subject is not a weaker address — it addresses a role or `*`, which no one
 reads.
 
 A PERSON IS A PRINCIPAL NO MACHINE IDENTITY VOUCHED FOR ([[LH-063]]): `<idp-id>~<subject>`
@@ -26,7 +26,7 @@ def is_person_subject(value: str | None) -> bool:
 
     One definition, used by every run-event builder, by the door that accepts the claim and by a notifier, because the
     sides disagreeing is the whole failure mode: a value the door lets through and the builder drops is a silent miss,
-    and one the builder keeps but the door never sanitized addresses a role, a team, or `*`.
+    and one the builder keeps but the door never sanitized addresses a role or `*`.
     """
     if not value:
         return False

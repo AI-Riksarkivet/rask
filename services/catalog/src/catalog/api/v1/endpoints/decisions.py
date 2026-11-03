@@ -77,7 +77,7 @@ _DECISION_PERMISSIONS: Final = frozenset({"can_decide_access", "can_expand_membe
 _DECIDABLE_ROLES: Final = frozenset({"member"})
 
 #: The usersets list-users may expand: the groups a task or a grant names, resolved to the people in them.
-_EXPANDABLE_USERSETS: Final = frozenset({("role", "assignee"), ("team", "member"), ("project", "member")})
+_EXPANDABLE_USERSETS: Final = frozenset({("role", "assignee"), ("project", "member")})
 
 #: The object types `governed` answers for: the datasets lineage records.
 _PROBEABLE_TYPES: Final = frozenset({"table"})
@@ -200,7 +200,7 @@ async def decide_check(client: WiredFgaClient, token: CurrentToken, resolver: Re
 
 @management_router.post("/list-users", dependencies=[Depends(require_can_expand_members)])
 async def decide_list_users(client: WiredFgaClient, token: CurrentToken, body: DecisionListUsers) -> DecisionListUsersResult:
-    """The people in a membership userset (``role:<id>#assignee``, ``team:<id>#member``, ``project:<id>#member``)."""
+    """The people in a membership userset (``role:<id>#assignee``, ``project:<id>#member``)."""
     caller = token.subject if token else "anonymous"
     asked = {"resource": body.object, "relation": body.relation}
     obj_type, sep, obj_id = body.object.partition(":")

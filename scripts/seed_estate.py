@@ -15,6 +15,8 @@ So this seeds the same estate through the doors a human uses, in the order the h
     POST /management/v1/warehouses                      a project admin gives it a bucket
     POST /management/v1/warehouses/{id}/namespaces      the ONLY door for a top-level namespace
     POST /v1/table/{ns}${name}/declare       the tables inside those namespaces
+    POST /management/v1/projects/{id}/roles             each project's roles
+    PUT  /management/v1/projects/{id}/roles/{role}/assignees   who is in each role
     POST /management/v1/access/tuples                   the extra grants, LAST
 
 Every guard therefore runs: an unknown tenant 404s at the warehouse door naming ``POST /management/v1/projects``,
@@ -25,7 +27,8 @@ skipped rather than written, because writing it is precisely how a ghost is made
 
 THE ESTATE MIRRORS THE FGA FIXTURES (``service_kit/governed/auth/model.fga.yaml``), the same set
 ``fga_seed_demo.py`` loads and CI asserts against, so this is a replacement rather than a toy: three
-projects, three warehouses, the bronze/silver/gold cascade under acme, a ``role:validators`` persona,
+projects, three warehouses, the bronze/silver/gold cascade under acme, each project's admins as a role of
+that project, a validators persona,
 and the users that exercise the interesting cases (a writer who is NOT a validator, a validator who
 reaches gold only through a role, a tenant member who is not an admin). Two deliberate differences:
 
@@ -37,6 +40,9 @@ reaches gold only through a role, a tenant member who is not an admin). Two deli
   ``<namespace>$<name>``, and OpenFGA holds its grants on the uuid the catalog minted for it (``table:<uuid>``,
   ADR 0173 §8). This file names objects by path, so git never holds a minted uuid, and each grant resolves its
   object through DescribeTable or DescribeNamespace when it is sent.
+* **A role is named ``role:<project>/<name>``** and held by the uuid its project's role door mints ([[LH-557]]):
+  the fixtures' ``role:acme_admins`` is ``role:acme/admins`` here, and each call naming a role resolves it through
+  ``GET /management/v1/projects/{id}/roles`` when it is sent.
 
 One fixture tuple is deliberately NOT seeded, for the ghost reason this script exists for:
 ``user:root_admin owner warehouse:lance_catalog`` (the estate root is the bootstrap job's to grant, not a
@@ -75,12 +81,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 
 import httpx
+from pydantic import BaseModel, ConfigDict
 
 from service_kit.naming import CATALOG_DELIMITER
 
@@ -129,9 +137,12 @@ CONVERGED: Mapping[int, tuple[str, str]] = MappingProxyType({409: ("converged", 
 #: class and same code, so the guard's own wording is the only discriminator there is, and a change to
 #: that wording in the catalog has to reach this tuple in the same commit.
 BINDING_REFUSALS: tuple[str, ...] = ("already bound to another warehouse", "already exists in the default root")
-#: ``/management/v1/access`` answers 501 when the stack runs auth-off: there is no tuple store to seed, which is a
-#: legitimate local configuration, not a failure. Loud, never silent — the estate is then unguarded.
-FGA_OFF: Mapping[int, tuple[str, str]] = MappingProxyType({501: ("skipped", "authorization is off — no tuple store to seed")})
+#: An FGA-backed door (``/management/v1/access``, a project's roles) answers 406 ``Unsupported`` when the stack runs
+#: auth-off (``service_kit.ns_errors``): there is no tuple store to seed, which is a legitimate local configuration, not a
+#: failure. Loud, never silent — the estate is then unguarded. What hangs off a skipped step is skipped with it.
+FGA_OFF: Mapping[int, tuple[str, str]] = MappingProxyType({406: ("skipped", "authorization is off — no tuple store to seed")})
+#: A role's create: converged when the project already holds the name, skipped when authorization is off.
+ROLE_CREATE: Mapping[int, tuple[str, str]] = MappingProxyType({**CONVERGED, **FGA_OFF})
 
 
 # --------------------------------------------------------------------------- #
@@ -158,12 +169,22 @@ class Warehouse:
     serving: str | None = None
 
 
+class Role(BaseModel):
+    """One role of a project ([[LH-557]]), and the subjects assigned it (``user:<name>`` or ``role:<project>/<name>``)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    assignees: tuple[str, ...] = ()
+
+
 @dataclass(frozen=True, slots=True)
 class Project:
-    """A tenant — the TOP of the hierarchy. One project may hold many warehouses."""
+    """A tenant — the TOP of the hierarchy. One project may hold many warehouses, and its roles."""
 
     id: str
     warehouses: tuple[Warehouse, ...] = ()
+    roles: tuple[Role, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -192,6 +213,7 @@ DEMO_ESTATE = Estate(
     projects=(
         Project(
             id="acme",
+            roles=(Role(name="admins", assignees=("user:alice", "user:bob")), Role(name="validators", assignees=("user:carol",))),
             warehouses=(
                 Warehouse(
                     id="acme-bucket",
@@ -207,11 +229,12 @@ DEMO_ESTATE = Estate(
                 ),
             ),
         ),
-        # team:eng owns TWO projects — the fixture's proof that a team is not a tenant. Their warehouses
-        # carry no namespaces, exactly as the fixtures leave them.
-        Project(id="research", warehouses=(Warehouse(id="research-bucket"),)),
+        # alice and bob administer research too, through research's own role: a role is one project's. Its warehouse
+        # carries no namespaces, exactly as the fixtures leave it.
+        Project(id="research", roles=(Role(name="admins", assignees=("user:alice", "user:bob")),), warehouses=(Warehouse(id="research-bucket"),)),
         Project(
             id="beta",
+            roles=(Role(name="admins", assignees=("user:frank",)),),
             warehouses=(
                 Warehouse(
                     id="beta-bucket",
@@ -224,15 +247,10 @@ DEMO_ESTATE = Estate(
         ),
     ),
     grants=(
-        # Teams and their members. `team:` and `role:` objects have no catalog existence to seed — they
-        # are pure authorization constructs with no registry record, so a tuple IS their whole life.
-        Grant("user:alice", "member", "team:eng"),
-        Grant("user:bob", "member", "team:eng"),
-        Grant("user:frank", "member", "team:partners"),
-        # The team → project edges, which is what makes alice an admin of acme AND research.
-        Grant("team:eng", "team", "project:acme"),
-        Grant("team:eng", "team", "project:research"),
-        Grant("team:partners", "team", "project:beta"),
+        # Each project's admins role administers it, which is what makes alice and bob admins of acme AND research.
+        Grant("role:acme/admins#assignee", "admin", "project:acme"),
+        Grant("role:research/admins#assignee", "admin", "project:research"),
+        Grant("role:beta/admins#assignee", "admin", "project:beta"),
         # dave: a plain WRITER on the bucket — writes any stage, but is NOT a validator.
         Grant("user:dave", "writer", "warehouse:acme-bucket"),
         # NO READ GRANT FOR A CLIENT'S OWN SERVICE ACCOUNT, and its absence is the control (Q17-8 / §F2-2 F2-4).
@@ -241,10 +259,9 @@ DEMO_ESTATE = Estate(
         # lineage with their OWN bearer; if a surface needs to be public, grant this subject that surface
         # explicitly and it becomes visible in the model.
         # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
-        Grant("user:carol", "assignee", "role:validators"),
-        Grant("role:validators#assignee", "validator", "namespace:acme-gold"),
+        Grant("role:acme/validators#assignee", "validator", "namespace:acme-gold"),
         Grant("user:carol", "reader", "warehouse:acme-bucket"),
-        # gina: a plain tenant member (not via team:eng) — a viewer who is not an admin.
+        # gina: a plain tenant member (not via acme's admins role) — a viewer who is not an admin.
         Grant("user:gina", "member", "project:acme"),
         # ---- UPWARD VISIBILITY (C1) --------------------------------------------------------------
         # ivan holds ONE grant, on ONE table. The containers above it become VISIBLE — the breadcrumb
@@ -288,7 +305,7 @@ DEMO_ESTATE = Estate(
 class Step:
     """One HTTP call, plus what it means for the ones that come after it.
 
-    ``key`` is the object this step brings into existence (also its FGA object id), ``parent`` the object
+    ``key`` is the object this step brings into existence (also its FGA object id), ``parents`` the objects
     that must exist first. A step whose parent failed is SKIPPED, not attempted — for a create that keeps
     the output honest, and for a grant it is load-bearing: a tuple write succeeds against an object that
     does not exist, which is the ghost this script exists to stop making.
@@ -300,7 +317,7 @@ class Step:
     path: str
     body: dict[str, object] | None = None
     key: str | None = None
-    parent: str | None = None
+    parents: tuple[str, ...] = ()
     tolerate: Mapping[int, tuple[str, str]] = MappingProxyType({})
     #: Phrases in the problem body that REVOKE ``tolerate`` for this response. A tolerated status is not a
     #: tolerated refusal — see ``BINDING_REFUSALS``.
@@ -317,6 +334,15 @@ def remap_subject(subject: str, principals: Mapping[str, str]) -> str:
         return subject
     name = subject.removeprefix("user:")
     return principals.get(name, f"{DEMO_IDP}~{name}")
+
+
+#: A role named by its project and name, ``role:<project>/<name>``, as git names it; never a uuid.
+_ROLE_REF = re.compile(r"role:([a-z0-9][a-z0-9-]*)/([^#/{}]+)")
+
+
+def role_ref(project: str, name: str) -> str:
+    """How the seed names a role of ``project``: ``role:<project>/<name>``."""
+    return f"role:{project}/{name}"
 
 
 def _warehouse_pairs(estate: Estate) -> list[tuple[Project, Warehouse]]:
@@ -372,7 +398,7 @@ def plan(estate: Estate, principals: Mapping[str, str], *, adopt_existing: bool 
             path="/management/v1/warehouses",
             body=_warehouse_body(project, warehouse),
             key=f"warehouse:{warehouse.id}",
-            parent=f"project:{project.id}",
+            parents=(f"project:{project.id}",),
         )
         for project, warehouse in _warehouse_pairs(estate)
     )
@@ -387,7 +413,7 @@ def plan(estate: Estate, principals: Mapping[str, str], *, adopt_existing: bool 
             path=f"/management/v1/warehouses/{warehouse.id}/namespaces",
             body={"namespace": namespace.name, **({"adopt_existing": True} if adopt_existing else {})},
             key=f"namespace:{namespace.name}",
-            parent=f"warehouse:{warehouse.id}",
+            parents=(f"warehouse:{warehouse.id}",),
             tolerate=CONVERGED,
             refuses=BINDING_REFUSALS,
         )
@@ -404,10 +430,38 @@ def plan(estate: Estate, principals: Mapping[str, str], *, adopt_existing: bool 
             path=f"/v1/table/{namespace.name}{CATALOG_DELIMITER}{table}/declare",
             body={"id": [namespace.name, table]},
             key=f"table:{namespace.name}{CATALOG_DELIMITER}{table}",
-            parent=f"namespace:{namespace.name}",
+            parents=(f"namespace:{namespace.name}",),
             tolerate=CONVERGED,
         )
         for namespace, table in _table_pairs(estate)
+    )
+    steps.extend(
+        Step(
+            layer="role",
+            label=f"role {role.name} (project {project.id})",
+            method="POST",
+            path=f"/management/v1/projects/{project.id}/roles",
+            body={"name": role.name},
+            key=role_ref(project.id, role.name),
+            parents=(f"project:{project.id}",),
+            tolerate=ROLE_CREATE,
+        )
+        for project in estate.projects
+        for role in project.roles
+    )
+    steps.extend(
+        Step(
+            layer="assignee",
+            label=f"role {role.name} (project {project.id}) #assignee @ {remap_subject(assignee, principals)}",
+            method="PUT",
+            # The role's uuid is minted by its create, so the path names the role and is resolved when it is sent.
+            path=f"/management/v1/projects/{project.id}/roles/{{{role_ref(project.id, role.name)}}}/assignees",
+            body={"user": remap_subject(assignee, principals)},
+            parents=(role_ref(project.id, role.name),),
+        )
+        for project in estate.projects
+        for role in project.roles
+        for assignee in role.assignees
     )
     planned = {step.key for step in steps}
     for grant in estate.grants:
@@ -419,9 +473,9 @@ def plan(estate: Estate, principals: Mapping[str, str], *, adopt_existing: bool 
                 method="POST",
                 path="/management/v1/access/tuples",
                 body={"user": user, "relation": grant.relation, "object": grant.object},
-                # No key: a tuple brings nothing into existence, so nothing hangs off it. The parent is
-                # the object it decorates WHEN this run is what creates that object — see Step.parent.
-                parent=grant.object if grant.object in planned else None,
+                # No key: a tuple brings nothing into existence, so nothing hangs off it. Its parents are the
+                # object it decorates and the role it names, each WHEN this run is what creates it — see Step.
+                parents=tuple(named for named in (grant.object, user.partition("#")[0]) if named in planned),
                 tolerate=FGA_OFF,
             )
         )
@@ -470,19 +524,21 @@ def seed(http: httpx.Client, steps: Sequence[Step]) -> list[Outcome]:
     """Walk the plan, printing one line per step; never stop early, never lie about what landed."""
     outcomes: list[Outcome] = []
     blocked: set[str] = set()
+    role_ids: dict[str, str] = {}
     layer = ""
     for step in steps:
         if step.layer != layer:
             layer = step.layer
             print(f"\n== {layer}s")
-        if step.parent is not None and step.parent in blocked:
-            note = f"its parent {step.parent} did not land"
+        if missing := [parent for parent in step.parents if parent in blocked]:
+            note = f"its parent {', '.join(missing)} did not land"
             print(f"  -  {step.label}: skipped, {note}")
             outcomes.append(Outcome(step, "skipped", note))
             if step.key is not None:
                 blocked.add(step.key)
             continue
-        body, unresolved = _governed_body(http, step)
+        step, unresolved = _with_roles_resolved(http, step, role_ids)
+        body, unresolved = (None, unresolved) if unresolved else _governed_body(http, step)
         if unresolved:
             print(f"  !! {step.label}: {unresolved}", file=sys.stderr)
             outcomes.append(Outcome(step, "failed", unresolved))
@@ -508,6 +564,8 @@ def seed(http: httpx.Client, steps: Sequence[Step]) -> list[Outcome]:
             state, word = tolerated
             print(f"  =  {step.label}: {word} ({note})")
             outcomes.append(Outcome(step, state, note))
+            if state == "skipped" and step.key is not None:
+                blocked.add(step.key)
             continue
         note = f"HTTP {response.status_code} {note}"
         print(f"  !! {step.label}: {note}", file=sys.stderr)
@@ -515,6 +573,44 @@ def seed(http: httpx.Client, steps: Sequence[Step]) -> list[Outcome]:
         if step.key is not None:
             blocked.add(step.key)
     return outcomes
+
+
+def _role_id(http: httpx.Client, ref: str, role_ids: dict[str, str]) -> tuple[str | None, str]:
+    """The uuid of the role ``ref`` (``role:<project>/<name>``) names, read from its project's role door, or a note."""
+    if ref in role_ids:
+        return role_ids[ref], ""
+    matched = _ROLE_REF.fullmatch(ref)
+    if matched is None:
+        return None, f"{ref} names no role"
+    project, name = matched.groups()
+    payload, note = _read(http, f"/management/v1/projects/{project}/roles")
+    for role in (_as_record(item) for item in _as_list(_as_record(payload).get("roles"))):
+        if role.get("name") == name and isinstance(role.get("id"), str):
+            role_ids[ref] = str(role["id"])
+            return role_ids[ref], ""
+    return None, note or f"project {project} holds no role {name!r}"
+
+
+def _with_roles_resolved(http: httpx.Client, step: Step, role_ids: dict[str, str]) -> tuple[Step, str]:
+    """``step`` with each role it names by ``role:<project>/<name>`` named by its uuid: ``{ref}`` in the path becomes the
+    bare uuid, ``ref`` in a body value ``role:<uuid>``. A role that cannot be resolved is a note."""
+    path, body = step.path, step.body
+    for ref in {m.group(0) for m in _ROLE_REF.finditer(path)}:
+        role_id, note = _role_id(http, ref, role_ids)
+        if role_id is None:
+            return step, f"could not resolve {ref}: {note}"
+        path = path.replace(f"{{{ref}}}", role_id)
+    if body is not None:
+        resolved: dict[str, object] = {}
+        for field, value in body.items():
+            if isinstance(value, str) and (matched := _ROLE_REF.match(value)) is not None:
+                role_id, note = _role_id(http, matched.group(0), role_ids)
+                if role_id is None:
+                    return step, f"could not resolve {matched.group(0)}: {note}"
+                value = f"role:{role_id}{value[matched.end() :]}"
+            resolved[field] = value
+        body = resolved
+    return replace(step, path=path, body=body), ""
 
 
 #: The object types whose grants OpenFGA holds by the uuid the catalog minted, never by name (ADR 0173 §8, [[LH-524]]).
@@ -621,6 +717,8 @@ def summarize(http: httpx.Client, estate: Estate) -> list[str]:
             for warehouse_spec in project.warehouses:
                 if warehouse_spec.id not in held:
                     absent(f"warehouse {warehouse_spec.id} is absent from project {project.id}'s warehouses")
+        if project.roles:
+            _summarize_roles(http, project, absent=absent)
         # Read the namespaces WHETHER OR NOT the project listed. Nesting this under the listing is how a
         # missing tenant takes its whole subtree's verification down with it in silence — and a subtree
         # nobody checked is indistinguishable from one that is there.
@@ -628,6 +726,26 @@ def summarize(http: httpx.Client, estate: Estate) -> list[str]:
             for namespace in warehouse_spec.namespaces:
                 _summarize_namespace(http, namespace, absent=absent)
     return problems
+
+
+def _summarize_roles(http: httpx.Client, project: Project, *, absent: Callable[[str], None]) -> None:
+    """Print one project's roles as its role door lists them, reporting every planned role that is not there."""
+    path = f"/management/v1/projects/{project.id}/roles"
+    try:
+        if http.get(path).status_code in FGA_OFF:
+            print("    roles: (none — authorization is off)")
+            return
+    except httpx.HTTPError:
+        pass  # the read below reports it
+    payload, note = _read(http, path)
+    if not isinstance(payload, dict):
+        absent(note or f"project {project.id}'s roles could not be listed")
+        return
+    names = [str(_as_record(item).get("name")) for item in _as_list(_as_record(payload).get("roles"))]
+    print(f"    roles: {', '.join(names) or '(none)'}")
+    for role in project.roles:
+        if role.name not in names:
+            absent(f"role {role.name} is absent from project {project.id}'s roles")
 
 
 def _summarize_namespace(http: httpx.Client, namespace: Namespace, *, absent: Callable[[str], None]) -> None:

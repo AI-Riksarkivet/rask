@@ -745,7 +745,7 @@ async def _authorize_grant(
         raise PermissionDeniedError(f"{relation!r} is not a grantable rung on {fga_type}")
     obj = await _require_rung(client, resolver, user=user, rung=_rung(action, fga_type, segments))
     if not revoking:
-        await _refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj)
+        await refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj)
 
 
 async def require_grant_authority(
@@ -768,7 +768,7 @@ async def require_grant_authority(
     await _authorize_grant(request, authz.client, resolver, user=authz.subject, fga_type=fga_type, segments=segments, revoking=revoking)
 
 
-async def _refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: object, relation: str, obj: str) -> None:
+async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: object, relation: str, obj: str) -> None:
     """Refuse a grant that would hand the CALLER a rung they do not already hold.
 
     Separation of duties, enforced at the only layer that can see both sides. See
@@ -2096,13 +2096,15 @@ async def seed_ownership(
 #: A `project:` object IS its own tenant and a `warehouse:` one carries a direct tuple, so neither needs
 #: the registry; they are left out rather than guessed at.
 _TENANT_RESOLVES_BY_NAMESPACE = frozenset({"namespace", "table", "materialized_view"})
-#: The types a role's grant is held inside its tenant on: those above, and a warehouse, whose own record names its project.
-_TENANT_HELD = _TENANT_RESOLVES_BY_NAMESPACE | {"warehouse"}
+#: The types a role's grant is held inside its tenant on: those above, a warehouse, whose own record names its project,
+#: and a project, which is its own tenant ([[LH-557]]: a role made a project's admin or member is that project's).
+_TENANT_HELD = _TENANT_RESOLVES_BY_NAMESPACE | {"warehouse", "project"}
 
 
 async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, *, fga_type: str, segments: list[str], settings: Settings) -> None:
     """Refuse granting a role from one tenant a rung on another tenant's object: a namespace's, a table's or a view's
-    tenant through its top-level namespace's binding, a warehouse's from its own record ([[LH-555]]).
+    tenant through its top-level namespace's binding, a warehouse's from its own record ([[LH-555]]), a project's its
+    own id, and a role's the project its own edge names ([[LH-557]]).
 
     A role name is estate-global unless the model says otherwise, so `role:analyst#assignee` minted in
     one project could be granted on any other project's namespace and every layer below would honour
@@ -2139,8 +2141,11 @@ async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, 
 
 
 def _tenant_of(settings: Settings, fga_type: str, first_segment: str) -> str | None:
-    """The project an object of ``fga_type`` belongs to, from its id's ``first_segment``: a warehouse's own id, or the
-    top-level namespace a namespace, table or view is under. ``None`` when the registry names none."""
+    """The project an object of ``fga_type`` belongs to, from its id's ``first_segment``: a project's own id, a
+    warehouse's own id, or the top-level namespace a namespace, table or view is under. ``None`` when the registry names
+    none."""
+    if fga_type == "project":
+        return first_segment
     if fga_type == "warehouse":
         record = warehouses.get_warehouse(settings.registry_root, settings.storage_options(), first_segment)
         project = record.get("project") if record is not None else None

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Any, Literal, Self
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -93,7 +94,7 @@ class MyPermissionsResponse(BaseModel):
 class AccessCheckRequest(BaseModel):
     """A simulated authorization question — does ``user`` hold ``relation`` on this object? The
     ``user`` may be a bare subject (``alice``, taken as ``user:alice``) or a fully-qualified userset
-    (``role:project_admin``, ``team:acme#member``)."""
+    (``role:<id>#assignee``)."""
 
     user: str
     relation: str
@@ -110,7 +111,7 @@ class AccessCheckResponse(BaseModel):
 
 class AccessGrantRequest(BaseModel):
     """Grant or revoke ONE base rung to a subject. ``user`` may be a bare id (``alice`` → ``user:alice``)
-    or a fully-qualified userset (``role:project_admin#assignee``, ``team:acme#member``); ``relation`` must
+    or a fully-qualified userset (``role:<id>#assignee``); ``relation`` must
     be a grantable base rung the compiled model defines on the type (owner/writer/reader/validator) — never
     a derived ``can_*`` action nor the structural ``parent`` edge."""
 
@@ -140,7 +141,7 @@ class TupleCondition(BaseModel):
 
 class AccessTuple(BaseModel):
     """One raw relationship tuple, verbatim (``user`` is a full subject — ``user:<id>`` or a userset like
-    ``team:acme#member``). The estate-admin tuple API's unit: the read page lists these, write/delete take
+    ``role:<id>#assignee``). The estate-admin tuple API's unit: the read page lists these, write/delete take
     one as the body and echo it back, and a check verdict carries the exact tuple it probed."""
 
     user: str
@@ -247,7 +248,7 @@ class AccessListUsersRequest(BaseModel):
 
 
 class AccessListUsersResponse(BaseModel):
-    """The effective subject set (ListUsers EXPANDS the model — role assignees, team members and the
+    """The effective subject set (ListUsers EXPANDS the model — role assignees and the
     parent cascade are included, so this is effective access, not stored tuples). ``"*"`` is a public
     wildcard. ``truncated`` flags the server's silent ``listUsersMaxResults`` ceiling: an under-reported
     access review must never read as a complete one."""
@@ -370,7 +371,7 @@ class AccessExpandResponse(BaseModel):
 
 class GraphNode(BaseModel):
     """One node in the authorization graph — an FGA object or subject. ``type`` is the FGA type
-    (user/role/team/table/namespace/warehouse/project), ``label`` the id without its ``type:`` prefix."""
+    (user/role/table/namespace/warehouse/project), ``label`` the id without its ``type:`` prefix."""
 
     id: str
     type: str
@@ -1010,10 +1011,7 @@ class MeResponse(BaseModel):
 
 
 #: The membership ladder the members API will grant, most privileged first, and the request type that
-#: names one rung of it. ``team`` is absent on purpose: it is the edge that makes every member of a
-#: team a project ADMIN (``admin: … or member from team``), so granting it here would let one request
-#: confer admin on a set of people the caller cannot enumerate — attaching a team stays an estate
-#: operation. Here rather than in ``endpoints/members.py`` because ``MemberList`` advertises the ladder
+#: names one rung of it. Here rather than in ``endpoints/members.py`` because ``MemberList`` advertises the ladder
 #: on the wire (so a UI does not keep a second copy of the model's rungs) — the endpoint's own policy
 #: constants (lock-out protection's ``ADMINISTRATIVE``) stay with the routing logic that enforces them.
 GRANTABLE: tuple[str, ...] = ("admin", "member")
@@ -1023,7 +1021,7 @@ Rung = Literal["admin", "member"]
 class Member(BaseModel):
     """One direct grant on this tenant."""
 
-    #: The FGA user string as stored (``user:gina``, ``role:x#assignee``, ``team:y#member``). Verbatim,
+    #: The FGA user string as stored (``user:gina``, ``role:<id>#assignee``). Verbatim,
     #: because it is what a revoke must send back and a prettified name that cannot round-trip is a trap.
     user: str
     relation: str
@@ -1040,6 +1038,54 @@ class GrantRequest(BaseModel):
     #: know the prefix is asking it to know the authorization model.
     user: str = Field(min_length=1, max_length=256)
     relation: Rung
+
+
+class RoleCreateRequest(BaseModel):
+    """A role to mint in a project ([[LH-557]]): its name, unique in the project, and what it is for."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1024)
+
+
+class RoleRecord(BaseModel):
+    """A project's role: ``role:<id>`` in OpenFGA is this ``id``."""
+
+    id: UUID
+    project: str
+    name: str
+    description: str | None = None
+    created_at: datetime
+    #: The principal that minted it.
+    created_by: str
+
+
+class Role(RoleRecord):
+    """A role and its direct assignees, each the FGA user string a revoke sends back (``user:<principal>``, or
+    ``role:<id>#assignee`` for a nested role). The assignees are left out of a listing."""
+
+    assignees: list[str] | None = None
+
+
+class RoleList(BaseModel):
+    roles: list[Role]
+
+
+class AssigneeRequest(BaseModel):
+    """One assignee of a role: a principal (``dex~gina``), its ``user:`` id, or another role of the same project
+    (``role:<id>#assignee``)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    user: str = Field(min_length=1, max_length=256)
+
+
+class RoleDeleted(BaseModel):
+    """What one delete of a role did: the role, and how many tuples on it and naming it went with it."""
+
+    role: RoleRecord
+    tuples_revoked: int
 
 
 # --------------------------------------------------------------------------- #

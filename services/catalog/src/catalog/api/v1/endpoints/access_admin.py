@@ -25,7 +25,6 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
-    ConcurrentModificationError,
     InvalidInputError,
     ServiceUnavailableError,
     TableNotFoundError,
@@ -55,7 +54,7 @@ from catalog.schemas import (
     PrincipalRecord,
     TupleCondition,
 )
-from catalog.services import principals, project_admins
+from catalog.services import principals, subject_tuples
 from lakehouse_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
@@ -66,7 +65,7 @@ log = logging.getLogger(__name__)
 
 
 #: OpenFGA's Read page-size ceiling — a larger request is a server-side 400, so cap it at the API edge.
-_MAX_PAGE_SIZE = 100
+_MAX_PAGE_SIZE = subject_tuples.PAGE_SIZE
 #: The warehouse relation only the chart's bootstrap hook and the catalog's own maintainer seed write ([[LH-473]]).
 _MAINTENANCE = "maintenance"
 
@@ -86,22 +85,6 @@ def _defined_relations(fga_type: str) -> frozenset[str]:
         if td["type"] == fga_type:
             return frozenset(td.get("relations") or {})
     return frozenset()
-
-
-@lru_cache
-def _types_granting_principals() -> tuple[str, ...]:
-    """The types with a relation a principal can hold directly (``[user]``, never only ``user:*``): where a tuple naming
-    one can sit, and so every type a Read by user is asked about."""
-    granting = []
-    for td in fga.load_model()["type_definitions"]:
-        meta = (td.get("metadata") or {}).get("relations") or {}
-        if any(
-            t.get("type") == "user" and not t.get("relation") and not t.get("wildcard")
-            for m in meta.values()
-            for t in m.get("directly_related_user_types") or []
-        ):
-            granting.append(td["type"])
-    return tuple(sorted(granting))
 
 
 @lru_cache
@@ -173,7 +156,7 @@ def _validated_object(obj: str) -> str:
 
 def _qualified_subject(user: str) -> str:
     """Resolve to a FULL subject (`fga.grantee_object`): a subject is the user it is; a qualified object or userset
-    (``team:acme#member``, ``role:admin#assignee``) passes through verbatim — the same resolution as the
+    (``role:<id>#assignee``) passes through verbatim — the same resolution as the
     per-object access/check + access/grant surfaces (double-prefixing would falsely deny every check)."""
     return fga.grantee_object(user)
 
@@ -462,11 +445,10 @@ async def list_access_objects(client: EstateFgaClient, token: CurrentToken, body
     The forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs
     an object type per call and returns only STORED tuples, so enumerating a subject meant one audited
     read per model type and still missed everything derived. ListObjects expands the model, so a table
-    reached through team → project → warehouse → namespace shows up here and nowhere else.
+    reached through role → project → warehouse → namespace shows up here and nowhere else.
 
-    The subject may be a userset (``team:eng#member``, ``role:validators#assignee``), which matters
-    because this model deliberately refuses ``team#member`` on resource rungs — a team reaches data
-    through a role, and only the userset question shows that.
+    The subject may be a userset (``role:<id>#assignee``), which matters because a grant to a role reaches
+    data through the role, and only the userset question shows that.
     """
     if body.type not in _model_types():
         raise InvalidInputError(f"{body.type!r} is not a type the authorization model defines")
@@ -620,19 +602,6 @@ def _principal_key(principal: str) -> str:
     return principal
 
 
-async def _tuples_naming(client: OpenFgaClient, user: str) -> list[fga.ClientTuple]:
-    """Every direct tuple naming ``user``, read type by type and page by page, since Read takes a user only with a type."""
-    found: list[fga.ClientTuple] = []
-    for fga_type in _types_granting_principals():
-        continuation: str | None = None
-        while True:
-            page, continuation = await fga.read_tuples(client, user=user, obj=f"{fga_type}:", page_size=_MAX_PAGE_SIZE, continuation_token=continuation)
-            found.extend(page)
-            if not continuation:
-                break
-    return found
-
-
 #: A principal key in a path: the identity provider's id and the subject it vouched for.
 PrincipalPath = Annotated[str, Path(description="the principal, '<idp-id>~<subject>' (e.g. 'dex~alice')")]
 
@@ -653,28 +622,6 @@ def _refuse_what_git_declares(key: str, naming: list[fga.ClientTuple], settings:
         )
 
 
-async def _refuse_stranding(client: OpenFgaClient, key: str, user: str, naming: list[fga.ClientTuple]) -> list[str]:
-    """The projects ``user`` holds a direct ``admin`` on; refused (409, code 14) while it is any one's only direct admin."""
-    administered = sorted({t.object for t in naming if t.relation == project_admins.ADMIN and t.object.startswith("project:")})
-    if stranded := [obj for obj in administered if project_admins.sole_admin(await fga.read_object_tuples(client, obj), obj, user)]:
-        raise ConcurrentModificationError(f"{key} holds the only direct admin of {', '.join(stranded)} — grant another admin first; nothing was revoked")
-    return administered
-
-
-async def _revoke_all(client: OpenFgaClient, user: str, naming: list[fga.ClientTuple], administered: list[str], *, actor: str) -> int:
-    """Revoke every tuple in ``naming``, each project ``admin`` through the store-arbitrated revoke; how many this removed."""
-    revoked = 0
-    for obj in administered:
-        removed_admin, _ = await project_admins.revoke_admin(client, obj, user, actor=actor, origin="principal_delete")
-        revoked += int(removed_admin)
-    rest = [
-        fga.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in naming if t.object not in administered or t.relation != project_admins.ADMIN
-    ]
-    if rest:
-        revoked += len(await fga.delete_tuples(client, rest, actor=actor, origin="principal_delete"))  # noqa: TID251
-    return revoked
-
-
 @router.delete("/principals/{principal:path}")
 async def delete_principal(
     principal: PrincipalPath, client: EstateFgaClient, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
@@ -683,10 +630,10 @@ async def delete_principal(
 
     A grant is a tuple naming the principal on an object of any type, written by whichever door made it, so the door
     reads them type by type rather than trusting any one door's list. It never strands an administration: a principal
-    holding the only direct ``admin`` of a project is refused before anything is revoked (:func:`_refuse_stranding`), and
-    each project ``admin`` goes through the members door's store-arbitrated revoke, which refuses again should another
-    revoke leave the principal a project's last admin meanwhile; what was revoked before that stays revoked, and calling
-    the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
+    holding the only direct ``admin`` of a project, or the last assignee of a role that is, is refused before anything
+    is revoked (:func:`subject_tuples.refuse_stranding`), and each project ``admin`` and role assignment goes through the
+    store-arbitrated revoke its own door uses, which refuses again should another change strand the project meanwhile;
+    what was revoked before that stays revoked, and calling the door again finishes. The estate admin cannot offboard themselves, since the rung this door asks would go with
     them, and a principal whose grants git declares is refused (:func:`_refuse_what_git_declares`). Re-running the door
     revokes whatever was granted since, keeps the first deletion's record and announces again, so a lost announcement is
     recovered by calling it again. ``revoked`` counts the tuples this call removed.
@@ -696,10 +643,10 @@ async def delete_principal(
     if token is not None and token.subject == key:
         raise InvalidInputError("an estate admin cannot offboard themselves: the rung this door asks would go with them")
     user = fga.user_object(key)
-    naming = await _tuples_naming(client, user)
+    naming = await subject_tuples.tuples_naming(client, user)
     _refuse_what_git_declares(key, naming, settings)
-    administered = await _refuse_stranding(client, key, user, naming)
-    revoked = await _revoke_all(client, user, naming, administered, actor=actor)
+    await subject_tuples.refuse_stranding(client, user, naming, who=key)
+    revoked = len(await subject_tuples.revoke_naming(client, user, naming, actor=actor, origin="principal_delete"))
     record = await run_in_threadpool(principals.record_deletion, settings.registry_root, settings.storage_options(), key, deleted_by=actor)
     audit(AuditAction.PRINCIPAL_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=user, revoked=revoked)
     await emit_control(

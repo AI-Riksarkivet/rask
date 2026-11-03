@@ -166,7 +166,7 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
 @pytest.mark.parametrize(
     ("user", "deleted"),
     [
-        pytest.param("team:acme#member", "team:acme#member", id="a-userset-passes-verbatim"),
+        pytest.param("role:acme#assignee", "role:acme#assignee", id="a-userset-passes-verbatim"),
         pytest.param("user:dex~alice@corp", "user:dex~alice%40corp", id="a-principal-is-the-user-it-is"),
         pytest.param("user:CiQ1c2VyLTESBWxvY2Fs", "user:CiQ1c2VyLTESBWxvY2Fs", id="a-stored-id-naming-no-principal-is-revoked-as-stored"),
     ],

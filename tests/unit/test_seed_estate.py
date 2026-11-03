@@ -49,7 +49,7 @@ Refusal = Callable[[httpx.Request], "tuple[int, object] | None"]
 
 #: The layer each POST route belongs to, in hierarchy order. A seeded estate is only reachable if these
 #: happen in this sequence.
-_ORDER = {"project": 0, "warehouse": 1, "namespace": 2, "table": 3, "grant": 4}
+_ORDER = {"project": 0, "warehouse": 1, "namespace": 2, "table": 3, "role": 4, "grant": 5}
 
 
 def _body(request: httpx.Request) -> dict[str, object]:
@@ -68,6 +68,8 @@ def _layer(request: httpx.Request) -> str:
         return "table"
     if path == "/management/v1/access/tuples":
         return "grant"
+    if path.endswith("/roles"):
+        return "role"
     return "other"
 
 
@@ -89,6 +91,8 @@ _REGISTRY = [
 #: `beta-locked` is the managed-access scope's stage — its table is what makes the C4 fixture a real
 #: object rather than a tuple about nothing.
 _TABLES = {"acme-bronze": [], "acme-silver": ["features", "dummy"], "acme-gold": ["catalog"], "beta-locked": ["records"]}
+#: The roles each project's role door lists after a clean seed, each with the uuid the fake minted for it.
+_ROLES = {"acme": ["admins", "validators"], "research": ["admins"], "beta": ["admins"]}
 
 
 def _uuid(kind: str, name: str) -> str:
@@ -122,6 +126,9 @@ def _fake_catalog(recorded: list[httpx.Request], refuse: Refusal | None = None) 
             return httpx.Response(200, json=_REGISTRY)
         if request.method == "POST" and (described := _describe(request.url.path)) is not None:
             return httpx.Response(200, json={"properties": {"rask.uuid": _uuid(*described)}})
+        if request.method == "GET" and request.url.path.startswith("/management/v1/projects/") and request.url.path.endswith("/roles"):
+            project = request.url.path.removeprefix("/management/v1/projects/").removesuffix("/roles")
+            return httpx.Response(200, json={"roles": [{"id": _uuid("role", f"{project}/{name}"), "name": name} for name in _ROLES.get(project, [])]})
         if request.url.path.endswith("/table/list"):
             namespace = request.url.path.removeprefix("/v1/namespace/").removesuffix("/table/list")
             return httpx.Response(200, json={"tables": _TABLES.get(namespace, [])})
@@ -253,8 +260,8 @@ def test_a_namespace_already_bound_to_another_warehouse_is_a_failure_not_converg
 
 def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(capsys: pytest.CaptureFixture[str]) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        if request.url.path == "/management/v1/access/tuples":
-            return 501, _problem("UnsupportedOperationError", "FGA administration requires OpenFGA (this stack runs auth-off)", 0)
+        if request.url.path == "/management/v1/access/tuples" or _layer(request) == "role":
+            return 406, _problem("UnsupportedOperationError", "this door requires OpenFGA (this stack runs auth-off)", 0)
         return None
 
     recorded: list[httpx.Request] = []
@@ -408,8 +415,7 @@ def test_a_demo_identity_is_seeded_as_its_principal_and_a_persona_under_the_demo
     assert seed_estate.remap_subject("user:carol", principals) == "demo~carol"
     # Only the SUBJECT side: the wildcard, a userset or an object type is never a principal to remap.
     assert seed_estate.remap_subject("user:*", principals) == "user:*"
-    assert seed_estate.remap_subject("role:validators#assignee", principals) == "role:validators#assignee"
-    assert seed_estate.remap_subject("team:eng", principals) == "team:eng"
+    assert seed_estate.remap_subject("role:acme/validators#assignee", principals) == "role:acme/validators#assignee"
 
 
 def test_the_demo_estate_grants_the_anonymous_principal_nothing() -> None:

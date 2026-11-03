@@ -25,6 +25,7 @@ from catalog.api.v1.endpoints import (
     policies,
     projects,
     publication,
+    roles,
     tables,
     tags,
     transactions,
@@ -62,6 +63,7 @@ for _module in (
     me,
     maintenance,
     members,
+    roles,
     publication,
     gates,
 ):

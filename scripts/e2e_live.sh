@@ -98,10 +98,9 @@ mint() {
     | uv run python -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"
 }
 ALICE="$(mint alice@example.com)"; BOB="$(mint bob@example.com)"
-# A THIRD IDENTITY, because bob is not the non-admin this estate needs. `project.admin` is
-# "[user, role#assignee] or member from team" and bob is in `team:eng`, which is bound to
-# `project:acme` — so bob holds `can_administer` and the 403 legs had nothing to assert.
-# `publisher@rask.internal` is in the deployed Dex configmap and is bound to no team; measured
+# A THIRD IDENTITY, because bob is not the non-admin this estate needs. The seed assigns bob to acme's
+# admins role, which holds `admin` on `project:acme` — so bob holds `can_administer` and the 403 legs had
+# nothing to assert. `publisher@rask.internal` is in the deployed Dex configmap and is in no role; measured
 # 2026-09-06: can_administer(project:acme) is False for publisher and True for bob.
 PUBLISHER="$(mint publisher@rask.internal)"
 [ -n "$ALICE" ] || fail "Dex issued no token for alice — is auth enabled and dex reachable at $DEX?"
@@ -142,8 +141,8 @@ if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing=
 export LANCE_E2E_TOKEN="$ALICE"
 export LANCE_E2E_ADMIN_TOKEN="$ALICE"
 # NOT exported blind. A leg asserting a 403 with this token needs a genuine non-admin, and on THIS estate
-# bob is a member of `team:eng` which is bound to `project:acme` — and `project.admin` is
-# "[user, role#assignee] or member from team", so bob is an admin and the create succeeds. The suite
+# bob is an assignee of acme's admins role, which holds `admin` on `project:acme`, so bob is an admin and
+# the create succeeds. The suite
 # then fails on a false premise and reads as a governance hole. It is not one; the identity was wrong.
 # So the token is offered only when the estate agrees it is non-admin, and the suite SKIPS otherwise —
 # an honest skip beats a red test that alleges something untrue.

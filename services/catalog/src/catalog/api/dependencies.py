@@ -491,7 +491,7 @@ def originator_hint(raw: str | None) -> str | None:
     A TARGETING hint and nothing else: it never authorizes, because a notifier re-derives
     every recipient's visibility at delivery, so at worst a forged value puts a row in an inbox whose
     owner can already see the run's outputs. That is what makes an unverified header sound here — and
-    it is also why the value must still be a PERSON. A userset (``team:acme#member``), a wildcard, a
+    it is also why the value must still be a PERSON. A userset (``role:<id>#assignee``), a wildcard, a
     ``user:``-prefixed object id and a role literal each address either everyone or nobody; the estate
     has written into an inbox actor literally named ``*`` before.
 

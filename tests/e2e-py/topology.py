@@ -37,9 +37,9 @@ WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
 
 #: WHO IS ACTUALLY AN OUTSIDER HERE, for the legs that assert a 403 on someone with no grant.
 #:
-#: `bob@example.com` is not one on this estate and three suites assumed he was. `team:eng` is bound to
-#: `project:acme`, and `project.admin` is "[user, role#assignee] or member from team" — so a team member
-#: IS a project admin. Measured against the live OpenFGA store 2026-09-06:
+#: `bob@example.com` is not one on this estate and three suites assumed he was. The seed makes him an
+#: assignee of acme's admins role, which holds `admin` on `project:acme` — so bob IS a project admin.
+#: Measured against the live OpenFGA store 2026-09-06:
 #:   can_administer(user:bob,       project:acme) -> True
 #:   can_administer(user:publisher, project:acme) -> False
 #:
@@ -53,7 +53,7 @@ WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
 #:
 #: THE DEFAULT IS THE CHART-DEPLOYED ESTATE'S, and one estate does not take it: the hermetic Dagger
 #: stack (`dagger call governance-chain`) mounts `.docker/dex.config.yaml`, which knows alice and bob
-#: and nobody else, and seeds neither `team:eng` nor `project:acme` — so bob is a genuine outsider
+#: and nobody else, and seeds neither acme's admins role nor `project:acme` — so bob is a genuine outsider
 #: there and `publisher@rask.internal` is not an identity at all. That lane sets the override, and
 #: the override and that Dex config are a pair: repointing either one alone leaves the lane minting a
 #: token for a user its Dex does not have.

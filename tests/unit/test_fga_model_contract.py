@@ -378,8 +378,6 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     # and finds it — and the estate side cannot dangle for a second reason: there is exactly one
     # `estate:` object, seeded at bootstrap, and no door deletes it.
     ("classification", "parent", "estate"): "tuple's object IS the dropped object; the estate is never dropped",
-    # Subject types, not governed objects with a lifecycle of their own — nothing drops them.
-    ("project", "team", "team"): "team is a subject type, not a droppable object",
     # A project's admin revision ([[LH-434]]): `revision` has no relations and no door makes or drops one, and the
     # project's delete removes the tuple with every other tuple on the project.
     ("project", "admin_revision", "revision"): "revision is a bookkeeping subject, not a droppable object",
@@ -388,12 +386,10 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     # A project cannot be deleted while a warehouse claims it — `projects.py`'s emptiness refusal
     # 409s naming every held warehouse, and a warehouse's own delete revokes this edge with it.
     ("warehouse", "project", "project"): "unreachable: project delete refuses while warehouses exist",
-    # A role scoped to a deleted project keeps pointing at it, and that is the SAFE direction rather
-    # than a leak: the grant door reads this edge to refuse a cross-tenant grant, so a role whose
-    # tenant is gone stops being grantable anywhere instead of becoming estate-wide. Repairing it
-    # would have to decide whether such a role is re-homed or retired, which is a lifecycle question
-    # nothing else in the model answers yet.
-    ("role", "project", "project"): "KNOWN RESIDUAL: fails CLOSED at the grant door",
+    # A project's delete ends each of its roles, every tuple on and naming the role with it, this edge included
+    # ([[LH-557]]); a role the raw tuple editor scoped stays pointing at its gone project, which the grant door
+    # reads to refuse it everywhere rather than as estate-wide.
+    ("role", "project", "project"): "project delete ends its roles",
 }
 
 
@@ -416,7 +412,7 @@ def test_no_new_object_as_user_shape_slips_past_revoke() -> None:
     for td in model["type_definitions"]:
         for relation, info in ((td.get("metadata") or {}).get("relations") or {}).items():
             for direct in info.get("directly_related_user_types") or []:
-                # `relation`-qualified (`team#member`) and wildcard entries are usersets/public
+                # `relation`-qualified (`role#assignee`) and wildcard entries are usersets/public
                 # grants, not an object standing in the user position.
                 if direct.get("type") in governed and not direct.get("relation") and not direct.get("wildcard"):
                     found.add((td["type"], relation, str(direct["type"])))

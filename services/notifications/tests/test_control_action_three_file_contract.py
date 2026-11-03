@@ -59,6 +59,10 @@ def _control_actions() -> set[str]:
 #: prevent, and matching a name shape instead of the fact is the defect class this check is here to catch.
 _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
     {
+        # A project's role minted or ended ([[LH-557]]): the role is an object; what a person gains or loses by it is
+        # announced as the grant pair, naming them.
+        "role_created",
+        "role_deleted",
         # The ref plane ([[LH-056]]): a branch or tag moved, which is an OBJECT changing, not a
         # person's standing. Same family as the namespace lifecycle below.
         "table_branch_created",

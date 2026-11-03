@@ -50,6 +50,8 @@ from service_kit.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 
 #: The estate the doors name: acme's warehouse, the two namespaces bound to it, and a table in one.
 PROJECT, WAREHOUSE, NAMESPACE, SIDE, TABLE = "acme", "wh-acme", "lake", "side", "lake$t"
+#: A role id the role doors are asked about: a stranger is refused on it by a decision, whatever it names.
+ROLE = "00000000-0000-4000-8000-000000000001"
 #: A signed-in person holding no grant, and one who reads `SIDE` and nothing else.
 STRANGER, READER = "mallory", "bob"
 
@@ -164,6 +166,27 @@ _DOORS: list[_Door] = [
         route="/management/v1/projects/{project_id}/members",
         params={"project_id": PROJECT},
         body={"user": "dex~alice", "relation": "admin"},
+    ),
+    # A project's roles ([[LH-557]]): each refusal answers the missing project's or role's 404.
+    _Refusing(method="POST", route="/management/v1/projects/{project_id}/roles", params={"project_id": PROJECT}, body={"name": "rival"}, refused=_NOT_FOUND),
+    _Refusing(method="GET", route="/management/v1/projects/{project_id}/roles", params={"project_id": PROJECT}, refused=_NOT_FOUND),
+    _Refusing(method="GET", route="/management/v1/projects/{project_id}/roles/{role_id}", params={"project_id": PROJECT, "role_id": ROLE}, refused=_NOT_FOUND),
+    _Refusing(
+        method="DELETE", route="/management/v1/projects/{project_id}/roles/{role_id}", params={"project_id": PROJECT, "role_id": ROLE}, refused=_NOT_FOUND
+    ),
+    _Refusing(
+        method="PUT",
+        route="/management/v1/projects/{project_id}/roles/{role_id}/assignees",
+        params={"project_id": PROJECT, "role_id": ROLE},
+        body={"user": f"dex~{STRANGER}"},
+        refused=_NOT_FOUND,
+    ),
+    _Refusing(
+        method="DELETE",
+        route="/management/v1/projects/{project_id}/roles/{role_id}/assignees",
+        params={"project_id": PROJECT, "role_id": ROLE},
+        body={"user": "dex~alice"},
+        refused=_NOT_FOUND,
     ),
     _Refusing(method="POST", route="/management/v1/projects/{id}/access/my-permissions", params={"id": PROJECT}),
     _Refusing(method="GET", route="/management/v1/projects/{id}/policies", params={"id": PROJECT}),
