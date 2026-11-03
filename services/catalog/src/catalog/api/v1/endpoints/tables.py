@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated
 from uuid import uuid4
@@ -116,24 +115,6 @@ router = APIRouter(prefix="/v1/table", tags=["table"])
 #: notion of a drop that can be taken back. It inherits the same three rungs as the
 #: spec router (`api/v1/router.py`), so moving a route does not move it out of its gate.
 management_router = APIRouter(prefix="/management/v1/table", tags=["table-management"])
-
-
-def _is_expired(expires_at: str) -> bool:
-    """Has the grace period ended? Unparseable or absent → NOT expired.
-
-    What `/tasks` reports beside each deadline. The undrop door refuses by ``trash.past_deadline``, the rule the
-    maintenance tick releases a record's grants by (ADR 0146).
-    """
-    if not expires_at:
-        return False
-    try:
-        deadline = datetime.fromisoformat(expires_at)
-    except ValueError:
-        log.warning("trash_expiry_unparseable", extra={"expires_at": expires_at})
-        return False
-    if deadline.tzinfo is None:  # records written before the stamp carried an offset
-        deadline = deadline.replace(tzinfo=UTC)
-    return deadline < datetime.now(UTC)
 
 
 def _collect_tables(ns: LanceNamespace, root_tables: list[str]) -> list[str]:
@@ -1323,12 +1304,7 @@ async def table_tasks(
     One entry per dropped table that held the name and that the caller may see, each with its uuid, which an undrop
     names when there are several ([[LH-525]]).
     """
-    records = await resolver.admitted_trash("table", parse_identifier(id))
-    entries: list[TrashEntry] = []
-    for record in records:
-        fields = {k: str(record.get(k, "")) for k in ("id", "uuid", "location", "dropped_by", "dropped_at", "expires_at")}
-        entries.append(TrashEntry(**fields, expired=_is_expired(fields["expires_at"])))
-    return entries
+    return [trash_doors.entry(record) for record in await resolver.admitted_trash("table", parse_identifier(id))]
 
 
 @management_router.post("/{id}/undrop", response_model_exclude_none=True)

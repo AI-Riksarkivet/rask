@@ -16,8 +16,31 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidTableStateError
 
 from catalog.core.config import Settings
+from catalog.schemas import TrashEntry
 from catalog.services import warehouses
 from lakehouse_kit import trash
+
+
+def entry(record: dict[str, Any]) -> TrashEntry:
+    """What a trash door answers about ``record``: the object, the name it held, its deadline and which side of it.
+
+    ``expired`` reads the deadline by :func:`trash.past_deadline`, the rule the undrop refuses by and maintenance releases
+    the grants by (ADR 0146), so a listing never calls a drop recoverable that the undrop refuses.
+    """
+    return TrashEntry(
+        kind=trash.kind_of(record),
+        **{field: str(record.get(field) or "") for field in ("id", "uuid", "location", "dropped_by", "dropped_at", "expires_at")},
+        expired=trash.past_deadline(record),
+    )
+
+
+def listing_key(record: dict[str, Any]) -> str:
+    """Where ``record`` sorts in a trash listing, and the page token that resumes after it: its name, then its uuid.
+
+    A name can lead to several trashed objects, so the name alone is no cursor; the uuid makes each key one object's. No
+    name holds a control character or an edge space (``identifiers.require_names``), so the space parts the two.
+    """
+    return f"{record.get('id') or ''} {trash.object_uuid(record) or ''}"
 
 
 async def drop_grace_days(settings: Settings, segments: list[str]) -> float:

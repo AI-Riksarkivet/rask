@@ -188,6 +188,7 @@ _DOORS: list[_Door] = [
     ),
     _Refusing(method="POST", route="/management/v1/warehouses/{warehouse_id}/validate", params={"warehouse_id": WAREHOUSE}, refused=_NOT_FOUND),
     _Refusing(method="GET", route="/management/v1/warehouses/{warehouse_id}/namespaces", params={"warehouse_id": WAREHOUSE}),
+    _Refusing(method="GET", route="/management/v1/warehouses/{warehouse_id}/trash", params={"warehouse_id": WAREHOUSE}),
     # The same listing behind its gate: bob reads `side` alone, which opens the warehouse to him through its `child` edge,
     # and is shown that namespace and not its sibling.
     _Listing(

@@ -1902,8 +1902,7 @@ export interface paths {
         put?: never;
         /**
          * Grant Warehouse Access
-         * @description Grant a base rung on the warehouse to a subject ([[LH-555]]): ``can_grant_<relation>`` and no self-elevation, asked
-         *     here as the router asks them on a table or a namespace, since it leaves every warehouse route to its handler.
+         * @description Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]]).
          */
         post: operations["grant_warehouse_access_management_v1_warehouse__id__access_grant_post"];
         delete?: never;
@@ -1923,10 +1922,7 @@ export interface paths {
         put?: never;
         /**
          * List Warehouse Access
-         * @description Effective access on the warehouse, per ``can_*`` action ([[LH-555]]).
-         *
-         *     Gated here on ``can_read_assignments``, the model's rung for seeing who holds what (``manage_grants``, which a
-         *     project's admin holds through ``can_administer from project``): the router leaves every warehouse route to its handler.
+         * @description Effective access on the warehouse, per ``can_*`` action, to who may manage its grants ([[LH-555]]).
          */
         post: operations["list_warehouse_access_management_v1_warehouse__id__access_list_post"];
         delete?: never;
@@ -1976,7 +1972,7 @@ export interface paths {
         put?: never;
         /**
          * Revoke Warehouse Access
-         * @description Revoke a base rung on the warehouse from a subject ([[LH-555]]): ``can_revoke_grant``, stricter than the grant.
+         * @description Revoke a base rung on the warehouse from a subject, gated by :func:`require_warehouse_revoke` ([[LH-555]]).
          */
         post: operations["revoke_warehouse_access_management_v1_warehouse__id__access_revoke_post"];
         delete?: never;
@@ -2318,6 +2314,38 @@ export interface paths {
          *     ``warehouse_protected`` or ``warehouse_unprotected`` on every call, as the table and namespace doors announce theirs.
          */
         post: operations["set_warehouse_protection_management_v1_warehouses__warehouse_id__protection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouses/{warehouse_id}/trash": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Warehouse Trash
+         * @description Every recoverable drop under this warehouse its caller holds a grant on: the way back to a dropped object whose
+         *     name is lost, and what is waiting to be purged ([[LH-556]]).
+         *
+         *     The undrop and tasks doors are addressed by name, so without this a caller had to know the name to find the drop.
+         *     Lakekeeper answers the same question per warehouse (`list_deleted_tabulars`): the route opens on the warehouse and
+         *     each item is judged on itself. Here the route asks ``can_get_metadata`` on the warehouse, as its namespace listing
+         *     does, and each trashed table and namespace is judged on its own uuid (``table:<uuid>``, ``namespace:<uuid>``), the
+         *     object its grants are held by and the undrop and tasks doors ask on (``fga_deps._require_trashed``): the warehouse's
+         *     rung opens upward from any one child, so it says nothing about the siblings.
+         *
+         *     The candidates are the trash a delete of this warehouse would end (``warehouses.trash_owned_by``), so a sibling
+         *     warehouse's drops on a shared bucket are never listed. Sorted by name and then uuid, the key the page token resumes
+         *     after (``trash_doors.listing_key``).
+         */
+        get: operations["list_warehouse_trash_management_v1_warehouses__warehouse_id__trash_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -8815,10 +8843,25 @@ export interface components {
             expires_at: string;
             /** Id */
             id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "table" | "namespace";
             /** Location */
             location: string;
             /** Uuid */
             uuid: string;
+        };
+        /**
+         * TrashListing
+         * @description A page of a warehouse's trash: each recoverable drop under it its caller holds a grant on ([[LH-556]]).
+         */
+        TrashListing: {
+            /** Objects */
+            objects: components["schemas"]["TrashEntry"][];
+            /** Page Token */
+            page_token?: string | null;
         };
         /**
          * TupleCondition
@@ -12606,6 +12649,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProtectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_warehouse_trash_management_v1_warehouses__warehouse_id__trash_get: {
+        parameters: {
+            query?: {
+                /** @description List only what was dropped beneath this namespace name. */
+                namespace?: string | null;
+                page_token?: string | null;
+                /** @description An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400. */
+                limit?: number | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                warehouse_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrashListing"];
                 };
             };
             /** @description Validation Error */

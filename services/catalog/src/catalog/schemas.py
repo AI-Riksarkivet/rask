@@ -930,6 +930,8 @@ class ProtectionResponse(BaseModel):
 class TrashEntry(BaseModel):
     """One recoverable drop — what the owner needs to decide whether to undrop before the deadline."""
 
+    #: A dropped table or a namespace a recoverable cascade dropped; each has its own undrop door.
+    kind: Literal["table", "namespace"]
     #: The name the object held when it was dropped, which the undrop restores it under.
     id: str
     #: The object's uuid: several dropped objects may have held one name, and an undrop names one by it (`?uuid=`).
@@ -942,6 +944,14 @@ class TrashEntry(BaseModel):
     expires_at: str
     #: True once `expires_at` has passed: the drop is final, though its bytes may stand until the purge.
     expired: bool = False
+
+
+class TrashListing(BaseModel):
+    """A page of a warehouse's trash: each recoverable drop under it its caller holds a grant on ([[LH-556]])."""
+
+    objects: list[TrashEntry]
+    #: Continues the listing; absent once every drop was judged (`lance_docs/ns_catalog/spec.yaml` PageToken).
+    page_token: str | None = None
 
 
 # --------------------------------------------------------------------------- #

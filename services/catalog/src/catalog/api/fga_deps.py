@@ -1625,20 +1625,52 @@ async def authorized_page(
     A candidate that records no uuid holds no grant, so it is answered to no caller, and is left out rather than fail the
     listing for every caller ([[LH-534]]).
     """
-    remaining = [(name, list(segments)) for name, segments in candidates if not page_token or name > page_token]
-    page: list[str] = []
+
+    async def resolved(batch: Sequence[tuple[str, Sequence[str]]]) -> list[str | None]:
+        return list(await asyncio.gather(*(_listed_object(resolver, kind, name, list(segments)) for name, segments in batch)))
+
+    page, token = await judged_page(
+        authz,
+        relation=relation,
+        candidates=[(name, (name, segments)) for name, segments in candidates],
+        objects_of=resolved,
+        page_token=page_token,
+        limit=limit,
+    )
+    return [name for name, _ in page], token
+
+
+async def judged_page[T](
+    authz: Authorization | None,
+    *,
+    relation: str,
+    candidates: Sequence[tuple[str, T]],
+    objects_of: Callable[[Sequence[T]], Awaitable[Sequence[str | None]]],
+    page_token: str | None,
+    limit: int | None,
+) -> tuple[list[T], str | None]:
+    """The page of ``candidates`` the caller holds ``relation`` on, and the page token after it.
+
+    Each candidate is its listing key (sorted, unique) and its item; ``objects_of`` answers the FGA object each item of a
+    batch is judged on, ``None`` for one that holds no grant and is left out. The page fills batch by batch
+    (``LISTING_BATCH``), so a listing judges only as many candidates as its page needs. The token is the last key served,
+    a ``None`` token meaning every candidate was judged. ``authz`` is ``None`` only with FGA off (:func:`authorization`),
+    when every decision allows, so the listing still pages on one path.
+    """
+    remaining = [(key, item) for key, item in candidates if not page_token or key > page_token]
+    page: list[T] = []
     for start in range(0, len(remaining), LISTING_BATCH):
         batch = remaining[start : start + LISTING_BATCH]
-        objects = await asyncio.gather(*(_listed_object(resolver, kind, name, segments) for name, segments in batch))
+        objects = await objects_of([item for _, item in batch])
         present = sorted({obj for obj in objects if obj is not None})
-        allowed = await authz.batch_check(relation, present) if present else {}
-        for offset, ((name, _), obj) in enumerate(zip(batch, objects, strict=True)):
+        allowed = dict.fromkeys(present, True) if authz is None else await authz.batch_check(relation, present) if present else {}
+        for offset, ((key, item), obj) in enumerate(zip(batch, objects, strict=True)):
             if obj is None or not allowed.get(obj, False):
                 continue
-            page.append(name)
+            page.append(item)
             if limit is not None and len(page) == limit:
                 more = start + offset + 1 < len(remaining)
-                return page, name if more else None
+                return page, key if more else None
     return page, None
 
 

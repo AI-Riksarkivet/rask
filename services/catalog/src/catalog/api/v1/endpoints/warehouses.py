@@ -26,12 +26,12 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
@@ -69,6 +69,7 @@ from catalog.api.dependencies import (
     estate_namespace,
     namespace_for_root,
 )
+from catalog.api.pagination import ListLimit
 from catalog.api.security import Caller, CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core import tier_policy
@@ -86,11 +87,12 @@ from catalog.schemas import (
     EstateBindingsResponse,
     ProtectionResponse,
     SetProtectionRequest,
+    TrashListing,
     UnbindWarehouseNamespaceResponse,
     WarehouseNamespacesResponse,
     WarehouseResponse,
 )
-from catalog.services import native, object_uuids, table_claims, warehouses
+from catalog.services import native, object_uuids, table_claims, trash_doors, warehouses
 from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
 from lakehouse_kit import base_registry, data_directories, location_claims, object_records, trash
@@ -98,7 +100,7 @@ from lakehouse_kit.control_emit import ControlEmitter, emit_control
 from lakehouse_kit.records import RecordExistsError, RecordMissingError
 from service_kit.governed import fga
 from service_kit.governed.deps import ANONYMOUS_SUBJECT
-from service_kit.naming import CONTROL_ID_RE
+from service_kit.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from service_kit.ns_errors import PartiallyApplied
 from storage import s3_client, split_s3_uri
 
@@ -486,6 +488,56 @@ async def list_warehouse_namespaces(
             limit=None,
         )
     return WarehouseNamespacesResponse(namespaces=bound)
+
+
+@router.get("/{warehouse_id}/trash", response_model_exclude_none=True)
+async def list_warehouse_trash(
+    warehouse_id: str,
+    settings: SettingsDep,
+    token: CurrentToken,
+    client: FgaClientDep,
+    namespace: Annotated[str | None, Query(description="List only what was dropped beneath this namespace name.")] = None,
+    page_token: str | None = None,
+    limit: ListLimit = None,
+) -> TrashListing:
+    """Every recoverable drop under this warehouse its caller holds a grant on: the way back to a dropped object whose
+    name is lost, and what is waiting to be purged ([[LH-556]]).
+
+    The undrop and tasks doors are addressed by name; this is the door that answers the names. The route asks
+    ``can_get_metadata`` on the warehouse, as its namespace listing does, and each trashed table and namespace is judged
+    on its own uuid (``table:<uuid>``, ``namespace:<uuid>``), the object its grants are held by and the undrop and tasks
+    doors ask on (``fga_deps._require_trashed``): the warehouse's rung opens upward from any one child, so it says nothing
+    about the siblings, and a listing judges its own candidates ([[LH-223]]). A record naming no uuid holds no grant and
+    is listed to no one ([[LH-534]]).
+
+    The candidates are the trash a delete of this warehouse would end (``warehouses.trash_owned_by``), so a sibling
+    warehouse's drops on a shared bucket are never listed. They sort by name and then uuid, the key the opaque page token
+    resumes after (``trash_doors.listing_key``, `lance_docs/ns_catalog/spec.yaml` PageToken).
+    """
+    _require_enabled(settings)
+    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
+    so = settings.storage_options()
+    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
+    if record is None:
+        raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
+    owned = await run_in_threadpool(partial(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id, bucket=str(record["bucket"])))
+    beneath = f"{namespace}{CATALOG_DELIMITER}" if namespace else ""
+    candidates = sorted(
+        ((trash_doors.listing_key(r), r) for r in owned if trash.object_uuid(r) and str(r.get("id") or "").startswith(beneath)), key=lambda c: c[0]
+    )
+
+    async def judged_on(records: Sequence[dict[str, Any]]) -> list[str | None]:
+        return [fga.object_of(trash.kind_of(r), str(trash.object_uuid(r))) for r in records]
+
+    page, next_token = await fga_deps.judged_page(
+        fga_deps.authorization(settings, client, token),
+        relation="can_get_metadata",
+        candidates=candidates,
+        objects_of=judged_on,
+        page_token=page_token,
+        limit=limit,
+    )
+    return TrashListing(objects=[trash_doors.entry(r) for r in page], page_token=next_token)
 
 
 async def _set_warehouse_status(

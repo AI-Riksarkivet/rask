@@ -1014,8 +1014,7 @@ async def namespace_tasks(
     Same contract as the table door: an undrop deadline the owner cannot see is not a safety
     feature. Reader-gated by the router (``tasks`` is a metadata read). One entry per dropped
     namespace that held the name and that the caller may see, each with its uuid ([[LH-525]])."""
-    records = await resolver.admitted_trash("namespace", parse_identifier(id))
-    return [TrashEntry(**{k: str(record.get(k, "")) for k in ("id", "uuid", "location", "dropped_by", "dropped_at", "expires_at")}) for record in records]
+    return [trash_doors.entry(record) for record in await resolver.admitted_trash("namespace", parse_identifier(id))]
 
 
 @management_router.post("/{id}/undrop", response_model_exclude_none=True)

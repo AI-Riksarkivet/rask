@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from lakehouse_kit.record_store import delete_record, get_record, list_records, put_record, record_key
 from lakehouse_kit.records import RecordChangedError, RecordMissingError, mutate_json
@@ -127,6 +127,11 @@ def make_record(
     if residue:
         record[RESIDUE] = True
     return record
+
+
+def kind_of(record: dict[str, Any]) -> Literal["table", "namespace"]:
+    """The kind of object ``record`` keeps: a ``namespace`` a recoverable cascade dropped, else a ``table``."""
+    return "namespace" if record.get("kind") == "namespace" else "table"
 
 
 def is_residue(record: dict[str, Any]) -> bool:

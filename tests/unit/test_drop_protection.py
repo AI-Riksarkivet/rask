@@ -363,6 +363,7 @@ def test_expired_selects_only_past_deadlines_and_never_deletes(tmp_path: Any) ->
     old = trash.make_record("ns$old", uuid=_uuid("ns$old"), location="s3://b/old", dropped_by="u", grace_days=7, now=now - timedelta(days=30))
     due = trash.expired([fresh, old], now=now)
     assert [r["id"] for r in due] == ["ns$old"]
+    assert trash.past_deadline({"expires_at": "2000-01-01T00:00:00"}), "a stamp written without an offset is read as UTC"
 
 
 def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:

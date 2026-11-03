@@ -695,18 +695,6 @@ def test_a_live_deadline_is_not_reported_as_expired(moto_client_recoverable: Tes
     assert tasks[0]["expires_at"]
 
 
-def test_an_unparseable_deadline_is_not_reported_as_expired(moto_client_recoverable: TestClient) -> None:
-    """Fail toward 'still recoverable'. A malformed timestamp must not make a table that is still
-    on storage read as beyond saving — the flag adds urgency, it never withdraws hope."""
-    from catalog.api.v1.endpoints.tables import _is_expired
-
-    assert _is_expired("") is False
-    assert _is_expired("not-a-date") is False
-    assert _is_expired("2000-01-01T00:00:00+00:00") is True
-    # A naive stamp (records written before the offset was included) is read as UTC, not rejected.
-    assert _is_expired("2000-01-01T00:00:00") is True
-
-
 def test_a_crash_mid_drop_leaves_the_table_recoverable_not_unreachable(moto_client_recoverable: TestClient) -> None:
     """diff2 F6 leg (a) — the drop's crash window must not strand data.
 

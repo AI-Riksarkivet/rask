@@ -459,7 +459,12 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   undrop and tasks doors stay addressed by name: `trash.named` finds every record dropped under it, `?uuid=` names
   one, and the router asks the door's rung on each candidate (`fga_deps._require_trashed`), so a door acts only on,
   and lists only, what its caller holds a grant on. Several candidates answer the undrop 409 (code 19) listing each
-  uuid and deadline; a live object of another uuid holding the name answers 409 too. A record keeps `uuid`,
+  uuid and deadline; a live object of another uuid holding the name answers 409 too. A caller who lost the name finds
+  the drop on `GET /management/v1/warehouses/{id}/trash` ([[LH-556]]): the route asks `can_get_metadata` on the
+  warehouse, its candidates are `warehouses.trash_owned_by`'s, each is judged on its own uuid
+  (`fga_deps.judged_page`), `?namespace=` keeps what was dropped beneath a name, and it pages on name then uuid
+  (`trash_doors.listing_key`); every trash door answers `trash_doors.entry`, `expired` read by `trash.past_deadline`.
+  Pinned by `services/catalog/tests/test_a_warehouses_trash_lists_what_its_caller_may_see.py`. A record keeps `uuid`,
   `namespace_uuid` (its namespace's at the drop) and, when a cascade filed it, `cascade` (the dropped namespace's
   uuid). A new table's claim never takes a location the trash keeps for its name's dropped table
   (`table_claims.kept_in_trash`). The purge judges a table record live by its location and a namespace record by its

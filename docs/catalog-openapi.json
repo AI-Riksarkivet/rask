@@ -11313,6 +11313,14 @@
             "title": "Id",
             "type": "string"
           },
+          "kind": {
+            "enum": [
+              "table",
+              "namespace"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "location": {
             "title": "Location",
             "type": "string"
@@ -11323,6 +11331,7 @@
           }
         },
         "required": [
+          "kind",
           "id",
           "uuid",
           "location",
@@ -11331,6 +11340,34 @@
           "expires_at"
         ],
         "title": "TrashEntry",
+        "type": "object"
+      },
+      "TrashListing": {
+        "description": "A page of a warehouse's trash: each recoverable drop under it its caller holds a grant on ([[LH-556]]).",
+        "properties": {
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/TrashEntry"
+            },
+            "title": "Objects",
+            "type": "array"
+          },
+          "page_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Page Token"
+          }
+        },
+        "required": [
+          "objects"
+        ],
+        "title": "TrashListing",
         "type": "object"
       },
       "TupleCondition": {
@@ -18080,7 +18117,7 @@
     },
     "/management/v1/warehouse/{id}/access/grant": {
       "post": {
-        "description": "Grant a base rung on the warehouse to a subject ([[LH-555]]): ``can_grant_<relation>`` and no self-elevation, asked\nhere as the router asks them on a table or a namespace, since it leaves every warehouse route to its handler.",
+        "description": "Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]]).",
         "operationId": "grant_warehouse_access_management_v1_warehouse__id__access_grant_post",
         "parameters": [
           {
@@ -18156,7 +18193,7 @@
     },
     "/management/v1/warehouse/{id}/access/list": {
       "post": {
-        "description": "Effective access on the warehouse, per ``can_*`` action ([[LH-555]]).\n\nGated here on ``can_read_assignments``, the model's rung for seeing who holds what (``manage_grants``, which a\nproject's admin holds through ``can_administer from project``): the router leaves every warehouse route to its handler.",
+        "description": "Effective access on the warehouse, per ``can_*`` action, to who may manage its grants ([[LH-555]]).",
         "operationId": "list_warehouse_access_management_v1_warehouse__id__access_list_post",
         "parameters": [
           {
@@ -18288,7 +18325,7 @@
     },
     "/management/v1/warehouse/{id}/access/revoke": {
       "post": {
-        "description": "Revoke a base rung on the warehouse from a subject ([[LH-555]]): ``can_revoke_grant``, stricter than the grant.",
+        "description": "Revoke a base rung on the warehouse from a subject, gated by :func:`require_warehouse_revoke` ([[LH-555]]).",
         "operationId": "revoke_warehouse_access_management_v1_warehouse__id__access_revoke_post",
         "parameters": [
           {
@@ -19297,6 +19334,125 @@
           }
         ],
         "summary": "Set Warehouse Protection",
+        "tags": [
+          "warehouse"
+        ]
+      }
+    },
+    "/management/v1/warehouses/{warehouse_id}/trash": {
+      "get": {
+        "description": "Every recoverable drop under this warehouse its caller holds a grant on: the way back to a dropped object whose\nname is lost, and what is waiting to be purged ([[LH-556]]).\n\nThe undrop and tasks doors are addressed by name, so without this a caller had to know the name to find the drop.\nLakekeeper answers the same question per warehouse (`list_deleted_tabulars`): the route opens on the warehouse and\neach item is judged on itself. Here the route asks ``can_get_metadata`` on the warehouse, as its namespace listing\ndoes, and each trashed table and namespace is judged on its own uuid (``table:<uuid>``, ``namespace:<uuid>``), the\nobject its grants are held by and the undrop and tasks doors ask on (``fga_deps._require_trashed``): the warehouse's\nrung opens upward from any one child, so it says nothing about the siblings.\n\nThe candidates are the trash a delete of this warehouse would end (``warehouses.trash_owned_by``), so a sibling\nwarehouse's drops on a shared bucket are never listed. Sorted by name and then uuid, the key the page token resumes\nafter (``trash_doors.listing_key``).",
+        "operationId": "list_warehouse_trash_management_v1_warehouses__warehouse_id__trash_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "warehouse_id",
+            "required": true,
+            "schema": {
+              "title": "Warehouse Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "List only what was dropped beneath this namespace name.",
+            "in": "query",
+            "name": "namespace",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "List only what was dropped beneath this namespace name.",
+              "title": "Namespace"
+            }
+          },
+          {
+            "in": "query",
+            "name": "page_token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Page Token"
+            }
+          },
+          {
+            "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An inclusive upper bound of the number of results. A limit above 1000 is answered at most 1000 results and a page_token that continues the listing. Zero and below are refused 400.",
+              "title": "Limit"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrashListing"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Warehouse Trash",
         "tags": [
           "warehouse"
         ]
