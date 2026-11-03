@@ -7,8 +7,9 @@ data on object storage itself (LanceDB SDK / lance-ray / pylance). The vendor pl
 per-table session policy, ADR 0170) or ``mode_b`` (vends nothing → the client uses the data endpoints).
 
 Authz: the router-level :func:`catalog.api.fga_deps.authorize` decides before this door runs. A read-tier
-vend needs ``can_read_data`` (or, for a maintainer, ``can_maintain``); a writing tier is a write, so the
-tier judge asks the rung that tier opens (``fga_deps.VEND_TIER_RUNGS``, ADR 0160). Each tier's session
+vend needs ``can_read_data``, and a maintainer holding no reader rung is refused it ([[LH-560]]); a writing tier is a
+write, so the tier judge asks the rung that tier opens (``fga_deps.VEND_TIER_RUNGS``, ADR 0160), and the router admits
+``can_maintain`` in place of ``can_read_data`` at the maintain tier alone (``fga_deps._ALTERNATIVE_RUNGS``). Each tier's session
 policy then grants at the object store only what that rung may change (``vending.build_session_policy``,
 [[LH-202]]).
 """

@@ -20,6 +20,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode
 
+from catalog.core import vending
 from service_kit.ns_errors import problem_body
 
 
@@ -90,7 +91,7 @@ def is_mutating(method: str, path: str = "") -> bool:
 
 def is_read_vend(path: str, request: Request) -> bool:
     """True for a read-tier credential vend, the one door whose read/write answer is in its query."""
-    return path.rstrip("/").rsplit("/", 1)[-1] == _VEND_ACTION and request.query_params.get("tier", "read") == "read"
+    return path.rstrip("/").rsplit("/", 1)[-1] == _VEND_ACTION and vending.requested_tier(request.query_params) == "read"
 
 
 def maintenance_response() -> JSONResponse:

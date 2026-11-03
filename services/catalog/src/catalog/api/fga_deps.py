@@ -54,7 +54,7 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import run_context, tier_policy
+from catalog.core import run_context, tier_policy, vending
 from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
 from catalog.services import dataplane, maintenance, native, object_uuids, table_claims, warehouses
@@ -87,8 +87,9 @@ _FGA_TYPE: dict[str, str] = {
 
 # Read-only trailing actions (reader rung). ``query``/``count_rows`` read DATA; the rest
 # read metadata — split so list_objects(can_read_data) is meaningful (both are reader).
-# ``credentials`` (vending) is a DATA read at minimum — the router guard requires can_read_data; the
-# endpoint additionally requires can_write_data for a write-tier vend and can_vend_maintain for a maintain-tier one.
+# ``credentials`` (vending) is a DATA read at minimum — the router guard requires can_read_data (or can_maintain at the
+# maintain tier alone, `_ALTERNATIVE_RUNGS`); the tier judge additionally requires can_write_data for a write-tier vend
+# and can_vend_maintain for a maintain-tier one.
 # ``blobs`` (GET /v1/table/{id}/blobs — the credential-less blob serving path) returns raw payload
 # bytes, so it is a DATA read exactly like ``query``.
 # ``changes`` (§ J4) is the MOST disclosing read a table has — every row it ever received, in order —
@@ -116,21 +117,30 @@ _META_READ_ACTIONS = frozenset({"describe", "exists", "list", "stats", "version"
 #: is owner-tier and its trailing segment is the word "list".
 _READ_RELATIONS: Final = frozenset({"can_get_metadata", "can_read_data", "can_read"})
 
-#: A SECOND door for one action, checked through :func:`_require_any` only when the primary denies.
+
+class _SecondRung(NamedTuple):
+    """A second rung a door admits, at the one credential tier it opens."""
+
+    tier: vending.Tier
+    relation: str
+
+
+#: A SECOND door for one action at one vend tier, checked through :func:`_require_any` only when the primary denies and
+#: the request asks that tier. The tier is read only once the door matched: no other door's query names one.
 #:
-#: `credentials` is a data read for everyone else, so `can_read_data` stays the primary rung. But a
-#: MAINTAINER is deliberately not a reader — `model.fga` states that and its test block asserts it —
-#: while it must still obtain the credential its own rewrite needs. The two rules are individually
-#: right and jointly denied: MEASURED 2026-09-08, 207 of 285 rewrites a tick fell back to the
-#: deployment's ROOT key because this router refused before the endpoint's tier check ever ran.
+#: `credentials` is a data read, so `can_read_data` is its primary rung. A MAINTAINER is deliberately not a reader
+#: (`model.fga` states it and its test block asserts it), yet the maintenance identity must obtain the maintain-tier
+#: credential its own rewrite needs: MEASURED 2026-09-08, 207 of 285 rewrites a tick fell back to the deployment's ROOT
+#: key because this router refused before the tier judge asked `can_vend_maintain`.
 #:
-#: PER ACTION, never per tier. The router could read `?tier=`, and it would buy nothing: a maintain-tier
-#: session policy grants `s3:GetObject` alongside `PutObject`, so a maintainer that can rewrite can
-#: already read those bytes. Gating the second door on the tier would add a moving part and no
-#: privilege boundary. What it must NOT become is a rung on the reader tier at large — `query` and
-#: `blobs` stay `can_read_data`, pinned by
+#: PER TIER ([[LH-560]]). Only the maintain tier opens to `can_maintain`, and the tier judge then asks that tier's own
+#: rung, `can_vend_maintain`, which the maintenance identity alone holds (ADR 0156 C4). At the read tier the judge asks
+#: nothing further, so a second rung there would vend a whole-table read to a maintainer who holds no `reader` grant;
+#: and since `can_grant_maintainer` is `maintainer and pass_grants`, any maintainer could hand that read on with no
+#: reader tuple written. `query`, `blobs` and the spec doors' vends stay `can_read_data` for the same reason. Pinned by
+#: `services/catalog/tests/test_a_maintainer_is_vended_no_read.py` on the real model, and the maintain tier's opening by
 #: `tests/integration/test_the_maintainer_rung_opens_the_maintain_tier_vend.py`.
-_ALTERNATIVE_RUNGS: dict[tuple[str, str], str] = {("table", "credentials"): "can_maintain"}
+_ALTERNATIVE_RUNGS: Final[dict[tuple[str, str], _SecondRung]] = {("table", "credentials"): _SecondRung(tier="maintain", relation="can_maintain")}
 
 
 # Full route suffixes that create a NEW child -> authorize the parent (create-on-parent).
@@ -971,6 +981,7 @@ async def _authorize_batch(request: Request, client: OpenFgaClient, resolver: Re
 #: ROOT key, because a refused vend falls back to the ambient credential.
 VEND_TIER_RUNGS: Final[dict[str, str]] = {"write": "can_write_data", "maintain": "can_vend_maintain"}
 
+
 #: The resources whose non-read doors write a table's data or its history, and so reach the tier judge.
 _JUDGED_RESOURCES: Final = frozenset({"table", "materialized_view"})
 
@@ -1018,7 +1029,8 @@ async def _write_door(request: Request, settings: Settings) -> tier_policy.Write
     if suffix == "credentials":
         # A vend is a read at its default tier and a WRITE at a writing one: the credential is how a
         # direct-to-storage writer writes, so it is judged on the rung its tier opens.
-        writing = VEND_TIER_RUNGS.get(request.query_params.get("tier", "read"))
+        tier = vending.requested_tier(request.query_params)
+        writing = VEND_TIER_RUNGS.get(tier) if tier is not None else None
         if writing is None:
             return None
         return tier_policy.Write(op=suffix, obj=obj, rung=_rung(writing, fga_type, segments), table=tuple(segments))
@@ -1475,11 +1487,12 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         _record_undeclared(path, fga_type, suffix, user=token.subject, obj=_object(fga_type, segments))
         raise
     rung = _rung(relation, fga_type, segments, suffix=suffix)
-    if (alternative := _ALTERNATIVE_RUNGS.get((fga_type, suffix))) is not None:
+    second = _ALTERNATIVE_RUNGS.get((fga_type, suffix))
+    if second is not None and vending.requested_tier(request.query_params) == second.tier:
         obj = await _resolve(resolver, rung)
         if obj is None:
             raise _refuse_absent(user=token.subject, relation=relation, label=_label(rung))
-        await _require_any(client, user=token.subject, doors=[(relation, obj), (alternative, obj)], label=_label(rung))
+        await _require_any(client, user=token.subject, doors=[(relation, obj), (second.relation, obj)], label=_label(rung))
         return
     try:
         await _require_rung(client, resolver, user=token.subject, rung=rung)

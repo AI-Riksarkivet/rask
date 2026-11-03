@@ -232,7 +232,7 @@ def test_holding_NEITHER_router_rung_is_still_refused_at_the_route(governed: tup
 
 
 def test_can_maintain_opens_NOTHING_ELSE_on_the_table(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The blast radius, and the reason this is a per-action second door rather than a wider rung.
+    """The blast radius, and the reason this is a second door on one action at one tier rather than a wider rung.
 
     `query` is a DATA READ like `credentials` is, and a maintainer must NOT gain it — that is the whole
     content of "a maintainer is not a reader". If this ever passes, the alternative has leaked from one

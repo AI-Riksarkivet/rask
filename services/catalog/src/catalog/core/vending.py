@@ -30,7 +30,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Literal, Protocol, assert_never, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -65,6 +65,22 @@ log = logging.getLogger(__name__)
 #:   because compaction commits versions and cleanup deletes them. Also the shape for a prefix with no
 #:   Lance layout to narrow by (the warehouse scope probe).
 Tier = Literal["read", "write", "maintain"]
+
+
+def requested_tier(query: Mapping[str, str]) -> Tier | None:
+    """The tier a vend request's query asks for, as the vend door reads it: ``read`` when it names none, ``None`` for a
+    value that is no tier (the door answers that 422, and nothing reads it as a tier before then)."""
+    match query.get("tier", "read"):
+        case "read":
+            return "read"
+        case "write":
+            return "write"
+        case "maintain":
+            return "maintain"
+        case _:
+            return None
+
+
 VendingMode = Literal["mode_b", "web_identity"]
 
 

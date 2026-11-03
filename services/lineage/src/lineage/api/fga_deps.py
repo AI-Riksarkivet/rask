@@ -110,8 +110,7 @@ def relations_for_operation(operation: str | None) -> tuple[str, ...]:
     A maintenance operation accepts EITHER rung, never `can_maintain` alone: the catalog gates an index
     commit at the writer tier, so accepting only the maintainer rung would refuse the person who actually
     built the index. Adding the
-    maintainer path is strictly additive; it takes nothing away from a writer. Same shape as the
-    catalog's `_ALTERNATIVE_RUNGS`, and for the same reason.
+    maintainer path is strictly additive; it takes nothing away from a writer.
 
     The tag gate's publication and restore accept the rungs of the doors that perform them (`_GATE_RELATIONS`).
     """
