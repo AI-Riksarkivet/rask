@@ -205,6 +205,9 @@ _DOORS: list[_Door] = [
         refused=_NOT_FOUND,
     ),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/access/my-permissions", params={"id": WAREHOUSE}),
+    _Refusing(method="POST", route="/management/v1/warehouse/{id}/access/list", params={"id": WAREHOUSE}, body={}),
+    _Refusing(method="POST", route="/management/v1/warehouse/{id}/access/grant", params={"id": WAREHOUSE}, body={"user": "dex~erin", "relation": "reader"}),
+    _Refusing(method="POST", route="/management/v1/warehouse/{id}/access/revoke", params={"id": WAREHOUSE}, body={"user": "dex~erin", "relation": "reader"}),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/managed-access/describe", params={"id": WAREHOUSE}),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/managed-access/set", params={"id": WAREHOUSE}, body={"enabled": True}),
     # The listings.

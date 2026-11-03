@@ -748,6 +748,26 @@ async def _authorize_grant(
         await _refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj)
 
 
+async def require_grant_authority(
+    request: Request,
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: Caller | None,
+    resolver: Resolver,
+    *,
+    fga_type: str,
+    segments: list[str],
+    revoking: bool,
+) -> None:
+    """Gate a grant or revoke door the router leaves to its handler exactly as :func:`authorize` gates the table and
+    namespace ones, through :func:`_authorize_grant`: ``can_grant_<rung>`` from the body, or ``can_revoke_grant``, and no
+    grant that raises the caller's own access ([[LH-555]]). A no-op with FGA off; with it on, no client is 503 and no
+    caller 401 (:func:`authorization`), since nothing before the handler decided."""
+    if (authz := authorization(settings, client, token)) is None:
+        return
+    await _authorize_grant(request, authz.client, resolver, user=authz.subject, fga_type=fga_type, segments=segments, revoking=revoking)
+
+
 async def _refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: object, relation: str, obj: str) -> None:
     """Refuse a grant that would hand the CALLER a rung they do not already hold.
 
@@ -2044,10 +2064,13 @@ async def seed_ownership(
 #: A `project:` object IS its own tenant and a `warehouse:` one carries a direct tuple, so neither needs
 #: the registry; they are left out rather than guessed at.
 _TENANT_RESOLVES_BY_NAMESPACE = frozenset({"namespace", "table", "materialized_view"})
+#: The types a role's grant is held inside its tenant on: those above, and a warehouse, whose own record names its project.
+_TENANT_HELD = _TENANT_RESOLVES_BY_NAMESPACE | {"warehouse"}
 
 
 async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, *, fga_type: str, segments: list[str], settings: Settings) -> None:
-    """Refuse granting a role from one tenant a rung on another tenant's object.
+    """Refuse granting a role from one tenant a rung on another tenant's object: a namespace's, a table's or a view's
+    tenant through its top-level namespace's binding, a warehouse's from its own record ([[LH-555]]).
 
     A role name is estate-global unless the model says otherwise, so `role:analyst#assignee` minted in
     one project could be granted on any other project's namespace and every layer below would honour
@@ -2067,7 +2090,7 @@ async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, 
     InvalidInput (13 -> 400), matching the bad-rung refusal above and lance-ns's own vocabulary: the
     grantor may well hold every rung this needs, so it is a malformed request rather than a denial.
     """
-    if not grantee.startswith("role:") or fga_type not in _TENANT_RESOLVES_BY_NAMESPACE or not segments:
+    if not grantee.startswith("role:") or fga_type not in _TENANT_HELD or not segments:
         return
     role_object = grantee.split("#", 1)[0]
     owned_by = {
@@ -2077,10 +2100,20 @@ async def refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, 
     }
     if not owned_by:
         return
-    target = await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, settings.storage_options(), segments[0])
+    target = await run_in_threadpool(_tenant_of, settings, fga_type, segments[0])
     if target is None or target in owned_by:
         return
     raise InvalidInputError(f"{grantee!r} belongs to project {min(owned_by)!r} and cannot be granted on {segments[0]!r}, which belongs to project {target!r}")
+
+
+def _tenant_of(settings: Settings, fga_type: str, first_segment: str) -> str | None:
+    """The project an object of ``fga_type`` belongs to, from its id's ``first_segment``: a warehouse's own id, or the
+    top-level namespace a namespace, table or view is under. ``None`` when the registry names none."""
+    if fga_type == "warehouse":
+        record = warehouses.get_warehouse(settings.registry_root, settings.storage_options(), first_segment)
+        project = record.get("project") if record is not None else None
+        return project or None
+    return warehouses.project_for_namespace(settings.registry_root, settings.storage_options(), first_segment)
 
 
 async def require_grants_may_follow(client: OpenFgaClient | None, settings: Settings, *, obj: str, source: list[str], destination: list[str]) -> None:

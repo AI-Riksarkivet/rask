@@ -28,7 +28,7 @@ import asyncio
 import logging
 from functools import lru_cache
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, Request
 from lance_namespace import InvalidInputError, NamespaceNotFoundError, ServiceUnavailableError, TableNotFoundError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
@@ -187,6 +187,30 @@ async def list_namespace_access(id: str, client: FgaClientDep, settings: Setting
     """Effective access on the namespace, per ``can_*`` action — owner-gated by the router
     (``can_delete``)."""
     return await _access_list(client, settings, token, resolver, "namespace", id)
+
+
+async def require_warehouse_review(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
+    """Gate a warehouse's access listing on ``can_read_assignments``, the model's rung for seeing who holds what
+    (``manage_grants``, which a project's admin holds through ``can_administer from project``) ([[LH-555]]). A route
+    dependency, since the router leaves every warehouse route to its handler."""
+    await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=f"warehouse:{id}")
+
+
+async def require_warehouse_grant(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
+    """Gate a warehouse grant as the router gates a table's or a namespace's: ``can_grant_<rung>`` read from the body, and
+    no grant that raises the caller's own access ([[LH-555]])."""
+    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=False)
+
+
+async def require_warehouse_revoke(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
+    """Gate a warehouse revoke on ``can_revoke_grant``, stricter than any grant ([[LH-555]])."""
+    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=True)
+
+
+@warehouse_router.post("/{id}/access/list", dependencies=[Depends(require_warehouse_review)])
+async def list_warehouse_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
+    """Effective access on the warehouse, per ``can_*`` action, to who may manage its grants ([[LH-555]])."""
+    return await _access_list(client, settings, token, resolver, "warehouse", id)
 
 
 async def _access_check(
@@ -358,7 +382,7 @@ async def _access_mutate(
     *,
     grant: bool,
 ) -> AccessGrantResponse:
-    """Grant or revoke one grantable rung to a subject on a table, a namespace or a classification label.
+    """Grant or revoke one grantable rung to a subject on a table, a namespace, a warehouse or a classification label.
 
     The MUTATE half of the #68 governance surface — the write counterpart of ``access/list``.
 
@@ -442,6 +466,34 @@ async def grant_namespace_access(
 ) -> AccessGrantResponse:
     """Grant a base rung on the namespace to a subject — gated per rung (``can_grant_<relation>``)."""
     return await _access_mutate(client, control, settings, token, resolver, "namespace", id, body, grant=True)
+
+
+@warehouse_router.post("/{id}/access/grant", dependencies=[Depends(require_warehouse_grant)])
+async def grant_warehouse_access(
+    id: str,
+    client: FgaClientDep,
+    control: ControlEmitterDep,
+    settings: SettingsDep,
+    resolver: ResolverDep,
+    token: CurrentToken,
+    body: AccessGrantRequest,
+) -> AccessGrantResponse:
+    """Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]])."""
+    return await _access_mutate(client, control, settings, token, resolver, "warehouse", id, body, grant=True)
+
+
+@warehouse_router.post("/{id}/access/revoke", dependencies=[Depends(require_warehouse_revoke)])
+async def revoke_warehouse_access(
+    id: str,
+    client: FgaClientDep,
+    control: ControlEmitterDep,
+    settings: SettingsDep,
+    resolver: ResolverDep,
+    token: CurrentToken,
+    body: AccessGrantRequest,
+) -> AccessGrantResponse:
+    """Revoke a base rung on the warehouse from a subject, gated by :func:`require_warehouse_revoke` ([[LH-555]])."""
+    return await _access_mutate(client, control, settings, token, resolver, "warehouse", id, body, grant=False)
 
 
 @namespace_router.post("/{id}/access/revoke")

@@ -428,9 +428,11 @@ export interface paths {
          *     For lineage, which records an outside producer's event naming a dataset by its location (``s3://<bucket>`` and the
          *     key) as well as by its name ([[LH-553]]): a location a table holds is that table, and its grants decide whether the
          *     producer may record it, while one no table holds is the outside world. The fact is structural, like ``governed``'s,
-         *     so it answers to the same role. A claim that cannot be read is 503, never "holds none", which would exempt it.
-         *     Lakekeeper answers the same question for its S3 signer: it resolves a request's location to the table holding it,
-         *     dropped tables included, then authorizes the caller on that table (``resolve_signable_by_location``,
+         *     so it answers to the same role. A claim that cannot be read (the store's error, a record that is no claim, a root the
+         *     conditional read does not serve: `lakehouse_kit.records`) is 503, never "holds none", which would exempt it. The
+         *     claims are the answer because the ``dir`` backend keeps no location exclusive (``lance_docs/ns_catalog/catalog/dir``
+         *     § Manifest Table Commits) and the claim store picks one holder (`lakehouse_kit.location_claims`). Lakekeeper's S3
+         *     signer asks the same question of its own store (``resolve_signable_by_location``,
          *     crates/lakekeeper/src/server/s3_signer/sign.rs).
          */
         post: operations["decide_locate_management_v1_decisions_locate_post"];
@@ -1889,6 +1891,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/warehouse/{id}/access/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant Warehouse Access
+         * @description Grant a base rung on the warehouse to a subject ([[LH-555]]): ``can_grant_<relation>`` and no self-elevation, asked
+         *     here as the router asks them on a table or a namespace, since it leaves every warehouse route to its handler.
+         */
+        post: operations["grant_warehouse_access_management_v1_warehouse__id__access_grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouse/{id}/access/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Warehouse Access
+         * @description Effective access on the warehouse, per ``can_*`` action ([[LH-555]]).
+         *
+         *     Gated here on ``can_read_assignments``, the model's rung for seeing who holds what (``manage_grants``, which a
+         *     project's admin holds through ``can_administer from project``): the router leaves every warehouse route to its handler.
+         */
+        post: operations["list_warehouse_access_management_v1_warehouse__id__access_list_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/warehouse/{id}/access/my-permissions": {
         parameters: {
             query?: never;
@@ -1913,6 +1959,26 @@ export interface paths {
          *     and gating it at the owner bar would mean only the people who already know the answer could ask.
          */
         post: operations["my_warehouse_permissions_management_v1_warehouse__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouse/{id}/access/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Warehouse Access
+         * @description Revoke a base rung on the warehouse from a subject ([[LH-555]]): ``can_revoke_grant``, stricter than the grant.
+         */
+        post: operations["revoke_warehouse_access_management_v1_warehouse__id__access_revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3316,8 +3382,9 @@ export interface paths {
          *     namespace/tenant they lack create rights on. The table keeps its uuid, so every record and every grant kept for it
          *     stays where it is ([[LH-523]], [[LH-524]]): into another namespace only its parent edge moves
          *     (``fga_deps.move_parent_edge``), and its data directories' claims move to its new name
-         *     (``_hand_over_data_directories``). A versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
-         *     destination's provenance continues from the source's. Source missing → 404
+         *     (``_hand_over_data_directories``). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard
+         *     lifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped
+         *     and another created ([[LH-554]]). Source missing → 404
          *     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
          *     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]]).
          */
@@ -11949,6 +12016,78 @@ export interface operations {
             };
         };
     };
+    grant_warehouse_access_management_v1_warehouse__id__access_grant_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_warehouse_access_management_v1_warehouse__id__access_list_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     my_warehouse_permissions_management_v1_warehouse__id__access_my_permissions_post: {
         parameters: {
             query?: {
@@ -11970,6 +12109,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_warehouse_access_management_v1_warehouse__id__access_revoke_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
                 };
             };
             /** @description Validation Error */

@@ -1,4 +1,4 @@
-"""A role from one tenant cannot be granted a rung on another tenant's namespace.
+"""A role from one tenant cannot be granted a rung on another tenant's namespace or warehouse.
 
 [[LH-062]]. A role name was estate-global: `role:analyst#assignee` minted in one project could be
 granted on any other project's namespace, and nothing downstream could tell. The tuple is
@@ -30,41 +30,53 @@ from catalog.services import warehouses
 from service_kit.storage_options import StorageOptions
 
 
+#: Each target's grant door and the door dave reads it through: a namespace's describe, a warehouse's own self-view.
+DOORS = {
+    "namespace": ("/management/v1/namespace/beta_bronze/access/grant", "/v1/namespace/beta_bronze/describe"),
+    "warehouse": ("/management/v1/warehouse/wh/access/grant", "/management/v1/warehouse/wh/access/my-permissions"),
+}
+
+
 @pytest.mark.parametrize(
-    ("role_project", "namespace_project", "granted", "dave_reads"),
+    ("target", "role_project", "tenant", "granted", "dave_reads"),
     [
-        pytest.param("acme", "beta", 400, 403, id="a-role-owned-by-another-project-is-refused"),
-        pytest.param("beta", "beta", 200, 200, id="a-role-owned-by-the-same-project-is-granted"),
-        pytest.param(None, "beta", 200, 200, id="an-estate-wide-role-carrying-no-project-is-granted"),
-        pytest.param("acme", None, 200, 200, id="a-namespace-whose-tenant-cannot-be-established-is-granted"),
+        pytest.param("namespace", "acme", "beta", 400, 403, id="a-role-owned-by-another-project-is-refused"),
+        pytest.param("namespace", "beta", "beta", 200, 200, id="a-role-owned-by-the-same-project-is-granted"),
+        pytest.param("namespace", None, "beta", 200, 200, id="an-estate-wide-role-carrying-no-project-is-granted"),
+        pytest.param("namespace", "acme", None, 200, 200, id="a-namespace-whose-tenant-cannot-be-established-is-granted"),
+        # A warehouse's own record names its tenant ([[LH-555]]).
+        pytest.param("warehouse", "acme", "beta", 400, 403, id="a-role-owned-by-another-project-is-refused-on-a-warehouse"),
+        pytest.param("warehouse", "beta", "beta", 200, 200, id="a-role-owned-by-the-warehouses-project-is-granted"),
     ],
 )
-def test_a_role_is_granted_on_a_namespace_only_inside_its_own_tenant(
+def test_a_role_is_granted_only_inside_its_own_tenant(
     governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
     tmp_path: Path,
+    target: str,
     role_project: str | None,
-    namespace_project: str | None,
+    tenant: str | None,
     granted: int,
     dave_reads: int,
 ) -> None:
     catalog, alice = governed_catalog, governed_catalog.bearer("alice")
-    if namespace_project is not None:
-        warehouses.put_warehouse(
-            str(tmp_path), StorageOptions(), {"id": "wh", "project": namespace_project, "bucket": namespace_project, "root_uri": str(tmp_path)}
-        )
-        warehouses.bind_namespace(str(tmp_path), StorageOptions(), "beta_bronze", "wh", str(tmp_path))
-    assert catalog.client.post("/v1/namespace/beta_bronze/create", json={}, headers=alice).status_code == 200
+    if tenant is not None:
+        warehouses.put_warehouse(str(tmp_path), StorageOptions(), {"id": "wh", "project": tenant, "bucket": tenant, "root_uri": str(tmp_path)})
+    if target == "namespace":
+        if tenant is not None:
+            warehouses.bind_namespace(str(tmp_path), StorageOptions(), "beta_bronze", "wh", str(tmp_path))
+        assert catalog.client.post("/v1/namespace/beta_bronze/create", json={}, headers=alice).status_code == 200
+    else:
+        catalog.store.write((catalog.person("alice"), "admin", f"project:{tenant}"), (f"project:{tenant}", "project", "warehouse:wh"))
     catalog.store.write(
         (catalog.person("dave"), "assignee", "role:analyst"),
         *([(f"project:{role_project}", "project", "role:analyst")] if role_project is not None else []),
     )
+    grant_door, read_door = DOORS[target]
 
-    grant = catalog.client.post(
-        "/management/v1/namespace/beta_bronze/access/grant", json={"user": "role:analyst#assignee", "relation": "reader"}, headers=alice
-    )
+    grant = catalog.client.post(grant_door, json={"user": "role:analyst#assignee", "relation": "reader"}, headers=alice)
 
     assert grant.status_code == granted, grant.text
     if granted == 400:
         assert "acme" in grant.json()["error"] and "beta" in grant.json()["error"], f"the refusal does not name both tenants: {grant.text}"
-    read = catalog.client.post("/v1/namespace/beta_bronze/describe", json={}, headers=catalog.bearer("dave"))
+    read = catalog.client.post(read_door, json={}, headers=catalog.bearer("dave"))
     assert read.status_code == dave_reads, read.text

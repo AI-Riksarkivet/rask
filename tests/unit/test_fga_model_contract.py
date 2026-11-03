@@ -323,7 +323,7 @@ def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.Mo
     # `can_grant_owner` there would be a gate on an unreachable door. A new `<type>_router` carrying
     # `/access/grant` is covered the day it is added, which is the property a list cannot have.
     served = _types_served_by("access/grant")
-    assert served == {"table", "namespace", "classification"}, f"the grant doors changed: {sorted(served)}"
+    assert served == {"table", "namespace", "warehouse", "classification"}, f"the grant doors changed: {sorted(served)}"
     for fga_type in sorted(served):
         grantable = _grantable_relations(fga_type)
         assert grantable, f"{fga_type} has a grant route and no grantable rung — the door admits nothing"
