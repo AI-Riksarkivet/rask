@@ -39,6 +39,10 @@ from service_kit.lineage_events import LANCE_FACET, DatasetUuids
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
+#: The run a writer's pipeline names in its Context, a UUID as the spec's ``ParentRunFacet`` requires.
+_PIPELINE_RUN = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a42"
+
+
 def _parsed(event: dict):
     """The event through lineage's own models, whichever shape it is.
 
@@ -280,30 +284,12 @@ def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> 
     assert w["authorization"] == "Bearer x"
 
 
-def test_build_write_event_records_derived_from_inputs() -> None:
-    # A rename must record its SOURCE as an input (DERIVED_FROM) so the destination is not an orphan.
-    event = build_write_event(
-        table_id="db1$renamed",
-        namespace="db1",
-        author="alice",
-        version=None,
-        operation="register_table",
-        run_id="r1",
-        event_time="2026-07-15T00:00:00Z",
-        job_namespace="catalog",
-        inputs=[InputRef("db1$orig", None)],
-    )
-    # An unversioned input edge carries no version facet: the source node, under the event's dataset namespace.
-    assert event["inputs"] == [{"namespace": "db1", "name": "db1$orig"}]
-    assert _written(event)["name"] == "db1$renamed"
-
-
 def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_the_writers_run() -> None:
     # A write derived from inputs names each at the version it consumed (the standard DatasetVersionDatasetFacet,
     # which lineage records on the edge), and an input read off a branch names that branch, because a branch
-    # numbers its versions apart from main. The run the writer named rides the run's `rask_lance` facet as `runId`
-    # ([[CTL-33]]), and lineage records it on every edge as the run the writer's own tooling answers to: the event's
-    # own run id is the catalog's, derived from the commit.
+    # numbers its versions apart from main. The run the writer named is the event's standard `parent` run, and lineage
+    # records it on every edge as the run the writer's own tooling answers to: the event's own run id is the catalog's,
+    # derived from the commit.
     event = build_write_event(
         table_id="db$gold",
         namespace="db",
@@ -314,7 +300,12 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_t
         event_time="2026-07-21T00:00:00Z",
         job_namespace="catalog",
         inputs=[InputRef("db$silver", 4), InputRef("db$review", 2, "draft")],
-        run=RunContext(run_id="pipeline-run-42"),
+        run=RunContext(run_id=_PIPELINE_RUN, job_namespace="pipelines", job="nightly"),
+    )
+    parent = {key: value for key, value in event["run"]["facets"]["parent"].items() if not key.startswith("_")}
+    assert (parent, {"runId", "job"} & set(event["run"]["facets"]["rask_lance"])) == (
+        {"run": {"runId": _PIPELINE_RUN}, "job": {"namespace": "pipelines", "name": "nightly"}},
+        set(),
     )
     on_main, on_branch = event["inputs"]
     assert (on_main["facets"]["version"]["datasetVersion"], "rask_lance" in on_main["facets"]) == ("4", False)
@@ -325,36 +316,14 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_t
 
     edges = edges_of(_parsed(event), received_at=datetime.now(UTC))
     assert sorted((e["in_table"], e["in_version"], e["in_branch"], e["out_table"], e["out_version"], e["writer_run_id"]) for e in edges) == [
-        ("db$review", 2, "draft", "db$gold", 7, "pipeline-run-42"),
-        ("db$silver", 4, None, "db$gold", 7, "pipeline-run-42"),
+        ("db$review", 2, "draft", "db$gold", 7, _PIPELINE_RUN),
+        ("db$silver", 4, None, "db$gold", 7, _PIPELINE_RUN),
     ]
 
 
-def test_emit_write_event_maps_input_pins_to_canonical_dataset_ids() -> None:
-    # The rename handler passes the SOURCE segments as an InputPin; emit_write_event must resolve them to the
-    # SAME canonical (namespace, id) the rest of the graph keys on, so the DERIVED_FROM edge points at the
-    # real source node. An unpinned source carries version=None (no reproducibility facet).
-    em = _RecordingEmitter()
-    asyncio.run(
-        emit_write_event(
-            cast(LineageEmitter, em),
-            ["db1", "dest"],
-            author="alice",
-            version=None,
-            operation="register_table",
-            authorization=None,
-            inputs=[InputPin(segments=["db1", "src"])],
-            uuids=NO_OBJECT_UUIDS,
-        )
-    )
-    # (canonical id, pinned version) of the source, as a resolved InputRef.
-    assert em.writes[0]["inputs"] == [InputRef("db1$src", None)]
-
-
 def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
-    # The #115 reproducibility seam: an InputPin with a concrete version must resolve to an InputRef carrying
-    # that SAME version (found-live 2026-07-13: pins emitted then dropped → READ edges with no version). This
-    # is the version!=None twin of the test above, so a refactor that drops pin.version reddens here.
+    # The #115 reproducibility seam: an InputPin resolves to the canonical id the graph keys on, with that SAME
+    # version (found-live 2026-07-13: pins emitted then dropped → READ edges with no version).
     em = _RecordingEmitter()
     asyncio.run(
         emit_write_event(

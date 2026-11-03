@@ -93,6 +93,9 @@ _TARGETING_FIELDS: Final = ("eventType", "eventTime", "producer")
 #: The facets that name WHO: the verified author, and rask's own facet carrying the tenant, the originator
 #: and the producer's run id. Every other facet describes the data or the job.
 _TARGETING_FACETS: Final = (AUTHOR_FACET, LANCE_FACET)
+#: A run's targeting facets, and the standard `parent` naming the writer's own run, which a notifier links a
+#: notification to ([[LH-554]], ADR 0191).
+_RUN_FACETS: Final = (*_TARGETING_FACETS, "parent")
 #: The facet an output keeps: rask's own, carrying the uuids the catalog keys the table by (ADR 0173 §10), which an
 #: inbox row names the table by beside its name.
 _OUTPUT_FACETS: Final = (LANCE_FACET,)
@@ -117,7 +120,7 @@ def targeting_view(event: dict[str, Any]) -> dict[str, Any]:
     """An event cut to what deciding WHOM TO TELL reads, and nothing describing data.
 
     Its consumer is a notifier walking the feed, and what one reads to target people is the targeting contract
-    (docs/COMMIT-EVENTS.md): the run id and its `rask_author` and `rask_lance` facets, the state and
+    (docs/COMMIT-EVENTS.md): the run id and its `rask_author`, `rask_lance` and `parent` facets, the state and
     time, and the output names with each output's `rask_lance` facet, which names the table by its uuids; for a static
     change, the dataset's name, namespace and those two facets, plus `producer`. Inputs, the job, every other
     output facet (column lineage among them, which names other tables and their columns) and every other run facet
@@ -130,7 +133,7 @@ def targeting_view(event: dict[str, Any]) -> dict[str, Any]:
     if "run" in event:
         run = event["run"]
         view["run"] = (
-            {**({"runId": run["runId"]} if "runId" in run else {}), **({"facets": _facets(run["facets"])} if "facets" in run else {})}
+            {**({"runId": run["runId"]} if "runId" in run else {}), **({"facets": _facets(run["facets"], _RUN_FACETS)} if "facets" in run else {})}
             if isinstance(run, dict)
             else run
         )

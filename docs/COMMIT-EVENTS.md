@@ -85,7 +85,10 @@ it in the dataset's standard `symlinks` facet as OpenLineage's clients name a st
 DataFusion through the namespace) names the same dataset in the graph the feed is forwarded to: Marquez joins a dataset
 by every identifier it was first seen under (`DatasetSymlinkDao`, 0.51.1). A drop or a deregister names no location;
 the event that made the table laid its symlink, and a rename keeps the location, so in Marquez the location stays
-joined to the name it was first seen under.
+joined to the name it was first seen under. A rename is one dataset change on the new name whose standard
+`lifecycleStateChange` is `RENAME`, with the old name as `previousIdentifier` (LH-554); Marquez 0.51.1 reads only `DROP`
+from that facet (`OpenLineageDao`), so there the new name is a dataset of its own, and the old name is not marked
+deleted.
 
 ### A write that committed rows
 
@@ -101,10 +104,13 @@ OpenLineage `RunEvent` whose `producer` is the catalog's emitter
   client committed them through `version/create`),
   `version`, `ref` (the branch, absent for main), `branchIdentifier` (tells two incarnations of one branch
   name apart), `project`.
+- `run.facets.parent`: the standard `ParentRunFacet` naming the writer's own run, when the commit declared one: the
+  spec Context headers `x-rask-run-id` (a UUID), `x-rask-job-namespace` and `x-rask-job` on a catalog door, or the
+  transaction properties `rask.run_id`, `rask.job_namespace` and `rask.job` on a stock client's `version/create`, all
+  three or none (LH-554). A graph backend files the catalog's commit run under the pipeline's run by it.
 - `outputs[0].facets.version.datasetVersion`: the same version as a string, when known.
 - `run.facets.rask_author.sub`: the subject of the verified token that made the call.
-- `inputs`: the tables the write derived from, at their versions. A rename names the source table as its
-  input, so a follower filtering on the old name sees the rename.
+- `inputs`: the tables the write derived from, at their versions.
 
 ### A publication
 
@@ -119,9 +125,11 @@ again later (after an erasure dropped the tag) is a new row.
 
 ### A dataset change
 
-A schema or lifecycle change that committed no rows (a create with no rows, a drop, ...). `event_type` is `COMPLETE`, `job`
-is `null`, and `event` is an OpenLineage `DatasetEvent` with no `run`: the table is `dataset.name`, and the
-`rask_lance` and `rask_author` facets sit on `dataset.facets`.
+A schema or lifecycle change that committed no rows (a create with no rows, a drop, a rename, ...). `event_type` is
+`COMPLETE`, `job` is `null`, and `event` is an OpenLineage `DatasetEvent` with no `run`: the table is `dataset.name`, and the
+`rask_lance` and `rask_author` facets sit on `dataset.facets`. A rename's `dataset.facets.lifecycleStateChange` is `RENAME`
+and names the old name as `previousIdentifier` (`namespace`, `name`), so a follower filtering on the old name reads the
+rename by it.
 
 ### Events from other producers
 
@@ -161,7 +169,7 @@ an outside source, and so is a dataset under another catalog's `lance-namespace:
   holds no `publish_table` for that move, announces it for the person the catalog recorded moving the tag. A tag moved past the catalog's doors names no
   such person: it is counted unauthored, which pages, and never announced. Only the version the tag names now is looked
   for, so a publication the tag moved past before the cron ran is not announced; the newer one is.
-- A table's lifecycle markers (a declare, a register, a rename's pair, a drop, a deregister) are best-effort: a crash
+- A table's lifecycle markers (a declare, a register, a rename, a drop, a deregister) are best-effort: a crash
   between the change and its outbox stage loses that marker, and nothing announces it again (ADR 0188). A follower that
   must not miss a table coming or going reads `ListTables` and `DescribeTable` as the truth, and the marker as its cue.
 - An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later
@@ -231,7 +239,7 @@ bootstrap-admin grants each account exactly its roles and revokes a role the map
 holding `event_reader` (`can_read_event_feed` on the estate root). The governed `GET /events` shows a service only the
 tables its own grants reach, so a notifier walking it would never see a run in a warehouse it holds nothing on. Each row
 is `{seq, event}`, the event cut to what deciding whom to tell reads: `eventType`, `eventTime`, `producer`, the run id
-with its `rask_author` and `rask_lance` facets, and each output's name with its own `rask_lance` facet (for a dataset
+with its `rask_author`, `rask_lance` and `parent` facets, and each output's name with its own `rask_lance` facet (for a dataset
 change, the dataset's name, namespace and those two facets). Nothing describing the data crosses it, and the cursor rule
 above holds unchanged. Who is told stays gated per person by `can_be_notified`, so the role widens what the notifier
 observes and never what a person receives.

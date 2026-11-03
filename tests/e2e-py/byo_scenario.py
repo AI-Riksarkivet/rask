@@ -8,7 +8,7 @@ tag gate. `drive` is that job, run from outside the cluster:
    the run that made it as `rask.*` transaction properties;
 2. it follows lineage's `GET /events?since=` forward to the bronze write and the version it committed;
 3. it derives silver through the catalog's create and insert doors, naming its run and the bronze input at that
-   version in the spec Context (`x-rask-run-id`, `x-rask-job`, `x-rask-inputs`);
+   version in the spec Context (`x-rask-run-id`, `x-rask-job-namespace`, `x-rask-job`, `x-rask-inputs`);
 4. it publishes: the project's gate holds a breaching version behind `published`, readers of `@published` keep the
    previous version, and a validator approves the held version;
 5. it follows the feed over silver and reads its writes and both publications in commit order;
@@ -242,21 +242,24 @@ def published_rows(identity: Identity, table_id: list[str]) -> int:
 
 
 class NamedRun(BaseModel):
-    """The run a write names, as the pipeline names it: its id, its job, and each input as a table id and the version
-    it was read at. Bronze's source is outside the catalog, so its runs name no input."""
+    """The run a write names, as the pipeline names it: its OpenLineage run id (a UUID), its job's namespace and name,
+    and each input as a table id and the version it was read at. Bronze's source is outside the catalog, so its runs
+    name no input."""
 
-    run_id: str
+    run_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    job_namespace: str = "byo-pipeline"
     job: str
     inputs: list[dict[str, Any]] = Field(default_factory=list)
 
     def context(self) -> dict[str, str]:
         """The spec Context headers that name this run on a catalog door."""
-        return {"x-rask-run-id": self.run_id, "x-rask-job": self.job, "x-rask-inputs": json.dumps(self.inputs)}
+        named = {"x-rask-run-id": self.run_id, "x-rask-job-namespace": self.job_namespace, "x-rask-job": self.job}
+        return named | {"x-rask-inputs": json.dumps(self.inputs)}
 
     def transaction_properties(self, *, author: str) -> dict[str, str]:
         """The `rask.*` transaction properties a stock client stages for this run when ``author`` commits it
         (`catalog.core.run_context`): `rask.inputs` only when the run names an input."""
-        stamped = {"rask.run_id": self.run_id, "rask.job": self.job, "rask.author": author}
+        stamped = {"rask.run_id": self.run_id, "rask.job_namespace": self.job_namespace, "rask.job": self.job, "rask.author": author}
         return stamped | ({"rask.inputs": json.dumps(self.inputs)} if self.inputs else {})
 
 
@@ -306,7 +309,7 @@ def drive(tenant: Tenant) -> ScenarioRun:
 
     # 1. Seed bronze with stock pylance through the namespace, each commit naming its run: a first load, then an increment.
     stock = pipeline.namespace()
-    seed_run = NamedRun(run_id="byo-seed-1", job="byo-bronze")
+    seed_run = NamedRun(job="byo-bronze")
     seeded = lance.write_dataset(
         rows_of(range(4)),
         namespace_client=stock,
@@ -332,7 +335,7 @@ def drive(tenant: Tenant) -> ScenarioRun:
     bronze_version = max(version for operation, version in writes(bronze_rows) if operation == "insert")
 
     # 3. Derive silver through the catalog's doors, naming the run and the input in the spec Context.
-    first_run = NamedRun(run_id="byo-run-1", job="byo-silver", inputs=[{"table": bronze_id, "version": bronze_version}])
+    first_run = NamedRun(job="byo-silver", inputs=[{"table": bronze_id, "version": bronze_version}])
     silver_start = feed_start(pipeline)
     created = pipeline.namespace(**first_run.context()).create_table(
         lance_namespace.CreateTableRequest(id=silver_id, mode="create"), arrow_ipc(rows_of(range(8)))
@@ -342,7 +345,7 @@ def drive(tenant: Tenant) -> ScenarioRun:
 
     # 4. The project turns review on; the next batch triples silver, past the 0.25 band, and is held behind `published`.
     tenant.declare_gate(review=True)
-    second_run = first_run.model_copy(update={"run_id": "byo-run-2"})
+    second_run = first_run.model_copy(update={"run_id": str(uuid.uuid4())})
     inserted = pipeline.namespace(**second_run.context()).insert_into_table(
         lance_namespace.InsertIntoTableRequest(id=silver_id, mode="append"), arrow_ipc(rows_of(range(8, 24)))
     )
@@ -366,7 +369,7 @@ def drive(tenant: Tenant) -> ScenarioRun:
     # 6. The pipeline cuts `staging` from silver through the spec's CreateTableBranch, then commits a stock append on it
     #    through version/create, naming its run and the bronze input as transaction properties.
     pipeline.namespace().create_table_branch(lance_namespace.CreateTableBranchRequest(id=silver_id, name=STAGING))
-    branch_run = first_run.model_copy(update={"run_id": "byo-run-3"})
+    branch_run = first_run.model_copy(update={"run_id": str(uuid.uuid4())})
     on_branch = lance.write_dataset(
         rows_of(range(24, 28)),
         lance.dataset(namespace_client=stock, table_id=silver_id).checkout_version((STAGING, None)),

@@ -15,6 +15,8 @@ write's run slot.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from catalog.core.lineage_emit import InputRef, build_write_event
@@ -27,7 +29,7 @@ DDL_OPERATIONS = (
 DATA_OPERATIONS = ("insert",)
 
 
-def _event(operation: str, inputs: list[InputRef] | None = None) -> dict[str, object]:
+def _event(operation: str, inputs: list[InputRef] | None = None) -> dict[str, Any]:
     return build_write_event(
         table_id="alpha$bronze$images",
         namespace="alpha$bronze",
@@ -61,9 +63,8 @@ def test_a_data_write_is_still_a_run_event(operation: str) -> None:
 
 def test_a_DDL_change_that_DERIVED_the_table_keeps_its_run() -> None:
     """A `DatasetEvent` has only `dataset` — no `inputs` — and every `DERIVED_FROM` edge is built from a
-    run's inputs. A rename passes its SOURCE so the destination is not an orphan with no history, so
-    moving it would sever the chain the input exists to preserve. Not a phantom either: something did
-    derive one table from another."""
-    event = _event("rename_table", inputs=[InputRef("alpha$bronze$old", None)])
-    assert "run" in event and "job" in event, "a derived rename lost the run that carries its source"
-    assert event["inputs"] == [{"namespace": "alpha$bronze", "name": "alpha$bronze$old"}]
+    run's inputs. A create whose run names an input derived the table from it, so moving it would sever the
+    edge the input declares. Not a phantom either: something did derive one table from another."""
+    event = _event("create_table", inputs=[InputRef("alpha$bronze$old", 3)])
+    assert "run" in event and "job" in event, "a derived create lost the run that carries its source"
+    assert [(i["namespace"], i["name"], i["facets"]["version"]["datasetVersion"]) for i in event["inputs"]] == [("alpha$bronze", "alpha$bronze$old", "3")]

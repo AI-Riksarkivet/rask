@@ -106,13 +106,16 @@ async def test_create_posts_exist_ok_with_schema_typed_rows_and_its_run(catalog:
     catalog.version = 9
     publisher = CatalogPublisher(catalog.url, token_file=_token(tmp_path / "token", "svc-token"), originator="alice")
 
-    version = await publisher.create_table("silver$vasa_0123456789ab", _plan(rows=2), properties={"annotation.project_id": "p1"}, run_id="pub-1")
+    version = await publisher.create_table(
+        "silver$vasa_0123456789ab", _plan(rows=2), properties={"annotation.project_id": "p1"}, run_id="0199a1b2c3d47e5f8a9b0c1d2e3f4a07"
+    )
 
     [call] = catalog.calls
     assert (version, call.table_id) == (9, "silver$vasa_0123456789ab")
     assert call.params["mode"] == "exist_ok", "the saga's retry safety RELIES on exist_ok — any other mode re-creates or errors on replay"
     assert json.loads(call.params["properties"]) == {"annotation.project_id": "p1"}
-    assert (call.headers["x-rask-run-id"], "x-rask-inputs" in call.headers) == ("pub-1", False), "an absent pin names no input (§7.2 — never fabricate)"
+    named = (call.headers["x-rask-run-id"], call.headers["x-rask-job-namespace"], call.headers["x-rask-job"], "x-rask-inputs" in call.headers)
+    assert named == ("0199a1b2c3d47e5f8a9b0c1d2e3f4a07", "annotator", "annotate.publish", False), "an absent pin names no input (§7.2 — never fabricate)"
     # The service's bearer authors the events, so the originator header is the only place the human survives.
     assert (call.headers["authorization"], call.headers["x-lance-originator"]) == ("Bearer svc-token", "alice")
     # A readable Arrow-IPC STREAM carrying the published schema: an IPC file, or inferred types, would fail the
@@ -124,7 +127,9 @@ async def test_create_posts_exist_ok_with_schema_typed_rows_and_its_run(catalog:
 @pytest.mark.asyncio
 async def test_the_pin_reaches_the_create_as_the_runs_input(catalog: _Catalog) -> None:
     """§7.2 over the wire: the one pinned source is the run's input in the catalog Context."""
-    await CatalogPublisher(catalog.url).create_table("silver$t_1", _plan(), properties={}, run_id="pub-1", source="demo$pages", source_version=24)
+    await CatalogPublisher(catalog.url).create_table(
+        "silver$t_1", _plan(), properties={}, run_id="0199a1b2c3d47e5f8a9b0c1d2e3f4a07", source="demo$pages", source_version=24
+    )
 
     assert json.loads(catalog.calls[0].headers["x-rask-inputs"]) == [{"table": ["demo", "pages"], "version": 24}]
 
@@ -139,9 +144,9 @@ async def test_every_publish_call_presents_the_annotators_own_token_read_again_a
     token = _token(tmp_path / "token", "token-1")
     publisher = CatalogPublisher(catalog.url, token_file=token, originator="dex~gina")
 
-    await publisher.create_table("acme-silver$labels_p1", _plan(), properties={}, run_id="pub-1")
+    await publisher.create_table("acme-silver$labels_p1", _plan(), properties={}, run_id="0199a1b2c3d47e5f8a9b0c1d2e3f4a07")
     _token(token, "token-2")
-    await publisher.create_table("acme-silver$labels_p1", _plan(), properties={}, run_id="pub-1")
+    await publisher.create_table("acme-silver$labels_p1", _plan(), properties={}, run_id="0199a1b2c3d47e5f8a9b0c1d2e3f4a07")
 
     presented = [(call.headers["authorization"], call.headers["x-lance-originator"]) for call in catalog.calls]
     assert presented == [("Bearer token-1", "dex~gina"), ("Bearer token-2", "dex~gina")]
@@ -154,7 +159,7 @@ async def test_a_create_the_catalog_does_not_take_is_sent_again(catalog: _Catalo
     monkeypatch.setattr(lakehouse, "CREATE_BACKOFF_S", 0.0)
     catalog.unavailable = lakehouse.CREATE_ATTEMPTS - 1
 
-    version = await CatalogPublisher(catalog.url).create_table("silver$t_1", _plan(), properties={}, run_id="pub-1")
+    version = await CatalogPublisher(catalog.url).create_table("silver$t_1", _plan(), properties={}, run_id="0199a1b2c3d47e5f8a9b0c1d2e3f4a07")
 
     assert (version, len(catalog.calls)) == (7, lakehouse.CREATE_ATTEMPTS)
 
@@ -167,5 +172,5 @@ async def test_a_create_the_catalog_never_takes_fails_after_its_attempts(catalog
     catalog.unavailable = lakehouse.CREATE_ATTEMPTS
 
     with pytest.raises(ServiceUnavailableError, match="the catalog is unavailable"):
-        await CatalogPublisher(catalog.url).create_table("silver$t_1", _plan(), properties={}, run_id="pub-1")
+        await CatalogPublisher(catalog.url).create_table("silver$t_1", _plan(), properties={}, run_id="0199a1b2c3d47e5f8a9b0c1d2e3f4a07")
     assert len(catalog.calls) == lakehouse.CREATE_ATTEMPTS

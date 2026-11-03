@@ -25,6 +25,10 @@ from service_kit.governed import fga
 from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, dataset_uuids, static_event_id
 
 
+#: The standard OpenLineage run facet naming the run a run was spawned by: for a catalog commit, the writer's own run.
+PARENT_FACET: Final = "parent"
+
+
 #: The states a person needs to be told about. RESOLVED as a product decision, not a technical
 #: default: notify-on-needs-attention — failures loudest, completions second. "Your run started" tells
 #: the person who clicked start nothing and is noise to everyone else, so START notifies nobody.
@@ -208,14 +212,17 @@ def source_run_id(run: LineageRun) -> str | None:
     """The producer's OWN run id — what its detail doors answer to.
 
     The graph `runId` is a derived uuid5 and links to nothing: every ingest-board row 404'd when it
-    was used as the link. `None` for runs recorded before producers stated it, which a consumer must
-    render unlinked rather than guess at.
+    was used as the link. `None` for a run that states none, which a consumer must render unlinked rather
+    than guess at.
 
-    Read as `rask_lance.runId`, the one spelling the estate's producers stamp: the catalog writes it and
-    lineage's edge list reads it, so a second spelling here would name no run for every catalog write
-    ([[CTL-33]]).
+    A catalog commit names the writer's run as the standard `parent` run facet (`ParentRunFacet.run.runId`), which
+    lineage's edge list reads too ([[LH-554]], ADR 0191); a producer reporting a run of its own states its id as
+    `rask_lance.runId` ([[CTL-33]]).
     """
-    return _facet_field(run.facets, LANCE_FACET, "runId")
+    parent = run.facets.get(PARENT_FACET)
+    parent_run = parent.get("run") if isinstance(parent, dict) else None
+    writer_run = parent_run.get("runId") if isinstance(parent_run, dict) else None
+    return writer_run if isinstance(writer_run, str) and writer_run else _facet_field(run.facets, LANCE_FACET, "runId")
 
 
 def project_id(run: LineageRun) -> str | None:

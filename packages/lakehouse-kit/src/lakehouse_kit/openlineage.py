@@ -159,15 +159,28 @@ def lifecycle_state(operation: str) -> str | None:
     return _LIFECYCLE_BY_OPERATION.get(operation.lower())
 
 
-def lifecycle_facet(producer: str, operation: str) -> dict[str, object]:
+def lifecycle_facet(producer: str, operation: str, *, renamed_from: tuple[str, str] | None = None) -> dict[str, object]:
     """The standard ``lifecycleStateChange`` payload for ``operation``, or ``{}`` when it is not DDL.
 
     Returning ``{}`` rather than guessing is the point: an operation this map does not name is one the
     estate has added without deciding what it does to the dataset, and a wrong value here is worse than
     an absent one — a reader acts on ``DROP``.
+
+    ``renamed_from`` is the ``(namespace, name)`` a ``RENAME`` moved the dataset from, the spec's ``previousIdentifier``:
+    one dataset under a new name, not a dataset deleted and another created ([[LH-554]]).
+
+    Raises:
+        ValueError: ``renamed_from`` is given for an operation that is not a rename.
     """
     state = lifecycle_state(operation)
-    return {"_producer": producer, "_schemaURL": LIFECYCLE_FACET_SCHEMA_URL, "lifecycleStateChange": state} if state else {}
+    if renamed_from is not None and state != "RENAME":
+        raise ValueError(f"only a rename names the identifier it moved from, not {operation!r}")
+    if not state:
+        return {}
+    facet: dict[str, object] = {"_producer": producer, "_schemaURL": LIFECYCLE_FACET_SCHEMA_URL, "lifecycleStateChange": state}
+    if renamed_from is not None:
+        facet["previousIdentifier"] = {"namespace": renamed_from[0], "name": renamed_from[1]}
+    return facet
 
 
 #: Standard ``ProcessingEngineRunFacet`` schema URL — WHICH ENGINE produced the run.

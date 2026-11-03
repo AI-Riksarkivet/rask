@@ -28,6 +28,8 @@ ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 INVALID_INPUT = 13
 CREATE = "/v1/table/db$t/create"
 KEY = "3f2b8c1a-7d4e-4f6a-9b0c-5e1d2a3b4c5d"
+#: A run the spec Context names whole: its id, a UUID, and its job's namespace and name.
+_RUN = {"x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", "x-rask-job-namespace": "pipelines", "x-rask-job": "nightly"}
 #: Past CPython's int-string conversion limit, so `json.loads` raises a bare `ValueError` rather than
 #: `JSONDecodeError` — valid JSON Python will not parse.
 _UNPARSEABLE_INT = "1" * 5000
@@ -68,7 +70,9 @@ _OFFSETS = struct.pack("<iii", 0, 5, 10)
         pytest.param(f"{CREATE}?properties=[1]", {}, "string values", id="properties-that-are-an-array"),
         pytest.param(f'{CREATE}?properties={{"a":1}}', {}, "string values", id="a-property-that-is-a-number"),
         pytest.param(f'{CREATE}?properties={{"write.format.default":"parquet"}}', {}, "Lance only", id="a-non-lance-format"),
-        pytest.param(CREATE, {"x-rask-run-id": "run-7", "x-rask-inputs": "{not-json"}, "inputs are not JSON", id="a-run-whose-inputs-are-not-json"),
+        pytest.param(CREATE, {**_RUN, "x-rask-inputs": "{not-json"}, "inputs are not JSON", id="a-run-whose-inputs-are-not-json"),
+        pytest.param(CREATE, {**_RUN, "x-rask-run-id": "run-7"}, "run_id", id="a-run-id-that-is-no-uuid"),
+        pytest.param(CREATE, {"x-rask-run-id": _RUN["x-rask-run-id"], "x-rask-job": "nightly"}, "job_namespace", id="a-run-naming-no-job-namespace"),
         # Refused, never dropped unread: the catalog writes with its own credential ([[LH-258]]).
         pytest.param(f'{CREATE}?storage_options={{"aws_region":"x"}}', {}, "storage_options are not accepted", id="client-storage-options"),
     ],

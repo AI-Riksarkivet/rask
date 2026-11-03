@@ -47,7 +47,9 @@ def test_a_pipeline_seeds_bronze_derives_silver_and_its_breach_waits_for_a_valid
     assert (approved["published_version"], approved["hold"]["decided_by"]) == (2, byo_tenant.validator.principal), approved
     assert run.published_rows_after_approval == 24
     assert [int(row["seq"]) for row in run.silver_rows] == sorted(int(row["seq"]) for row in run.silver_rows)
-    assert (insert["inputs"], scenario.lance_facet(insert)["job"]) == ([run.bronze_table], "byo-silver"), insert
+    assert (insert["inputs"], insert["event"]["run"]["facets"]["parent"]["job"]) == ([run.bronze_table], {"namespace": "byo-pipeline", "name": "byo-silver"}), (
+        insert
+    )
     assert (run.caught_up["events"], run.caught_up["next_cursor"]) == ([], run.cursor), run.caught_up
 
 

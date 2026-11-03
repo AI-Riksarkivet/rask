@@ -203,3 +203,4 @@ before they had a record here; each names its source document and the date of th
 | [0188](0188-a-lost-publication-is-announced-from-its-tag-and-lifecycle-markers-stay-best-effort.md) | LH-552 | A lost publication is announced from its tag; a table's lifecycle markers stay best-effort (2026-11-01) |
 | [0189](0189-the-product-chart-carries-no-engine-seam.md) | XC-182 | The product chart carries no engine seam: a bring-your-own engine is a client like any other (2026-11-01) |
 | [0190](0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md) | XC-188 | The notifications inbox is a client of the lakehouse's events: the lakehouse emits, a notifier delivers (2026-11-02) |
+| [0191](0191-a-rename-is-one-renamed-dataset-and-a-commit-names-its-writers-run-as-parent.md) | LH-554 | A rename is one renamed dataset, and a commit names its writer's run as its parent (2026-11-03) |

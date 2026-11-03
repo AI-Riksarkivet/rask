@@ -276,8 +276,9 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   (`fga_deps.require_declared_inputs`, ADR 0183 §2); before the commit is finalized the catalog records each input's uuid
   for the writing table's uuid (`catalog.services.table_inputs`, `_table_inputs/` on the control root, never ended). The
   run is `catalog.core.run_context`: on `create`, `insert` and `merge_insert` it comes from the spec Context headers
-  `x-rask-run-id`, `x-rask-job`, `x-rask-inputs` (a JSON array of `{table: [segments], version, branch}`) and the
-  door stamps it as the transaction properties `rask.run_id` / `rask.job` / `rask.inputs`; at `version/create` the
+  `x-rask-run-id` (a UUID), `x-rask-job-namespace`, `x-rask-job` (all three or none: the run is the commit's OpenLineage
+  `parent`, ADR 0191), `x-rask-inputs` (a JSON array of `{table: [segments], version, branch}`) and the door stamps it as
+  the transaction properties `rask.run_id` / `rask.job_namespace` / `rask.job` / `rask.inputs`; at `version/create` the
   catalog reads the same properties from the staged manifest, which may carry no other `rask.*` key but `rask.author`,
   and refuses a `rask.author` other than the caller (a property any committer can write proves authorship only because
   of that refusal). A compaction and a restore add no data, so they name no run. A rename commits nothing a run can
@@ -362,7 +363,8 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   `_commit_authors/<uuid>/tags/published/`), the run id is derived from the table's uuid, the version and the tag
   file's `updatedAt` (`commit_ids.tag_move_run_id`, since an erasure can drop the tag and a version be published again),
   and a move the feed holds no run for is announced for that mover; one with no recorded mover is counted unauthored once
-  (the `tag:published` mark, keyed by the move). A table's lifecycle markers (declare, register, rename,
+  (the `tag:published` mark, keyed by the move). A table's lifecycle markers (declare, register, rename (one `RENAME`
+  dataset change naming the old id as `previousIdentifier`, ADR 0191),
   drop, deregister) stay best-effort, as in Lakekeeper and Polaris. Pinned by
   `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
 

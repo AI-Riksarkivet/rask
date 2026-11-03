@@ -46,7 +46,12 @@ PROJECT = "acme"
 NAMESPACE = "acme-silver"
 TABLE = f"{NAMESPACE}$orders"
 #: The run a silver write names (ADR 0156 C2): an input the writer may read, at a version.
-RUN = {"x-rask-run-id": "run-7", "x-rask-inputs": json.dumps([{"table": ["acme-bronze", "orders"], "version": 1}])}
+RUN = {
+    "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+    "x-rask-job-namespace": "pipelines",
+    "x-rask-job": "nightly",
+    "x-rask-inputs": json.dumps([{"table": ["acme-bronze", "orders"], "version": 1}]),
+}
 #: What the validator holds on the table, beside the writer rungs alice holds.
 WRITER = ("can_write_data", "can_update_tag", "can_get_metadata", "can_read_data")
 

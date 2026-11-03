@@ -1332,7 +1332,12 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
 
 
 #: The provenance a pipeline names on a governed write (ADR 0156 C2): its run, its job, and each input at a version.
-_RUN = {"x-rask-run-id": "run-7", "x-rask-job": "nightly", "x-rask-inputs": json.dumps([{"table": ["db", "src"], "version": 1}])}
+_RUN = {
+    "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+    "x-rask-job-namespace": "pipelines",
+    "x-rask-job": "nightly",
+    "x-rask-inputs": json.dumps([{"table": ["db", "src"], "version": 1}]),
+}
 
 
 def _with_source(served: Served) -> lance_namespace.LanceNamespace:
@@ -1399,23 +1404,30 @@ def test_a_catalog_write_door_commits_the_run_its_context_names(
     assert landed.version == 2
     properties = _committed_properties(landed, 2)
     assert {key: value for key, value in properties.items() if key != "rask.inputs"} == {
-        "rask.run_id": "run-7",
+        "rask.run_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+        "rask.job_namespace": "pipelines",
         "rask.job": "nightly",
         "rask.author": "dex~alice",
         "rask.operation": operation,
     }
     assert json.loads(properties["rask.inputs"]) == [{"table": ["db", "src"], "version": 1}]
     (announced,) = recorder.writes
-    assert (announced["version"], [ref[:3] for ref in announced["inputs"]], announced["run"].run_id, announced["run"].job) == (
+    assert (announced["version"], [ref[:3] for ref in announced["inputs"]], str(announced["run"].run_id), announced["run"].job) == (
         2,
         [("db$src", 1, None)],
-        "run-7",
+        "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
         "nightly",
     )
 
 
 _SILVER = ["lab", "t"]
-_PROVENANCE = {"rask.run_id": "run-7", "rask.author": "dex~alice", "rask.inputs": json.dumps([{"table": ["db", "src"], "version": 1}])}
+_PROVENANCE = {
+    "rask.run_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+    "rask.job_namespace": "pipelines",
+    "rask.job": "nightly",
+    "rask.author": "dex~alice",
+    "rask.inputs": json.dumps([{"table": ["db", "src"], "version": 1}]),
+}
 
 
 def _stock_append_naming_no_run(served: Served) -> tuple[int, int, str]:
@@ -1441,7 +1453,12 @@ def _insert_door_naming_no_run(served: Served) -> tuple[int, int, str]:
 
 def _update_door(served: Served) -> tuple[int, int, str]:
     """``update`` cannot carry a run into its commit, so a silver table refuses it whatever the Context names."""
-    context = {"x-rask-run-id": "run-7", "x-rask-inputs": _PROVENANCE["rask.inputs"]}
+    context = {
+        "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+        "x-rask-job-namespace": "pipelines",
+        "x-rask-job": "nightly",
+        "x-rask-inputs": _PROVENANCE["rask.inputs"],
+    }
     answer = httpx.post(f"{served.url}/v1/table/lab$t/update", json={"updates": [["v", "'z'"]]}, headers={**_TOKEN, **context})
     return answer.status_code, answer.json()["code"], answer.json()["detail"]
 
@@ -1503,7 +1520,13 @@ def test_a_silver_commit_lands_only_when_it_names_its_run_and_inputs(
 
 
 def _stock_append_naming(served: Served, inputs: str) -> tuple[int, str]:
-    provenance = {"rask.run_id": "run-7", "rask.author": "dex~alice", "rask.inputs": inputs}
+    provenance = {
+        "rask.run_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+        "rask.job_namespace": "pipelines",
+        "rask.job": "nightly",
+        "rask.author": "dex~alice",
+        "rask.inputs": inputs,
+    }
     with pytest.raises(OSError):
         lance.write_dataset(_keyed([4], ["d"]), namespace_client=served.stock(), table_id=_TABLE, mode="append", transaction_properties=provenance)
     _, code, detail = _answer_to_the_staged_commit(served, "db$t", 2)
@@ -1512,7 +1535,11 @@ def _stock_append_naming(served: Served, inputs: str) -> tuple[int, str]:
 
 def _insert_door_naming(served: Served, inputs: str) -> tuple[int, str]:
     with pytest.raises(lance_namespace.InvalidInputError) as refused:
-        _insert(served.stock({"x-rask-run-id": "run-7", "x-rask-inputs": inputs}))
+        _insert(
+            served.stock(
+                {"x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", "x-rask-job-namespace": "pipelines", "x-rask-job": "nightly", "x-rask-inputs": inputs}
+            )
+        )
     return refused.value.code, str(refused.value)
 
 

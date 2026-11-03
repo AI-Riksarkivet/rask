@@ -132,7 +132,7 @@ class Drills:
         body = {"namespace": self.namespace, "properties": {"rask.tier": "bronze"}}
         scenario.ok(admin.http.post(f"{CATALOG}/management/v1/warehouses/{self.tenant.project}/namespaces", json=body, timeout=60))
         self.grant(self.pipeline.principal, "writer")
-        self._commit(self.source, range(4), NamedRun(run_id=f"c5-src-{uuid.uuid4().hex[:6]}", job="c5-source"), mode="create")
+        self._commit(self.source, range(4), NamedRun(job="c5-source"), mode="create")
 
     def grant(self, principal: str, relation: str) -> None:
         """The tenant's admin grants ``relation`` on the namespace, which the catalog announces on the control lane."""
@@ -141,7 +141,7 @@ class Drills:
 
     def run(self, table: list[str]) -> NamedRun:
         """A fresh run of the pipeline's job for ``table``, reading the source table at version 1."""
-        return NamedRun(run_id=f"c5-{table[-1]}-{uuid.uuid4().hex[:8]}", job=f"c5-{table[-1]}", inputs=[{"table": self.source, "version": 1}])
+        return NamedRun(job=f"c5-{table[-1]}", inputs=[{"table": self.source, "version": 1}])
 
     def make(self, name: str) -> list[str]:
         """A table the pipeline makes in the namespace with a stock client, its first commit naming a run."""

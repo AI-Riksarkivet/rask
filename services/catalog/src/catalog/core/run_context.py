@@ -1,5 +1,10 @@
 """The run a governed write names: its id, its job and the inputs it read (ADR 0156 C2, ADR 0157, [[LH-225]]).
 
+The run is the commit's OpenLineage parent ([[LH-554]]): its id is a UUID and its job is named by a namespace and a name,
+as the spec's ``ParentRunFacet`` requires (``run.runId`` of ``format: uuid``, ``job.namespace`` and ``job.name``), so the
+catalog's announcement of the commit names the writer's own run where a graph backend links the two (Marquez 0.51.1 keys
+a parent run by that triple, ``Utils.findParentRunUuid``). A run naming part of that triple is refused.
+
 Provenance travels in the spec ``Context`` (``lance_docs/ns_catalog/spec.yaml`` § Context): a client's
 ``header.<name>`` entry reaches the catalog as the request header ``<name>``. On its own write doors the catalog
 reads the run from those headers and stamps it into the commit as Lance transaction properties; a stock client
@@ -28,23 +33,26 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from typing import Annotated, Final
+from uuid import UUID
 
 from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 
 RUN_ID_HEADER: Final = "x-rask-run-id"
+JOB_NAMESPACE_HEADER: Final = "x-rask-job-namespace"
 JOB_HEADER: Final = "x-rask-job"
 INPUTS_HEADER: Final = "x-rask-inputs"
 
 RUN_ID_PROPERTY: Final = "rask.run_id"
+JOB_NAMESPACE_PROPERTY: Final = "rask.job_namespace"
 JOB_PROPERTY: Final = "rask.job"
 INPUTS_PROPERTY: Final = "rask.inputs"
 AUTHOR_PROPERTY: Final = "rask.author"
 OPERATION_PROPERTY: Final = "rask.operation"
 
 #: Every ``rask.*`` transaction property a stock client's commit may carry.
-PROPERTIES: Final = frozenset({RUN_ID_PROPERTY, JOB_PROPERTY, INPUTS_PROPERTY, AUTHOR_PROPERTY})
+PROPERTIES: Final = frozenset({RUN_ID_PROPERTY, JOB_NAMESPACE_PROPERTY, JOB_PROPERTY, INPUTS_PROPERTY, AUTHOR_PROPERTY})
 
 #: Each input is one FGA check on the commit path, so the list is bounded.
 MAX_INPUTS: Final = 64
@@ -63,29 +71,28 @@ class RunInput(BaseModel):
 
 
 class RunContext(BaseModel):
-    """The run behind one commit."""
+    """The run behind one commit: the writer's own OpenLineage run, and the job it is a run of."""
 
     model_config = ConfigDict(frozen=True)
 
-    run_id: _Name
-    job: _Name | None = None
+    run_id: UUID
+    job_namespace: _Name
+    job: _Name
     inputs: Annotated[tuple[RunInput, ...], Field(max_length=MAX_INPUTS)] = ()
 
     def properties(self, *, author: str | None) -> dict[str, str]:
         """The ``rask.*`` transaction properties that carry this run in a commit made by ``author``."""
-        stamped = {RUN_ID_PROPERTY: self.run_id}
+        stamped = {RUN_ID_PROPERTY: str(self.run_id), JOB_NAMESPACE_PROPERTY: self.job_namespace, JOB_PROPERTY: self.job}
         if author is not None:
             stamped[AUTHOR_PROPERTY] = author
-        if self.job is not None:
-            stamped[JOB_PROPERTY] = self.job
         if self.inputs:
             stamped[INPUTS_PROPERTY] = json.dumps([entry.model_dump(exclude_none=True) for entry in self.inputs], separators=(",", ":"))
         return stamped
 
 
-def _parse(run_id: str | None, job: str | None, inputs: str | None, *, where: str) -> RunContext | None:
+def _parse(run_id: str | None, job_namespace: str | None, job: str | None, inputs: str | None, *, where: str) -> RunContext | None:
     if run_id is None:
-        if job is not None or inputs is not None:
+        if job_namespace is not None or job is not None or inputs is not None:
             raise InvalidInputError(f"{where} names a job or inputs but no run id")
         return None
     try:
@@ -95,7 +102,7 @@ def _parse(run_id: str | None, job: str | None, inputs: str | None, *, where: st
     if not isinstance(listed, list):
         raise InvalidInputError(f"{where}: the inputs are a JSON array of {{table, version, branch}}")
     try:
-        return RunContext.model_validate({"run_id": run_id, "job": job, "inputs": listed})
+        return RunContext.model_validate({"run_id": run_id, "job_namespace": job_namespace, "job": job, "inputs": listed})
     except ValidationError as exc:
         first = exc.errors(include_url=False, include_input=False)[0]
         field = ".".join(str(part) for part in first["loc"])
@@ -106,9 +113,12 @@ def from_headers(headers: Mapping[str, str]) -> RunContext | None:
     """The run a request's Context names, or ``None`` when it names none.
 
     Raises:
-        InvalidInputError: The headers name a job or inputs without a run id, or one of them is malformed.
+        InvalidInputError: The headers name a job or inputs without a run id, a run id that is no UUID or without its
+            job's namespace and name, or one of them is malformed.
     """
-    return _parse(headers.get(RUN_ID_HEADER), headers.get(JOB_HEADER), headers.get(INPUTS_HEADER), where="the request's Context")
+    return _parse(
+        headers.get(RUN_ID_HEADER), headers.get(JOB_NAMESPACE_HEADER), headers.get(JOB_HEADER), headers.get(INPUTS_HEADER), where="the request's Context"
+    )
 
 
 def from_properties(properties: Mapping[str, str] | None) -> RunContext | None:
@@ -116,13 +126,19 @@ def from_properties(properties: Mapping[str, str] | None) -> RunContext | None:
 
     Raises:
         InvalidInputError: A ``rask.*`` key other than the run's own is present, a job or inputs are named without a
-            run id, or one of them is malformed.
+            run id, a run id is no UUID or names no job namespace and name, or one of them is malformed.
     """
     properties = properties or {}
     foreign = sorted(key for key in properties if key.startswith("rask.") and key not in PROPERTIES)
     if foreign:
         raise InvalidInputError(f"commit refused: the rask.* transaction properties a commit may carry are {sorted(PROPERTIES)}, not {foreign}")
-    return _parse(properties.get(RUN_ID_PROPERTY), properties.get(JOB_PROPERTY), properties.get(INPUTS_PROPERTY), where="the commit's transaction properties")
+    return _parse(
+        properties.get(RUN_ID_PROPERTY),
+        properties.get(JOB_NAMESPACE_PROPERTY),
+        properties.get(JOB_PROPERTY),
+        properties.get(INPUTS_PROPERTY),
+        where="the commit's transaction properties",
+    )
 
 
 def commit_properties(run: RunContext | None, *, author: str | None, operation: str) -> dict[str, str]:

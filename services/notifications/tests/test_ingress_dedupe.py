@@ -41,7 +41,14 @@ PAGES_UUID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b"
 RUN_EVENT: dict[str, Any] = {
     "eventType": "FAIL",
     "eventTime": "2026-08-09T12:00:00+00:00",
-    "run": {"runId": "run-77", "facets": {"rask_author": {"name": "alice", "sub": "alice"}, "rask_lance": {"runId": "ingest-77"}}},
+    "run": {
+        "runId": "run-77",
+        # The writer's own run, as the catalog names it on a commit: the standard parent run facet (ADR 0191).
+        "facets": {
+            "rask_author": {"name": "alice", "sub": "alice"},
+            "parent": {"run": {"runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a77"}, "job": {"namespace": "lance-ingest", "name": "harvest"}},
+        },
+    },
     "job": {"namespace": "lance-ingest", "name": "harvest"},
     "outputs": [{"namespace": "bronze", "name": "bronze$pages", "facets": {"rask_lance": {"tableUuid": PAGES_UUID}}}],
 }
@@ -108,7 +115,7 @@ def test_the_handler_unwraps_the_envelope_rather_than_treating_it_as_the_event(b
     bus.post("/lineage-events", json=_cloud_event(RUN_EVENT))
     stored = plane.boxes["alice"][0]
     assert stored["notification_id"] == "run-77@FAIL"
-    assert stored["source_run_id"] == "ingest-77"
+    assert stored["source_run_id"] == "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a77"
     assert (stored["object_id"], stored["object_name"], stored["object_uuid"]) == (f"table:{PAGES_UUID}", "bronze$pages", PAGES_UUID)
 
 

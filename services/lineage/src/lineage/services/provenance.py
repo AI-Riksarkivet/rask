@@ -63,6 +63,7 @@ from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
+from lineage_kit import ParentRunFacet
 from service_kit.arrow_ipc import encode_arrow_stream
 from service_kit.governed.machine_identity import read_identity_token
 from service_kit.lineage_events import LANCE_FACET, dataset_uuids
@@ -281,6 +282,15 @@ def scope_of(datasets: list[Dataset]) -> Scope:
     )
 
 
+def _writer_run(event: RunEvent) -> str | None:
+    """The writer's own run: the event's standard ``parent`` run (``ParentRunFacet``), the run its commit declared
+    ([[LH-554]]); ``None`` when the event names none or names one the spec does not admit."""
+    try:
+        return ParentRunFacet.model_validate(event.run.facets["parent"]).run.run_id
+    except (KeyError, ValidationError):
+        return None
+
+
 def edges_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> list[dict[str, Any]]:
     """The table-level edges a successful run asserts: every input to every output it wrote, at their versions.
 
@@ -291,8 +301,7 @@ def edges_of(event: RunEvent | DatasetEvent, *, received_at: datetime) -> list[d
     """
     if not isinstance(event, RunEvent) or not event.is_success:
         return []
-    lance_facet = event.run.facets.get(LANCE_FACET)
-    writer_run = lance_facet.get("runId") if isinstance(lance_facet, dict) else None
+    writer_run = _writer_run(event)
     rows: list[dict[str, Any]] = []
     for output in event.outputs:
         out_table, out_version = edge_identity(output), _version_of(output)

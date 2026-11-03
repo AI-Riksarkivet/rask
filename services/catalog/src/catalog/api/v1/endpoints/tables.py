@@ -76,8 +76,8 @@ from catalog.core.lineage_emit import (
     DEREGISTER_TABLE,
     DROP_TABLE,
     REGISTER_TABLE,
+    RENAME_TABLE,
     RESTORE_TABLE,
-    InputPin,
     emit_write_event,
 )
 from catalog.core.modes import RegisterMode
@@ -1544,8 +1544,9 @@ async def rename_table(
     namespace/tenant they lack create rights on. The table keeps its uuid, so every record and every grant kept for it
     stays where it is ([[LH-523]], [[LH-524]]): into another namespace only its parent edge moves
     (``fga_deps.move_parent_edge``), and its data directories' claims move to its new name
-    (``_hand_over_data_directories``). A versionless REGISTER marker records the attachment at the new id, with the source as its input, so the
-    destination's provenance continues from the source's. Source missing → 404
+    (``_hand_over_data_directories``). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard
+    lifecycle state ``RENAME`` naming the old id as ``previousIdentifier``: one table under a new name, never a table dropped
+    and another created ([[LH-554]]). Source missing → 404
     ``TableNotFound``; destination name taken → 409 ``TableAlreadyExists``; the location held by a
     concurrent rename or registration → 409 ``ConcurrentModification`` (code 14, [[LH-204]])."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
@@ -1595,48 +1596,25 @@ async def rename_table(
         )
     )
     await _hand_over_data_directories(settings, location, source=segments, destination=new_segments)
-    # A rename keeps the table's uuid (ADR 0173 §2): both markers and the control event name the one the door resolved.
-    source_ids = await uuids.table(segments, uuid=table.uuid)
+    # A rename keeps the table's uuid (ADR 0173 §2): the event and the control event name the one the door resolved.
     destination_ids = await uuids.table(new_segments, uuid=table.uuid)
-    # The SOURCE's terminal marker, then the destination's. Both name the one uuid the door resolved, whose grants a
-    # rename leaves where they are, so lineage authorizes both on the same object.
-    #
-    # DEREGISTER, NOT DROP, and the distinction is the whole change: the bytes survive under the new id.
-    # Lineage reads both as this id leaving the catalog — `dropped_at()` fires and the reconcile stops
-    # expecting the location under THIS id ([[LH-144]]) — and only DEREGISTER says the bytes were kept.
-    # The destination's REGISTER marker below completes the pair: the same location, still governed,
-    # now expected under the new id.
-    await emit_write_event(
-        emitter,
-        segments,
-        author=token.subject if token is not None else None,
-        version=None,
-        operation=DEREGISTER_TABLE,
-        authorization=authorization,
-        uuids=uuids,
-        known=source_ids,
-    )
     # A rename moves no grant ([[LH-524]]): every grant is held by the table's uuid, which the rename keeps. Into
     # another namespace, the parent edge moves with it.
     if parents is not None and parents[0] is not None and parents[1] is not None:
         await fga_deps.move_parent_edge(client, settings, token, obj=renamed, source=parents[0], destination=parents[1])
-    # …then the DESTINATION's (re)attachment at its new location. Versionless: the relocate preserved
-    # the on-disk version along with the whole version history, and the marker names none of it.
+    # Versionless: the version history moved with the pointer, and the event names none of it. The location rides it so
+    # the table's symlink is the one its earlier events named.
     await emit_write_event(
         emitter,
         new_segments,
         author=token.subject if token is not None else None,
         version=None,
-        operation=REGISTER_TABLE,
+        operation=RENAME_TABLE,
         authorization=authorization,
         uuids=uuids,
         known=destination_ids,
         source_uri=location,
-        # The destination is the renamed SOURCE, so record the source table as this event's input — otherwise
-        # the rename severs the provenance chain and a follower of the feed or a forwarded graph backend sees the
-        # renamed table as an orphan with no history (audit 2026-07-14). The source's DROP marker above ends its
-        # own line; this input stitches the destination onto it.
-        inputs=[InputPin(segments=segments, uuid=table.uuid)],
+        renamed_from=segments,
     )
     await emit_control(
         control,

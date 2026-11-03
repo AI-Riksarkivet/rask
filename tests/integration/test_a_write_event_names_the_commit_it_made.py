@@ -322,10 +322,15 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(
         return {key: dataset.get("facets", {}).get("rask_lance", {}).get(key) for key in uuids}
 
     announced = [(_lance(event)["operation"], _named(_dataset(event))) for event in events]
-    assert announced == [
-        (operation, uuids) for operation in ("create_table", "insert", "deregister_table", "register_table", "insert", "add_columns", "drop_table")
-    ], announced
-    assert [_named(source) for source in events[3]["inputs"]] == [uuids], "the rename's source is not named by the table's uuid"
+    assert announced == [(operation, uuids) for operation in ("create_table", "insert", "rename_table", "insert", "add_columns", "drop_table")], announced
+    # One table renamed in place: a DatasetEvent on its new name, naming the old one as the spec's previousIdentifier.
+    renamed = events[2]
+    lifecycle = {key: value for key, value in renamed["dataset"]["facets"]["lifecycleStateChange"].items() if not key.startswith("_")}
+    assert ("run" in renamed, renamed["dataset"]["name"], lifecycle) == (
+        False,
+        "lh522$u",
+        {"lifecycleStateChange": "RENAME", "previousIdentifier": {"namespace": renamed["dataset"]["namespace"], "name": "lh522$t"}},
+    ), renamed
     projected = [_named(_dataset(targeting_view(event))) for event in events]
     assert projected == [uuids] * len(events), projected
     assert [named for named in control.named if named[0].startswith("table_")] == [
@@ -388,7 +393,12 @@ def test_an_edge_names_the_incarnation_of_each_branch_it_joins(real_ns_client: T
     assert created.status_code == 200, created.text
     for table, branch in (("lh214$src", "feed"), (TABLE, BRANCH)):
         assert client.post(f"/v1/table/{table}/branches/create", json={"name": branch}).status_code == 200
-    run = {"x-rask-run-id": "run-413", "x-rask-inputs": json.dumps([{"table": ["lh214", "src"], "version": 1, "branch": "feed"}])}
+    run = {
+        "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+        "x-rask-job-namespace": "pipelines",
+        "x-rask-job": "nightly",
+        "x-rask-inputs": json.dumps([{"table": ["lh214", "src"], "version": 1, "branch": "feed"}]),
+    }
     before = len(events)
 
     answer = client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(9)), headers={**ARROW, **run})
@@ -399,3 +409,8 @@ def test_an_edge_names_the_incarnation_of_each_branch_it_joins(real_ns_client: T
     identifiers = [(edge["in_branch"], edge["in_branch_identifier"], edge["out_branch"], edge["out_branch_identifier"]) for edge in edges]
     source, target = _incarnations(str(created.json()["location"])), _incarnations(location)
     assert identifiers == [("feed", source["feed"], BRANCH, target[BRANCH])], identifiers
+    # The writer's run is the commit's parent, on the edge and in the view a notifier reads (ADR 0191).
+    from lineage.api.v1.endpoints.events import targeting_view
+
+    named = (edges[0]["writer_run_id"], targeting_view(written)["run"]["facets"]["parent"]["run"])
+    assert named == (run["x-rask-run-id"], {"runId": run["x-rask-run-id"]}), named

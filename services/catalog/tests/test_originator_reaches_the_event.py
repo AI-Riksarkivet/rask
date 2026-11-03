@@ -120,7 +120,7 @@ def _optional() -> EmitFields:
         source_uri="s3://bkt/t.lance",
         schema_fields=[],
         inputs=[InputRef("acme$src", 2)],
-        run=RunContext(run_id="pipeline-7", job="nightly"),
+        run=RunContext(run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", job_namespace="pipelines", job="nightly"),
         project="acme",
         originator="dex~bob",
     )
@@ -138,7 +138,10 @@ def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
     assert event["eventTime"] == "2026-10-25T12:00:00+00:00"
     assert facets["rask_lance"]["project"] == "acme"
     assert facets["rask_lance"]["originator"] == "dex~bob"
-    assert (facets["rask_lance"]["runId"], facets["rask_lance"]["job"]) == ("pipeline-7", "nightly")
+    assert (facets["parent"]["run"], facets["parent"]["job"]) == (
+        {"runId": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07"},
+        {"namespace": "pipelines", "name": "nightly"},
+    )
     assert event["inputs"][0]["name"] == "acme$src"
     assert event["outputs"][0]["facets"]["dataSource"]["uri"] == "s3://bkt/t.lance"
 

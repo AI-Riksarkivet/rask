@@ -65,7 +65,8 @@ from lakehouse_kit.openlineage import (
     symlinks_facet,
 )
 from lakehouse_kit.schema import SchemaFields
-from lineage_kit import CanonError, SigningKey, attach_signature, author_of
+from lineage_kit import CanonError, ParentRunFacet, SigningKey, attach_signature, author_of
+from lineage_kit.schemas import JobRef, RunRef
 from service_kit.governed import fga
 from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from service_kit.governed.subjects import is_person_subject
@@ -132,6 +133,9 @@ OVERWRITE_TABLE = "overwrite_table"
 #: location. Both are "the table came into existence in this catalog" events, like ``create_table``.
 DECLARE_TABLE = "declare_table"
 REGISTER_TABLE = "register_table"
+#: A table moved to a new name, its uuid, data and grants kept: one DatasetEvent on the new name, whose standard
+#: ``lifecycleStateChange`` is ``RENAME`` with the old name as ``previousIdentifier`` ([[LH-554]]).
+RENAME_TABLE = "rename_table"
 #: The tag gate (ADR 0156 C1, [[LH-466]]): a table's ``published`` tag moved, so readers of its tier now read
 #: ``version``, the tag's target. It mints no version, and it is a run of its own so the project's watchers are told
 #: that new data is live: a notifier targets them by this event's ``rask_lance.project``
@@ -170,7 +174,7 @@ class UuidReader(Protocol):
 
 
 class InputPin(BaseModel):
-    """A source dataset an emitted write derives from, with the EXACT version it consumed (or ``None``).
+    """A source dataset an emitted write derives from, with the EXACT version it consumed.
 
     The API-surface shape (catalog ``segments``, as any ``{id}`` route uses); ``emit_write_event`` resolves
     it to the canonical lineage/FGA id. A pinned ``version`` becomes a ``DatasetVersionDatasetFacet`` on the
@@ -179,12 +183,9 @@ class InputPin(BaseModel):
     """
 
     segments: list[str]
-    version: int | None = None
+    version: int
     #: The branch the version is on, ``None`` for main: a branch numbers its versions apart from main.
     branch: str | None = None
-    #: The table's uuid when the door already resolved the name, as a rename has its source's: the name may name
-    #: nothing by the time the event is built.
-    uuid: str | None = None
 
 
 class InputRef(NamedTuple):
@@ -193,7 +194,7 @@ class InputRef(NamedTuple):
     Named in the event's own dataset namespace, the catalog's: an input the catalog names is one of its tables."""
 
     name: str
-    version: int | None
+    version: int
     branch: str | None = None
     uuids: DatasetUuids = DatasetUuids()
     #: The incarnation of ``branch`` when the event was built ([[LH-413]]): a branch deleted and created again under the
@@ -208,7 +209,7 @@ async def input_refs(pins: list[InputPin] | None, *, uuids: UuidReader) -> list[
             fga.canonical_object_id(pin.segments),
             pin.version,
             pin.branch,
-            await uuids.table(pin.segments, uuid=pin.uuid),
+            await uuids.table(pin.segments),
             await uuids.branch_identifier(pin.segments, pin.branch) if pin.branch is not None else None,
         )
         for pin in pins or []
@@ -225,20 +226,13 @@ def run_inputs(run: RunContext | None) -> list[InputPin] | None:
 
 def _input_dataset(ref: InputRef, *, namespace: str) -> dict[str, Any]:
     """An OpenLineage INPUT dataset under the catalog's dataset ``namespace``, carrying the standard
-    ``DatasetVersionDatasetFacet`` when a source version is pinned, and rask's ``rask_lance`` facet naming the branch that
-    version is on."""
-    dataset: dict[str, Any] = {"namespace": namespace, "name": ref.name}
-    if ref.version is not None:
-        dataset["facets"] = {
-            "version": {
-                "_producer": _PRODUCER,
-                "_schemaURL": _VERSION_FACET_SCHEMA,
-                "datasetVersion": str(ref.version),
-            }
-        }
+    ``DatasetVersionDatasetFacet`` of the version it read, and rask's ``rask_lance`` facet naming the branch that version
+    is on."""
+    facets: dict[str, Any] = {"version": {"_producer": _PRODUCER, "_schemaURL": _VERSION_FACET_SCHEMA, "datasetVersion": str(ref.version)}}
     if ref.branch is not None:
         identifier = {BRANCH_IDENTIFIER: ref.branch_identifier} if ref.branch_identifier is not None else {}
-        dataset.setdefault("facets", {})[LANCE_FACET] = lance_facet(_PRODUCER, ref=ref.branch, **identifier)
+        facets[LANCE_FACET] = lance_facet(_PRODUCER, ref=ref.branch, **identifier)
+    dataset: dict[str, Any] = {"namespace": namespace, "name": ref.name, "facets": facets}
     return with_dataset_uuids(dataset, ref.uuids, producer=_PRODUCER)
 
 
@@ -321,6 +315,7 @@ def build_write_event(
     catalog_impl: str = "",
     warehouse_uri: str = "",
     uuids: DatasetUuids | None = None,
+    renamed_from: str | None = None,
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
@@ -333,13 +328,14 @@ def build_write_event(
     event records the run without asserting a version. ``run_id`` / ``event_time`` are injected
     so the builder is pure and deterministically testable.
 
-    ``inputs`` names the tables this write is DERIVED FROM — a rename passes the
-    SOURCE table so the destination's provenance chain is not severed (the edge list holds dest←source instead
-    of the renamed table appearing as an orphan with no history). Default ``None`` → no input edge, the
-    normal case for a fresh write.
+    ``inputs`` names the tables this write is DERIVED FROM, each at the version it read. Default ``None`` → no input
+    edge, the normal case for a fresh write.
 
-    ``run`` is the run the writer named (:mod:`catalog.core.run_context`); its id and job ride the catalog's ``lance``
-    facet, because ``run_id`` is this event's own id and the writer's need not be the UUID OpenLineage asks for.
+    ``run`` is the run the writer named (:mod:`catalog.core.run_context`): the standard ``parent`` run facet, so a graph
+    backend files this commit's run under the writer's ([[LH-554]]). ``run_id`` is this event's own id, the catalog's.
+
+    ``renamed_from`` is the canonical id a rename moved the table from, the lifecycle facet's ``previousIdentifier``
+    under the same dataset ``namespace``.
 
     ``commits_rows`` says the commit added rows ([[LH-492]]): a table's first version can, through the catalog's
     ``create`` door or a stock client's ``version/create``. Such a create is announced as a run whose output names
@@ -349,10 +345,6 @@ def build_write_event(
     name, as each input's carries its own, so lineage keys the table by what a rename keeps.
     """
     lance_fields: dict[str, Any] = {"operation": operation}
-    if run is not None:
-        lance_fields["runId"] = run.run_id
-        if run.job is not None:
-            lance_fields["job"] = run.job
     if version is not None:
         lance_fields["version"] = version
     # THE REF THE WRITE LANDED ON, because the version alone does not identify a snapshot. A branch is a
@@ -398,6 +390,9 @@ def build_write_event(
     # beside `lance` rather than inside it: `rask_lance.operation` is rask's own vocabulary and opaque to
     # anyone else, and the engine is exactly the part that is not rask-specific.
     run_facets["processing_engine"] = processing_engine_facet(_PRODUCER, name="lance", version=lance.__version__)
+    if run is not None:
+        parent = ParentRunFacet(producer=_PRODUCER, run=RunRef(run_id=str(run.run_id)), job=JobRef(namespace=run.job_namespace, name=run.job))
+        run_facets["parent"] = parent.model_dump(by_alias=True, exclude_none=True)
     if author is not None:
         run_facets[AUTHOR_FACET] = author_facet(_PRODUCER, author)
     output: dict[str, Any] = {"namespace": namespace, "name": table_id}
@@ -426,7 +421,7 @@ def build_write_event(
     # carries rask's more specific name and stays — this is the half a standard consumer can read, and
     # without it a create, a drop and an alter are one event with a different opaque string. Empty for
     # a DATA operation, deliberately: see `lifecycle_facet`.
-    if lifecycle := lifecycle_facet(_PRODUCER, operation):
+    if lifecycle := lifecycle_facet(_PRODUCER, operation, renamed_from=(namespace, renamed_from) if renamed_from is not None else None):
         facets["lifecycleStateChange"] = lifecycle
     if schema_fields:
         # Standard schema facet → the per-version column schema (blob/vector-aware) (#24), so a
@@ -448,10 +443,8 @@ def build_write_event(
     output = with_dataset_uuids(output, uuids or DatasetUuids(), producer=_PRODUCER)
     # A DDL change that DERIVED the table from another one keeps its run, and the spec is why: a
     # `DatasetEvent` has only `dataset` — no `inputs` — and the edge list builds every edge from a run's
-    # inputs (`lineage.services.provenance.edges_of`). A rename passes its SOURCE precisely so the
-    # destination is not an orphan with no history, so moving it would sever the chain this event
-    # exists to preserve. There is no phantom in that case either: something really did derive one
-    # table from another. A definition change that committed rows keeps its run for the same reason an Overwrite
+    # inputs (`lineage.services.provenance.edges_of`), so moving it would sever the edge its run declared.
+    # A definition change that committed rows keeps its run for the same reason an Overwrite
     # does: those rows are a write at this version, and a follower acting on writes reads them off a run.
     if _is_ddl(operation) and not inputs and not commits_rows:
         return _as_dataset_event(output=output, run_facets=run_facets, event_time=event_time)
@@ -514,7 +507,7 @@ class EmitFields(TypedDict, total=False):
     schema_fields: SchemaFields | None
     #: The version-pinned source dataset(s) this write DERIVES FROM.
     inputs: list[InputRef] | None
-    #: The run the writer named, whose id and job ride the ``rask_lance`` facet.
+    #: The run the writer named, the event's standard ``parent`` run.
     run: RunContext | None
     #: The TENANT owning the namespace — WATCH targeting's only key.
     project: str | None
@@ -531,6 +524,8 @@ class EmitFields(TypedDict, total=False):
     commits_rows: bool
     #: The table's and its namespace's uuids (ADR 0173 §10), which the output names beside its name.
     uuids: DatasetUuids | None
+    #: The canonical id a rename moved the table from, the lifecycle facet's ``previousIdentifier``.
+    renamed_from: str | None
 
 
 @runtime_checkable
@@ -748,6 +743,7 @@ class _BaseLineageEmitter:
             branch_identifier=fields.get("branch_identifier"),
             commits_rows=fields.get("commits_rows", False),
             uuids=fields.get("uuids"),
+            renamed_from=fields.get("renamed_from"),
             catalog_impl=self._catalog_impl,
             warehouse_uri=self._warehouse_uri,
         )
@@ -978,6 +974,7 @@ async def emit_write_event(
     run: RunContext | None = None,
     commits_rows: bool = False,
     event_time: str | None = None,
+    renamed_from: list[str] | None = None,
 ) -> None:
     """Publish a best-effort lineage event for a catalog mutation, awaited INLINE in the handler.
 
@@ -988,8 +985,9 @@ async def emit_write_event(
     give at-least-once delivery that lands one row. ``version=None`` records the run without a version.
     ``source_uri`` attaches the standard dataSource facet (the physical storage URI) — passed by ops that
     (re)attach a location, e.g. ``register``/``declare``.
-    ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a
-    rename passes its source; a pipeline's write passes the inputs its run names); ``run`` names that run's id and job.
+    ``inputs`` names the source dataset(s) this write is DERIVED FROM, each optionally version-pinned (a pipeline's write
+    passes the inputs its run names); ``run`` is that run, the event's ``parent``. ``renamed_from`` is the identifier a rename
+    moved the table from.
     ``commits_rows`` says the commit added rows, which makes a create a write (:func:`build_write_event`).
     ``event_time`` is when the commit was made, the event's ``eventTime``; a versioned event's run id is derived from
     the commit (:mod:`catalog.core.commit_ids`).
@@ -1025,4 +1023,5 @@ async def emit_write_event(
         commits_rows=commits_rows,
         uuids=table_uuids,
         event_time=event_time,
+        renamed_from=fga.canonical_object_id(renamed_from) if renamed_from is not None else None,
     )

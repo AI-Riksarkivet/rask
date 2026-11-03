@@ -98,7 +98,9 @@ def _two_inserts_of_one_new_key(client: TestClient, _location: str, context: dic
         pytest.param(_two_inserts_of_one_new_key, True, [200, 400], [1, 2, 9], id="racing-inserts-land-a-new-key-once"),
         # A run in the Context sends an insert through the stamped commit, which must keep the key check across the race.
         pytest.param(
-            lambda c, location: _two_inserts_of_one_new_key(c, location, {"x-rask-run-id": "run-7"}),
+            lambda c, location: _two_inserts_of_one_new_key(
+                c, location, {"x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", "x-rask-job-namespace": "pipelines", "x-rask-job": "nightly"}
+            ),
             True,
             [200, 400],
             [1, 2, 9],

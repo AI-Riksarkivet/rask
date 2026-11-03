@@ -130,7 +130,7 @@ event = {
             "rask_author": {"name": token.subject, "sub": token.subject},  # AUTHOR_FACET, service_kit.lineage_events
             "rask_lance": {  # LANCE_FACET
                 "operation": "promote",
-                "runId": producer_run_id,  # what YOUR detail door answers to; the catalog and lineage spell it so
+                "runId": producer_run_id,  # what YOUR detail door answers to; a catalog commit names its writer's run as `parent` (ADR 0191)
                 "project": project_id,  # (3) WATCH's key. Omit -> zero watchers.
             },
             "errorMessage": {"message": reason},
@@ -322,7 +322,7 @@ the inbox's ServiceAccount by mapping it to `event_reader` in the product chart'
 on `estate:rask` and revokes it once the map stops naming the role). Not the governed `/events`: that
 shows a service only the tables its grants reach, so every tenant warehouse's runs would be invisible to
 the lane and the tick would still log success. Each row carries only the targeting view (run id, state,
-time, the `rask_author` and `rask_lance` facets, and each output's name with its own `rask_lance` facet, which carries the table's
+time, the `rask_author`, `rask_lance` and `parent` facets, and each output's name with its own `rask_lance` facet, which carries the table's
 uuids), because addressing people needs nothing more. A
 deployment that forgets the grant gets a 403 on every tick, and no retry helps: the invocation retry the inbox's
 release scopes to its app-id retries `408,429,500-599` and never a 4xx, because a 403's answer will not change.

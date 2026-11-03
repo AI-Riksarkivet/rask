@@ -159,7 +159,12 @@ def _rows() -> bytes:
 
 
 #: The run a silver write names (ADR 0156 C2): an input the writer may read, at a version.
-_RUN = {"x-rask-run-id": "run-7", "x-rask-inputs": json.dumps([{"table": ["src", "a"], "version": 1}])}
+_RUN = {
+    "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+    "x-rask-job-namespace": "pipelines",
+    "x-rask-job": "nightly",
+    "x-rask-inputs": json.dumps([{"table": ["src", "a"], "version": 1}]),
+}
 
 
 def test_a_write_is_judged_under_the_tier_its_namespace_declares(real_ns_client: TestClient, grants: Grants, caplog: pytest.LogCaptureFixture) -> None:

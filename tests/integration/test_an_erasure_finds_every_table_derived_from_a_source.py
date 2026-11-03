@@ -62,10 +62,11 @@ def _rows() -> bytes:
     return sink.getvalue().to_pybytes()
 
 
-def _run(run_id: str, *inputs: str) -> dict[str, str]:
-    """The Context a pipeline's write names its run in: each input read at version 1."""
+def _run(label: str, *inputs: str) -> dict[str, str]:
+    """The Context a pipeline's write names its run in, the run's UUID derived from ``label``: each input read at version 1."""
     named = [{"table": name.split("$"), "version": 1} for name in inputs]
-    return {**_ARROW, "x-rask-run-id": run_id, "x-rask-job": "daily", **({"x-rask-inputs": json.dumps(named)} if named else {})}
+    run = {"x-rask-run-id": str(uuid.uuid5(uuid.NAMESPACE_URL, label)), "x-rask-job-namespace": "pipelines", "x-rask-job": "daily"}
+    return {**_ARROW, **run, **({"x-rask-inputs": json.dumps(named)} if named else {})}
 
 
 def _declared(catalog: httpx.Client, *tables: str) -> dict[str, str]:
@@ -236,7 +237,12 @@ def _silver_appended_by_a_stock_client(catalog: httpx.Client, url: str) -> None:
         namespace_client=lance_namespace.connect("rest", {"uri": url}),
         table_id=["acme-silver", "pages"],
         mode="append",
-        transaction_properties={"rask.run_id": "silver-1", "rask.inputs": inputs},
+        transaction_properties={
+            "rask.run_id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+            "rask.job_namespace": "pipelines",
+            "rask.job": "daily",
+            "rask.inputs": inputs,
+        },
     )
 
 

@@ -103,7 +103,7 @@ def test_catalog_write_event_conforms_and_names_the_table_by_the_catalog_and_its
         source_uri="s3://lakehouse/bronze/images",
         schema_fields=[{"name": "id", "type": "int64"}, {"name": "payload", "type": "blob"}],
         inputs=[catalog_emit.InputRef("alpha$raw$drop", 7, "review")],
-        run=RunContext(run_id="nightly-7", job="ingest"),
+        run=RunContext(run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", job_namespace="pipelines", job="ingest"),
     )
     _assert_conforms(event)
     # One dataset in a graph backend for the catalog's event and an engine's naming the table's location: the

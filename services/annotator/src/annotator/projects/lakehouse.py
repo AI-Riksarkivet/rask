@@ -50,9 +50,14 @@ from service_kit.naming import CATALOG_DELIMITER
 
 logger = logging.getLogger(__name__)
 
-#: The catalog Context headers that name a write's run and its inputs (ADR 0156 C2).
+#: The catalog Context headers that name a write's run and its inputs (ADR 0156 C2): the run is the commit's OpenLineage
+#: parent, a UUID run id with its job's namespace and name (ADR 0191).
 RUN_ID_HEADER = "x-rask-run-id"
+JOB_NAMESPACE_HEADER = "x-rask-job-namespace"
+JOB_HEADER = "x-rask-job"
 INPUTS_HEADER = "x-rask-inputs"
+#: The job a publish is a run of.
+PUBLISH_JOB = ("annotator", "annotate.publish")
 
 #: Attempts at the publish's create before it fails the saga run. A dropped connection or an unanswered call is retried
 #: here rather than left to the watchdog's next tick, and retrying is safe by construction, not by hope: `create` posts
@@ -117,7 +122,7 @@ class CatalogPublisher:
     ) -> int:
         """Create (or converge on) the published table; return its version."""
         body = _arrow_stream_bytes(plan)
-        headers = {**self._headers(), RUN_ID_HEADER: run_id}
+        headers = {**self._headers(), RUN_ID_HEADER: run_id, JOB_NAMESPACE_HEADER: PUBLISH_JOB[0], JOB_HEADER: PUBLISH_JOB[1]}
         if source is not None and source_version is not None:
             headers[INPUTS_HEADER] = json.dumps([{"table": source.split(self._delimiter), "version": source_version}])
         catalog = NamespaceCatalogWriteTransport(
