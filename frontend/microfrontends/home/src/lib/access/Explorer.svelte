@@ -527,7 +527,7 @@
 	});
 
 	/** Resting stroke per edge KIND — colour is the code (the legend names it): grants green,
-	 *  role/team membership amber, `parent` scaffolding muted. Uncoded edges (the model view) keep
+	 *  role membership amber, `parent` scaffolding muted. Uncoded edges (the model view) keep
 	 *  the muted look. */
 	const KIND_STROKE: Record<string, string> = {
 		grant: 'var(--success)',
@@ -608,7 +608,7 @@
 		{busy}
 		types={modelTypes}
 		relations={relationOptions}
-		subjects={['user:', 'team:', 'role:']}
+		subjects={['user:', 'role:']}
 		objects={objectOptions}
 		onrun={() => {
 			void run();
@@ -848,7 +848,7 @@
 					>
 						<span class="text-primary">━</span> derivation path ·
 						<span class="text-success">━</span> grant ·
-						<span class="text-warning">━</span> role/team ·
+						<span class="text-warning">━</span> role ·
 						<span>─</span> parent ·
 						<span>┅ ⏳</span> time-boxed ·
 						<span class="opacity-50">▢</span> dimmed = filtered out or off-query

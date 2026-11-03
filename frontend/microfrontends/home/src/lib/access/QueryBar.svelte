@@ -91,7 +91,7 @@
 				bind:value={user}
 				list="access-subjects"
 				class="w-56 font-mono text-xs"
-				placeholder="subject — user:alice, team:eng#member"
+				placeholder="subject — user:alice, role:<id>#assignee"
 				aria-label="Subject"
 			/>
 		{/if}

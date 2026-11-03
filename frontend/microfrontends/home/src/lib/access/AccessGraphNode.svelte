@@ -19,16 +19,7 @@
 	// One node of the explorer canvas. Styled entirely with @rask/ui token utilities — no legacy bridge
 	// vars, no literal hex — so it themes in both modes without a second source of truth.
 	import { Handle, Position } from '@xyflow/svelte';
-	import {
-		Boxes,
-		Database,
-		Folder,
-		Package,
-		ShieldCheck,
-		User,
-		Users,
-		Warehouse,
-	} from '@lucide/svelte';
+	import { Boxes, Database, Folder, Package, ShieldCheck, User, Warehouse } from '@lucide/svelte';
 	import { cn } from '@rask/ui/utils';
 
 	let { data }: NodeProps<AccessNodeType> = $props();
@@ -36,7 +27,6 @@
 	const ICONS: Record<string, typeof User> = {
 		user: User,
 		role: ShieldCheck,
-		team: Users,
 		table: Database,
 		namespace: Folder,
 		warehouse: Warehouse,

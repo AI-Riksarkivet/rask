@@ -35,12 +35,12 @@ from starlette.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, current_subject
 from catalog.api.v1.endpoints.members import ProjectId
 from catalog.core.identifiers import require_names
 from catalog.schemas import AssigneeRequest, Role, RoleCreateRequest, RoleDeleted, RoleList, RoleRecord
-from catalog.services import project_admins, role_grants, roles, subject_tuples
 from catalog.services import projects as project_registry
+from catalog.services import role_grants, role_membership, roles
 from lakehouse_kit.control_emit import emit_control
 from lakehouse_kit.records import RecordExistsError
 from service_kit.governed import fga
@@ -85,10 +85,6 @@ async def _role_gate(
     return fga_deps.require_fga(settings, client, feature="roles"), role
 
 
-def _actor(token: Caller | None) -> str:
-    return token.subject if token is not None else "system:catalog"
-
-
 def _announced_actor(token: Caller | None) -> str | None:
     return f"user:{token.subject}" if token is not None else None
 
@@ -117,23 +113,25 @@ async def create_role(
     """
     require_names([body.name])
     wired = await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_create_role")
-    actor = _actor(token)
+    actor = current_subject(token)
     record = RoleRecord(id=uuid.uuid4(), project=project_id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
-    edge = fga.ClientTuple(user=f"project:{project_id}", relation="project", object=roles.role_object(record.id))
+    obj = roles.role_object(record.id)
+    edge = fga.ClientTuple(user=f"project:{project_id}", relation="project", object=obj)
     await fga.write_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
     try:
         await run_in_threadpool(roles.create_role_record, settings.registry_root, settings.storage_options(), record)
-    except BaseException as exc:
+    except RecordExistsError:
         await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
-        if isinstance(exc, RecordExistsError):
-            raise NamespaceAlreadyExistsError(f"project {project_id!r} already holds a role named {body.name!r}") from None
+        raise NamespaceAlreadyExistsError(f"project {project_id!r} already holds a role named {body.name!r}") from None
+    except BaseException:
+        await fga.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
         raise
-    audit(AuditAction.ROLE_CREATE, AuditOutcome.SUCCESS, subject=actor, resource=roles.role_object(record.id), project=project_id, name=record.name)
+    audit(AuditAction.ROLE_CREATE, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, name=record.name)
     await emit_control(
         control,
         action="role_created",
         object_type="role",
-        object_id=roles.role_object(record.id),
+        object_id=obj,
         actor=_announced_actor(token),
         extra={"project": project_id, "name": record.name},
     )
@@ -155,28 +153,6 @@ async def get_role(project_id: ProjectId, role_id: uuid.UUID, client: FgaClientD
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
 
 
-async def announce_role_ended(control: ControlEmitterDep, role: RoleRecord, removed: list[fga.ClientTuple], *, token: Caller | None, reason: str) -> None:
-    """Announce ``role`` ended (``role_deleted``), and tell each person and role who lost a grant with it (``grant_revoked``)."""
-    await emit_control(
-        control,
-        action="role_deleted",
-        object_type="role",
-        object_id=roles.role_object(role.id),
-        actor=_announced_actor(token),
-        extra={"project": role.project, "name": role.name, "deleted": len(removed)},
-    )
-    for tup in removed:
-        if fga.names_someone(tup.user):
-            await emit_control(
-                control,
-                action="grant_revoked",
-                object_type="grant",
-                object_id=tup.object,
-                actor=_announced_actor(token),
-                extra={"relation": tup.relation, "subject": tup.user, "reason": reason},
-            )
-
-
 @router.delete("/{project_id}/roles/{role_id}")
 async def delete_role(
     project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
@@ -192,22 +168,22 @@ async def delete_role(
         ConcurrentModificationError: Ending it would strand a project.
     """
     wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_delete")
-    actor = _actor(token)
+    actor = current_subject(token)
     removed = await role_grants.end_role(wired, role, control_root=settings.registry_root, storage_options=settings.storage_options(), actor=actor)
     audit(AuditAction.ROLE_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=roles.role_object(role.id), project=project_id, removed=len(removed))
-    await announce_role_ended(control, role, removed, token=token, reason="role_deleted")
+    await role_grants.announce_ended(control, role, removed, actor=_announced_actor(token), reason="role_deleted")
     return RoleDeleted(role=role, tuples_revoked=len(removed))
 
 
-async def _assignee(client: OpenFgaClient, settings: Settings, role: RoleRecord, raw: str) -> str:
+async def _assignee(*, settings: Settings, role: RoleRecord, raw: str) -> str:
     """The OpenFGA user ``raw`` names as an assignee of ``role``: a principal, or another standing role of its project."""
     user = fga.grantee_object(raw)
     if user.startswith("user:"):
         return user
     nested, _, relation = user.partition("#")
-    nested_id = nested.removeprefix("role:")
     if not nested.startswith("role:") or relation != roles.ASSIGNEE:
         raise InvalidInputError(f"{raw!r} is neither a principal nor a role's assignees ('role:<id>#assignee')")
+    nested_id = nested.removeprefix("role:")
     if nested_id == str(role.id):
         raise InvalidInputError(f"role {role.name!r} cannot be its own assignee")
     if await run_in_threadpool(roles.find_role, settings.registry_root, settings.storage_options(), role.project, nested_id) is None:
@@ -215,11 +191,11 @@ async def _assignee(client: OpenFgaClient, settings: Settings, role: RoleRecord,
     return user
 
 
-async def _require_admin_grant(client: OpenFgaClient, settings: Settings, token: Caller | None, role: RoleRecord) -> None:
+async def _require_admin_grant(*, client: OpenFgaClient, settings: Settings, token: Caller | None, role: RoleRecord) -> None:
     """Ask ``can_grant_admin`` on ``role``'s project while the role holds that project's ``admin``; a refusal answers the
     missing role's 404, as the role's own gate does."""
     project = f"project:{role.project}"
-    if not any(t.relation == project_admins.ADMIN and t.user == roles.assignees_of(role.id) for t in await fga.read_object_tuples(client, project)):
+    if not role_membership.holds_admin(await fga.read_object_tuples(client, project), project, roles.assignees_of(role.id)):
         return
     try:
         await fga_deps.require_relation(client, settings, token, relation="can_grant_admin", obj=project)
@@ -247,12 +223,12 @@ async def assign_role(
         PermissionDeniedError: The assignment would raise the caller's own access.
     """
     wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
-    await _require_admin_grant(wired, settings, token, role)
-    user = await _assignee(wired, settings, role, body.user)
+    await _require_admin_grant(client=wired, settings=settings, token=token, role=role)
+    user = await _assignee(settings=settings, role=role, raw=body.user)
     obj = roles.role_object(role.id)
     if token is not None:
         await fga_deps.refuse_self_elevation(wired, user=token.subject, grantee=user, relation=roles.ASSIGNEE, obj=obj)
-    actor = _actor(token)
+    actor = current_subject(token)
     if user not in await _assignees(wired, role.id):
         await fga.write_tuples(wired, [fga.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)], actor=actor, origin="grant_api")  # noqa: TID251
         audit(AuditAction.ROLE_ASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
@@ -280,7 +256,7 @@ async def unassign_role(
     """Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.
 
     Refused 409 (code 14) for the last assignee of a role that is its project's only direct admin
-    (:func:`subject_tuples.unassign`, arbitrated by the store as the members door's revoke is).
+    (:func:`role_membership.unassign`, arbitrated by the store as the members door's revoke is).
     \f
 
     Raises:
@@ -288,9 +264,11 @@ async def unassign_role(
         ConcurrentModificationError: The removal would leave the project with no direct admin.
     """
     wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
-    await _require_admin_grant(wired, settings, token, role)
-    user, obj, actor = fga.grantee_object(body.user), roles.role_object(role.id), _actor(token)
-    if await subject_tuples.unassign(wired, str(role.id), user, actor=actor, origin="grant_api"):
+    await _require_admin_grant(client=wired, settings=settings, token=token, role=role)
+    user = fga.grantee_object(body.user)
+    obj = roles.role_object(role.id)
+    actor = current_subject(token)
+    if await role_membership.unassign(wired, str(role.id), user, actor=actor, origin="grant_api"):
         audit(AuditAction.ROLE_UNASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
         await emit_control(
             control,

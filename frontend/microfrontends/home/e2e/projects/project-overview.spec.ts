@@ -20,7 +20,7 @@ const DETAIL = {
 		{ id: 'acme-wh', bucket: 'acme-bucket', status: 'active' },
 		{ id: 'acme-gold', bucket: 'gold-bucket', serving: 'gold', status: 'pending' },
 	],
-	admins: ['user:alice', 'team:eng#member'],
+	admins: ['user:alice', 'role:7d2c0f4e-5b1a-4c3e-9f6d-2a8b1c0e9f3a#assignee'],
 };
 
 let token: string;
@@ -48,10 +48,12 @@ test('renders the project’s warehouse rows and effective admins', async ({ pag
 	await expect(gold).toContainText('gold-bucket');
 	await expect(gold).toContainText('pending');
 
-	// The effective admins, verbatim — a userset (`team:eng#member`) is a real grant and must not be
+	// The effective admins, verbatim — a userset (`role:<id>#assignee`) is a real grant and must not be
 	// flattened into a plain user.
 	await expect(page.getByText('user:alice', { exact: true })).toBeVisible();
-	await expect(page.getByText('team:eng#member', { exact: true })).toBeVisible();
+	await expect(
+		page.getByText('role:7d2c0f4e-5b1a-4c3e-9f6d-2a8b1c0e9f3a#assignee', { exact: true }),
+	).toBeVisible();
 });
 
 test('each warehouse row crosses INTO the lakehouse zone with data-sveltekit-reload', async ({
@@ -73,7 +75,9 @@ test('each warehouse row crosses INTO the lakehouse zone with data-sveltekit-rel
 });
 
 test('a project the catalog refuses is named as denied, not rendered empty', async ({ page }) => {
-	await seed(page, { 'GET /management/v1/projects/secret': { status: 403, body: { detail: 'forbidden' } } });
+	await seed(page, {
+		'GET /management/v1/projects/secret': { status: 403, body: { detail: 'forbidden' } },
+	});
 	await page.goto('/projects/secret');
 	await expect(
 		page.getByText("You don't have access to this project's registry facts."),

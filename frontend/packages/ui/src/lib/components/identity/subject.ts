@@ -6,7 +6,7 @@
 // verbatim, ellipsize opaque ones in the middle, and always carry the FULL subject in `title`
 // so hover/copy still yields the real value a tuple write needs.
 
-/** A subject is "readable" when a human can recognize it: emails, `role:…#member`, `team:…`,
+/** A subject is "readable" when a human can recognize it: emails, `role:…#assignee`,
  *  short names like `root_admin`. Opaque = one long unbroken token (an OIDC sub, a UUID-ish id). */
 const OPAQUE_RE = /^[A-Za-z0-9_-]{25,}$/;
 

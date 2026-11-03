@@ -4,7 +4,7 @@
 
 	export type AccessData = {
 		fgaId: string; // the full FGA id, e.g. user:alice / table:db1$t / role:eng#assignee
-		fgaType: string; // user | role | team | table | namespace | warehouse | project
+		fgaType: string; // user | role | table | namespace | warehouse | project
 		label: string; // the id without its type prefix
 		focus: boolean; // the object the graph is centred on
 		selected: boolean;
@@ -20,7 +20,6 @@
 		Folder,
 		ShieldCheck,
 		User,
-		Users,
 		Warehouse as WarehouseIcon,
 	} from '@lucide/svelte';
 	import { pop } from '@rask/ui/motion';
@@ -31,7 +30,6 @@
 	const ICONS: Record<string, typeof User> = {
 		user: User,
 		role: ShieldCheck,
-		team: Users,
 		table: Database,
 		namespace: Folder,
 		warehouse: WarehouseIcon,
@@ -39,11 +37,7 @@
 	};
 	const Icon = $derived(ICONS[data.fgaType] ?? Database);
 	const kind = $derived(
-		['user', 'role', 'team'].includes(data.fgaType)
-			? 'subject'
-			: data.focus
-				? 'focus'
-				: 'container',
+		['user', 'role'].includes(data.fgaType) ? 'subject' : data.focus ? 'focus' : 'container',
 	);
 	const accent = $derived(
 		kind === 'subject' ? '#6aa9ff' : kind === 'focus' ? 'var(--amber, #ffc14d)' : '#8aa0bd',

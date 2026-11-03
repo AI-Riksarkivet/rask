@@ -64,8 +64,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import Caller, CurrentToken
-from catalog.api.v1.endpoints.roles import announce_role_ended
+from catalog.api.security import CurrentToken, current_subject
 from catalog.core.config import Settings
 from catalog.schemas import (
     CreateProjectRequest,
@@ -428,10 +427,6 @@ async def set_project_protection(
     return ProtectionResponse(id=project_id, protected=body.protected)
 
 
-def _actor_of(token: Caller | None) -> str:
-    return token.subject if token is not None else "system:catalog"
-
-
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: str,
@@ -507,15 +502,15 @@ async def delete_project(
             f"project:{project_id}",
             # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off
             # stack, where there genuinely is no principal — never a stand-in for one we failed to thread.
-            actor=_actor_of(token),
+            actor=token.subject if token is not None else "system:catalog",
             origin="lifecycle_delete",
         )
         revoked = True
     # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
+    role_fga = client if settings.fga_enabled else None
     for role in await run_in_threadpool(roles.list_roles, settings.registry_root, so, project_id):
-        role_fga = client if settings.fga_enabled else None
-        ended = await role_grants.end_role(role_fga, role, control_root=settings.registry_root, storage_options=so, actor=_actor_of(token))
-        await announce_role_ended(control, role, ended, token=token, reason="project_deleted")
+        ended = await role_grants.end_role(role_fga, role, control_root=settings.registry_root, storage_options=so, actor=current_subject(token))
+        await role_grants.announce_ended(control, role, ended, actor=f"user:{token.subject}" if token is not None else None, reason="project_deleted")
     # The revoke removes every tuple whose OBJECT is `project:<id>` (the admin/member grants), and each role's end every
     # tuple on and naming that role, its `project` edge among them. Tuples where the project is the USER are otherwise
     # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse

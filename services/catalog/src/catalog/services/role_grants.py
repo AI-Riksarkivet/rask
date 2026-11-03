@@ -1,4 +1,5 @@
-"""How a role is ended, in OpenFGA and in its registry, by the one path both doors that end a role take ([[LH-557]]).
+"""How a role is ended, in OpenFGA and in its registry, and announced, by the one path both doors that end a role take
+([[LH-557]]): the role delete door and the project delete door.
 
 A role's tuples are of two kinds: those NAMING it, where ``role:<uuid>#assignee`` is the subject (a rung on an object,
 another role's assignee, a project's ``admin``), and those ON it (its assignees and its ``project`` edge). Ending a role
@@ -19,6 +20,7 @@ from lance_namespace import ServiceUnavailableError
 from starlette.concurrency import run_in_threadpool
 
 from catalog.services import roles, subject_tuples
+from lakehouse_kit.control_emit import emit_control
 from service_kit.governed import fga
 
 
@@ -26,6 +28,7 @@ if TYPE_CHECKING:
     from openfga_sdk.client import OpenFgaClient
 
     from catalog.schemas import RoleRecord
+    from lakehouse_kit.control_emit import ControlEmitter
     from service_kit.storage_options import StorageOptions
 
 
@@ -38,7 +41,7 @@ async def end_role(client: OpenFgaClient | None, role: RoleRecord, *, control_ro
 
     Raises:
         ConcurrentModificationError: Ending it would leave a project with no direct admin; nothing was changed.
-        lakehouse_kit.records.RecordChangedError: Its record changed while it was being ended.
+        lakehouse_kit.records.RecordChangedError: Its record changed under both of the ending's reads.
     """
     if client is None:
         await run_in_threadpool(roles.end_role_record, control_root, storage_options, role)
@@ -57,3 +60,25 @@ async def end_role(client: OpenFgaClient | None, role: RoleRecord, *, control_ro
         except ServiceUnavailableError:
             log.exception("role_edge_not_removed", extra={"role": obj})
     return removed
+
+
+async def announce_ended(control: ControlEmitter, role: RoleRecord, removed: list[fga.ClientTuple], *, actor: str | None, reason: str) -> None:
+    """Announce ``role`` ended (``role_deleted``), and tell each person and role who lost a grant with it (``grant_revoked``)."""
+    await emit_control(
+        control,
+        action="role_deleted",
+        object_type="role",
+        object_id=roles.role_object(role.id),
+        actor=actor,
+        extra={"project": role.project, "name": role.name, "deleted": len(removed)},
+    )
+    for tup in removed:
+        if fga.names_someone(tup.user):
+            await emit_control(
+                control,
+                action="grant_revoked",
+                object_type="grant",
+                object_id=tup.object,
+                actor=actor,
+                extra={"relation": tup.relation, "subject": tup.user, "reason": reason},
+            )

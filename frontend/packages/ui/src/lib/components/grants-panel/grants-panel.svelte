@@ -1,6 +1,6 @@
 <script lang="ts">
 	// The access-review panel (#51): who holds which can_* action on a catalog object, expanded through
-	// the FGA model (roles, teams, the parent cascade). Kind-generalized (sweep group 3): `kind` picks
+	// the FGA model (roles, nested roles, the parent cascade). Kind-generalized (sweep group 3): `kind` picks
 	// the catalog surface — 'table' (the default) or 'namespace' — and the owner gate is the per-type
 	// bar (can_drop / can_delete). Owner-only by design — the catalog gates the enumeration, so a
 	// non-owner sees the denial state, never the ACL. Hoisted into @rask/ui (audit 2026-07-24: the data
@@ -242,7 +242,7 @@
 				<div class="sim-form">
 					<input
 						class="mono"
-						placeholder="principal (idp~user id), or role:…#assignee / team:…#member"
+						placeholder="principal (idp~user id), or role:…#assignee"
 						bind:value={simUser}
 						onkeydown={(e) => e.key === 'Enter' && runCheck()}
 					/>

@@ -8,7 +8,7 @@
 // own Types Previewer walks `type_definitions` and emits edges for `computedUserset` only — it draws
 // NO edge for `tupleToUserset` (`X from Y`) and none for `intersection` or `difference` children. Its
 // maintainers say so (openfga/openfga discussion #299: "our current visualization predates the 1.1
-// schema"). In THIS model `X from Y` is the entire containment cascade — team → project → warehouse →
+// schema"). In THIS model `X from Y` is the entire containment cascade — project → warehouse →
 // namespace → table — so a previewer that omits it draws a model with the spine removed.
 //
 // Parsed from the DSL text rather than the compiled JSON on purpose: the DSL is what a human edits and

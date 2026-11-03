@@ -113,7 +113,7 @@
 		const t = (e.node.data as { fgaType?: string }).fgaType ?? '';
 		// clicking a subject prefills the grant form with its node id: a user's is the OpenFGA user the store holds,
 		// which a grant names as written (the catalog reads a `user:` grantee as that stored id)
-		if (['user', 'role', 'team'].includes(t)) {
+		if (['user', 'role'].includes(t)) {
 			mgUser = e.node.id;
 		}
 		if (graph) rebuild(graph);

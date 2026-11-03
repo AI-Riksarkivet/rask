@@ -150,7 +150,7 @@ export const fetchAccessGraph = query(
 );
 
 /** #72 grant a base rung (owner/writer/reader/validator) to a subject on the object. `user` may be a
- *  bare id (`alice`) or a userset (`role:…#assignee` / `team:…#member`). On success the object's
+ *  bare id (`alice`) or a userset (`role:…#assignee`). On success the object's
  *  active review + graph refresh in the SAME flight, so a surface that issued a grant never renders
  *  an ACL it just changed. */
 export const grantAccess = command(

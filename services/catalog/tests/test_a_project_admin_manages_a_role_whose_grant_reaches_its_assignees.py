@@ -13,6 +13,7 @@ access, as the grant doors refuse it) and a role of another project.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from catalog.schemas import RoleRecord
 from catalog.services import roles, warehouses
 from service_kit.storage_options import StorageOptions
 
@@ -121,3 +123,26 @@ def test_a_role_whose_ending_failed_part_way_is_ended_by_calling_its_door_again(
     again = _status(catalog.client.post(ROLES, json={"name": "analysts"}, headers=root), 201).json()
     assert [listed["id"] for listed in _status(catalog.client.get(ROLES, headers=root), 200).json()["roles"]] == [again["id"]] != [role["id"]]
     assert not [t for t in catalog.store.tuples() if f"role:{role['id']}" in (t[0].split("#")[0], t[2])], "a tuple of the ended role survived it"
+
+
+def test_an_ending_that_lost_a_race_ends_no_role_it_did_not_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A role's record is stamped ended under the ETag of the read that found it, never deleted (ADR 0172's release
+    rule). So of two endings of one role, with a create taking its name between the slower one's read and its write, the
+    slower one reads again, finds the new role, and leaves it standing."""
+    root, so = str(tmp_path), StorageOptions()
+    ended = RoleRecord(id=uuid.uuid4(), project="acme", name="analysts", created_at=datetime.now(UTC), created_by="dex~alice")
+    taken = RoleRecord(id=uuid.uuid4(), project="acme", name="analysts", created_at=datetime.now(UTC), created_by="dex~bob")
+    roles.create_role_record(root, so, ended)
+    read = roles.read_json
+
+    def read_then_the_rivals_land(control_root: str, storage_options: StorageOptions, key: str) -> tuple[dict[str, Any], str] | None:
+        found = read(control_root, storage_options, key)
+        monkeypatch.setattr(roles, "read_json", read)
+        roles.end_role_record(root, so, ended)
+        roles.create_role_record(root, so, taken)
+        return found
+
+    monkeypatch.setattr(roles, "read_json", read_then_the_rivals_land)
+    roles.end_role_record(root, so, ended)
+
+    assert roles.list_roles(root, so, "acme") == [taken]

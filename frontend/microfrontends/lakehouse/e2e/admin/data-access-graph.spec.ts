@@ -94,7 +94,7 @@ test('inline grant on the graph reaches the catalog', async ({ page }) => {
 	await page.getByRole('tab', { name: 'access' }).click();
 	await page.getByRole('button', { name: 'Show authorization graph' }).click();
 	const graph = page.locator('.ag');
-	await graph.getByPlaceholder('user (e.g. alice), or role:… / team:…#member').fill('carol');
+	await graph.getByPlaceholder('principal (idp~user id), or role:…#assignee').fill('carol');
 	// force: the detail page's poll re-renders shift layout just enough that Playwright's stability
 	// sampler starves under the 30s budget; the trigger is present+enabled (asserted) and the wire
 	// assertion below is the real contract, so skipping the stability wait is safe here.

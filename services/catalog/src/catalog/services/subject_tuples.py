@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING, Final
 
 from lance_namespace import ConcurrentModificationError
 
-from catalog.services import project_admins
-from catalog.services.roles import ASSIGNEE, assignees_of
+from catalog.services import project_admins, role_membership
+from catalog.services.roles import ASSIGNEE
 from service_kit.governed import fga
 
 
@@ -29,20 +29,22 @@ if TYPE_CHECKING:
 PAGE_SIZE: Final = 100
 
 
+def _holds_directly(type_definition: dict[str, object], user_type: str, relation: str | None) -> bool:
+    """Whether some relation of ``type_definition`` names ``user_type`` (as ``user_type#relation``) as a direct subject."""
+    metadata = type_definition.get("metadata") or {}
+    relations = (metadata.get("relations") if isinstance(metadata, dict) else None) or {}
+    return any(
+        t.get("type") == user_type and t.get("relation") == relation and not t.get("wildcard")
+        for meta in relations.values()
+        for t in meta.get("directly_related_user_types") or []
+    )
+
+
 @lru_cache
 def types_holding(user_type: str, relation: str | None) -> tuple[str, ...]:
     """The types with a relation holding a ``user_type`` subject directly (``user_type#relation`` when ``relation`` is
     given), never through a wildcard alone."""
-    holding = []
-    for td in fga.load_model()["type_definitions"]:
-        meta = (td.get("metadata") or {}).get("relations") or {}
-        if any(
-            t.get("type") == user_type and t.get("relation") == relation and not t.get("wildcard")
-            for m in meta.values()
-            for t in m.get("directly_related_user_types") or []
-        ):
-            holding.append(td["type"])
-    return tuple(sorted(holding))
+    return tuple(sorted(td["type"] for td in fga.load_model()["type_definitions"] if _holds_directly(td, user_type, relation)))
 
 
 async def tuples_naming(client: OpenFgaClient, user: str) -> list[fga.ClientTuple]:
@@ -63,11 +65,22 @@ def _is_project_admin(t: fga.ClientTuple) -> bool:
     return t.relation == project_admins.ADMIN and t.object.startswith("project:")
 
 
-async def _role_project(client: OpenFgaClient, role: str) -> tuple[str | None, set[str]]:
-    """The project ``role``'s edge names (``project:<id>``), and its direct assignees."""
-    tuples = [t for t in await fga.read_object_tuples(client, role) if t.object == role]
-    project = next((t.user for t in tuples if t.relation == "project" and t.user.startswith("project:")), None)
-    return project, {t.user for t in tuples if t.relation == ASSIGNEE}
+def _is_role_assignment(t: fga.ClientTuple) -> bool:
+    return t.relation == ASSIGNEE and t.object.startswith("role:")
+
+
+async def _project_stranded_by(client: OpenFgaClient, user: str, t: fga.ClientTuple) -> str | None:
+    """The project that revoking ``t`` from ``user`` would leave with no direct admin, or ``None``."""
+    if _is_project_admin(t):
+        project, admin = t.object, user
+    elif _is_role_assignment(t):
+        project, assigned = await role_membership.role_project(client, t.object)
+        if project is None or assigned != {user}:
+            return None
+        admin = f"{t.object}#{ASSIGNEE}"
+    else:
+        return None
+    return project if project_admins.sole_admin(await fga.read_object_tuples(client, project), project, admin) else None
 
 
 async def refuse_stranding(client: OpenFgaClient, user: str, naming: list[fga.ClientTuple], *, who: str) -> None:
@@ -77,16 +90,9 @@ async def refuse_stranding(client: OpenFgaClient, user: str, naming: list[fga.Cl
     Raises:
         ConcurrentModificationError: Ending ``user`` would strand a project; nothing was revoked.
     """
-    stranded = {t.object for t in naming if _is_project_admin(t) and project_admins.sole_admin(await fga.read_object_tuples(client, t.object), t.object, user)}
+    stranded: set[str] = set()
     for t in naming:
-        if not _is_role_assignment(t):
-            continue
-        project, assigned = await _role_project(client, t.object)
-        if (
-            project is not None
-            and assigned == {user}
-            and project_admins.sole_admin(await fga.read_object_tuples(client, project), project, f"{t.object}#{ASSIGNEE}")
-        ):
+        if (project := await _project_stranded_by(client, user, t)) is not None:
             stranded.add(project)
     if stranded:
         raise ConcurrentModificationError(
@@ -94,53 +100,20 @@ async def refuse_stranding(client: OpenFgaClient, user: str, naming: list[fga.Cl
         )
 
 
-def _is_role_assignment(t: fga.ClientTuple) -> bool:
-    return t.relation == ASSIGNEE and t.object.startswith("role:")
-
-
 async def revoke_naming(client: OpenFgaClient, user: str, naming: list[fga.ClientTuple], *, actor: str, origin: fga.TupleOrigin) -> list[fga.ClientTuple]:
     """Revoke every tuple in ``naming``; the tuples removed. A project ``admin`` and a role assignment each go through the
-    store-arbitrated revoke of the door that grants it (:func:`project_admins.revoke_admin`, :func:`unassign`)."""
+    store-arbitrated revoke of the door that grants it (:func:`project_admins.revoke_admin`, :func:`role_membership.unassign`)."""
+    admins = [t for t in naming if _is_project_admin(t)]
+    assignments = [t for t in naming if _is_role_assignment(t)]
+    rest = [fga.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in naming if not (_is_project_admin(t) or _is_role_assignment(t))]
     removed: list[fga.ClientTuple] = []
-    for t in naming:
-        if _is_project_admin(t):
-            revoked, _ = await project_admins.revoke_admin(client, t.object, user, actor=actor, origin=origin)
-        elif _is_role_assignment(t):
-            revoked = await unassign(client, t.object.removeprefix("role:"), user, actor=actor, origin=origin)
-        else:
-            continue
+    for t in admins:
+        revoked, _ = await project_admins.revoke_admin(client, t.object, user, actor=actor, origin=origin)
         if revoked:
             removed.append(fga.ClientTuple(user=user, relation=t.relation, object=t.object))
-    arbitrated = [t for t in naming if _is_project_admin(t) or _is_role_assignment(t)]
-    if rest := [fga.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in naming if t not in arbitrated]:
+    for t in assignments:
+        if await role_membership.unassign(client, t.object.removeprefix("role:"), user, actor=actor, origin=origin):
+            removed.append(fga.ClientTuple(user=user, relation=t.relation, object=t.object))
+    if rest:
         removed.extend(await fga.delete_tuples(client, rest, actor=actor, origin=origin))  # noqa: TID251
     return removed
-
-
-async def unassign(client: OpenFgaClient, role_id: str, user: str, *, actor: str, origin: fga.TupleOrigin) -> bool:
-    """Remove ``user`` from role ``role_id``'s direct assignees; whether this call removed it.
-
-    Refused (409, code 14) when ``user`` is the last direct assignee of a role that is its project's only direct admin.
-    While the role holds the project's ``admin``, the removal moves the project's ``admin_revision`` in the same Write
-    (:func:`project_admins.next_revision`), so it and any other change to who administers the project, each judged on its
-    own read, cannot both commit; the loser reads again and judges what it finds.
-
-    Raises:
-        ConcurrentModificationError: The removal would strand the project, or its admins changed under both reads.
-    """
-    role, subject = f"role:{role_id}", assignees_of(role_id)
-    target = fga.ClientTuple(user=user, relation=ASSIGNEE, object=role)
-    for _ in range(project_admins.ADMIN_REVOKE_READS):
-        project, assigned = await _role_project(client, role)
-        if user not in assigned:
-            return False
-        project_tuples = await fga.read_object_tuples(client, project) if project is not None else []
-        if project is None or not any(t.object == project and t.relation == project_admins.ADMIN and t.user == subject for t in project_tuples):
-            await fga.delete_tuples(client, [target], actor=actor, origin=origin)  # noqa: TID251
-            return True
-        if assigned == {user} and project_admins.sole_admin(project_tuples, project, subject):
-            raise ConcurrentModificationError(f"{user} is the last assignee of {role}, the only direct admin of {project} — assign another first")
-        moved, stale = project_admins.next_revision(project_tuples, project)
-        if await fga.commit_unless_changed(client, deletes=[target, *stale], writes=[moved], actor=actor, origin=origin):  # noqa: TID251
-            return True
-    raise ConcurrentModificationError(f"the admins of the project {role} belongs to changed while this removal ran, twice — read them again and retry")

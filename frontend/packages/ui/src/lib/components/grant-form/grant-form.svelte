@@ -127,7 +127,7 @@
 <div data-slot="grant-form" class="form">
 	<input
 		class="mono"
-		placeholder="principal (idp~user id), or role:…#assignee / team:…#member"
+		placeholder="principal (idp~user id), or role:…#assignee"
 		aria-label="Subject to grant to"
 		bind:value={subject}
 	/>

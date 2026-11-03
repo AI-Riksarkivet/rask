@@ -23,7 +23,7 @@ describe('subjectDisplay', () => {
 		expect(d.title).toBe(`user:${DEX_SUB}`);
 	});
 
-	it.each(['root_admin', 'alice@example.com', 'role:steward#member', 'team:htr#member', '*'])(
+	it.each(['root_admin', 'alice@example.com', 'role:steward#member', 'role:htr#assignee', '*'])(
 		'passes the readable subject %s through verbatim',
 		(s) => {
 			expect(subjectDisplay(s)).toEqual({ label: s, title: s });

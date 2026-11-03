@@ -22,7 +22,7 @@ export const TupleConditionSchema = v.object({
 });
 
 export const TupleSchema = v.object({
-	user: v.string(), // e.g. user:alice, team:eng#member, namespace:db1
+	user: v.string(), // e.g. user:alice, role:<id>#assignee, namespace:db1
 	relation: v.string(), // e.g. owner, can_read_data, parent
 	object: v.string(), // e.g. table:db1$t, warehouse:acme-wh, project:acme
 	/** Present when the grant is TIME-BOXED. `null` is permanent — and the distinction has to survive

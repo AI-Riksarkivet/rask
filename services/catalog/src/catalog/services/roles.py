@@ -69,14 +69,16 @@ def create_role_record(control_root: str, storage_options: StorageOptions, recor
     key, body = _key(record.project, record.name), StoredRole(**record.model_dump()).model_dump(mode="json")
     try:
         create_json(control_root, storage_options, key, body)
+        return
     except RecordExistsError:
-        stored = read_json(control_root, storage_options, key)
-        if stored is None or StoredRole.model_validate(stored[0]).ended_at is None:
-            raise
-        try:
-            replace_json(control_root, storage_options, key, body, etag=stored[1])
-        except RecordChangedError as exc:
-            raise RecordExistsError(key) from exc
+        pass
+    stored = read_json(control_root, storage_options, key)
+    if stored is None or StoredRole.model_validate(stored[0]).ended_at is None:
+        raise RecordExistsError(key)
+    try:
+        replace_json(control_root, storage_options, key, body, etag=stored[1])
+    except RecordChangedError as exc:
+        raise RecordExistsError(key) from exc
 
 
 def list_roles(control_root: str, storage_options: StorageOptions, project: str) -> list[RoleRecord]:
@@ -103,19 +105,32 @@ def find_role(control_root: str, storage_options: StorageOptions, project: str, 
     return next((role for role in list_roles(control_root, storage_options, project) if str(role.id) == str(role_id)), None)
 
 
+#: How many times an ending reads the record: once, and once more after another write moved it.
+END_READS: Final = 2
+
+
 def end_role_record(control_root: str, storage_options: StorageOptions, record: RoleRecord) -> None:
     """Stamp ``record`` ended, under the ETag of the read that finds it; a no-op once it is ended or its name holds
     another role.
 
+    A write that lands between the read and the stamp (another ending of the role, a create taking its name once it is
+    ended) refuses the stamp, and the ending reads again and judges what it finds, so it never ends a role it did not read.
+
     Raises:
-        lakehouse_kit.records.RecordChangedError: The record changed between that read and the write.
+        lakehouse_kit.records.RecordChangedError: The record changed under both reads.
     """
     key = _key(record.project, record.name)
-    stored = read_json(control_root, storage_options, key)
-    if stored is None:
+    for _ in range(END_READS):
+        stored = read_json(control_root, storage_options, key)
+        if stored is None:
+            return
+        standing = StoredRole.model_validate(stored[0])
+        if standing.id != record.id or standing.ended_at is not None:
+            return
+        ended = standing.model_copy(update={"ended_at": datetime.now(UTC)})
+        try:
+            replace_json(control_root, storage_options, key, ended.model_dump(mode="json"), etag=stored[1])
+        except RecordChangedError:
+            continue
         return
-    standing = StoredRole.model_validate(stored[0])
-    if standing.id != record.id or standing.ended_at is not None:
-        return
-    ended = standing.model_copy(update={"ended_at": datetime.now(UTC)})
-    replace_json(control_root, storage_options, key, ended.model_dump(mode="json"), etag=stored[1])
+    raise RecordChangedError(f"role record {key!r} changed under both reads")

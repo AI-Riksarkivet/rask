@@ -49,7 +49,7 @@ export type GraphNode = {
 };
 
 /** What KIND of fact an edge is — the canvas colour-codes these, because on a dense store the three
- *  read very differently: a `parent` edge is scaffolding, a role/team edge is indirection, and only
+ *  read very differently: a `parent` edge is scaffolding, a role edge is indirection, and only
  *  the rest are grants somebody chose to write. */
 export type EdgeKind = 'grant' | 'membership' | 'structural';
 
@@ -79,7 +79,7 @@ const subjectRef = (id: string): { node: string; rung: string | null } => {
 const edgeKind = (subject: string, label: string): EdgeKind => {
 	if (label === 'parent') return 'structural';
 	const type = idType(subject);
-	if (subject.includes('#') || type === 'role' || type === 'team') return 'membership';
+	if (subject.includes('#') || type === 'role') return 'membership';
 	return 'grant';
 };
 
@@ -107,14 +107,14 @@ export const idType = (id: string): string => id.split(':')[0] || 'unknown';
 
 const idLabel = (id: string): string => {
 	const withoutType = id.includes(':') ? id.slice(id.indexOf(':') + 1) : id;
-	// A userset (`team:eng#member`) keeps its relation — dropping it would render a team and one of its
+	// A userset (`role:<id>#assignee`) keeps its relation — dropping it would render a role and one of its
 	// rungs as the same node, silently merging two different subjects.
 	return withoutType;
 };
 
-/** Subjects (who) vs containers (what) — the model's own split: `user`/`team`/`role` are the only
+/** Subjects (who) vs containers (what) — the model's own split: `user`/`role` are the only
  *  types that appear on the left of a tuple as principals. */
-const SUBJECT_TYPES = new Set(['user', 'team', 'role']);
+const SUBJECT_TYPES = new Set(['user', 'role']);
 
 export const isSubject = (id: string): boolean => SUBJECT_TYPES.has(idType(id));
 
@@ -229,7 +229,7 @@ function visit(
 	// Terminal subjects — the actual grantees, including a `user:*` public wildcard, which must never
 	// be hidden: a wildcard is the single widest grant the model can express.
 	for (const subject of leaf.users ?? []) {
-		// Usersets fold into their role/team node here exactly as on the store canvas — see subjectRef.
+		// Usersets fold into their role node here exactly as on the store canvas — see subjectRef.
 		const ref = subjectRef(subject);
 		nodeFor(ref.node, depth - 1, mechanismLabel(mechanism), acc);
 		// The edge carries the RELATION only. The mechanism is already on the node this edge arrives at
@@ -282,18 +282,18 @@ function finish(acc: Walked): BuiltGraph {
  * the facet rail had nothing to narrow and the first thing anyone met was a blank box.
  *
  * Depth is assigned by ROLE rather than by hops, because a whole-store graph has no distance-from-
- * anything to measure: subjects (`user`/`team`/`role`) sit left, the containment spine
+ * anything to measure: subjects (`user`/`role`) sit left, the containment spine
  * (warehouse → project → namespace) in the middle, and leaf resources (table, view, transaction) right.
  * That is the direction tuples already read in, so arrows run left-to-right here as everywhere else.
  */
 export function buildWholeGraph(tuples: readonly TupleLike[]): BuiltGraph {
 	// One column per RUNG of the hierarchy, so the canvas reads as the org chart it encodes:
-	// users leftmost (people), then the groupings they belong to (team/role — membership edges point
+	// users leftmost (people), then the groupings they belong to (roles — membership edges point
 	// rightward into them), then the containment chain root-first — project is the top of the tenancy
 	// hierarchy, and every parent sits LEFT of its children so the parent→child edges all flow with
-	// the reading direction. Before this, user/team/role shared one column and project shared
-	// warehouse's, which drew a team beside its own members and the tenancy root mid-canvas.
-	const SUBJECT_DEPTH: Record<string, number> = { user: -2, team: -1, role: -1 };
+	// the reading direction. A shared subject column would draw a role beside its own members, and a
+	// project sharing its warehouse's column would put the tenancy root mid-canvas.
+	const SUBJECT_DEPTH: Record<string, number> = { user: -2, role: -1 };
 	const CONTAINER_DEPTH: Record<string, number> = {
 		project: 0,
 		warehouse: 1,

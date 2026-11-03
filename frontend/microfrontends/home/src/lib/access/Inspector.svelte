@@ -478,8 +478,7 @@
 				<p class="text-[11px] text-muted-foreground">
 					<span class="font-mono">&lt;idp-id&gt;~&lt;user id&gt;</span> — not a username. Or a
 					userset:
-					<span class="font-mono">team:eng#member</span>,
-					<span class="font-mono">role:validators#assignee</span>.
+					<span class="font-mono">role:&lt;id&gt;#assignee</span>.
 				</p>
 			</div>
 
