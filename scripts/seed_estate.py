@@ -213,7 +213,9 @@ DEMO_ESTATE = Estate(
     projects=(
         Project(
             id="acme",
-            roles=(Role(name="admins", assignees=("user:alice", "user:bob")), Role(name="validators", assignees=("user:carol",))),
+            # alice is in no role: the seed runs as her, and no door lets a caller assign herself to a role (a grant may not
+            # raise its caller's own access); she administers every project she creates through its creator's admin.
+            roles=(Role(name="admins", assignees=("user:bob",)), Role(name="validators", assignees=("user:carol",))),
             warehouses=(
                 Warehouse(
                     id="acme-bucket",
@@ -229,9 +231,9 @@ DEMO_ESTATE = Estate(
                 ),
             ),
         ),
-        # alice and bob administer research too, through research's own role: a role is one project's. Its warehouse
-        # carries no namespaces, exactly as the fixtures leave it.
-        Project(id="research", roles=(Role(name="admins", assignees=("user:alice", "user:bob")),), warehouses=(Warehouse(id="research-bucket"),)),
+        # bob administers research too, through research's own role: a role is one project's. Its warehouse carries no
+        # namespaces, exactly as the fixtures leave it.
+        Project(id="research", roles=(Role(name="admins", assignees=("user:bob",)),), warehouses=(Warehouse(id="research-bucket"),)),
         Project(
             id="beta",
             roles=(Role(name="admins", assignees=("user:frank",)),),
