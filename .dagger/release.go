@@ -185,9 +185,9 @@ func (m *Rask) Lakehouse(
 		return nil, err
 	}
 	run := time.Now().UTC().Format(time.RFC3339Nano)
-	tool := withRenderableChart(m.base(src))
+	tool := withRenderableChart(m.tools(src))
 
-	pinned, err := tool.WithExec([]string{"bash", "-c", fmt.Sprintf("set -euo pipefail\nhelm show values %s --version %s | uv run python -c "+
+	pinned, err := tool.WithExec([]string{"bash", "-c", fmt.Sprintf("set -euo pipefail\nhelm show values %s --version %s | uv run --no-project --with pyyaml python -c "+
 		"'import sys, yaml; i = yaml.safe_load(sys.stdin)[\"image\"]; print(i[\"repository\"] + \"/%s@\" + i[\"digests\"][\"%s\"])'",
 		chart, version, catalogImageName, catalogImageName)}).Stdout(ctx)
 	if err != nil {

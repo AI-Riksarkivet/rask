@@ -62,6 +62,13 @@ func (m *Rask) pythonBase(src *dagger.Directory) *dagger.Container {
 // every run. `.dagger/test.go` always had the flag — only this base lacked it,
 // which is why the pytest lane passed while the type gate could not.
 func (m *Rask) base(src *dagger.Directory) *dagger.Container {
+	return m.tools(src).WithExec([]string{"uv", "sync", "--all-packages"})
+}
+
+// tools is base without the workspace synced: uv, the source and its caches, for a lane that runs scripts and charts but
+// imports no workspace member. `uv sync --all-packages` installs every client's dependencies too, and on arm64 one of
+// them (lance-graph, no wheel for the platform) builds from source and fails.
+func (m *Rask) tools(src *dagger.Directory) *dagger.Container {
 	return dag.Container().
 		From(UvPythonImage).
 		WithMountedCache("/root/.cache/uv", dag.CacheVolume("rask-uv-cache")).
@@ -73,6 +80,5 @@ func (m *Rask) base(src *dagger.Directory) *dagger.Container {
 			// the build system.
 			Exclude: []string{"**/.env", "**/.env.*", ".venv", ".git", "node_modules", "frontend/node_modules"},
 		}).
-		WithWorkdir("/src").
-		WithExec([]string{"uv", "sync", "--all-packages"})
+		WithWorkdir("/src")
 }

@@ -10,7 +10,9 @@ BASE_B="s3://mb-b"
 # THE ESTATE ADMIN IS THE IDENTITY THE SUITES DRIVE AS, named at install the way the live estate names it. Minting a
 # project gates on the estate root, and only the bootstrap-admin hook writes that grant, so without it every suite that
 # mints a tenant is refused 403 `can_observe_events required on estate:rask` before it asserts anything.
-ADMIN_PRINCIPAL="$(uv run python "$(dirname "${BASH_SOURCE[0]}")/dex_principal.py" alice@example.com)"
+# The script imports PyYAML alone, so it runs in an environment of that and nothing else: syncing the workspace would
+# install every client's dependencies, and one of them builds from source on arm64.
+ADMIN_PRINCIPAL="$(uv run --no-project --with pyyaml python "$(dirname "${BASH_SOURCE[0]}")/dex_principal.py" alice@example.com)"
 # shellcheck disable=SC2034 # read by the sourcing script
 HELM_SET=(
   --set image.localImages=true
