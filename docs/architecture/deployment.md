@@ -344,6 +344,34 @@ and every one reaches a pod from the secret store. See
   (`make e2e-ci`) and the per-zone Playwright suites; `dagger call <fn>` locally is the CI step.
 - **`.github/workflows/docs.yml`** builds this Zensical site (`zensical build --clean`) and Storybook, and deploys
   both to GitHub Pages.
+- **`.github/workflows/release.yml`** publishes a lakehouse release when the tag `lakehouse-vX.Y.Z` is pushed (§ Releases).
+
+## Releases
+
+A client repository pins the lakehouse by one version, `X.Y.Z`, the tag `lakehouse-vX.Y.Z` without its prefix
+([[XC-187]]). Pushing the tag is the only way a release is made, and it publishes to public GHCR with the job's own
+token:
+
+| What | A client pins it as |
+| --- | --- |
+| The catalog image, amd64 and arm64 in one index | `ghcr.io/ai-riksarkivet/lance-rest-catalog@sha256:…` (the chart already names it) |
+| The product chart, pinned to that index's digest | `oci://ghcr.io/ai-riksarkivet/charts/rask`, `--version X.Y.Z` |
+| The platform package (XC-186) | `service-kit[governed] @ git+https://github.com/AI-Riksarkivet/rask@lakehouse-vX.Y.Z#subdirectory=packages/service-kit` |
+| A lakehouse for its e2e | `dagger install github.com/AI-Riksarkivet/rask@lakehouse-vX.Y.Z`, then `dag.Rask().Lakehouse("X.Y.Z")` |
+
+A new GHCR package is private until its visibility is set, and a job token cannot set it. So on the first release, the
+org's package settings make each of the two packages public once: `lance-rest-catalog` and `charts/rask`. Every later
+release publishes into them as they stand.
+
+Each architecture's image is built natively on a runner of its own (`dagger call publish-image`): under emulation the
+image's import gate dies of SIGILL in a native wheel. `dagger call publish` then joins them into one index and pushes the
+chart with `scripts/pin_chart_release.py`'s pin. The released chart is a real deployment by default, so it refuses the
+development stand-ins until an install names the platform's services. `Lakehouse` is the exception: it stands the
+release up as the local estate it is. It copies the pinned image into a registry inside the session, installs the
+published chart with the development fixtures (`scripts/install_from_empty.sh`, `CHART` and `CHART_VERSION`), and
+returns one service serving the catalog on 2333, Dex on 5556 and the object store on 9000. Bind that service as
+`rask-catalog`, `rask-dex` and `rask-rustfs`, so a token's issuer and a vended endpoint resolve under the names the
+catalog uses.
 
 ## State stores
 

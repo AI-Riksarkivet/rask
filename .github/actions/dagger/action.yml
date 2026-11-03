@@ -1,0 +1,20 @@
+name: Dagger CLI and engine
+description: Installs the Dagger CLI pinned to the module's engineVersion and warms the engine, retrying the engine pull only.
+runs:
+  using: composite
+  steps:
+    - name: Install Dagger CLI (pinned to the module's engineVersion)
+      shell: bash
+      run: curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.8 BIN_DIR=/usr/local/bin sh
+    # The engine pull is retried on its own, as ci.yml does: the work is never retried into passing.
+    - name: Warm the Dagger engine
+      shell: bash
+      env:
+        DAGGER_NO_NAG: "1"
+      run: |
+        for attempt in 1 2 3 4 5; do
+          if dagger core version; then exit 0; fi
+          echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+          sleep $((attempt * 15))
+        done
+        dagger core version

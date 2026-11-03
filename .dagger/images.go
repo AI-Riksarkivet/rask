@@ -100,12 +100,17 @@ func (m *Rask) Image(
 	// Extra build args as KEY=VALUE (e.g. AGE_REF=..., CNPG_BASE=...).
 	// +optional
 	buildArg []string,
+	// The platform to build for (linux/amd64, linux/arm64); the engine's own by default. A foreign one runs under
+	// the engine's built-in emulation, so no host setup is needed.
+	// +optional
+	platform dagger.Platform,
 ) *dagger.Container {
 	args := provenance(buildDate, vcsRef, version)
 	args = append(args, extraArgs(buildArg)...)
 	return src.DockerBuild(dagger.DirectoryDockerBuildOpts{
 		Dockerfile: fmt.Sprintf(".docker/%s.dockerfile", name),
 		BuildArgs:  args,
+		Platform:   platform,
 	})
 }
 

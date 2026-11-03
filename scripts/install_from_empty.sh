@@ -5,12 +5,18 @@
 # exit reason, and the logs of whatever is not Ready, every Job pod's included.
 #
 # The images the render names (`<component>:$TAG`, image.localImages) must already be pullable by the cluster:
-# `dagger call install-from-empty` builds them into a registry its k3s mirrors; scripts/e2e_stack.sh loads them into kind.
+# `dagger call install-from-empty` builds them into a registry its k3s mirrors, `dagger call lakehouse` copies a release's
+# published images there by digest, and scripts/e2e_stack.sh loads them into kind.
+#
+# CHART is the chart to install: this tree's ./chart by default, or a published release's OCI reference with
+# CHART_VERSION naming its version ([[XC-187]]).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 RELEASE="${RELEASE:-rask}"
 TAG="${TAG:-dev}"
+CHART="${CHART:-./chart}"
+CHART_VERSION="${CHART_VERSION:-}"
 TIMEOUT="${TIMEOUT:-900s}"
 # shellcheck source=scripts/stack_values.sh
 . scripts/stack_values.sh
@@ -55,7 +61,7 @@ echo "==> rask"
     done
   done ) &
 RECORDER=$!
-scripts/helm.sh upgrade --install "$RELEASE" ./chart --timeout "$TIMEOUT" "${HELM_SET[@]}"
+scripts/helm.sh upgrade --install "$RELEASE" "$CHART" ${CHART_VERSION:+--version "$CHART_VERSION"} --timeout "$TIMEOUT" "${HELM_SET[@]}"
 
 echo "==> ready"
 kubectl wait --for=condition=Available deploy --all --timeout="$TIMEOUT"

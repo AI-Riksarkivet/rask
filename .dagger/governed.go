@@ -193,7 +193,7 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, prov 
 	if err != nil {
 		return nil, err
 	}
-	return m.Image(src, "rest-catalog", "", "", "", nil).
+	return m.Image(src, "rest-catalog", "", "", "", nil, "").
 		WithServiceBinding("store", stack.Store).
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
 		WithEnvVariable("LANCE_REST_ROOT", "s3://lance-catalog").
@@ -262,7 +262,7 @@ out.mkdir(exist_ok=True)
 // namespace (ADR 0158) and presenting `token` to it. It answers on the session hostname `host`, so the catalog
 // it binds can reach it back without a binding cycle; the caller starts it.
 func (m *Rask) lineageService(src *dagger.Directory, catalog *dagger.Service, token *dagger.File, host string) *dagger.Service {
-	return m.Image(src, "rest-catalog", "", "", "", nil).
+	return m.Image(src, "rest-catalog", "", "", "", nil, "").
 		WithServiceBinding("catalog", catalog).
 		// Lineage calls `assert_authentication_configured` exactly as the catalog does, and refuses to
 		// boot unless a posture is named. The authorization under test in these lanes is the CATALOG's;

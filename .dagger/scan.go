@@ -336,7 +336,7 @@ func (m *Rask) ScanImage(
 	if name == "" {
 		return "", fmt.Errorf("scan-image: --name is required (the .docker/<stem>.dockerfile stem)")
 	}
-	return m.scanContainer(ctx, m.Image(src, name, "", "", "", nil), severity, ignoreUnfixed)
+	return m.scanContainer(ctx, m.Image(src, name, "", "", "", nil, ""), severity, ignoreUnfixed)
 }
 
 // ScanZoneImage builds one micro-frontend zone and scans it, mirroring ScanImage for the frontend plane.
@@ -405,7 +405,7 @@ func (m *Rask) Sbom(
 	if name == "" {
 		return nil, fmt.Errorf("sbom: --name is required (the .docker/<stem>.dockerfile stem)")
 	}
-	return m.sbomContainer(m.Image(src, name, "", "", "", nil), name), nil
+	return m.sbomContainer(m.Image(src, name, "", "", "", nil, ""), name), nil
 }
 
 // ZoneSbom mirrors Sbom for a micro-frontend zone, as ScanZoneImage mirrors ScanImage.

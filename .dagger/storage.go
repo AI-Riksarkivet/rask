@@ -174,7 +174,7 @@ func (m *Rask) RustfsLifecycle(
 		return "", err
 	}
 
-	catalog := m.Image(src, "rest-catalog", "", "", "", nil).
+	catalog := m.Image(src, "rest-catalog", "", "", "", nil, "").
 		WithServiceBinding("rustfs", rustfs).
 		// THE POSTURE, DECLARED. `assert_authentication_configured` refuses to boot on the AMBIGUITY
 		// between "open because I meant it" and "open because nothing set it", so a lane that names

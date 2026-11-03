@@ -1,0 +1,54 @@
+name: Lakehouse release
+
+# A lakehouse release ([[XC-187]], decided by the owner 2026-11-03): pushing the tag `lakehouse-vX.Y.Z` publishes the
+# catalog image (amd64 + arm64, one index) and the product chart pinned to that index's digest to public GHCR, and the
+# tag itself is the pin for the platform package (service-kit, through uv's git source) and for the Dagger module
+# another repository calls to stand the lakehouse up (`dagger call lakehouse --version X.Y.Z`). Nothing else publishes.
+on:
+  push:
+    tags:
+      - 'lakehouse-v*'
+
+# One release per tag, never cancelled: a half-published release is a chart that names an image nobody pushed.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+# The job's own token pushes the packages; no long-lived registry secret exists.
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # Each architecture is built natively on a runner of its own: an emulated build of this image dies in its import
+  # gate (SIGILL in a native wheel), so emulation cannot cut a release.
+  image:
+    strategy:
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/dagger
+      - name: Build and push this architecture's catalog image
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: dagger call publish-image --version "${GITHUB_REF_NAME#lakehouse-v}" --vcs-ref "$GITHUB_SHA" --username "$ACTOR" --password env:GITHUB_TOKEN
+
+  publish:
+    needs: image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/dagger
+      - name: Join the images into one index and publish the chart pinned to it
+        env:
+          DAGGER_NO_NAG: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          version="${GITHUB_REF_NAME#lakehouse-v}"
+          dagger call publish --version "$version" --username "$ACTOR" --password env:GITHUB_TOKEN | tee "$RUNNER_TEMP/published.txt"
+          { echo "## lakehouse-v$version"; echo '```'; cat "$RUNNER_TEMP/published.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

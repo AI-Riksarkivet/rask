@@ -74,15 +74,22 @@ func (m *Rask) InstallFromEmpty(
 		ref, stem := fields[0], fields[1]
 		archive := "/images/" + stem + ".tar"
 		pusher = pusher.
-			WithMountedFile(archive, m.Image(src, stem, "", "", "", nil).AsTarball()).
+			WithMountedFile(archive, m.Image(src, stem, "", "", "", nil, "").AsTarball()).
 			WithExec([]string{"push", "--insecure", archive, "rask-registry:5000/library/" + ref}, dagger.ContainerWithExecOpts{UseEntrypoint: true})
 	}
 	if _, err := pusher.Sync(ctx); err != nil {
 		return "", fmt.Errorf("pushing the images to the session registry: %w", err)
 	}
 
-	kubeconfig := dag.CacheVolume("rask-install-from-empty-kubeconfig")
-	k3s := dag.Container().From(k3sImage).
+	kubeconfig := dag.CacheVolume("rask-install-from-empty-kubeconfig-" + run)
+	return runInstall(ctx, installer(tool, emptyCluster(registry, kubeconfig, run), kubeconfig, run), "rask from empty")
+}
+
+// emptyCluster is an empty k3s whose Docker Hub pulls go through `registry` first (k3sRegistries), writing its
+// kubeconfig to `kubeconfig`. `run` keys the service, so each call starts a cluster of its own; the kubeconfig volume is
+// named by the same run, so no earlier run's kubeconfig satisfies clusterReady's wait.
+func emptyCluster(registry *dagger.Service, kubeconfig *dagger.CacheVolume, run string) *dagger.Service {
+	return dag.Container().From(k3sImage).
 		WithNewFile("/usr/bin/entrypoint.sh", k3sEntrypoint, dagger.ContainerWithNewFileOpts{Permissions: 0o755}).
 		WithNewFile("/etc/rancher/k3s/registries.yaml", k3sRegistries).
 		WithServiceBinding("rask-registry", registry).
@@ -100,29 +107,40 @@ func (m *Rask) InstallFromEmpty(
 				" --write-kubeconfig /kc/k3s.yaml --write-kubeconfig-mode 644"},
 			InsecureRootCapabilities: true,
 		})
+}
 
-	install := tool.
+// installer is `tool` with kubectl, bound to `k3s` as rask-k3s; a command it runs starts with clusterReady.
+func installer(tool *dagger.Container, k3s *dagger.Service, kubeconfig *dagger.CacheVolume, run string) *dagger.Container {
+	return tool.
 		WithFile("/usr/local/bin/kubectl", kubectlBinary(), dagger.ContainerWithFileOpts{Permissions: 0o755}).
 		WithServiceBinding("rask-k3s", k3s).
 		WithMountedCache("/kc", kubeconfig).
 		WithEnvVariable("RUN", run).
-		WithExec([]string{"bash", "-c", "set -euo pipefail\nexec 2>&1\nset -x\n" +
-			"until [ -s /kc/k3s.yaml ]; do sleep 2; done\n" +
-			"sed -E 's#https://[^:/]+:6443#https://rask-k3s:6443#' /kc/k3s.yaml > /tmp/kubeconfig\n" +
-			"export KUBECONFIG=/tmp/kubeconfig\n" +
-			"until [ -n \"$(kubectl get nodes -o name 2>/dev/null)\" ]; do sleep 2; done\n" +
-			"kubectl wait --for=condition=Ready node --all --timeout=180s\n" +
-			"set +x\nscripts/install_from_empty.sh"}, dagger.ContainerWithExecOpts{Expect: dagger.ReturnTypeAny})
+		WithEnvVariable("KUBECONFIG", "/tmp/kubeconfig")
+}
+
+// clusterReady waits for the cluster installer binds, writes its kubeconfig where KUBECONFIG names it, and waits for
+// its node to be Ready. A command run in installer's container starts with it.
+const clusterReady = "set -euo pipefail\nexec 2>&1\nset -x\n" +
+	"until [ -s /kc/k3s.yaml ]; do sleep 2; done\n" +
+	"sed -E 's#https://[^:/]+:6443#https://rask-k3s:6443#' /kc/k3s.yaml > /tmp/kubeconfig\n" +
+	"until [ -n \"$(kubectl get nodes -o name 2>/dev/null)\" ]; do sleep 2; done\n" +
+	"kubectl wait --for=condition=Ready node --all --timeout=180s\nset +x\n"
+
+// runInstall runs scripts/install_from_empty.sh in `cluster` (installer's container), returning its output; a cluster
+// that never readies or an install that fails returns that output in the error, naming `what`.
+func runInstall(ctx context.Context, cluster *dagger.Container, what string) (string, error) {
+	install := cluster.WithExec([]string{"bash", "-c", clusterReady + "scripts/install_from_empty.sh"}, dagger.ContainerWithExecOpts{Expect: dagger.ReturnTypeAny})
 	out, err := install.Stdout(ctx)
 	if err != nil {
 		return "", err
 	}
 	code, err := install.ExitCode(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("reading %s's install exit code: %w", what, err)
 	}
 	if code != 0 {
-		return "", fmt.Errorf("rask did not install from empty (exit %d):\n%s", code, out)
+		return "", fmt.Errorf("%s did not install (exit %d):\n%s", what, code, out)
 	}
 	return out, nil
 }
