@@ -58,7 +58,7 @@ def lineage_name_for(namespace: str, name: str) -> str:
     goes through ONE rule: a second copy of this expression is how an edge ends up under a different key
     than the table it is meant to name.
     """
-    from lineage.api.fga_deps import is_external_source
+    from lineage.core.sources import is_external_source
 
     return f"{namespace}/{name}" if is_external_source(namespace, name) else name
 

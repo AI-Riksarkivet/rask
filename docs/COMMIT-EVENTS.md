@@ -76,6 +76,17 @@ and its namespace ([ADR 0173](adr/0173-tables-and-namespaces-are-keyed-by-a-mint
 renamed or taken by another table; its uuid cannot, so key what you keep about a table on `tableUuid`. A uuid is
 absent when the catalog could not read it. The OpenLineage dataset `name` stays the table id.
 
+Every dataset the catalog and maintenance name is under one OpenLineage `namespace`, the catalog's endpoint:
+`lance-namespace://<host>/api/catalog`, the release's public host ([[LH-553]]; OpenLineage names a catalog's tables by the
+catalog serving them, https://openlineage.io/docs/spec/naming). Two estates' `acme$bronze$events` are then two datasets
+in one graph backend. An event that names a table's location (a create, a write, a register, a publication) also lists
+it in the dataset's standard `symlinks` facet as OpenLineage's clients name a storage location, type `LOCATION`:
+`s3://<bucket>` and the key, or `file` and the path. So an engine that reads the table by its location (Spark, Ray or
+DataFusion through the namespace) names the same dataset in the graph the feed is forwarded to: Marquez joins a dataset
+by every identifier it was first seen under (`DatasetSymlinkDao`, 0.51.1). A drop or a deregister names no location;
+the event that made the table laid its symlink, and a rename keeps the location, so in Marquez the location stays
+joined to the name it was first seen under.
+
 ### A write that committed rows
 
 `event_type` is the run state (`START`, `RUNNING`, `COMPLETE`, `FAIL`, `ABORT`) and `event` is an
@@ -119,6 +130,13 @@ Their `rask_author.sub` is bound to the posting token, and each governed dataset
 ones its name resolved to through the catalog with that token when lineage took the event in, whatever the producer
 claimed. A name the token cannot resolve (a service account's token is lineage's audience, which the catalog refuses)
 is recorded without a uuid. Every other facet is that producer's own claim.
+
+A dataset another producer names by a storage location, and every identifier its `symlinks` facet lists, is decided on
+the table it names, because the forwarded graph joins them to that table: lineage asks the catalog which table a
+location holds (`POST /management/v1/decisions/locate`, on the `governance_prober` role), and resolves a symlinked
+catalog name as the poster. Recording one the poster may not see is refused 403, as naming the table by its id is, and
+a dataset named by a location a table holds carries that table's `tableUuid` in the feed; a location no table holds is
+an outside source, and so is a dataset under another catalog's `lance-namespace://` host.
 
 ## Delivery
 

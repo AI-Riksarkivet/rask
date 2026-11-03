@@ -12,12 +12,13 @@ The signature door's knobs are the estate's too ([[XC-078]]): ``SignatureDoorSet
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Annotated
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AfterValidator, AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse_kit.objectfs import lance_storage_options
+from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from service_kit.governed.settings import FgaSettings
 from service_kit.governed.store_credential import S3KeyPair, store_key_pair
 from service_kit.signature_doors import SignatureDoorSettings
@@ -116,6 +117,12 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     # "maintenance", the SERVICE: the namespace lands on every emitted RunEvent's job and is persisted into
     # AGE. The job NAME, `expire_versions.<table_id>`, names the operation.
     lineage_job_namespace: str = Field(default="maintenance", alias="MAINTENANCE_LINEAGE_JOB_NAMESPACE")
+    #: The catalog's dataset namespace, every table's OpenLineage dataset namespace ([[LH-553]]): the value the catalog's
+    #: `LANCE_LINEAGE_DATASET_NAMESPACE` holds, which the chart renders into both from one helper, so a pass lands on the
+    #: dataset the catalog's events name.
+    lineage_dataset_namespace: Annotated[str, AfterValidator(require_dataset_namespace)] = Field(
+        default=DEFAULT_DATASET_NAMESPACE, alias="MAINTENANCE_LINEAGE_DATASET_NAMESPACE"
+    )
 
     # --- S3 access to the Lance lakehouse bucket ----------------------------------------------------
     s3_endpoint: str = Field(default="http://localhost:9000", alias="MAINTENANCE_S3_ENDPOINT")

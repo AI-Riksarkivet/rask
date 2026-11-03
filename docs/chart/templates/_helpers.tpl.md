@@ -1127,6 +1127,16 @@ The public prefix of the catalog's route, and the one value both its `rask.apiRo
 decoded form, so the `%2B` and `%2F` the catalog judges a name by would arrive as `+` and `/` (measured on Traefik
 3.7.8, whose URLRewrite sets `RawPath` from `EscapedPath()`, [[LH-526]]). The catalog strips the prefix itself.
 
+## `{{- define "rask.lineageDatasetNamespace" -}}`
+
+The namespace every table's OpenLineage dataset is named under, rendered into the catalog
+(`LANCE_LINEAGE_DATASET_NAMESPACE`), maintenance (`MAINTENANCE_LINEAGE_DATASET_NAMESPACE`) and lineage
+(`LINEAGE_CATALOG_DATASET_NAMESPACE`) from this one helper, so the two producers name a table alike and lineage reads a
+dataset under any other catalog's namespace as another estate's ([[LH-553]]). It names the catalog's endpoint, as OpenLineage names a catalog's tables by the
+catalog serving them (`unitycatalog://{host}`, https://openlineage.io/docs/spec/naming): the release's first public
+hostname with the catalog's public prefix, so two estates' tables are two datasets in one graph backend. A development
+estate with no hostname names the catalog's in-cluster Service, unique per release and namespace.
+
 ## `{{- define "rask.apiRoutes" -}}`
 
 THE ONE ROUTE TABLE: the public `/api/*` prefixes the cluster route publishes, as a JSON list of

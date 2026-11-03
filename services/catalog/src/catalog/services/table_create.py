@@ -232,7 +232,7 @@ async def create_governed_table(
     # table that shares its buffers, so no payload is too large to stamp. Gated on lineage being
     # enabled: when off we don't stamp coordinates the graph never receives.
     if settings.lineage_emit_enabled:
-        table = stamp_lineage_metadata(table, build_lineage_metadata(namespace=namespace))
+        table = stamp_lineage_metadata(table, build_lineage_metadata(namespace=settings.lineage_dataset_namespace))
     # Pre-existence, computed BEFORE the write (declared-only counts — it already holds an owner grant).
     # Overwrite and ExistOk always probe, because what each did decides its lineage record, which does not
     # depend on FGA: an Overwrite of a table is not its create, and an ExistOk that kept one committed no rows

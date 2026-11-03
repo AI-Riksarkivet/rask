@@ -52,6 +52,7 @@ from lakehouse_kit.openlineage import (
     DATASET_EVENT_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
+    SYMLINKS_FACET,
     VERSION_FACET_SCHEMA_URL,
     author_facet,
     catalog_facet,
@@ -61,6 +62,7 @@ from lakehouse_kit.openlineage import (
     lifecycle_state,
     processing_engine_facet,
     schema_facet,
+    symlinks_facet,
 )
 from lakehouse_kit.schema import SchemaFields
 from lineage_kit import CanonError, SigningKey, attach_signature, author_of
@@ -186,9 +188,10 @@ class InputPin(BaseModel):
 
 
 class InputRef(NamedTuple):
-    """A resolved input edge for the wire builder: canonical ``(namespace, name)``, pinned version, its branch and its uuids."""
+    """A resolved input edge for the wire builder: the table's canonical id, pinned version, its branch and its uuids.
 
-    namespace: str
+    Named in the event's own dataset namespace, the catalog's: an input the catalog names is one of its tables."""
+
     name: str
     version: int | None
     branch: str | None = None
@@ -202,7 +205,6 @@ async def input_refs(pins: list[InputPin] | None, *, uuids: UuidReader) -> list[
     """``pins`` resolved to the canonical ids FGA keys on and the uuids the edge list keys on, so an edge names the real table."""
     refs = [
         InputRef(
-            fga.parent_namespace_id(pin.segments) or "",
             fga.canonical_object_id(pin.segments),
             pin.version,
             pin.branch,
@@ -221,10 +223,11 @@ def run_inputs(run: RunContext | None) -> list[InputPin] | None:
     return [InputPin(segments=list(entry.table), version=entry.version, branch=entry.branch) for entry in run.inputs]
 
 
-def _input_dataset(ref: InputRef) -> dict[str, Any]:
-    """An OpenLineage INPUT dataset, carrying the standard ``DatasetVersionDatasetFacet`` when a source
-    version is pinned, and rask's ``rask_lance`` facet naming the branch that version is on."""
-    dataset: dict[str, Any] = {"namespace": ref.namespace, "name": ref.name}
+def _input_dataset(ref: InputRef, *, namespace: str) -> dict[str, Any]:
+    """An OpenLineage INPUT dataset under the catalog's dataset ``namespace``, carrying the standard
+    ``DatasetVersionDatasetFacet`` when a source version is pinned, and rask's ``rask_lance`` facet naming the branch that
+    version is on."""
+    dataset: dict[str, Any] = {"namespace": namespace, "name": ref.name}
     if ref.version is not None:
         dataset["facets"] = {
             "version": {
@@ -322,14 +325,15 @@ def build_write_event(
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
     ``table_id`` is the catalog's canonical id (e.g. ``alpha$bronze$images``), the lineage ``Dataset`` name a caller of
-    the doors reads; the table's identity across a rename is the uuid ``uuids`` carries in the output's ``rask_lance`` facet,
+    the doors reads, under ``namespace``, the catalog's dataset namespace (``lance-namespace://<host><prefix>``,
+    :data:`service_kit.naming.CATALOG_DATASET_SCHEME`, [[LH-553]]), which every input is named under too; the table's identity across a rename is the uuid ``uuids`` carries in the output's ``rask_lance`` facet,
     which its OpenFGA object (``table:<uuid>``) names (ADR 0173 §8, §10). ``operation`` is the catalog op (``create_table`` / ``insert`` / ``merge_insert``
     / ``update`` / ``delete``). ``version`` is the Lance version the write produced; when it is ``None``
     (e.g. an insert whose response carries no version) the standard version facet is omitted so the
     event records the run without asserting a version. ``run_id`` / ``event_time`` are injected
     so the builder is pure and deterministically testable.
 
-    ``inputs`` names the ``(namespace, table_id)`` datasets this write is DERIVED FROM — a rename passes the
+    ``inputs`` names the tables this write is DERIVED FROM — a rename passes the
     SOURCE table so the destination's provenance chain is not severed (the edge list holds dest←source instead
     of the renamed table appearing as an orphan with no history). Default ``None`` → no input edge, the
     normal case for a fresh write.
@@ -413,6 +417,11 @@ def build_write_event(
             "name": source_uri,
             "uri": source_uri,
         }
+        # The same location as the IDENTIFIER an engine reading the table by it names (`s3://<bucket>` and the key), so a
+        # graph backend joins that engine's events to this table's ([[LH-553]]; Marquez keys a dataset by every symlink it
+        # was first seen under, `DatasetSymlinkDao`, 0.51.1). Absent where the door names no location: a drop or a
+        # deregister ends the table, and its location's symlink was laid by the event that made it.
+        facets[SYMLINKS_FACET] = symlinks_facet(_PRODUCER, location=source_uri)
     # WHAT THIS DID TO THE DATASET, in the spec's own six-value vocabulary. `rask_lance.operation` already
     # carries rask's more specific name and stays — this is the half a standard consumer can read, and
     # without it a create, a drop and an alter are one event with a different opaque string. Empty for
@@ -456,7 +465,7 @@ def build_write_event(
         # writes lump into one job (``insert``) whose output set spans every table, in the feed and in a
         # forwarded graph backend. Per-table keeps a job's output set scoped to the one table it wrote.
         "job": {"namespace": job_namespace, "name": f"{operation}.{table_id}"},
-        "inputs": [_input_dataset(ref) for ref in (inputs or [])],
+        "inputs": [_input_dataset(ref, namespace=namespace) for ref in (inputs or [])],
         "outputs": [output],
     }
 
@@ -648,6 +657,9 @@ class _BaseLineageEmitter:
     best-effort — ``_send`` swallows failures so a lineage outage never breaks a catalog write."""
 
     _job_namespace: str
+    #: The namespace every dataset this catalog names is under: its endpoint (:data:`service_kit.naming.CATALOG_DATASET_SCHEME`,
+    #: [[LH-553]]), required of every transport so no wiring falls back to a name another estate holds too.
+    _dataset_namespace: str
     #: Set by `make_emitter`; absent in the hand-constructed emitters the tests build, which is why it
     #: carries a class-level default rather than being required in every `__init__`.
     _project_resolver: ProjectResolver | None = None
@@ -719,7 +731,7 @@ class _BaseLineageEmitter:
             return
         event = build_write_event(
             table_id=table_id,
-            namespace=namespace,
+            namespace=self._dataset_namespace,
             author=author,
             version=version,
             operation=operation,
@@ -767,10 +779,11 @@ class _BaseLineageEmitter:
 class HttpLineageEmitter(_BaseLineageEmitter):
     """POSTs OpenLineage events to the lineage service, swallowing every failure."""
 
-    def __init__(self, client: httpx.AsyncClient, url: str, *, job_namespace: str) -> None:
+    def __init__(self, client: httpx.AsyncClient, url: str, *, job_namespace: str, dataset_namespace: str) -> None:
         self._client = client
         self._url = url
         self._job_namespace = job_namespace
+        self._dataset_namespace = dataset_namespace
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str, authorization: str | None) -> None:
         # Forward the caller's bearer so ingest accepts the event when the lineage service has OIDC on
@@ -806,6 +819,7 @@ class DaprEmitter(_BaseLineageEmitter):
         topic: str,
         *,
         job_namespace: str,
+        dataset_namespace: str,
         timeout_seconds: float,
         outbox_uri: str = "",
         storage_options: Callable[[], StorageOptions] | None = None,
@@ -815,6 +829,7 @@ class DaprEmitter(_BaseLineageEmitter):
         self._pubsub = pubsub
         self._topic = topic
         self._job_namespace = job_namespace
+        self._dataset_namespace = dataset_namespace
         self._timeout_seconds = timeout_seconds
         self._outbox_uri = outbox_uri
         #: Read at every stage, never held: the key pair in it rotates while the catalog runs ([[XC-082]]).
@@ -894,6 +909,7 @@ def make_emitter(
     pubsub: str,
     topic: str,
     job_namespace: str,
+    dataset_namespace: str,
     timeout_seconds: float = 5.0,
     project_resolver: ProjectResolver | None = None,
     outbox_uri: str = "",
@@ -908,7 +924,8 @@ def make_emitter(
     no-op when disabled or unwired (a half-configured transport must never silently become the other).
 
     ``unannounced`` answers, for a write's parent namespace and operation, whether it goes unannounced (the provenance
-    namespace's own rows). ``commit_ids`` holds the key a versioned announcement's run id is derived under."""
+    namespace's own rows). ``commit_ids`` holds the key a versioned announcement's run id is derived under.
+    ``dataset_namespace`` is the catalog's endpoint, every dataset's namespace ([[LH-553]])."""
     if not enabled:
         return NoopEmitter()
     if transport == "dapr" and dapr is not None:
@@ -917,6 +934,7 @@ def make_emitter(
             pubsub,
             topic,
             job_namespace=job_namespace,
+            dataset_namespace=dataset_namespace,
             timeout_seconds=timeout_seconds,
             outbox_uri=outbox_uri,
             storage_options=storage_options,
@@ -932,7 +950,7 @@ def make_emitter(
         emitter._commit_ids = commit_ids
         return emitter
     if transport == "http" and url and client is not None:
-        http_emitter = HttpLineageEmitter(client, url, job_namespace=job_namespace)
+        http_emitter = HttpLineageEmitter(client, url, job_namespace=job_namespace, dataset_namespace=dataset_namespace)
         http_emitter._project_resolver = project_resolver
         http_emitter._catalog_impl = catalog_impl
         http_emitter._warehouse_uri = warehouse_uri

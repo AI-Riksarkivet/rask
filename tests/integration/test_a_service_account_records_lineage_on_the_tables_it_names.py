@@ -7,6 +7,11 @@ catalog's decision door by name, as the producer: the catalog resolves the name,
 uuid with the decision. So a pipeline on workload identity records lineage for a table it may write, keyed by that
 table's uuid as the catalog's own events are, and is refused one it may not.
 
+A graph backend joins a dataset by every identifier it carries, and the catalog names each table's storage location in
+its events' ``symlinks`` facet ([[LH-553]]). So a producer naming a table by its location, or listing the table among its
+own dataset's symlinks, is decided on that table: lineage asks the catalog's ``locate`` door which table a location
+holds, and resolves a symlinked name as the producer.
+
 Nothing stands in: the catalog's own app on a real `dir` namespace with OpenFGA on a store of this test's own, lineage's
 own app and lifespan asking it through `CatalogDecider` and recording into its provenance namespace, and every caller a
 token a real verifier checks: the loopback Dex for the person who makes the tables, the loopback service-account issuer
@@ -16,7 +21,7 @@ for lineage and the producer. The grants a deployment's bootstrap hook writes ar
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +30,10 @@ import pyarrow as pa
 import pytest
 from pydantic import BaseModel
 
+from lakehouse_kit.openlineage import SYMLINKS_FACET_SCHEMA_URL
 from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed import fga
+from service_kit.naming import location_identifier
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event
 
 
@@ -34,16 +41,17 @@ from tests.integration.lineage_app import live_catalog, live_lineage, run_event
 _LINEAGE_SA, _PRODUCER_SA = "rask-sa-lineage", "producer"
 _LINEAGE = f"kubernetes~system:serviceaccount:default:{_LINEAGE_SA}"
 _PRODUCER = f"kubernetes~system:serviceaccount:etl:{_PRODUCER_SA}"
-#: The table the producer may write, and one it holds no grant on.
-_MINE, _THEIRS = "acme$mine", "acme$theirs"
+#: The table the producer may write, one it may only read, and one it holds no grant on.
+_MINE, _READ, _THEIRS = "acme$mine", "acme$read", "acme$theirs"
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
 
 
 class Estate(BaseModel):
-    """Lineage's address, the uuid of each table the catalog made, and of their namespace."""
+    """Lineage's address, the uuid and storage location of each table the catalog made, and their namespace's uuid."""
 
     lineage_url: str
     uuids: dict[str, str]
+    locations: dict[str, str]
     namespace_uuid: str
 
 
@@ -77,14 +85,17 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
         assert catalog.post("/v1/namespace/acme/create", json={}).status_code == 200
         namespace_uuid = catalog.post("/v1/namespace/acme/describe", json={}).json()["properties"]["rask.uuid"]
         uuids: dict[str, str] = {}
-        for table in (_MINE, _THEIRS):
+        locations: dict[str, str] = {}
+        for table in (_MINE, _READ, _THEIRS):
             created = catalog.post(f"/v1/table/{table}/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
             assert created.status_code == 200, created.text
-            uuids[table] = catalog.post(f"/v1/table/{table}/describe", json={"vend_credentials": False}).json()["properties"]["rask.uuid"]
+            described = catalog.post(f"/v1/table/{table}/describe", json={"vend_credentials": False}).json()
+            uuids[table], locations[table] = described["properties"]["rask.uuid"], described["location"]
         openfga_store.write(
             (fga.user_object(_LINEAGE), "decider", "estate:rask"),
             (fga.user_object(_LINEAGE), "governance_prober", "estate:rask"),
             (fga.user_object(_PRODUCER), "writer", fga.table_object(uuids[_MINE])),
+            (fga.user_object(_PRODUCER), "reader", fga.table_object(uuids[_READ])),
         )
         lineage_token = tmp_path / "lineage-catalog-token"
         lineage_token.write_text(sa_issuer.mint(_LINEAGE_SA, audience="rask-catalog"))
@@ -98,7 +109,7 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
         }.items():
             monkeypatch.setenv(key, value)
         with live_lineage(catalog_url, monkeypatch) as lineage_url:
-            yield Estate(lineage_url=lineage_url, uuids=uuids, namespace_uuid=namespace_uuid)
+            yield Estate(lineage_url=lineage_url, uuids=uuids, locations=locations, namespace_uuid=namespace_uuid)
 
 
 @pytest.mark.parametrize(
@@ -117,3 +128,43 @@ def test_a_service_accounts_event_is_admitted_only_for_a_table_it_may_write_and_
     assert [(row["outputs"], row["table_uuids"], row["namespace_uuids"], row["unresolved_tables"]) for row in feed] == (
         [([table], [estate.uuids[table]], [estate.namespace_uuid], [])] if status == 201 else []
     )
+
+
+@pytest.mark.parametrize(
+    ("named_as", "status", "read"),
+    [
+        pytest.param(lambda estate: location_input(estate.locations[_READ]), 201, _READ, id="the-location-of-a-table-it-may-read"),
+        pytest.param(lambda estate: location_input(estate.locations[_THEIRS]), 403, None, id="the-location-of-a-table-it-may-not-see"),
+        pytest.param(lambda estate: location_input(estate.locations[_THEIRS] + "-elsewhere"), 201, None, id="a-location-no-table-holds"),
+        pytest.param(lambda estate: symlinked_input(_THEIRS), 403, None, id="a-symlink-to-a-table-it-may-not-see"),
+    ],
+)
+def test_a_dataset_named_by_a_tables_location_or_symlink_is_decided_and_recorded_as_that_table(
+    estate: Estate, sa_issuer: Any, named_as: Callable[[Estate], dict[str, Any]], status: int, read: str | None
+) -> None:
+    producer = {"Authorization": f"Bearer {sa_issuer.mint(_PRODUCER_SA, namespace='etl', audience='rask-lineage')}"}
+    event = run_event("run-2", "COMPLETE", "2026-11-03T10:00:00+00:00", outputs=[_MINE])
+    event["inputs"] = [named_as(estate)]
+    with httpx.Client(base_url=estate.lineage_url, headers=producer, timeout=60) as lineage:
+        posted = lineage.post("/api/v1/lineage", json=event)
+        recorded = [(row["outputs"], sorted(row["table_uuids"])) for row in lineage.get("/events").json()["events"]]
+
+    # A read by location is a read of the table the location holds, in lineage's own feed as in the forwarded graph.
+    named = sorted(estate.uuids[table] for table in (_MINE, read) if table is not None)
+    assert (posted.status_code, recorded) == (status, [([_MINE], named)] if status == 201 else []), posted.text
+
+
+def location_input(location: str) -> dict[str, Any]:
+    """An input named by a storage location, as OpenLineage's clients name one (``service_kit.naming.location_identifier``)."""
+    namespace, name = location_identifier(location)
+    return {"namespace": namespace, "name": name}
+
+
+def symlinked_input(table: str) -> dict[str, Any]:
+    """An outside source whose ``symlinks`` facet lists the governed ``table`` by its catalog name."""
+    identifiers = [{"namespace": "lance-namespace://localhost/api/catalog", "name": table, "type": "TABLE"}]
+    return {
+        "namespace": "s3://elsewhere",
+        "name": "raw/drop",
+        "facets": {"symlinks": {"_producer": "https://example.invalid/etl", "_schemaURL": SYMLINKS_FACET_SCHEMA_URL, "identifiers": identifiers}},
+    }

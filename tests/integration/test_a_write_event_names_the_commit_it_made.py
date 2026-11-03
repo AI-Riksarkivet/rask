@@ -70,7 +70,12 @@ def events(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> list[
             posted.append(json.loads(request.content))
         return httpx.Response(200)
 
-    emitter = HttpLineageEmitter(httpx.AsyncClient(transport=httpx.MockTransport(_receive)), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
+    emitter = HttpLineageEmitter(
+        httpx.AsyncClient(transport=httpx.MockTransport(_receive)),
+        "http://lineage/api/v1/lineage",
+        job_namespace="lance-catalog",
+        dataset_namespace="lance-namespace://localhost/api/catalog",
+    )
     monkeypatch.setattr(real_ns_client.app.state, "lineage_emitter", emitter, raising=False)
     return posted
 

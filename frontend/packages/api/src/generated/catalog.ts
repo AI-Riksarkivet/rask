@@ -412,6 +412,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/decisions/locate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Decide Locate
+         * @description Which governed table each storage location holds, by the location claims every door that makes a table takes.
+         *
+         *     For lineage, which records an outside producer's event naming a dataset by its location (``s3://<bucket>`` and the
+         *     key) as well as by its name ([[LH-553]]): a location a table holds is that table, and its grants decide whether the
+         *     producer may record it, while one no table holds is the outside world. The fact is structural, like ``governed``'s,
+         *     so it answers to the same role. A claim that cannot be read is 503, never "holds none", which would exempt it.
+         *     Lakekeeper answers the same question for its S3 signer: it resolves a request's location to the table holding it,
+         *     dropped tables included, then authorizes the caller on that table (``resolve_signable_by_location``,
+         *     crates/lakekeeper/src/server/s3_signer/sign.rs).
+         */
+        post: operations["decide_locate_management_v1_decisions_locate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/erasures": {
         parameters: {
             query?: never;
@@ -5703,6 +5731,24 @@ export interface components {
             users: string[];
         };
         /**
+         * DecisionLocate
+         * @description Which governed table each of ``locations`` holds: a storage location an event names a dataset by ([[LH-553]]).
+         */
+        DecisionLocate: {
+            /** Locations */
+            locations: string[];
+        };
+        /**
+         * DecisionLocateResult
+         * @description One answer per location asked about: the uuid of the governed table it holds, or ``None`` where it holds none.
+         */
+        DecisionLocateResult: {
+            /** Located */
+            located: {
+                [key: string]: string | null;
+            };
+        };
+        /**
          * DeclareTableRequest
          * @description Request for declaring a table.
          */
@@ -9671,6 +9717,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DecisionListUsersResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    decide_locate_management_v1_decisions_locate_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DecisionLocate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionLocateResult"];
                 };
             };
             /** @description Validation Error */

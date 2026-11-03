@@ -26,7 +26,13 @@ A governed table is recorded under the uuid the catalog minted for it, with its 
 beside it as the name its event used, so the same object is governed by OpenFGA (`table:<uuid>`), versioned by Lance and
 traced here, and a rename does not split its lineage (ADR 0173 §10). An external source (anything outside the governed tiers, R23) is recorded
 namespace-qualified, `<namespace>/<name>`, so an external input can never resolve onto a governed table's edges
-(`Dataset.lineage_name` in `lineage/models.py`).
+(`Dataset.lineage_name` in `lineage/models.py`). The catalog names its datasets under its endpoint,
+`lance-namespace://<host>/api/catalog`, with each table's storage location in the `symlinks` facet ([[LH-553]],
+`docs/COMMIT-EVENTS.md` § A feed row). A dataset an outside producer names by a location a governed table holds, or lists
+in its own `symlinks`, is authorized as that table, because the forwarded graph joins it there
+(`lineage.api.fga_deps.resolve_aliases`), and a dataset named by such a location is recorded under the table's uuid in
+the feed and the edge list too (`lineage.services.names.stamp_resolved_uuids`). A dataset under another catalog's
+`lance-namespace://` host is another estate's table, an outside source here (`LINEAGE_CATALOG_DATASET_NAMESPACE`).
 
 ## Where the records live
 

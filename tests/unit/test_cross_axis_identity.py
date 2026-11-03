@@ -25,6 +25,9 @@ from tests.unit.named_resolver import NamedResolver
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
+_DATASETS = "lance-namespace://rask.example.org/api/catalog"
+
+
 def _settings() -> Any:
     return SimpleNamespace(
         lineage_emit_enabled=True,
@@ -41,6 +44,8 @@ def _settings() -> Any:
         storage_options=dict,
         # ADR 0187: the create records its author unless it is a provenance row write, and no namespace is that here.
         provenance_namespace="",
+        # [[LH-553]] The catalog's dataset namespace, which the Lance file names the table under as every event does.
+        lineage_dataset_namespace=_DATASETS,
     )
 
 
@@ -120,11 +125,12 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     assert emitter.create["table_id"] == canonical
     assert emitter.create["namespace"] == "alpha$bronze"
     assert emitter.create["author"] == "dex~alice"
-    # Data axis: the namespace stamped into the Lance file's schema metadata (#21).
-    assert stamped["namespace"] == "alpha$bronze"
+    # Data axis: the dataset namespace stamped into the Lance file's schema metadata (#21), the catalog's own, which the
+    # emitter names every dataset under ([[LH-553]]).
+    assert stamped["namespace"] == _DATASETS
     # ...and both coordinates are on the table handed to the write, not only computed. `lineage.dataset_id` is the
     # table's uuid, which the write stamps once it has claimed the location (`dataplane.create_table`).
     metadata = written["table"].schema.metadata or {}
-    assert metadata.get(b"lineage.namespace") == b"alpha$bronze"
+    assert metadata.get(b"lineage.namespace") == _DATASETS.encode()
     # The WROTE edge's schema facet is read off the table written.
     assert [field["name"] for field in emitter.create["schema_fields"]] == ["id"]

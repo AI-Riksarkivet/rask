@@ -13,12 +13,13 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Literal, Self
+from typing import TYPE_CHECKING, Annotated, Final, Literal, Self
 
-from pydantic import AliasChoices, Field, SecretStr, model_validator
+from pydantic import AfterValidator, AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse_kit.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
+from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse_kit.store_session import WebIdentity, held_session
 from service_kit.governed.principal import PrincipalKey
 from service_kit.governed.settings import GovernedAuthSettings
@@ -303,6 +304,13 @@ class CatalogLineageSettings(BaseSettings):
     lineage_url: str | None = Field(default=None, alias="LANCE_LINEAGE_URL")
     lineage_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_LINEAGE_EMIT_TIMEOUT_SECONDS")
     lineage_job_namespace: str = Field(default="lance-catalog", alias="LANCE_LINEAGE_JOB_NAMESPACE")
+    #: The namespace every table's OpenLineage dataset is named under: this catalog's endpoint,
+    #: ``lance-namespace://<host><prefix>`` ([[LH-553]], OpenLineage's dataset naming: a catalog's tables are named by the
+    #: catalog serving them). The chart renders it from the release's public host (`rask.lineageDatasetNamespace`), so
+    #: two estates' ``acme$bronze$t`` are two datasets in one graph backend.
+    lineage_dataset_namespace: Annotated[str, AfterValidator(require_dataset_namespace)] = Field(
+        default=DEFAULT_DATASET_NAMESPACE, alias="LANCE_LINEAGE_DATASET_NAMESPACE"
+    )
     #: Stage lineage events here before publishing (docs/RESILIENCE.md gap #1, the estate's #1
     #: weakness). EMPTY = today's behaviour exactly: `publish_lineage_with_outbox` degrades to a plain
     #: publish when this is unset, so the wiring is inert until a deployment opts in.

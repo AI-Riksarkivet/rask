@@ -41,10 +41,10 @@ class _RecordingEmitter:
         finally:
             self.in_flight -= 1
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None:
+    async def emit_maintenance(self, *, table_id: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
         await self._publish(table_id, self.completed)
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
         await self._publish(table_id, self.failed)
 
 

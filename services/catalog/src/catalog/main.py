@@ -282,6 +282,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         pubsub=settings.dapr_pubsub,
         topic=settings.dapr_topic,
         job_namespace=settings.lineage_job_namespace,
+        dataset_namespace=settings.lineage_dataset_namespace,
         timeout_seconds=settings.lineage_emit_timeout_seconds,
         project_resolver=_resolve_project,
         # The provenance namespace's own rows are never announced (`services.provenance_namespace`).

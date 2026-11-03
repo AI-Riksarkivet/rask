@@ -104,6 +104,7 @@ spec:
             - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
             - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $ .Values.maintenance.daprAppId) | quote }} }
             - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+            - { name: MAINTENANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
             {{- end }}

@@ -145,6 +145,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         pubsub=settings.lineage_pubsub,
         topic=settings.lineage_topic,
         job_namespace=settings.lineage_job_namespace,
+        dataset_namespace=settings.lineage_dataset_namespace,
         timeout_seconds=settings.publish_timeout_seconds,
         outbox_uri=settings.lineage_outbox_uri,
         storage_options=settings.storage_options,

@@ -11,11 +11,13 @@ config: enabling a layer without the inputs it needs raises at startup, never si
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AfterValidator, AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse_kit.objectfs import lance_storage_options
+from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from service_kit.governed.settings import GovernedAuthSettings
 from service_kit.governed.store_credential import S3KeyPair, store_key_pair
 from service_kit.storage_options import StorageOptions
@@ -69,6 +71,12 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     #: The namespace the catalog keeps for provenance (its `LANCE_PROVENANCE_NAMESPACE`), where this service
     #: creates its tables. The two must name the same namespace.
     provenance_namespace: str = Field(default="provenance", alias="LINEAGE_PROVENANCE_NAMESPACE")
+    #: The dataset namespace the catalog names its tables under (its `LANCE_LINEAGE_DATASET_NAMESPACE`, [[LH-553]]): a
+    #: dataset under it is one of this estate's tables, and one under another catalog's is another estate's, which this
+    #: service records as an outside source. The chart renders both from `rask.lineageDatasetNamespace`.
+    catalog_dataset_namespace: Annotated[str, AfterValidator(require_dataset_namespace)] = Field(
+        default=DEFAULT_DATASET_NAMESPACE, alias="LINEAGE_CATALOG_DATASET_NAMESPACE"
+    )
     #: Bounds each catalog call, so a hung catalog cannot pin a delivery for ever.
     catalog_timeout_seconds: float = Field(default=30.0, gt=0, alias="LINEAGE_CATALOG_TIMEOUT_SECONDS")
 

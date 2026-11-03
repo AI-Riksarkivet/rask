@@ -34,6 +34,7 @@ from typing import Any, cast
 import pytest
 from lance_namespace import PermissionDeniedError
 
+from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE
 from lineage.api.fga_deps import Governed, enforce_output_authz, is_external_source
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, Job, Run, RunEvent
@@ -126,17 +127,30 @@ def settings() -> LineageSettings:
     )
 
 
+class _Claims(OpenFgaDecider):
+    """The store's answers, and a catalog whose claims hold the table ``held`` maps each location to, and none at any other
+    location: those are the outside world. Which table a location holds is driven against the real catalog door in
+    `tests/integration/test_a_service_account_records_lineage_on_the_tables_it_names.py`."""
+
+    def __init__(self, client: Any, held: dict[str, str]) -> None:
+        super().__init__(client)
+        self._held = held
+
+    async def locate(self, locations: list[str]) -> dict[str, str | None]:
+        return {location: self._held.get(location) for location in locations}
+
+
 @pytest.fixture
 def request_with(monkeypatch):
     """Wire a fake FGA into the request's decider, through the `fga` helper it reads."""
 
-    def _make(allowed: set[str]) -> tuple[object, _FakeFGA]:
+    def _make(allowed: set[str], held: dict[str, str] | None = None) -> tuple[object, _FakeFGA]:
         fake = _FakeFGA(allowed)
 
         monkeypatch.setattr(fga, "batch_check", fake.batch_check)
 
         class _App:
-            state = type("S", (), {"decider": OpenFgaDecider(cast("Any", object()))})()
+            state = type("S", (), {"decider": _Claims(cast("Any", object()), held or {})})()
 
         return type("R", (), {"app": _App()})(), fake
 
@@ -181,9 +195,10 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
 async def test_OUTPUTS_are_never_exempted(settings, request_with) -> None:
     """Writing is the direction that mutates the estate. An output under an external namespace is a
     producer claiming to have written the outside world — not a case to make permissive, and the
-    asymmetry is deliberate rather than an oversight in the filter."""
-    request, _ = request_with(set())
-    event = _event(outputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME)])
+    asymmetry is deliberate rather than an oversight in the filter. Beside it here, a governed table's location the
+    caller may write, which is that table and admits no outside output sharing its key under another bucket ([[LH-553]])."""
+    request, _ = request_with({_object(GOVERNED)}, {f"s3://lake/{EXTERNAL_NAME}": _uuid(GOVERNED)})
+    event = _event(outputs=[_dataset("s3://lake", EXTERNAL_NAME), _dataset(EXTERNAL_NS, EXTERNAL_NAME)])
 
     with pytest.raises(PermissionDeniedError, match="can_write_data"):
         await enforce_output_authz(event, request, settings, _PIPELINE)
@@ -212,6 +227,9 @@ async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_externa
         # A declared namespace does NOT exempt a governed table id. Both holes would have to be open at
         # once — a namespace literally named `file` AND a table id with no delimiter.
         ("file", "file$gold", False),
+        # [[LH-553]] This estate's catalog names its own tables; another catalog's are another estate's.
+        (DEFAULT_DATASET_NAMESPACE, "bronze$pages", False),
+        ("lance-namespace://other.example.org/api/catalog", "bronze$pages", True),
     ],
 )
 def test_the_discriminator_is_a_URI_SCHEME_OR_A_DECLARED_NAMESPACE(namespace: str, name: str, external: bool) -> None:

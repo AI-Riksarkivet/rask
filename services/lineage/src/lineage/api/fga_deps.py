@@ -37,10 +37,11 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse_kit.openlineage import author_facet, lifecycle_state
+from lakehouse_kit.openlineage import SYMLINKS_FACET, author_facet, lifecycle_state
 from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep
 from lineage.api.security import Caller, CurrentToken
 from lineage.core.config import LineageSettings
+from lineage.core.sources import is_external_source
 from lineage.models import (
     MAINTENANCE_OPERATIONS,
     Dataset,
@@ -57,6 +58,7 @@ from service_kit.governed import fga
 from service_kit.governed.decider import AccessDecider
 from service_kit.governed.principal import is_principal
 from service_kit.lineage_events import AUTHOR_FACET, dataset_uuids
+from service_kit.naming import identifier_location
 
 
 log = logging.getLogger(__name__)
@@ -315,51 +317,6 @@ def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None
         event.run.facets[AUTHOR_FACET] = stamp
 
 
-def is_external_source(namespace: str, name: str) -> bool:
-    """Is this dataset OUTSIDE the governed estate — a raw source rather than a table we authorize?
-
-    R23 draws the line the whole medallion rests on: the governed tiers are exactly bronze -> silver ->
-    gold, and **raw is the external world, never a governed tier**. So a producer that honestly records
-    where its data came from names something that has no catalog entry, no ``table:`` object, and
-    therefore no tuple that could ever be written for it. Authorizing those inputs the same way as
-    governed ones is not strict — it is unsatisfiable, and it refused every such producer permanently:
-
-        403 "can_get_metadata required on inputs: bind86-src/run1"
-
-    on the ingest plane's START event, whose input is the S3 prefix the run reads. The run landed its
-    data, the terminal event was authorized fine, and the run was never recorded as opened. Ten
-    configuration causes were investigated before the service's own message was read.
-
-    The discriminator has TWO forms and lives in `service_kit.naming`, because it is a
-    convention this service and every producer must agree on. A
-    store URI carrying a scheme (``s3://bucket``) is external by shape. A BARE identifier cannot be
-    decided by shape at all, since that is exactly what a catalog namespace looks like (``bronze``,
-    ``bind86-bronze``), so the bare external namespaces are DECLARED: ``file`` and ``lance``.
-
-    Testing the scheme ALONE was a one-sided failure that looked like nothing. Of ingest's three source
-    kinds only `s3-prefix` mints a scheme; `local-dir` mints ``file`` and `lance-append` mints
-    ``lance``, so both were authorized as governed and both had their START event refused — while the
-    terminal event, which carries no inputs, was accepted. The run was recorded with half its
-    provenance and every check that asks "does a run exist" passed (measured on the deployed estate
-    2026-09-10: ``ingest_input_denied ... inputs=['/tmp/ingest-fixtures']``, 403).
-
-    **This does not reopen the forgery hole it sits next to.** The guard exists so an authenticated
-    reader cannot record "I read ``gold$catalog``" into the feed. A namespace is PART OF A DATASET'S
-    IDENTITY (`Dataset.lineage_name`), so a caller who fakes ``s3://anything`` as the namespace of
-    ``gold$catalog`` names an *external* dataset ``s3://anything/gold$catalog`` — a different identity from
-    the governed ``gold$catalog``, on no governed table's edges. It cannot impersonate a governed dataset; it
-    can only assert an edge from a source that is, correctly, outside the estate. What remains protected is
-    exactly what the guard was written to protect: claiming to have read a GOVERNED dataset you cannot see.
-
-    Outputs are deliberately NOT filtered this way. Writing is the direction that mutates the estate,
-    and this plane never writes outside it — an output naming an external namespace is a producer
-    claiming to have written the outside world, which is not a case to make permissive.
-    """
-    from service_kit.naming import is_external_source_namespace
-
-    return is_external_source_namespace(namespace, name)
-
-
 class _StampedAuthor:
     """The subject a BUS producer stamped on its own event, as a :class:`Caller`.
 
@@ -513,6 +470,81 @@ async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object],
     return stored is not None and stored == payload
 
 
+class Aliases(BaseModel):
+    """The governed tables an event's datasets are named as besides their own names ([[LH-553]]), as the catalog answers.
+
+    ``objects`` are the tables each dataset (by its index in the list asked about) names by a storage location or a
+    ``symlinks`` identifier; ``located`` the indices of the datasets whose own name is a location a governed table holds,
+    each of which is that table; ``hidden`` are the identifiers naming a governed table by name the caller may not see,
+    which no grant asked about the dataset reaches."""
+
+    model_config = ConfigDict(frozen=True)
+
+    objects: dict[int, frozenset[str]] = {}
+    located: frozenset[int] = frozenset()
+    hidden: frozenset[str] = frozenset()
+
+
+def _symlinks(dataset: Dataset) -> list[tuple[str, str]]:
+    """The ``(namespace, name)`` identifiers ``dataset``'s standard ``symlinks`` facet lists, malformed entries left out."""
+    facet = dataset.facet(SYMLINKS_FACET) or {}
+    identifiers = facet.get("identifiers")
+    if not isinstance(identifiers, list):
+        return []
+    return [
+        (str(entry["namespace"]), str(entry["name"]))
+        for entry in identifiers
+        if isinstance(entry, dict) and isinstance(entry.get("namespace"), str) and isinstance(entry.get("name"), str) and entry["name"]
+    ]
+
+
+async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, user: str) -> Aliases:
+    """The governed tables ``datasets`` are named as by a storage location or a ``symlinks`` identifier.
+
+    A GRAPH BACKEND JOINS A DATASET BY EVERY IDENTIFIER IT CARRIES. The catalog names each table's location in its events'
+    ``symlinks`` facet, so an engine naming the table by that location (``s3://<bucket>`` and the key) is recorded on the
+    governed table in Marquez (`DatasetSymlinkDao`, 0.51.1), and so is an identifier a producer lists in its own
+    ``symlinks``. Exempting a location as the outside world would let a producer record reading, or writing, a table it
+    may not see on that table's node. So the catalog is asked which table each location holds (``locate``): one a table
+    holds is that table, and one no table holds stays the outside world. A ``symlinks`` identifier naming a governed table
+    by its name is resolved as the caller (``check_tables`` on ``can_get_metadata``), and one the caller may not see is
+    ``hidden``.
+    """
+    locations: dict[str, list[int]] = {}
+    names: dict[str, list[int]] = {}
+    own: dict[int, str] = {}
+    for index, dataset in enumerate(datasets):
+        if is_external_source(dataset.namespace, dataset.name) and (location := identifier_location(dataset.namespace, dataset.name)) is not None:
+            own[index] = location
+            locations.setdefault(location, []).append(index)
+        for namespace, name in _symlinks(dataset):
+            if not is_external_source(namespace, name):
+                names.setdefault(name, []).append(index)
+            elif (location := identifier_location(namespace, name)) is not None:
+                locations.setdefault(location, []).append(index)
+    objects: dict[int, set[str]] = {}
+    held: set[str] = set()
+    if locations:
+        for location, table_uuid in (await decider.locate(sorted(locations))).items():
+            if table_uuid is not None:
+                held.add(location)
+                for index in locations[location]:
+                    objects.setdefault(index, set()).add(fga.table_object(table_uuid))
+    hidden: set[str] = set()
+    if names:
+        for name, decision in (await decider.check_tables(user=user, relation="can_get_metadata", tables=sorted(names))).items():
+            if (table_uuid := decision.table_uuid) is None:
+                hidden.add(name)
+                continue
+            for index in names[name]:
+                objects.setdefault(index, set()).add(fga.table_object(table_uuid))
+    return Aliases(
+        objects={index: frozenset(found) for index, found in objects.items()},
+        located=frozenset(index for index, location in own.items() if location in held),
+        hidden=frozenset(hidden),
+    )
+
+
 async def enforce_output_authz(
     event: RunEvent | DatasetEvent,
     request: Request,
@@ -569,20 +601,31 @@ async def enforce_output_authz(
         if author is not None and author != token.subject:
             log.info("ingest_run_mutation_denied", extra={"sub": token.subject, "run_id": event.run_id, "author": author})
             raise ForeignRunError(f"run {event.run_id} was founded by another subject; only its author may extend it")
+    attested = _attested(signed_by, settings)
+    # WHAT THE EVENT NAMES BY A LOCATION OR A SYMLINK ([[LH-553]]): the catalog attests its own, so they are not re-derived.
+    written = Aliases() if attested else await resolve_aliases(decider, list(event.outputs), user=token.subject)
+    # A column upstream named by a location is read as its table too: a graph backend joins it there as it joins an input.
+    sources = [
+        *event.inputs,
+        *(Dataset(namespace=up.namespace, name=up.name) for out in event.outputs for up in out.column_upstreams if is_external_source(up.namespace, up.name)),
+    ]
+    read_as = Aliases() if attested else await resolve_aliases(decider, sources, user=token.subject)
     # OUTPUTS ARE NEVER EXEMPTED: writing is the direction that mutates the estate, so an output naming an external
     # namespace is a producer claiming to have written the outside world, and it names no object, as an output carrying
-    # no uuid names none. No grant can name either, so the refusal is unrepairable ([[LH-166]]).
+    # no uuid names none. No grant can name either, so the refusal is unrepairable ([[LH-166]]). An output named by the
+    # location of a governed table is that table, and is decided on its grants.
     outputs = output_refs(event.outputs)
+    unnamed = frozenset(name for index, out in enumerate(event.outputs) if index not in written.located for name in output_refs([out]).unresolved)
+    outputs = Governed(objects=outputs.objects.union(*written.objects.values()), unresolved=unnamed | written.hidden)
     if outputs.unresolved:
         reason = f"{' or '.join(relations)} required on outputs: {', '.join(sorted(outputs.unresolved))}"
         log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": sorted(outputs.unresolved)})
         raise UngovernedOutputError(reason)
-    attested = _attested(signed_by, settings)
     if outputs.objects and not attested:
         denied = await _denied_objects(decider, user=token.subject, relations=relations, objects=sorted(outputs.objects))
         if denied:
             log.info("ingest_denied", extra={"sub": token.subject, "relation": "|".join(relations), "outputs": denied})
-            reason = f"{' or '.join(relations)} required on outputs: {', '.join(_names_of(event.outputs, denied))}"
+            reason = f"{' or '.join(relations)} required on outputs: {', '.join(_names_of(event.outputs, denied, written))}"
             if not await _none_are_governed(decider, objects=denied):
                 raise PermissionDeniedError(reason)
             raise UngovernedOutputError(reason)
@@ -604,19 +647,28 @@ async def enforce_output_authz(
     # upstream is the table a dataset of the event by that name is.
     column_upstreams = {up.name for out in event.outputs for up in out.column_upstreams if not is_external_source(up.namespace, up.name)}
     read = governed_refs(event.inputs, column_upstreams=column_upstreams)
+    read = Governed(objects=read.objects.union(*read_as.objects.values()), unresolved=read.unresolved | read_as.hidden)
     hidden = set(read.unresolved)
     if read.objects and not attested:
         seen = await decider.batch_check(user=token.subject, relation="can_get_metadata", objects=sorted(read.objects))
-        hidden |= set(_names_of(event.inputs, [obj for obj in read.objects if not seen.get(obj)]))
+        hidden |= set(_names_of(sources, [obj for obj in read.objects if not seen.get(obj)], read_as))
     if hidden:
         log.info("ingest_input_denied", extra={"sub": token.subject, "relation": "can_get_metadata", "inputs": sorted(hidden)})
         raise PermissionDeniedError(f"can_get_metadata required on inputs: {', '.join(sorted(hidden))}")
 
 
-def _names_of(datasets: Iterable[Dataset], objects: Iterable[str]) -> list[str]:
-    """The names ``datasets`` give the tables ``objects`` are, for a refusal: a caller reads names, never uuids."""
+def _names_of(datasets: Iterable[Dataset], objects: Iterable[str], aliases: Aliases | None = None) -> list[str]:
+    """The names ``datasets`` give the tables ``objects`` are, for a refusal: a caller reads names, never uuids. A dataset
+    named by a location or a symlink of one of them (``aliases``) is named too, so its refusal names what the caller sent."""
     wanted = set(objects)
-    return sorted({d.name for d in datasets if (uuid := dataset_uuids(d.model_dump(by_alias=True)).table_uuid) and fga.table_object(uuid) in wanted})
+    found = (aliases or Aliases()).objects
+    return sorted(
+        {
+            d.name
+            for index, d in enumerate(datasets)
+            if ((uuid := dataset_uuids(d.model_dump(by_alias=True)).table_uuid) and fga.table_object(uuid) in wanted) or found.get(index, frozenset()) & wanted
+        }
+    )
 
 
 class DatasetFilter:

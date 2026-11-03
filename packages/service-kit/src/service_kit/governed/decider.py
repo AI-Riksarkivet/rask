@@ -11,7 +11,8 @@ This module is the wire contract (the schemas both sides read) and the two clien
 catalog's own rule (`catalog.api.v1.endpoints.decisions`). `AccessDecider` is the five questions those services ask,
 and nothing that changes the store. `OpenFgaDecider` answers them from the store, for the services that hold a client;
 `CatalogDecider` asks the catalog, which answers each route only to a caller holding that route's decision role on
-the estate root.
+the estate root. Which table a storage location holds is the catalog's alone to say (its location claims), so only
+`CatalogDecider` answers `locate` ([[LH-553]]).
 
 A check names its objects by id, or names tables by name ([[LH-531]]). Every grant is held by a table's uuid (ADR 0173
 §8), and a producer's event names its tables only; the catalog is the one resolver of a name, so it resolves each, decides
@@ -133,6 +134,22 @@ class DecisionGovernedResult(BaseModel):
     governed: dict[str, bool]
 
 
+class DecisionLocate(BaseModel):
+    """Which governed table each of ``locations`` holds: a storage location an event names a dataset by ([[LH-553]])."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    locations: list[str] = Field(min_length=1, max_length=MAX_OBJECTS_PER_QUESTION)
+
+
+class DecisionLocateResult(BaseModel):
+    """One answer per location asked about: the uuid of the governed table it holds, or ``None`` where it holds none."""
+
+    model_config = ConfigDict(frozen=True)
+
+    located: dict[str, str | None]
+
+
 class AccessDecider(Protocol):
     """The authorization questions a check-only door asks."""
 
@@ -145,6 +162,8 @@ class AccessDecider(Protocol):
     async def list_users(self, *, relation: str, obj: str) -> list[str]: ...
 
     async def governed(self, objects: list[str]) -> dict[str, bool]: ...
+
+    async def locate(self, locations: list[str]) -> dict[str, str | None]: ...
 
     async def close(self) -> None: ...
 
@@ -172,6 +191,18 @@ class OpenFgaDecider:
     async def governed(self, objects: list[str]) -> dict[str, bool]:
         # A name that is no object id holds no tuple, and reading it would fail the whole read.
         return {obj: fga.is_object_id(obj) and bool(await fga.read_object_tuples(self._client, obj)) for obj in objects}
+
+    async def locate(self, locations: list[str]) -> dict[str, str | None]:
+        """Unanswerable, so an outage: the store holds no locations, and only the catalog's claims say which table one holds.
+
+        Never ``None`` for "holds none": that answer exempts a location from every check, so a decider that cannot know
+        must not give it.
+
+        Raises:
+            ServiceUnavailableError: Always.
+        """
+        del locations
+        raise ServiceUnavailableError("only the catalog answers which table a location holds")
 
     async def close(self) -> None:
         """The client belongs to the lifespan that built it (`fga.dispose`), not to this view of it."""
@@ -217,6 +248,12 @@ class CatalogDecider:
 
     async def list_users(self, *, relation: str, obj: str) -> list[str]:
         return (await self._ask("/list-users", DecisionListUsers(relation=relation, object=obj), DecisionListUsersResult)).users
+
+    async def locate(self, locations: list[str]) -> dict[str, str | None]:
+        located: dict[str, str | None] = {}
+        for chunk in _chunks(locations):
+            located |= _complete((await self._ask("/locate", DecisionLocate(locations=chunk), DecisionLocateResult)).located, chunk)
+        return located
 
     async def governed(self, objects: list[str]) -> dict[str, bool]:
         governed: dict[str, bool] = {}
@@ -284,6 +321,8 @@ __all__ = [
     "DecisionGovernedResult",
     "DecisionListUsers",
     "DecisionListUsersResult",
+    "DecisionLocate",
+    "DecisionLocateResult",
     "OpenFgaDecider",
     "TableDecision",
 ]

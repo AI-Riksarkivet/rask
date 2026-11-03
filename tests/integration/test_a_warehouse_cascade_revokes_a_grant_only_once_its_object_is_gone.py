@@ -233,7 +233,12 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
         monkeypatch.setattr(app.state, "oidc", MagicMock())
         act_as(client, "alice")
         monkeypatch.setattr(app.state, "fga", store)
-        emitter = HttpLineageEmitter(httpx.AsyncClient(transport=httpx.MockTransport(_receive)), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
+        emitter = HttpLineageEmitter(
+            httpx.AsyncClient(transport=httpx.MockTransport(_receive)),
+            "http://lineage/api/v1/lineage",
+            job_namespace="lance-catalog",
+            dataset_namespace="lance-namespace://localhost/api/catalog",
+        )
         monkeypatch.setattr(app.state, "lineage_emitter", emitter, raising=False)
         for path, body in (("/management/v1/projects", {"id": PROJECT}), ("/management/v1/warehouses", {"id": warehouse, "project": PROJECT})):
             answer = client.post(path, json=body)

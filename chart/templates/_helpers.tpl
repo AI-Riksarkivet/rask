@@ -892,6 +892,11 @@ keys_shaped() { case "$1" in *,) return 1 ;; *,*) pub_shaped "${1%%,*}" && pub_s
 
 {{- define "rask.catalogPublicPrefix" -}}/api/catalog{{- end -}}
 
+{{- define "rask.lineageDatasetNamespace" -}}
+{{- $host := first .Values.route.hostnames | default (printf "%s-catalog.%s" (include "lance.fullname" .) .Release.Namespace) -}}
+{{- printf "lance-namespace://%s%s" $host (include "rask.catalogPublicPrefix" .) -}}
+{{- end -}}
+
 {{- define "rask.apiRoutes" -}}
 {{- $root := . -}}
 {{- $rows := list -}}

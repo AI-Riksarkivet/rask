@@ -22,11 +22,12 @@ from typing import Final
 from lakehouse_kit.lancekit.catalog_client import catalog_api_client, request_headers
 from lakehouse_kit.lancekit.reader import translate_catalog_errors
 from lineage.core.config import LineageSettings
-from lineage.models import DatasetEvent, RunEvent
+from lineage.core.sources import is_external_source
+from lineage.models import Dataset, DatasetEvent, RunEvent
 from service_kit.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
 from service_kit.governed.decider import AccessDecider
 from service_kit.lineage_events import DatasetUuids, with_dataset_uuids
-from service_kit.naming import CATALOG_DELIMITER, is_external_source_namespace, uuid_of
+from service_kit.naming import CATALOG_DELIMITER, identifier_location, uuid_of
 
 
 #: The catalog's answers that mean "no object the caller may see by this name": the name names none, the caller may
@@ -109,14 +110,29 @@ async def stamp_resolved_uuids(
     there is, so each governed dataset's is replaced by what the catalog answers and an external source's is removed.
     A name the describe doors resolve to no table is asked about through ``decider`` as ``subject``, the caller the
     bearer was verified as, when both are given. A dataset whose name still resolves to no table keeps none, and is
-    recorded by its name.
+    recorded by its name. A dataset named by a storage location a governed table holds is named by that table's uuid, as
+    the catalog's ``locate`` door answers it through ``decider`` ([[LH-553]]): it is that table, which the graph the feed
+    is forwarded to joins it to by the table's ``symlinks``, and `fga_deps.enforce_output_authz` decides it on its grants.
     """
     datasets = [*event.inputs, *event.outputs]
-    governed = sorted({dataset.name for dataset in datasets if not is_external_source_namespace(dataset.namespace, dataset.name)})
+    governed = sorted({dataset.name for dataset in datasets if not is_external_source(dataset.namespace, dataset.name)})
     resolved = dict(zip(governed, await asyncio.gather(*(names.table(name, bearer=bearer) for name in governed)), strict=True))
     if decider is not None and subject is not None and (unseen := [name for name in governed if resolved[name].table_uuid is None]):
         decided = await decider.check_tables(user=subject, relation=_DESCRIBE_RELATION, tables=unseen)
         resolved |= {name: DatasetUuids(table_uuid=d.table_uuid, namespace_uuid=d.namespace_uuid) for name, d in decided.items() if d.allowed}
+    located = await _located(datasets, decider) if decider is not None else {}
     for dataset in datasets:
-        uuids = DatasetUuids() if is_external_source_namespace(dataset.namespace, dataset.name) else resolved[dataset.name]
+        if is_external_source(dataset.namespace, dataset.name):
+            location = identifier_location(dataset.namespace, dataset.name)
+            uuids = DatasetUuids(table_uuid=located.get(location)) if location is not None else DatasetUuids()
+        else:
+            uuids = resolved[dataset.name]
         dataset.facets = with_dataset_uuids({"facets": dataset.facets}, uuids, producer=_PRODUCER).get("facets", {})
+
+
+async def _located(datasets: list[Dataset], decider: AccessDecider) -> dict[str, str | None]:
+    """The uuid of the governed table each storage location ``datasets`` are named by holds, as the catalog answers it."""
+    locations = sorted(
+        {location for d in datasets if is_external_source(d.namespace, d.name) and (location := identifier_location(d.namespace, d.name)) is not None}
+    )
+    return await decider.locate(locations) if locations else {}

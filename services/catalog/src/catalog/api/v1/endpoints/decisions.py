@@ -31,7 +31,9 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Final
 
+from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends
+from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
@@ -40,7 +42,11 @@ from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, Settin
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, require_names
+from catalog.services import table_claims
 from catalog.services.object_uuids import UnidentifiedObjectError
+from lakehouse_kit import location_claims
+from lakehouse_kit.base_refs import names_a_location
+from lakehouse_kit.location_claims import ClaimStore
 from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.governed.decider import (
@@ -51,6 +57,8 @@ from service_kit.governed.decider import (
     DecisionGovernedResult,
     DecisionListUsers,
     DecisionListUsersResult,
+    DecisionLocate,
+    DecisionLocateResult,
     TableDecision,
 )
 
@@ -222,6 +230,53 @@ async def decide_governed(client: WiredFgaClient, token: CurrentToken, body: Dec
         raise
     audit(AuditAction.AUTHZ_DECISION, AuditOutcome.SUCCESS, subject=caller, route="governed", governed=",".join(o for o, g in governed.items() if g), **asked)
     return DecisionGovernedResult(governed=governed)
+
+
+def _table_at(store: ClaimStore, location: str) -> str | None:
+    """The uuid of the table holding ``location``, or ``None`` where none does: a spelling that names no location, one no
+    claim holds, a released claim, and a data directory's claim, which records no uuid.
+
+    A recoverable drop keeps its table's claim (`lakehouse_kit.location_claims`), so a trashed table's location still
+    answers the table: its grants decide what may be recorded about it, as they do by its name.
+    """
+    if not names_a_location(location):
+        return None
+    claim = location_claims.holder(store, location)
+    return claim.uuid if claim is not None else None
+
+
+@management_router.post("/locate", dependencies=[Depends(require_can_probe_governance)])
+async def decide_locate(token: CurrentToken, settings: SettingsDep, body: DecisionLocate) -> DecisionLocateResult:
+    """Which governed table each storage location holds, by the location claims every door that makes a table takes.
+
+    For lineage, which records an outside producer's event naming a dataset by its location (``s3://<bucket>`` and the
+    key) as well as by its name ([[LH-553]]): a location a table holds is that table, and its grants decide whether the
+    producer may record it, while one no table holds is the outside world. The fact is structural, like ``governed``'s,
+    so it answers to the same role. A claim that cannot be read (the store's error, a record that is no claim, a root the
+    conditional read does not serve: `lakehouse_kit.records`) is 503, never "holds none", which would exempt it. The
+    claims are the answer because the ``dir`` backend keeps no location exclusive (``lance_docs/ns_catalog/catalog/dir``
+    § Manifest Table Commits) and the claim store picks one holder (`lakehouse_kit.location_claims`). Lakekeeper's S3
+    signer asks the same question of its own store (``resolve_signable_by_location``,
+    crates/lakekeeper/src/server/s3_signer/sign.rs).
+    """
+    caller = token.subject if token else "anonymous"
+    asked = {"locations": ",".join(body.locations)}
+    store = table_claims.claim_store(settings)
+    try:
+        located = {location: await run_in_threadpool(_table_at, store, location) for location in body.locations}
+    except (ClientError, OSError, ValueError, NotImplementedError) as exc:
+        audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="locate", reason="claims_unreadable", **asked)
+        log.error("decision_locate_unreadable", exc_info=True)
+        raise ServiceUnavailableError("the location claims cannot be read") from exc
+    audit(
+        AuditAction.AUTHZ_DECISION,
+        AuditOutcome.SUCCESS,
+        subject=caller,
+        route="locate",
+        located=",".join(loc for loc, uuid in located.items() if uuid),
+        **asked,
+    )
+    return DecisionLocateResult(located=located)
 
 
 #: Every route here is a management route; the spec prefix carries none.

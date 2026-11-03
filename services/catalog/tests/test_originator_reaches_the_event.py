@@ -103,6 +103,7 @@ class _RecordingEmitter(_BaseLineageEmitter):
     """A real emitter with a recording transport — the bundle must survive the whole chain."""
 
     _job_namespace = "test"
+    _dataset_namespace = "lance-namespace://localhost/api/catalog"
 
     def __init__(self) -> None:
         self.events: list[dict[str, Any]] = []
@@ -118,7 +119,7 @@ def _optional() -> EmitFields:
         authorization="Bearer x",
         source_uri="s3://bkt/t.lance",
         schema_fields=[],
-        inputs=[InputRef("acme", "acme$src", 2)],
+        inputs=[InputRef("acme$src", 2)],
         run=RunContext(run_id="pipeline-7", job="nightly"),
         project="acme",
         originator="dex~bob",

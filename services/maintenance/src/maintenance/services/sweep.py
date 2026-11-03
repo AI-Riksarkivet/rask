@@ -62,7 +62,6 @@ from maintenance.services.due import refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
 from maintenance.services.naming import PolicyOwners, TableIds, policy_owners, read_uuids, table_uuid
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
-from service_kit.governed import fga
 from service_kit.governed.audit import AuditAction, AuditOutcome, audit
 from service_kit.lineage_events import DatasetUuids
 from service_kit.storage_options import StorageOptions, s3_filesystem
@@ -765,14 +764,14 @@ def audit_material_work(result: DatasetResult, *, subject: str) -> None:
     )
 
 
-async def _emit_complete(emitter: MaintenanceEmitter, *, table_id: str, namespace: str, uuids: DatasetUuids) -> None:
+async def _emit_complete(emitter: MaintenanceEmitter, *, table_id: str, location: str, uuids: DatasetUuids) -> None:
     """The COMPLETE publish, a coroutine function so the attribute lookup happens INSIDE :func:`_publish_all`'s guard."""
-    await emitter.emit_maintenance(table_id=table_id, namespace=namespace, uuids=uuids)
+    await emitter.emit_maintenance(table_id=table_id, location=location, uuids=uuids)
 
 
-async def _emit_failed(emitter: MaintenanceEmitter, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids) -> None:
+async def _emit_failed(emitter: MaintenanceEmitter, *, table_id: str, location: str, error: str, uuids: DatasetUuids) -> None:
     """The FAIL publish — same late-binding rule as :func:`_emit_complete`."""
-    await emitter.emit_maintenance_failed(table_id=table_id, namespace=namespace, error=error, uuids=uuids)
+    await emitter.emit_maintenance_failed(table_id=table_id, location=location, error=error, uuids=uuids)
 
 
 async def _publish_all(kind: str, jobs: list[tuple[str, Callable[[], Awaitable[None]]]]) -> None:
@@ -809,10 +808,10 @@ def _lane_of(result: DatasetResult) -> Literal["complete", "fail"] | None:
 
 
 class _Emit(BaseModel):
-    """One dataset's lineage event: the table it names, that table's namespace, their uuids, and a failure's error."""
+    """One dataset's lineage event: the table it names, the location the pass opened, its uuids, and a failure's error."""
 
     table_id: str
-    namespace: str
+    location: str
     uuids: DatasetUuids
     error: str = ""
 
@@ -827,7 +826,7 @@ def _emit_selection(results: list[DatasetResult]) -> tuple[list[_Emit], list[_Em
             continue
         emit = _Emit(
             table_id=result.table_id,
-            namespace=fga.parent_namespace_id(result.table_id) or "",
+            location=result.uri,
             uuids=result.uuids,
             error=result.error or "",
         )
@@ -839,19 +838,17 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
     """Emit a best-effort maintenance event per swept dataset: COMPLETE for reclaimed versions, FAIL for a terminal
     per-dataset failure (#7b + §4 failure visibility). Nothing here raises into the sweep.
 
-    The parent namespace is derived via :func:`service_kit.governed.fga.parent_namespace_id`, so events land on the SAME
-    ``(:Dataset)`` the catalog created. Only the FAIL lane is capped at ``_MAX_FAIL_EMITS_PER_TICK``.
+    Each names the table by its catalog id under the catalog's dataset namespace, as the catalog's own events do, so the
+    pass lands on the SAME dataset the catalog created. Only the FAIL lane is capped at ``_MAX_FAIL_EMITS_PER_TICK``.
     """
     complete, failed = _emit_selection(results)
     if len(failed) > _MAX_FAIL_EMITS_PER_TICK:
         log.warning("maintenance_fail_emits_capped", extra={"failing": len(failed), "emitted": _MAX_FAIL_EMITS_PER_TICK})
         random.shuffle(failed)
         failed = failed[:_MAX_FAIL_EMITS_PER_TICK]
+    await _publish_all("complete", [(e.table_id, partial(_emit_complete, emitter, table_id=e.table_id, location=e.location, uuids=e.uuids)) for e in complete])
     await _publish_all(
-        "complete", [(e.table_id, partial(_emit_complete, emitter, table_id=e.table_id, namespace=e.namespace, uuids=e.uuids)) for e in complete]
-    )
-    await _publish_all(
-        "fail", [(e.table_id, partial(_emit_failed, emitter, table_id=e.table_id, namespace=e.namespace, error=e.error, uuids=e.uuids)) for e in failed]
+        "fail", [(e.table_id, partial(_emit_failed, emitter, table_id=e.table_id, location=e.location, error=e.error, uuids=e.uuids)) for e in failed]
     )
 
 

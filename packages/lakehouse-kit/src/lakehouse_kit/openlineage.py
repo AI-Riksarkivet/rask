@@ -26,6 +26,7 @@ import uuid
 from typing import Final
 
 from service_kit.lineage_events import AUTHOR_FACET_SCHEMA_URL, LANCE_FACET_SCHEMA_URL
+from service_kit.naming import CATALOG_DATASET_SCHEME, is_catalog_dataset_namespace, location_identifier
 
 
 log = logging.getLogger(__name__)
@@ -260,6 +261,47 @@ def dataset_type_facet(producer: str, *, external: bool) -> dict[str, object]:
         "_producer": producer,
         "_schemaURL": DATASET_TYPE_FACET_SCHEMA_URL,
         "datasetType": DATASET_TYPE_FILE if external else DATASET_TYPE_TABLE,
+    }
+
+
+#: The dataset namespace a lakehouse emitter names the catalog's tables under when its deployment names none: the chart
+#: renders each estate's own (`rask.lineageDatasetNamespace`, the catalog's public host), so two estates' tables are two
+#: datasets in one graph backend ([[LH-553]]).
+DEFAULT_DATASET_NAMESPACE: Final = f"{CATALOG_DATASET_SCHEME}://localhost/api/catalog"
+
+
+def require_dataset_namespace(value: str) -> str:
+    """``value`` when it is a catalog's dataset namespace (:func:`service_kit.naming.is_catalog_dataset_namespace`).
+
+    Raises:
+        ValueError: It is not, so lineage would read every table the emitter names as an outside source.
+    """
+    if not is_catalog_dataset_namespace(value) or value == f"{CATALOG_DATASET_SCHEME}://":
+        raise ValueError(f"a dataset namespace is {CATALOG_DATASET_SCHEME}://<host><prefix>, not {value!r}")
+    return value
+
+
+#: Standard ``SymlinksDatasetFacet``: the other identifiers one dataset is named by
+#: (https://openlineage.io/docs/spec/facets/dataset-facets/symlinks).
+SYMLINKS_FACET: Final = "symlinks"
+SYMLINKS_FACET_SCHEMA_URL: Final = "https://openlineage.io/spec/facets/1-0-1/SymlinksDatasetFacet.json#/$defs/SymlinksDatasetFacet"
+
+#: The identifier type a storage location is named under, as OpenLineage's own clients name it
+#: (``DatasetIdentifier.SymlinkType.LOCATION``, client/java ``io.openlineage.client.utils``).
+SYMLINK_TYPE_LOCATION: Final = "LOCATION"
+
+
+def symlinks_facet(producer: str, *, location: str) -> dict[str, object]:
+    """The standard ``symlinks`` payload naming a table's storage ``location`` as the identifier an engine reading it by
+    location sends (:func:`service_kit.naming.location_identifier`), so a graph backend holds the two as one dataset
+    ([[LH-553]]). The dataset itself keeps the catalog's name, as OpenLineage's S3 Tables handler keeps the catalog's
+    table and links its bucket (``S3TablesCatalogTypeHandler``), because the catalog's name is the one its grants and
+    lineage's feed are read by."""
+    namespace, name = location_identifier(location)
+    return {
+        "_producer": producer,
+        "_schemaURL": SYMLINKS_FACET_SCHEMA_URL,
+        "identifiers": [{"namespace": namespace, "name": name, "type": SYMLINK_TYPE_LOCATION}],
     }
 
 

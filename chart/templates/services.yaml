@@ -103,6 +103,7 @@ spec:
             {{- end }}
             - { name: LANCE_LINEAGE_EMIT_ENABLED, value: "true" }
             - { name: LANCE_LINEAGE_TRANSPORT, value: "dapr" }
+            - { name: LANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
             - { name: LANCE_DAPR_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
             - { name: LANCE_DAPR_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
@@ -277,6 +278,7 @@ spec:
             - { name: LINEAGE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: RASK_CATALOG_IDENTITY_TOKEN_FILE, value: /var/run/secrets/rask/identity/rask-catalog/token }
             - { name: LINEAGE_PROVENANCE_NAMESPACE, value: {{ .Values.services.lineage.provenanceNamespace | quote }} }
+            - { name: LINEAGE_CATALOG_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
             - { name: LINEAGE_SECRETS_FROM_DAPR, value: "true" }
             - { name: LINEAGE_DOCS, value: {{ .Values.docs.enabled | quote }} }
             - { name: LINEAGE_EVENTS_RETENTION_DAYS, value: {{ .Values.services.lineage.eventsRetentionDays | quote }} }

@@ -77,7 +77,10 @@ def catalog_and_maintenance(
 
     store = TupleStore()
     lineage = HttpLineageEmitter(
-        httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200))), "http://lineage/api/v1/lineage", job_namespace="lance-catalog"
+        httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200))),
+        "http://lineage/api/v1/lineage",
+        job_namespace="lance-catalog",
+        dataset_namespace="lance-namespace://localhost/api/catalog",
     )
     try:
         with TestClient(catalog_app, headers={"Authorization": "Bearer t"}) as catalog, TestClient(maintenance_app) as maintenance:

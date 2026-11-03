@@ -83,12 +83,58 @@ def is_safe_project(value: object) -> bool:
 EXTERNAL_SOURCE_NAMESPACES = frozenset({"file", "lance"})
 
 
-def is_external_source_namespace(namespace: str, name: str) -> bool:
-    """Is this lineage dataset a source outside the governed estate?
+#: The scheme of the namespace a catalog names its tables' OpenLineage datasets under ([[LH-553]]): the catalog's endpoint,
+#: ``lance-namespace://<host><prefix>``, as OpenLineage names a catalog's tables by the catalog that serves them
+#: (``unitycatalog://{host}``, ``hive://{host}:{port}``; https://openlineage.io/docs/spec/naming). Two estates holding
+#: ``acme$bronze$t`` are then two datasets in one graph backend. The table's storage location rides the dataset's
+#: ``symlinks`` facet, so an engine naming the table by its location (``s3://<bucket>`` and the key) names the same dataset.
+CATALOG_DATASET_SCHEME: Final = "lance-namespace"
+
+
+def is_catalog_dataset_namespace(namespace: str) -> bool:
+    """Whether ``namespace`` is a catalog's dataset namespace (:data:`CATALOG_DATASET_SCHEME`)."""
+    return namespace.startswith(f"{CATALOG_DATASET_SCHEME}://")
+
+
+def location_identifier(location: str) -> tuple[str, str]:
+    """The OpenLineage ``(namespace, name)`` a storage location is named by: ``s3://<bucket>`` and the key, or ``file`` and
+    the absolute path (https://openlineage.io/docs/spec/naming, the S3 and local file system rows).
+
+    The split OpenLineage's own clients make (``PathUtils.fromPath``), so an engine naming a table by its location names
+    the identifier the catalog's ``symlinks`` facet carries.
+    """
+    scheme, sep, rest = location.partition("://")
+    if not sep:
+        return "file", location
+    if scheme == "file":
+        return "file", rest
+    authority, _, key = rest.partition("/")
+    return f"{scheme}://{authority}", key
+
+
+def identifier_location(namespace: str, name: str) -> str | None:
+    """The storage location an OpenLineage ``(namespace, name)`` names (:func:`location_identifier` reversed), or ``None``
+    when the namespace names no store: a catalog's, or a bare one other than ``file``."""
+    if namespace == "file":
+        return name
+    if "://" not in namespace or is_catalog_dataset_namespace(namespace):
+        return None
+    return f"{namespace.rstrip('/')}/{name.lstrip('/')}"
+
+
+def is_external_source_namespace(namespace: str, name: str, *, catalog: str) -> bool:
+    """Is this lineage dataset named outside the governed estate's names, as a source rather than a catalog table?
 
     TWO forms, because the estate's producers legitimately mint both: a store URI carrying a scheme
     (``s3://bucket``), which is the convention for a namespaced external system, and one of the bare
-    identifiers in :data:`EXTERNAL_SOURCE_NAMESPACES`.
+    identifiers in :data:`EXTERNAL_SOURCE_NAMESPACES`. ``catalog`` is the dataset namespace of the catalog the reader
+    governs for (:data:`CATALOG_DATASET_SCHEME`): it names that catalog's tables, so it is never external, while another
+    catalog's names another estate's tables, which are the outside world to this one: OpenLineage keys a dataset by its
+    namespace and name together (https://openlineage.io/docs/spec/naming).
+
+    A STORE LOCATION MAY STILL BE A GOVERNED TABLE: a table lives at one, and a catalog's event names it there in its
+    ``symlinks`` facet, so a graph backend joins the two. Lineage asks the catalog which table a location holds before
+    it exempts one (``lineage.api.fga_deps``); this answers only how the dataset is named.
 
     THE NAME IS PART OF THE ANSWER for the bare form, and only for it. A declared namespace is a bare
     identifier, which is exactly what a catalog namespace looks like — so an operator who created a
@@ -101,6 +147,8 @@ def is_external_source_namespace(namespace: str, name: str) -> bool:
     The scheme form ignores the name deliberately: ``s3://bucket`` is not a catalog namespace under any
     configuration, so there is nothing for the name to disambiguate.
     """
+    if is_catalog_dataset_namespace(namespace):
+        return namespace.rstrip("/") != catalog.rstrip("/")
     if "://" in namespace:
         return True
     return namespace in EXTERNAL_SOURCE_NAMESPACES and CATALOG_DELIMITER not in name

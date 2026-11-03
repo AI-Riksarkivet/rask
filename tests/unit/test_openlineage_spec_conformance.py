@@ -74,6 +74,7 @@ def _assert_conforms(event: dict[str, Any]) -> None:
     ("constant", "official"),
     [
         (ol.SCHEMA_FACET_SCHEMA_URL, facet_v2.schema_dataset.SchemaDatasetFacet),
+        (ol.SYMLINKS_FACET_SCHEMA_URL, facet_v2.symlinks_dataset.SymlinksDatasetFacet),
     ],
 )
 def test_facet_schema_url_matches_the_official_client(constant: str, official: Any) -> None:
@@ -85,10 +86,14 @@ def test_facet_schema_url_matches_the_official_client(constant: str, official: A
     assert constant == official._get_schema()
 
 
-def test_catalog_write_event_conforms() -> None:
+#: The catalog's dataset namespace, its endpoint ([[LH-553]]).
+_DATASETS = "lance-namespace://rask.example.org/api/catalog"
+
+
+def test_catalog_write_event_conforms_and_names_the_table_by_the_catalog_and_its_location() -> None:
     event = catalog_emit.build_write_event(
         table_id="alpha$bronze$images",
-        namespace="alpha$bronze",
+        namespace=_DATASETS,
         author="alice",
         version=3,
         operation=catalog_emit.CREATE_TABLE,
@@ -97,10 +102,19 @@ def test_catalog_write_event_conforms() -> None:
         job_namespace="lance-catalog",
         source_uri="s3://lakehouse/bronze/images",
         schema_fields=[{"name": "id", "type": "int64"}, {"name": "payload", "type": "blob"}],
-        inputs=[catalog_emit.InputRef("alpha$raw", "alpha$raw$drop", 7, "review")],
+        inputs=[catalog_emit.InputRef("alpha$raw$drop", 7, "review")],
         run=RunContext(run_id="nightly-7", job="ingest"),
     )
     _assert_conforms(event)
+    # One dataset in a graph backend for the catalog's event and an engine's naming the table's location: the
+    # symlink is the identifier OpenLineage's clients name an S3 location by (`s3://<bucket>`, the key).
+    output = event["outputs"][0]
+    assert (output["namespace"], output["name"], output["facets"]["symlinks"]["identifiers"]) == (
+        _DATASETS,
+        "alpha$bronze$images",
+        [{"namespace": "s3://lakehouse", "name": "bronze/images", "type": "LOCATION"}],
+    )
+    assert [(i["namespace"], i["name"]) for i in event["inputs"]] == [(_DATASETS, "alpha$raw$drop")]
 
 
 @pytest.mark.parametrize("operation", [catalog_emit.DROP_TABLE])
@@ -109,7 +123,7 @@ def test_catalog_versionless_write_event_conforms(operation: str) -> None:
     # an omitted optional facet must not take the required envelope with it.
     event = catalog_emit.build_write_event(
         table_id="alpha$bronze$images",
-        namespace="alpha$bronze",
+        namespace=_DATASETS,
         author=None,
         version=None,
         operation=operation,
@@ -120,18 +134,24 @@ def test_catalog_versionless_write_event_conforms(operation: str) -> None:
     _assert_conforms(event)
 
 
-def test_compaction_maintenance_events_conform() -> None:
+def test_maintenance_events_conform_and_name_the_table_as_the_catalog_does() -> None:
     ok = compaction_emit.build_maintenance_event(
         table_id="alpha$bronze$images",
-        namespace="alpha$bronze",
+        namespace=_DATASETS,
         job_namespace="lance-compaction",
+        location="s3://lakehouse/bronze/images",
         run_id=_RUN_ID,
         event_time=_EVENT_TIME,
     )
     _assert_conforms(ok)
+    output = ok["outputs"][0]
+    assert (output["namespace"], output["facets"]["symlinks"]["identifiers"]) == (
+        _DATASETS,
+        [{"namespace": "s3://lakehouse", "name": "bronze/images", "type": "LOCATION"}],
+    )
     failed = compaction_emit.build_maintenance_fail_event(
         table_id="alpha$bronze$images",
-        namespace="alpha$bronze",
+        namespace=_DATASETS,
         job_namespace="lance-compaction",
         run_id=_RUN_ID,
         event_time=_EVENT_TIME,

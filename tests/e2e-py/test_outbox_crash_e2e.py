@@ -42,7 +42,7 @@ import pytest
 import requests
 from outbox_probe import bearer, owned_output_table, table_uuids
 
-from catalog.core.lineage_emit import INSERT, InputRef, build_write_event
+from catalog.core.lineage_emit import INSERT, build_write_event
 from lakehouse_kit import outbox
 from lineage_kit.signing import SigningKey, attach_signature
 from service_kit.governed.signing_key import signing_key_secret
@@ -264,14 +264,6 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
         run_id=run_id,
         event_time=datetime.now(UTC).isoformat(),
         job_namespace=CATALOG_JOB_NAMESPACE,
-        # THE NAMESPACE IS THE EXTERNAL MARKER, and `"external"` is not one. `is_external_source`
-        # exempts an input from `can_get_metadata` in exactly two forms — a namespace carrying a URI
-        # scheme (`s3://…`), or one of the bare identifiers in `EXTERNAL_SOURCE_NAMESPACES`
-        # (`{"file", "lance"}`). A namespace that is neither reads as a CATALOG namespace, so a
-        # notional source outside the estate is authorized like a governed table and refused on an
-        # object that can never carry a tuple. Measured live 2026-09-20:
-        # `can_get_metadata required on inputs: e2e_crash_src`.
-        inputs=[InputRef(namespace="s3://e2e-crash-src", name="e2e_crash_src", version=None)],
         # The table's uuids, as every event the catalog signs names its table by them: lineage refuses an output no
         # uuid names ([[LH-166]]), so without them the relay drains this event into a refusal and the feed never holds it.
         uuids=table_uuids(PROBE_NAMESPACE, PROBE_TABLE),

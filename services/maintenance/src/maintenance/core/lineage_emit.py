@@ -38,7 +38,15 @@ from typing import Any, Final, Protocol, runtime_checkable
 from dapr.aio.clients import DaprClient
 
 from lakehouse_kit import outbox
-from lakehouse_kit.openlineage import ERROR_MESSAGE_FACET_SCHEMA_URL, RUN_EVENT_SCHEMA_URL, author_facet, lance_facet, run_id_for
+from lakehouse_kit.openlineage import (
+    ERROR_MESSAGE_FACET_SCHEMA_URL,
+    RUN_EVENT_SCHEMA_URL,
+    SYMLINKS_FACET,
+    author_facet,
+    lance_facet,
+    run_id_for,
+    symlinks_facet,
+)
 from lineage_kit import CanonError, SigningKey, attach_signature
 from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
@@ -93,6 +101,7 @@ def build_maintenance_fail_event(
     table_id: str,
     namespace: str,
     job_namespace: str,
+    location: str | None = None,
     run_id: str,
     event_time: str,
     error: str,
@@ -124,6 +133,7 @@ def build_maintenance_fail_event(
         table_id=table_id,
         namespace=namespace,
         job_namespace=job_namespace,
+        location=location,
         run_id=run_id,
         event_time=event_time,
         # A FAILURE especially must be attributable: an unattributed failure is the one a person is
@@ -142,6 +152,7 @@ def build_maintenance_event(
     table_id: str,
     namespace: str,
     job_namespace: str,
+    location: str | None = None,
     run_id: str,
     event_time: str,
     author: str = "",
@@ -166,6 +177,10 @@ def build_maintenance_event(
 
     ``uuids`` name the output's table and namespace in its ``rask_lance`` facet (ADR 0173 §10): a rename keeps a table's
     uuid and changes its name, so the feed keys the pass on the table it reclaimed, not on whatever holds the name later.
+
+    ``namespace`` is the catalog's dataset namespace, the one the catalog names the table under, so a graph backend holds
+    the pass on the catalog's dataset ([[LH-553]]); ``location`` is the dataset the pass opened, named in the output's
+    ``symlinks`` facet as the catalog names it.
     """
     facets: dict[str, Any] = {LANCE_FACET: lance_facet(_PRODUCER, operation=EXPIRE_VERSIONS)}
     if author:
@@ -180,26 +195,34 @@ def build_maintenance_event(
         # whose output set spans the whole lakehouse.
         "job": {"namespace": job_namespace, "name": f"{EXPIRE_VERSIONS}.{table_id}"},
         "inputs": [],
-        "outputs": [with_dataset_uuids({"namespace": namespace, "name": table_id}, uuids, producer=_PRODUCER)],
+        "outputs": [with_dataset_uuids(_output(namespace, table_id, location), uuids, producer=_PRODUCER)],
     }
+
+
+def _output(namespace: str, table_id: str, location: str | None) -> dict[str, Any]:
+    """The pass's output: the table under the catalog's dataset namespace, with its location's symlink when it is known."""
+    output: dict[str, Any] = {"namespace": namespace, "name": table_id}
+    if location:
+        output["facets"] = {SYMLINKS_FACET: symlinks_facet(_PRODUCER, location=location)}
+    return output
 
 
 @runtime_checkable
 class MaintenanceEmitter(Protocol):
     """Emits expiry maintenance events (success + failure) to the lineage service (best-effort)."""
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None: ...
+    async def emit_maintenance(self, *, table_id: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None: ...
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None: ...
+    async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None: ...
 
 
 class NoopEmitter:
     """The emitter used when lineage emission is disabled (or unwired) — does nothing."""
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None:
+    async def emit_maintenance(self, *, table_id: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
         return None
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
         return None
 
 
@@ -220,6 +243,7 @@ class DaprMaintenanceEmitter:
         topic: str,
         job_namespace: str,
         timeout_seconds: float,
+        dataset_namespace: str,
         outbox_uri: str = "",
         storage_options: Callable[[], StorageOptions] | None = None,
         author: str = "",
@@ -239,17 +263,19 @@ class DaprMaintenanceEmitter:
         self._pubsub = pubsub
         self._topic = topic
         self._job_namespace = job_namespace
+        self._dataset_namespace = dataset_namespace
         self._timeout_seconds = timeout_seconds
         self._outbox_uri = outbox_uri
         #: Read at every stage, never held: the key pair in it rotates while the service runs ([[XC-082]]).
         self._storage_options = storage_options
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None:
+    async def emit_maintenance(self, *, table_id: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
         # uuid4 ON PURPOSE: each tick that reclaims versions is a distinct successful run (§4 decided —
         # do NOT make COMPLETE deterministic; only the FAIL path below needs the flood guard).
         event = build_maintenance_event(
             table_id=table_id,
-            namespace=namespace,
+            namespace=self._dataset_namespace,
+            location=location,
             job_namespace=self._job_namespace,
             run_id=str(uuid.uuid4()),
             event_time=datetime.now(UTC).isoformat(),
@@ -258,7 +284,7 @@ class DaprMaintenanceEmitter:
         )
         await self._publish(event, table_id)
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
+    async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
         # DETERMINISTIC run id — the flood guard: the cron re-sweeps every ~2 min, so a persistently
         # failing dataset would otherwise mint a fresh run, and a fresh feed row, per tick. One id per
         # dataset → the feed's key for a terminal state (`<run_id>@FAIL`) is the same on every tick, and its
@@ -267,7 +293,8 @@ class DaprMaintenanceEmitter:
         # until the feed's retention (`eventsRetentionDays`) prunes it; the next failure after that lands anew.
         event = build_maintenance_fail_event(
             table_id=table_id,
-            namespace=namespace,
+            namespace=self._dataset_namespace,
+            location=location,
             job_namespace=self._job_namespace,
             run_id=run_id_for(f"{EXPIRE_VERSIONS}-fail-{table_id}"),
             event_time=datetime.now(UTC).isoformat(),
@@ -328,6 +355,7 @@ def make_emitter(
     pubsub: str,
     topic: str,
     job_namespace: str,
+    dataset_namespace: str,
     timeout_seconds: float = 5.0,
     author: str = "",
     signing: SigningKeyHolder[SigningKey] | None = None,
@@ -340,6 +368,7 @@ def make_emitter(
             pubsub=pubsub,
             topic=topic,
             job_namespace=job_namespace,
+            dataset_namespace=dataset_namespace,
             timeout_seconds=timeout_seconds,
             outbox_uri=outbox_uri,
             storage_options=storage_options,

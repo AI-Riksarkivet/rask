@@ -4,7 +4,7 @@ Drives the async emit with stdlib ``asyncio.run`` (the project convention). Cove
 * the OpenLineage maintenance-event shapes (COMPLETE and FAIL) **round-tripped through the lineage
   ``RunEvent`` model** — the cross-service wire contract,
 * which datasets in a sweep get which event (material work → COMPLETE; ``maintain:``-errored → FAIL;
-  ``open:``-errored / no-op / unnamed → nothing) + the parent-namespace derivation,
+  ``open:``-errored / no-op / unnamed → nothing) and the location each names its table at,
 * the FAIL flood guard (deterministic per-dataset run id; COMPLETE keeps uuid4), the per-tick FAIL cap
   (logged, never silent) and the concurrent (bounded) FAIL fan-out,
 * the emitter factory (no-op when off/unwired; Dapr when wired) and the best-effort publish (a broker
@@ -122,17 +122,17 @@ def test_fail_event_retryable_is_best_effort() -> None:
 
 
 class _RecordingEmitter:
-    """Captures (table_id, namespace) per COMPLETE emit and (table_id, namespace, error) per FAIL emit."""
+    """Captures (table_id, location) per COMPLETE emit and (table_id, location, error) per FAIL emit."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
-        self.failed_calls: list[tuple[str, str, str]] = []
+        self.calls: list[tuple[str, str | None]] = []
+        self.failed_calls: list[tuple[str, str | None, str]] = []
 
-    async def emit_maintenance(self, *, table_id: str, namespace: str, uuids: DatasetUuids = UNRESOLVED) -> None:
-        self.calls.append((table_id, namespace))
+    async def emit_maintenance(self, *, table_id: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
+        self.calls.append((table_id, location))
 
-    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
-        self.failed_calls.append((table_id, namespace, error))
+    async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
+        self.failed_calls.append((table_id, location, error))
 
 
 def _result(uri: str, **kw: Any) -> DatasetResult:
@@ -155,7 +155,7 @@ def test_emit_sweep_lineage_emits_only_for_datasets_whose_versions_were_reclaime
         _result("s3://b/nounderscore", old_versions_removed=1),  # no __manifest row names it → skip
     ]
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
-    assert emitter.calls == [("ns$a", "ns"), ("ns$b", "ns")]
+    assert emitter.calls == [("ns$a", "s3://b/ns$a"), ("ns$b", "s3://b/ns$b")]
     assert emitter.failed_calls == []  # an open:-errored dir NEVER produces an event (§4 selection)
 
 
@@ -173,10 +173,10 @@ def test_emit_sweep_lineage_fails_only_for_maintain_errors() -> None:
         _named("ns$e", old_versions_removed=1),  # healthy → COMPLETE as before
     ]
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
-    assert emitter.calls == [("ns$e", "ns")]
+    assert emitter.calls == [("ns$e", "s3://b/ns$e")]
     assert emitter.failed_calls == [
-        ("ns$a", "ns", "maintain: Commit conflict"),
-        ("ns$b", "ns", "maintain: cleanup blew up"),
+        ("ns$a", "s3://b/ns$a", "maintain: Commit conflict"),
+        ("ns$b", "s3://b/ns$b", "maintain: cleanup blew up"),
     ]
 
 
@@ -214,11 +214,11 @@ def test_emit_sweep_lineage_never_raises_even_for_a_broken_emitter() -> None:
     # emitter that predates the FAIL protocol (AttributeError while building the coros) or one whose
     # coroutine raises — either way the cron handler must never see it.
     class _OldProtocolEmitter:
-        async def emit_maintenance(self, *, table_id: str, namespace: str) -> None:
+        async def emit_maintenance(self, *, table_id: str, location: str | None = None) -> None:
             return None
 
     class _RaisingEmitter(_RecordingEmitter):
-        async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
+        async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
             raise RuntimeError("boom from a non-best-effort emitter")
 
     results = [_named("ns$a", error="maintain: x")]
@@ -234,7 +234,14 @@ def test_fail_batch_bounded_through_the_real_emitter_with_a_hung_sidecar() -> No
         async def publish_event(self, **_kw: Any) -> None:
             await asyncio.sleep(60)
 
-    emitter = DaprMaintenanceEmitter(cast(Any, _HungClient()), pubsub="p", topic="t", job_namespace="compaction", timeout_seconds=0.2)
+    emitter = DaprMaintenanceEmitter(
+        cast(Any, _HungClient()),
+        pubsub="p",
+        topic="t",
+        job_namespace="compaction",
+        timeout_seconds=0.2,
+        dataset_namespace="lance-namespace://localhost/api/catalog",
+    )
     results = [_named(f"ns$t{i}", error="maintain: hung") for i in range(30)]
     start = time.monotonic()
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
@@ -247,9 +254,9 @@ def test_emit_sweep_lineage_fail_batch_is_concurrent_not_sequential() -> None:
     # N slow publishes must take ~one publish's latency, not N of them — the ack-window bound. 20 emits
     # sleeping 0.1s each would be 2s sequential; concurrent they finish in a fraction of that.
     class _SlowEmitter(_RecordingEmitter):
-        async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, uuids: DatasetUuids = UNRESOLVED) -> None:
+        async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
             await asyncio.sleep(0.1)
-            await super().emit_maintenance_failed(table_id=table_id, namespace=namespace, error=error)
+            await super().emit_maintenance_failed(table_id=table_id, location=location, error=error)
 
     emitter = _SlowEmitter()
     results = [_named(f"ns$t{i}", error="maintain: slow") for i in range(20)]
@@ -258,14 +265,6 @@ def test_emit_sweep_lineage_fail_batch_is_concurrent_not_sequential() -> None:
     elapsed = time.monotonic() - start
     assert len(emitter.failed_calls) == 20
     assert elapsed < 1.0, f"FAIL batch ran sequentially ({elapsed:.2f}s for 20 × 0.1s sleeps)"
-
-
-def test_emit_sweep_lineage_root_table_has_empty_namespace() -> None:
-    # A single-segment table id has no parent namespace → "" (matching the catalog's create emit, so the
-    # maintenance event never clobbers the dataset node's namespace).
-    emitter = _RecordingEmitter()
-    asyncio.run(emit_sweep_lineage(cast(Any, emitter), [_named("solo", old_versions_removed=1)]))
-    assert emitter.calls == [("solo", "")]
 
 
 # --------------------------------------------------------------------------- #
@@ -280,7 +279,14 @@ def test_emit_sweep_lineage_root_table_has_empty_namespace() -> None:
     ],
 )
 def test_make_emitter_is_noop_when_disabled(enabled: bool, dapr: Any, emitter_type: type) -> None:
-    emitter = make_emitter(enabled=enabled, dapr=dapr, pubsub="lineage-pubsub", topic="lineage.events.v1", job_namespace="compaction")
+    emitter = make_emitter(
+        enabled=enabled,
+        dapr=dapr,
+        pubsub="lineage-pubsub",
+        topic="lineage.events.v1",
+        job_namespace="compaction",
+        dataset_namespace="lance-namespace://localhost/api/catalog",
+    )
     assert isinstance(emitter, emitter_type)
 
 
@@ -299,9 +305,10 @@ def test_dapr_emitter_publishes_to_configured_pubsub_and_topic() -> None:
         pubsub="lineage-pubsub",
         topic="lineage.events.v1",
         job_namespace="compaction",
+        dataset_namespace="lance-namespace://localhost/api/catalog",
         timeout_seconds=5.0,
     )
-    asyncio.run(emitter.emit_maintenance(table_id="ns$a", namespace="ns"))
+    asyncio.run(emitter.emit_maintenance(table_id="ns$a"))
     assert len(client.published) == 1
     assert client.published[0]["pubsub"] == "lineage-pubsub"
     assert client.published[0]["topic"] == "lineage.events.v1"
@@ -316,10 +323,17 @@ def test_dapr_emitter_best_effort_swallows_publish_failure() -> None:
         async def publish_event(self, **_kw: Any) -> None:
             raise RuntimeError("sidecar down")
 
-    emitter = DaprMaintenanceEmitter(cast(Any, _BoomClient()), pubsub="p", topic="t", job_namespace="compaction", timeout_seconds=5.0)
-    asyncio.run(emitter.emit_maintenance(table_id="ns$a", namespace="ns"))  # no raise == pass
+    emitter = DaprMaintenanceEmitter(
+        cast(Any, _BoomClient()),
+        pubsub="p",
+        topic="t",
+        job_namespace="compaction",
+        timeout_seconds=5.0,
+        dataset_namespace="lance-namespace://localhost/api/catalog",
+    )
+    asyncio.run(emitter.emit_maintenance(table_id="ns$a"))  # no raise == pass
     asyncio.run(  # the FAIL path is best-effort the same way
-        emitter.emit_maintenance_failed(table_id="ns$a", namespace="ns", error="maintain: x")
+        emitter.emit_maintenance_failed(table_id="ns$a", error="maintain: x")
     )
 
 
@@ -328,14 +342,16 @@ def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() ->
     # MERGEs one (:Run) node and /events dedups the redelivered terminal — while COMPLETE keeps uuid4
     # (each materially-compacting tick IS a distinct run; §4 says do NOT change that).
     client = _FakeDaprClient()
-    emitter = DaprMaintenanceEmitter(cast(Any, client), pubsub="p", topic="t", job_namespace="compaction", timeout_seconds=5.0)
+    emitter = DaprMaintenanceEmitter(
+        cast(Any, client), pubsub="p", topic="t", job_namespace="compaction", timeout_seconds=5.0, dataset_namespace="lance-namespace://localhost/api/catalog"
+    )
 
     async def drive() -> None:
-        await emitter.emit_maintenance_failed(table_id="ns$a", namespace="ns", error="maintain: t1")
-        await emitter.emit_maintenance_failed(table_id="ns$a", namespace="ns", error="maintain: t2")
-        await emitter.emit_maintenance_failed(table_id="ns$b", namespace="ns", error="maintain: t1")
-        await emitter.emit_maintenance(table_id="ns$a", namespace="ns")
-        await emitter.emit_maintenance(table_id="ns$a", namespace="ns")
+        await emitter.emit_maintenance_failed(table_id="ns$a", error="maintain: t1")
+        await emitter.emit_maintenance_failed(table_id="ns$a", error="maintain: t2")
+        await emitter.emit_maintenance_failed(table_id="ns$b", error="maintain: t1")
+        await emitter.emit_maintenance(table_id="ns$a")
+        await emitter.emit_maintenance(table_id="ns$a")
 
     asyncio.run(drive())
     run_ids = [json.loads(p["data"])["run"]["runId"] for p in client.published]
@@ -391,7 +407,7 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
 
     emitter = _RecordingEmitter()
     asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
-    assert emitter.calls == [("silver$plain", "silver")], "a pass was named by a stamp"
+    assert emitter.calls == [("silver$plain", named)], "a pass was named by a stamp"
 
 
 def test_the_maintenance_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -421,6 +437,7 @@ def test_the_maintenance_emitter_STAGES_the_event_rather_than_publishing_it_bare
         pubsub="maintenance-pubsub",
         topic="lineage.events.v1",
         job_namespace="compaction",
+        dataset_namespace="lance-namespace://localhost/api/catalog",
         timeout_seconds=5.0,
         outbox_uri="s3://staging/outbox",
         storage_options=lambda: StorageOptions(options={"region": "eu-north-1"}),

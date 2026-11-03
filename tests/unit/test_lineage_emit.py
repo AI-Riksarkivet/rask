@@ -33,6 +33,7 @@ from catalog.core.lineage_emit import (
     make_emitter,
 )
 from catalog.core.run_context import RunContext
+from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE
 from lineage.models import RunEvent
 from service_kit.lineage_events import LANCE_FACET, DatasetUuids
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
@@ -190,11 +191,14 @@ class _BoomClient:
 
 def test_http_emitter_posts_the_event() -> None:
     client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
+    emitter = HttpLineageEmitter(
+        cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE
+    )
     asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=3))
     assert client.posted is not None
     output = _written(client.posted)
-    assert output["namespace"] == "a"
+    # Every dataset is named under the catalog's endpoint, not the table's parent namespace ([[LH-553]]).
+    assert output["namespace"] == DEFAULT_DATASET_NAMESPACE
     assert output["name"] == "a$b"
     assert output["facets"]["version"]["datasetVersion"] == "3"  # #20
     assert _facets(client.posted)["rask_author"]["sub"] == "alice"
@@ -203,7 +207,7 @@ def test_http_emitter_posts_the_event() -> None:
 def test_http_emitter_forwards_authorization() -> None:
     # So ingest accepts the event when the lineage service has OIDC on (else 401 + silent drop).
     client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
     asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1, authorization="Bearer xyz"))
     assert client.headers == {"Authorization": "Bearer xyz"}
 
@@ -287,9 +291,9 @@ def test_build_write_event_records_derived_from_inputs() -> None:
         run_id="r1",
         event_time="2026-07-15T00:00:00Z",
         job_namespace="catalog",
-        inputs=[InputRef("db1", "db1$orig", None)],
+        inputs=[InputRef("db1$orig", None)],
     )
-    # An unversioned input edge carries no version facet — just the (namespace, name) source node.
+    # An unversioned input edge carries no version facet: the source node, under the event's dataset namespace.
     assert event["inputs"] == [{"namespace": "db1", "name": "db1$orig"}]
     assert _written(event)["name"] == "db1$renamed"
 
@@ -309,7 +313,7 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_t
         run_id="r1",
         event_time="2026-07-21T00:00:00Z",
         job_namespace="catalog",
-        inputs=[InputRef("db", "db$silver", 4), InputRef("db", "db$review", 2, "draft")],
+        inputs=[InputRef("db$silver", 4), InputRef("db$review", 2, "draft")],
         run=RunContext(run_id="pipeline-run-42"),
     )
     on_main, on_branch = event["inputs"]
@@ -343,8 +347,8 @@ def test_emit_write_event_maps_input_pins_to_canonical_dataset_ids() -> None:
             uuids=NO_OBJECT_UUIDS,
         )
     )
-    # (parent namespace, canonical id, pinned version) of the source, as a resolved InputRef.
-    assert em.writes[0]["inputs"] == [InputRef("db1", "db1$src", None)]
+    # (canonical id, pinned version) of the source, as a resolved InputRef.
+    assert em.writes[0]["inputs"] == [InputRef("db1$src", None)]
 
 
 def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
@@ -364,7 +368,7 @@ def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
             uuids=NO_OBJECT_UUIDS,
         )
     )
-    assert em.writes[0]["inputs"] == [InputRef("db1", "db1$src", 5)]  # the pin survives resolution
+    assert em.writes[0]["inputs"] == [InputRef("db1$src", 5)]  # the pin survives resolution
 
 
 def test_emit_write_event_root_table_has_empty_namespace() -> None:
@@ -396,7 +400,9 @@ def test_build_write_event_drop_is_versionless_and_named_drop_table() -> None:
 
 def test_http_emitter_swallows_failures() -> None:
     # Best-effort: a down/erroring lineage service must NOT propagate out of a catalog write.
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, _BoomClient()), "http://lineage", job_namespace="lance-catalog")
+    emitter = HttpLineageEmitter(
+        cast(httpx.AsyncClient, _BoomClient()), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE
+    )
     asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1))  # no raise
 
 
@@ -413,6 +419,7 @@ def test_make_emitter_selects_implementation() -> None:
             "pubsub": "lineage-pubsub",
             "topic": "lineage.events.v1",
             "job_namespace": "lance-catalog",
+            "dataset_namespace": DEFAULT_DATASET_NAMESPACE,
         }
         kw.update(over)
         return make_emitter(**kw)
@@ -451,6 +458,7 @@ def test_dapr_emitter_publishes_event_to_topic() -> None:
         "lineage-pubsub",
         "lineage.events.v1",
         job_namespace="lance-catalog",
+        dataset_namespace=DEFAULT_DATASET_NAMESPACE,
         timeout_seconds=5.0,
     )
     asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1))
@@ -469,6 +477,7 @@ def test_dapr_emitter_swallows_publish_failure() -> None:
         "lineage-pubsub",
         "lineage.events.v1",
         job_namespace="x",
+        dataset_namespace=DEFAULT_DATASET_NAMESPACE,
         timeout_seconds=5.0,
     )
     asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author=None, version=2, operation=INSERT))  # no raise
@@ -516,7 +525,9 @@ def test_build_write_event_merge_carries_version() -> None:
 
 def test_http_emitter_emit_write_posts_operation_and_version_under_the_commits_run_id() -> None:
     client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
+    emitter = HttpLineageEmitter(
+        cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE
+    )
 
     def announce() -> str:
         uuids = DatasetUuids(table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
@@ -546,7 +557,7 @@ async def test_a_catalog_write_RESOLVES_its_tenant_so_watchers_are_reachable() -
     remember.
     """
     client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
 
     async def _resolver(top_ns: str) -> str | None:
         return "acme" if top_ns == "acme-bronze" else None
@@ -563,7 +574,7 @@ async def test_a_catalog_write_RESOLVES_its_tenant_so_watchers_are_reachable() -
 async def test_an_EXPLICIT_project_is_not_overridden_by_resolution() -> None:
     """A caller that knows the tenant beats a lookup — resolution fills a gap, it does not decide."""
     client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
 
     async def _resolver(_top_ns: str) -> str | None:
         return "wrong-tenant"
@@ -587,7 +598,7 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
     delivery, so a forged one can at worst tell a person about a run whose outputs they can already see.
     """
     client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
 
     await emitter.emit_create(
         table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, originator="dex~08a8684b-db88"
@@ -604,7 +615,7 @@ async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
     """An originator is an address, so it must identify a person; a role, a wildcard or a userset is not one, and
     carrying it would address whatever it names (`service_kit.governed.subjects.is_person_subject`)."""
     client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
+    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
 
     await emitter.emit_create(table_id="db$t", namespace="db", author="svc", version=1, originator=junk)
 

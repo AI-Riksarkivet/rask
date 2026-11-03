@@ -60,12 +60,13 @@ from lakehouse_kit.lancekit.reader import CatalogTableReader, RestCatalogTranspo
 from lakehouse_kit.lancekit.writer import RestCatalogWriteTransport
 from lakehouse_kit.openlineage import BRANCH_IDENTIFIER
 from lineage.core.config import LineageSettings
+from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
 from service_kit.arrow_ipc import encode_arrow_stream
 from service_kit.governed.machine_identity import read_identity_token
 from service_kit.lineage_events import LANCE_FACET, dataset_uuids
-from service_kit.naming import CATALOG_DELIMITER, is_external_source_namespace
+from service_kit.naming import CATALOG_DELIMITER
 
 
 log = logging.getLogger(__name__)
@@ -245,13 +246,16 @@ def edge_identity(dataset: Dataset) -> str:
     """The key a dataset's edges are recorded under: a governed table's uuid, else its :attr:`Dataset.lineage_name`.
 
     A governed table is keyed by the uuid the catalog minted for it, which a rename keeps, so its edges before and after
-    one are one history ([[LH-522]], ADR 0173 §10). An external source keeps its namespace-qualified name ([[LIN-3]]),
-    and a governed table whose event named no uuid (an outside producer's name the caller's credential could not
-    resolve) keeps its bare name. The three cannot collide: a uuid holds no delimiter and no ``/``, a governed name
-    always holds the delimiter, and an external one always holds a ``/``.
+    one are one history ([[LH-522]], ADR 0173 §10), and so is a dataset an outside producer named by the location that
+    table holds, whose uuid the HTTP door stamped from the catalog's answer ([[LH-553]], `names.stamp_resolved_uuids`):
+    reading a table by its location is reading the table. An external source keeps its namespace-qualified name
+    ([[LIN-3]]), and a governed table whose event named no uuid (an outside producer's name the caller's credential
+    could not resolve) keeps its bare name. The three cannot collide: a uuid holds no delimiter and no ``/``, a governed
+    name always holds the delimiter, and an external one always holds a ``/``.
+
+    A uuid on an external dataset is the door's, never the producer's: the HTTP door replaces whatever the body claimed,
+    and the bus admits only signed producers, which name a table by its catalog id.
     """
-    if is_external_source_namespace(dataset.namespace, dataset.name):
-        return dataset.lineage_name
     return dataset_uuids({"facets": dataset.facets}).table_uuid or dataset.lineage_name
 
 
@@ -266,7 +270,9 @@ class Scope(BaseModel):
 
 def scope_of(datasets: list[Dataset]) -> Scope:
     """The :class:`Scope` of an event naming ``datasets``."""
-    governed = [dataset for dataset in datasets if not is_external_source_namespace(dataset.namespace, dataset.name)]
+    governed = [
+        dataset for dataset in datasets if not is_external_source(dataset.namespace, dataset.name) or dataset_uuids({"facets": dataset.facets}).table_uuid
+    ]
     named = [(dataset.name, dataset_uuids({"facets": dataset.facets})) for dataset in governed]
     return Scope(
         table_uuids=list(dict.fromkeys(uuids.table_uuid for _, uuids in named if uuids.table_uuid)),

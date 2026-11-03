@@ -199,6 +199,7 @@ def lineage(estate: Estate, monkeypatch: pytest.MonkeyPatch) -> list[dict[str, A
         pubsub="",
         topic="",
         job_namespace="lance-catalog",
+        dataset_namespace="lance-namespace://localhost/api/catalog",
         project_resolver=_project,
     )
     monkeypatch.setattr(estate.client.app.state, "lineage_emitter", emitter, raising=False)

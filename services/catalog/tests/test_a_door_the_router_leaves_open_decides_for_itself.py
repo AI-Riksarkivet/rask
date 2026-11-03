@@ -138,6 +138,7 @@ _DOORS: list[_Door] = [
     _Refusing(method="POST", route="/management/v1/decisions/check", body={"user": "user:dex~alice", "relation": "can_read_data", "tables": [TABLE]}),
     _Refusing(method="POST", route="/management/v1/decisions/list-users", body={"relation": "member", "object": f"project:{PROJECT}"}),
     _Refusing(method="POST", route="/management/v1/decisions/governed", body={"objects": ["table:00000000-0000-4000-8000-000000000000"]}),
+    _Refusing(method="POST", route="/management/v1/decisions/locate", body={"locations": ["s3://lakehouse/00000000-0000-4000-8000-000000000000"]}),
     # The estate admin's feed and tenant registry.
     _Refusing(method="GET", route="/management/v1/events"),
     _Refusing(method="POST", route="/management/v1/projects", body={"id": "rival"}),

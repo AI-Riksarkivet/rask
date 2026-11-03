@@ -32,7 +32,8 @@ _KEY_NAMESPACE = "lineage.namespace"
 
 
 def build_lineage_metadata(*, namespace: str) -> dict[str, str]:
-    """The lineage coordinates to stamp into the Lance file's schema metadata at create (no PII)."""
+    """The lineage coordinates to stamp into the Lance file's schema metadata at create (no PII): ``namespace`` is the
+    catalog's dataset namespace its events name the table under ([[LH-553]])."""
     return {_KEY_NAMESPACE: namespace}
 
 

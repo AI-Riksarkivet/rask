@@ -64,6 +64,6 @@ def test_a_DDL_change_that_DERIVED_the_table_keeps_its_run() -> None:
     run's inputs. A rename passes its SOURCE so the destination is not an orphan with no history, so
     moving it would sever the chain the input exists to preserve. Not a phantom either: something did
     derive one table from another."""
-    event = _event("rename_table", inputs=[InputRef("alpha$bronze", "alpha$bronze$old", None)])
+    event = _event("rename_table", inputs=[InputRef("alpha$bronze$old", None)])
     assert "run" in event and "job" in event, "a derived rename lost the run that carries its source"
     assert event["inputs"] == [{"namespace": "alpha$bronze", "name": "alpha$bronze$old"}]

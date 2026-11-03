@@ -135,9 +135,9 @@ def _emit(client: TestClient, kind: str) -> None:
             )
         )
     elif kind == "failure":
-        portal.call(lambda: lineage.emit_maintenance_failed(table_id="acme$events", namespace="acme", error="maintain: failed", uuids=UUIDS))
+        portal.call(lambda: lineage.emit_maintenance_failed(table_id="acme$events", error="maintain: failed", uuids=UUIDS))
     else:
-        portal.call(lambda: lineage.emit_maintenance(table_id="acme$events", namespace="acme", uuids=UUIDS))
+        portal.call(lambda: lineage.emit_maintenance(table_id="acme$events", uuids=UUIDS))
 
 
 def _signed(event: dict[str, Any], public: str) -> tuple[str, str, str, DatasetUuids] | RefusalReason:
@@ -225,6 +225,7 @@ def test_an_emitter_refuses_a_key_for_an_identity_it_does_not_stamp_as_its_autho
             pubsub="p",
             topic="lineage.events.v1",
             job_namespace="lance",
+            dataset_namespace="lance-namespace://localhost/api/catalog",
             timeout_seconds=1.0,
             author="service-someone-else",
             signing=holder,
