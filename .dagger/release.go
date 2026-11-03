@@ -195,8 +195,8 @@ func (m *Rask) Lakehouse(
 	}
 	image := strings.TrimSpace(pinned)
 
-	registry := dag.Container().From(registryImage).WithExposedPort(5000).AsService(dagger.ContainerAsServiceOpts{UseEntrypoint: true})
-	if registry, err = registry.Start(ctx); err != nil {
+	registry, err := sessionRegistry(run).Start(ctx)
+	if err != nil {
 		return nil, fmt.Errorf("starting the session registry: %w", err)
 	}
 	if _, err := dag.Container().From(craneImage).WithServiceBinding("rask-registry", registry).

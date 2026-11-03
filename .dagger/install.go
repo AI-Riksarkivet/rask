@@ -55,7 +55,7 @@ func (m *Rask) InstallFromEmpty(
 	src *dagger.Directory,
 ) (string, error) {
 	run := time.Now().UTC().Format(time.RFC3339Nano)
-	registry := dag.Container().From(registryImage).WithExposedPort(5000).AsService(dagger.ContainerAsServiceOpts{UseEntrypoint: true})
+	registry := sessionRegistry(run)
 
 	tool := withRenderableChart(m.base(src))
 	images, err := tool.WithExec([]string{"bash", "-c", "RELEASE=rask . scripts/stack_values.sh && helm template rask ./chart \"${HELM_SET[@]}\"" +
@@ -83,6 +83,16 @@ func (m *Rask) InstallFromEmpty(
 
 	kubeconfig := dag.CacheVolume("rask-install-from-empty-kubeconfig-" + run)
 	return runInstall(ctx, installer(tool, emptyCluster(registry, kubeconfig, run), kubeconfig, run), "rask from empty")
+}
+
+// sessionRegistry is the registry a run's cluster mirrors, keyed by `run`. Its storage lives only as long as the
+// service, so whatever fills it must run against this run's instance: keyed by the run, every exec that binds it is a
+// new cache key, where an unkeyed registry let a later session reuse an earlier one's cached push and pull from an empty
+// registry (measured 2026-11-03: the second `Lakehouse` of rc.2 ran its `crane copy` CACHED and every catalog pod went
+// ImagePullBackOff).
+func sessionRegistry(run string) *dagger.Service {
+	return dag.Container().From(registryImage).WithEnvVariable("RUN", run).WithExposedPort(5000).
+		AsService(dagger.ContainerAsServiceOpts{UseEntrypoint: true})
 }
 
 // emptyCluster is an empty k3s whose Docker Hub pulls go through `registry` first (k3sRegistries), writing its
