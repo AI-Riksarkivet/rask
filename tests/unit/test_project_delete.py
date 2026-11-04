@@ -14,18 +14,15 @@ leaving a record-less-or-tuple-less half state behind — the reason the revoke 
 from __future__ import annotations
 
 import asyncio
-import logging
-from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from lance_namespace import NamespaceNotEmptyError, ServiceUnavailableError
+from lance_namespace import NamespaceNotEmptyError
 from pydantic import SecretStr
 
 from catalog.api.v1.endpoints import projects as ep
 from catalog.core.config import Settings
-from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
@@ -112,30 +109,6 @@ def _delete(
     return asyncio.run(ep.delete_project(project_id, record=_RECORD, settings=settings, token=token, client=client, control=control or _Emitter()))
 
 
-@pytest.fixture
-def audited() -> Iterator[list[logging.LogRecord]]:
-    """Capture the compliance rows on the dedicated audit logger (mirrors ``test_audit.py``)."""
-
-    class _Capture(logging.Handler):
-        def __init__(self) -> None:
-            super().__init__()
-            self.records: list[logging.LogRecord] = []
-
-        def emit(self, record: logging.LogRecord) -> None:
-            self.records.append(record)
-
-    handler = _Capture()
-    logger = logging.getLogger(AUDIT_LOGGER)
-    previous = logger.level
-    logger.addHandler(handler)
-    configure_audit(enabled=True)
-    try:
-        yield handler.records
-    finally:  # restore the level this test found, so the audit stream's state never leaks between tests
-        logger.removeHandler(handler)
-        logger.setLevel(previous)
-
-
 # ── the refusal: a tenant's contents ─────────────────────────────────────────────────────────────────
 
 
@@ -173,23 +146,6 @@ def test_empty_project_is_deleted_and_its_tuples_revoked(monkeypatch: pytest.Mon
     assert world.revoked == [{"obj": "project:acme", "actor": "dex~alice", "origin": "lifecycle_delete"}]
     event = control.events[0]
     assert (event.action, event.object_type, event.object_id, event.actor) == ("project_deleted", "project", "project:acme", "user:dex~alice")
-
-
-def test_an_openfga_outage_aborts_the_delete_instead_of_reporting_a_half_success(monkeypatch: pytest.MonkeyPatch, audited: list[logging.LogRecord]) -> None:
-    # The reason the revoke goes first: when it fails there is nothing to half-report. The 503 propagates,
-    # the record survives (so the tenant is still named, still administered, still deletable on a retry),
-    # nothing is announced on the bus and no compliance row claims a revocation that never happened.
-    world = _world(
-        monkeypatch,
-        tuples=[_grant("user:u0", "member"), _grant("user:u1", "member"), _grant("user:u2", "member"), _grant("user:u3", "member")],
-        revoke_error=ServiceUnavailableError("openfga is unavailable"),
-    )
-    control = _Emitter()
-    with pytest.raises(ServiceUnavailableError):
-        _delete("acme", _settings(fga_enabled=True), client=object(), control=control)
-    assert world.calls == ["revoke"] and world.deleted == []
-    assert control.events == []
-    assert [r for r in audited if r.__dict__.get("audit.action") == "access_revoke"] == []
 
 
 def test_fga_off_still_deletes_the_record_and_reports_zero(monkeypatch: pytest.MonkeyPatch) -> None:

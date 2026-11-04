@@ -9,12 +9,10 @@
 	import { ChevronDown, Menu } from '@lucide/svelte';
 	import {
 		norm,
-		prefetchOnIntent,
 		isMainMenu,
 		mainMenuNav,
 		topNav,
 		under,
-		zoneOf,
 		type Me,
 		type NavUser,
 		type NotificationFeed,
@@ -22,21 +20,17 @@
 		type TopNavItem,
 	} from './nav-config.js';
 
-	// The shared top navbar — the cross-zone IA on the shadcn-svelte NavigationMenu shape. One entry
-	// per microfrontend zone, and EVERY zone of the seven-zone estate is in the bar (R15); a zone
-	// that carries `items`/`groups` renders as a trigger opening a panel of its sub-areas (so the
-	// estate is one hop away from anywhere), and a zone with a single surface stays a plain link.
-	// The Governance/Operations columns appear only for an estate admin (`me.estate_admin`, the
-	// frozen /management/v1/me contract — fail-closed: no `me`, no admin columns); Access is never a top-level
-	// entry, it is one row of the Governance column. The identity/theme control (the old sidebar
-	// footer nav-user) lives on the right side. Bare flex chrome on purpose: the mount decides the
-	// framing (AppShell sits it on the header's navbar row).
+	// The shared top navbar on the shadcn-svelte NavigationMenu shape. An entry that carries
+	// `items`/`groups` renders as a trigger opening a panel of its sub-areas, and one with a single
+	// surface stays a plain link. The Operations column appears only for an estate admin
+	// (`me.estate_admin`, the frozen /management/v1/me contract — fail-closed: no `me`, no admin
+	// columns). The identity/theme control lives on the right side. Bare flex chrome on purpose: the
+	// mount decides the framing (AppShell sits it on the header's navbar row).
 	//
 	// `me` is the RESOLVED identity (null = signed out / lookup failed); `meLoading` renders the BASE
 	// entry titles as invisible text under skeleton pills instead — the same chrome classes and the
 	// same chevron reservation as the resolved entries, so loading and resolved states have IDENTICAL
-	// dimensions (no layout shift when /management/v1/me lands) and a zone whose `me` is server-resolved never flashes
-	// the non-admin entry set pretending to be the truth.
+	// dimensions (no layout shift when /management/v1/me lands).
 	let {
 		pathname = '',
 		me = null,
@@ -49,25 +43,20 @@
 		pathname?: string;
 		/** The frozen /management/v1/me identity, or null when signed out / unresolved. */
 		me?: Me | null;
-		/** True while the zone's fetchMe() is still in flight — renders skeletons. */
+		/** True while the app's fetchMe() is still in flight — renders skeletons. */
 		meLoading?: boolean;
 		authEnabled?: boolean;
 		user?: NavUser | null;
-		/** The zone's run feed for the notification bell. `null` (the default) renders NO bell — a zone
-		 *  opts in by passing its runs, so a zone that has not wired the feed shows nothing rather than
-		 *  a permanently empty surface. */
+		/** The app's feed for the notification bell. `null` (the default) renders NO bell, so an app
+		 *  that has not wired the feed shows nothing rather than a permanently empty surface. */
 		notifications?: NotificationFeed | null;
 		class?: string;
 	} = $props();
 
 	// TWO LEVELS, TWO BARS. The ESTATE level — `/`, `/projects`, `/settings` — is where you choose what
-	// to work on: Home · Projects · Settings. Everything else is inside a project and gets the zone
-	// bar. `isMainMenu` owns that test (nav-config.ts), and the boundary is deliberate: `/projects` is
-	// the list and stays at the estate level, while `/projects/<id>` is a project you have OPENED, so
-	// it gets the zone bar — opening a project is what puts you inside one.
-	//
-	// It replaced `zoneOf(pathname) === ''`, which could not tell those two apart: both are home-zone
-	// paths, and one of them is the whole point of the distinction.
+	// to work on: Home · Projects · Settings. Everything else is inside a project and gets the
+	// in-project bar. `isMainMenu` owns that test (nav-config.ts): `/projects` is the list and stays at
+	// the estate level, while `/projects/<id>` is a project you have OPENED.
 	const inMainMenu = $derived(isMainMenu(pathname));
 	// The refusal reason depends on WHICH refusal it is. `me == null` is an unresolved identity — not
 	// signed in, or the catalog could not answer — so naming a relation would be useless advice; the
@@ -86,21 +75,8 @@
 	// Skeletons must reserve the bar you are ACTUALLY about to get, or the main menu flashes eight
 	// placeholder chips and settles into two.
 	const placeholders = $derived(inMainMenu ? mainMenuNav(false) : topNav(false));
-	// Cross-zone links leave THIS app's route manifest → hard nav (data-sveltekit-reload); the home
-	// zone owns the origin root, so its zone key is ''. A plain function over the `pathname` prop, not
-	// a `$derived`: the panel rows render inside bits-ui's portalled Content, and a derived read from
-	// there warns (`derived_inert`) as the panel tears down.
-	const crossZone = (href: string) => zoneOf(href) !== zoneOf(pathname);
-
-	// Warm a cross-zone target document on intent (hover/focus): rel=prefetch of the zone root —
-	// see prefetchDocument for the honest browser-support scope. Same-zone links already preload
-	// via data-sveltekit-preload-data. Attachment (native listeners), so bits-ui's own pointer
-	// handlers on the link are never clobbered.
-	const warm = (href: string) => (el: HTMLElement) =>
-		crossZone(href) ? prefetchOnIntent(href)(el) : undefined;
-
-	// A panel row is lit when the current path is under it — except a row that IS the zone root
-	// (Lineage's Graph, Media's Search), which matches exactly or it would light up on every sibling.
+	// A panel row is lit when the current path is under it — except a row that IS the entry's own href
+	// (the Overview), which matches exactly or it would light up on every sibling.
 	const itemActive = (entry: TopNavEntry, item: TopNavItem) =>
 		item.href === entry.href ? norm(pathname) === item.href : under(item.href)(pathname);
 
@@ -109,7 +85,7 @@
 	// the same box.
 	const chrome = navigationMenuTriggerStyle();
 
-	// Below the shell breakpoint the whole bar folds into ONE overflow entry. The zone entries are
+	// Below the shell breakpoint the whole bar folds into ONE overflow entry. The app entries are
 	// `whitespace-nowrap` by design (a wrapped nav label is worse than no nav label), so they cannot
 	// share a narrow row with the project switcher and the account control — they used to simply
 	// overflow their container and run underneath the avatar. Collapsing is the only honest answer:
@@ -118,7 +94,7 @@
 	const narrow = new IsMobile(SHELL_COLLAPSE_BREAKPOINT);
 	const collapsed = $derived(narrow.current);
 
-	// THE ESTATE BAR IS CENTRED; the zone bar is not. Inside a project this row is a menubar — it
+	// THE ESTATE BAR IS CENTRED; the app bar is not. Inside a project this row is a menubar — it
 	// starts where the sidebar trigger ends and reads left-to-right like every other strip of chrome
 	// above content. The main menu has no rail, no crumbs and two or three entries in a full-width
 	// bar, so left-aligning them there parked the estate's ONLY navigation in a corner with a screen
@@ -133,22 +109,22 @@
 	// (see below), and a centred single trigger would just look misplaced.
 	const centred = $derived(inMainMenu && !collapsed);
 
-	// The overflow panel is FLAT — one heading per zone, then its destinations. The desktop panels'
+	// The overflow panel is FLAT — one heading per page, then its destinations. The desktop panels'
 	// group columns (Lakehouse's Workspace/Catalog/Operations) and the row descriptions are
-	// dropped: on a phone-width panel they cost a screenful of scrolling and buy nothing. The zone
+	// dropped: on a phone-width panel they cost a screenful of scrolling and buy nothing. The app
 	// root is prepended when no row already is it, exactly like the desktop panel, so a trigger is
-	// never the only way into a zone.
+	// never the only way into a page.
 	const overflowItems = (entry: TopNavEntry): TopNavItem[] => {
 		const items = entry.groups ? entry.groups.flatMap((group) => group.items) : (entry.items ?? []);
 		if (items.some((item) => item.href === entry.href)) return items;
 		return [
 			{
-				// A paneled zone's prepended root row says "<Zone> home" to set it off from the rows
-				// under it; a plain-link zone's ONLY row IS the zone, so it just carries the zone's
-				// name (the Home zone would otherwise read "Home home").
+				// A paneled page's prepended root row says "<Zone> home" to set it off from the rows
+				// under it; a plain-link page's ONLY row IS the app, so it just carries the console's
+				// name (the Home page would otherwise read "Home home").
 				title: items.length ? `${entry.title} home` : entry.title,
 				href: entry.href,
-				description: `Open the ${entry.title.toLowerCase()} zone.`,
+				description: `Open the ${entry.title.toLowerCase()} page.`,
 			},
 			...items,
 		];
@@ -161,7 +137,7 @@
 		     the account cluster's flank, which is what puts the entries in the middle of the bar. -->
 		<div class="flex-1" data-slot="navbar-flank"></div>
 	{/if}
-	<!-- `aria-label` overrides the primitive's default "main", so this IS the zones landmark — one
+	<!-- `aria-label` overrides the primitive's default "main", so this IS the pages landmark — one
 	     nav element, not a nav nested inside a nav. Collapsed, the root takes the whole row (the
 	     base `max-w-max` is dropped) so the shared panel viewport — which is `w-full` below `md` —
 	     is bounded by the row instead of by one narrow trigger, and cannot spill past the edge.
@@ -204,7 +180,7 @@
 					</li>
 				{/each}
 			{:else if collapsed}
-				<!-- The narrow bar: ONE entry. Every zone and every sub-area it owns is a row in this
+				<!-- The narrow bar: ONE entry. Every page and every sub-area it owns is a row in this
 				     panel, so nothing the wide bar reaches becomes unreachable here. -->
 				<NavigationMenu.Item>
 					<NavigationMenu.Trigger>
@@ -226,12 +202,7 @@
 								<ul class="grid gap-0.5 pb-1">
 									{#each overflowItems(entry) as item (item.href)}
 										<li>
-											<NavigationMenu.Link
-												href={item.href}
-												active={itemActive(entry, item)}
-												data-sveltekit-reload={crossZone(item.href) ? '' : undefined}
-												{@attach warm(item.href)}
-											>
+											<NavigationMenu.Link href={item.href} active={itemActive(entry, item)}>
 												<span class="truncate text-sm leading-none font-medium">{item.title}</span>
 											</NavigationMenu.Link>
 										</li>
@@ -253,7 +224,7 @@
 					     pair), and `none` is the right one. It strips the listitem semantics, so a screen
 					     reader walking the list never meets an empty item between two real ones — exactly
 					     what a decorative spacer should do.
-					     NOT IN THE MAIN MENU. Weighting eight zone entries is guidance; weighting three
+					     NOT IN THE MAIN MENU. Weighting eight page entries is guidance; weighting three
 					     estate entries is a hole. It was drawn there at DOUBLE width (sm:w-14) to read as
 					     structure and read instead as Settings having fallen off the end of the row — and
 					     the skeleton above reserved the compact gap, so an admin's bar also jumped 32px
@@ -300,12 +271,12 @@
 									class="grid gap-x-3 gap-y-1 p-2 md:w-[46rem]"
 									style="grid-template-columns: repeat({entry.groups.length}, minmax(0, 1fr))"
 								>
-									<!-- No zone-root filler row here, BY RULING (2026-08-03): the groups panel's
-									     destinations are its group rows — a "Lakehouse · Open the lakehouse zone." row
+									<!-- No page-root filler row here, BY RULING (2026-08-03): the groups panel's
+									     destinations are its group rows — a "Lakehouse · Open the console." row
 									     linking a redirect-to-tables page said nothing a real row doesn't, and only
-									     THIS zone ever rendered it (the flat-items zones all carry a real
+									     THIS page ever rendered it (the flat-items pages all carry a real
 									     function-titled root row — Search, Overview — so their equivalent is skipped).
-									     The narrow overflow menu still prepends every zone's root uniformly; the wide
+									     The narrow overflow menu still prepends every page's root uniformly; the wide
 									     panel does not. -->
 									{#each entry.groups as group (group.label)}
 										<div>
@@ -317,12 +288,7 @@
 											<ul class="grid gap-1">
 												{#each group.items as item (item.href)}
 													<li>
-														<NavigationMenu.Link
-															href={item.href}
-															active={itemActive(entry, item)}
-															data-sveltekit-reload={crossZone(item.href) ? '' : undefined}
-															{@attach warm(item.href)}
-														>
+														<NavigationMenu.Link href={item.href} active={itemActive(entry, item)}>
 															<span class="text-sm leading-none font-medium">{item.title}</span>
 															<span class="text-muted-foreground line-clamp-2 text-xs leading-snug">
 																{item.description}
@@ -345,34 +311,27 @@
 							<NavigationMenu.Content>
 								<ul class="grid gap-1 p-2 md:w-[30rem] md:grid-cols-2">
 									{#if !entry.items.some((i) => i.href === entry.href)}
-										<!-- The zone root itself — a panel must not be the only way in, and the
+										<!-- The app root itself — a panel must not be the only way in, and the
 										     trigger is a button, not a link. Skipped when a row already IS the
 										     root (lineage's Graph, media's Search), so no href appears twice. -->
 										<li class="md:col-span-2">
 											<NavigationMenu.Link
 												href={entry.href}
 												active={norm(pathname) === entry.href}
-												data-sveltekit-reload={crossZone(entry.href) ? '' : undefined}
-												{@attach warm(entry.href)}
 												class="bg-muted/40 p-3"
 											>
 												<span class="text-foreground text-sm leading-none font-medium"
 													>{entry.title}</span
 												>
 												<span class="text-muted-foreground text-xs leading-snug">
-													Open the {entry.title.toLowerCase()} zone.
+													Open the {entry.title.toLowerCase()} page.
 												</span>
 											</NavigationMenu.Link>
 										</li>
 									{/if}
 									{#each entry.items as item (item.href)}
 										<li>
-											<NavigationMenu.Link
-												href={item.href}
-												active={itemActive(entry, item)}
-												data-sveltekit-reload={crossZone(item.href) ? '' : undefined}
-												{@attach warm(item.href)}
-											>
+											<NavigationMenu.Link href={item.href} active={itemActive(entry, item)}>
 												<span class="text-sm leading-none font-medium">{item.title}</span>
 												<span class="text-muted-foreground line-clamp-2 text-xs leading-snug">
 													{item.description}
@@ -383,13 +342,7 @@
 								</ul>
 							</NavigationMenu.Content>
 						{:else}
-							<NavigationMenu.Link
-								href={entry.href}
-								active={entry.match(pathname)}
-								data-sveltekit-reload={crossZone(entry.href) ? '' : undefined}
-								{@attach warm(entry.href)}
-								class={chrome}
-							>
+							<NavigationMenu.Link href={entry.href} active={entry.match(pathname)} class={chrome}>
 								{#if entry.icon}
 									<entry.icon class="size-4" aria-hidden="true" />
 								{/if}
@@ -407,8 +360,8 @@
 	<div class={cn('flex items-center', centred ? 'flex-1 justify-end' : 'ml-auto shrink-0')}>
 		{#if meLoading}
 			<!-- size-8 = the resolved NavbarUser trigger (Button size="icon") — same box, no shift. The
-			     bell reserves nothing: a zone with no feed has no bell, so reserving its width would
-			     shift the account control on every load in every zone that has not wired a feed. -->
+			     bell reserves nothing: a page with no feed has no bell, so reserving its width would
+			     shift the account control on every load in every page that has not wired a feed. -->
 			<Skeleton class="size-8 rounded-full" />
 		{:else}
 			{#if notifications}

@@ -53,10 +53,9 @@ def _string_enums(spec: dict) -> dict[str, list[str]]:
 # enums today — a per-spec vacuity guard would fail on lineage for having nothing to check, and
 # dropping the guard would let the whole thing pass on an empty sweep.
 #
-# THE OTHER HOP IS GATED IN THE JS PLANE, not here: spec -> generated TypeScript client is
-# `frontend/packages/zone-contract/src/generated-client-freshness.test.ts`, which walks enum members
-# for this exact reason. This file owns live app -> committed spec; that one owns committed spec ->
-# client. Neither needs to grow the other's half.
+# THE OTHER HOP IS GATED BY REGENERATION, not here: spec -> generated TypeScript client is `dagger call openapi`
+# (`.dagger/openapi.go`), which regenerates `@rask/api`'s client from the committed specs and diffs it. This file owns
+# live app -> committed spec.
 _SPECS = [("catalog.main", "catalog-openapi.json", "catalog.ts"), ("lineage.main", "lineage-openapi.json", "lineage.ts")]
 
 

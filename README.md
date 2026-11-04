@@ -17,60 +17,59 @@ doors like any other client (ADRs 0154 and 0155).
 
 **The platform is workload-agnostic by design.** It stores and governs blobs and multimodal data;
 no workload is its identity. Anything that reads bytes, writes a governed table and emits lineage fits the same
-shape — text, image, audio, video, embeddings.
+shape — text, image, audio, video, embeddings. A workload's model, stage graph and output format are its own and live
+outside this repository; no shared seam (the catalog and its tier governance, the maintenance sweep, lineage, the
+events) names one. The test for any shared seam is *would this still be right for audio?*
 
-**The platform itself knows no modality, and that is enforced rather than aspirational.** Modality
-lives in exactly one place: the sealed `runners/<workload>` projects. It must not leak into a shared seam —
-the catalog and its tier governance, the maintenance sweep, lineage, notifications — because a seam that knows
-one modality makes the next one a second-class citizen. The test for any shared seam is *would this still be
-right for audio?*
+This repository holds the lakehouse and its console, nothing else. Every other client (flows, compute and the Ray
+engine fixtures, the annotator, the viewer and search with the explorer, table-maintenance, the sealed runners) left
+it and is recovered from git history at `64ef118a9`, the last commit that holds every client, when it moves to its
+own repository.
 
-Polyglot monorepo: Python via [uv], JS/TS via [Bun] + Turborepo (oxlint + oxfmt), docs via
-[Zensical], hermetic builds via [Dagger] (`.dagger/` — **every image**, local and CI).
+Polyglot monorepo: Python via [uv], JS/TS via [Bun] (oxlint + oxfmt), docs via [Zensical], hermetic builds via
+[Dagger] (`.dagger/` — **every image**, local and CI).
 
 ## Layout
 
 Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
 
-- `packages/` — reusable Python libraries (uv workspace members, no entrypoints): `lineage-kit`,
-  `ray-kit`, `service-kit` (the lakehouse's kit), `client-kit` (code only the lakehouse's clients run),
-  `storage`, plus `ray-cluster-env` (the Ray images' environment and tracing hooks)
+- `packages/` — reusable Python libraries (uv workspace members, no entrypoints): `service-kit` (the platform
+  package a client pins by lakehouse tag: the app factory, the auth plane, the naming, and the contract the
+  lakehouse's events publish), `lakehouse-kit` (the lakehouse's kernel, with `lakehouse_kit.storage`, its S3 client,
+  STS and URI seam; no client imports it) and `lineage-kit` (OpenLineage emission and the Ed25519 signing seam)
 - `services/` — runnable Python services (uv workspace members):
-  - **lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
+  - **the lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
     tables, and the bronze→silver→gold tier governance a pipeline's writes pass through), `lineage`
-    (OpenLineage → AGE, and the durable `GET /events` log), `maintenance` (version expiry, trash purge, the orphan
-    scan, cross-store reconcile, and the list of tables due for a bring-your-own compaction or index optimize; ADR 0162)
-  - **media**: `viewer`, `search`, `annotator`
-  - **fleet**: `flows` (the studio flow-builder's server half), `notifications` (the per-subject inbox), and
-    `compute` (Ray introspection + Serve proxy), the companion of a bring-your-own Ray engine, which ships in its
-    own chart (`deploy/fixtures/compute`) with its own HTTPRoute
+    (the OpenLineage intake, the commit feed and edge list as Lance tables, and the durable `GET /events` log; the
+    lineage graph is bring-your-own, ADR 0158), `maintenance` (version expiry, trash purge, the orphan scan,
+    cross-store reconcile, and the list of tables due for a bring-your-own compaction or index optimize; ADR 0162)
+  - **the console's backend**: `notifications`, the per-subject inbox behind the console's bell, a client of the
+    lakehouse's events (ADR 0190)
   - **the edge** is the platform's Gateway (Kubernetes Gateway API), not a rask process: the chart's HTTPRoutes
     (`chart/templates/route.yaml`) send each public `/api/*` prefix to its service, and every service authenticates
     each request itself (ADR 0165)
-- `runners/` — **sealed model environments, not workspace members** (each owns its `pyproject.toml`
-  and `uv.lock`, so torch/model pins never enter the fleet's resolution): `htr`, `asr`, `diarize`,
-  `voiceprint`, `topics`, `kg`, `assist`, `insid3`, `dummy`
-- `frontend/` — the JS/TS plane; its own Bun + Turborepo workspace root:
-  - `microfrontends/` — **six SvelteKit 2 + Svelte 5 zones**: `home` (catch-all, owns `/`,
-    `/projects`, `/settings` and the OIDC BFF) + `lakehouse`, `explorer`, `annotator`, `compute`,
-    `studio` — composed by the Turborepo `:3024` proxy in dev, by the cluster route in-cluster
-  - `packages/` — `@rask/ui` (Svelte 5 + Bits UI + Tailwind 4 design system, Storybook), `@rask/api`,
-    `@rask/explorer-api`, `@rask/dockview`, `@rask/flow`, `@rask/engine`, `@rask/labeling`,
-    `@rask/config`, `@rask/zone-contract` (the estate's shape gates, a vitest suite)
-- `scripts/` — all dev/ops scripts (indexing, harvesting, the dev fleet, the e2e stack drivers)
+- `frontend/` — the JS/TS plane; its own Bun workspace root:
+  - `console/` — the console: ONE SvelteKit 2 + Svelte 5 single-page app with no backend of its own. The browser
+    signs in to Dex with PKCE on the public `rask-web` client, keeps its tokens in memory under a strict Content
+    Security Policy, and calls the catalog, lineage and inbox APIs with its bearer. A small Bun server (`serve.ts`)
+    serves the built files and the runtime `config.json`
+  - `packages/` — `@rask/ui` (Svelte 5 + Bits UI + Tailwind 4 design system, Storybook), `@rask/api` (the typed
+    client generated from the OpenAPI specs), `@rask/dockview` (the workbench), `@rask/flow` (the governance graphs)
+- `scripts/` — all dev/ops scripts (the e2e stack drivers, the estate seed, the chart and store tooling)
 - `tests/` — cross-service suites: `unit`, `integration`, `e2e-py` (**live**, `-m e2e`, needs a
   deployed stack), `e2e` (Playwright, its own lockfile)
-- `chart/` — the product chart: rask's services, zones and their configuration, with OpenFGA as its only
+- `chart/` — the product chart: the lakehouse's services and their configuration, with OpenFGA as its only
   (optional) subchart. Dapr, NATS JetStream, the CloudNativePG operator, External Secrets, Dex, the object store
   and observability are prerequisites, installed in development from `deploy/fixtures/` (ADR 0153)
+- `deploy/fixtures/console` — the console's own release: the web image, the notifications inbox and an HTTPRoute on
+  the platform's Gateway, beside the product chart and installed after it
 - `.docker/` — one dockerfile per deployable; `.dagger/` — the build + CI module; `docs/` — Zensical
   source (the depth lives here)
 
 Workspace membership is **globbed per plane**: `[tool.uv.workspace] members = ["packages/*",
-"services/*"]` and `frontend/package.json` `workspaces = ["microfrontends/*", "packages/*"]`. A new
+"services/*"]` and `frontend/package.json` `workspaces = ["console", "packages/*"]`. A new
 directory joins its plane automatically — provided it ships a `pyproject.toml` / `package.json`;
-without one it is silently skipped. Deployables build from the root lock via `uv sync --package
-<name>`; runners build from their own.
+without one it is silently skipped. Deployables build from the root lock via `uv sync --package <name>`.
 
 ## Quick start
 
@@ -80,24 +79,20 @@ from the old machine (memory, `.env`, local branches), and the k3s estate instal
 ```bash
 make install     # bun --cwd=frontend install + uv sync --all-packages + git hooks + make k3s-deps + make claude-bootstrap
 make build
-make test        # offline suites (deselects the live `e2e` + model-bound `slow` marks)
+make test        # offline suites (deselects the live `e2e` + long-running `slow` marks)
 make check       # fmt + lint + typecheck + knip
 ```
 
 ## Run locally
 
 ```bash
-make dev-zone ZONE=lakehouse   # ONE zone + its own mock upstreams — no cluster, no containers
-make dev-frontends             # every zone behind the :3024 proxy
-make dev-micro                 # the fleet: compute, flows, notifications and the explorer trio (no edge)
-make dev-frontends-k3s         # all zones with /api → the in-cluster Gateway, port-forwarded to :8888
+make dev         # the console with Vite HMR, /api → RASK_EDGE_URL (default :8888)
+make dev-k3s     # the console against the in-cluster Gateway, port-forwarded to :8888
+make dev-micro   # the notifications inbox on the host (no edge)
 ```
 
-**`make dev-zone` is the leanest loop and the only one that needs nothing else** — it starts a zone
-plus the seed-driven mock upstreams its own Playwright suite uses, so it also runs in a cloud sandbox
-or CI. Auth is off and cross-zone links 404, because exactly one zone is listening. Open **`:3024`**,
-not a zone's own port, when running the full composition. The lakehouse services (catalog, lineage,
-maintenance) need Dapr, NATS, OpenFGA and an object store, so they run on k3s, not in `make dev-micro`.
+The lakehouse services (catalog, lineage, maintenance) need Dapr, NATS, OpenFGA and an object store, so they run on
+k3s, and the console reaches them through the cluster's Gateway (`make dev-k3s`).
 
 ## Clusters
 
@@ -108,6 +103,8 @@ The chart in `chart/` is the single deploy artifact for both.
   ```bash
   make k3s-install                       # one-time host bootstrap (sudo)
   make k3s-build k3s-import k3s-up       # build, side-load, helm install + wait
+  make k3s-clients                       # the console's release (web + inbox) after the lakehouse
+  make seed-dev                          # projects, warehouses, namespaces and grants through the catalog
   make k9s                               # inspect it
   make k3s-down / k3s-purge
   ```
@@ -122,10 +119,9 @@ The chart in `chart/` is the single deploy artifact for both.
 > Both clusters can exist at once, and a bare `kubectl` may reach the **kind** one. The k3s release
 > lives at `KUBECONFIG=/etc/rancher/k3s/k3s.yaml` — the Makefile already sets it.
 
-**Dagger builds every image — never `docker build`.** `dagger call image --name=<stem>` for anything
-in `.docker/`, `dagger call zone-image --zone=<zone>` for a micro-frontend; `scripts/dagger-image.sh`
-is the single seam. The dockerfile stays the source of truth, so a build cannot behave one way
-locally and another in CI.
+**Dagger builds every image — never `docker build`.** `dagger call image --name=<stem>` for anything in `.docker/`
+(`frontend` is the console's image, `make console-image`); `scripts/dagger-image.sh` is the single seam. The
+dockerfile stays the source of truth, so a build cannot behave one way locally and another in CI.
 
 ## Security scanning
 
@@ -139,20 +135,21 @@ make scan-image NAME=notifications
 ## CI
 
 `.github/workflows/ci.yml` calls the Dagger module's real functions — `lint`, `typecheck`, `openapi`,
-`test`, `test-pg`, `charts`, `frontend`, `scan-*` — plus the kind-backed live jobs
-(`make e2e-ci`), the per-zone Playwright suites, and the zone-image build+smoke.
-Everything hermetic runs identically on your machine: `dagger call <fn>` == the CI step.
+`test`, `charts`, `frontend`, `scan-*` — plus the kind-backed live jobs (`make e2e-ci`) and the console's
+Playwright suite. Everything hermetic runs identically on your machine: `dagger call <fn>` == the CI step.
 
 ## Common Make targets
 
 | Target                                  | What it does                                                         |
 | --------------------------------------- | -------------------------------------------------------------------- |
 | `make install` / `make build`           | Install both planes / build everything                               |
-| `make test` / `make test-slow`          | pytest offline (`-m "not slow and not e2e"`) / + slow (needs a GPU)   |
+| `make test` / `make test-slow`          | pytest offline (`-m "not slow and not e2e"`) / + slow                |
 | `make check` / `make ci`                | fmt + lint + typecheck + knip / + tests                              |
-| `make dev-zone ZONE=<z>`                | One zone + its mocks, no cluster                                     |
-| `make dev-micro` / `make dev-frontends` | Local backend fleet / all zones on `:3024`                           |
+| `make dev` / `make dev-k3s`             | The console with Vite HMR / against the in-cluster Gateway           |
+| `make dev-micro`                        | The notifications inbox on the host                                  |
+| `make console-image`                    | The console's image through Dagger                                   |
 | `make k3s-build k3s-import k3s-up`      | The long-lived k3s deploy                                            |
+| `make k3s-clients`                      | The console's release, after the lakehouse                           |
 | `make kind-up … kind-deploy`            | Throwaway kind cluster lifecycle                                     |
 | `make e2e-ci`                           | The guarded live proofs (kind)                                       |
 | `make e2e`                              | Playwright browser e2e against a running deploy                      |

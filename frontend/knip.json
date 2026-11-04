@@ -8,13 +8,12 @@
 		"make"
 	],
 	"workspaces": {
-		"microfrontends/*": {
+		"console": {
 			"entry": [
-				"src/**/*.remote.ts",
-				"src/**/*.server.ts",
-				"server.ts",
-				"e2e/**/warmup.setup.ts",
-				"e2e/**/mock-*.ts"
+				"serve.ts",
+				"e2e/edge.ts",
+				"e2e/mock-*.ts",
+				"e2e/*/mock-*.ts"
 			]
 		},
 		"packages/ui": {
@@ -23,19 +22,6 @@
 			],
 			"project": [
 				"src/**/*.{ts,js,svelte}"
-			]
-		},
-		"packages/zone-contract": {
-			"entry": [
-				"src/**/*.test.ts"
-			],
-			"project": [
-				"src/**/*.ts"
-			]
-		},
-		"packages/engine": {
-			"ignore": [
-				"scripts/gen-corner-fixture.ts"
 			]
 		}
 	}

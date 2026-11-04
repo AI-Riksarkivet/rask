@@ -90,8 +90,10 @@ def metrics_reader():
 
 
 def test_a_transport_failure_leaves_a_series_not_only_a_log_line(metrics_reader: Any) -> None:
+    """The shape of both recorded incidents: the transport refused, the run's data landed anyway, and nothing downstream
+    could tell. The emit never raises (the guarantee this package makes) and answers that the event needs recovery."""
     client = _DeadClient()
-    ClientEmitter(_as_client(client)).emit(_event())  # never raises — the guarantee this package makes
+    assert ClientEmitter(_as_client(client)).emit(_event()) is False
 
     points = _points(metrics_reader, "lineage.events.dropped")
     assert points, "a dropped lineage event left nothing a monitoring rule could fire on"
@@ -106,7 +108,9 @@ def test_an_authoring_failure_is_not_reported_as_a_transport_failure(metrics_rea
     object.__setattr__(event, "to_openlineage", lambda: (_ for _ in ()).throw(TypeError("unserialisable facet")))
 
     with caplog.at_level(logging.WARNING, logger="lineage_kit.emitter"):
-        ClientEmitter(_as_client(client)).emit(event)
+        delivered = ClientEmitter(_as_client(client)).emit(event)
+
+    assert delivered is False, "an unauthorable event is just as lost as a refused one"
 
     assert client.calls == 0, "an event that could not be authored was still handed to the transport"
     assert [r.getMessage() for r in caplog.records] == ["lineage_author_failed"], "an authoring bug is logged as a transport failure"
@@ -117,8 +121,8 @@ def test_an_authoring_failure_is_not_reported_as_a_transport_failure(metrics_rea
 
 def test_a_healthy_emit_counts_no_drop(metrics_reader: Any) -> None:
     client = _RecordingClient()
-    ClientEmitter(_as_client(client)).emit(_event())
-    assert client.calls == 1
+    assert ClientEmitter(_as_client(client)).emit(_event()) is True
+    assert client.calls == 1, "the happy path stopped emitting"
     assert not _points(metrics_reader, "lineage.events.dropped")
 
 
@@ -129,32 +133,6 @@ def test_a_healthy_emit_counts_no_drop(metrics_reader: Any) -> None:
 # unreachable); what the caller gets is the answer. The bool means "this event needs no recovery", not "it
 # reached the graph", which is why `NoopEmitter` answers True: a deployment with lineage switched off has
 # lost nothing, and staging its events would grow an outbox nothing drains.
-
-
-def test_a_delivered_event_reports_true() -> None:
-    client = _RecordingClient()
-    assert ClientEmitter(_as_client(client)).emit(_event()) is True
-    assert client.calls == 1, "the happy path stopped emitting"
-
-
-def test_a_refused_door_reports_false() -> None:
-    """The shape of both recorded incidents: the transport refused, the run's data landed anyway, and
-    nothing downstream could tell."""
-    assert ClientEmitter(_as_client(_DeadClient())).emit(_event()) is False
-
-
-def test_an_unauthorable_event_reports_false_too() -> None:
-    """The OTHER failure mode, which the emitter deliberately keeps distinct: a producer that built an
-    unserialisable facet never reaches the transport at all, and is just as lost."""
-
-    class _Unauthorable(RunEvent):
-        def to_openlineage(self) -> Any:
-            raise ValueError("facet is not serialisable")
-
-    event = _Unauthorable.model_validate(_event().model_dump(by_alias=True))
-    client = _RecordingClient()
-    assert ClientEmitter(_as_client(client)).emit(event) is False
-    assert client.calls == 0, "an unauthorable event reached the transport"
 
 
 @pytest.mark.parametrize(

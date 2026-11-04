@@ -1,24 +1,24 @@
 # API Reference — storage
 
-Auto-generated from source docstrings in `packages/storage/src`. For a narrative
+Auto-generated from source docstrings in `packages/lakehouse-kit/src/lakehouse_kit/storage`. For a narrative
 overview see [Packages → Storage](../packages/storage.md).
 
 ## Client
 
-::: storage.client
+::: lakehouse_kit.storage.client
 
 ## STS (credential vending)
 
-::: storage.sts
+::: lakehouse_kit.storage.sts
 
 ## Errors
 
-::: storage.errors
+::: lakehouse_kit.storage.errors
 
 ## Listing and retention
 
-::: storage.s3
+::: lakehouse_kit.storage.s3
 
 ## URI helpers
 
-::: storage.uri
+::: lakehouse_kit.storage.uri

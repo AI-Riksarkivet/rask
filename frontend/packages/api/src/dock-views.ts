@@ -75,11 +75,11 @@ export interface DockViewsStore<T> {
 }
 
 export interface DockViewsStoreOptions {
-	/** Namespaces this workbench inside the ONE per-subject library, so zones cannot collide. */
+	/** Namespaces this workbench inside the ONE per-subject library, so workbenches cannot collide. */
 	workbenchId: string;
-	/** The zone's own path to the catalog's library document. */
+	/** The path to the catalog's library document. */
 	endpoint: string;
-	/** Injected for tests and for server-side reads. */
+	/** Injected for tests and for the app's own adapter (`userStateFetcher`). */
 	fetcher?: typeof fetch;
 	/** Injected for tests — ids and timestamps are the only non-determinism here. */
 	now?: () => string;
@@ -151,7 +151,7 @@ export function makeDockViewsStore<T>(options: DockViewsStoreOptions): DockViews
 
 	/**
 	 * Read-modify-write, never a blind PUT: ONE document holds every workbench's views, so replacing it
-	 * wholesale would delete the other zones' libraries.
+	 * wholesale would delete the other workbenches' libraries.
 	 *
 	 * Refuses on `unreadable` — the same rule `persistence.ts` holds for the draft, and for the same
 	 * reason: a document that exists but could not be read must never be overwritten by a client that

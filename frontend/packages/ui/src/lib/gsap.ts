@@ -1,5 +1,5 @@
 // Single place to import GSAP for the whole workspace (skill: gsap — "register once, on the client").
-// Importing the module is SSR-safe; only *calling* gsap touches window/document, so the project
+// Importing the module is browser-only; only *calling* gsap touches window/document, so the project
 // defaults are set inside a browser guard. Components import { gsap } from './gsap'.
 //
 // The browser check is `typeof window` — NOT SvelteKit's `$app/environment` — because this lib must

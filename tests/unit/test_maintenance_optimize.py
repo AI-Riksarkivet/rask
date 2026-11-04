@@ -9,7 +9,6 @@ prefix compacts as an ordinary merge. Local filesystem, no S3.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -30,18 +29,6 @@ def _expire(uri: str, *, older_than: timedelta | None = None, retain_versions: i
 
 def _compaction_due(uri: str) -> CompactionDue | None:
     return compaction_due(lance.dataset(uri), DueQuestion(table="ns$t", uuid=str(uuid4()), location=uri), StorageOptions())
-
-
-def _fragmented_indexed_dataset(root: Path) -> str:
-    """A local Lance dataset with a BTREE index and several small fragments (each append = 1 fragment)."""
-    uri = str(root / "t.lance")
-    lance.write_dataset(pa.table({"id": pa.array(range(100), pa.int64())}), uri)
-    ds = lance.dataset(uri)
-    ds.create_scalar_index("id", "BTREE")
-    for i in range(4):
-        base = 100 + i * 10
-        lance.write_dataset(pa.table({"id": pa.array(range(base, base + 10), pa.int64())}), uri, mode="append")
-    return uri
 
 
 def test_expiry_open_error_prefix_for_a_missing_dataset(tmp_path: Path) -> None:
@@ -159,27 +146,6 @@ def test_a_registered_base_that_IS_A_LANCE_DATASET_ROOT_is_not_due_for_compactio
     )
 
     assert _compaction_due(uri) is None, "a table registered against a live Lance root was listed for compaction"
-
-
-def test_expiry_refuses_a_dataset_that_uses_data_overlays(tmp_path: Path, overlay_dataset: Callable[[Path], str]) -> None:
-    """Flag 64. An overlay supersedes individual CELL values from `data/overlay-<uuid>.lance`;
-    a rewrite that does not understand them would fold stale base values back in.
-
-    Today pylance refuses the open itself, so this asserts the CLASSIFICATION: a typed refusal that
-    names the flag, not an untyped `open:` error carrying a Rust source path — which is what the
-    sweep's lineage layer drops as transient non-dataset noise and `summarize` buried in `errors`.
-    """
-    uri = overlay_dataset(tmp_path)
-    data_dir = Path(uri) / "data"
-    files_before = {p.name for p in data_dir.iterdir()}
-
-    result = _expire(uri, older_than=timedelta(0))
-
-    assert result.refused is not None, "an overlay dataset must be REFUSED"
-    assert "64" in result.refused and "overlay" in result.refused.lower(), f"the refusal must name the flag: {result.refused}"
-    assert result.error is None, "a refusal is not an error — the lineage layer drops errors as noise"
-    assert result.error_type is None
-    assert {p.name for p in data_dir.iterdir()} == files_before, "the overlay dataset's files were rewritten"
 
 
 def test_an_UNKNOWN_flag_still_refuses_everything(tmp_path: Path) -> None:

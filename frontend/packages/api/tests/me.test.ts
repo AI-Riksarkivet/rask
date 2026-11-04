@@ -1,7 +1,7 @@
 /**
- * Unit tests for `fetchMe` — the single-sourced BFF fetch of the frozen `GET /management/v1/me` contract. Every
- * zone's navbar identity flows through this one helper, so its degrade-to-null posture (no token, 401,
- * outage, timeout, schema drift) is pinned here rather than re-proven per zone.
+ * Unit tests for `fetchMe` — the single fetch of the frozen `GET /management/v1/me` contract. The
+ * navbar identity flows through this one helper, so its degrade-to-null posture (no token, 401,
+ * outage, timeout, schema drift) is pinned here.
  */
 import { describe, expect, test } from 'vitest';
 import { fetchMe, type Me } from '../src/me';

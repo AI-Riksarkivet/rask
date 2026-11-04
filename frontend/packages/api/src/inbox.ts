@@ -4,25 +4,23 @@
  * `@rask/ui`'s `NotificationCenter` has always exposed `seen`/`dismissed` as bindable props with
  * `onseen`/`ondismiss` documented at `notification-center.svelte:44-48` as "the persistence seam".
  * Unbound, the component remembers per TAB: close the tab and a FAILED run you had already dealt
- * with comes back unread, on every zone, forever. This module is what a zone binds that seam to —
+ * with comes back unread, on every page, forever. This module is what a page binds that seam to —
  * `services/notifications`' inbox, one actor per subject, reached through the gateway's
  * `/api/notifications` row.
  *
  * **Every route here is SUBJECT-DERIVED and takes no subject.** The service mints the actor id from
  * the verified token's `sub` with no header fallback, so the only thing this transport can address
- * is the caller's own inbox — which is also why it is server-side only: the bearer lives in the
- * sealed httpOnly session cookie a zone's BFF holds, and the browser cannot attach it.
+ * is the caller's own inbox: the browser sends the signed-in person's bearer and nothing else.
  *
- * Built on `@rask/api/upstream` rather than a seventeenth hand-rolled fetch ladder (#93): the
- * three-outcome `ApiResult` contract — `0` unreachable, `n` answered-n, `502` contract drift — is
- * what every caller's honest-state branch reads, and the drift class that produced sixteen
- * disagreeing copies is exactly the one a new transport re-opens.
+ * Built on `@rask/api/client`'s `upstreamJSON`: the three-outcome `ApiResult` contract — `0`
+ * unreachable, `n` answered-n, `502` contract drift — is what every caller's honest-state branch
+ * reads.
  */
 
 import * as v from 'valibot';
 
 import type { ApiResult } from './client.js';
-import { parsed, upstreamJSON } from './upstream.js';
+import { parsed, upstreamJSON } from './client.js';
 
 /** Names this upstream in every failure detail — "answered 503" alone sends a reader to the wrong
  *  service, and the estate now runs sixteen app-ids. */
@@ -88,14 +86,14 @@ export interface DismissResult {
  *
  *  Two fields rather than the raw `InboxFeed` because the cursor is deliberately not part of the
  *  bell's contract — the panel shows a window and says how many more there are, it does not page.
- *  `null` at the call site (see each zone's `inbox.remote.ts`) is the un-wired case: no session, no
+ *  `null` at the call site (see the console's `inbox.api.ts`) is the un-wired case: no session, no
  *  service, and the bell falls back to its own per-tab memory rather than to a blank panel. */
 export interface InboxPanel {
 	rows: InboxNotification[];
 	unread: number;
 }
 
-/** Project a feed onto the panel's shape. Trivial, and shared anyway: every zone derives this, and
+/** Project a feed onto the panel's shape. Trivial, and shared anyway: every page derives this, and
  *  the one that derived it differently would be the one whose badge disagreed with the others. */
 export function inboxPanel(feed: InboxFeed): InboxPanel {
 	return { rows: feed.notifications, unread: feed.unread };
@@ -144,16 +142,16 @@ const DismissResultSchema: v.GenericSchema<unknown, DismissResult> = v.object({
 	unread: v.number(),
 });
 
-/** One inbox call. A parameter object because the zone-bound halves (`fetch`, the bearer) and the
+/** One inbox call. A parameter object because the app-bound halves (`fetch`, the bearer) and the
  *  env-bound half (`base`) come from three different places and three positionals would be F1 soup. */
 export interface InboxRequest {
-	/** The REQUEST EVENT's fetch, so the zone's own instrumentation and server-side cookies ride along. */
-	fetch: typeof globalThis.fetch;
-	/** The notifications API base — the gateway's `/api/notifications` row, env-resolved in the zone.
-	 *  The gateway rewrites that prefix to itself, so the service's own paths hang off it unchanged. */
+	/** The fetch to use; the browser's own when omitted. */
+	fetch?: typeof globalThis.fetch | undefined;
+	/** The notifications API base, `/api/notifications`: the inbox mounts its routes under that prefix
+	 *  itself, so the Gateway forwards it unrewritten. */
 	base: string;
-	/** The signed-in session's bearer. Absent on an auth-off stack, where the service resolves the
-	 *  subject as `anon` and serves one anonymous inbox — the honest local shape, not a special case. */
+	/** An explicit bearer; omitted, the installed provider's (the signed-in person's) is used. On an
+	 *  auth-off stack there is none, and the service serves one anonymous inbox. */
 	bearer?: string | undefined;
 }
 
@@ -229,7 +227,7 @@ export async function dismissNotification(
 	return parsed(result, DismissResultSchema, UPSTREAM);
 }
 
-/** The two id sets a zone binds into the shared bell. */
+/** The two id sets a page binds into the shared bell. */
 export interface InboxReadState {
 	seen: string[];
 	dismissed: string[];

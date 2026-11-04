@@ -185,20 +185,17 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
 
 ```bash
 make k3s-install      # one-time: k3s + helm (sudo)
-make k3s-build        # build the fleet, the zones, the lakehouse image and the dev images as :dev, through Dagger
+make k3s-build        # build the lakehouse image, the inbox and the console as :dev, through Dagger
 make k3s-import       # side-load the :dev images into k3s containerd
 make k3s-up           # the fixtures (FIXTURES), each its own release, then helm upgrade --install rask ./chart --wait
-# UI: http://rask.local/   API: http://rask.local/api/health
-# (add "127.0.0.1 rask.local" to /etc/hosts)
-make e2e              # verify MFE hydration + API round-trip end-to-end (run after k3s-up)
+make k3s-clients      # the console's release (web + inbox), after the lakehouse
+make e2e              # the browser e2e against the deployed console (run after k3s-clients)
 make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
-`compute` and `flows`, the six zone images (`web-<zone>`), `annotator` (the client
-the annotator fixture runs), `media` (the viewer and search, which the explorer runs), `lance-rest-catalog` (the
-lakehouse image that serves catalog, lineage and maintenance) and the `ray-cluster` image the
-development engine fixture runs. `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
+`lance-rest-catalog` (the lakehouse image that serves catalog, lineage and maintenance), `notifications` (the inbox)
+and `console` (the console's static-file image). `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
 `sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
 `default`, the fixtures' namespace), and `values-live-pins.yaml` files are per-host state from `make k3s-pins`, never
 committed ([[XC-152]]). The dev-registry path (`make dev-registry`, then `dagger call image --name=<stem> publish
@@ -213,18 +210,11 @@ locally and in CI.
 | Image | Dockerfile | Notes |
 |---|---|---|
 | `lance-rest-catalog` | `rest-catalog.dockerfile` | The lakehouse image, one image for several deployments: `catalog`, `lineage` and `maintenance`, plus the chart's Jobs and hooks. It installs no client, so deleting a client changes nothing it builds. |
-| `media` | `media.dockerfile` | The viewer and search, clients of the lakehouse, one image for both; the product chart deploys neither. |
-| `flows`, `notifications`, `compute`, `annotator` | `<name>.dockerfile` | One per service, `uv sync --frozen --package <name>` against the root `uv.lock`. `compute` and `annotator` each ship in their own chart (`deploy/fixtures/compute`, `deploy/fixtures/annotator`); no chart in this repo deploys `flows` or `notifications`. |
-| `web-<zone>` (6 images) | `frontend.dockerfile` | One parametrized dockerfile, `--build-arg APP=<zone>`. SSR via `svelte-adapter-bun`; `home` is the catch-all (owns `/`), the five domain zones (lakehouse, explorer, annotator, compute, studio) each pin a bare base `/<zone>`. The zones are a client of the lakehouse, and the product chart deploys none of them (XC-181). tini as PID 1, non-root UID 10001. |
-| `ray-cluster`, `ray-<runner>` | `ray-cluster.dockerfile`, `ray-runner.dockerfile` | The development engine's head image and one image per sealed runner (`--runner <runner>`); neither is part of the product chart. |
+| `notifications` | `notifications.dockerfile` | The inbox, `uv sync --frozen --package notifications` against the root `uv.lock`; the console's release deploys it (`deploy/fixtures/console`). |
+| `console` | `frontend.dockerfile` | The console: the single-page app built to static files, served by its own small Bun server (`frontend/console/serve.ts`) with the runtime `config.json` the console's chart mounts. No server-side rendering, no backend of its own; tini as PID 1, non-root UID 10001. |
 
-The one frontend dockerfile encodes a non-obvious build contract (documented in its header): `svelte-adapter-bun`
-externalizes `@sveltejs/kit`, so the final image must ship `node_modules` (`build/` is not standalone). And bun 1.3's
-**isolated linker** keeps real packages in `node_modules/.bun/` with per-member symlinks, so the final stage copies
-both the root store **and** the app dir (with its symlinks) and runs from the app dir.
-
-The frontend topology those images serve (the Turborepo vertical-microfrontend proxy, the shared `@rask/ui` shell,
-and per-app `kit.paths.base`) is documented in the `rask-frontend` project skill (`.claude/skills/rask-frontend`).
+The console's topology (one route tree, the shared `@rask/ui` shell, browser sign-in with PKCE) is documented in the
+`rask-frontend` project skill (`.claude/skills/rask-frontend`).
 
 ## The engine is the user's
 
@@ -233,32 +223,16 @@ The lakehouse submits no job and runs no stage, training or engine
 they run, and it writes through the catalog's namespace doors. The chart installs no Ray (ADR 0153): no KubeRay
 operator, no RayCluster or RayService, no GPU reservation and no Serve application.
 
-The **`compute` service** (`:8804`, over `ray-kit`) is the companion of a bring-your-own Ray engine, not part of the
-lakehouse. It reads that engine's Ray dashboard REST API at `RAY_DASHBOARD_URL` for the jobs board and job-history
-prune, and proxies `/api/serve/*`. It ships in its own chart, `deploy/fixtures/compute` (release `compute` in rask's
-namespace, installed by `make k3s-clients` after `make k3s-up`), which reads the rask release's Dapr app token, `lance-tracing`
-Configuration, Dex, catalog and OTel Collector by reference; it holds no OpenFGA credential and asks the
-catalog's decision door, which answers its service account only when the product chart's `auth.externalDeciders` names
-it ([[LH-442]]). The fixture chart publishes `/api/ray` and `/api/serve`
-with its own HTTPRoute on the same Gateway (`deploy/fixtures/compute/chart/templates/route.yaml`), and a NetworkPolicy
-admitting its app port. The address of the engine's dashboard is the fixture's own `rayDashboardUrl`, and the Ray
-auth token compute presents (its `rayAuth`) is a Secret the engine's owner provides; the annotator fixture names the
-same head for its Serve discovery (its `serve.discoveryUrl`). The product chart names no part of the engine: no
+A compute engine's companions (a Ray dashboard client, a Serve proxy, the engine's own fixtures) are clients outside
+this repository; they were here until git history at `64ef118a9`. The product chart names no part of an engine: no
 address, token, scrape job, alert or network peer (ADR 0189).
-
-In development `make k3s-clients` installs the `kuberay-operator`, `ray-cluster` and `compute` fixtures, after `make k3s-up`
-(`deploy/fixtures`, not for production); the head Service is `rask-ray-head-svc`, and the compute and annotator
-fixtures name it. GPUs, a device plugin, the `nvidia` RuntimeClass and each Serve replica's GPU fraction belong to the
-engine: the `ray-cluster` fixture's `gpuCount` sizes its head, and the `nvidia-device-plugin` fixture advertises
-`nvidia.com/gpu` on a node where nothing does yet (`deploy/fixtures/README.md`). A runner reaches a remote cluster
-with `--address ray://…:10001`.
 
 ## Helm chart (`chart/`)
 
 `make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
 
-- **the lakehouse** — catalog, lineage and maintenance. The clients (the zones, flows, the notifications inbox, the viewer and search, and the
-  annotator, which has its own release, `deploy/fixtures/annotator`, ADR 0171) are not rendered here.
+- **the lakehouse** — catalog, lineage and maintenance. No client is rendered here: the console and the
+  notifications inbox have their own release (`deploy/fixtures/console`).
 - **The cluster route** (`templates/route.yaml`) — Gateway API HTTPRoutes on the platform's Gateway
   (`route.parentRefs`): `<release>-api` sends each public `/api/*` prefix to its service, with a `URLRewrite`
   `ReplacePrefixMatch` where the service mounts another path (the table is `rask.apiRoutes` in `_helpers.tpl`), and
@@ -280,8 +254,8 @@ with `--address ray://…:10001`.
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
 `deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, Dapr, NATS, the CloudNativePG operator,
 Dex, RustFS, OpenBao, the telemetry chain, the lineage graph backend and the SMTP relay. It installs no client:
-`make k3s-clients` adds them after it (the KubeRay operator, a Ray cluster, the `compute` chart, the table-maintenance
-job and the annotator), each its own release reaching the lakehouse by reference. A platform brings its own.
+`make k3s-clients` adds the console's release after it (the web image, the inbox and their HTTPRoute), reaching the
+lakehouse by reference. A platform brings its own.
 
 ### The first estate admin
 
@@ -340,8 +314,8 @@ and every one reaches a pod from the secret store. See
 ## CI
 
 - **`.github/workflows/ci.yml`** calls the Dagger module's functions (`lint`, `typecheck`, `openapi`, `test`,
-  `test-pg`, `charts`, `frontend`, `scan-*`, `zone-smoke`) plus the kind-backed live jobs
-  (`make e2e-ci`) and the per-zone Playwright suites; `dagger call <fn>` locally is the CI step.
+  `charts`, `frontend`, `scan-*`) plus the kind-backed live jobs (`make e2e-ci`) and the console's Playwright suite;
+  `dagger call <fn>` locally is the CI step.
 - **`.github/workflows/docs.yml`** builds this Zensical site (`zensical build --clean`) and Storybook, and deploys
   both to GitHub Pages.
 - **`.github/workflows/release.yml`** publishes a lakehouse release when the tag `lakehouse-vX.Y.Z` is pushed (§ Releases).

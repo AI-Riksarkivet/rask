@@ -77,3 +77,4 @@ deploy/fixtures/*/values-live-pins.yaml
 
 # The compose stack's object-store root pair (.docker/docker-compose.yml secrets:); a secret never enters the repo.
 .docker/secrets/
+.kube/

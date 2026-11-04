@@ -1,7 +1,7 @@
-# Who can see and do what, per zone
+# Who can see and do what in the console
 
 The estate has **two** identity facts, both from the frozen `GET /management/v1/me` contract
-(`frontend/packages/api/src/me.ts`), both derived from FGA by the catalog:
+(read through `@rask/api`), both derived from FGA by the catalog:
 
 | Fact                         | Type                       | Means                                                                 |
 | ---------------------------- | -------------------------- | --------------------------------------------------------------------- |
@@ -17,44 +17,39 @@ decides authorization — it decides **disclosure**.
 1. **Information architecture** — the navbar and sidebar do not render a link to a surface the
    identity cannot use. `estate_admin` is the only fact the nav reads
    (`packages/ui/src/lib/shell/nav-config.ts`). This is courtesy, not security.
-2. **The route door** — `microfrontends/lakehouse/src/routes/admin/+layout.server.ts` throws
-   `403` on the SERVER for a non-`estate_admin`, before any admin component is rendered or sent. The
-   root `+layout.svelte` repeats the check client-side so a soft navigation cannot outrun it.
-   Fail-closed on every ambiguity: no token, a 401/403, a timeout, an unreachable catalog, or a
-   `/management/v1/me` response that drifted from the contract all land in the same branch as "not an admin".
-3. **The backend** — every read and write goes through the zone's BFF to the catalog or the lineage
-   plane, which run the real FGA check against the forwarded user bearer. **This is the only layer
-   that cannot be bypassed**, and it is the one that actually authorizes.
+2. **The route guard** — the console's admin layout reads `/management/v1/me` in the browser and shows a
+   `403` page to a non-`estate_admin` before any admin component renders. Fail-closed on every ambiguity: no
+   token, a 401/403, a timeout, an unreachable catalog, or a `/management/v1/me` response that drifted from the
+   contract all land in the same branch as "not an admin". The console has no server of its own, so this guard runs
+   in the browser and is **disclosure, not authorization**: a person who edits the page can render the admin views,
+   and every call those views make is still refused by the catalog.
+3. **The backend** — every read and write is a browser call to the catalog, lineage or the inbox with the signed-in
+   person's bearer, and each runs the real FGA check against that bearer. **This is the only layer that cannot be
+   bypassed**, and it is the one that actually authorizes.
 
-## What the BFF itself enforces
+## What the console holds
 
-The BFF is a bearer-forwarding proxy, not a policy engine. Its own rules:
+The console is a single-page app with no backend of its own, as Lakekeeper's console is:
 
-- **Writes are session-only.** Every `POST`/`PUT`/`PATCH`/`DELETE` route refuses with `401` when auth
-  is enabled and there is no session, without the request leaving the BFF. The service credential is
-  **never** attached to a write — that was a real confused-deputy hole (2026-07-13), and it is why the
-  `/api` and `/capi` catch-alls are GET-only and every write is its own narrow, body-enumerated route.
-- **The catalog door is OIDC-only.** `makeCatalogProxy` has no service-token fallback at all, so an
-  anonymous request to `/capi/**` reaches the catalog with no credential and gets the catalog's honest
-  `401`.
-- **Reads on the lineage plane have a service-credential fallback.** `makeLineageProxy` attaches
-  `LINEAGE_SERVICE_TOKEN` for `GET`/`HEAD` when there is no session, so a governed stack can serve
-  lineage reads without a per-user login. That subject is the client's own ServiceAccount's
-  (`kubernetes~system:serviceaccount:<ns>:<its service account>`): its reach is exactly what FGA grants it,
-  and nothing else in the estate has this fallback.
-- **Signed-out page loads are redirected**, not 404ed: `isGatedPageRequest` sends a browser `GET` for
-  HTML to the home zone's `/auth/login?redirect=…`. API routes are deliberately excluded so they keep
-  returning `401` JSON instead of an HTML redirect.
+- **One credential, the person's own.** The browser signs in to the platform's issuer (Dex in development) with
+  OIDC and PKCE on the public `rask-web` client and attaches that person's access token to every call. There is no
+  service credential anywhere in the console, so no anonymous or signed-out read reaches a door with anyone's authority.
+- **Tokens live in memory.** Nothing is written to `localStorage` or a cookie; only the transient PKCE state survives
+  the sign-in redirect. A reload signs in again through the issuer's own session. A strict Content Security Policy,
+  set by the console's own server, limits where the page may load code from and connect to.
+- **Same origin, no CORS.** The console's release attaches an HTTPRoute to the platform's Gateway beside the
+  lakehouse's, so the page and the APIs share one origin.
+- **Signed-out page loads start the sign-in**, and a call answered `401` does the same, so an expired session never
+  renders a half-loaded page as if it were empty.
 
-## Per zone
+## Per surface
 
-| Zone            | Anonymous (auth on)                     | Signed in, no estate_admin                                     | estate_admin                     |
-| --------------- | --------------------------------------- | -------------------------------------------------------------- | -------------------------------- |
-| `home` `/`      | Landing + the OIDC round-trip.          | Landing + the project gallery, one card per `projects[]` row.    | Same, plus every project.        |
-| `lakehouse/data`| Redirected to login.                    | Catalog, lineage and models UI. Every read and write is FGA-checked per object by the catalog — the danger-zone controls RENDER, and the backend refuses the ones this identity cannot do. | Same; FGA still decides per object. |
-| `lakehouse/admin`| Redirected to login.                   | **403 from the server.** No admin HTML, no admin nav entries.    | Full access.                     |
-| `media`         | Redirected to login.                    | Search, atlas, workflow. Writes (tag, batch submit) session-only.| Same.                            |
-| `annotator`     | Redirected to login.                    | The Pixi canvas, read and write. Annotation writes session-only. | Same.                            |
+| Surface               | Anonymous (auth on)      | Signed in, no estate_admin                                     | estate_admin                     |
+| --------------------- | ------------------------ | -------------------------------------------------------------- | -------------------------------- |
+| `/`, `/projects`      | Sent to sign in.         | Landing + the project gallery, one card per `projects[]` row.    | Same, plus every project.        |
+| `/catalog/…`          | Sent to sign in.         | Catalog, lineage and governance views. Every read and write is FGA-checked per object by the catalog — the danger-zone controls RENDER, and the backend refuses the ones this identity cannot do. | Same; FGA still decides per object. |
+| `/admin/…`            | Sent to sign in.         | **403 page from the route guard.** No admin nav entries; every admin call is refused by the catalog. | Full access.                     |
+| `/notifications`      | Sent to sign in.         | The person's own inbox, from the notifications inbox.            | Same.                            |
 
 ## Known and deliberate
 
@@ -66,11 +61,10 @@ The BFF is a bearer-forwarding proxy, not a policy engine. Its own rules:
 - **`projects[].role` drives display only.** The gallery and the projects list label a membership
   `admin` or `member`; nothing in the UI gates on it. Per-project authorization is FGA's, per request.
 - **Auth-off stacks are fully open** by construction — no OIDC env means no identities, and the
-  backend answers `estate_admin: true` for dev parity. Dev servers and the hermetic e2e run this way.
+  backend answers `estate_admin: true` for dev parity.
 
 ## What pins this
 
-`microfrontends/lakehouse/e2e/admin/admin-gate.spec.ts` — a member is refused on every admin
-route by the server door, an admin passes, a catalog outage fails closed, and a browser that lies about
-its own identity (a member's session plus a mocked `/management/v1/me` claiming `estate_admin`) still gets `403`,
-because the door that decides never asked the browser.
+The console's Playwright suite (`frontend/console/e2e`) drives the admin guard: a member sees the `403` page on every
+admin route, an admin passes, and a catalog outage fails closed. That the catalog refuses an admin call from a
+non-admin bearer is pinned by the catalog's own suites, because that refusal is the one that authorizes.

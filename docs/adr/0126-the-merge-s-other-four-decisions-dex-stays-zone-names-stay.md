@@ -31,6 +31,6 @@ The merge plan wrote five decisions with status PROPOSED and restated them after
 - `frontend.oidc.publicIssuer` remains the issuer knob (`chart/values.yaml:884`); Dex is a bundled dev
   stand-in for a platform-run IdP in production.
 - Decision 3 was later overtaken for specific zones by the zone rulings
-  ([0113](0113-the-zone-set-r8-r9-r15-r16-r17-r18-2026-07-27.md)) and the explorer rename; the reserved-segment
+  (0113, removed with the zones, in git history at `64ef118a9`) and the explorer rename; the reserved-segment
   guard and the `web-` prefix are what it still governs.
 - Whether NATS HA has since been taken up was not checked for this record.

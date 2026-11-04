@@ -16,8 +16,8 @@ how the one notifier in this repo consumes it.
 **A notification names a PERSON and a REASON. A feed names an estate.** `services/notifications` is an
 inbox behind the bell — one Dapr `InboxActor` per subject holding claim-check pointers with durable
 read state — precisely so the badge counts *your* work rather than the estate's. It is a client of the lakehouse's
-events that lives in this repo beside the console, as the web plane's per-user backend; no chart in this repo deploys
-it, and its import contract (`services/notifications/pyproject.toml`) forbids `lakehouse_kit` by any chain. That makes
+events that lives in this repo beside the console, as the console's per-user backend; the console's own release deploys
+it (`deploy/fixtures/console`), and its import contract (`services/notifications/pyproject.toml`) forbids `lakehouse_kit` by any chain. That makes
 coverage a **targeting** problem, not a transport one: the ingresses already carry everything the estate does, and
 the inbox's whole job is to discard all of it except rows that name a subject under one of six reasons.
 
@@ -370,17 +370,16 @@ notify somebody.
 
 1. **No identity at the door.** A producer that never captured a verified sub can never name a person,
    and nothing downstream can repair it. Closed for every write through the catalog's namespace doors, whose event the catalog authors as the
-   verified caller (data enters the lakehouse only there, ADR 0154). Still open for
-   `services/compute` (`RayJob` has no author field). See `docs/adr/0042-the-compute-service-gets-no-emitter-yet-and-the-blocker-is.md` — an emitter without an identity
+   verified caller (data enters the lakehouse only there, ADR 0154). An emitter without an identity
    produces events the plane is *designed* to discard, which reads as coverage and is not.
 2. **No principal at all.** Some transitions are caused by a TIMER, not a person. The audience usually
    exists, but a timer's emit site has no `Request` to resolve `ControlEmitterDep` from, so it must be
    given a handle to an emitter. Before filing such an emit site as impossible, separate "no audience"
    from "no handle": only the first is structural.
 3. **A fact that only exists while somebody is looking.** Several failures are composed at read time
-   inside an HTTP handler and never persisted or published — flows' unparsable result. Nothing can notify what was never recorded.
-4. **An audience that is real but unmodelled.** `services/flows` has no project and no lakehouse
-   output, so even a perfect emit dies on `notifiable()`'s output rule.
+   inside an HTTP handler and never persisted or published. Nothing can notify what was never recorded.
+4. **An audience that is real but unmodelled.** A producer with no project and no lakehouse output dies on
+   `notifiable()`'s output rule even with a perfect emit.
 5. **Steady states wearing an event's clothes.** A permanently un-granted service, a repeating denial, a
    degraded lane — these are METRICS, and `docs/adr/0039-lineage-records-what-happened-to-data-an-authorization.md` records why lineage must not carry them.
 

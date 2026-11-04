@@ -203,7 +203,7 @@ chart and live-verified on kind.
   (`lakehouse_kit/dapr_publish.py`) so a wedged sidecar/NATS can't hang a write handler past its ack window.
 - **Liveness + readiness probes on every workload.** App pods get an HTTP `readinessProbe` (`/readyz`,
   dependency-aware) **and** `livenessProbe` (`/livez`, process-up only — never restarts on a slow backend);
-  the zones get `tcpSocket` probes (`lance.appProbes` / `lance.tcpProbes`).
+  a workload with no HTTP health route gets a `tcpSocket` probe (`lance.appProbes` / `lance.tcpProbes`).
 - **Restricted container securityContext on every app pod.** `runAsNonRoot` (images ship a numeric
   `USER` — uid 10001 — so the kubelet can verify non-root at admission), drop **ALL**
   capabilities, no privilege escalation, `seccompProfile: RuntimeDefault`, and `readOnlyRootFilesystem`

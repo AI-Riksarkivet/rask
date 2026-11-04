@@ -1,93 +1,66 @@
-# frontend — Turborepo workspace (bun + SvelteKit micro-frontend zones, the rask shape)
+# frontend — the rask console (bun workspace)
 
-The frontend is decomposed into **four independently-built SvelteKit zones** (the rask micro-frontend
-shape), so the rask merge is a **directory graft**. Each zone is its own SvelteKit app + Bun SSR server
-(`svelte-adapter-bun`), served under a base path and composed by Ingress zone-routing in the cluster
-(the dev composition proxy locally). Everything a zone does NOT own itself — the design system, the
-auth/BFF seam, the lineage and media clients — lives in a workspace package.
-
-A zone boundary costs a full document load, so it has to buy something. These four each do: `home` is
-the landing and owns the OIDC round-trip (and stays separate for the rask compute merge); `lakehouse`
-is the governed estate; `annotator` is split from `media` to keep 17 MB of Pixi + OpenCV out of the
-bundle of someone who came to search. Their backends are **not** the same set and the chart no longer
-pretends they are — media reaches viewer, search and the annotator service (the workflow's tag write
-and batch submit); the annotator reaches viewer and the annotator service, and never search. Each pod
-gets exactly the upstreams its own BFF routes read, and `@rask/zone-contract` fails if that drifts.
-The catalog, lineage,
-models and admin areas used to be four more zones — one backend plane, one shared client, one nav
-panel, and one shared image tag between them — so they paid four SSR servers and a hard reload per hop
-and collected no independent-deploy payoff. They are areas of `lakehouse` now.
+The console is ONE SvelteKit 2 + Svelte 5 single-page app with no backend of its own. The browser
+signs in to the platform's issuer (Dex in development) with OpenID Connect authorization code + PKCE as
+the public client `rask-web`, keeps the tokens in memory, and calls the lakehouse's doors and the
+notifications inbox with its bearer, same-origin, through the platform's Gateway. The built files are
+served by `console/serve.ts`.
 
 ```
 frontend/
-  package.json      # workspace root — bun workspaces; scripts ONLY delegate to turbo
-  turbo.json        # build/check/check:tsgo/test/test:e2e/lint/fmt task graph (^build ordering, cached)
-  TOOLING.md        # the toolchain: ONE linter, ONE formatter, and the rules that are off with reasons
+  package.json      # workspace root (bun workspaces: console, packages/*); plain bun scripts
+  TOOLING.md        # the toolchain: one linter, one formatter, the rules that are off and why
   .oxlintrc.json    # oxlint — every extension, .svelte included (via @rsvelte/oxlint-plugin)
   .oxfmtrc.json     # rsvelte-fmt + oxfmt — every extension
-  microfrontends/
-    home/           # catch-all zone (base '/'); owns the OIDC /auth/{login,callback,logout} routes
-    lakehouse/      # /lakehouse — the governed estate, its AREAS in one router:
-                    #     /lakehouse/catalog     projects, tables, namespaces, warehouses
-                    #     /lakehouse/admin    access, tenants, audit, events, streams, DLQ
-                    #                         (estate-admin gated, fail-closed, in the root layout)
-    media/          # /explorer — semantic search, the embedding atlas, the derivation workflow
-    annotator/      # /annotator — the Pixi labeling canvas (split for bundle isolation, not domain)
-  packages/           # ALL under one vendor-neutral scope: `rask` and `lance` are both temporary names
-                    #   (rask becomes compute), and @rask/* is turborepo's own convention, so nothing
-                    #   here has to be renamed again when they change.
-    ui/             # @rask/ui — THE design system: shadcn-svelte on bits-ui 2, AppShell + nav-config.
-                    #   The second UI package (@lance/ui) is folded in; every component it exported that
-                    #   anything imported now lives here, and four components that existed but were
-                    #   missing from the exports map are reachable at last (that gap is what kept the
-                    #   second package alive).
-    api/            # @rask/api — the cross-cutting seam, by subpath:
-                    #     .                  gateway rewrite · valibot parse · the frozen /management/v1/me contract
-                    #     /client            the browser-side BFF client, bound per zone in $lib/http
-                    #     /lineage           lineage domain types + the typed lineage-plane client
-                    #     /generated/*       the OpenAPI output (bun run gen:types) — never hand-edited
-                    #     /oidc /bff         server-only: PKCE + sealed session, and the zone wiring
-                    #                        factories (hooks, layout load, catalog/lineage/viewer proxies)
-    media-api/      # @rask/explorer-api — the media-plane client (descriptor/DatasetView, Arrow envelopes)
-    engine/         # @rask/engine — the Pixi canvas engine, tools and layer store
-    labeling/       # @rask/labeling — annotation history, tag writer, job clients
-    config/         # @rask/config — the shared tsconfig base
-    zone-contract/  # @rask/zone-contract — everything about the zone SPLIT that no type or build can
-                    #   check, and the things that kept silently drifting when nobody did:
-                    #     · the manifest agrees — microfrontends.json, each svelte.config.js base, each
-                    #       vite.config.ts port, chart/values.yaml, and the package name turbo routes by
-                    #     · a cross-zone <a> hard-navigates (was an ESLint rule; now runs on Svelte's
-                    #       own compiler, over every component in every zone)
-                    #     · one config per tool, at the root — no per-package .oxlintrc/.oxfmtrc leftover
-                    #     · nothing outside the frontend names a retired package or zone (the dockerfile,
-                    #       chart, CI workflow, dagger module, verification scripts)
-                    #     · every BFF route has a caller — a route with no caller is a hole to a backend
-                    #   plus the local composition proxy driven by the same routing config
-                    #   (`bun run dev` → one origin on :5200, like the cluster Ingress)
+  patches/          # bun patchedDependencies (bits-ui, apache-arrow — see TOOLING.md)
+  console/          # the app
+    src/routes/     #   /  /projects  /projects/[project]  /catalog/...  /admin/...  /settings/...
+                    #   /preferences/...  /notifications  /workbench  /auth/{login,callback,logout}
+    src/lib/auth.svelte.ts    # sign-in (oidc-client-ts), /config.json, the bearer provider
+    src/lib/remote.svelte.ts  # query / query.live / command — the reads and writes, in the browser
+    src/lib/**/*.api.ts       # each surface's reads and writes against its upstream
+    src/lib/upstreams.ts      # where each upstream answers: /api/catalog, /api/lineage, /api/notifications
+    serve.ts        #   the static server the image runs (SPA fallback, /config.json, the CSP header)
+    e2e/            #   the Playwright suite (see below)
+  packages/
+    ui/             # @rask/ui — the design system (shadcn-svelte on bits-ui 2), AppShell + nav-config,
+                    #   Storybook. The only package with a build step (svelte-package → dist/).
+    api/            # @rask/api — the browser transport (`client`), the /management/v1/me contract, the
+                    #   inbox, lineage and dock-layout clients, the generated OpenAPI types
+    dockview/       # @rask/dockview — the Svelte binding over dockview 7 (the workbench)
+    flow/           # @rask/flow — the Svelte Flow binding (the governance graphs)
 ```
 
-Note the two API packages are different layers, not duplicates: `@rask/api` is the **BFF/auth seam**
-every zone's server wiring goes through, while `@rask/explorer-api` is the **typed client for the media
-services** (viewer/search/annotator). One is how a zone's server talks to the estate; the other is how
-the browser talks to the media plane.
+## Runtime config and security
 
-Commands (root): `bun install` · `bun run dev` (all four zones **plus the composition proxy**, so the
-estate is one origin at <http://localhost:5200> exactly as it is behind the Ingress — `bun run dev:zones`
-for the raw per-port servers) · `bun run build` · `bun run check` · `bun run lint` · `bun run fmt:check`
-(CI-exact; `bun run fmt` rewrites) · `bun run test:e2e` · `bun run gen:types` (regenerates the OpenAPI
-types from `../docs/*-openapi.json`). Lint and format are **one tool each, over every extension**: `oxlint` (with
-`@rsvelte/oxlint-plugin` for `.svelte`) and `rsvelte-fmt` (which delegates everything that is not
-`.svelte` to oxfmt, off the same config) — see [TOOLING.md](TOOLING.md).
-Each zone image builds from the parametrized
-`.docker/frontend.dockerfile` (`--build-arg APP=<zone>` → `lance-<zone>:dev`); runtime contract
-`bun ./build/index.js`, uid 1000. `make frontend-images` / `make frontend-load` build + side-load them all.
+`/config.json` is `{issuer, clientId, scopes}` (extra keys are ignored), rendered by the console's
+release and named to `serve.ts` by `CONSOLE_CONFIG_FILE`; the built app carries no environment. With no
+config, sign-in is off and no bearer is sent. `issuer` may be absolute or a same-origin path.
 
-Adding a zone = `microfrontends/<name>` (its own `svelte.config.js` with `paths.base`, and a
-package **named for the directory** — turbo resolves routing keys against package names) + the chart's
-`frontend.apps` list + the Ingress route + an entry in `microfrontends/home/microfrontends.json`
-with a unique dev port. `@rask/zone-contract`'s tests fail if any of those four disagree.
-Its `hooks.server.ts`, `+layout.server.ts` and BFF catch-all routes are one line each — the factories in
-`@rask/api/bff` (`makeZoneHooks`, `zoneLayoutLoad`, `makeCatalogProxy`, `makeLineageProxy`,
-`makeViewerProxy`); its `src/lib/http.ts` binds `@rask/api/client` to the zone's base path. Remote
-functions (`query`/`query.live`) are enabled per zone (`kit.experimental.remoteFunctions` +
-`compilerOptions.experimental.async`); shared UI lives in `@rask/ui`.
+The content security policy is SvelteKit's (`kit.csp`, mode `hash`) and travels with the build.
+`serve.ts` sends it as a header, adding the issuer's origin to `connect-src` and `frame-ancestors 'none'`,
+with `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`.
+
+## Scripts (run from the repo root as `bun --cwd=frontend run <script>`)
+
+| Script            | What it runs                                                                  |
+| ----------------- | ----------------------------------------------------------------------------- |
+| `dev`             | builds `@rask/ui`, then the console's `vite dev` on :5173, `/api` → `RASK_EDGE_URL` (default `http://localhost:8888`) |
+| `build`           | `@rask/ui` (svelte-package), then the console (adapter-static → `console/build`) |
+| `check`           | build, then `check` in every package (svelte-check; tsgo for `@rask/api`)     |
+| `lint` / `fmt` / `fmt:check` | oxlint / rsvelte-fmt in every package                              |
+| `test`            | build, then every package's vitest suite                                      |
+| `test:e2e`        | builds `@rask/ui`, then the console's Playwright suite (which builds the app) |
+| `knip`            | unused files, exports and dependencies across the workspace                   |
+| `storybook` / `build-storybook` | `@rask/ui`'s Storybook                                          |
+| `gen:types`       | regenerate `@rask/api`'s catalog and lineage types from `docs/*-openapi.json` |
+
+## The Playwright suite
+
+`console/e2e` runs against the BUILT app served by its own `serve.ts`, behind `e2e/edge.ts`, a Bun
+stand-in for the Gateway that routes each `/api/*` prefix to a seed-driven mock upstream (the catalog,
+lineage, the inbox, the NATS monitor). Sign-in runs the real PKCE path against `e2e/mock-oidc.ts`, a mock
+issuer served same-origin at `/oidc`; a spec chooses who signs in with `signIn()` (the issuer reads the
+`mock_oidc_identity` cookie), and every API call then carries that bearer. Three origins, one per family
+of specs, each with its own mocks: auth-off, the estate pages, and the lakehouse pages (ports in
+`e2e/ports.ts` and `e2e/admin/ports.ts`).

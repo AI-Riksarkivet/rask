@@ -30,9 +30,9 @@
  * and throwing them away is throwing away the routing phase this file exists to gain.
  *
  * **Why this is not the dependency `layout.ts` rejected.** That file turned elk down on bundle size
- * "against ~7 KB of deferred-bundle headroom in this zone (`budget.json`)". `budget.json` no longer
- * exists — the per-zone ceiling and its `budget.test.ts` gate were removed 2026-08-04 — and `elkjs` is
- * ALREADY a dependency of the explorer zone, where `lib/workflow/layout.ts` has run it since the flow
+ * "against ~7 KB of deferred-bundle headroom in the console (`budget.json`)". `budget.json` no longer
+ * exists — the per-page ceiling and its `budget.test.ts` gate were removed 2026-08-04 — and `elkjs` is
+ * ALREADY a dependency of the explorer page, where `lib/workflow/layout.ts` has run it since the flow
  * editor shipped. The constraint that justified the hand-rolled placer is gone, and the library is
  * already vetted and installed.
  *

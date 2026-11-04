@@ -39,7 +39,7 @@ class SvelteHeaderActions implements HeaderActionsRenderer {
 	#chrome: DockChrome;
 	#options: DockChromeOptions;
 	/**
-	 * The zone's catalogue, so the `+` picker can list it.
+	 * The console's catalogue, so the `+` picker can list it.
 	 *
 	 * Handed down the constructor rather than reached for: this renderer is built by dockview outside
 	 * any Svelte tree, and `init()` below mounts `GroupActions` with NO context map at all — so a

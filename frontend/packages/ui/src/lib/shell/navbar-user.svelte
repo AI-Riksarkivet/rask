@@ -8,14 +8,14 @@
 
 	// The shell identity + theme control, relocated from the sidebar footer to the navbar's right side:
 	// avatar trigger + dropdown (identity, theme toggle, settings, the shared auth control). Context-free
-	// (no sidebar dependency) so it renders in the navbar of every zone AND on the home landing. The
-	// identity flows in as a plain prop from each zone's +layout.server.ts (single-sourced via
+	// (no sidebar dependency) so it renders in the navbar of every page. The
+	// identity flows in as a plain prop from the app's root layout load (single-sourced via
 	// @rask/api's sessionToUser) — the shared shell never imports app data.
 	//
-	// `authEnabled` drives the auth affordance (identical in every MFE): off → today's local identity,
+	// `authEnabled` drives the auth affordance: off → the local identity,
 	// no auth UI; on + signed in → identity + Sign out; on + signed out (user null) → a "Sign in" prompt.
-	// Login/logout are ORIGIN-relative links that HARD-navigate (data-sveltekit-reload) to the home zone,
-	// which owns /auth/*; the session cookie is set at path "/" so it's shared across every path-routed zone.
+	// Login/logout are the app's own `/auth/*` pages: the session lives in the page's memory, so they are
+	// soft navigations — a document load would drop it.
 	let {
 		user = null,
 		authEnabled = false,
@@ -35,7 +35,7 @@
 				? { name: 'Sign in', email: 'not signed in', initials: '?' }
 				: { name: 'Not signed in', email: 'auth disabled on this stack', initials: '—' }),
 	);
-	// Return to the zone the user signed in from (validated as a local path in the login route).
+	// Return to the app the user signed in from (validated as a local path in the login route).
 	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(pathname || '/')}`);
 </script>
 
@@ -71,11 +71,9 @@
 		     being `disabled` and started going somewhere. It was "Settings (soon)" — a dead control, the
 		     shape this estate refuses everywhere else — while the notification preferences it should
 		     have pointed at sat behind `/settings`'s estate-admin door, reachable by almost nobody.
-		     `/preferences` is a home-zone route, so this is CROSS-ZONE from all six other zones and
-		     carries `data-sveltekit-reload`: without it SvelteKit soft-navigates into a route the
-		     current zone does not own and 404s. `HOME_ROUTES` is what teaches `zoneOf` that. -->
+		     -->
 		<DropdownMenu.Item>
-			<a href="/preferences" data-sveltekit-reload class="flex w-full items-center gap-2">
+			<a href="/preferences" class="flex w-full items-center gap-2">
 				<Settings class="size-4" />
 				Preferences
 			</a>
@@ -83,19 +81,18 @@
 		{#if authEnabled}
 			<DropdownMenu.Separator />
 			{#if signedIn}
-				<!-- Cross-zone hard-nav to the home zone's /auth/logout; clears the origin-wide session cookie.
-				     The shadcn Item wrapper omits bits-ui's `child`, so the anchor is the item's content and
-				     fills the row (data-sveltekit-reload leaves this zone's route manifest). -->
+				<!-- The shadcn Item wrapper omits bits-ui's `child`, so the anchor is the item's content and
+				     fills the row. -->
 				<DropdownMenu.Item>
-					<a href="/auth/logout" data-sveltekit-reload class="flex w-full items-center gap-2">
+					<a href="/auth/logout" class="flex w-full items-center gap-2">
 						<LogOut class="size-4" />
 						Sign out
 					</a>
 				</DropdownMenu.Item>
 			{:else}
-				<!-- Cross-zone hard-nav to the home zone's /auth/login; returns here after the round-trip. -->
+				<!-- Returns here after the round-trip. -->
 				<DropdownMenu.Item>
-					<a href={loginHref} data-sveltekit-reload class="flex w-full items-center gap-2">
+					<a href={loginHref} class="flex w-full items-center gap-2">
 						<LogIn class="size-4" />
 						Sign in
 					</a>

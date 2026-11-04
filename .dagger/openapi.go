@@ -6,7 +6,7 @@ import (
 	"dagger/rask/internal/dagger"
 )
 
-// Openapi runs the CI `test` job's OpenAPI drift gate (`make openapi-check`): the committed specs
+// Openapi runs the CI OpenAPI drift gate (`make openapi-check`): the committed specs
 // (docs/*-openapi.json) are the canonical, reviewable contract of every endpoint we serve, and they are
 // GENERATED from the live FastAPI apps — so a route added or changed without refreshing the spec must fail
 // here, not surprise a client. base() excludes .git, so instead of `make openapi-check`'s `git diff` this
@@ -39,7 +39,7 @@ func (m *Rask) Openapi(
 	// +optional
 	src *dagger.Directory,
 ) (string, error) {
-	return m.base(src).
+	out, err := m.base(src).
 		// Snapshot the committed specs before regenerating over them.
 		WithExec([]string{"cp", "docs/catalog-openapi.json", "/tmp/catalog.orig.json"}).
 		WithExec([]string{"cp", "docs/lineage-openapi.json", "/tmp/lineage.orig.json"}).
@@ -49,4 +49,18 @@ func (m *Rask) Openapi(
 		WithExec([]string{"diff", "-u", "/tmp/catalog.orig.json", "docs/catalog-openapi.json"}).
 		WithExec([]string{"diff", "-u", "/tmp/lineage.orig.json", "docs/lineage-openapi.json"}).
 		Stdout(ctx)
+	if err != nil {
+		return out, err
+	}
+	// The second hop: committed spec -> the typed client the console calls through. `@rask/api`'s generated files are
+	// openapi-typescript's output over the committed specs (`bun run gen:types`, which `make openapi` runs), so a spec
+	// refreshed without its client fails here, as `make openapi-check`'s diff does locally.
+	client, err := m.frontendBase(src).
+		WithExec([]string{"cp", "packages/api/src/generated/catalog.ts", "/tmp/catalog.orig.ts"}).
+		WithExec([]string{"cp", "packages/api/src/generated/lineage.ts", "/tmp/lineage.orig.ts"}).
+		WithExec([]string{"bun", "run", "gen:types"}).
+		WithExec([]string{"diff", "-u", "/tmp/catalog.orig.ts", "packages/api/src/generated/catalog.ts"}).
+		WithExec([]string{"diff", "-u", "/tmp/lineage.orig.ts", "packages/api/src/generated/lineage.ts"}).
+		Stdout(ctx)
+	return out + client, err
 }

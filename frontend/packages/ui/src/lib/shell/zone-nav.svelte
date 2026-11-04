@@ -3,17 +3,9 @@
 	import * as Collapsible from '../components/collapsible/index.js';
 	import * as Sidebar from '../components/sidebar/index.js';
 	import { useSidebar } from '../components/sidebar/context.svelte.js';
-	import { prefetchOnIntent, type ZoneNav, type ZoneNavLeaf } from './nav-config.js';
+	import type { ZoneNav, ZoneNavLeaf } from './nav-config.js';
 
-	// The CURRENT zone's own routes, as LABELLED GROUPS. The cross-zone list lives in the top navbar
-	// (`TopNavbar`), so leaves here are same-zone by construction and stay SOFT navs (no
-	// data-sveltekit-reload — it would defeat the SPA router inside the zone) EXCEPT a leaf that
-	// declares `reload`: that one points outside this zone's route manifest (e.g. media's Annotate →
-	// /annotator) and must hard-navigate, so it also warms the target document on intent like the
-	// navbar's cross-zone entries.
-	//
-	// This replaced a single flat list. Lakehouse had to compensate by swapping the entire sidebar per
-	// area, which meant the zone's other four areas were invisible from wherever you stood.
+	// The app's own routes, as LABELLED GROUPS, all soft navigations inside one router.
 	let { pathname = '', nav = null }: { pathname?: string; nav?: ZoneNav | null } = $props();
 
 	// The RAIL's own collapse state. Load-bearing for `groupOpen` below: in icon mode a collapsed
@@ -57,12 +49,7 @@
 			<span>{leaf.title}</span>
 		</span>
 	{:else}
-		<a
-			href={leaf.href}
-			data-sveltekit-reload={leaf.reload ? '' : undefined}
-			{...props}
-			{@attach (el) => (leaf.reload ? prefetchOnIntent(leaf.href)(el) : undefined)}
-		>
+		<a href={leaf.href} {...props}>
 			{#if leaf.icon}
 				<leaf.icon />
 			{/if}
@@ -73,7 +60,7 @@
 
 {#if nav}
 	{#if nav.root}
-		<!-- The zone ROOT, above and outside every group: it is the landing that summarises the
+		<!-- The app ROOT, above and outside every group: it is the landing that summarises the
 		     sections, not a member of one. No GroupLabel — a one-row labelled section is noise. -->
 		<Sidebar.Group>
 			<Sidebar.GroupContent>

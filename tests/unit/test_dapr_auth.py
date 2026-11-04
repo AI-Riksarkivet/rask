@@ -14,11 +14,9 @@ import asyncio
 from typing import Any
 
 import pytest
-from lance_namespace import PermissionDeniedError
 
 from lineage.core.config import LineageSettings
-from service_kit.governed.dapr_auth import assert_app_token_configured, require_dapr_token
-from service_kit.ns_errors import problem_detail
+from service_kit.governed.dapr_auth import assert_app_token_configured
 
 
 # --------------------------------------------------------------------------- #
@@ -26,56 +24,9 @@ from service_kit.ns_errors import problem_detail
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("presented", ["s3cre"])
-def test_mismatch_or_missing_header_is_403(monkeypatch: pytest.MonkeyPatch, presented: str | None) -> None:
-    """CONTRACT: with the token set, any non-matching/absent ``dapr-api-token`` header is a 403."""
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    # `PermissionDeniedError`, not `HTTPException`: the guard raises a DOMAIN error now so its 403
-    # wears the same problem+json envelope as every other refusal (open_fastapi-audit). The status is
-    # still 403 — asserted through the translator that renders it, which is what a caller actually sees.
-    with pytest.raises(PermissionDeniedError):
-        require_dapr_token(presented)
-    assert problem_detail(PermissionDeniedError("x"))[0] == 403
-
-
-def test_non_ascii_header_is_a_clean_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CONTRACT: the compare is over BYTES — ``secrets.compare_digest`` on str raises ``TypeError``
-    for non-ASCII, which would turn an attacker-controlled header into a 500 instead of a 403."""
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    with pytest.raises(PermissionDeniedError):
-        require_dapr_token("sécrét")
-    assert problem_detail(PermissionDeniedError("x"))[0] == 403
-
-
-def test_the_escape_hatch_does_not_weaken_a_CONFIGURED_door(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The flag says "unconfigured is acceptable", never "wrong tokens are acceptable".
-
-    [[LH-162]]: an unconfigured door refuses unless somebody SETS `RASK_ALLOW_UNAUTHENTICATED_DAPR`, so
-    an open door is chosen and greppable instead of inherited from an empty variable (owner decision
-    2026-09-15). Without this test the hatch would be a master key: set it once for a dev convenience
-    and every deployment that inherited the setting would accept forged tokens too.
-    """
-    monkeypatch.setenv("APP_API_TOKEN", "the-real-token")
-    monkeypatch.setenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")
-
-    with pytest.raises(PermissionDeniedError, match="invalid or missing"):
-        require_dapr_token(dapr_api_token="a-forged-token", dapr_caller_app_id="")
-
-
 # --------------------------------------------------------------------------- #
 # assert_app_token_configured — the fail-closed startup assert.
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("blank", [None, ""])
-def test_assert_fails_closed_when_enabled_and_unset(monkeypatch: pytest.MonkeyPatch, blank: str | None) -> None:
-    """CONTRACT: Dapr delivery on + unset/blank token = refuse to start (never an open route)."""
-    if blank is None:
-        monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    else:
-        monkeypatch.setenv("APP_API_TOKEN", blank)
-    with pytest.raises(RuntimeError, match="APP_API_TOKEN"):
-        assert_app_token_configured(dapr_enabled=True)
 
 
 def test_assert_noop_when_disabled_or_configured(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -50,12 +50,12 @@ from pydantic import BaseModel
 from catalog.core import manifest_bytes
 from catalog.services import dataplane, table_claims
 from lakehouse_kit import base_refs, commit_records, commit_turns, maintenance_due, records
+from lakehouse_kit.storage import S3Client
 from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
 from service_kit.storage_options import StorageOptions
-from storage import S3Client
 from tests.integration import store_requests
 
 

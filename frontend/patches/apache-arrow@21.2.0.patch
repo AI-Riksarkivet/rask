@@ -1,0 +1,70 @@
+diff --git a/builder/valid.js b/builder/valid.js
+index b35a5f5e1f399c483e5852481970245893a8d1d8..66f90f8b7b63835a52dbb62a8610bc7ec41dad9d 100644
+--- a/builder/valid.js
++++ b/builder/valid.js
+@@ -43,21 +43,16 @@ function createIsValidFunction(nullValues) {
+         // @ts-ignore
+         return function isValid(value) { return true; };
+     }
+-    let fnBody = '';
++    // A closure instead of a compiled function: `new Function` is refused under a content security
++    // policy without 'unsafe-eval'. A Set's SameValueZero matches the switch's strict equality for every
++    // value except NaN, which is checked explicitly, as before.
+     const noNaNs = nullValues.filter((x) => x === x);
+-    if (noNaNs.length > 0) {
+-        fnBody = `
+-    switch (x) {${noNaNs.map((x) => `
+-        case ${valueToCase(x)}:`).join('')}
+-            return false;
+-    }`;
+-    }
+-    // NaN doesn't equal anything including itself, so it doesn't work as a
+-    // switch case. Instead we must explicitly check for NaN before the switch.
+-    if (nullValues.length !== noNaNs.length) {
+-        fnBody = `if (x !== x) return false;\n${fnBody}`;
+-    }
+-    return new Function(`x`, `${fnBody}\nreturn true;`);
++    const checksNaN = nullValues.length !== noNaNs.length;
++    const nulls = new Set(noNaNs);
++    return function isValid(x) {
++        if (checksNaN && x !== x) return false;
++        return !nulls.has(x);
++    };
+ }
+ exports.createIsValidFunction = createIsValidFunction;
+ /** @ignore */
+diff --git a/builder/valid.mjs b/builder/valid.mjs
+index 3a08f9af7f6d578581927043ba1285b060ecb465..5fd7395d6e9c27b8346bbd97aa1657bb032089c6 100644
+--- a/builder/valid.mjs
++++ b/builder/valid.mjs
+@@ -40,21 +40,16 @@ export function createIsValidFunction(nullValues) {
+         // @ts-ignore
+         return function isValid(value) { return true; };
+     }
+-    let fnBody = '';
++    // A closure instead of a compiled function: `new Function` is refused under a content security
++    // policy without 'unsafe-eval'. A Set's SameValueZero matches the switch's strict equality for every
++    // value except NaN, which is checked explicitly, as before.
+     const noNaNs = nullValues.filter((x) => x === x);
+-    if (noNaNs.length > 0) {
+-        fnBody = `
+-    switch (x) {${noNaNs.map((x) => `
+-        case ${valueToCase(x)}:`).join('')}
+-            return false;
+-    }`;
+-    }
+-    // NaN doesn't equal anything including itself, so it doesn't work as a
+-    // switch case. Instead we must explicitly check for NaN before the switch.
+-    if (nullValues.length !== noNaNs.length) {
+-        fnBody = `if (x !== x) return false;\n${fnBody}`;
+-    }
+-    return new Function(`x`, `${fnBody}\nreturn true;`);
++    const checksNaN = nullValues.length !== noNaNs.length;
++    const nulls = new Set(noNaNs);
++    return function isValid(x) {
++        if (checksNaN && x !== x) return false;
++        return !nulls.has(x);
++    };
+ }
+ /** @ignore */
+ function valueToCase(x) {

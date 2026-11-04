@@ -15,11 +15,11 @@
 	import { isMainMenu } from './nav-config.js';
 
 	// Subtle content settle-in. Runs once when the shell MOUNTS — i.e. on a fresh
-	// document load, which is every cross-zone microfrontend landing — so the page gently
+	// document load, which is every full-page landing — so the page gently
 	// rises + fades in instead of snapping after the hard nav. Only the content area
 	// animates; the sidebar/shell stay put. In-app soft navs don't remount the shell, so
 	// this does NOT replay on every click (kept subtle, not annoying); those keep each
-	// app's onNavigate view transition. SSR-safe: the wrapper starts at opacity:0 (CSS
+	// app's onNavigate view transition. browser-only: the wrapper starts at opacity:0 (CSS
 	// below) so the first paint never shows content pre-animation (no flash); GSAP fades
 	// it in and clears the transform so nothing lingers (no containing block for fixed/
 	// portaled children). Reduced-motion: no animation, just reveal.
@@ -36,20 +36,20 @@
 		return () => tween.kill();
 	}
 
-	// The shared application shell: a zone-scoped sidebar (the CURRENT zone's routes, from `zoneNav`)
+	// The shared application shell: a app-scoped sidebar (the CURRENT page's routes, from `zoneNav`)
 	// + a content inset headed by TWO rows — the estate navbar (sidebar trigger, project switcher,
-	// cross-zone zone links, identity/theme) and, under it, a slim breadcrumb bar. They used to share
-	// one row, where the breadcrumb and the zone links fought for the same horizontal space and
+	// full-page page links, identity/theme) and, under it, a slim breadcrumb bar. They used to share
+	// one row, where the breadcrumb and the app links fought for the same horizontal space and
 	// overlapped on a narrow viewport; giving each its own row is what makes the header hold up at
-	// any width. Every microfrontend wraps its routes in this so they share identical chrome (no
+	// any width. Every app wraps its routes in this so they share identical chrome (no
 	// drift). `pathname` comes from the consuming app's $app/state and drives the breadcrumb + active
-	// nav; `me`/`meLoading` come from the zone's fetchMe() and gate the navbar's admin entries.
+	// nav; `me`/`meLoading` come from the console's fetchMe() and gate the navbar's admin entries.
 	let {
 		pathname = '',
 		project = { name: '', subtitle: 'Project' },
 		// NO fabricated default (#92). This used to default to `{ name: 'rask', email: 'local',
 		// initials: 'RA' }` — the exact identity NavbarUser's own comment records removing as a
-		// governance defect, re-injected one layer up: any zone that passed no `user` rendered a
+		// governance defect, re-injected one layer up: any page that passed no `user` rendered a
 		// signed-in account named after the product, and `signedIn = !!user` was true for a person
 		// who never signed in. Null is the honest default; NavbarUser already renders the signed-out
 		// states for both auth modes.
@@ -71,48 +71,48 @@
 		// navbar renders the honest signed-out state either way (the fabricated placeholder died in #92).
 		user?: NavUser | null;
 		authEnabled?: boolean;
-		/** The CURRENT zone's own sidebar routes; null renders an empty sidebar (pre-wiring). */
+		/** The CURRENT page's own sidebar routes; null renders an empty sidebar (pre-wiring). */
 		zoneNav?: ZoneNav | null;
 		/** The frozen /management/v1/me identity for the navbar (null = signed out / unresolved). */
 		me?: Me | null;
-		/** True while the zone's fetchMe() is in flight — the navbar renders skeletons. */
+		/** True while the console's fetchMe() is in flight — the navbar renders skeletons. */
 		meLoading?: boolean;
 		/** Crumbs the PATH cannot express, appended after the path-derived trail.
 		 *
-		 *  The shell derives its trail from `pathname`, which is right for a zone whose state is its
+		 *  The shell derives its trail from `pathname`, which is right for a page whose state is its
 		 *  URL path. It is not enough for one whose state is a QUERY — the annotate canvas lives at
 		 *  `/annotator/?keys=…`, so a path-derived trail says "Annotator" and cannot say WHICH page of
 		 *  which task you are on. That is why the canvas had no breadcrumb at all; the answer is to let
-		 *  the zone contribute the part it alone knows, not to hide the bar. */
+		 *  the app contribute the part it alone knows, not to hide the bar. */
 		crumbs?: Crumb[];
-		/** The zone's run feed for the navbar's notification bell (see `NotificationFeed`). The shell
+		/** The console's run feed for the navbar's notification bell (see `NotificationFeed`). The shell
 		 *  never fetches it; `null` renders no bell at all. */
 		notifications?: NotificationFeed | null;
-		/** A zone whose CONTENT owns the whole viewport — an annotation canvas, not a page of panels.
+		/** A page whose CONTENT owns the whole viewport — an annotation canvas, not a page of panels.
 		 *  Drops the sidebar and the breadcrumb row and gives `children` the full height, while keeping the
-		 *  one thing every zone must share: this header, with the project switcher and the identity cluster
+		 *  one thing every page must share: this header, with the project switcher and the identity cluster
 		 *  in the same place at the same size.
 		 *
 		 *  It exists because the annotator hand-rolled its own `<header>` around a bare TopNavbar instead —
-		 *  two implementations of the estate header, free to drift, and they did: that zone's account avatar
+		 *  two implementations of the estate header, free to drift, and they did: that page's account avatar
 		 *  sat on the LEFT (it omitted the `min-w-0 flex-1` this file passes), and it had no project
-		 *  switcher and no breadcrumb while the other three did. A missing variant is why a zone forks the
+		 *  switcher and no breadcrumb while the other three did. A missing variant is why a page forks the
 		 *  shell; adding the variant is the fix. */
 		canvas?: boolean;
-		/** Optional zone-owned sidebar footer (e.g. media's live service-status popover). */
+		/** Optional app-owned sidebar footer (e.g. media's live service-status popover). */
 		sidebarFooter?: Snippet;
-		/** Optional zone-owned rail CONTENT under the zone nav (e.g. the workbench's saved views).
-		 *  Forces the rail visible even for a single-leaf zone — such a zone's rail content IS its
+		/** Optional app-owned rail CONTENT under the app nav (e.g. the workbench's saved views).
+		 *  Forces the rail visible even for a single-leaf page — such a page's rail content IS its
 		 *  navigation, and hiding the rail also hid the project switcher and collapse trigger,
-		 *  which read as "this zone forgot the shell" (the missing-variant lesson, again). */
+		 *  which read as "the console forgot the shell" (the missing-variant lesson, again). */
 		sidebarContent?: Snippet;
 		children: Snippet;
 	} = $props();
 
-	// A zone with one leaf has nothing to navigate — home's sole leaf was "Projects → /", a link to
+	// A page with one leaf has nothing to navigate — home's sole leaf was "Projects → /", a link to
 	// the page you are already on. A rail there costs horizontal width and implies areas that do not
-	// exist, so zones like the catch-all render no rail and no collapse trigger at all.
-	// Counted across every group AND nested child, so a zone that splits one list into two groups
+	// exist, so pages like the catch-all render no rail and no collapse trigger at all.
+	// Counted across every group AND nested child, so a page that splits one list into two groups
 	// does not accidentally fall under the threshold.
 	const hasNav = $derived(zoneNavLeaves(zoneNav).length > 1 || sidebarContent !== undefined);
 
@@ -129,7 +129,7 @@
 	// Empty means NO project is active — the shell must say so honestly, never invent "Default".
 	const projectName = $derived(projectSlug || project.name);
 	// Estate level (/, /projects, /settings) is OUTSIDE any project: no project crumb, and the
-	// switcher shows a neutral prompt. Inside a zone the project is the breadcrumb ROOT and links
+	// switcher shows a neutral prompt. Inside a page the project is the breadcrumb ROOT and links
 	// back to its overview page — the way back the trail never offered.
 	const estateLevel = $derived(isMainMenu(pathname));
 	const shellProject = $derived({
@@ -152,20 +152,20 @@
 	// renders as text and carries aria-current instead.
 	const lastCrumbId = $derived(trail.tail.at(-1)?.id);
 
-	// A canvas zone starts with the rail icon-collapsed so the canvas keeps its width; every other
-	// zone starts expanded. Initial state only — bound, so the trigger and cmd/ctrl+b still work
+	// A canvas page starts with the rail icon-collapsed so the canvas keeps its width; every other
+	// page starts expanded. Initial state only — bound, so the trigger and cmd/ctrl+b still work
 	// everywhere. Deliberately NOT $derived: that would fight the user, snapping the rail back to
-	// the prop's value every time anything rerendered. `canvas` is fixed per zone (it is passed as a
-	// literal by the one zone that sets it), so capturing it once is the correct reading.
+	// the prop's value every time anything rerendered. `canvas` is fixed per page (it is passed as a
+	// literal by the one page that sets it), so capturing it once is the correct reading.
 	// svelte-ignore state_referenced_locally
 	let sidebarOpen = $state(!canvas);
 </script>
 
 <Sidebar.Provider bind:open={sidebarOpen} class="h-svh overflow-hidden">
-	<!-- The rail renders in EVERY zone that has somewhere to go, canvas included. `canvas` used to
-	     suppress it outright, which is why the annotator was the one zone with no sidebar at all — a
-	     user landing there lost the navigation every other zone gave them, with no way to get it
-	     back. Canvas means "the content owns the viewport height", not "this zone opts out of
+	<!-- The rail renders in EVERY page that has somewhere to go, canvas included. `canvas` used to
+	     suppress it outright, which is why the annotator was the one page with no sidebar at all — a
+	     user landing there lost the navigation every other page gave them, with no way to get it
+	     back. Canvas means "the content owns the viewport height", not "the console opts out of
 	     navigation"; it now starts icon-collapsed instead (see sidebarOpen), so the canvas keeps its
 	     width and the rail is one click away. -->
 	{#if hasNav}
@@ -182,26 +182,26 @@
 		     for the workbench's dock painting over the navbar dropdowns — and instead made the header
 		     the containing block for the NavigationMenu's absolutely-positioned viewport, which then
 		     rendered nothing at all (open, height 452, opacity 1, invisible — proven by comparing the
-		     compute zone, which still worked, against the workbench, which did not). The dock is
-		     isolated on ITS side instead (a zone whose content paints over chrome must lower itself,
+		     compute page, which still worked, against the workbench, which did not). The dock is
+		     isolated on ITS side instead (a page whose content paints over chrome must lower itself,
 		     never raise the shared shell). -->
 		<header class="flex min-w-0 shrink-0 flex-col">
 			<!-- Row 1 — the estate navbar. Integrated (sidebar-07): no border, h-14 → h-12 when the
-			     sidebar is icon-collapsed. Trigger on the left; the cross-zone TopNavbar (zone links +
+			     sidebar is icon-collapsed. Trigger on the left; the full-page TopNavbar (page links +
 			     identity/theme) takes the rest. The project switcher moved to the SIDEBAR HEADER: it is
-			     project context, and the rail's top slot was spending itself on the zone name, which the
+			     project context, and the rail's top slot was spending itself on the app name, which the
 			     navbar highlight and the breadcrumb already say. -->
 			<!-- `border-b` only in canvas mode: normally the breadcrumb row below carries `border-y` and
 			     supplies the separation, so adding one here would double it. Canvas mode drops that row —
 			     and took the divider with it, leaving the header floating against the content, which is
-			     visible the moment you look at the two zones side by side. -->
+			     visible the moment you look at the two pages side by side. -->
 			<div
 				class="flex h-14 min-w-0 shrink-0 items-center gap-2 px-4 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12 {canvas
 					? 'border-border/60 border-b'
 					: ''}"
 			>
 				<!-- Nothing to toggle when there is no sidebar; the switcher and identity stay either way.
-				     Gated on hasNav ALONE, not on canvas: a canvas zone now renders a rail (collapsed),
+				     Gated on hasNav ALONE, not on canvas: a canvas page now renders a rail (collapsed),
 				     so suppressing its trigger would leave the annotator with a sidebar nobody could
 				     expand. -->
 				{#if hasNav}
@@ -219,14 +219,14 @@
 				/>
 			</div>
 			<!-- Row 2 — the breadcrumb bar. Its own slim row, so it can never be squeezed by (or
-			     overlap) the zone links; within the row, a trail too long to fit folds its MIDDLE
+			     overlap) the app links; within the row, a trail too long to fit folds its MIDDLE
 			     behind the ellipsis menu (`collapseCrumbs`) instead of shrinking the current page.
 
 			     It renders in CANVAS mode too. It used to be suppressed there, which left the annotate
-			     view with no way back and nothing saying where you were — and the zone rail that might
-			     have covered for that is gone. A canvas zone contributes its own `crumbs` (its state is
+			     view with no way back and nothing saying where you were — and the app rail that might
+			     have covered for that is gone. A canvas page contributes its own `crumbs` (its state is
 			     a query, not a path), so the trail says which task and which page rather than just
-			     naming the zone. One slim row is a cheap price for not being lost. -->
+			     naming the app. One slim row is a cheap price for not being lost. -->
 			{#if !canvas || crumbs.length > 0}
 				<nav
 					aria-label="Breadcrumb"
@@ -239,7 +239,6 @@
 								<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
 								<a
 									href={crumb.href}
-									data-sveltekit-reload={crumb.id === '__project' ? '' : undefined}
 									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 									>{crumb.label}</a
 								>
@@ -267,10 +266,8 @@
 									<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">
 										{#each trail.hidden as crumb (crumb.id)}
 											<DropdownMenu.Item class="p-0">
-												<a
-													href={crumb.href}
-													data-sveltekit-reload={crumb.id === '__project' ? '' : undefined}
-													class="w-full truncate px-2 py-1.5 capitalize">{crumb.label}</a
+												<a href={crumb.href} class="w-full truncate px-2 py-1.5 capitalize"
+													>{crumb.label}</a
 												>
 											</DropdownMenu.Item>
 										{/each}
@@ -291,11 +288,10 @@
 									<!-- The SAME conditional the lead and dropdown branches carry, and the one this
 									     branch was missing (#92): `collapseCrumbs` puts EVERYTHING in tail whenever
 									     the trail fits (breadcrumb.ts:102) — the common case — so the `__project`
-									     crumb rendered HERE as a soft link into the home zone from six zones that
-									     do not own `/projects/…`. Pinned all-or-nothing by the zone-contract gate. -->
+									     crumb rendered HERE as a soft link into the console from six pages that
+									     do not own `/projects/…`. Pinned all-or-nothing by the app-contract gate. -->
 									<a
 										href={crumb.href}
-										data-sveltekit-reload={crumb.id === '__project' ? '' : undefined}
 										class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 										>{crumb.label}</a
 									>

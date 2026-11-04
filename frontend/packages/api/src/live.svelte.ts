@@ -8,21 +8,18 @@ import { onMount, untrack } from 'svelte';
  *     $effect(() => { load(); const t = setInterval(load, POLL_MS); return () => clearInterval(t) })
  *
  * which thirteen files in the lakehouse carried, and which — measured 2026-08-05 — still runs
- * THIRTEEN more times across the estate: ten in `compute` (a zone that already has a live cursor and
+ * THIRTEEN more times across the estate: ten in `compute` (a page that already has a live cursor and
  * uses it for none of them), one in `models`, one in the annotator's labeling queue.
  *
  * WHY IT IS HERE AND NOT IN A ZONE. It was written three times — `home`, `lakehouse`, `models`, 274
  * lines between them — and the three copies had already DIVERGED. Only the lakehouse copy carried the
- * measurement behind rule four; a zone adopting either of the others inherited the rule with no
+ * measurement behind rule four; a page adopting either of the others inherited the rule with no
  * evidence for it, which is exactly how a hard-won rule gets "simplified" back out. This file is that
  * copy, reconciled.
  *
- * Nothing here touches `$app/server`, `$env`, or any feed. It takes a cursor as an argument, so it is
- * a MECHANISM — which is the only thing a `frontend/packages/*` entry may be. The zone-specific half
- * (`lineageTick`, `controlCursor`, …) stays in the zone that owns it, because it imports that app's
- * own `feeds.remote.ts` — `query.live` is declared per app so it gets its own endpoint and can reach
- * `getRequestEvent`. That is the same seam `@rask/api/runs-feed` already uses: share the body, keep
- * the app-bound shim in the app.
+ * Nothing here touches any feed. It takes a cursor as an argument, so it is a MECHANISM — which is the
+ * only thing a `frontend/packages/*` entry may be. The cursors themselves (`lineageTick`,
+ * `controlCursor`, …) live in the console's own `feeds.api.ts`.
  *
  * Four rules, and the last two are each here because getting them wrong broke a test:
  *
@@ -51,7 +48,7 @@ import { onMount, untrack } from 'svelte';
  * Nothing here is a timer. An idle surface issues exactly one request and then stays quiet.
  */
 
-/** The shape of a `query.live` instance consumed as a cursor — see any zone's `feeds.remote.ts`. */
+/** The shape of a live query consumed as a cursor — see the console's `feeds.api.ts`. */
 export interface LiveCursor {
 	readonly current: number | undefined;
 	readonly connected: boolean;
@@ -91,9 +88,9 @@ export function liveRead<K = void>(
  * The read-scheduling decision, factored out of `liveRead` so it can be tested without a component.
  *
  * `liveRead` itself needs a mount and an effect root, so its rules were only ever exercised
- * indirectly — by one zone's e2e suite counting HTTP reads. That is a real test and a slow, distant
- * one: the estate learned rule three from an e2e failure, in a different zone, on a different plane.
- * The rules are pure, so they can be pinned here directly, and a zone adopting this gets them
+ * indirectly — by one page's e2e suite counting HTTP reads. That is a real test and a slow, distant
+ * one: the estate learned rule three from an e2e failure, in a different page, on a different plane.
+ * The rules are pure, so they can be pinned here directly, and a page adopting this gets them
  * verified rather than inherited.
  */
 export function shouldRead(state: {

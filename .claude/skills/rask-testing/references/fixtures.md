@@ -13,14 +13,13 @@ itself for the current code; this reference does not restate it. The generic mec
 - A moto server that pylance can reach
 - A live uvicorn socket
 - NATS, locally, through Dagger
-- The Ray job client
 - The chart
 
 ## A service app, with its lifespan
 
 Every service builds `app` at module import. Pick the fixture by how settings reach the app.
 
-**Settings through an `lru_cache`d getter**: `get_settings()` in catalog, lineage and maintenance; `get_<service>_settings()` in annotator, search and viewer. Copy
+**Settings through an `lru_cache`d getter**: `get_settings()` in catalog, lineage and maintenance. Copy
 `tests/integration/conftest.py::real_ns_client`. The order is load-bearing:
 
 1. `monkeypatch.setenv` every variable the service needs to build and boot. For the catalog that
@@ -43,27 +42,24 @@ test of one of those needs `importlib.reload`.
 The sibling fixture `::client` has the same order over a `MagicMock(spec=LanceNamespace)`. It serves
 only claims about routing, identifier parsing and error mapping.
 
-**Settings read once at import** (`make_service_app`'s `build_settings()` in compute,
-flows and notifications):
+**Settings read once at import** (`make_service_app`'s `build_settings()` in notifications):
 
-- Set the env the whole directory needs around the first import, in its `conftest.py`, then hand it
-  back. Copy `services/compute/tests/conftest.py`. Env left set leaks into every other testpath,
+- Set the env the whole directory needs around each test, in its `conftest.py`, through a function-scoped
+  `monkeypatch`. Copy `services/notifications/tests/conftest.py::_notifications_env`. Env left set leaks into every other testpath,
   because pytest collects all of them before it runs any test, and nothing checks for the leak: the
   suite stays green while a later module builds its app from the wrong values.
 - A test that needs another value sets it with `monkeypatch.setenv` and calls
-  `importlib.reload(<module>)` (`services/compute/tests/test_retention_is_configured_not_imported.py`).
+  `importlib.reload(<module>)` (`services/notifications/tests/test_reconcile_cron.py`).
 - Code in `service_kit` itself builds a synthetic app with `make_service_app(..., settings=...)`
   (`packages/service-kit/tests/test_settings_are_injectable.py`).
-- compute and notifications also keep `lru_cache`d service getters
-  (`get_compute_settings`, `get_notifications_settings`,
+- notifications also keeps `lru_cache`d service getters (`get_notifications_settings`,
   `get_ingress_settings`). A test that changes one of their values clears that getter before and after,
   as `services/notifications/tests/conftest.py::_notifications_env` does.
 
 **Authorization.** `service_kit.governed.deps.make_auth_deps` builds each service's `current_subject`
 and `get_checker`. Override those callables: `security._deps.current_subject` and
 `security._deps.get_checker` on the service's security module
-(`services/flows/tests/test_run_gate.py`; the notifications and search suites
-do the same), or the re-exported names where a service exports them (`annotator.api.security`).
+(`services/notifications/tests/test_adversarial_inbox.py`).
 
 **Real OTLP exporters.** `packages/service-kit/tests/conftest.py` pins required env from the ambient
 value (so a developer's own setting still wins) and caps `OTEL_EXPORTER_OTLP_TIMEOUT` (measured on that
@@ -103,8 +99,8 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
   never go through botocore.
 - The fixture is `scope="module"`: one server and one bucket per module. Each test isolates itself by
   namespace name, not by bucket.
-- Plain `storage`/boto3 code does not need the server. `with mock_aws():` plus a boto3 client that
-  seeds the bucket is enough (`packages/storage/tests/test_storage.py`).
+- Plain `lakehouse_kit.storage`/boto3 code does not need the server. `with mock_aws():` plus a boto3 client that
+  seeds the bucket is enough (`packages/lakehouse-kit/tests/test_storage.py`).
 - To count what a door asks the store (how many listings of a table's `_versions/` an open costs), put
   `tests/integration/store_requests.counted(<moto url>)` between the catalog and the server and point
   `LANCE_S3_ENDPOINT` at its `url`: it forwards every request unchanged, chunked bodies included, and
@@ -121,9 +117,8 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
 
 Use one when the claim is about the wire. The rask example is
 `tests/integration/test_a_catalog_reader_reads_a_whole_table_in_bounded_pages.py` (`uvicorn.Config(app, port=0, lifespan="on")` on a
-thread, with a bounded wait for `server.started`). Why it matters here:
-`services/search/tests/test_search_spec_binding.py`'s docstring records a query-model binding that `TestClient`
-accepted and a live uvicorn on fastapi 0.140.13 answered with 422 on every call.
+thread, with a bounded wait for `server.started`). Why it matters here: a query-model binding once passed under `TestClient` while a live uvicorn on fastapi 0.140.13
+answered 422 on every call (measured on a client's search door, in git history at `64ef118a9`).
 
 ## NATS, locally, through Dagger
 
@@ -137,14 +132,6 @@ IMG=$(grep -ohP 'natsImage = "\K[^"]+' .dagger/*.go)
 dagger core container from --address="$IMG" with-exposed-port --port=4222 \
   with-default-args --args=nats-server,--jetstream as-service up --ports=14222:4222
 ```
-
-## The Ray job client
-
-Copy `packages/ray-kit/tests/test_dashboard_bounds.py`: a small class that implements only the methods
-the code under test calls (there, `list_jobs`), returned through `cast(JobSubmissionClient, fake)`. No
-Ray runtime starts, and the function under test keeps its real parameter type without a
-`# type: ignore`. Nothing checks the cast against Ray (`writing-python` → `references/testing.md`
-§ Doubles).
 
 ## The chart
 

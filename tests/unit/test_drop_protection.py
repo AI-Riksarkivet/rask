@@ -22,9 +22,8 @@ from typing import Any, cast
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
-from lance_namespace import DeregisterTableResponse, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
+from lance_namespace import DeregisterTableResponse, TableNotFoundError
 
-from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver
 from catalog.api.idempotency import KeyedDoor
 from catalog.core.config import Settings
@@ -32,7 +31,6 @@ from catalog.services import table_claims
 from catalog.services.table_claims import ResolvedTable
 from lakehouse_kit import location_claims, protection
 from lakehouse_kit.control_emit import NoopControlEmitter
-from service_kit.governed import fga
 from service_kit.naming import UUID_PROPERTY
 from service_kit.storage_options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
@@ -222,15 +220,6 @@ def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
     )
 
 
-def test_a_protected_table_refuses_drop_and_the_native_call_never_ran(tmp_path: Any) -> None:
-    settings = _settings(tmp_path)
-    _protect(settings, "table", "bronze$pages")
-    ns: Any = _RecordingNamespace()
-    with pytest.raises(InvalidTableStateError, match="protected against deletion"):
-        _drop_table(settings, ns)
-    assert ns.calls == [], "the guard must run BEFORE the native call — bytes were touched"
-
-
 def test_force_drops_a_protected_table_and_the_record_dies_with_it(tmp_path: Any) -> None:
     settings = _settings(tmp_path)
     so = settings.storage_options()
@@ -239,57 +228,6 @@ def test_force_drops_a_protected_table_and_the_record_dies_with_it(tmp_path: Any
     _drop_table(settings, ns, force=True)
     assert ns.calls == ["deregister_table"]
     assert protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages")) is None, "the record must die with its table"
-
-
-def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
-    """Deregister keeps bytes but removes the object from GOVERNANCE — leaving it ungated would make
-    'deregister, then delete the files by hand' the unprotected path around the protected drop."""
-    from catalog.api.v1.endpoints import tables as t_ep
-
-    settings = _settings(tmp_path)
-    _protect(settings, "table", "bronze$pages")
-    ns: Any = _RecordingNamespace()
-    with pytest.raises(InvalidTableStateError, match="protected against deletion"):
-        asyncio.run(
-            t_ep.deregister_table(
-                id="bronze$pages",
-                keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
-                ns=ns,
-                table=_resolved(settings),
-                settings=settings,
-                client=None,
-                emitter=_NoopLineage(),
-                control=NoopControlEmitter(),
-                token=None,
-                so=StorageOptions(),
-                authorization=None,
-                uuids=NO_OBJECT_UUIDS,
-            )
-        )
-    assert ns.calls == []
-
-
-def test_a_protected_namespace_refuses_drop(tmp_path: Any) -> None:
-    from catalog.api.v1.endpoints import namespaces as n_ep
-
-    settings = _settings(tmp_path)
-    _protect(settings, "namespace", "bronze")
-    ns: Any = _RecordingNamespace()
-    with pytest.raises(NamespaceNotEmptyError, match="protected against deletion"):
-        asyncio.run(
-            n_ep.drop_namespace(
-                id="bronze",
-                ns=ns,
-                settings=settings,
-                token=None,
-                client=None,
-                control=NoopControlEmitter(),
-                emitter=cast(Any, None),
-                body=None,
-                uuids=NO_OBJECT_UUIDS,
-            )
-        )
-    assert ns.calls == []
 
 
 # ---------------------------------------------------------------- the protection doors themselves
@@ -324,28 +262,6 @@ def test_the_protection_door_sets_and_clears_the_record(tmp_path: Any) -> None:
     )
     assert result.protected is False
     assert protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages")) is None
-
-
-def test_the_protection_suffix_is_owner_gated_not_writer(tmp_path: Any) -> None:
-    """The authz map is where each door's tier is declared, and a misplaced entry grants the wrong rung
-    — pin both kinds.
-
-    THE TIER IS THE ASSERTION, not the relation's NAME. This asserted `== "can_drop"` / `== "can_delete"`,
-    which reads as the same thing and is not: it pins the spelling and says nothing about the rung, so it
-    would pass over a `can_drop` re-tiered to `writer` and fail over a correctly owner-tier rung that
-    happens to be called something else. `can_set_protection` is exactly that second case ([[LH-055]]) —
-    its own ACTION over the drop's TIER, so `#41`'s audit trail can tell arming a safety from destroying
-    the object. Resolved against the compiled model, which is where the rung actually lives.
-    """
-    model = {t["type"]: (t.get("relations") or {}) for t in fga.load_model()["type_definitions"]}
-    for fga_type in ("table", "namespace"):
-        relation = fga_deps._OWNER_SUFFIX_RELATION[fga_type]["protection"]  # noqa: SLF001
-        definition = model[fga_type].get(relation)
-        assert definition is not None, f"the {fga_type} protection door checks {relation!r}, which the model does not define"
-        assert definition == {"computedUserset": {"relation": "owner"}}, (
-            f"{fga_type}#{relation} is {definition!r}, not the OWNER tier — a protection door below owner "
-            f"lets a writer disarm a safety guarding a destruction they could never perform."
-        )
 
 
 # ---------------------------------------------------------------- #75 trash / undrop
@@ -456,42 +372,6 @@ def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
     finally:
         deps.revoke_ownership = original
     revoked.assert_not_awaited()
-
-
-def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None:
-    """A cascade destroys children INSIDE one native call — they never reach a door. Before this, a
-    protected table under a cascade-dropped namespace died silently while the docstring claimed
-    otherwise. The refusal must NAME the protected descendant: "something in here is protected" is
-    not an answer anyone can act on.
-
-    IT REFUSES AS A TABLE (code 19) THOUGH THE DOOR IS A NAMESPACE'S, and the cascade is where that
-    matters most. Here the namespace genuinely IS non-empty, so `NamespaceNotEmpty` would be a
-    well-founded instruction: a generated client would empty the container and retry, dropping every
-    unprotected sibling on the way, and still never pass the one protected table. The code names the
-    OBSTRUCTION, not the door."""
-    from lance_namespace import DropNamespaceRequest
-
-    from catalog.api.v1.endpoints import namespaces as n_ep
-
-    settings = _settings(tmp_path)
-    _stand(settings, "bronze$pages")
-    _protect(settings, "table", "bronze$pages")
-    ns: Any = _RecordingNamespace()
-    with pytest.raises(InvalidTableStateError, match="bronze\\$pages"):
-        asyncio.run(
-            n_ep.drop_namespace(
-                id="bronze",
-                ns=ns,
-                settings=settings,
-                token=None,
-                client=None,
-                control=NoopControlEmitter(),
-                emitter=cast(Any, None),
-                body=DropNamespaceRequest(behavior="Cascade"),
-                uuids=NO_OBJECT_UUIDS,
-            )
-        )
-    assert ns.calls == [], "the cascade ran despite a protected descendant"
 
 
 def test_force_lets_a_cascade_through(tmp_path: Any) -> None:

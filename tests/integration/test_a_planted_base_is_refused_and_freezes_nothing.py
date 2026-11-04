@@ -48,12 +48,13 @@ from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-import storage
+import lakehouse_kit.storage as storage
 from lakehouse_kit import base_registry
 from lakehouse_kit.base_refs import BaseRefs, normalise
 from lakehouse_kit.features import manifest_base_path_refs
 from lakehouse_kit.maintenance_due import CloneList
 from lakehouse_kit.objectfs import lance_storage_options
+from lakehouse_kit.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge, sweep
 from maintenance.services.due import TableIds
@@ -62,7 +63,6 @@ from maintenance.services.plan import PlanContext
 from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.naming import UUID_PROPERTY
-from storage import S3Client
 
 
 logging.getLogger("werkzeug").setLevel(logging.ERROR)

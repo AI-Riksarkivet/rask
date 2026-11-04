@@ -9,8 +9,7 @@
 # It brings up the GOVERNED stack (Dex OIDC + OpenFGA + Dapr + NATS + RustFS + OpenBao) on kind with the feature
 # flags the suites need, seeds the exact grants/buckets they assume, then runs every tests/e2e-py module the lane can
 # serve, Phase 1's acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own (ADR 0167), on the
-# lakehouse and its platform fixtures alone. Only then does it install a client (the annotator) and run that client's
-# suite in a session of its own (XC-183).
+# lakehouse and its platform fixtures alone, with no client installed (XC-183).
 #
 # The telemetry chain is off: OpenTelemetry is rask's boundary and the store behind the Collector is the platform's. Maintenance is on, because its deployed sweep is a lakehouse claim
 # (`tests/e2e-py/test_maintenance_e2e.py`).
@@ -142,9 +141,6 @@ if [ -z "$SIDE_LOADED" ]; then
   echo "!! the render named no side-loaded <component>:$TAG image — image.localImages or image.tag has moved" >&2
   exit 1
 fi
-# THE ANNOTATOR'S OWN IMAGE. It is a client of the lakehouse with its own release (deploy/fixtures/annotator, ADR 0171),
-# installed after rask below, so the product render names none of it.
-SIDE_LOADED="$SIDE_LOADED"$'\n'"annotator:$TAG annotator"
 
 # BUILT AS TARBALLS, IN THE BACKGROUND. No build needs the cluster, so they run while kind and the fixtures come up, and
 # `--out` hands each one over as an OCI archive the node imports directly: no image passes through a docker daemon.
@@ -192,9 +188,6 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
 # seed scripts are rask's), so fixtures.sh does not wait for them.
 "$(dirname "$0")/fixtures.sh" external-secrets dapr nats dex openbao
-# The CloudNativePG operator the annotator's release keeps its state on, its CRDs applied first as `make k3s-crds` does.
-kubectl apply --server-side -f chart/crds-bootstrap/ >/dev/null
-"$(dirname "$0")/fixtures.sh" cloudnative-pg
 
 step "3/9 side-load the images"
 wait "$BUILD_PID" || { cat "$IMAGE_DIR/build.log"; echo "!! an image build failed (log above)" >&2; exit 1; }
@@ -224,8 +217,8 @@ rm -rf "$IMAGE_DIR"
 # The object store runs the upstream RustFS image its fixture pins by digest, which the node pulls itself.
 "$(dirname "$0")/fixtures.sh" rustfs
 # A VENDED CREDENTIAL NAMES AN ADDRESS BOTH SIDES REACH THE STORE AT: the node's own address and the store's NodePort, as
-# on the estate. The scenario's stock client writes from this runner, and the annotator, an in-cluster client of the
-# catalog (ADR 0171), reads from its pod, where a port-forward on the runner answers nothing. The catalog's own
+# on the estate. The scenario's stock client writes from this runner, and an in-cluster client of the catalog reads from
+# its pod, where a port-forward on the runner answers nothing. The catalog's own
 # `rask-rustfs:9000` resolves only in the cluster (`vending.endpoint`, LH-489). Every other suite here brings its own
 # storage options, through the port-forward below.
 NODE_IP="$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
@@ -299,8 +292,7 @@ kubectl rollout status deploy/"$RELEASE"-maintenance --timeout=300s
 
 # Every running container of a side-loaded image must serve the archive this run built — the definitive proof the whole
 # suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). A container's `imageID`
-# names either digest depending on how containerd recorded the import, so both recorded above are accepted. It runs again
-# once the clients are installed, after the lakehouse's own sessions.
+# names either digest depending on how containerd recorded the import, so both recorded above are accepted.
 check_fresh() {
 kubectl get pods -o json >"$FRESH.pods" || return 1
 python3 -c '
@@ -559,9 +551,7 @@ failed=()
 #   rustfs_provisioning  its own lane (`dagger call rustfs-provisioning`): it provisions IAM on a throwaway store
 #   observability  the telemetry chain: it reads the platform's store behind the Collector, so a deployed estate runs it
 #   edge           the Gateway's routes, which this stack does not render (stack_values.sh)
-#   media_catalog  the annotator's media backend, outside the lakehouse
-#   annotator      a client's suite, run in a session of its own once the client is installed, after Phase 1
-"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not observability and not edge and not media_catalog and not annotator" \
+"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not observability and not edge" \
   || failed+=("the lane's suites")
 
 # PHASE 1'S ACCEPTANCE (XC-090), BY ITS MARKER, so a module joins the lane by carrying `phase1`: one drive of the
@@ -581,29 +571,10 @@ else
   failed+=("Phase 1's acceptance")
 fi
 
-# THE CLIENTS, ONLY NOW (XC-183). Everything above ran on the lakehouse and its platform fixtures alone, which is the
-# removal test: no lakehouse session needs a client. The annotator installs as a deployment beside rask would install
-# it: it reaches rask by reference, and the issuer it accepts is the one the catalog was given. This stack renders no
-# Gateway, so its route is off. Its pod waits for the Postgres its release renders, so its rollout is given the
-# Cluster's bootstrap. Its suite drives it through the lakehouse's public doors, in a session of its own.
-ISSUER="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_OIDC_ISSUER")].value}')"
-if "$(dirname "$0")/fixtures.sh" annotator -- --set-string auth.oidc.issuer="$ISSUER" --set-string image.tag="$TAG" --set route.enabled=false \
-  && { kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=annotator" --ignore-not-found >/dev/null 2>&1 || true; } \
-  && kubectl rollout status deploy/"$RELEASE"-annotator --timeout=600s && check_fresh; then
-  forward "$RELEASE-annotator" 8103:8103 /tmp/pf-ann.log
-  for i in $(seq 1 40); do
-    [ "$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:8103/livez 2>/dev/null || true)" = "200" ] && break
-    sleep 2
-  done
-  LANCE_E2E_ANNOTATOR_URL=http://localhost:8103 "${PYTEST[@]}" tests/e2e-py services/annotator/tests/live -m annotator || failed+=("the annotator's suite")
-else
-  failed+=("the annotator's install")
-fi
-
 if [ "${#failed[@]}" -gt 0 ]; then
   echo
   echo "!! FAIL: $(IFS=,; echo "${failed[*]}")"
   exit 1
 fi
 echo
-echo "✓ e2e stack suite green on the lakehouse alone, Phase 1's acceptance and its soak with it, then the clients' suites"
+echo "✓ e2e stack suite green on the lakehouse alone, Phase 1's acceptance and its soak with it"

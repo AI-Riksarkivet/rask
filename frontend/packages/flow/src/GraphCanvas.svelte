@@ -20,7 +20,7 @@
 	 *   • The wrapper is sized by its parent; a zero-height container renders an empty canvas, so the
 	 *     caller owns layout and this owns only the flow.
 	 *
-	 * The stylesheet is imported once per zone in `app.css` (vendor sheet + the rask `--xy-*` theme,
+	 * The stylesheet is imported once per page in `app.css` (vendor sheet + the rask `--xy-*` theme,
 	 * both under `layer(base)`), never here — a component-level import lands it in that component's
 	 * layer and loses to it.
 	 */

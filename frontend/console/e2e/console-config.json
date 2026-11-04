@@ -1,0 +1,5 @@
+{
+	"issuer": "/oidc",
+	"clientId": "rask-web",
+	"scopes": ["openid", "profile", "email", "federated:id"]
+}

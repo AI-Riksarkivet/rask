@@ -1079,6 +1079,10 @@
                     "description": "The platform's Vault or OpenBao (https), which the Dapr secret store and ESO's SecretStore read when `enabled` is false; required then, and refused beside `enabled`.",
                     "type": "string"
                 },
+                "externalReaders": {
+                    "description": "A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read; supplied from the client's own values, so the lakehouse names none.",
+                    "type": "object"
+                },
                 "identity": {
                     "type": "object",
                     "properties": {

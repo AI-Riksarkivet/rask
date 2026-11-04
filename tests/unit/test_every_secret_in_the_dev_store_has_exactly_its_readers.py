@@ -26,11 +26,14 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from collections import defaultdict
 from collections.abc import Iterator
 from typing import Final
 
-from tests.unit.chart_render import REPO, containers, render, render_fixture, seed_scripts, store_identities, with_dev_store
+import pytest
+
+from tests.unit.chart_render import REPO, containers, render, render_chart_text, render_fixture, seed_scripts, store_identities, with_dev_store
 
 
 #: The dev estate as `make k3s-up` renders it, with the planes that hold a credential switched on.
@@ -329,3 +332,34 @@ def test_every_secret_in_the_dev_store_has_exactly_its_readers_and_no_published_
     )
     assert not (published := _published_tokens(estate)), f"a store token is a literal of the render: {published}"
     assert presenters == {f"{STORE_POD}/seed", "Job/rask-object-store-scoped-users-r1/provision"}, sorted(presenters)
+
+
+#: A client's store reader as a client's own values supply it (`openbao.externalReaders`): its bus user and a signer's
+#: public key, which every verifier may read.
+_CLIENT_READER: Final = '{"client":{"serviceAccount":"rask-sa-client","secrets":["nats-user-client","signing-public-rask-sa-catalog"]}}'
+
+
+@pytest.mark.parametrize(
+    ("secrets", "refusal"),
+    [
+        pytest.param('["*"]', "is no secret name", id="a-wildcard"),
+        pytest.param('["a/b"]', "is no secret name", id="a-path"),
+        pytest.param('["signing-key-rask-sa-catalog"]', "is the lakehouse's own secret", id="a-signer-key"),
+        pytest.param('["object-store-root"]', "is the lakehouse's own secret", id="an-operator-read"),
+    ],
+)
+def test_a_client_store_reader_is_refused_any_read_that_is_not_its_own(secrets: str, refusal: str) -> None:
+    reader = f'openbao.externalReaders={{"client":{{"serviceAccount":"rask-sa-client","secrets":{secrets}}}}}'
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render_chart_text(REPO / "chart", *DEV_ESTATE, "--set-json", reader)
+    assert refusal in refused.value.stderr
+
+
+def test_a_client_store_reader_is_granted_exactly_what_its_values_name() -> None:
+    chart = render(*DEV_ESTATE, "--set-json", f"openbao.externalReaders={_CLIENT_READER}")
+
+    policies = _documents(chart, "policy-")
+    roles = _documents(chart, "role-")
+
+    assert _granted(policies["rask-client"]) == {"nats-user-client", "signing-public-rask-sa-catalog"}
+    assert roles["rask-client"]["bound_service_account_names"] == ["rask-sa-client"]

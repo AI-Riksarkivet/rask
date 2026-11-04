@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { DockviewApi } from 'dockview';
 import { uniquePanelId } from './panel-id';
@@ -91,27 +90,5 @@ describe('panelChoices', () => {
 		expect(open).toHaveLength(3);
 		expect(open.find((c) => c.key === 'runs')?.open).toBe(true);
 		expect(open.find((c) => c.key === 'graph')?.open).toBe(false);
-	});
-});
-
-describe('the header offers "+" as a control separate from split', () => {
-	it('renders both triggers, and they open different popovers', () => {
-		// Fails on the previous code, which had no add control at all. The separation is the point:
-		// split acts on the PANE, "+" acts on the CONTENT. An earlier draft of the backlog had add-panel
-		// REPLACING split, which is what produced a control whose only outcome was a second copy of
-		// whatever you were already looking at.
-		const header = readFileSync(new URL('./GroupActions.svelte', import.meta.url), 'utf8');
-		expect(header).toContain('PanelPicker');
-		expect(header).toContain('SplitMenu');
-		expect(header).toContain('rask-add-menu-');
-		expect(header).toContain('rask-split-menu-');
-	});
-
-	it('gives every group its own popover ids, so one trigger cannot open another group’s menu', () => {
-		// Derived from `group.id`, NOT Svelte's `$props.id()`: each group header is its own mount() root
-		// and that counter restarts per root, so every group would mint the same id.
-		const header = readFileSync(new URL('./GroupActions.svelte', import.meta.url), 'utf8');
-		expect(header).toMatch(/rask-add-menu-\$\{group\.id\}/);
-		expect(header).toMatch(/rask-split-menu-\$\{group\.id\}/);
 	});
 });

@@ -51,7 +51,7 @@ from pydantic import BaseModel, ConfigDict
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from storage import S3Client
+    from lakehouse_kit.storage import S3Client
 
 
 #: The admin API's own prefix, which takes plain JSON bodies; its compatibility alias wants encrypted ones.
@@ -189,7 +189,7 @@ class AdminClient:
 
 
 def _s3(plan: Plan, secret: str) -> S3Client:
-    from storage import s3_client
+    from lakehouse_kit.storage import s3_client
 
     return s3_client(plan.endpoint, access_key=plan.root_access_key, secret_key=secret, region=REGION)
 

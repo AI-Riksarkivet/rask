@@ -1,0 +1,35 @@
+# What the console's release supplies to the lakehouse release it runs beside ([[XC-191]]): the lakehouse names no
+# client, so the admission lives here, and `make k3s-up` layers every fixture's `lakehouse-values.yaml` onto the
+# lakehouse release, so an install from git admits it. Every name below is the inbox's (Dapr app id `notifications`,
+# ServiceAccount `rask-sa-notifications` in `default`), as chart/values.yaml derives them.
+auth:
+  # The catalog's decision door answers the inbox's account: `decider` for its visibility and watch checks,
+  # `member_expander` for a userset's members, `event_reader` for lineage's whole run feed (`GET /events/projection`).
+  externalDeciders: {"default:rask-sa-notifications": ["decider", "member_expander", "event_reader"]}
+nats:
+  auth:
+    users:
+      # The inbox's bus user: its two durables (chart/values.yaml `bus.durables`) on LINEAGE, DLQ and CATALOG_CONTROL,
+      # its dead letters and the bus watchdog's probe. rask's secret store holds it as `nats-user-notifications`.
+      notifications:
+        publish:
+          - dlq.notifications
+          - probe.notifications
+          - $JS.API.STREAM.NAMES
+          - $JS.API.CONSUMER.INFO.LINEAGE.notifications-inbox
+          - $JS.API.CONSUMER.CREATE.LINEAGE.notifications-inbox.>
+          - $JS.ACK.LINEAGE.notifications-inbox.>
+          - $JS.API.CONSUMER.INFO.DLQ.notifications-inbox
+          - $JS.API.CONSUMER.CREATE.DLQ.notifications-inbox.>
+          - $JS.ACK.DLQ.notifications-inbox.>
+          - $JS.API.CONSUMER.INFO.CATALOG_CONTROL.notifications-control
+          - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL.notifications-control.>
+          - $JS.ACK.CATALOG_CONTROL.notifications-control.>
+        subscribe: [_INBOX.>]
+openbao:
+  # The inbox's sidecar loads rask's secret store under its own role (`<release>-notifications`), bound to its
+  # ServiceAccount, reading exactly its bus credential and rask's signers' public keys.
+  externalReaders:
+    notifications:
+      serviceAccount: rask-sa-notifications
+      secrets: [nats-user-notifications, signing-public-rask-sa-catalog, signing-public-rask-sa-maintenance]

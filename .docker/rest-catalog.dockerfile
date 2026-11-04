@@ -6,8 +6,8 @@
 #   catalog.main:app (:2333) · lineage.main:app (:8000) · maintenance.service:app (:8000)
 # — optionally wrapped in `opentelemetry-instrument` (shipped via lineage's opentelemetry-distro).
 # It installs and import-gates the lakehouse's services and nothing else: every client builds its own image
-# (the media viewer and search: .docker/media.dockerfile; the annotator: .docker/annotator.dockerfile, ADR 0171), so
-# deleting a client changes nothing this image builds or installs ([[XC-177]]).
+# (the console: .docker/frontend.dockerfile; the notifications inbox: .docker/notifications.dockerfile), so deleting a
+# client changes nothing this image builds or installs ([[XC-177]]).
 # Build context = repo root:  scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 
 # ── builder: two-step uv sync against the ROOT uv.lock ───────────────────────
@@ -85,7 +85,7 @@ COPY --from=builder --link /opt/venv /opt/venv
 # FOUR FILES OUT OF `scripts/`, NAMED ONE BY ONE. Each is run by a chart workload, so each has to
 # exist in an image; copying the whole directory would put every dev and ops script into a
 # request-serving image for the sake of four. Each imports stdlib plus what the venv above already
-# carries (`storage`, boto3/botocore, pydantic), so none adds a dependency, and no chart Job needs a
+# carries (`lakehouse_kit.storage`, boto3/botocore, pydantic), so none adds a dependency, and no chart Job needs a
 # third-party image that a registry could withdraw.
 #
 # INTO THE FINAL STAGE, not the builder: the builder hands over `/opt/venv` and nothing else, so a
@@ -105,9 +105,10 @@ COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 # Import every module this image serves, against the venv the runtime stage ships. A missing
 # DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
 # only be seen here, where the deployable's own closure is the only one present. See the script.
-# `--absent`: the client kit and lancedb (a client's dataset reader) never ship in the lakehouse image ([[XC-178]]).
+# `--absent`: the notifications inbox (a client) and lancedb (a client's dataset reader) never ship in the lakehouse
+# image ([[XC-178]]).
 COPY .docker/import-gate.py /tmp/import-gate.py
-RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance --absent client_kit lancedb && rm /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance --absent notifications lancedb && rm /tmp/import-gate.py
 
 # ── the pool gate ────────────────────────────────────────────────────────────
 # Measure the pools OMP_NUM_THREADS bounds, under the environment this stage ships: a pool wider than it fails the build.

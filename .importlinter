@@ -3,9 +3,9 @@
 # and names the offending chain. `dapr` is a root package because import-linter cannot forbid an external
 # SUBPACKAGE (`dapr.ext.workflow`) otherwise, and include_external_packages lets the other third-party
 # names (ray, durabletask, fastapi, starlette, dotenv) be forbidden directly. Every first-party package the
-# lakehouse imports is a root package too (`storage`): an external package's own imports are not in the
-# graph, so a client imported through one would pass every contract. No client is a root package, so this file holds
-# with every client tree deleted (XC-188): a client is forbidden below as an external name.
+# lakehouse imports is a root package too: an external package's own imports are not in the graph, so a client imported
+# through one would pass every contract. No client is a root package: the notifications inbox, the one Python client
+# left in this repository, is forbidden below as an external name and keeps its own layer rules in its own config.
 
 [importlinter]
 root_packages =
@@ -15,7 +15,6 @@ root_packages =
     service_kit
     lakehouse_kit
     lineage_kit
-    storage
     dapr
 include_external_packages = True
 
@@ -28,14 +27,12 @@ forbidden_modules =
     service_kit.exceptions
 allow_indirect_imports = True
 
-# The lakehouse knows no client (XC-175): a client and the engine it fronts (ADR 0155) reach the lakehouse only through
-# its public doors, so deleting every client changes nothing in the lakehouse. A client may import the lakehouse's kits;
-# no lakehouse service and no kit it runs imports a client (the notifications inbox among them, XC-188), the kit the
-# clients share (client_kit) or the engine's packages (ray_kit, ray_cluster_env), by any chain. The clients are forbidden
-# as external names, not root packages, so this file holds with every client tree deleted; a client's own layer rules
-# live in its own config.
+# The lakehouse knows no client (XC-175): a client and a compute engine (ADR 0155) reach the lakehouse only through its
+# public doors, so deleting every client changes nothing in the lakehouse. A client may import the platform package;
+# no lakehouse service and no kit it runs imports the notifications inbox (XC-188) or Ray, by any chain. Both are
+# forbidden as external names, not root packages, so this file holds with the inbox deleted.
 [importlinter:contract:the-lakehouse-knows-no-client]
-name = Phase 1 (3), XC-176, XC-178, XC-188: no lakehouse service and no lakehouse kit imports a client, the client kit, an engine or an engine's kit
+name = Phase 1 (3), XC-176, XC-178, XC-188: no lakehouse service and no lakehouse kit imports a client or a compute engine
 type = forbidden
 source_modules =
     catalog
@@ -44,19 +41,9 @@ source_modules =
     service_kit
     lakehouse_kit
     lineage_kit
-    storage
 forbidden_modules =
     notifications
-    flows
-    search
-    viewer
-    annotator
-    compute
-    client_kit
     ray
-    ray_kit
-    ray_cluster_env
-    table_maintenance
 
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
 name = Phase 1 (3): no lakehouse service and no shared kit imports a workflow engine

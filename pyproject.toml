@@ -16,8 +16,6 @@ bypass-selection = true
 [tool.uv.workspace]
 # Language-pure directories, so globs are both possible and safe: every dir under packages/ and
 # services/ carries a pyproject.toml. The JS plane lives in frontend/ with its own bun workspace.
-# NOTE: runners/* are deliberately NOT members — sealed model envs whose heavy pins
-# (CUDA torch, model SDKs) must never enter the services' resolution.
 members = ["packages/*", "services/*"]
 
 [dependency-groups]
@@ -131,9 +129,6 @@ extend-select = ["TID251", "FAST001"]
 "services/catalog/**" = ["A002", "ANN401", "RUF002", "RUF003", "RUF043", "RUF100", "C901", "PERF401", "E501"]
 "services/lineage/**" = ["ANN401", "RUF002", "RUF003", "RUF100", "C901", "S608", "E501"]
 "services/maintenance/**" = ["ANN401", "RUF100", "C901", "PERF401", "E501"]
-"services/viewer/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"services/search/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"services/annotator/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 # The gate-3 (R19) port of packages/common into service-kit moved the files verbatim, so the same
 # scoped exemption travels with them: the governed/lakehouse/lancekit/media/schemas subtrees plus the
 # four flat modules ported to the base (obs, openlineage, dapr_publish, control_events).
@@ -157,27 +152,13 @@ extend-select = ["TID251", "FAST001"]
 "packages/lakehouse-kit/src/lakehouse_kit/compaction_gate.py" = ["RUF100"]
 "packages/lakehouse-kit/src/lakehouse_kit/features.py" = ["RUF100"]
 "packages/lakehouse-kit/src/lakehouse_kit/history_fences.py" = ["RUF100"]
-"packages/client-kit/src/client_kit/lancekit/reader.py" = ["A002"]  # `filter=` is the lance dataset API's own parameter name
-"packages/client-kit/src/client_kit/lancekit/catalog.py" = ["A002"]  # `filter=` is the lance dataset API's own parameter name
-"packages/client-kit/src/client_kit/lancekit/**" = ["ANN401", "C901", "PERF401"]
-# No ANN exemption under media/: `dataset_handle` is the entry point every media and annotator route
-# passes through to reach a dataset, and an untyped return there is an `Any` in every one of them.
-"packages/client-kit/src/client_kit/media/**" = ["E501"]
 # `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
 # `service_kit/obs.py` measured identically and went the same way 2026-09-10.
 "packages/lakehouse-kit/src/lakehouse_kit/dapr_publish.py" = ["ANN401"]
-# TID251: a sealed runner is where a model framework and a workload's own Lance writes belong, outside
-# the platform seams the banned-api rules guard (htr and dummy carry their own ruff config and never
-# read this map).
-"runners/**" = ["TID251", "A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-# The encoder stub, a self-contained script on the Ray images.
 "scripts/gen_openapi.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "tests/**" = ["TID251", "A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501", "S101", "S105", "S106", "S107", "S108", "S113", "S603", "S607"]
 "scripts/**" = ["TID251"]
-"services/viewer/src/viewer/services/clips.py" = ["S603"]
-"services/viewer/src/viewer/services/audio_prep.py" = ["S603"]
-"scripts/harvest_ead.py" = ["ANN", "RET503", "B007"]
 # ---- TID251: the sanctioned sites of the banned-api rules ---------------------------------------
 # A dedicated seam module IS the sanctioned site, so it takes a per-file ignore. Every other sanctioned
 # use takes a LINE-level `# noqa: TID251` at its call site, never a per-file ignore: a per-file ignore
@@ -185,12 +166,11 @@ extend-select = ["TID251", "FAST001"]
 # sanctioned for grant_on_create), a raw ActorProxy planted in the same file went unflagged, and
 # maintenance's rebuild may grant tuples but must never revoke them, which only a line-level exemption
 # can express.
-"packages/storage/src/storage/client.py" = ["TID251"]  # boto3: the S3 client seam
-"packages/storage/src/storage/sts.py" = ["TID251"]  # boto3: the STS client seam
+"packages/lakehouse-kit/src/lakehouse_kit/storage/client.py" = ["TID251"]  # boto3: the S3 client seam
+"packages/lakehouse-kit/src/lakehouse_kit/storage/sts.py" = ["TID251"]  # boto3: the STS client seam
 "packages/service-kit/src/service_kit/draining.py" = ["TID251"]  # signal: the drain seam
 "packages/service-kit/src/service_kit/arrow_ipc.py" = ["TID251"]  # arrow ipc: the validating decoder
 "packages/lakehouse-kit/src/lakehouse_kit/lancekit/reader.py" = ["TID251", "A002"]  # decode_arrow_response: the /query reader; `filter=` is the request's own field
-"services/annotator/src/annotator/projects/proxies.py" = ["TID251"]  # ActorProxy: the proxies module
 "services/notifications/src/notifications/proxies.py" = ["TID251"]  # ActorProxy + encode_subject: the proxies module
 
 # The code-shape bans. Each message names the seam a caller goes through instead; the sanctioned sites
@@ -198,11 +178,9 @@ extend-select = ["TID251", "FAST001"]
 # Five `dataclasses.dataclass` noqa lines are DEBT against the Pydantic-only rule, not sanctioned uses:
 # lakehouse_kit/idempotency.py, catalog/api/idempotency.py, catalog/core/lineage_emit.py,
 # maintenance/services/credentials.py and maintenance/services/sweep.py.
-# services/viewer RESTATES this whole map in its own pyproject.toml: a nested banned-api table replaces
-# the root one rather than merging with it (measured, ruff 0.16.0), so a ban added here is added there too.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
-"boto3".msg = "Build S3/STS clients through storage.s3_client / storage.sts_client: a raw boto3 client carries no timeouts."
+"boto3".msg = "Build S3/STS clients through lakehouse_kit.storage.s3_client / sts_client: a raw boto3 client carries no timeouts."
 "lance.write_dataset".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
 "lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
 "catalog.services.warehouses.put_warehouse".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
@@ -231,10 +209,9 @@ extend-select = ["TID251", "FAST001"]
 "service_kit.governed.fga.revoke_object_tuples".msg = "Tuple revokes happen only at the registered revoking sites."
 "service_kit.governed.fga.commit_unless_changed".msg = "Arbitrated tuple writes happen only at the registered sites."
 "service_kit.governed.fga.hierarchy_edge_tuples".msg = "Hierarchy edges are seeded only by fga.py."
-"torch".msg = "No model framework in a shared seam: models live in sealed runners/."
-"pyannote".msg = "No model framework in a shared seam: models live in sealed runners/."
+"torch".msg = "No model framework in the lakehouse: a model runs in a client's own environment."
+"pyannote".msg = "No model framework in the lakehouse: a model runs in a client's own environment."
 "nats".msg = "No service talks to the broker directly: events ride Dapr pub/sub."
-"ray_kit.await_success".msg = "Poll a Ray job through the shared submit-or-reattach kernel."
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15
@@ -246,7 +223,7 @@ indent-style = "space"
 [tool.ruff.lint.isort]
 lines-after-imports = 2
 # COMPLETE, and it is meant to stay that way: every first-party import name on disk is here — the
-# seven code-shipping packages (client_kit, lakehouse_kit, lineage_kit, ray_cluster_env, ray_kit, service_kit, storage) and
+# three code-shipping packages (lakehouse_kit, lineage_kit, service_kit) and
 # the services. A missing name is not a metadata gap: ruff sorts that module into
 # the THIRD-PARTY block, so `from catalog.core.config import ...` sat beside `import httpx` in every
 # file that imported it.
@@ -260,23 +237,13 @@ lines-after-imports = 2
 # ADD A NEW MEMBER'S IMPORT NAME HERE IN THE SAME CHANGE that creates it (adding-a-package.md step 4).
 # One name at a time is cheap; ten at once is a repo-wide re-sort.
 known-first-party = [
-    "annotator",
     "catalog",
-    "client_kit",
-    "compute",
-    "flows",
     "lakehouse_kit",
     "lineage",
     "lineage_kit",
     "maintenance",
     "notifications",
-    "ray_cluster_env",
-    "ray_kit",
-    "search",
     "service_kit",
-    "storage",
-    "table_maintenance",
-    "viewer",
 ]
 
 [tool.ty.terminal]
@@ -294,7 +261,6 @@ extra-paths = ["tests/e2e-py"]
 [tool.ty.src]
 # ty otherwise walks these and reports on code we neither own nor can fix:
 #   .venv        — third-party site-packages (lance, ray.serve) — 38 diagnostics
-#   runners/     — sealed model envs, deliberately outside the fleet's resolution
 exclude = [
     # A vulture whitelist is a file of BARE NAMES by design — every line is an unresolved
     # reference to a type checker. lance-ns excludes it for the same reason.
@@ -305,10 +271,8 @@ exclude = [
     "**/.venv",
     "**/node_modules",
     # A worktree is a COMPLETE second checkout living inside this one. Walking it type-checks
-    # another branch's code — including its `runners/`, which the entry below only excludes at
-    # the root — and reports failures nobody on this branch can fix.
+    # another branch's code and reports failures nobody on this branch can fix.
     "**/.claude/worktrees",
-    "runners",
     # foreign code, regenerated on upgrade, gitignored for the same reason.
     "api",
 ]
@@ -336,7 +300,6 @@ markers = [
     "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",
     "e2e: live end-to-end suites needing a running/deployed stack (deselect with '-m \"not e2e\"'; run via make e2e-ci / the per-suite targets)",
     # per-suite selectors used by the e2e make targets (e.g. `pytest -m cas`); all of them ALSO carry e2e
-    "annotator: the annotator driven from its own release through the lakehouse's public doors (XC-167): its own roles, a person's annotation through the catalog, a publish as its own account (needs LANCE_E2E_ANNOTATOR_URL)",
     "byo_branch: a stock client's commits on a branch on the live estate, each staged on the table's vended credential and judged at version/create (LH-490)",
     "byo_erasure: an erasure drill on the live estate: the obligation recorded, a bring-your-own job's rewrites through version/create, the catalog's verification (LH-493)",
     "byo_pipeline: a bring-your-own pipeline end to end on the live estate: stock writes, provenance, the tag gate, the commit feed (LH-478)",
@@ -344,7 +307,6 @@ markers = [
     "chaos: criterion 5's dependency-outage drills (XC-095): each takes one dependency of the release down, so they are deselected unless the run passes --chaos",
     "compaction: compaction/GC sweep e2e",
     "edge: each public /api prefix reaches its service through the cluster Gateway and is refused there anonymously (needs RASK_E2E_EDGE_URL)",
-    "media_catalog: annotator/catalog live-mode e2e",
     "nats_auth: operator-mode NATS admits each bus client only to its own subjects (run by `dagger call nats-auth`, which provides the broker, nsc and daprd)",
     "observability: observability (OTLP/Greptime) e2e",
     "phase1: Phase 1's acceptance (XC-090): one drive of the bring-your-own scenario (`byo_scenario`), its own claims, and one module per criterion read off that drive; criterion 1, provenance, is XC-091, criterion 2, the catalog, is XC-092, criterion 4, events, is XC-094, and criterion 5, resilience, is XC-095, whose drills also carry `chaos`; criterion 3, no engine, is the import contracts `make lint-imports` runs, on a release the e2e-stack lane installs with no engine",

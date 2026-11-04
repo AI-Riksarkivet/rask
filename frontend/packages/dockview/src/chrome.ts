@@ -3,11 +3,11 @@
  *
  * The layout API stays deliberately thin: a consumer holds the real `DockviewApi`. Chrome is the
  * opposite, and on purpose. dockview ships **no** default header buttons at all — the per-tab close
- * ✕ is genuinely the only control that exists out of the box — so a thin binding leaves every zone
- * hand-writing three renderer factories, the split maths, and a context-menu array. Three zones
+ * ✕ is genuinely the only control that exists out of the box — so a thin binding leaves every page
+ * hand-writing three renderer factories, the split maths, and a context-menu array. Three pages
  * doing that independently is three drifting answers to one question.
  *
- * So chrome is an ABSTRACTION with working defaults: a zone declares intent, this package owns every
+ * So chrome is an ABSTRACTION with working defaults: a page declares intent, this package owns every
  * `createRightHeaderActionComponent`, `moveTo({ position })` and `getTabContextMenuItems` call.
  *
  *     <Dock {panels} />                              // everything on
@@ -25,7 +25,7 @@
  *   - Floating already works via `shift`+drag on a tab. No user discovers a modifier chord.
  *
  * NOT AVAILABLE, whatever the docs suggest — all upstream-paid, none in the MIT core:
- * smart alignment guides, the five-zone drop compass, layout undo/redo, pinned tabs, auto-hiding
+ * smart alignment guides, the five-page drop compass, layout undo/redo, pinned tabs, auto-hiding
  * edge groups. And `Ctrl+M` two-phase keyboard docking is fully implemented in the 7.0.4 bundle but
  * its keybindings are **not declared on `DockviewKeybindings`**, so it cannot fire — wiring it from
  * the docs would silently do nothing.
@@ -51,7 +51,7 @@ export interface DockChrome {
 	/**
 	 * Open a group in a real second browser window.
 	 *
-	 * Requires the consuming zone to serve {@link DockChromeOptions.popoutUrl} — a blank document.
+	 * Requires the consuming page to serve {@link DockChromeOptions.popoutUrl} — a blank document.
 	 * Left ON because the button self-disables when no url is configured, which is a visible,
 	 * explicable state rather than a silent no-op.
 	 */
@@ -65,7 +65,7 @@ export interface DockChrome {
 	keyboard: boolean;
 	/** Keep an emptied group (and its header chrome) alive instead of destroying it. */
 	keepEmptyGroups: boolean;
-	/** Widen the whole-layout edge drop zone so it is findable. See {@link EDGE_DROP}. */
+	/** Widen the whole-layout edge drop page so it is findable. See {@link EDGE_DROP}. */
 	edgeDrop: boolean;
 	/**
 	 * Panel watchers: a panel raises an alert, the WHOLE panel highlights, and a header bell offers
@@ -78,7 +78,7 @@ export interface DockChromeOptions {
 	/**
 	 * A blank document for popout windows to load, e.g. `${base}/popout.html`.
 	 *
-	 * Zone-shaped, so it cannot be defaulted here: each zone is served under its own base path. The
+	 * Zone-shaped, so it cannot be defaulted here: each page is served under its own base path. The
 	 * parent document's stylesheets ARE copied into the popout, so rask's OKLCH tokens and Tailwind
 	 * utilities resolve there with no extra work — the file itself only needs an empty body.
 	 */

@@ -1,40 +1,37 @@
 # Component catalog & packaging
 
-`frontend/packages/ui` — 207 files, ~3.8k lines of `.svelte` under `src/lib/components` plus a 1.3k-line `src/lib/shell`.
+`frontend/packages/ui` — 173 tracked files; `src/lib/shell` alone is ~2.1k lines (measured 2026-11-04).
 
 ## Build
 
-`svelte-package` (`@sveltejs/package` 2.5.8) emits `src/lib/` → `dist/`, stripping the `src/lib` prefix — which is why every `exports` entry reads `./dist/components/<x>` while the source sits at `src/lib/components/<x>`. `dist/` and `storybook-static/` are gitignored; the `files` allowlist keeps stories and tests out of the tarball. Turbo caches `dist/**`, and both `check` and `test` depend on the package's **own** `build`.
+`svelte-package` (`@sveltejs/package` 2.5.8) emits `src/lib/` → `dist/`, stripping the `src/lib` prefix — which is why every `exports` entry reads `./dist/components/<x>` while the source sits at `src/lib/components/<x>`. `dist/` and `storybook-static/` are gitignored; the `files` allowlist keeps stories and tests out of the tarball. The workspace's `check` and `test` scripts run `build` first (`frontend/package.json`), because the console reads `dist/`.
 
 `tsconfig.json`: `strict` + `noUncheckedIndexedAccess`, **no** `exactOptionalPropertyTypes` (the Bits UI "union too complex" incompatibility — leave it off), `target: ES2022` (`run-status.ts:121-123` avoids `toSorted` for this reason), `verbatimModuleSyntax`.
 
 `vite.config.ts` serves Storybook + vitest, and its `test` block is load-bearing (`vite.config.ts:8-19`): `include` names **both** homes — `tests/**` and `src/**` — and `exclude` drops `dist/**` and `.svelte-kit/**`. `svelte-package` copies test files into both build trees, so vitest's default discovery ran every suite three times against regenerated output; narrowing to `src` alone silently dropped 117 tests to 10. Change neither half without checking the other.
 
-## The 42 export subpaths
+## The 31 export subpaths
 
 **Components** — `dist/components/<name>/index.js`, conditions `svelte` + `types` only:
 
-`alert-dialog · avatar · badge · button · card · checkbox · chip · collapsible · data-table · dialog · dropdown-menu · field · gated-action · grant-form · grants-panel · hierarchy · identity · input · navigation-menu · popover · progress · radio-group · rainbow-button · resizable-split · search-bar · select · separator · sheet · sidebar · skeleton · slider · sort-header · switch · table · tabs · textarea · tooltip` (measured 2026-10-16 against `package.json` `exports`)
+`alert-dialog · avatar · badge · button · card · checkbox · collapsible · data-table · dialog · dropdown-menu · gated-action · grant-form · grants-panel · hierarchy · identity · input · navigation-menu · popover · select · separator · sheet · sidebar · skeleton · switch · table · tooltip` (measured 2026-11-04 against `package.json` `exports`)
 
-**`./gated-action`** — ruling #143's implementation, and missing from this list until 2026-08-16 even though `package.json` has always exported it. `{ allowed, reason, action?, class?, children }`: when allowed it renders the children with NO wrapper at all; when refused it wraps them in a `Tooltip.Trigger` `child` span (`data-slot="gated-action"`, `aria-disabled="true"`, `class="contents"` so geometry is unchanged) with a capture-phase click/keydown guard. It deliberately does NOT set the native `disabled` attribute — that would kill the tooltip and drop the control from the tab order — so **a child that sets `disabled` itself defeats the mechanism**; make the child's own `disabled` conditional on the same verdict. Wrapping in a `Tooltip.Trigger` button instead of a span would be a nested-button SSR crash.
+**`./gated-action`** — ruling #143's implementation, and missing from this list until 2026-08-16 even though `package.json` has always exported it. `{ allowed, reason, action?, class?, children }`: when allowed it renders the children with NO wrapper at all; when refused it wraps them in a `Tooltip.Trigger` `child` span (`data-slot="gated-action"`, `aria-disabled="true"`, `class="contents"` so geometry is unchanged) with a capture-phase click/keydown guard. It deliberately does NOT set the native `disabled` attribute — that would kill the tooltip and drop the control from the tab order — so **a child that sets `disabled` itself defeats the mechanism**; make the child's own `disabled` conditional on the same verdict. Wrapping in a `Tooltip.Trigger` button instead of a span would nest a button inside a button.
 
-**`./hierarchy`** — `ProjectHierarchy` + `HierarchyNode` (#109): project › warehouse › namespace › table as a vertical graph. **The one subpath with a vendor-canvas dependency** — it draws on `@rask/flow`'s `StaticFlow`, so `@rask/flow` and `@xyflow/svelte` are `@rask/ui` dependencies for this component alone, and a zone mounting it must declare both itself AND import their two stylesheets `layer(base)` in its `app.css` (vendor sheet first, then `@rask/flow/styles.css`) or the canvas paints in the library's light-mode hex. Home's `/projects/<id>` and the lakehouse's Overview both render it; it lives here rather than in either zone because zones may not import each other, and transport-agnostic (the GrantsPanel precedent) because the library owns no API client — the two rung reads arrive as async props and each zone passes its own remote functions.
+**`./hierarchy`** — `ProjectHierarchy` + `HierarchyNode` (#109): project › warehouse › namespace › table as a vertical graph. **The one subpath with a vendor-canvas dependency** — it draws on `@rask/flow`'s `StaticFlow`, so `@rask/flow` and `@xyflow/svelte` are `@rask/ui` dependencies for this component alone, and the app mounting it must declare both itself AND import their two stylesheets `layer(base)` in its `app.css` (vendor sheet first, then `@rask/flow/styles.css`) or the canvas paints in the library's light-mode hex. The console's `/projects/<id>` and `/catalog` overview both render it. It is transport-agnostic (the GrantsPanel precedent) because the library owns no API client: the two rung reads arrive as async props and the console passes its own `*.api.ts` reads.
 
 **`./identity`** — `Subject` + `subjectDisplay` (#87). An OIDC `sub` is an opaque base64 blob; the helper keeps readable identifiers verbatim and ellipsizes opaque ones in the middle, and the FULL subject always rides `title` so hover/copy still yields the value a tuple write needs. Render it with `<Subject value={…} />`, never `subjectDisplay(...).label` — the component is what makes the title invariant structural, after a call site dropped it within days of the helper shipping. Its own subpath, not under `grants-panel`: the concern is any surface that prints a sub (FGA subjects, control-event actors, audit stamps).
 
-**Non-components** (`./utils`, `./motion`, `./color-mode` carry a `default` condition; `./shell` does not — it is `types` + `svelte` like a component, and shares rough edge 3; `./styles/tokens.css` is a bare path):
+**Non-components** (`./utils` and `./motion` carry a `default` condition; `./shell` does not — it is `types` + `svelte` like a component, and shares rough edge 3; `./styles/tokens.css` is a bare path):
 
 | Subpath | Contents |
 |---|---|
 | `./shell` | `AppShell, AppSidebar, AppError, TopNavbar, NotificationCenter, InboxList, ForbiddenPage` + `inbox` + `nav-config` + `breadcrumb` |
 | `./utils` | `cn`, `toDate/formatAbsolute/formatRelative/formatTimestamp`, `WithElementRef/WithoutChildren/WithoutChild/WithoutChildrenOrChild` |
 | `./motion` | GSAP `{@attach}` factories |
-| `./color-mode` | `useColorMode()` |
 | `./styles/tokens.css` | the theme |
 
-Usage ranking across zones: `shell` (24) ≈ `select` (24) > `button` (20) > `badge` (19) > `data-table` (16) > `card` (15) > root barrel (14) > `utils` (12) > `motion` (11).
-
-The root barrel `.` is a **curated subset** (`src/lib/index.ts`): button, badge, dialog, card, sort-header, utils, select, motion, chip, search-bar, grants-panel. `README.md:30-31` names the subpaths authoritative — prefer `@rask/ui/button` over `@rask/ui`.
+The root barrel `.` is a **curated subset** (`src/lib/index.ts`): button, badge, dialog, card, utils, select, motion, grants-panel. `README.md:30-31` names the subpaths authoritative — prefer `@rask/ui/button` over `@rask/ui`.
 
 ## Three barrel conventions
 
@@ -42,13 +39,13 @@ They coexist deliberately; match the one the component already uses.
 
 1. **shadcn dual export** — `Root` + `Sidebar` + `SidebarRoot` (`sidebar/index.ts`). Consumed as `import * as Sidebar from '@rask/ui/sidebar'`.
 2. **Namespace object** — `export const Dialog = { Root, Trigger, … }` (`dialog/index.ts:7`; same for `Table`, `AlertDialog`). Consumed as `import { Dialog } from '@rask/ui/dialog'`.
-3. **Single default** — `export { default as Chip }`.
+3. **Single default** — `export { default as Switch }` (`switch/index.ts`).
 
 Re-exporting a Bits UI primitive unchanged needs an explicit `typeof` annotation; a bare re-export infers a non-portable type and silently skips the `.d.ts` declaration (`collapsible/index.ts:3-4`, repeated in `dropdown-menu`, `popover`, `alert-dialog`).
 
 ## The `child` escape hatch
 
-`sidebar-menu-button.svelte:68-77` declares a local `{#snippet Button({ props })}`, merges with `mergeProps(buttonProps, props)` from `bits-ui`, and forwards to a caller-supplied `child?: Snippet<[{ props: Record<string, unknown> }]>`. `zone-nav.svelte` uses it at four call sites (`:66, :83, :99, :112`), each rendering the `leafLink` snippet at `:40-52`, to emit an `<a>` where the component would otherwise emit a `<button>`. Reach for this instead of forking a component to change its tag.
+`sidebar-menu-button.svelte:68-77` declares a local `{#snippet Button({ props })}`, merges with `mergeProps(buttonProps, props)` from `bits-ui`, and forwards to a caller-supplied `child?: Snippet<[{ props: Record<string, unknown> }]>`. `shell/zone-nav.svelte` (the in-page sidebar navigation) uses it at four call sites (`:66, :83, :99, :112`), each rendering the `leafLink` snippet at `:40-52`, to emit an `<a>` where the component would otherwise emit a `<button>`. Reach for this instead of forking a component to change its tag.
 
 ## Data-table stack
 
@@ -59,7 +56,7 @@ A vendored shadcn-svelte adapter over `@tanstack/table-core` 8.21.
 - `FlexRender` resolves a `ColumnDef` template that is a string, a `renderComponent()` config, a `renderSnippet()` config, or a primitive.
 - `selectionColumn()` ships the indeterminate select-all column.
 - `types.ts:11-14` augments tanstack's `ColumnMeta` with `{ headerClass, cellClass }` and is **type-re-exported** from the barrel so the augmentation reaches consumers through the `.d.ts` chain.
-- The barrel re-exports the tanstack row models, so a zone needs no direct `@tanstack` dependency.
+- The barrel re-exports the tanstack row models, so the console needs no direct `@tanstack` dependency.
 
 Containment is deliberate: `Card` and the DataTable card both carry `min-w-0 max-w-full`, and horizontal scroll lives on `Table`'s inner `[data-slot=table-container] overflow-x-auto`.
 
@@ -67,18 +64,16 @@ Containment is deliberate: `Card` and the DataTable card both carry `min-w-0 max
 
 **Storybook 10.4.6** with `@storybook/svelte-vite` (not `-sveltekit` — this is a library). Addons: docs, svelte-csf, a11y. `preview.ts` imports `tokens.css`; `tags: ['autodocs']` globally. Run `make storybook` (→ `:6006`).
 
-Coverage is thin: **4 story files for ~35 exported components** — `button.stories.svelte` (CSF via `defineMeta` + `{#snippet template(args)}`), `card.stories.ts` (CSF3 `Meta/StoryObj`), `dialog.stories.svelte`, `Welcome.stories.svelte`. A new component should ship a story.
+Coverage is thin: **6 story files for 26 exported components** — `button.stories.svelte` (CSF via `defineMeta` + `{#snippet template(args)}`), `card.stories.ts` (CSF3 `Meta/StoryObj`), `dialog.stories.svelte`, `gated-action.stories.svelte`, `shell/notification-center.stories.svelte`, `Welcome.stories.svelte`. A new component should ship a story.
 
-8 vitest suites, all pure-function or SSR-string. Seven live in `tests/`; a suite may also sit beside its source (`src/lib/components/identity/subject.test.ts`) — `vite.config.ts:17` includes both homes. No jsdom and no `@testing-library/svelte` (adding either changes the workspace lockfile).
+Vitest suites are pure-function or SSR-string. Seven live in `tests/`; a suite may also sit beside its source (`src/lib/components/identity/subject.test.ts`) — `vite.config.ts:17` includes both homes. No jsdom and no `@testing-library/svelte` (adding either changes the workspace lockfile).
 
 ## Known rough edges
 
 Do not treat these as patterns to copy.
 
-1. Two extensionless relative imports violate the package's own `.js` convention and survive into `dist`: `motion.ts:10` → `'./gsap'`, and `search-bar.svelte:8` → `'../chip'` (a bare **directory** import, resolvable only by a bundler's implicit `/index` lookup).
-2. Component subpaths declare no `default` condition — a tool resolving without the `svelte` condition gets an unresolvable specifier. Conversely `./color-mode` promises a `default` while shipping raw `$state`/`$derived`.
+1. An extensionless relative import violates the package's own `.js` convention and survives into `dist`: `motion.ts:10` → `'./gsap'`.
+2. Component subpaths declare no `default` condition — a tool resolving without the `svelte` condition gets an unresolvable specifier.
 3. Six exported subpaths have zero consumers outside the package (`avatar, collapsible, dropdown-menu, navigation-menu, sidebar, tooltip`); they exist to serve `shell/`.
-4. Two near-duplicate sort headers: `SortHeader` (renders its own `<th>`, takes `sortKey/sortDir/onsort`) and `DataTableHeaderButton` (tanstack-driven, renders a bare `<button>`).
-5. `GrantsPanel` (423 lines) is the largest component and is arguably domain logic — it hardcodes the FGA relation ladder `['reader','writer','validator','owner']`. It was hoisted here only after the data and lineage copies had silently drifted apart.
-6. `ResizableSplit` defaults `storageKey = 'lance-media-split'` — a zone-specific localStorage key baked into a shared default.
-7. `tsconfig.json:15`'s `baseUrl` triggers a TS 7 deprecation warning on every `check`.
+4. `GrantsPanel` (420 lines) is the largest component and is arguably domain logic — it hardcodes the FGA relation ladder `['reader','writer','validator','owner']`. It was hoisted here only after the data and lineage copies had silently drifted apart.
+5. `tsconfig.json:15`'s `baseUrl` triggers a TS 7 deprecation warning on every `check`.

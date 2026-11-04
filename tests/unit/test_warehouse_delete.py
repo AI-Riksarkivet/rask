@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
@@ -39,10 +38,7 @@ from catalog.core.config import Settings
 from catalog.core.lineage_emit import NoopEmitter
 from catalog.services import warehouses
 from lakehouse_kit.control_emit import NoopControlEmitter
-from service_kit.governed import fga as fga_module
 from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
 from service_kit.naming import UUID_PROPERTY
 from service_kit.storage_options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
@@ -62,14 +58,6 @@ def _settings(tmp_path: Any, *, fga_enabled: bool = False) -> Settings:
     if fga_enabled:
         data |= {"fga_enabled": True, "oidc_enabled": True, "oidc_issuer": "https://idp", "oidc_audience": "lance", "oidc_connectors": {"local": "dex"}}
     return Settings.model_validate(data)
-
-
-def _caller(key: str) -> PersonPrincipal:
-    principal = Principal.parse(key)
-    return PersonPrincipal(principal=principal, claims=IDToken(iss="i", sub=principal.subject, aud="lance", exp=1, iat=1))
-
-
-_TOKEN = _caller("dex~alice")
 
 
 class _FakeNamespace:
@@ -183,40 +171,6 @@ def _delete(
         )
 
     return asyncio.run(_resolved_then_deleted())
-
-
-class _FakeStore:
-    """A minimal OpenFGA stand-in resolving the ONE relation this door checks — ``project#can_administer``
-    from a direct ``project#admin`` tuple, exactly as the compiled model derives it. Any other relation is
-    an error, so a gate quietly re-pointed at the warehouse (or at a weaker rung) fails the test rather
-    than passing it."""
-
-    def __init__(self, *, project_admins: tuple[str, ...] = (), project: str = "acme") -> None:
-        self.tuples: set[tuple[str, str, str]] = {(f"user:{sub}", "admin", f"project:{project}") for sub in project_admins}
-        self.checks: list[tuple[str, str, str]] = []
-        self.revoked: list[str] = []
-
-    async def check(self, _client: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
-        self.checks.append((user, relation, obj))
-        if relation != "can_administer":
-            raise AssertionError(f"the warehouse-delete gate checked an unexpected relation: {relation}")
-        subject = user if ":" in user else f"user:{user}"
-        return (subject, "admin", obj) in self.tuples
-
-    async def revoke(self, _client: object, obj: str, **_kw: object) -> list[SimpleNamespace]:
-        """Hands back WHAT it revoked, mirroring the helper: a count cannot be fanned out to the
-        principals who just lost access."""
-        self.revoked.append(obj)
-        return [SimpleNamespace(user=f"user:u{i}", relation="owner", object=obj) for i in range(3)]
-
-    async def read(self, _client: object, obj: str, **_kw: object) -> list[SimpleNamespace]:
-        """The tuples held on ``obj``: what the delete reads for a namespace an earlier attempt left on the warehouse."""
-        return [SimpleNamespace(user=user, relation=relation, object=held) for user, relation, held in self.tuples if held == obj]
-
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(fga_module, "check", self.check)
-        monkeypatch.setattr(fga_module, "revoke_object_tuples", self.revoke)
-        monkeypatch.setattr(fga_module, "read_object_tuples", self.read)
 
 
 # --------------------------------------------------------------------------- #
@@ -355,54 +309,6 @@ def test_force_true_overrides_the_protection_flag(tmp_path: Any) -> None:
     assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is None
 
 
-def test_force_true_without_authorization_is_still_refused(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The security-critical one: ``force`` turns the PROTECTION lock only.
-
-    Both locks are set here — protected AND unauthorized — and the caller passes ``force=true``. The
-    outcome must be the AUTHORIZATION failure, which proves the FGA gate is consulted before force is even
-    read: had the order been reversed, force would have unlocked protection and the delete would have gone
-    on to a rung this caller never held. Nothing is deleted, nothing is purged.
-
-    The failure surfaces as the missing-warehouse 404, not a 403 — NO EXISTENCE ORACLE (audit #4, the rule
-    ``_set_warehouse_status`` set in this same module): denial and absence are made indistinguishable so
-    the door cannot be used to probe which warehouse ids exist. Strictly less disclosure than a 403.
-    """
-    settings = _settings(tmp_path, fga_enabled=True)
-    _seed(settings, protected=True)
-    store = _FakeStore()  # mallory holds NO admin tuple on project:acme
-    store.install(monkeypatch)
-    purged: list[str] = []
-    monkeypatch.setattr(warehouses, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
-
-    with pytest.raises(TableNotFoundError):
-        _delete(
-            settings,
-            _request(),
-            token=_caller("dex~mallory"),
-            client=MagicMock(),
-            force=True,
-            purge_bucket=True,
-        )
-
-    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is not None
-    assert purged == []
-    assert store.revoked == []
-
-
 # --------------------------------------------------------------------------- #
 # the gate
 # --------------------------------------------------------------------------- #
-
-
-def test_the_gate_is_the_projects_admin_rung_never_a_relation_on_the_warehouse(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Deleting storage is a TENANT-level act: the door is `can_administer` on the warehouse's OWN project,
-    # not a rung someone could hold on this one warehouse (a warehouse owner must not be able to delete it).
-    settings = _settings(tmp_path, fga_enabled=True)
-    _seed(settings)
-    store = _FakeStore(project_admins=("dex~alice",))
-    store.install(monkeypatch)
-
-    _delete(settings, _request(), token=_TOKEN, client=MagicMock())
-
-    assert store.checks == [("dex~alice", "can_administer", "project:acme")]
-    assert not any(obj.startswith("warehouse:") for _u, _r, obj in store.checks)

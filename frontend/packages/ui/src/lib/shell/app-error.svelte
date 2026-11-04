@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { TriangleAlert } from '@lucide/svelte';
 
-	// Shared error state for every microfrontend's +error.svelte, so a failed route in any
-	// zone degrades to the SAME branded page (resilient-page principle) instead of a blank
+	// Shared error state for every app's +error.svelte, so a failed route in any
+	// page degrades to the SAME branded page (resilient-page principle) instead of a blank
 	// document or a per-app one-off. The app's +error.svelte passes page.status/page.error.
 	let {
 		status = 500,

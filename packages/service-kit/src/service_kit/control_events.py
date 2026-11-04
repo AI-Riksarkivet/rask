@@ -82,7 +82,7 @@ ControlAction = Literal[
     # diff2 F10 item 6 — the EXPIRY PURGE has its own verbs. It reused `table_dropped` /
     # `namespace_dropped` with `extra.reason="trash_expired"`, which made an automated reclamation
     # indistinguishable from a person deleting the table unless a consumer thought to read `extra` —
-    # and the console's feed does not. Two different facts were arriving under one name: "someone
+    # and a feed reader may not. Two different facts were arriving under one name: "someone
     # decided to remove this" and "the grace period ran out and the sweep collected it". The second
     # has no actor (the emitter stamps `None`), is not appealable, and is the LAST event an object
     # ever produces, so conflating them mis-reports both the cause and the finality.

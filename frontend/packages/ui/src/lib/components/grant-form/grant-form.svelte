@@ -1,6 +1,6 @@
 <script lang="ts" module>
-	/** Matches the zones' status-aware `ApiResult`. Declared STRUCTURALLY rather than imported, on the
-	 *  GrantsPanel precedent: this library owns no API client, so a zone hands its own remotes in. */
+	/** Matches the pages' status-aware `ApiResult`. Declared STRUCTURALLY rather than imported, on the
+	 *  GrantsPanel precedent: this library owns no API client, so a page hands its own remotes in. */
 	export type GrantFormResult =
 		| { ok: true; data: { user: string } }
 		| { ok: false; status: number; detail: string };
@@ -39,7 +39,7 @@
 	// from one surface and grantable from the other with no decision behind the difference.
 	//
 	// Transport-agnostic like every component here: `grant`/`revoke` arrive as async props and the
-	// library never imports a zone remote.
+	// library never imports a page remote.
 	import { GatedAction } from '../gated-action/index.js';
 	import { Select } from '../select/index.js';
 	import { TriangleAlert } from '@lucide/svelte';

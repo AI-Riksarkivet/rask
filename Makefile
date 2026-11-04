@@ -1,18 +1,14 @@
-.PHONY: k3s-clients fga-store-check fga-estate-migrate sbom zone-sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill lakehouse-alone audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: k3s-clients fga-store-check fga-estate-migrate sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image seed-dev e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
 	@echo "  install build test lint fmt clean storybook"
 	@echo "  typecheck knip check ci   frontend-check frontend-build"
-	@echo "  dev-micro                              — backend fleet (per-domain services; no edge)"
-	@echo "  dev-frontends                          — all 6 zones behind the :3024 proxy (browse http://localhost:3024)"
-	@echo "  dev-frontends-k3s                      — same, but /api → the IN-CLUSTER edge (Traefik, port-forwarded)"
-	@echo "  home frontend-<zone>                   — run one zone each (e.g. frontend-explorer)"
+	@echo "  dev-micro                              — the notifications inbox on the host"
+	@echo "  dev                                    — the console (Vite HMR, /api → RASK_EDGE_URL)"
+	@echo "  dev-k3s                                — the console against the IN-CLUSTER edge (Traefik, port-forwarded)"
+	@echo "  console-image                          — the console's static-file image (web + serve.ts)"
 	@echo "  dev-gc                                 — reclaim the dev registry + the Dagger cache"
-	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
-	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
-	@echo "  qwen-serve                             — vLLM Qwen3.6-27B on GPU 2 for OpenCode"
-	@echo "  harvest-ead"
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
 
 # --all-packages, not a bare `uv sync`: a bare sync installs the ROOT project only and
@@ -38,10 +34,8 @@ build:
 	uv sync --all-packages
 	bun --cwd=frontend run build
 
-# Python tests via pytest. THE FRONTENDS DO HAVE A UNIT SUITE and this line used to deny it: 128
-# tracked vitest files across the 18 packages that declare a `test` script. `make test` does not run
-# them — `bun --cwd=frontend run test` does, and CI runs both — so the honest statement is that this
-# target covers ONE plane, not that the other plane has nothing to cover.
+# Python tests via pytest. The console has its own unit suite (vitest): `bun --cwd=frontend run test` runs it, and CI
+# runs both, so this target covers ONE plane.
 # `not e2e`: tests/e2e-py is collectable (so the collection gate in
 # tests/unit/test_e2e_collection_gate.py can see it) but its suites need a LIVE deployed
 # stack — run them via `make e2e-ci` / the per-suite targets.
@@ -58,17 +52,6 @@ build:
 PYTEST_WORKERS ?= 16
 PYTEST_PARALLEL = $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS))
 
-# The sealed runners' suites. A runner is sealed OUT of the root workspace (own lock, own venv), so the
-# root pytest can neither import nor collect its tests: each suite runs from INSIDE its own directory,
-# where pytest reads that runner's config and `uv run --frozen` syncs from that runner's lock. From the
-# repo root pytest would read the ROOT testpaths and die at collection on fleet modules the runner's
-# venv lacks. The loop covers every `runners/*/tests`, so a runner that gains a suite runs in both
-# `make test` and `make test-slow` with no edit here, and `--frozen` fails loudly on a runner that has
-# a suite but commits no uv.lock. `|| exit 1` because a shell loop reports only its LAST iteration's
-# status: without it a failing suite followed by a passing one reads as green.
-RUNNER_SUITES := $(sort $(patsubst %/tests,%,$(wildcard runners/*/tests)))
-run-runner-suites = for runner in $(RUNNER_SUITES); do (cd $$runner && uv run --frozen pytest $(1)) || exit 1; done
-
 # The OpenFGA server the offline suite asserts authorization outcomes against (root `conftest.py::openfga`, [[LH-235]]):
 # the static binary out of the very image `.dagger/governed.go` pins and `dagger call test` copies onto PATH, so a
 # developer box and CI evaluate the model with one server. It depends on that file, so a bumped pin re-exports it.
@@ -84,15 +67,10 @@ openfga: $(OPENFGA_BIN) ## Export the pinned OpenFGA server binary to .localbin,
 
 test: $(OPENFGA_BIN)
 	uv run pytest -m "not slow and not e2e" $(PYTEST_PARALLEL)
-	$(call run-runner-suites,-m "not slow")
 
-# Slow tests need real models / a GPU (e.g. the YOLO layout smoke test) and hang on hosts without
-# them, so this is opt-in. The root workspace declares no `slow` mark at all: every one lives in a
-# sealed runner, so the runner loop, run with no marker filter, is what this target adds over
-# `make test`.
+# `slow` marks a long-running offline test; this target runs them with the rest of the offline suite.
 test-slow: $(OPENFGA_BIN)
 	uv run pytest -m "not e2e" $(PYTEST_PARALLEL)
-	$(call run-runner-suites,)
 
 lint:
 	uv run ruff check .
@@ -128,7 +106,7 @@ comment-gate:
 	uv run python scripts/comment_history_gate.py --worktree
 
 clean:
-	rm -rf .venv node_modules **/node_modules **/dist **/.svelte-kit **/.turbo **/storybook-static
+	rm -rf .venv node_modules **/node_modules **/dist **/.svelte-kit **/storybook-static
 
 # ---- python (uv workspace) -------------------------------------------------
 typecheck:
@@ -161,27 +139,15 @@ openapi-check: openapi
 	  || { echo "!! OpenAPI drift: a route changed without refreshing the spec or its client. Commit the diff above."; exit 1; }
 	@echo "OpenAPI specs match the committed contract"
 
-# ---- zone images -----------------------------------------------------------
-# `make frontend-images` == the ci.yml "Build every zone image" step, byte-for-byte — the same
-# contract `dagger call charts` == `make charts` holds. The step invoked this target by name while it
-# did not exist, so the web-smoke job died with make's exit 2 ("No rule to make target") before
-# building anything: the gate's whole claim ("the dockerfile still builds") had never been tested.
-#
-# ZONES is `?=`, so ci.yml's scan of microfrontends/*/package.json wins when exported; locally the
-# committed list applies. `|| exit 1` stops at the FIRST failing zone rather than reporting the last
-# one's status for all of them.
-#
-# The build itself goes through DAGGER (scripts/dagger-image.sh -> `dagger call zone-image`), like every
-# other image in this repo since 2026-07-29. The dockerfile is unchanged and still declares the OCI
-# provenance args (BUILD_DATE / VCS_REF / VERSION); the helper supplies them, because a Dagger Function
-# is sandboxed and cannot read git — and stamping a timestamp inside the module would change the build
-# args on every invocation and defeat the layer cache.
-FRONTEND_TAG ?= dev
+# ---- the console image -----------------------------------------------------
+# The console is one static single-page app served by its own `serve.ts` (.docker/frontend.dockerfile). The build goes
+# through DAGGER (scripts/dagger-image.sh -> `dagger call image --name=frontend`), like every image in this repository;
+# the helper supplies the OCI provenance args (BUILD_DATE / VCS_REF / VERSION), because a Dagger Function is sandboxed
+# and cannot read git.
+CONSOLE_TAG ?= dev
 
-frontend-images: ## Build every zone image from the one parametrized dockerfile (web-<zone>:$(FRONTEND_TAG))
-	@for a in $(ZONES); do \
-	  VERSION="$(FRONTEND_TAG)" bash scripts/dagger-image.sh --zone $$a --tag web-$$a:$(FRONTEND_TAG) || exit 1; \
-	done
+console-image: ## Build the console's image (web-console:$(CONSOLE_TAG)) from .docker/frontend.dockerfile
+	VERSION="$(CONSOLE_TAG)" bash scripts/dagger-image.sh --name frontend --tag web-console:$(CONSOLE_TAG)
 
 # ---- chart gates (prod overlay + alert rules) -------------------------------
 # CI enforces both via `dagger call charts` (.dagger/charts.go), which shells out to these two
@@ -221,9 +187,8 @@ alert-rules-check: ## promtool: the alert rules are valid AND actually fire on s
 alert-rules-drill: ## replay every alert rule against a REAL GreptimeDB (skips with no cluster)
 	@uv run python scripts/alert_rules_drill.py; s=$$?; [ $$s -eq 1 ] && exit 1 || exit 0
 
-# ---- frontend dead-code + dep gate (knip, repo-wide; see knip.json) ---------
-# Cross-workspace tool — analyses the whole JS graph at once, so it stays a
-# root-level gate, not a per-package turbo task (lint/fmt ARE per-package turbo tasks).
+# ---- frontend dead-code + dep gate (knip, workspace-wide; see knip.json) ---------
+# Analyses the whole JS graph at once, so it runs once over the workspace rather than per package.
 knip:
 	bun --cwd=frontend run knip
 
@@ -314,7 +279,7 @@ ci: check test
 # audit       osv-scanner over all SIX lockfiles + .dagger/go.mod. No build, seconds.
 # scan-config trivy misconfig over .docker/ + chart/, and secret detection repo-wide. No build.
 # scan-image  trivy over an image DAGGER BUILT — needs the build first, so it is minutes, not seconds.
-#             NAME is the .docker/<stem>.dockerfile stem; ZONE is a frontend/microfrontends/ dir.
+#             NAME is the .docker/<stem>.dockerfile stem (`frontend` is the console).
 audit:
 	dagger call audit
 
@@ -350,15 +315,6 @@ sbom: ## CycloneDX SBOM for one image (NAME=rest-catalog) — writes ./sbom-<nam
 	dagger call sbom --name=$(NAME) export --path=./sbom-$(NAME).cdx.json
 	@echo "  -> ./sbom-$(NAME).cdx.json"
 
-zone-sbom: ## CycloneDX SBOM for one micro-frontend zone (ZONE=lakehouse)
-	@test -n "$(ZONE)" || { echo "  !! usage: make zone-sbom ZONE=lakehouse"; exit 1; }
-	dagger call zone-sbom --zone=$(ZONE) export --path=./sbom-web-$(ZONE).cdx.json
-	@echo "  -> ./sbom-web-$(ZONE).cdx.json"
-
-scan-zone-image:
-	@test -n "$(ZONE)" || { echo "  !! usage: make scan-zone-image ZONE=home"; exit 1; }
-	dagger call scan-zone-image --zone=$(ZONE)
-
 # ---- claude code -----------------------------------------------------------
 claude-bootstrap:
 	@command -v claude  >/dev/null 2>&1 || { echo "  !! claude CLI not found — install Claude Code first"; exit 1; }
@@ -378,200 +334,44 @@ claude-bootstrap:
 	@echo "==> Done — re-run anytime (idempotent). Skills come from the ra-skills marketplace; see .claude/README.md."
 	@echo "    Authenticate any MCP servers if prompted on first use."
 
-# ---- backend fleet ---------------------------------------------------------
-# Local microservice fleet (gateway + per-domain backends) via scripts/dev-micro.sh.
-# Bring up deps first: `make ray-up`; S3/HCP from .env. The gateway listens on
-# :8888 so the frontends' /api proxy works. (The `viewer` monolith target and the
-# local postgres/alembic targets died at P7a — the app DB is gone; the lineage/
-# openfga databases are chart-provisioned.)
+# ---- the inbox on the host --------------------------------------------------
+# The notifications inbox, the console's one backend, as a host process via scripts/dev-micro.sh. There is no edge on
+# the host, so the console reaches the lakehouse through `make dev-k3s` or a cluster.
 dev-micro:
 	uv sync --all-packages
 	./scripts/dev-micro.sh
 
-# ---- frontends (SvelteKit microfrontends) ----------------------------------
-# Six independent SvelteKit SSR zones (svelte-adapter-bun) + the shared ui
-# library's watcher, orchestrated by Turborepo. Each zone's server reaches /api/* at
-# RASK_EDGE_URL and its Vite dev server proxies /api/* to VIEWER_BACKEND (both :8888,
-# an edge — `make dev-frontends-k3s` forwards the cluster's). The zones come up on
-# their own ports AND Turborepo auto-starts its built-in microfrontends proxy (from
-# frontend/microfrontends/home/microfrontends.json — no extra package) on :3024:
-#   single origin → http://localhost:3024   (browse THIS for cross-zone nav)
-#   home :5273 (catch-all: /) · media :5173 /explorer · lakehouse :5174 /lakehouse · compute :5175 /compute · studio :5176 /studio · annotator :5177 /annotator
-# The shared ui-package shell + nav render with NO backend; start one
-# (`make dev-micro`) only when you need live /api data.
+# ---- the console (one SvelteKit single-page app) --------------------------
+# `frontend/console` builds to static files: no server of its own, the browser signs in to Dex with PKCE and calls the
+# lakehouse's /api/* and the inbox with its bearer. In development Vite proxies /api/* to RASK_EDGE_URL (default
+# :8888, an edge; `make dev-k3s` forwards the cluster's). The design system builds first so the app reads a complete
+# dist/; to live-edit it, run `bun --cwd=frontend/packages/ui run dev` in a second terminal.
+dev:                  # the console with Vite HMR, /api → RASK_EDGE_URL
+	bun --cwd=frontend run dev
 
-# The zone estate — one entry per directory under frontend/microfrontends/. Drives
-# `make k3s-build`/`k3s-import` (one image per zone via --build-arg APP=$z) and
-# sync-favicons; the zone-contract deploy-path gate pins this list to the zone
-# directories that actually exist, so add/retire a zone HERE too.
-ZONES ?= home lakehouse explorer annotator compute studio
-
-dev-frontends:        # build the ui + api libs once, then all zones + :3024 proxy
-	# Build the libs FIRST so the zones read a complete dist/. Running `turbo run dev`
-	# unfiltered also starts the ui library's `svelte-package -w` watcher, which rewrites
-	# dist/ concurrently and races the zones reading it (one zone crashes → turbo tears
-	# the whole run down). Zones-only dev avoids that. To live-edit the ui library, run
-	# its watcher in a second terminal: `bun run dev:ui`.
-	bunx turbo --cwd=frontend run build --filter='./packages/ui' --filter='./packages/api'
-	bunx turbo --cwd=frontend run dev --filter='./microfrontends/*'
-
-dev-frontends-k3s:    # frontend HMR (Path A) against the IN-CLUSTER backend
-	# Port-forwards the in-cluster edge (k3s Traefik's Gateway, which serves the chart's
-	# HTTPRoutes) to :8888, then runs all zones with Vite HMR pointed at it (VIEWER_BACKEND
-	# client proxy + RASK_EDGE_URL SSR, both :8888). One Ctrl-C tears down both (trap kills
-	# the port-forward). Needs the cluster up (`make k3s-up`). Browse http://localhost:3024.
+dev-k3s:              # the console with Vite HMR against the IN-CLUSTER edge
 	@echo "==> port-forward kube-system/traefik → http://localhost:8888 (Ctrl-C stops both)"
 	@$(KUBECTL) -n kube-system port-forward svc/traefik 8888:80 >/dev/null 2>&1 & \
 	  PF=$$!; trap 'kill $$PF 2>/dev/null' EXIT INT TERM; \
-	  until curl -sf http://localhost:8888/api/ray/health >/dev/null 2>&1; do sleep 1; done; \
-	  echo "==> edge reachable; starting frontends (Vite HMR)"; \
-	  bunx turbo --cwd=frontend run build --filter='./packages/ui' --filter='./packages/api' && \
-	  VIEWER_BACKEND=http://localhost:8888 RASK_EDGE_URL=http://localhost:8888 \
-	    bunx turbo --cwd=frontend run dev --filter='./microfrontends/*'
+	  until curl -sf http://localhost:8888/api/lineage/livez >/dev/null 2>&1; do sleep 1; done; \
+	  echo "==> edge reachable; starting the console (Vite HMR)"; \
+	  RASK_EDGE_URL=http://localhost:8888 bun --cwd=frontend run dev
 
-home:      # catch-all zone only, :5273 (serves /)
-	bun --cwd=frontend run dev:home
-
-frontend-%:           # run one domain zone on its own port, e.g. `make frontend-explorer`
-	bun --cwd=frontend run dev:$*
-
-# ONE zone + its FAKE upstreams — the only frontend loop that needs no cluster and no fleet.
-#
-# `make frontend-<zone>` above starts the zone alone, which leaves its /api pointed at a backend
-# nobody started (home/lakehouse default to :8001, the lineage service — which `make dev-micro` does
-# not run, so every call fails on a connection refused). This starts that zone's own seed-driven
-# mocks and points it at them, which is the same machinery its Playwright suite uses — so it works
-# with no k3s, no uvicorn fleet, and no container runtime. That is what makes it the loop for a cloud
-# sandbox (claude.ai/code, CI) as well as for a laptop.
-#
-# Mocks answer 404 until seeded, auth is OFF, and cross-zone links 404 because only one zone listens.
-# `compute` and `studio` have no mocks at all — the script says so instead of pretending. Details and
-# the full trap list: .claude/skills/rask-frontend (§ Develop ONE zone, no cluster).
-dev-zone:             # one zone + fake upstreams, e.g. `make dev-zone ZONE=lakehouse`
-	@test -n "$(ZONE)" || { echo "  !! usage: make dev-zone ZONE=lakehouse   (zones: $(ZONES))"; exit 1; }
-	bun --cwd=frontend/packages/zone-contract run dev:zone $(ZONE)
-
-frontend-build:       # production-build every zone + the ui library (turbo, cached)
+frontend-build:       # production-build the console and the design system
 	bun --cwd=frontend run build
 
-frontend-check:       # svelte-check every zone + the ui library (turbo)
-	bun --cwd=frontend run check
-
-sync-favicons:        # copy the shared favicon source → every zone's static/ (one source of truth)
-	@for a in $(ZONES); do \
-	  mkdir -p frontend/microfrontends/$$a/static && \
-	  cp frontend/assets/favicon.ico frontend/assets/favicon.svg \
-	     frontend/microfrontends/$$a/static/ ; \
-	done; echo "synced favicon.{ico,svg} → 6 zones' static/"
-
-# ---- ray -------------------------------------------------------------------
-RAY_HEAD_PORT       ?= 6379
-RAY_DASHBOARD_PORT  ?= 8265
-
-# ray-up exports S3_SECRET (+ the lineage token) to the LOCAL head because the submission body no
-# longer carries them (the Ray Jobs API echoes runtime_env to any reader — docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
-# "The Python estate audit").
-# In-cluster the pods hold them via secretKeyRef; locally the head process env is the pod. The
-# rustfsadmin default is the dev store's published constant.
-ray-up:
-	@if ray status >/dev/null 2>&1; then \
-	  echo "Ray already running. ray-status / ray-down to inspect / stop."; \
-	else \
-	  S3_SECRET=$${S3_SECRET:-rustfsadmin} LINEAGE_SERVICE_TOKEN=$${APP_API_TOKEN:-} \
-	  S3_ENDPOINT=$${S3_ENDPOINT:-http://localhost:9000} S3_REGION=$${S3_REGION:-us-east-1} \
-	  uv run ray start --head --port=$(RAY_HEAD_PORT) \
-	    --dashboard-host=0.0.0.0 --dashboard-port=$(RAY_DASHBOARD_PORT); \
-	  echo "Ray dashboard: http://localhost:$(RAY_DASHBOARD_PORT)"; \
-	fi
-
-ray-down:
-	uv run ray stop
-
-ray-status:
-	uv run ray status
-
-# ---- serve -----------------------------------------------------------------
-serve-up:
-	uv run --project runners/htr python runners/htr/scripts/deploy_serve.py up
-
-serve-down:
-	uv run --project runners/htr python runners/htr/scripts/deploy_serve.py down
-
-serve-status:
-	uv run --project runners/htr python runners/htr/scripts/deploy_serve.py status
-
-# Single CPU/1-GPU htrflow endpoint for the low-resource / local-k3s shape.
-serve-up-htrflow:
-	RASK_SERVE_REPLICAS=1 RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
-	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --project runners/htr --no-sync python runners/htr/scripts/deploy_serve.py up --app htrflow
-
-# ---- GPU split: HTR on 2 GPUs, Qwen LLM on the 3rd -------------------------
-# transcribe + htrflow co-reside on a 2-GPU Ray pool (GPUs 0,1) via fractional
-# Serve reservations: 2 apps x RASK_SERVE_REPLICAS x RASK_SERVE_GPU_FRAC.
-# Defaults: 2 x 2 x 0.49 = 1.96 GPU, leaving headroom for the htr pipeline's
-# Layout/Line num_gpus=0.001 fractions. GPU 2 is reserved for qwen-serve.
-HTR_CUDA_DEVICES    ?= 0,1
-RASK_SERVE_REPLICAS ?= 2
-RASK_SERVE_GPU_FRAC ?= 0.49
-
-ray-up-htr:
-	@if ray status >/dev/null 2>&1; then \
-	  echo "Ray already running. ray-down first to re-pin the GPU pool."; \
-	else \
-	  CUDA_VISIBLE_DEVICES=$(HTR_CUDA_DEVICES) RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 \
-	    uv run --no-sync ray start --head --port=$(RAY_HEAD_PORT) --num-gpus=2 \
-	    --dashboard-host=0.0.0.0 --dashboard-port=$(RAY_DASHBOARD_PORT); \
-	  echo "Ray (2-GPU HTR pool, devices $(HTR_CUDA_DEVICES)) dashboard: http://localhost:$(RAY_DASHBOARD_PORT)"; \
-	fi
-
-serve-up-both:
-	RASK_SERVE_REPLICAS=$(RASK_SERVE_REPLICAS) RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
-	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --project runners/htr --no-sync python runners/htr/scripts/deploy_serve.py up --app transcribe
-	RASK_SERVE_REPLICAS=$(RASK_SERVE_REPLICAS) RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
-	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --project runners/htr --no-sync python runners/htr/scripts/deploy_serve.py up --app htrflow
-
-# ---- Qwen3.6-27B LLM backend for OpenCode (external, isolated venv) --------
-# Lives outside the rask uv workspace: vLLM pins torch/transformers that clash
-# with the HTR venv. Pinned to GPU 2 so it never contends with the HTR pool.
-# Exposes an OpenAI-compatible API at http://localhost:$(QWEN_PORT)/v1.
-QWEN_VENV        ?= $(HOME)/qwen-serve/.venv
-QWEN_MODEL       ?= Qwen/Qwen3.6-27B
-# Port 8001, not 8000: Ray Serve's HTTP proxy holds :8000 (unused by the HTR
-# pipeline, which calls Serve via in-process handles, but it owns the port).
-QWEN_PORT        ?= 8001
-QWEN_CTX         ?= 131072
-QWEN_CUDA_DEVICE ?= 2
-# Gated-DeltaNet (Mamba-style) needs one state-cache block per concurrent
-# sequence. The default 1024 exceeds what fits alongside 131K-token KV cache;
-# a single-user OpenCode backend needs only a handful, so cap well under that.
-QWEN_MAX_SEQS    ?= 256
-
-# VLLM_USE_FLASHINFER_SAMPLER=0: this box has no CUDA toolkit (nvcc), so
-# flashinfer's JIT-compiled sampler kernel can't build. Fall back to vLLM's
-# native PyTorch top-k/top-p sampler (no compiler needed, negligible impact).
-qwen-serve:
-	CUDA_VISIBLE_DEVICES=$(QWEN_CUDA_DEVICE) VLLM_USE_FLASHINFER_SAMPLER=0 \
-	  $(QWEN_VENV)/bin/vllm serve $(QWEN_MODEL) \
-	  --port $(QWEN_PORT) --tensor-parallel-size 1 \
-	  --max-model-len $(QWEN_CTX) --max-num-seqs $(QWEN_MAX_SEQS) --reasoning-parser qwen3
-
-# ---- EAD harvest -----------------------------------------------------------
-# (search-index / search-index-fresh died at P7a with scripts/index_alto.py;
-# catalog-index died in the R6/R20 wave with scripts/index_catalog.py — the EAD
-# data re-lands as a catalog-governed Lance table served at /api/explorer/search.
-# harvest-ead survives: it only downloads the EAD source files.)
-harvest-ead:
-	uv run python scripts/harvest_ead.py
+frontend-check:       # svelte-check, lint, format, unit tests and knip over the console and its packages
+	bun --cwd=frontend run check && bun --cwd=frontend run lint && bun --cwd=frontend run fmt:check && \
+	  bun --cwd=frontend run test && bun --cwd=frontend run knip
 
 # ---- dev seeding -----------------------------------------------------------
-# The media plane (viewer and search) is a client the product chart does not deploy; with its release running and
-# empty, /explorer finds nothing, /annotator has no page and /lakehouse lists no tables — and "not seeded" is
-# indistinguishable from "not built". One command fixes that for the whole estate.
-seed-dev: ## Seed the dev estate: media corpus + a labeling task with items (needs a running cluster)
-	scripts/seed_dev_estate.sh
+# The demo estate through the catalog's real doors, in hierarchy order (scripts/seed_estate.py): projects, warehouses,
+# namespaces and grants a fresh install shows nothing of.
+seed-dev: ## Seed the dev estate's projects, warehouses, namespaces and grants through the catalog (needs a running cluster)
+	uv run python scripts/seed_estate.py
 
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
-# Prove packages/storage + LanceDB work against a REAL rustfs backend (not moto).
+# Prove lakehouse_kit.storage + LanceDB work against a REAL rustfs backend (not moto).
 # rustfs serves the S3 API on :9000; rask is storage-agnostic, so this is env-only.
 # ONE command, not three. This replaced `rustfs-up` (a DETACHED `docker run`), `smoke-rustfs` and
 # `rustfs-down` — the last of which an operator had to remember. The service is bound for exactly the
@@ -615,27 +415,20 @@ governance-chain: ## Governance e2e — authz + provenance authorship + lineage 
 nats-auth: ## NATS auth e2e — each bus client admitted only to its own subjects (operator-mode broker + daprd)
 	dagger call nats-auth
 
-# The lakehouse's own gates in a tree with every client deleted ([[XC-188]]): the import contracts (`make lint-imports`)
-# and the offline suite, on a workspace re-locked without the clients. `.dagger/lakehouse.go` names the client trees.
-lakehouse-alone: ## The lakehouse's import contracts and offline suite with every client tree deleted
-	dagger call lakehouse-alone
-
 # ---- local k3s ------------------------------------------------------------
 # A service that is in neither this list nor $(K3S_IMAGES) is never built by `make k3s-build` and never
 # side-loaded by `make k3s-import`, so a hand-built image lands outside CONTAINERD and k3s answers
 # ErrImagePull. Measured 2026-08-06: a Dagger build succeeded (exit 0), `kubectl set image` ->
 # ErrImagePull, rolled back.
-# `annotator` is a client with its own release (deploy/fixtures/annotator, ADR 0171) and its own image, and so is
-# `table-maintenance`, the bring-your-own compaction job (deploy/fixtures/table-maintenance, [[LH-529]]).
-# `media` is the viewer and search, clients of the lakehouse that build apart from its image ([[XC-177]]); the product
-# chart's explorer runs it.
-COMPOSE_IMAGES = compute flows annotator table-maintenance media
+# `notifications` is the inbox and `web-console` the console's static-file image (from .docker/frontend.dockerfile): the
+# console's own release runs both (deploy/fixtures/console).
+COMPOSE_IMAGES = notifications
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 # Routed through scripts/helm.sh, which sets HELM_DRIVER=sql. NOT bare `helm`: the release lives in
 # Postgres, and against the default Secret backend helm reports it ABSENT and `upgrade --install`
 # re-installs over a live estate WITHOUT erroring. Read-only subcommands pass straight through.
 # The release's namespace, stated rather than inherited from the kubeconfig context ([[XC-152]]): the fixtures it reads
-# by name (rask-rustfs, rask-dex, rask-openbao, rask-nats, compute) install into `default` (each fixture.env), so the
+# by name (rask-rustfs, rask-dex, rask-openbao, rask-nats) install into `default` (each fixture.env), so the
 # release must share it. Helm reads HELM_NAMESPACE; kubectl takes the flag, and a later `-n`/`-A` in a recipe wins.
 RELEASE_NAMESPACE ?= default
 HELM ?= KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/helm.sh
@@ -644,7 +437,7 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl --namespace $(RELEASE_NAMESPACE)
 # the default render runs its containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
 # The object store fixture runs the upstream RustFS image by digest, which the node pulls; nothing here builds it.
-K3S_IMAGES = $(COMPOSE_IMAGES) ray-cluster lance-rest-catalog
+K3S_IMAGES = $(COMPOSE_IMAGES) web-console lance-rest-catalog
 # Where k3s-build leaves each image as an OCI tarball and k3s-import reads it: no docker daemon on either side.
 K3S_IMAGE_DIR ?= build/k3s-images
 
@@ -664,11 +457,11 @@ k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/, 
 	helm dependency build ./chart
 	./scripts/fixtures.sh --vendor
 
-k3s-build: ## Build all fleet + ray-cluster images as OCI tarballs in K3S_IMAGE_DIR (via Dagger, no docker)
+k3s-build: ## Build the lakehouse, inbox and console images as OCI tarballs in K3S_IMAGE_DIR (via Dagger, no docker)
 	@for s in $(COMPOSE_IMAGES); do \
 	  bash scripts/dagger-image.sh --name $$s --out $(K3S_IMAGE_DIR)/$$s.tar || exit 1; \
 	done
-	bash scripts/dagger-image.sh --name ray-cluster --out $(K3S_IMAGE_DIR)/ray-cluster.tar
+	bash scripts/dagger-image.sh --name frontend --out $(K3S_IMAGE_DIR)/web-console.tar
 	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
 	# ride the COMPOSE_IMAGES loop. Same build scripts/e2e_stack.sh does.
 	bash scripts/dagger-image.sh --name rest-catalog --out $(K3S_IMAGE_DIR)/lance-rest-catalog.tar
@@ -705,25 +498,21 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null \
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
 # given the issuer and origin rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's; observability is
-# the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to. A GPU node
-# with no device plugin yet adds nvidia-device-plugin.
+# the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to.
 FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao observability marquez
 
 # THE CLIENTS, each its own release and none a prerequisite: `k3s-up` installs the lakehouse alone, and `k3s-clients`
-# adds them after it (XC-183), each reaching the lakehouse by reference. The Ray engine is two releases, the operator
-# first, and compute (the Ray dashboard and Serve companion) follows it, reading rask's app token and Dapr Configuration;
-# table-maintenance is the bring-your-own compaction job ([[LH-529]]); the annotator keeps its state on the
-# cloudnative-pg fixture (ADR 0171).
-CLIENTS ?= kuberay-operator ray-cluster compute table-maintenance annotator
+# adds them after it (XC-183), each reaching the lakehouse by reference. The console is the one client this repository
+# deploys: its web image and the notifications inbox, given the issuer and origin the lakehouse is given.
+CLIENTS ?= console
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES)))
 	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) --set-string publicOrigin=$(DEV_ORIGIN))
 
 k3s-clients: ## Install the lakehouse's clients (CLIENTS) as their own releases, after `k3s-up`: each reaches it by reference
-	$(if $(filter-out compute annotator,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out compute annotator,$(CLIENTS)))
-	$(if $(filter compute,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh compute -- --set-string auth.oidc.issuer=$(DEV_ISSUER))
-	$(if $(filter annotator,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh annotator -- --set-string auth.oidc.issuer=$(DEV_ISSUER))
+	$(if $(filter-out console,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out console,$(CLIENTS)))
+	$(if $(filter console,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh console -- --set-string auth.oidc.issuer=$(DEV_ISSUER))
 
 k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
@@ -771,9 +560,6 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  $${AWS_ACCESS_KEY_ID:+--set-string objectStore.accessKey=$$AWS_ACCESS_KEY_ID}
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
 	@echo "API → http://<node-ip>/api/catalog/livez   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
-
-seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
-	./scripts/seed-corpus.sh
 
 k3s-stem-check: ## Refuse an upgrade while any image stem runs more than one tag ([[LH-169]])
 	@# A PREREQUISITE OF k3s-up, not a courtesy target. The chart carries ONE tag per image stem and ten
@@ -894,7 +680,7 @@ kind-up: bootstrap ## Create the rask kind cluster (idempotent; deploy/kind/kind
 
 kind-images: ## Build the full :dev image set into docker's image store, which `kind load docker-image` reads (same builds k3s uses)
 	@for s in $(COMPOSE_IMAGES); do bash scripts/dagger-image.sh --name $$s --tag $$s:dev || exit 1; done
-	bash scripts/dagger-image.sh --name ray-cluster --tag ray-cluster:dev
+	bash scripts/dagger-image.sh --name frontend --tag web-console:dev
 	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 
 kind-load: ## Side-load the :dev image set into the kind cluster
@@ -993,15 +779,12 @@ e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
 # security-shaped ones (edge, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = annotator byo-branch byo-erasure byo-pipeline cas chaos compaction edge media-catalog observability phase1 soak track-a
+E2E_SUITES = byo-branch byo-erasure byo-pipeline cas chaos compaction edge observability phase1 soak track-a
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
                                           # expands to nothing and silently declares no target.
 
-e2e-annotator:      ## XC-167 live proof: the annotator, from its own release, works a scratch tenant through the lakehouse's public doors as the person and publishes as its own account (`bash scripts/e2e_live.sh tests/e2e-py services/annotator/tests/live -m annotator --require-live` discovers its addresses)
-	@test -n "$(LANCE_E2E_ANNOTATOR_URL)" || { echo "  !! e2e-annotator needs LANCE_E2E_ANNOTATOR_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	uv run pytest tests/e2e-py services/annotator/tests/live -m annotator --require-live -v
 e2e-byo-branch:     ## LH-490 live proof: a branch the owner creates through CreateTableBranch takes a writer's stock append, delete and update through version/create on the table's vended credential, main is unchanged, a refused branch commit answers a typed error, and the store refuses the credential a final manifest and a ref (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX; `bash scripts/e2e_live.sh tests/e2e-py/test_a_stock_client_commits_on_a_branch.py` discovers them)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-byo-branch needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_DEX)" || { echo "  !! e2e-byo-branch needs LANCE_E2E_CATALOG_URL, LANCE_E2E_DEX — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
@@ -1054,9 +837,6 @@ e2e-edge:           ## Each /api prefix reaches its service through the cluster 
 	@test -n "$(RASK_E2E_EDGE_URL)" || { echo "set RASK_E2E_EDGE_URL, e.g. make e2e-edge RASK_E2E_EDGE_URL=http://10.16.51.55 LANCE_E2E_DEX=http://localhost:8080/dex"; exit 1; }
 	@test -n "$(LANCE_E2E_DEX)" || { echo "set LANCE_E2E_DEX, the Dex the estate's issuer names, e.g. http://localhost:8080/dex"; exit 1; }
 	RASK_E2E_EDGE_URL=$(RASK_E2E_EDGE_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m edge -v --require-live
-e2e-media-catalog:  ## Annotator/catalog live-mode proof (needs MEDIA_CATALOG_URL)
-	@test -n "$(MEDIA_CATALOG_URL)" || { echo "  !! e2e-media-catalog needs MEDIA_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	MEDIA_CATALOG_URL=$(MEDIA_CATALOG_URL) uv run pytest tests/e2e-py services/annotator/tests/live -m media_catalog -v
 e2e-observability:  ## OTLP → GreptimeDB observability proof (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-observability needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
@@ -1086,8 +866,8 @@ e2e-track-a:        ## Track A acceptance: tier contract + gate/publish symmetry
 # ---- the local image path (registry + Dagger engine) ------------------------
 # `make dev-registry` once per host (a local registry on :5000, and k3s pointed at it), and
 # `make dagger-engine` once (an engine that may push to a plain-HTTP registry). Every
-# `dagger call image|zone-image ... publish` goes through both. Iterate the frontends with
-# `make dev-frontends` (local Vite HMR); backend changes rebuild and `make k3s-up`.
+# `dagger call image ... publish` goes through both. Iterate the console with `make dev` (local Vite HMR); backend
+# changes rebuild and `make k3s-up`.
 dagger-engine: ## One-time: a Dagger engine that can push to the plain-HTTP dev registry
 	@bash scripts/dagger-engine.sh
 
@@ -1096,8 +876,8 @@ dagger-engine: ## One-time: a Dagger engine that can push to the plain-HTTP dev 
 #   * the Dagger engine cache — its default GC ceiling is proportional to the disk (5.67 TB on a 7.4 TB
 #     volume), so it never collected. `make dagger-engine` now writes an explicit 60 GB cap; this target
 #     is the manual sweep.
-#     old ones (measured: 113 tags of web-home, 83.9 GB).
-# Both are safe: every artefact is reproducible with `dagger call image|zone-image ... publish`, and k3s
+#     old ones (measured: 113 tags of one web image, 83.9 GB).
+# Both are safe: every artefact is reproducible with `dagger call image ... publish`, and k3s
 # holds running images in its own containerd cache.
 registry-gc: ## Drop all but the newest tags in the dev registry, then sweep blobs
 	@bash scripts/registry-gc.sh
@@ -1111,10 +891,3 @@ dev-gc: registry-gc dagger-gc ## Reclaim both the registry and the Dagger cache
 
 dev-registry: ## One-time: local image registry + point k3s at it (sudo; restarts k3s)
 	bash scripts/k3s-registry.sh
-
-# All THREE reload paths, because they fail independently and each one was broken on its own at some
-# point: a wheel synced into site-packages, a zone's COMPILED build/, and the ui package's dist/ (the only
-# package with a build step — zones bundle its dist, never its source).
-# ---- e2e (Playwright) -------------------------------------------------------
-e2e: ## Browser e2e against a running deploy (RASK_E2E_BASE_URL, default http://localhost)
-	cd tests/e2e && bun install && bunx playwright test

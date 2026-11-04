@@ -2,7 +2,7 @@
 
 Follows the repo convention: `RASK_*` env vars, with ``AliasChoices`` so the official client's own
 variable names (``OPENLINEAGE_URL`` and friends) keep working. This used to cite
-``packages/storage``'s ``RASK_S3_ENDPOINT_URL`` as the exemplar of that pattern; it is not one —
+``lakehouse_kit.storage``'s ``RASK_S3_ENDPOINT_URL`` as the exemplar of that pattern; it is not one —
 storage resolves the same kind of canonical-first precedence BY HAND (``_env_first`` over three name
 tuples) and imports no pydantic-settings, deliberately, because two sealed runners take it as a path
 dependency and neither carries pydantic. The convention is the env NAMES; the mechanism differs.
@@ -50,7 +50,7 @@ class LineageSettings(BaseSettings):
     endpoint_path: str = Field(default="api/v1/lineage", validation_alias=AliasChoices("RASK_LINEAGE_ENDPOINT_PATH", "OPENLINEAGE_ENDPOINT"))
     #: HTTP transport timeout, seconds.
     timeout: float = Field(default=5.0, validation_alias=AliasChoices("RASK_LINEAGE_TIMEOUT"))
-    #: ``auto`` = http when an endpoint is configured, else no-op. ``console`` logs events
+    #: ``auto`` = http when an endpoint is configured, else no-op. "console" logs events
     #: through the official ConsoleTransport (debugging); ``noop`` forces lineage off.
     transport: Literal["auto", "http", "console", "noop"] = Field(default="auto", validation_alias=AliasChoices("RASK_LINEAGE_TRANSPORT"))
 

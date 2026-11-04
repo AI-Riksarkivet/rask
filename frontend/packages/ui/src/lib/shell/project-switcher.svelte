@@ -7,8 +7,8 @@
 	import { projectFromHost } from './breadcrumb.js';
 
 	// sidebar-07's TeamSwitcher, adapted into a PROJECT switcher and relocated to the navbar row:
-	// it is estate chrome (which project am I in), not in-zone navigation, so it sits beside the
-	// sidebar HEADER, where the rail's most valuable slot used to print the zone's own name — a fact
+	// it is estate chrome (which project am I in), not in-app navigation, so it sits beside the
+	// sidebar HEADER, where the rail's most valuable slot used to print the console's own name — a fact
 	// the top navbar and the breadcrumb already state. Project-first
 	// IA via HOST: the project IS the request host (e.g. demo.localhost), so "Main menu" returns to
 	// the platform picker on the FRONT-DOOR host — derived by stripping the project's subdomain
@@ -82,17 +82,13 @@
 	</DropdownMenu.Trigger>
 	<DropdownMenu.Content class="min-w-56 rounded-lg" align="start" side="bottom" sideOffset={4}>
 		<DropdownMenu.Label class="text-muted-foreground text-xs">Projects</DropdownMenu.Label>
-		<!-- YOUR projects, from /management/v1/me — the memberships every zone already holds. Picking one opens
+		<!-- YOUR projects, from /management/v1/me — the memberships every page already holds. Picking one opens
 		     its overview (/projects/<id> stamps the active-project cookie, #103). The active one is
 		     checked. An empty list degrades to one Browse row rather than a dropdown that says
 		     "select" while offering nothing to select. -->
 		{#each projects as m (m.project)}
 			<DropdownMenu.Item class="p-0">
-				<a
-					href={`/projects/${m.project}`}
-					data-sveltekit-reload
-					class="flex w-full items-center gap-2 px-2 py-1.5"
-				>
+				<a href={`/projects/${m.project}`} class="flex w-full items-center gap-2 px-2 py-1.5">
 					<div class="flex size-6 items-center justify-center rounded-md border">
 						<Boxes class="size-3.5 shrink-0" />
 					</div>
@@ -102,7 +98,7 @@
 			</DropdownMenu.Item>
 		{/each}
 		<DropdownMenu.Item class="p-0">
-			<a href="/projects" data-sveltekit-reload class="flex w-full items-center gap-2 px-2 py-1.5">
+			<a href="/projects" class="flex w-full items-center gap-2 px-2 py-1.5">
 				<div class="flex size-6 items-center justify-center rounded-md border">
 					<Boxes class="size-3.5 shrink-0" />
 				</div>
@@ -111,9 +107,7 @@
 		</DropdownMenu.Item>
 		<DropdownMenu.Separator />
 		<DropdownMenu.Item class="p-0">
-			<!-- data-sveltekit-reload: cross-zone by definition (home owns '/'), so a soft nav would ask
-			     THIS zone for a route it does not own and 404. Same rule every cross-zone link follows. -->
-			<a href={homeUrl} data-sveltekit-reload class="flex w-full items-center gap-2 px-2 py-1.5">
+			<a href={homeUrl} class="flex w-full items-center gap-2 px-2 py-1.5">
 				<div class="flex size-6 items-center justify-center rounded-md border bg-transparent">
 					<House class="size-4" />
 				</div>

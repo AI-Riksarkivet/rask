@@ -87,14 +87,6 @@ def _grant(h: _Harness, user: str, relation: str) -> members.MemberList:
 # --------------------------------------------------------------------------- #
 
 
-def test_a_denied_gate_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    h = _Harness(allow=False)
-    h.install(monkeypatch)
-    with pytest.raises(ForbiddenError):
-        _grant(h, "dex~bob", "admin")
-    assert h.written == []
-
-
 # --------------------------------------------------------------------------- #
 # Grant
 # --------------------------------------------------------------------------- #

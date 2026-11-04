@@ -5,8 +5,8 @@
 	// bar (can_drop / can_delete). Owner-only by design — the catalog gates the enumeration, so a
 	// non-owner sees the denial state, never the ACL. Hoisted into @rask/ui (audit 2026-07-24: the data
 	// and lineage copies had silently drifted apart). Transport-agnostic (rask convention:
-	// the lib never owns an API client) — the zone injects its own `client`,
-	// and the Grants* types are the STRUCTURAL shapes this panel reads, so any zone whose generated
+	// the lib never owns an API client) — the app injects its own `client`,
+	// and the Grants* types are the STRUCTURAL shapes this panel reads, so any page whose generated
 	// catalog types carry these fields can pass its functions straight through without adapters.
 	// Collapsed by default: one owner-tier round-trip per dataset, with definitive outcomes (the ACL,
 	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
@@ -16,12 +16,12 @@
 	import Subject from '../identity/subject.svelte';
 
 	export type GrantsKind = 'table' | 'namespace';
-	/** Mirrors the zones' status-aware ApiResult (http.ts): 0 = fetch-level failure/offline. */
+	/** Mirrors the pages' status-aware ApiResult (http.ts): 0 = fetch-level failure/offline. */
 	export type GrantsResult<T> =
 		| { ok: true; data: T }
 		| { ok: false; status: number; detail: string };
 	export type GrantsAccessList = { grants: { relation: string; users: string[] }[] };
-	/** The zone-owned catalog seam: review + #68 check + #72 grant/revoke, all owner-gated SERVER-side. */
+	/** The console-owned catalog seam: review + #68 check + #72 grant/revoke, all owner-gated SERVER-side. */
 	export type GrantsClient = {
 		fetchAccess: (kind: GrantsKind, id: string) => Promise<GrantsResult<GrantsAccessList>>;
 		checkAccess: (
@@ -50,7 +50,7 @@
 		 *  a caller that has not been wired up.
 		 *
 		 *  A 5th client member rather than a `permissions` prop, because the panel owns the flow and the
-		 *  zone owns the transport (the rule this whole file follows). A prop would push per-dataset
+		 *  page owns the transport (the rule this whole file follows). A prop would push per-dataset
 		 *  refetching into every caller. */
 		fetchMyPermissions?: (
 			kind: GrantsKind,

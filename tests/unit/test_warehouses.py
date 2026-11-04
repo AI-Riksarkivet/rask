@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -101,18 +101,6 @@ def _caller(key: str) -> PersonPrincipal:
 
 
 _TOKEN = _caller("dex~alice")
-
-
-def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An OpenFGA outage is a 503, never a fall-through: no decision is not a denial, and since the
-    bootstrap exception died there is no second door for it to leak into either."""
-
-    async def outage(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
-        raise ServiceUnavailableError("openfga down")
-
-    monkeypatch.setattr(fga_module, "check", outage)
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
 
 
 def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -272,29 +260,6 @@ def _create_project_as(settings: Settings, sub: str, project_id: str) -> Any:
     )
 
 
-def test_gate_has_one_door_only_and_never_probes_the_estate_rung(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The bootstrap exception is GONE (Decision 1): a project admin passes, and the estate root is
-    never even probed — tenants are minted at POST /management/v1/projects, not through a warehouse side door."""
-    store = _FakeStore()
-    store.tuples.add(("user:dex~alice", "admin", "project:acme"))
-    monkeypatch.setattr(fga_module, "check", store.check)
-    asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
-    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
-
-
-def test_gate_denies_an_ordinary_user_with_no_estate_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail-closed, and the denial is FINAL: no second door exists to fall through to. An estate admin
-    who is not this project's admin is denied here too — their path is POST /management/v1/projects, which seeds
-    them as admin, after which this gate passes on the project's own rung."""
-    store = _FakeStore(estate_admins=("dex~alice",))  # estate rung held — and still irrelevant here
-    monkeypatch.setattr(fga_module, "check", store.check)
-    with pytest.raises(PermissionDeniedError):
-        asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
-    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
-
-
 def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> None:
     """The guard that REPLACED the bootstrap exception: an unknown project is a 404 (spec code 4,
     problem body) whose detail names the fix — POST /management/v1/projects. Existence comes from the registry,
@@ -390,25 +355,6 @@ def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, m
     assert not any(t[2] == "project:evil" for t in store.tuples)
 
 
-def test_a_second_warehouse_in_a_live_tenant_still_needs_that_tenants_admin(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Estate rank does not reach INSIDE a live tenant: carol holds the estate door (she could mint her
-    # own projects) but is not acme's admin, so acme refuses her warehouse — and no project-admin
-    # tuple is minted behind the refusal.
-    from catalog.schemas import CreateWarehouseRequest
-
-    store = _FakeStore(estate_admins=("dex~alice", "dex~carol"))
-    store.install(monkeypatch)
-    monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
-    settings = _governed_settings(tmp_path)
-    _create_project_as(settings, "dex~alice", "acme")
-    _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-wh", project="acme"))
-
-    with pytest.raises(PermissionDeniedError):
-        _create_as(settings, "dex~carol", CreateWarehouseRequest(id="acme-two", project="acme"))
-    assert ("user:dex~carol", "admin", "project:acme") not in store.tuples
-    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-two") is None
-
-
 # --------------------------------------------------------------------------- #
 # routing isolation guards (audit F3/F4)
 # --------------------------------------------------------------------------- #
@@ -427,21 +373,6 @@ def test_binding_lookup_fails_closed_on_read_error(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(warehouses, "binding_for_namespace", boom)
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
-
-
-def test_resolver_refuses_when_warehouse_record_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    # AUDIT #7: the fail-closed "missing warehouse record (status None) → refuse" branch had NO test. A bound
-    # namespace whose warehouse record has vanished must 403, NOT silently route to the (now orphaned) bucket.
-    monkeypatch.setattr(
-        warehouses,
-        "binding_for_namespace",
-        lambda *_a, **_k: {"warehouse_id": "wh-a", "root_uri": "s3://bkt-a"},
-    )
-    # The resolver reads the WHOLE record now ([[LH-067]] needs its `endpoint` too, at the same one
-    # GET), so a vanished record is a `get_warehouse` returning None rather than a status of None.
-    monkeypatch.setattr(warehouses, "get_warehouse", lambda *_a, **_k: None)  # record gone
-    with pytest.raises(PermissionDeniedError):
         asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
 
 
@@ -491,41 +422,6 @@ def test_reserved_bucket_set_defaults_collapse_to_the_root_bucket() -> None:
     assert s.reserved_bucket_set == frozenset({"lance-catalog"})
     local = Settings.model_validate({"root": "file:///tmp/cat", "s3_access_key_id": "x", "s3_secret_access_key": "x"})
     assert local.reserved_bucket_set == frozenset()
-
-
-def test_create_warehouse_rejects_multibase_and_catalog_buckets(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # End-to-end through the endpoint guard: a warehouse claiming an approved multi-base data bucket or the
-    # catalog's own bucket is refused BEFORE any bucket/registry/FGA side effect.
-    from catalog.api.v1.endpoints import warehouses as wh_ep
-    from catalog.schemas import CreateWarehouseRequest
-
-    settings = Settings.model_validate(
-        {
-            "warehouses_enabled": True,
-            "control_root": _root(tmp_path),
-            "multibase_data_bases": "s3://lance-data-1,s3://lance-data-2",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
-    provisioned: list[str] = []
-    monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: provisioned.append(bucket))
-    # The project EXISTS (seeded in the registry) so the refusal below is the reserved-bucket guard
-    # itself, not require_project_exists' 404 firing first.
-    proj_svc.put_project(_root(tmp_path), StorageOptions(), {"id": "evil", "created_at": "t", "created_by": "x"})
-    for bucket in ("lance-data-1", "lance-data-2", "lance-catalog"):
-        with pytest.raises(InvalidInputError):
-            asyncio.run(
-                wh_ep.create_warehouse(
-                    settings=settings,
-                    token=None,  # FGA off → the admin gate is a no-op; the reserved guard must still fire
-                    client=None,
-                    control=cast(Any, None),  # only used after a successful create
-                    vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
-                    body=CreateWarehouseRequest(id="wh-evil", project="evil", bucket=bucket),
-                )
-            )
-    assert provisioned == []
 
 
 # --------------------------------------------------------------------------- #

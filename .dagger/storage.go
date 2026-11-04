@@ -22,7 +22,7 @@ const rustfsImage = "rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676
 // (os error 13)` (measured 2026-10-18).
 const rustfsUser = "rustfs"
 
-// SmokeRustfs proves `packages/storage` works against a REAL S3 backend rather than moto.
+// SmokeRustfs proves `lakehouse_kit.storage` works against a REAL S3 backend rather than moto.
 //
 // It REPLACES three make targets — `rustfs-up`, `smoke-rustfs`, `rustfs-down` — and collapsing them
 // is what makes the Dagger form strictly better rather than a trade. The old shape started a DETACHED
@@ -37,7 +37,7 @@ const rustfsUser = "rustfs"
 //
 // The credentials are env-driven on purpose — the estate's storage layer must swap
 // RustFS, a platform's S3 and AWS with environment variables alone, and hard-coding them here would quietly test a
-// narrower contract than the one `packages/storage` promises.
+// narrower contract than the one `lakehouse_kit.storage` promises.
 func (m *Rask) SmokeRustfs(
 	ctx context.Context,
 	// +defaultPath="/"
@@ -107,7 +107,7 @@ func (m *Rask) RustfsProvisioning(
 }
 
 // RustfsLifecycle runs the catalog lifecycle e2e with the bytes on a RustFS service bound to this one exec,
-// proving the catalog speaks plain S3 through `packages/storage` rather than one store's dialect.
+// proving the catalog speaks plain S3 through `lakehouse_kit.storage` rather than one store's dialect.
 //
 // It replaces `scripts/rustfs_e2e.sh`, which drove `docker compose up -d --build` over
 // `docker-compose.yml` + `docker-compose.rustfs.yml`. That script was invisible to the estate's own
@@ -163,7 +163,7 @@ func (m *Rask) RustfsLifecycle(
 	// The bucket, before anything reads it. `Sync` is what orders this against the catalog below.
 	// THE ESTATE'S OWN S3 SEAM, not a third-party CLI image, which a registry can close to anonymous pulls
 	// ([[XC-075]]) so that a lane that pulls fresh cannot bootstrap its store at all. `m.base`
-	// carries uv, python and this repo — `packages/storage` is the same client the fleet uses.
+	// carries uv, python and this repo — `lakehouse_kit.storage` is the same client the fleet uses.
 	if _, err := m.base(src).
 		WithServiceBinding("rustfs", rustfs).
 		WithEnvVariable("RASK_S3_ENDPOINT_URL", "http://rustfs:9000").

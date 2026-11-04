@@ -137,13 +137,13 @@ from lakehouse_kit.lancekit.commit_verdict import CommitVerdict, classify_commit
 from lakehouse_kit.lancekit.versions import committed_at
 from lakehouse_kit.schema import SchemaFields, facet_fields
 from lakehouse_kit.stage_stamp import declare_dataset_id
+from lakehouse_kit.storage import s3_client, split_s3_uri
 from lakehouse_kit.version_retention import MAIN_BRANCH, recorded_branch
 from service_kit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
 from service_kit.naming import CATALOG_DELIMITER
 from service_kit.ns_errors import PartiallyApplied
 from service_kit.outage import reads_as_store_outage
 from service_kit.storage_options import StorageOptions, s3_filesystem
-from storage import s3_client, split_s3_uri
 
 
 log = logging.getLogger(__name__)

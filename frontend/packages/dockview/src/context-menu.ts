@@ -32,7 +32,7 @@ export function makeTabContextMenu(
 		const inGrid = kind === 'grid';
 
 		// Mirrors the header buttons: with one panel `moveTo` is a documented no-op, so the row
-		// duplicates instead. Never disabled — every zone seeds one-panel groups.
+		// duplicates instead. Never disabled — every page seeds one-panel groups.
 		if (chrome.split && inGrid) {
 			const verb = splitVerb(group.panels.length);
 			items.push('separator');

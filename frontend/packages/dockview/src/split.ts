@@ -12,7 +12,7 @@
  *  - **2 or more panels** — MOVE the active panel out into a new adjacent group. The real split.
  *  - **exactly 1 panel** — DUPLICATE it into a new adjacent group.
  *
- * Duplicating rather than disabling is deliberate. Every zone seeds three groups of one panel each,
+ * Duplicating rather than disabling is deliberate. Every page seeds three groups of one panel each,
  * so a "disable when nothing to split" guard greys out every split control on first load — which is
  * precisely the "there are no features here" complaint the chrome exists to answer. It is also the
  * VS Code semantic for *Split editor right*, which is what the icon reads as.

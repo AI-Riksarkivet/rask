@@ -81,7 +81,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   whose purpose is closing a zero-trust gap (an unsigned writer admitted, a credential that never rotates, an identity
   trusted by position) is pre-approved: do it and report it. Still ask before anything destructive on shared live
   state, and still ask a real trade-off between two designs that both meet the four facts.
-- **The lakehouse names no client, anywhere** (owner, 2026-11-04: "Lakehouse don't know anything about the other stuff what so ever. It does not eg know flows or compute"). No file the lakehouse owns (the product chart, `deploy/values-*`, its alert rules, the platform dev fixtures, the kits, catalog/lineage/maintenance, their tests) names flows, studio, compute, table-maintenance, the annotator, the viewer, search, the notifications inbox or any other client; `scripts/lakehouse_names_no_client.py` enforces it in `make lint` and `dagger call lint` ([[XC-191]]). `docs/`, the agent instructions and the repository tooling still describe and build the clients this repository hosts, and each client's move deletes its own. The lakehouse ships only the generic seam, with empty defaults: `auth.externalDeciders`, `services.lineage.provenanceMaintainers`, `networkPolicy.objectStoreExtraFrom`, the Dex fixture's `clients`. A client's integration values (its account's roles, its Dex sign-in client, its store peer) are written in the client's own tree or repository and supplied to a lakehouse install from there (a client fixture's `lakehouse-values.yaml`, which `make k3s-up` layers onto the lakehouse release by glob; `-f <client values>`; or `Lakehouse(values, dexClient, …)` for its e2e). The removal test holds for files as well as imports: deleting every client changes no lakehouse file.
+- **The lakehouse names no client, anywhere** (owner, 2026-11-04: "Lakehouse don't know anything about the other stuff what so ever. It does not eg know flows or compute"). No file the lakehouse owns (the product chart, `deploy/values-*`, its alert rules, the platform dev fixtures, the kits, catalog/lineage/maintenance, their tests) names the console, the notifications inbox or any other client; `scripts/lakehouse_names_no_client.py` enforces it in `make lint` and `dagger call lint` ([[XC-191]]). `docs/`, the agent instructions and the repository tooling still describe and build the console and the inbox, the clients this repository hosts. The lakehouse ships only the generic seam, with empty defaults: `auth.externalDeciders`, `openbao.externalReaders`, `services.lineage.provenanceMaintainers`, `networkPolicy.objectStoreExtraFrom`, the Dex fixture's `clients`. A client's integration values (its account's roles, its Dex sign-in client, its store peer) are written in the client's own tree or repository and supplied to a lakehouse install from there (a client fixture's `lakehouse-values.yaml`, which `make k3s-up` layers onto the lakehouse release by glob; `-f <client values>`; or `Lakehouse(values, dexClient, …)` for its e2e). The removal test holds for files as well as imports: deleting every client changes no lakehouse file.
 - **Platform services are external in production** (owner, 2026-10-04). OpenBao, Dex, S3, the OTel backend, ESO, the
   operators, NATS and OpenFGA's Postgres are the platform's; the bundled copies are development fixtures. rask
   references them by name, mints no production trust root, and does not engineer a fixture's durability. The app
@@ -114,7 +114,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   have not.
   **DAGGER BUILDS EVERY IMAGE. NOT DOCKER.** Local and CI both reach
   BuildKit through `dagger call` against `.dagger/images.go` — `dagger call image --name=<stem>` for
-  anything in `.docker/`, `dagger call zone-image --zone=<zone>` for a micro-frontend. **`docker build`
+  anything in `.docker/` (`--name=frontend` is the console). **`docker build`
   and `docker buildx build` must not appear** in the `Makefile`, `scripts/` or `.github/workflows/`;
   `scripts/dagger-image.sh` is the single seam every build goes through.
   The dockerfile stays the single source of truth — Dagger changes the *driver*, not the definition, so
@@ -130,8 +130,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   `dagger core container from --address=<img> with-exposed-port --port=<p> with-default-args
   --args=<cmd> as-service up --ports=<host>:<p>`.
 - **JS/TS uses Bun exclusively.** Use `bun` / `bunx`. `npm`, `npx`, `pnpm`, `pnpx` are not on PATH and MCP install commands assume `bunx`.
-- **The JS/TS plane lives in `frontend/`** — its own bun + Turborepo workspace root (its own `package.json`, `bun.lock`, `turbo.json`). Every bun/turbo call is **scoped to it**: `bun --cwd=frontend run <task>`, `bunx turbo --cwd=frontend run <task>`. Use the `--cwd=` form — `bun --cwd <path>` with a space silently no-ops.
-- **JS/TS lint + format is oxlint + oxfmt**, not ESLint/Prettier (both deleted). Svelte support comes from `@rsvelte/oxlint-plugin` (lint) and `@rsvelte/fmt` (format); configs live at `frontend/.oxlintrc.json` and `frontend/.oxfmtrc.json`. `lint` / `fmt` / `fmt:check` are **per-package turbo tasks**, run from `frontend/`.
+- **The JS/TS plane lives in `frontend/`** — its own bun workspace root (its own `package.json`, `bun.lock`). Every bun call is **scoped to it**: `bun --cwd=frontend run <task>`. Use the `--cwd=` form — `bun --cwd <path>` with a space silently no-ops.
+- **JS/TS lint + format is oxlint + oxfmt**, not ESLint/Prettier (both deleted). Svelte support comes from `@rsvelte/oxlint-plugin` (lint) and `@rsvelte/fmt` (format); configs live at `frontend/.oxlintrc.json` and `frontend/.oxfmtrc.json`. `lint` / `fmt` / `fmt:check` are per-package scripts the workspace root runs over every package (`bun run --filter '*'`), from `frontend/`.
 - **Python uses uv** (3.13) with Ruff + `ty` for type-checking. Run Python via `uv run <cmd>`; type-check via `uv run ty check` (the locked ty; `uvx ty` resolves the newest release and drifts from the lock).
 - Identifiers and env vars carry **no `ra-`/`ra_` prefix** (legacy from the ra-batch migration). Env vars are `RASK_*`.
 
@@ -141,52 +141,34 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | ---------------------------- | ------------------------------------------------------------------------ |
 | First-time setup             | `make install` (= `bun --cwd=frontend install` + `uv sync --all-packages` + git hooks + `make k3s-deps` (subcharts) + `make claude-bootstrap`, which installs the ra-skills and mattpocock plugins) |
 | Build everything             | `make build`                                                             |
-| Run tests (excludes slow, e2e) | `make test` (= `uv run pytest -m "not slow and not e2e" -n 16`, then each `runners/*/tests` suite with `-m "not slow"`) |
-| Run all tests incl. slow     | `make test-slow` (needs real models / a GPU)                             |
+| Run tests (excludes slow, e2e) | `make test` (= `uv run pytest -m "not slow and not e2e" -n 16`)        |
+| Run all tests incl. slow     | `make test-slow`                                                         |
 | Single Python test           | `uv run pytest services/catalog/tests/<file>.py::test_name`             |
 | Filter by name               | `uv run pytest -k <pattern>`                                             |
 | Skip slow tests              | `uv run pytest -m "not slow"`                                            |
 | Format + lint + typecheck    | `make check` (= `make fmt` + `make lint` + `make lint-imports` + `make typecheck` + `make knip` + `make fga-test` + `make go-fmt` + `make chart-docs-check`) |
-| Scan dependencies for CVEs   | `make audit` (osv-scanner over all six lockfiles + `.dagger/go.mod`)     |
+| Scan dependencies for CVEs   | `make audit` (osv-scanner over every lockfile + `.dagger/go.mod`)        |
 | Scan dockerfiles + chart     | `make scan-config` (trivy misconfig + secret detection)                  |
 | Scan git history for secrets | `make scan-secrets` (trufflehog; gates on VERIFIED credentials only)     |
-| Scan a built image           | `make scan-image NAME=rest-catalog` / `make scan-zone-image ZONE=home`   |
-| Frontend type-check only     | `bun --cwd=frontend run check` (one zone: `bunx turbo --cwd=frontend run check --filter=home`) |
+| Scan a built image           | `make scan-image NAME=rest-catalog` (`NAME=frontend` is the console)     |
+| Frontend gates               | `make frontend-check` (check, lint, fmt:check, unit tests, knip); e2e `bun --cwd=frontend run test:e2e` |
 | Storybook for `@rask/ui`     | `make storybook` (→ `:6006`)                                             |
 | Bootstrap Claude Code config | `make claude-bootstrap`                                                  |
 
 ### Run the app locally
 
 ```bash
-make dev-micro         # the fleet: compute :8804 + flows :8840 + notifications :8850 + the explorer trio
-                       #   from :8101 (via scripts/dev-micro.sh); no edge — see dev-frontends-k3s
-make dev-frontends     # every zone + the :3024 composition proxy (builds @rask/ui first)
-make dev-zone ZONE=lakehouse   # ONE zone + its FAKE upstreams — no cluster, no fleet, no docker
-make home              # the catch-all zone alone, :5273
-make frontend-explorer # one zone alone (frontend-<zone>: lakehouse|explorer|annotator|compute|studio)
+make dev               # the console with Vite HMR on :5173, /api proxied to RASK_EDGE_URL (default :8888)
+make dev-k3s           # the same against the IN-CLUSTER edge (port-forwards k3s Traefik's Service to :8888)
+make dev-micro         # the notifications inbox on the host (:8850, scripts/dev-micro.sh); no edge in front
 ```
 
-**`make dev-zone ZONE=<z>` is the leanest loop, and the only one that works with no cluster at all** —
-it starts that zone plus the seed-driven mock upstreams its own Playwright suite uses, so it also runs
-in a cloud sandbox (claude.ai/code) or CI, where Dagger and k3s cannot. Auth is OFF and cross-zone links
-404 because one zone is listening. Populated data needs an `e2e/dev-seed.ts` — **`lakehouse`,
-`explorer` and `annotator` have one**; `home` mocks its upstreams but ships no seed, so it
-renders its EMPTY state (the launcher says which). `compute` and `studio` ship no mocks at all (no
-`e2e/`, no `test:e2e`) — they start, but unmocked. Full trap list and the coverage
-table: `.claude/skills/rask-frontend` § *Develop ONE zone, no cluster*.
-
-**`make frontend-<zone>` does NOT actually isolate a zone**, despite the name: it goes through
-`turbo run dev --filter=<zone>...`, which also starts turbo's built-in microfrontends proxy on **:3024**
-and `@rask/ui`'s watcher — so it fails outright if anything already holds :3024. Use `dev-zone`.
-
-**Open `:3024`, not a zone's own port** — that is the composition proxy that routes
-`/<zone>` to the right dev server. `scripts/dev-micro.sh` is the source of truth for the
-fleet's process list and ports.
-
-`make dev-frontends` builds `@rask/ui` + `@rask/api` before starting the zones on purpose:
-an unfiltered `turbo run dev` also starts the ui library's `svelte-package -w` watcher,
-which rewrites `dist/` while the zones read it — one zone crashes and turbo tears the whole
-run down.
+**The console is one static single-page app with no server of its own** (`frontend/console`): the browser signs in to
+Dex with PKCE on the public `rask-web` client, keeps its tokens in memory, and calls the lakehouse's `/api/*` and the
+inbox's `/api/notifications/*` with its bearer, same-origin through the Gateway. `make dev` therefore needs an edge on
+`RASK_EDGE_URL`: `make dev-k3s` provides the cluster's. Its Playwright suite needs none: it serves the BUILT app behind
+`frontend/console/e2e/edge.ts` with mocked upstreams and a mock OIDC issuer (`e2e/mock-oidc.ts`), so the real PKCE
+path runs. See `.claude/skills/rask-frontend`.
 
 ### The in-cluster loop: k3s + k9s
 
@@ -202,8 +184,8 @@ make k9s             # inspect the cluster (installed into .localbin by `make bo
 
 Images are built by Dagger and pushed to that registry:
 `dagger call image --name=rest-catalog publish --address=172.17.0.1:5000/lance-rest-catalog:<tag>`, then
-`kubectl set image` or a chart value. **For pure UI work `make dev-frontends` is the faster loop** —
-Vite HMR, sub-second, no cluster involved.
+`kubectl set image` or a chart value. **For pure UI work `make dev-k3s` is the faster loop** — Vite HMR, sub-second,
+against the cluster's edge.
 
 **Tilt was REMOVED 2026-08-04.** It bought an in-cluster hot-reload (~15 s for a zone edit) and cost
 a 479-line Tiltfile, four make targets, a `dev.reload` values flag whose only job was to relax
@@ -223,10 +205,8 @@ Two things bite when pushing to the local registry, and neither announces itself
   `make dagger-engine`. Re-run it after a Dagger CLI upgrade: a version mismatch makes the CLI
   quietly provision its own config-less engine and the HTTPS failure returns.
 
-**`make k3s-build` rebuilds EVERY image** (the ray-cluster export alone measures 238 s) when usually
-one service changed. (`.docker/frontend.dockerfile` used to copy **all** zones' sources before `bun install`, so touching
-one invalidated the install layer of every image. It no longer does — line 56 is
-`COPY frontend/microfrontends/${APP} microfrontends/${APP}`, one named zone.)
+**`make k3s-build` rebuilds EVERY image** (the lakehouse's, the inbox's and the console's) when usually one changed;
+`scripts/dagger-image.sh --name <stem>` builds one.
 
 **The dev loop leaks disk in two places, and both grew past a terabyte before anyone looked.**
 `make dev-gc` reclaims both; `make registry-gc` / `make dagger-gc` do one each.
@@ -237,11 +217,11 @@ one invalidated the install layer of every image. It no longer does — line 56 
   explicit 60 GB cap (`DAGGER_MAX_USED_SPACE` to change it), and the script recreates the engine when
   the CONFIG changes, not only when the version does.
 - **The dev registry.** Every rebuild pushes a uniquely tagged image and nothing removes the old
-  ones: measured **113 tags of `web-home`**, 83.9 GB. The registry is created with
+  ones: measured **113 tags of one web image**, 83.9 GB. The registry is created with
   `REGISTRY_STORAGE_DELETE_ENABLED=true` — without it `registry:2` refuses DELETE and nothing can be
   reclaimed at all.
 
-Both are safe to wipe: every artefact is reproducible with `dagger call image|zone-image … publish`,
+Both are safe to wipe: every artefact is reproducible with `dagger call image … publish`,
 and k3s holds running images in its own containerd cache.
 
 - **`make k3s-up` owns the release.** It renders the chart with `image.localImages=true` (side-loaded
@@ -252,48 +232,106 @@ and k3s holds running images in its own containerd cache.
   anything else.
 
 
-`make serve-down` / `make ray-down` to tear down. EAD download: `make harvest-ead` (the `catalog-index` Lance indexer died in the R6/R20 wave — the EAD table re-lands catalog-governed behind `/api/explorer/search`).
-(The app database, Alembic migrations and the `pg-*`/`viewer` targets died at P7a — the only relational
-store left is the chart-managed `rask-age` Postgres, which serves OpenFGA's database.
+(The only relational store in the lakehouse is the chart-managed `rask-age` Postgres, which serves OpenFGA's database;
+the console's release keeps the inbox's actor state on a CloudNativePG Postgres of its own.
 Lineage keeps no database: its feed and edge list are Lance tables in the catalog's provenance namespace, ADR 0158.)
 
 ## Repository layout
 
-Two **language-pure planes** — **don't blur them**. Python lives at the repo root (`packages/` + `services/`); the entire JS/TS estate lives under `frontend/`, its own bun + Turborepo workspace root. (There is deliberately **no Polylith-style `projects/` layer** — it was removed 2026-07; deployables build straight from the root uv workspace via `uv sync --package <name>`, one dockerfile per deployable in `.docker/`.)
+This repository holds **the lakehouse and its console, and nothing else** (owner, 2026-11-04; XC-192). Every other
+client (flows, compute, the annotator, the viewer and search, table-maintenance, the sealed runners and their zones)
+was deleted here and is recovered from git history at `64ef118a9` when it moves to a repository of its own.
+
+Two **language-pure planes** — **don't blur them**. Python lives at the repo root (`packages/` + `services/`); the JS/TS
+plane lives under `frontend/`, its own bun workspace root. There is no Polylith-style `projects/` layer: deployables
+build straight from the root uv workspace via `uv sync --package <name>`, one dockerfile per deployable in `.docker/`.
 
 - `packages/` — reusable **Python** libraries, **no entrypoints**. uv workspace members.
-  - `packages/storage` — the S3 client, STS and URI seam: `s3_client`/`S3Client`, `configured_endpoint`, `sts_client`, `iter_keys`/`prune_timestamped_prefixes`, `split_s3_uri`, and the `StorageError`/`BucketNotFoundError`/`ObjectNotFoundError` + `s3_errors` family. It derives no credential: a key pair is passed per client or comes from the standard AWS chain. **Protocol-agnostic:** it ships no source or sink adapter; a workload's own sources and sinks live in that workload (`runners/htr/src/htr/sources.py`, beside its IIIF read-through cache), and the lakehouse ships none (ADR 0154).
-  - `packages/service-kit` — the **platform package** a client pins by lakehouse tag ([[XC-186]]): `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`/`SettingsDep`, the injectable lifespan, health and probes, telemetry, the auth plane (`governed`), the naming a client needs (`naming`, `ns_errors`, `spec_routes`, `endpoint_scheme`) and the input and credential guards (`arrow_ipc`, `storage_options`), and the contract a client reads the lakehouse's events by ([[XC-188]]: `control_events`, `lineage_events`, `governed.subjects`, `signature_doors`). It also ships the test seam a client's suite needs, as a pytest plugin (`service_kit.pytest_plugin`, entry point `pytest11`, [[XC-190]]). Dependency-light (no lancedb/ray/sqlmodel), it carries no client's own code ([[XC-178]]): the fleet factory and the actor helpers (`governed.actor_state_store`, `governed.actor_warmup`) are platform its clients build on, which no lakehouse service runs, and it imports nothing from the lakehouse's kernel (`.importlinter`, `the-platform-knows-no-kernel`).
-  - `packages/lakehouse-kit` — the lakehouse's **kernel**, imported only by its own services (`catalog`, `lineage`, `maintenance`): the lance app factory (`lakehouse_kit.lance_app`); the catalog's records, registries and governance guards (protection, trash, history fences, quality gates, retention); the table layout and feature checks; the namespace clients, readers and writers (`lakehouse_kit.lancekit`); the OpenLineage emission builders, the control-event emitter and the outbox seams with the Dapr publish; and the store session. No client may import it by any chain: each client's own `[tool.importlinter]` contract forbids it ([[XC-186]]).
-  - `packages/client-kit` — the code the lakehouse's clients share and the lakehouse never runs: the media app factory and lifespan (`client_kit.media`, built on by `viewer`, `search` and `annotator`), the dataset registry and descriptors (`client_kit.lancekit`, the only lancedb user) and a client's table read and write paths selected by its `MEDIA_*` settings (`client_kit.lancekit.reader` / `.writer`, through the stock Lance Namespace SDK in `client_kit.lancekit.catalog`), the offset-pagination envelope (`client_kit.pagination`) and the per-route rate limiter (`client_kit.rate_limit`, `[ratelimit]` extra). Depends on `service-kit`; the import contract `the-lakehouse-knows-no-client` forbids it from every lakehouse module.
-  - `packages/ray-kit` — Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, the dashboard service). Used by the `compute` service.
-  - `packages/lineage-kit` — the OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events (`lineage_kit.signing`), used by catalog, lineage and maintenance, and by a client verifying the lakehouse's events (the notifications inbox)
-  - `packages/ray-cluster-env` — NAMES the Ray images' platform environment (Ray with its data/default/serve extras) and ships the tracing hooks the head and Serve are configured with (`ray_cluster_env.tracing`, on the OTel SDK alone, so no lakehouse kit is in an engine image); both Ray dockerfiles `uv sync --package ray-cluster-env` from the root lock. (`packages/ratch` was DISSOLVED 2026-08-28 — owner ruling, `open_ray-kernel.md`: its Ray-interaction half was a drifted third submission seam retired for `ray-kit`, its schema/dataset layer was vendored into the sealed audio runners that consumed it undeclared, and its CLI had no callers. With it went the one sanctioned CLI exception — packages ship no entrypoints again, without exception.)
-- `services/` — runnable **Python** code. **The old monolithic `viewer` service is gone**, and so is the whole batches/orchestrator plane (P7a compute-plane cutover; ADR 0154 and ADR 0155):
-  - `services/compute` — the **`compute` service** (`:8804`): Ray dashboard introspection (`/api/ray/*`), the `/api/serve/*` proxy and the cron that prunes terminal Ray jobs — the companion of a bring-your-own Ray engine, **not part of the product chart** (ADR 0155). It ships as its own chart, `deploy/fixtures/compute` (release `compute`, installed by `make k3s-clients` in rask's namespace), which reads the rask release's Dapr app token, `lance-tracing` Configuration, Dex, catalog, and OTel Collector by reference; it holds no OpenFGA credential and asks the catalog's decision door, which answers its service account only when the product chart's `auth.externalDeciders` names it. The lakehouse runs no stage, no training and no engine, and the import contract `the-lakehouse-knows-no-client` (`.importlinter`) forbids `catalog`, `lineage`, `maintenance`, `service_kit`, `lakehouse_kit`, `lineage_kit` and `storage` from importing `ray`, `ray_kit`, `ray_cluster_env`, `compute`, the clients' shared kit `client_kit`, or any other client (`notifications`, `flows`, `search`, `viewer`, `annotator`, `table_maintenance`). Thin shell over `ray-kit`; no DB. `compute` names the uv member, import, image and app-id (R22); its HTTP paths are `/api/ray` + `/api/serve`. (`core`/`core_api`/`search_api`/`volumes_api` died in the R6/R20 media wave — the S3 object browser now lives in the lance `viewer` at `/api/explorer/object*`; lines/EAD FTS re-land as catalog-governed Lance tables behind `/api/explorer/search`.)
-  - `services/notifications` — the **targeted inbox** (`:8850`, app-id `notifications`) behind the estate's bell: a **client** of the lakehouse's events, not part of the product chart ([[XC-188]]). It belongs with the console, and until its release is built the dev estate runs no inbox; its own import contract forbids `lakehouse_kit`. One Dapr `InboxActor` per subject holding claim-check POINTERS with durable read state, so the badge counts YOUR work rather than the estate's. Two ingresses: a `lineage.events.v1` subscription and a `bindings.cron` reconciler over lineage's durable `GET /events` (the bus alone is provably incomplete — external OpenLineage producers, a user's pipeline among them, emit over HTTP only). Its targeting sources: authorship, ORIGINATOR (a service-authored run done FOR a named person), `project#member`-gated project watches, the grant pair, and a scheduled erasure release. A tool's own work queue (an annotation task, say) is announced on the tool's own channel, never on this bell (ADR 0171). Delivery gates on `can_be_notified`, render on `can_get_metadata` — see `.claude/skills/openfga` and `rask-services-fleet`. **COVERAGE IS DECIDED AT THE PRODUCER, not here:** a state change that names nobody is not under-delivered, it is undeliverable, and `notifiable()` answers an event it cannot target with a SUCCESS ack — so a producer that stamps a role literal in `author.sub`, omits `lance.project`, or emits no event at all fails silently and is reported by nothing. Before adding a feature whose outcome a person should hear about, read `.claude/skills/rask-notifications` (the contract).
-  - **The medallion is tier governance, not a service** (ADR 0155). The governed tiers are exactly bronze→silver→gold (R23: raw is the external world, never a governed tier), and ADR 0155 puts their rules in the **catalog's write path**, so no writer can bypass them. Moving data between tiers is the **user's pipeline, on their own compute and orchestrator**: it reads a tier and writes the next through the catalog's Lance Namespace doors (`CreateTable`, `InsertIntoTable`, `MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`) like any other client, and the catalog announces every committed write on lineage; how a pipeline outside the estate consumes those announcements is a separate decision, and the NATS topics are internal. The catalog's gates door declares a project's quality gate and the publish door runs it; with review declared on the gate, a breach is held for a `can_promote` holder to approve or reject (ADR 0161). The catalog serves no model registry (LH-558): a model plane is a client's. There is no protocol-specific ingest door, and adding one would make that protocol privileged.
-- `frontend/` — the **JS/TS plane** and its own workspace root: `package.json`, `bun.lock`, `turbo.json`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/` (the shared favicon source). The only JS outside it is `tests/e2e`, a standalone Playwright project with its own lockfile (`make e2e`).
-  - **The 6 zones** (`frontend/microfrontends/<zone>`), SvelteKit 2 + Svelte 5, **SSR** via `svelte-adapter-bun` (a real Bun server: `bun ./build/index.js`), composed by Turborepo's built-in microfrontends proxy on `:3024` in dev; the product chart renders none of them (they are a client of the lakehouse, XC-181): `home` (catch-all, base `''`, owns `/` + the OIDC BFF), `lakehouse` (`/lakehouse` — data/lineage/models/admin/storage areas), `explorer` (`/explorer`, labelled **Explorer**), `annotator` (`/annotator`, labelled **Annotate**), `compute` (`/compute`), `studio` (`/studio`); a leftover `microfrontends/train/`, `media/` or `models/` on a dev host is untracked build residue, not a zone. Bases are a bare `/<zone>` — **there is no `/default/` segment**. Every zone renders the shared `@rask/ui/shell` AppShell. See `.claude/skills/rask-frontend`.
-  - `frontend/packages/ui` — Svelte 5 + Bits UI + Tailwind 4 design system (`@rask/ui`) w/ Storybook 10 (`@storybook/svelte-vite`). The only frontend package with a build step (`svelte-package` → `dist/`). **Styled components live here, not in the zones** (zones supply `app.css` with an `@source '../../../packages/ui/dist'` — three `../`). 40 subpath exports incl. **`@rask/ui/shell`**. See `.claude/skills/rask-styling`.
-  - `frontend/packages/api` — `@rask/api`, the shared data layer: typed `/api/*` client and the edge base (`@rask/api/edge`, `RASK_EDGE_URL`) **plus** the OIDC/BFF plane (`bff.ts`, `oidc.ts`) and the lineage client. valibot. JIT TS, no build step.
-  - `frontend/packages/explorer-api` — `@rask/explorer-api`, the Arrow-backed explorer/viewer client.
-  - `frontend/packages/engine` — `@rask/engine`, a framework-agnostic PixiJS/WebGPU annotation canvas (ra-anno lineage).
-  - `frontend/packages/labeling` — `@rask/labeling`, the `LabelOp` model + the annotator's Arrow-IPC transport.
-  - `frontend/packages/config` — `@rask/config`, one shared `tsconfig.base.json` (extended by 6 of 14 packages).
-  - `frontend/packages/zone-contract` — `@rask/zone-contract`, **imported by nothing at runtime**: 21 files gating the estate's shape (cross-zone `data-sveltekit-reload`, the zone manifest, deploy paths, and a toolchain guard that fails the build if ESLint/Prettier reappear), **plus the dev scripts those gates guard** — `src/dev-zone.ts` (`make dev-zone`) and `src/proxy.ts`. Dev tooling lives *inside* a package on purpose: `lint`/`fmt` are per-package turbo tasks, so a script parked outside both workspace globs would be linted and formatted by nothing.
-- `scripts/` — **all** dev/ops scripts, shell + Python: one-shot setup / debug tools (`harvest_ead`, `download_*`, `smoke_s3`, …) plus `dev-micro.sh` and `k3s-install.sh`. **No production-state-changing CLIs** — data enters, and moves between tiers, only through the catalog's namespace doors.
+  - `packages/service-kit` — the **platform package** a client pins by lakehouse tag ([[XC-186]]): `make_service_app`
+    app factory, `Settings`/config, exceptions, middleware, `get_settings`/`SettingsDep`, the injectable lifespan, health
+    and probes, telemetry, the auth plane (`governed`), the naming a client needs (`naming`, `ns_errors`, `spec_routes`,
+    `endpoint_scheme`), the input and credential guards (`arrow_ipc`, `storage_options`), and the contract a client
+    reads the lakehouse's events by ([[XC-188]]: `control_events`, `lineage_events`, `governed.subjects`,
+    `signature_doors`). It also ships the test seam a client's suite needs, as a pytest plugin
+    (`service_kit.pytest_plugin`, entry point `pytest11`, [[XC-190]]). Dependency-light (no lancedb/ray/sqlmodel), and it
+    imports nothing from the lakehouse's kernel (`.importlinter`, `the-platform-knows-no-kernel`).
+  - `packages/lakehouse-kit` — the lakehouse's **kernel**, imported only by its own services (`catalog`, `lineage`,
+    `maintenance`): the lance app factory (`lakehouse_kit.lance_app`); the catalog's records, registries and governance
+    guards (protection, trash, history fences, quality gates, retention); the table layout and feature checks; the
+    namespace clients, readers and writers (`lakehouse_kit.lancekit`); the OpenLineage emission builders, the
+    control-event emitter and the outbox seams with the Dapr publish; the store session; and the S3 client, STS and URI
+    seam (`lakehouse_kit.storage`: `s3_client`/`S3Client`, `configured_endpoint`, `sts_client`, `iter_keys`, `split_s3_uri`,
+    the `StorageError` family). No client may import it: the inbox's own `[tool.importlinter]` contract forbids it.
+  - `packages/lineage-kit` — the OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage
+    events (`lineage_kit.signing`), used by catalog, lineage and maintenance, and by the inbox to verify the lakehouse's
+    events.
+- `services/` — runnable **Python** code:
+  - `services/catalog`, `services/lineage`, `services/maintenance` — **the lakehouse**, built from the lance app factory
+    and shipped as ONE image (`.docker/rest-catalog.dockerfile`) run with three commands.
+  - `services/notifications` — the **targeted inbox** (`:8850`, app-id `notifications`) behind the console's bell: a
+    **client** of the lakehouse's events, not part of the product chart ([[XC-188]]). The console's own release deploys it
+    (`deploy/fixtures/console`). One Dapr `InboxActor` per subject holding claim-check POINTERS with durable read state, so
+    the badge counts YOUR work rather than the estate's. Two ingresses: a `lineage.events.v1` subscription and a
+    `bindings.cron` reconciler over lineage's durable `GET /events` (the bus alone is provably incomplete — external
+    OpenLineage producers, a user's pipeline among them, emit over HTTP only). Its targeting sources: authorship,
+    ORIGINATOR (a service-authored run done FOR a named person), `project#member`-gated project watches, the grant pair,
+    and a scheduled erasure release. Delivery gates on `can_be_notified`, render on `can_get_metadata` — see
+    `.claude/skills/openfga` and `rask-services-fleet`. **COVERAGE IS DECIDED AT THE PRODUCER, not here:** a state change
+    that names nobody is not under-delivered, it is undeliverable, and `notifiable()` answers an event it cannot target
+    with a SUCCESS ack — so a producer that stamps a role literal in `author.sub`, omits `lance.project`, or emits no event
+    at all fails silently and is reported by nothing. Before adding a feature whose outcome a person should hear about,
+    read `.claude/skills/rask-notifications` (the contract).
+  - **The medallion is tier governance, not a service** (ADR 0155). The governed tiers are exactly bronze→silver→gold
+    (R23: raw is the external world, never a governed tier), and ADR 0155 puts their rules in the **catalog's write
+    path**, so no writer can bypass them. Moving data between tiers is the **user's pipeline, on their own compute and
+    orchestrator**: it reads a tier and writes the next through the catalog's Lance Namespace doors (`CreateTable`,
+    `InsertIntoTable`, `MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`;
+    `lance_docs/ns_catalog/spec.yaml`) like any other client, and the catalog announces every committed write on lineage.
+    The catalog's gates door declares a project's quality gate and the publish door runs it; with review declared on the
+    gate, a breach is held for a `can_promote` holder to approve or reject (ADR 0161). The catalog serves no model
+    registry (LH-558). There is no protocol-specific ingest door, and adding one would make that protocol privileged.
+- `frontend/` — the **JS/TS plane** and its own bun workspace root: `package.json` (plain bun scripts, no Turborepo),
+  `bun.lock`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/`.
+  - `frontend/console` — **the console**: ONE SvelteKit 2 + Svelte 5 single-page app (`adapter-static`, `ssr = false`,
+    fallback `index.html`) with no backend of its own, Lakekeeper-style. The browser signs in to Dex with OIDC and PKCE
+    on the public `rask-web` client (`oidc-client-ts`, tokens in memory, only the transient PKCE state in
+    sessionStorage), reads its issuer, client and scopes from `/config.json` at boot (rendered by its chart), and calls
+    the catalog, lineage and inbox APIs with its bearer, same-origin. `serve.ts` is its static server: the build with an
+    SPA fallback, `/config.json` from `$CONSOLE_CONFIG_FILE`, and the strict CSP SvelteKit computes, sent as a header.
+    Every page of the former `home` and `lakehouse` zones lives in one route tree (`/`, `/projects`, `/catalog/...`,
+    `/admin/...`, `/settings/...`, `/preferences/...`, `/notifications`, `/workbench`); an admin page's guard is a
+    client-side `+layout.ts`, which discloses nothing the catalog's per-request check would not refuse. See
+    `.claude/skills/rask-frontend`.
+  - `frontend/packages/ui` — Svelte 5 + Bits UI + Tailwind 4 design system (`@rask/ui`) with Storybook 10. The only
+    frontend package with a build step (`svelte-package` → `dist/`); styled components live here, and the console's
+    `app.css` reads them with an `@source` two `../` up. See `.claude/skills/rask-styling`.
+  - `frontend/packages/api` — `@rask/api`, the typed `/api/*` client the console calls through, with the bearer supplied
+    by a provider the app installs, the lineage client and the OpenAPI types generated from `docs/*-openapi.json`.
+  - `frontend/packages/dockview` — `@rask/dockview`, the workbench's dock; `frontend/packages/flow` — `@rask/flow`, the
+    graph views the governance pages draw with.
+- `tests/` — `tests/unit`, `tests/integration` and `tests/e2e-py` (the live suites) for the lakehouse; `tests/e2e` holds
+  the inbox's two browser verify scripts.
+- `scripts/` — **all** dev/ops scripts, shell + Python. **No production-state-changing CLIs** — data enters, and moves
+  between tiers, only through the catalog's namespace doors.
+- `deploy/` — the overlays (`values-*.yaml`), the alert rules, kind and k3s configs, and `deploy/fixtures/<name>`: the
+  platform's development stand-ins (cloudnative-pg, dapr, dex, external-secrets, marquez, nats, observability, openbao,
+  rustfs, mailpit) and the console's release (`deploy/fixtures/console`: the web pod, the inbox and its Dapr state store,
+  one HTTPRoute, and the admissions it supplies the lakehouse in `lakehouse-values.yaml`).
 
-- `runners/` — **sealed model environments, NOT workspace members. This is the ONLY place a modality may live.** One directory per workload, each holding its Ray Data pipeline (`src/runner`) *and* its model actors in one project with its **own `pyproject.toml`**; three (`assist`, `dummy`, `htr`) commit their own `uv.lock`, and the other six have none tracked, so their images resolve at build time. Matched by no glob, which is the point: a runner's heavy ML stack (torch, ultralytics, transformers, …) never enters the fleet's resolution (root lock 200 → 145 packages). **The seal's saving is in RESOLUTION and IMPORT, not in the suite's runtime** — measured 2026-09-10, the fleet suite is **~8m20s** over 8,586 tests (two runs agreeing within 0.3%), a broad front with no hotspot: the slowest single test is 14.1 s and the top 30 sum to 34%. Selecting testpaths is the only lever. `storage` is a **path** dep. A runner's tests are invisible to the root pytest — `make test` runs them separately; its images build from **its** lock; it carries its own ruff config (ruff resolves the nearest pyproject). Ray entrypoint: `uv run --project runners/<workload> runner`, overridden in-cluster by `RASK_RUNNER_CMD=runner`. A second workload is a second sibling directory, and needs no change anywhere else. **A workload's awkward dependencies are ITS problem — never solved by fattening a shared image.** **RESOLVED 2026-08-25: PER-WORKLOAD BAKED IMAGES** (owner decision). `.docker/ray-cluster.dockerfile` is the agnostic head image — it builds `packages/ray-cluster-env` (the platform environment and its tracing hooks) from the ROOT lock and installs no runner at all (verified in the built image: torch, htrflow, ultralytics and cv2 absent). One workload's image is built from the PARAMETRIZED `.docker/ray-runner.dockerfile` via `ARG RUNNER`, exactly as `frontend.dockerfile` builds every zone from `ARG APP`: `scripts/dagger-image.sh --runner <runner> --tag ray-<runner>:<tag>`. A Serve application declares its own image as `runtime_env.image_uri` in the engine's Serve config (the rask chart renders no Serve application, ADR 0153), so several workloads share one cluster without sharing one environment. A tenth runner is a new `--runner=` value and edits no file. Note the distinction, because the word is overloaded: the 2026-08-23 ruling rejects shipping DEPENDENCIES through `runtime_env` (its `pip`/`uv` fields, resolving a stack at replica start), and that still stands. `runtime_env.env_vars` (scoping ENVIRONMENT to one application or job) and `runtime_env.image_uri` (naming a prebuilt image) are both fine and are how this is wired. **The two environments do not merge, and that is the seal working:** a runner image's default interpreter is the workload's venv, so `import lance` fails there by design — the head image bakes no job and carries no Lance plane either (ADR 0155: a job that writes a tier is the user's, in the user's image). No offline test pins that a declared application's import path exists in the image that serves it: the check belongs in a Dagger smoke over the built images (import each application), and that smoke does not exist yet.
-
-**Workspace membership is globbed, per plane** — the directories are language-pure, so every child carries the right manifest:
+**Workspace membership is globbed, per plane** — the directories are language-pure, so every child carries the right
+manifest:
 
 - `pyproject.toml` → `[tool.uv.workspace] members = ["packages/*", "services/*"]`
-- `frontend/package.json` → `workspaces = ["microfrontends/*", "packages/*"]` (relative to `frontend/`)
+- `frontend/package.json` → `workspaces = ["console", "packages/*"]` (relative to `frontend/`)
 
-A new Python library/service or a new zone is picked up by the glob — but it **must** ship a `pyproject.toml` (Python) or a `package.json` (JS), or its plane silently drops it.
+A new Python library or service is picked up by the glob — but it **must** ship a `pyproject.toml`, or uv refuses the
+workspace; a new JS package under `frontend/packages/` must ship a `package.json`, or bun silently skips it.
 
-Deployables are just workspace members with a dockerfile: `.docker/<name>.dockerfile` runs `uv sync --frozen --package <name>` against the **root** `uv.lock` (ten Python services: `annotator`, `catalog`, `compute`, `flows`, `lineage`, `maintenance`, `notifications`, `search`, `table-maintenance`, `viewer`. `annotator`, `compute`, `flows`, `notifications` and `table-maintenance` each build their own `.docker/<name>.dockerfile`, and every image but `compute`'s, `annotator`'s, `flows`', `media`'s, `notifications`' and `table-maintenance`'s is deployed by the product chart (flows, media and notifications by no chart in this repo, the other three each by its own chart, `deploy/fixtures/compute`, `deploy/fixtures/annotator` and `deploy/fixtures/table-maintenance`, the last a bring-your-own compaction CronJob, ADR 0174); one image, `.docker/rest-catalog.dockerfile`, installs and serves the lakehouse's `catalog`, `lineage` and `maintenance` and no client, and another, `.docker/media.dockerfile`, the clients `viewer` and `search`, which no chart in this repo deploys; `.docker/runner.dockerfile` is the runner image and the Ray cluster image is `.docker/ray-cluster.dockerfile`).
+Deployables are workspace members with a dockerfile: `.docker/rest-catalog.dockerfile` installs and serves the
+lakehouse's `catalog`, `lineage` and `maintenance` and no client (its import gate refuses `notifications` and `lancedb`),
+`.docker/notifications.dockerfile` the inbox, and `.docker/frontend.dockerfile` the console's image (`web-console`, the
+static build and `serve.ts`); `.docker/cnpg-age-ext.dockerfile` and `.docker/marquez.dockerfile` build development
+fixtures' images.
 
 ## Architecture
 
@@ -302,16 +340,14 @@ writes its governed tables through the catalog.** That is the whole of what it i
 Namespace (catalog + provenance), events on Dapr + NATS JetStream, with lineage and authorization across all of it;
 the compute engine and the workflow engine are the user's (ADR 0154, ADR 0155).
 Any modality — text, image, audio, video, embeddings, or one nobody has written yet — is a first-class
-citizen: bytes in, a governed table out, lineage emitted. That is observable, not aspirational: there are
-**nine sealed runners** (`asr`, `assist`, `diarize`, `dummy`, `htr`, `insid3`, `kg`, `topics`,
-`voiceprint`), spanning audio, image and text. No single one of them is the platform, and if any file
-here reads as though one is, that file is wrong.
+citizen: bytes in, a governed table out, lineage emitted. The workloads that write it (audio, image and text alike)
+are clients in repositories of their own; no single one of them is the platform, and if any file here reads as though
+one is, that file is wrong.
 
 **It is NOT an HTR system, and it belongs to no institution.** Never describe it as either. A data type
 must never enter a shared seam — the catalog, tier governance, the sweep, annotation, search, lineage,
 notifications — and the test for every one of those is *would this be right for audio?* If an answer
-needs a modality's name, it belongs in a sealed `runners/<workload>`, whose internals (stage graph,
-models, GPU packing, output format) this file deliberately does not describe. An organisation name is
+needs a modality's name, it belongs in the workload that writes it, outside this repository. An organisation name is
 only ever an external identifier someone else owns — a model repo, a source URL, the GitHub org — never
 a description of what rask is.
 
@@ -338,10 +374,10 @@ Key facts that aren't obvious from any single file:
   counter `compaction.datasets.mixed_file_versions` pages on one. pylance 13's `update()`,
   `merge_insert().data_storage_version()` and `compact_files()` also take a `data_storage_version` that
   can stamp the flag: a stock client's such commit is refused at `version/create`, and rask code never passes it.
-- **A workload is a SEALED RUNNER, and the platform knows nothing about it.** `runners/<workload>` submits one Ray Data pipeline per CLI invocation and blocks on `.materialize()`; long-lived model weights stay warm behind **Ray Serve** deployments the runner owns and `make serve-up` deploys independently of any job. Serve replica counts and GPU fractions are the RUNNER's business (`RASK_SERVE_REPLICAS` / `RASK_SERVE_GPU_FRAC` plus literals inside its own pipeline module) — never the platform's. Whatever a workload's stage graph, model or output format is, it reaches the platform as config: bytes in, a governed table out, lineage emitted. Its per-workload mechanics live in that runner's own README, not here.
+- **A workload is the user's, and the platform knows nothing about it.** Whatever a workload's stage graph, model or output format is, it reaches the platform as a client of the catalog's doors: bytes in, a governed table out, lineage emitted.
 - **The estate is AUTHENTICATED, and this bullet used to say the opposite.** It read *"No auth, no app
   middleware. The services assume localhost / trusted network"* — which was true once and has been
-  false for a while: `chart/values.yaml` defaults auth ON, nine services mix in `GovernedAuthSettings`,
+  false for a while: `chart/values.yaml` defaults auth ON, every service mixes in `GovernedAuthSettings`,
   and `chart/templates/route.yaml` publishes every `/api/*` prefix at the edge. The stale sentence was not
   harmless: read as policy, "trusted network" made an unguarded service look deliberate rather than
   unfinished. Owner ruling 2026-08-26: authenticated is the truth, the ungated services get the door
@@ -349,31 +385,27 @@ Key facts that aren't obvious from any single file:
   `service_kit.middleware.register_middleware` rather than per route. That work landed: the tracking
   file, `open_fastapi-audit.md`, was **DRAINED AND DELETED 2026-08-28** — all 55 findings fixed
   RED-first, every closure adversarially re-verified (the drain's own commits carry the record).
-  **`compute` is gated too** — verified 2026-09-09: it mixes in `GovernedAuthSettings`, ships a
-  `security.py` whose `require_read` resolves a `CurrentSubject` plus an FGA checker, and gates the WHOLE
-  `/ray` router (`dependencies=[Depends(security.require_read)]`). **rask runs no edge process** (ADR 0165): the platform's
+  **rask runs no edge process** (ADR 0165): the platform's
   Gateway (Kubernetes Gateway API) serves the chart's HTTPRoutes (`chart/templates/route.yaml`), which route each
   public `/api/*` prefix straight to its service's app port, rewriting the prefix with `URLRewrite`
   `ReplacePrefixMatch` where the service mounts elsewhere (table: `rask.apiRoutes` in `chart/templates/_helpers.tpl`),
-  and each service authenticates every request itself. `/api/ray/*` and `/api/serve/*` route to the **compute**
-  service (over `ray-kit`) through the compute fixture chart's own HTTPRoute — the URL namespace names the Ray
-  cluster, not the service (R22). SSR `load`/remote functions reach `/api/*` server-side through the same route at
-  one absolute base, `RASK_EDGE_URL`; client code uses the relative `/api/*`. On k3s the Gateway
+  and each service authenticates every request itself. The console's release attaches its own HTTPRoute to the same
+  Gateway (`/` → its web pod, `/api/notifications` → the inbox), so the browser reaches every API same-origin with its
+  bearer and no CORS. On k3s the Gateway
   is Traefik's Gateway provider (`deploy/k3s/traefik-gateway.yaml`, Gateway `traefik-gateway` in `kube-system`).
-- **State surface:** the lakehouse (Lance datasets on S3; RustFS in development, `rask-rustfs`, ADR 0168) governed by the catalog, plus the chart-managed **OpenFGA** Postgres database — served by the `rask-age` **StatefulSet**, NOT by CloudNativePG. Lineage keeps no database (ADR 0158): its commit feed (`provenance$events`), table-level edge list (`provenance$edges`), outbox refusals and forwarder cursors are Lance tables in the catalog's provenance namespace, written and read through the catalog's doors, and the lineage graph is bring-your-own (the relay forwards every recorded event as OpenLineage to `services.lineage.forward.url`; Marquez in development). Measured live 2026-09-07: **zero** `cluster.postgresql.cnpg.io` objects exist, and `age.cnpgCluster.enabled` defaults **false** because the AGE-on-CNPG cutover needs a built extension image (`.docker/cnpg-age-ext.dockerfile`), K8s 1.33+ and CNPG >= 1.27 — the two paths are mutually exclusive and `age-cluster.yaml` fails the render if both are on. The CNPG **operator** is a prerequisite (ADR 0153; in development the `cloudnative-pg` fixture in `cnpg-system`) and runs with nothing to reconcile, so a running operator is not evidence that a `Cluster` exists. **The app's own relational DB is gone** (P7a): no batches table, no Alembic, no `DATABASE_URL` in the fleet. **No Redis**; events ride Dapr pub/sub on NATS JetStream. (`.docker/` still carries 3 `docker-compose*.yml` files: the local stack and two auth/dex variants. They are side stacks for local bring-up, not the deploy path; the Helm chart is.) The Helm chart in `chart/` is the single deploy artifact for both local k3s and production, and installs no operator: the External Secrets Operator, the Dapr control plane, NATS JetStream and the CloudNativePG operator are prerequisites, installed in development from `deploy/fixtures`, each its own release; the chart renders a CNPG `Cluster` only with `age.cnpgCluster.enabled`, for a cluster that serves `postgresql.cnpg.io/v1`. Ray is not in the chart (ADR 0153), and neither is its companion `compute` service (ADR 0155): the engine is bring-your-own, and the product chart names no part of it — no address, token, scrape job, alert or network peer (ADR 0189); `make k3s-clients` installs a dev one from `deploy/fixtures` (kuberay-operator, ray-cluster, compute) after `make k3s-up`, each its own release; `make k3s-up` installs the lakehouse alone (XC-183). Local deploy: `make k3s-install` (one-time) → `make k3s-build` → `make k3s-import` → `make k3s-up`; tear down with `make k3s-down` / `make k3s-purge`. See `docs/architecture/deployment.md` and `chart/README.md`.
+- **State surface:** the lakehouse (Lance datasets on S3; RustFS in development, `rask-rustfs`, ADR 0168) governed by the catalog, plus the chart-managed **OpenFGA** Postgres database — served by the `rask-age` **StatefulSet**, NOT by CloudNativePG. Lineage keeps no database (ADR 0158): its commit feed (`provenance$events`), table-level edge list (`provenance$edges`), outbox refusals and forwarder cursors are Lance tables in the catalog's provenance namespace, written and read through the catalog's doors, and the lineage graph is bring-your-own (the relay forwards every recorded event as OpenLineage to `services.lineage.forward.url`; Marquez in development). Measured live 2026-09-07: **zero** `cluster.postgresql.cnpg.io` objects exist, and `age.cnpgCluster.enabled` defaults **false** because the AGE-on-CNPG cutover needs a built extension image (`.docker/cnpg-age-ext.dockerfile`), K8s 1.33+ and CNPG >= 1.27 — the two paths are mutually exclusive and `age-cluster.yaml` fails the render if both are on. The CNPG **operator** is a prerequisite (ADR 0153; in development the `cloudnative-pg` fixture in `cnpg-system`) and runs with nothing to reconcile, so a running operator is not evidence that a `Cluster` exists. **The app's own relational DB is gone** (P7a): no batches table, no Alembic, no `DATABASE_URL` in the fleet. **No Redis**; events ride Dapr pub/sub on NATS JetStream. (`.docker/` still carries 3 `docker-compose*.yml` files: the local stack and two auth/dex variants. They are side stacks for local bring-up, not the deploy path; the Helm chart is.) The Helm chart in `chart/` is the single deploy artifact for both local k3s and production, and installs no operator: the External Secrets Operator, the Dapr control plane, NATS JetStream and the CloudNativePG operator are prerequisites, installed in development from `deploy/fixtures`, each its own release; the chart renders a CNPG `Cluster` only with `age.cnpgCluster.enabled`, for a cluster that serves `postgresql.cnpg.io/v1`. No compute engine is in the chart (ADR 0153, ADR 0155): the engine is bring-your-own, and the product chart names no part of it — no address, token, scrape job, alert or network peer (ADR 0189). `make k3s-up` installs the lakehouse alone (XC-183), and `make k3s-clients` installs the console's release (`deploy/fixtures/console`) after it. Local deploy: `make k3s-install` (one-time) → `make k3s-build` → `make k3s-import` → `make k3s-up`; tear down with `make k3s-down` / `make k3s-purge`. See `docs/architecture/deployment.md` and `chart/README.md`.
 - **Observability (optional, `observability.enabled`):** rask ships ONE thing: the **OTel Collector** (`chart/templates/otel-collector.yaml`, app-id `rask-otel`), its telemetry seam. **Vector was RETIRED 2026-07-27** (owner ruling): the Collector is the single log shipper — its filelog receiver tails infra-pod logs, and it scrapes the Dapr sidecars and control plane and OpenFGA. Every plane (the fleet, Dapr, OpenFGA) exports plain OTLP/HTTP to the Collector and names no store; the Collector exports to **`observability.export.endpoint`** with the backend's headers from `observability.export.*` (GreptimeDB's db-name, trace-pipeline and audit-table headers by default) and basic auth from the store's `otel-collector-export` secret. **The store, dashboards and alerting are the platform's, not the chart's** ([[XC-127]], ADR 0153): the alert rules are an artefact of their own, `deploy/alerting/rules.yml` (promtool-proven by `make alert-rules-check`, replayed against GreptimeDB by `make alert-rules-drill`), for the platform's evaluator. Development gets the chain from the `observability` fixture (`deploy/fixtures/observability`, namespace `observability`): GreptimeDB (`greptimedb.observability:4000`, local volume, retention Job) → Perses (rask's dashboards) and vmalert → Alertmanager, which `deploy/values-local.yaml` names. Standard OTLP throughout (not OTel-Arrow).
-- **The lakehouse runs no ingest, no stage, no training and no engine (ADR 0154, ADR 0155).** Data enters through the catalog's namespace doors and the catalog announces each committed write; nothing inside the lakehouse reacts to that announcement by copying rows into the next tier — a user's pipeline does, on its own compute. Ingest of an external source is a bring-your-own client job (a sealed runner, CP-061, not yet built) that commits through the catalog; until it lands, data reaches bronze only from a client speaking the namespace doors; the live lane `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` is such a client, seeding bronze with stock pylance on the credential the catalog vends. A create that commits no rows is a DDL event, and one that commits rows is announced as a write (LH-492). **No tier carries a workload-shaped schema**: a governed row needs no column, because its run and inputs ride the commit as `rask.*` transaction properties (ADR 0156 C9, LH-225); `source_rowid` is the one column the platform names (`lakehouse_kit.stage_stamp`), an opt-in held to uint64 stable row ids and reserved by name in the catalog (`catalog/core/provenance_guard.py`), and the rest of the row, `stage` and `lineage` included, is the writer's. A workload's own output shape belongs to its sealed runner or the user's pipeline.
-- **Source bytes are a WORKLOAD concern.** A runner may read from S3, an HTTP endpoint, a read-through cache, anywhere — the platform takes data only through the catalog's namespace doors and does not care where the bytes came from. A workload's source and sink adapters are its own code; the platform ships none and has no privileged ingress for any particular protocol.
+- **The lakehouse runs no ingest, no stage, no training and no engine (ADR 0154, ADR 0155).** Data enters through the catalog's namespace doors and the catalog announces each committed write; nothing inside the lakehouse reacts to that announcement by copying rows into the next tier — a user's pipeline does, on its own compute. Ingest of an external source is a bring-your-own client job (CP-061, not yet built) that commits through the catalog; until it lands, data reaches bronze only from a client speaking the namespace doors; the live lane `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` is such a client, seeding bronze with stock pylance on the credential the catalog vends. A create that commits no rows is a DDL event, and one that commits rows is announced as a write (LH-492). **No tier carries a workload-shaped schema**: a governed row needs no column, because its run and inputs ride the commit as `rask.*` transaction properties (ADR 0156 C9, LH-225); `source_rowid` is the one column the platform names (`lakehouse_kit.stage_stamp`), an opt-in held to uint64 stable row ids and reserved by name in the catalog (`catalog/core/provenance_guard.py`), and the rest of the row, `stage` and `lineage` included, is the writer's. A workload's own output shape belongs to the user's pipeline.
+- **Source bytes are a WORKLOAD concern.** A workload may read from S3, an HTTP endpoint, a read-through cache, anywhere — the platform takes data only through the catalog's namespace doors and does not care where the bytes came from. A workload's source and sink adapters are its own code; the platform ships none and has no privileged ingress for any particular protocol.
 
 ## Conventions
 
-- **The zones' SSR reads one `RASK_EDGE_URL`; their dev proxies still disagree.** Every zone's SSR reaches `/api/*` through the edge at `RASK_EDGE_URL` (default `http://localhost:8888`). The Vite dev `/api` proxies are per zone: `compute`/`studio` → `VIEWER_BACKEND` (`:8888`); `home`/`lakehouse` → `LANCE_BACKEND` (**`:8001`**, the lineage service); `explorer`/`annotator` have no `/api` proxy and reach `:8101`/`:8102`/`:8103` via their own BFF. `make dev-micro` runs the fleet only and starts no router: the zones' `/api` needs an edge on `RASK_EDGE_URL` — the in-cluster Gateway through `make dev-frontends-k3s` (which port-forwards k3s Traefik's Service to :8888), or `make dev-zone ZONE=<z>` for a zone against its mocks. See `.claude/skills/rask-services-fleet` and `rask-frontend`.
+- **The console calls `/api/*` same-origin, in development too.** `vite dev` proxies `/api` to `RASK_EDGE_URL` (default `http://localhost:8888`, an edge: `make dev-k3s` port-forwards k3s Traefik's Service there); the built app is served by `serve.ts` behind the platform's Gateway. See `.claude/skills/rask-services-fleet` and `rask-frontend`.
 - **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are globbed (`testpaths` names `packages/*/tests`, `services/*/tests` and the three root suites), not discovered from the rootdir.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
-- **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across every JS/TS workspace (zones, `@rask/ui`, `@rask/api`, `@rask/zone-contract`). Prettier is gone.
-- **JS monorepo runs on Turborepo** (`frontend/turbo.json`): `bun --cwd=frontend run build`/`check`/`dev` delegate to `turbo run` (package tasks + `^build` ordering + cached `build`/`.svelte-kit`/`dist` outputs). Add a new JS package's scripts in its own `package.json` — never centralize task logic in root. `lint`/`fmt`/`fmt:check` are **per-package turbo tasks** too (each package runs `oxlint` / `oxfmt`); only `knip` stays root-level, because it analyses the whole JS graph at once.
-- **The cross-zone link gate is a test, not a lint rule.** A cross-zone `<a>` must carry `data-sveltekit-reload` or SvelteKit soft-navigates into a route the zone doesn't own (→ 404). Enforced by `@rask/zone-contract`'s vitest suite (`frontend/packages/zone-contract/src/cross-zone-reload.test.ts`) — oxlint's `.svelte` support reads the `<script>` block, not the markup, so an anchor-attribute rule cannot live there.
-- **Frontend is SSR + Svelte 5 strict.** Every `.svelte` change is validated with the Svelte 5 skills + the `svelte` MCP autofixer. Browser-only globals must stay inside `onMount`/`$effect`/handlers (never component top level or `load`) or SSR render crashes.
+- **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across the console and every package under `frontend/packages`. Prettier is gone.
+- **The JS workspace runs plain bun scripts** (`frontend/package.json`): `build` builds `@rask/ui` then the console, and `check`/`lint`/`fmt`/`fmt:check`/`test` run each package's own script through `bun run --filter '*'`. Add a new JS package's scripts in its own `package.json`; only `knip` stays root-level, because it analyses the whole JS graph at once.
+- **The console is a client-rendered single-page app, Svelte 5 strict.** Every `.svelte` change is validated with the Svelte 5 skills + the `svelte` MCP autofixer. Its CSP is strict (no `unsafe-eval`): a dependency that builds code at runtime breaks under it, which is why `frontend/patches/` carries an apache-arrow patch.
 - **`ty` is configured with `error-on-warning = true`** — typecheck warnings fail CI.
 - **Comments carry rationale and provenance, never HISTORY** (owner ruling 2026-08-30). Three kinds of
   prose live in these modules and only two may stay: **(1) rationale** — why it is this way, what is
@@ -436,7 +468,7 @@ Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
 | --- | --- |
 | Where code belongs; workspace globs; `pyproject.toml`; a new member or deployable | `rask-architecture` |
 | The cluster route, an endpoint's public prefix, a 404/401/403 through `/api/*`, ports | `rask-services-fleet` |
-| A zone, a route, data fetching, cross-zone links, the frontend gates | `rask-frontend` |
+| The console: a route, sign-in, data fetching, the CSP, the frontend gates and e2e | `rask-frontend` |
 | `@rask/ui`, tokens, `class=`, an unstyled page, a new component | `rask-styling` |
 | Whether a feature should tell a PERSON something — emitting a run/control event, a notification that never fired, a new `ControlAction`/`NotificationReason` | `rask-notifications` |
 | A Dapr component vs hand-rolling — queuing, scheduling, locking, config, secrets, middleware; which blocks this estate uses/refused and why | `rask-dapr` |

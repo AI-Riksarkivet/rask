@@ -46,7 +46,7 @@ In the app's CSS:
 @import '@rask/ui/styles/tokens.css';
 
 /* Tailwind 4 skips node_modules — scan @rask/ui/dist or its classes vanish. */
-@source '../../../../packages/ui/dist';
+@source '../../packages/ui/dist';
 ```
 
 ## Adding a component

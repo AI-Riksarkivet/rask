@@ -135,7 +135,7 @@ Related `lance-ray` version facts measured in the same pass:
   parameters**, contrary to what `ray_lance_job.py` recorded. The conclusion (fall back to the native
   build) held; the stated reason did not.
 - `lance_ray.read_lance(uri, scanner_options={"with_row_id": True})` **does** surface `_rowid` (verified at
-  both 0.4.2 and 0.5.0) — see [ADR 0122](../adr/0122-the-ray-plane-gets-a-standing-audit-r27-2026-07-28.md).
+  both 0.4.2 and 0.5.0) — see ADR 0122 (in git history at `64ef118a9`).
 
 ## Sizing note for rask's page images
 
@@ -157,4 +157,5 @@ the cardinality bug in particular should be re-checked, and this note updated if
 
 ## Who relies on this
 
-The document viewer (`services/viewer/.../pages.py`) is the read path these measurements govern.
+A client's blob read path is what these measurements govern: the document viewer was the first, and it is now a
+client outside this repository (git history at `64ef118a9`).

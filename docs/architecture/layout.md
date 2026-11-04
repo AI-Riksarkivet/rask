@@ -1,125 +1,84 @@
 # Monorepo Layout
 
-rask is a monorepo with two **language-pure planes** — Python at the repo root,
-JS/TS under `frontend/`. Each plane is its own workspace root (uv for Python, Bun
-+ Turborepo for JS/TS), and inside each plane the library/runnable boundary is
-deliberate — don't blur it. Deployables build straight from the root uv workspace,
-one `.docker/<name>.dockerfile` per deployable running `uv sync --frozen --package
-<name>` against the root `uv.lock`.
+rask is a monorepo with two **language-pure planes** — Python at the repo root, JS/TS under `frontend/`. Each plane is
+its own workspace root (uv for Python, Bun for JS/TS), and inside each plane the library/runnable boundary is
+deliberate — don't blur it. Deployables build straight from the root uv workspace, one `.docker/<name>.dockerfile` per
+deployable running `uv sync --frozen --package <name>` against the root `uv.lock`.
+
+The repository holds the lakehouse and its console. Every other client left it and is recovered from git history at
+`64ef118a9`, the last commit that holds every client, when it moves to its own repository.
 
 ```mermaid
 flowchart TD
     subgraph py["Python plane · repo root · uv workspace"]
         subgraph services["services/ · runnable code"]
-            lake["lakehouse: catalog · lineage · maintenance"]
-            fleet["flows · compute · notifications"]
-            media["media: viewer · search"]
-            annot["annotator (a client, own release)"]
+            lake["the lakehouse: catalog · lineage · maintenance"]
+            inbox["notifications (the console's inbox, a client)"]
         end
         subgraph packages["packages/ · reusable libraries (no entrypoints)"]
             psk["service-kit (the platform a client pins)"]
-            phk["lakehouse-kit (the lakehouse's kernel)"]
-            pck["client-kit"]
+            phk["lakehouse-kit (the lakehouse's kernel, with lakehouse_kit.storage)"]
             plk["lineage-kit"]
-            pst["storage"]
-            prk["ray-kit"]
-            prc["ray-cluster-env (Ray env + tracing hooks)"]
         end
         cx["scripts/ · dev + ops tools"]
     end
-    subgraph js["frontend/ · JS/TS plane · bun + turbo workspace"]
-        mf["microfrontends/ · home · lakehouse · explorer<br/>annotator · compute · studio"]
-        fpk["packages/ · ui · api · explorer-api · dockview<br/>flow · engine · labeling · config · zone-contract"]
+    subgraph js["frontend/ · JS/TS plane · bun workspace"]
+        app["console/ · one single-page app"]
+        fpk["packages/ · ui · api · dockview · flow"]
     end
-    rn["runners/&lt;workload&gt; · SEALED<br/><sub>own pyproject, NOT a workspace member</sub>"] --> pst
     lake --> phk
     lake --> plk
     phk --> psk
-    phk --> pst
-    fleet --> psk
-    media --> pck
-    annot --> pck
-    pck --> psk
-    mf --> fpk
+    inbox --> psk
+    inbox --> plk
+    app --> fpk
 ```
 
 ## `packages/` — reusable libraries, no entrypoints
 
-There are **two** `packages/` directories, one per plane: the root one is
-Python-only, `frontend/packages/` is TS-only. Each is unambiguous from inside its
-plane, and language purity is what lets both workspaces glob their members.
+There are **two** `packages/` directories, one per plane: the root one is Python-only, `frontend/packages/` is TS-only.
+Each is unambiguous from inside its plane, and language purity is what lets both workspaces glob their members.
 
 | Package | Language | Purpose |
 |---|---|---|
-| `packages/service-kit` | Python | The platform package a client pins by lakehouse tag: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, health and probes, telemetry, the auth plane (`service_kit.governed`), the naming a client needs, the input and credential guards (`service_kit.arrow_ipc`, `service_kit.storage_options`), and the contract the lakehouse's events publish (`service_kit.control_events`, `service_kit.lineage_events`, `service_kit.governed.subjects`, `service_kit.signature_doors`). Dependency-light (no lancedb/ray/sqlmodel), carries no code only a client runs, and imports nothing from the lakehouse's kernel. |
-| `packages/lakehouse-kit` | Python | The lakehouse's kernel: the lance app factory, the catalog's records, registries and governance guards, the namespace clients, the OpenLineage, control-event and outbox seams and the store session. Imported by catalog, lineage and maintenance; every client's import contract forbids it. |
-| `packages/client-kit` | Python | Code the lakehouse's clients share and the lakehouse never runs: the media app factory and lifespan, the lancedb dataset registry and descriptors, the per-route rate limiter. Used by viewer, search and the annotator; the lakehouse may not import it. |
+| `packages/service-kit` | Python | The platform package a client pins by lakehouse tag: `make_service_app` app factory, `Settings`/config, exceptions, middleware, `get_settings`, injectable lifespan, health and probes, telemetry, the auth plane (`service_kit.governed`), the naming a client needs, the input and credential guards (`service_kit.arrow_ipc`, `service_kit.storage_options`), the contract the lakehouse's events publish (`service_kit.control_events`, `service_kit.lineage_events`, `service_kit.governed.subjects`, `service_kit.signature_doors`), and its pytest plugin. Dependency-light (no lancedb/ray/sqlmodel), and imports nothing from the lakehouse's kernel. |
+| `packages/lakehouse-kit` | Python | The lakehouse's kernel: the lance app factory, the catalog's records, registries and governance guards, the namespace clients, the OpenLineage, control-event and outbox seams, the store session, and [`lakehouse_kit.storage`](../packages/storage.md), the S3 client, STS and URI seam. Imported by catalog, lineage and maintenance; no client imports it. |
 | `packages/lineage-kit` | Python | The OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used by catalog, lineage, maintenance and notifications. |
-| [`packages/storage`](../packages/storage.md) | Python | The S3 client seam (`s3_client`, `configured_endpoint`, STS, `iter_keys`, `split_s3_uri`, the `StorageError` family). |
-| `packages/ray-kit` | Python | Ray Job SDK + dashboard wrapper (schemas, `build_client`, `RAY_TRANSIENT_ERRORS`, dashboard service). Used by the `compute` service only; the lakehouse may not import it. |
-| `packages/ray-cluster-env` | Python | The Ray images' platform environment and the tracing hooks the head and Serve are configured with (`ray_cluster_env.tracing`). |
-| `frontend/packages/ui` | TS / Svelte | `@rask/ui`: Svelte 5 + Bits UI + Tailwind 4 component library with Storybook; `@rask/ui/shell` exports the shared `AppShell` every zone renders. |
-| `frontend/packages/api` | TS | `@rask/api`: the typed `/api/*` client (relative paths; SSR rewrites them to `RASK_EDGE_URL`) plus the OIDC/BFF plane and the lineage client. |
-| `frontend/packages/explorer-api` | TS | `@rask/explorer-api`: the Arrow-backed explorer/viewer client. |
-| `frontend/packages/{dockview,flow,engine,labeling,config}` | TS | Workbench docks, the studio flow canvas, the annotation canvas, the `LabelOp` model and the shared `tsconfig`. |
-| `frontend/packages/zone-contract` | TS | `@rask/zone-contract`: the estate's shape gates as a vitest suite (cross-zone `data-sveltekit-reload`, the zone manifest, deploy paths, the toolchain guard) plus the `make dev-zone` scripts. |
+| `frontend/packages/ui` | TS / Svelte | `@rask/ui`: Svelte 5 + Bits UI + Tailwind 4 component library with Storybook; `@rask/ui/shell` exports the console's `AppShell`. |
+| `frontend/packages/api` | TS | `@rask/api`: the typed client generated from `docs/catalog-openapi.json` and `docs/lineage-openapi.json`, the inbox client and the lineage client, calling same-origin `/api/*` with the signed-in person's bearer. |
+| `frontend/packages/dockview` | TS / Svelte | `@rask/dockview`: the console's workbench docks. |
+| `frontend/packages/flow` | TS / Svelte | `@rask/flow`: the graph canvas the governance views use (the project hierarchy, the access graph). |
 
-## `services/` · `frontend/microfrontends/` · `scripts/` — runnable code
+## `services/` · `frontend/console` · `scripts/` — runnable code
 
 | Path | Type | Purpose |
 |---|---|---|
 | `services/{catalog,lineage,maintenance}` | FastAPI | The lakehouse: the governed Lance Namespace catalog with tier governance, OpenLineage intake, the durable `GET /events` feed and edge list (Lance tables the catalog governs) and the forwarder to a graph backend, and maintenance (expiry, purge, orphan scan, reconcile). |
-| `services/notifications` | FastAPI | The targeted inbox behind the console's bell (`:8850`), a client of the lakehouse's events that reads them through service-kit's contract and imports nothing from `lakehouse_kit`; no chart in this repo deploys it (ADR 0190). |
-| `services/{viewer,search}` | FastAPI | The media plane (`:8101`–`:8102`, public `/api/explorer/*`). The viewer also serves the S3 object browser. |
-| `services/annotator` | FastAPI | The labeling tool (`:8103`, public `/api/explorer/annotations`), a client of the lakehouse that reads and writes only through the catalog's doors; deployed by its own chart, `deploy/fixtures/annotator`, not the product chart (ADR 0171). |
-| `services/flows` | FastAPI | The studio flow-builder's server half (`/api/flows`). |
-| `services/compute` | FastAPI | Ray dashboard introspection + `/api/serve/*` proxy on `:8804`, the companion of a bring-your-own Ray engine; deployed by its own chart, `deploy/fixtures/compute`, not the product chart. |
-| `frontend/microfrontends/home` | SvelteKit 2 + Svelte 5 (SSR) | The catch-all zone (`:5273`) on `svelte-adapter-bun`; owns `/` and the OIDC BFF. |
-| `frontend/microfrontends/{lakehouse,explorer,annotator,compute,studio}` | SvelteKit 2 + Svelte 5 (SSR) | The five domain zones, each pinned to a bare base `/<zone>` and rendering the shared `@rask/ui/shell`; composed by Turborepo's microfrontends proxy on `:3024` in dev and the cluster route in-cluster. |
-| `scripts/` | Python + shell | Every dev/ops tool in one place: `dev-micro.sh`, `k3s-install.sh`, the e2e stack drivers, … No production-state-changing CLIs — data enters and moves only through the catalog's namespace doors. |
-
-## `runners/` — sealed model environments, deliberately NOT workspace members
-
-`runners/<workload>` is the only place a modality may live: each directory holds one workload's Ray Data pipeline
-(`src/runner`) and its model actors in one project with **its own `pyproject.toml`** (`asr`, `assist`, `diarize`,
-`dummy`, `htr`, `insid3`, `kg`, `topics`, `voiceprint`). None is matched by a glob in `[tool.uv.workspace] members`,
-so a runner's heavy ML stack never enters the fleet's resolution, and the platform knows nothing about any of them:
-a runner reaches the lakehouse as a client of the catalog, like any other pipeline.
-
-Consequences that follow from the seal, all deliberate:
-
-- `storage` is a **path** dependency, not a workspace one.
-- A runner's tests are invisible to the root `pytest`; `make test` runs them separately.
-- Each runner carries its own ruff config; ruff resolves the *nearest* pyproject.
-- A runner's image is built from the parametrized `.docker/ray-runner.dockerfile`
-  (`scripts/dagger-image.sh --runner <runner>`), from its own lock where it commits one (`assist`, `dummy`, `htr`).
+| `services/notifications` | FastAPI | The targeted inbox behind the console's bell (`:8850`), a client of the lakehouse's events that reads them through service-kit's contract and imports nothing from `lakehouse_kit` (ADR 0190); released with the console (`deploy/fixtures/console`). |
+| `frontend/console` | SvelteKit 2 + Svelte 5 (single-page app) | The console: static files with no backend of its own, served by its own small Bun server (`serve.ts`) with the runtime `config.json`. The browser signs in to Dex with PKCE on the public `rask-web` client, keeps its tokens in memory under a strict Content Security Policy, and calls the catalog, lineage and inbox APIs with its bearer. |
+| `scripts/` | Python + shell | Every dev/ops tool in one place: `dev-micro.sh`, `k3s-install.sh`, the e2e stack drivers, the estate seed, … No production-state-changing CLIs — data enters and moves only through the catalog's namespace doors. |
 
 ## Deployables — workspace members with a dockerfile
 
-There is **no `projects/` layer**. `annotator`, `compute`, `flows` and `notifications`
-each build their own `.docker/<name>.dockerfile` via `uv sync --frozen --package <name>`
-against the **root** `uv.lock`; one image, `.docker/rest-catalog.dockerfile`, serves the lakehouse's `catalog`,
-`lineage` and `maintenance`, and another, `.docker/media.dockerfile`, the clients `viewer` and `search`. The seven
-zones build from `.docker/frontend.dockerfile`.
+There is **no `projects/` layer**. `notifications` builds its own `.docker/notifications.dockerfile` via
+`uv sync --frozen --package notifications` against the **root** `uv.lock`; one image, `.docker/rest-catalog.dockerfile`,
+serves the lakehouse's `catalog`, `lineage` and `maintenance`. The console builds from `.docker/frontend.dockerfile`
+(`make console-image`).
 
 ## Workspace membership is globbed
 
-Both planes glob their members — `[tool.uv.workspace] members = ["packages/*",
-"services/*"]` in the root `pyproject.toml`, `workspaces = ["microfrontends/*",
-"packages/*"]` in `frontend/package.json`. Globs are safe here **only because the
-directories are language-pure**: uv errors on a member without a `pyproject.toml`,
-and bun silently skips a directory without a `package.json`, so a mixed directory
-would force either an enumerated member list or an exclude list. Adding a member
-is therefore just creating the directory with its manifest — no root file to edit.
+Both planes glob their members — `[tool.uv.workspace] members = ["packages/*", "services/*"]` in the root
+`pyproject.toml`, `workspaces = ["console", "packages/*"]` in `frontend/package.json`. Globs are safe here **only
+because the directories are language-pure**: uv errors on a member without a `pyproject.toml`, and bun silently skips a
+directory without a `package.json`, so a mixed directory would force either an enumerated member list or an exclude
+list. Adding a member is therefore just creating the directory with its manifest — no root file to edit.
 
 ## Toolchain
 
-- **Python** via [uv](https://docs.astral.sh/uv/) (3.13), linted/formatted with
-  **Ruff** (line length 160) and type-checked with **ty** (`uvx ty check`).
-- **JS/TS** via **Bun** exclusively — `npm`/`npx`/`pnpm` are not on PATH.
-  **oxlint** + **oxfmt** (tabs, single quotes, `printWidth: 100`) with
-  `@rsvelte/fmt` for `.svelte`, plus `svelte-check`. Each is a **per-package
-  turbo task** (`lint`, `fmt`, `fmt:check`, `check`) run from `frontend/`:
-  `bun --cwd=frontend run lint`.
+- **Python** via [uv](https://docs.astral.sh/uv/) (3.13), linted/formatted with **Ruff** (line length 160) and
+  type-checked with **ty** (`uv run ty check`).
+- **JS/TS** via **Bun** exclusively — `npm`/`npx`/`pnpm` are not on PATH. **oxlint** + **oxfmt** (tabs, single quotes,
+  `printWidth: 100`) with `@rsvelte/fmt` for `.svelte`, plus `svelte-check`, each a plain bun script run from
+  `frontend/`: `bun --cwd=frontend run lint`.
 - **Images** are built by Dagger (`scripts/dagger-image.sh`), never by docker.
 - Identifiers and env vars carry **no `ra-` prefix** — env vars are `RASK_*`.

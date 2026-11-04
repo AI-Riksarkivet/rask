@@ -8,38 +8,21 @@
 //	dagger call audit                       osv-scanner over EVERY lockfile in the workspace
 //	dagger call scan-config                 trivy misconfig + secrets over .docker/ and chart/
 //	dagger call scan-secrets                trufflehog over the full GIT HISTORY
-//	dagger call scan-image --name=flows     trivy over the image dagger call image just built
-//	dagger call scan-zone-image --zone=home  … the same, for a micro-frontend
+//	dagger call scan-image --name=frontend  trivy over the image dagger call image just built
 //
 // ── Why two tools and not one ───────────────────────────────────────────────────────────────────
 // OSV-Scanner reads `uv.lock` and `bun.lock` natively, which is the whole ballgame here. The recursion
-// is deliberately NOT narrowed to the two workspace roots, because the roots are not where the risk is —
-// the first run of this gate found SIX lockfiles plus the Dagger module's own go.mod:
-//
-//	uv.lock                    232 pkgs   the fleet
-//	frontend/bun.lock          652 pkgs   7 zones + 6 packages
-//	runners/htr/uv.lock        156 pkgs   SEALED — torch, htrflow, ultralytics, transformers
-//	runners/assist/uv.lock      46 pkgs   SEALED
-//	runners/dummy/uv.lock       32 pkgs   SEALED
-//	tests/e2e/bun.lock           4 pkgs   the standalone Playwright project
-//	.dagger/go.mod              37 pkgs   this module's own dependencies
-//
-// The sealed runners are the point. Each carries its own lock and its own venv, matched by no workspace
-// glob, so they are invisible to every root-level tool — `uv sync`, ruff, ty, the root pytest. On the
-// first run they held 25 of the 38 findings while the root `uv.lock` held 1. A scan narrowed to the
-// roots would have reported near-clean and been worse than no scan at all, because it would have read
-// as coverage.
-//
-// (Only 3 of the 9 directories under runners/ have a lockfile at all. The other six — asr, diarize,
-// insid3, kg, topics, voiceprint — are unlocked and therefore unscannable; that is a real gap in the
-// coverage this function claims, and it belongs to those runners, not to this gate.)
+// is deliberately NOT narrowed to the workspace roots: a lockfile anywhere in the tree is scanned, so one added
+// later is covered with no edit here. The lockfiles today are `uv.lock` (the lakehouse and the inbox),
+// `frontend/bun.lock` (the console and its packages), `tests/e2e/bun.lock` (the inbox's browser verify scripts) and the
+// Dagger module's own `.dagger/go.mod`.
 //
 // Trivy is NOT here for a second opinion on those packages. It covers the two layers OSV does not reach
 // at all: the OS packages baked into the trixie/bun BASE images (Debian CVEs never appear in a lockfile),
 // and misconfiguration + secret detection across the 8 dockerfiles and the Helm chart.
 //
 // ── Why the image scan is not a per-PR gate ─────────────────────────────────────────────────────
-// It cannot be cheap: scanning an image means BUILDING it (a zone measures ~90 s, ray-cluster 238 s).
+// It cannot be cheap: scanning an image means BUILDING it (a web image measured ~90 s).
 // `audit` and `scan-config` need no build at all and run in seconds, so those two are the PR gates and
 // the image scan belongs on a schedule. Wiring the expensive one into the PR path is how a security gate
 // becomes the thing everybody skips.
@@ -315,8 +298,8 @@ func (m *Rask) scanContainer(
 
 // ScanImage builds a deployable from .docker/<name>.dockerfile and scans that exact image.
 //
-// `name` is the dockerfile stem, identical to `dagger call image --name=…`: rest-catalog, compute, runner,
-// ray-cluster, …
+// `name` is the dockerfile stem, identical to `dagger call image --name=…`: rest-catalog, notifications,
+// frontend, …
 func (m *Rask) ScanImage(
 	ctx context.Context,
 	// +defaultPath="/"
@@ -337,29 +320,6 @@ func (m *Rask) ScanImage(
 		return "", fmt.Errorf("scan-image: --name is required (the .docker/<stem>.dockerfile stem)")
 	}
 	return m.scanContainer(ctx, m.Image(src, name, "", "", "", nil, ""), severity, ignoreUnfixed)
-}
-
-// ScanZoneImage builds one micro-frontend zone and scans it, mirroring ScanImage for the frontend plane.
-func (m *Rask) ScanZoneImage(
-	ctx context.Context,
-	// +defaultPath="/"
-	// +optional
-	src *dagger.Directory,
-	// Zone directory under frontend/microfrontends.
-	zone string,
-	// Severities that FAIL the gate.
-	// +optional
-	// +default="HIGH,CRITICAL"
-	severity string,
-	// Skip CVEs with no fix available upstream.
-	// +optional
-	// +default=true
-	ignoreUnfixed bool,
-) (string, error) {
-	if zone == "" {
-		return "", fmt.Errorf("scan-zone-image: --zone is required")
-	}
-	return m.scanContainer(ctx, m.ZoneImage(src, zone, "", "", ""), severity, ignoreUnfixed)
 }
 
 // sbomContainer emits a CycloneDX SBOM for an already-built image, reusing the tarball seam
@@ -406,18 +366,4 @@ func (m *Rask) Sbom(
 		return nil, fmt.Errorf("sbom: --name is required (the .docker/<stem>.dockerfile stem)")
 	}
 	return m.sbomContainer(m.Image(src, name, "", "", "", nil, ""), name), nil
-}
-
-// ZoneSbom mirrors Sbom for a micro-frontend zone, as ScanZoneImage mirrors ScanImage.
-func (m *Rask) ZoneSbom(
-	// +defaultPath="/"
-	// +optional
-	src *dagger.Directory,
-	// Zone directory under frontend/microfrontends.
-	zone string,
-) (*dagger.File, error) {
-	if zone == "" {
-		return nil, fmt.Errorf("zone-sbom: --zone is required")
-	}
-	return m.sbomContainer(m.ZoneImage(src, zone, "", "", ""), "web-"+zone), nil
 }

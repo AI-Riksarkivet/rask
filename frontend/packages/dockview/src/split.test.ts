@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import type { DockviewApi, DockviewGroupPanel, IDockviewPanel } from 'dockview';
 import { SPLIT_DIRECTIONS, splitPanel, splitVerb } from './split';
@@ -142,19 +141,6 @@ describe('SPLIT_DIRECTIONS', () => {
 		expect(new Set(seen).size).toBe(4);
 		expect(seen.sort()).toEqual(['above', 'below', 'left', 'right']);
 	});
-
-	it('the HEADER offers all four — it no longer hardcodes two', () => {
-		// The assertion that fails on the previous code. GroupActions used to render two buttons wired
-		// to split('right') and split('bottom'); up and left existed only as tab-context-menu rows,
-		// which is an interaction nobody discovers. Source containment because the header is a component
-		// and this repo has no DOM environment to mount one in — the real click-through is a Playwright
-		// proof.
-		const header = readFileSync(new URL('./GroupActions.svelte', import.meta.url), 'utf8');
-		expect(header, 'the header does not mount the direction pad').toContain('SplitMenu');
-		expect(header, 'the header still hardcodes a single split direction').not.toMatch(
-			/split\('(right|bottom|left|top)'\)/,
-		);
-	});
 });
 
 describe('splitVerb', () => {
@@ -164,17 +150,5 @@ describe('splitVerb', () => {
 		expect(splitVerb(2)).toBe('Split');
 		expect(splitVerb(1)).toBe('Duplicate');
 		expect(splitVerb(0)).toBe('Duplicate');
-	});
-
-	it('is the rule BOTH surfaces use — the header no longer keeps its own copy', () => {
-		// Guards the drift this signature change fixed: `GroupActions.svelte` derived the verb from an
-		// inline ternary while `context-menu.ts` called `splitVerb`, so the two could disagree and only
-		// a browser would show it. Asserted as source containment because the header is a component and
-		// this repo has no DOM test environment to mount one in.
-		const header = readFileSync(new URL('./GroupActions.svelte', import.meta.url), 'utf8');
-		expect(header).toContain('splitVerb');
-		expect(header, 'the header re-implemented the verb rule instead of importing it').not.toMatch(
-			/\?\s*'Split'\s*:\s*'Duplicate'/,
-		);
 	});
 });

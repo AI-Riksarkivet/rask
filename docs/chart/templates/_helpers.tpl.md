@@ -244,8 +244,7 @@ to name is deleted, so the lakehouse and observability planes resolve the same e
 ## `{{- define "lance.catalogImage" -}}`
 
 The lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks)
-— every one of them runs the SAME image with a different entrypoint. The explorer's viewer and
-search are clients and run their own `media` image.
+— every one of them runs the SAME image with a different entrypoint. A client runs its own image.
 
 It DELEGATES to `rask.image`, which is the estate's one image contract: registry prefix, digest
 pinning, and the side-loaded (`image.localImages`) form. This helper used to render
@@ -698,8 +697,7 @@ map does not name, so every door must carry the same map: one include, here.
 nobody in; for an empty connector id; and for an idp id that is not a string, is outside lower-case letters, digits and
 `-`, or is `kubernetes`, which is the service-account issuer's: a person named `kubernetes~…` would read as a machine at
 every door. The service refuses the same map at boot (`GovernedAuthSettings`, a `dict[str, str]`, which takes no number
-for an idp id); the render refusal names the value before any pod starts. The compute fixture's copy of the map is
-refused by the same rules (`deploy/fixtures/compute/chart/templates/compute.yaml`).
+for an idp id); the render refusal names the value before any pod starts.
 
 ## `{{- define "lance.bootstrapAdmin" -}}`
 

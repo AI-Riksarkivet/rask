@@ -8,8 +8,7 @@
 #
 #   scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 #   scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
-#   scripts/dagger-image.sh --zone lakehouse    --tag web-lakehouse:dev
-#   scripts/dagger-image.sh --runner htr        --tag ray-htr:dev
+#   scripts/dagger-image.sh --name frontend     --tag console:dev
 #   scripts/dagger-image.sh --name cnpg-age-ext --tag cnpg-age:dev --arg AGE_REF=v1.5.0
 #   scripts/dagger-image.sh --name rest-catalog --out build/k3s-images/lance-rest-catalog.tar   (no docker: what k3s-build does)
 #
@@ -38,14 +37,12 @@
 # nothing and never discards the cache.
 set -euo pipefail
 
-NAME="" ZONE="" RUNNER="" TAG="" MODE="load" ADDRESS="" OUT=""
+NAME="" TAG="" MODE="load" ADDRESS="" OUT=""
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name)    NAME="$2"; shift 2 ;;
-    --zone)    ZONE="$2"; shift 2 ;;
-    --runner)  RUNNER="$2"; shift 2 ;;
     --tag)     TAG="$2"; shift 2 ;;
     --arg)     EXTRA_ARGS+=(--build-arg "$2"); shift 2 ;;
     --push)    MODE="push"; ADDRESS="$2"; shift 2 ;;
@@ -54,8 +51,8 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$NAME" && -z "$ZONE" && -z "$RUNNER" ]]; then
-  echo "!! need --name <dockerfile stem>, --zone <zone>, or --runner <runner>" >&2; exit 2
+if [[ -z "$NAME" ]]; then
+  echo "!! need --name <dockerfile stem>" >&2; exit 2
 fi
 if [[ "$MODE" == "load" && -z "$TAG" ]]; then
   echo "!! --load needs --tag <image:tag>" >&2; exit 2
@@ -89,19 +86,11 @@ BUILD_DATE="${BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 VCS_REF="${VCS_REF:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
 VERSION="${VERSION:-${TAG##*:}}"
 
-if [[ -n "$ZONE" ]]; then
-  fn=(zone-image --zone="$ZONE")
-elif [[ -n "$RUNNER" ]]; then
-  # One workload's Ray image, from the parametrized .docker/ray-runner.dockerfile.
-  fn=(runner-image --runner="$RUNNER")
-else
-  fn=(image --name="$NAME")
-fi
-fn+=(--build-date="$BUILD_DATE" --vcs-ref="$VCS_REF" --version="$VERSION")
+fn=(image --name="$NAME" --build-date="$BUILD_DATE" --vcs-ref="$VCS_REF" --version="$VERSION")
 [[ ${#EXTRA_ARGS[@]} -gt 0 ]] && fn+=("${EXTRA_ARGS[@]}")
 
 if [[ "$MODE" == "push" ]]; then
-  echo ">> dagger: ${ZONE:-$NAME} -> $ADDRESS"
+  echo ">> dagger: $NAME -> $ADDRESS"
   exec dagger call "${fn[@]}" publish --address="$ADDRESS"
 fi
 
@@ -109,7 +98,7 @@ fi
 # `make k3s-import` loads it into k3s's containerd under the name the chart expects.
 if [[ "$MODE" == "out" ]]; then
   mkdir -p "$(dirname "$OUT")"
-  echo ">> dagger: ${ZONE:-${RUNNER:-$NAME}} -> $OUT"
+  echo ">> dagger: $NAME -> $OUT"
   dagger call "${fn[@]}" export --path="$OUT"
   # NAMED WHEN A TAG IS GIVEN. Dagger's export carries no image name, and containerd names an image it imports from an
   # OCI layout by the `io.containerd.image.name` annotation on the index's manifest entry, a full reference; the layout's
@@ -152,7 +141,7 @@ tar="$(mktemp -d)/image.tar"
 # shellcheck disable=SC2064  # expand $tar now, at trap-set time — the temp dir is per-invocation
 trap "rm -rf '$(dirname "$tar")'" EXIT
 
-echo ">> dagger: ${ZONE:-$NAME} -> $TAG"
+echo ">> dagger: $NAME -> $TAG"
 dagger call "${fn[@]}" export --path="$tar"
 
 # `docker load` prints the image ID, not the tag — the tarball carries no repo:tag, so tag it here.

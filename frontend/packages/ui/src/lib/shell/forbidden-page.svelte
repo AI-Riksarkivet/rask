@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { ShieldX } from '@lucide/svelte';
 
-	// Shared role-blocked state: any zone route gated on an FGA privilege (estate admin, project
+	// Shared role-blocked state: any page route gated on an FGA privilege (estate admin, project
 	// admin, …) renders THIS when the caller lacks it, so denial looks identical everywhere (the
 	// app-error principle, but for authz: a 403 is an answer, not an error). The route decides the
 	// wording; the default names no privilege to avoid leaking what gates what.
@@ -21,8 +21,6 @@
 		</div>
 		<div class="text-xl font-semibold">{title}</div>
 		<p class="text-muted-foreground text-sm">{message}</p>
-		<a href={home} data-sveltekit-reload class="text-primary text-sm hover:underline"
-			>← Back to home</a
-		>
+		<a href={home} class="text-primary text-sm hover:underline">← Back to home</a>
 	</div>
 </div>

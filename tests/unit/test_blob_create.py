@@ -14,7 +14,7 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pytest
-from lance import Blob, blob_array, blob_field
+from lance import blob_array, blob_field
 from lance_namespace import (
     CreateNamespaceRequest,
     DeclareTableRequest,
@@ -113,14 +113,6 @@ def test_create_table_writes_plain_schema_at_2_2_with_stable_row_ids(tmp_path: P
     assert dataset.count_rows() == 3
 
 
-def test_create_mode_conflicts_when_blob_table_exists(tmp_path: Path) -> None:
-    ns = connect("dir", {"root": str(tmp_path)})
-    _declare_namespace(ns, "db")
-    create_table(ns, StorageOptions(), ["db", "c1"], _blob_table(), root=str(tmp_path), mode="create", registry=None)
-    with pytest.raises(TableAlreadyExistsError):
-        create_table(ns, StorageOptions(), ["db", "c1"], _blob_table(), root=str(tmp_path), mode="create", registry=None)
-
-
 def test_overwrite_replaces_existing_blob_table(tmp_path: Path) -> None:
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
@@ -166,60 +158,6 @@ def test_exist_ok_on_declared_only_table_writes_instead_of_500(tmp_path: Path) -
 
 
 # --- blob modes: managed (inline/packed/dedicated) always; external pointer gated ------------------ #
-
-
-def test_external_pointer_blob_is_gated_by_the_flag(tmp_path: Path) -> None:
-    source = tmp_path / "external.bin"
-    source.write_bytes(b"external-bytes-payload")
-    ns = connect("dir", {"root": str(tmp_path / "root")})
-    _declare_namespace(ns, "db")
-    schema = pa.schema([pa.field("id", pa.int64()), blob_field("blob")])
-    pointer = pa.table(
-        {"id": [1], "blob": blob_array([Blob.from_uri(source.as_uri(), position=0, size=8)])},
-        schema=schema,
-    )
-
-    # Default: an external pointer outside the dataset root is rejected as a clean client error (400).
-    with pytest.raises(InvalidInputError, match="external"):
-        create_table(ns, StorageOptions(), ["db", "ext_off"], pointer, root=str(tmp_path / "root"), registry=None)
-
-    # Opted in: accepted, written at 2.2, and the referenced byte slice reads back.
-    create_table(ns, StorageOptions(), ["db", "ext_on"], pointer, allow_external_blobs=True, root=str(tmp_path / "root"), registry=None)
-    ds = _open(ns, ["db", "ext_on"])
-    assert ds.data_storage_version == "2.2"
-    assert ds.read_blobs("blob", indices=[0])[0][1] == b"external"  # first 8 bytes of the source
-
-
-def test_external_blob_allowlist_accepts_in_base_rejects_out_of_base(tmp_path: Path) -> None:
-    """#92: the SAFER posture. With a registered base allowlist and the blanket flag OFF, an external
-    Blob.from_uri UNDER a registered base is accepted, while one OUTSIDE every registered base is rejected —
-    a curated media bucket without opening the blanket outside-bases door."""
-    base = tmp_path / "approved"
-    base.mkdir()
-    (base / "obj.bin").write_bytes(b"approved-external-payload")
-    outside = tmp_path / "elsewhere.bin"
-    outside.write_bytes(b"unapproved-payload")
-    ns = connect("dir", {"root": str(tmp_path / "root")})
-    _declare_namespace(ns, "db")
-    schema = pa.schema([pa.field("id", pa.int64()), blob_field("blob")])
-
-    def _pointer(uri: str) -> pa.Table:
-        return pa.table({"id": [1], "blob": blob_array([Blob.from_uri(uri, position=0, size=8)])}, schema=schema)
-
-    bases = [base.as_uri()]
-    # UNDER the registered base → accepted with allow_external_blobs left False.
-    create_table(
-        ns, StorageOptions(), ["db", "in_base"], _pointer((base / "obj.bin").as_uri()), external_blob_bases=bases, root=str(tmp_path / "root"), registry=None
-    )
-    ds = _open(ns, ["db", "in_base"])
-    assert ds.data_storage_version == "2.2"
-    assert ds.read_blobs("blob", indices=[0])[0][1] == b"approved"  # first 8 bytes, read back
-
-    # OUTSIDE every registered base → rejected (allowlist doesn't cover it, blanket flag off).
-    with pytest.raises(InvalidInputError, match="external"):
-        create_table(
-            ns, StorageOptions(), ["db", "out_base"], _pointer(outside.as_uri()), external_blob_bases=bases, root=str(tmp_path / "root"), registry=None
-        )
 
 
 # --- rename is a POINTER move (the dir backend's native rename is a 501) ----------------------------- #

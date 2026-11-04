@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="rask">
-	<rect width="32" height="32" rx="7" fill="#2c4fd0" />
-	<g fill="#ffffff">
-		<rect x="9" y="10.2" width="14" height="2.6" rx="1.3" />
-		<rect x="9" y="14.7" width="14" height="2.6" rx="1.3" />
-		<rect x="9" y="19.2" width="8" height="2.6" rx="1.3" />
-	</g>
-</svg>

@@ -1,6 +1,6 @@
 """Wait for an S3-compatible store to answer, then create each named bucket it does not hold yet.
 
-The Dagger lanes bootstrap their throwaway store with this file, through `packages/storage`'s `s3_client`, the S3 seam
+The Dagger lanes bootstrap their throwaway store with this file, through `lakehouse_kit.storage`'s `s3_client`, the S3 seam
 the fleet uses, so no lane depends on a third-party CLI image a registry can withdraw ([[XC-075]]). In a cluster the
 scoped-users hook makes the platform buckets with the same two calls (`scripts/rustfs_admin.py`).
 
@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
-    from storage import S3Client
+    from lakehouse_kit.storage import S3Client
 
 
 #: Bounded, and the bound is stated: a store that has not answered in two minutes is not slow, it is
@@ -80,7 +80,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv[1:])
 
     # Imported here so `--help` and the argument errors above do not pay for boto3.
-    from storage import s3_client
+    from lakehouse_kit.storage import s3_client
 
     client = s3_client()
     _await_store(client)

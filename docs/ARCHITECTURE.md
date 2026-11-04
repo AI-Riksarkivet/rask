@@ -13,10 +13,6 @@ where we are right now, and what's next**. Skim the diagrams; read the section y
 > "the Lance manifest is the schema, the version is the handshake": the storage/bus/identity
 > contract, its enforcement points, what Dapr+NATS do and don't enforce, and the Lakekeeper comparison.
 
-> 🖱️ **Prefer to click through it?** Open [`system-diagram.html`](system-diagram.html) — an
-> interactive walk-through of the four core flows (create / read / promote / lineage), with the
-> data-plane mode toggle (Mode B server-mediated vs STS vending) and real payloads per step.
-> ([`system-diagram.md`](system-diagram.md) is the text companion.)
 
 ---
 

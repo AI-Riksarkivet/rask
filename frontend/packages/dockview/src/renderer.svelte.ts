@@ -52,7 +52,7 @@ export class SveltePanelRenderer implements IContentRenderer {
 		alerts: DockAlerts | null = null,
 	) {
 		this.#alerts = alerts;
-		// The registry stores `AnyPanelComponent` so BOTH shapes a zone might write are assignable: a
+		// The registry stores `AnyPanelComponent` so BOTH shapes a page might write are assignable: a
 		// panel declaring `PanelProps` (component props are contravariant, and `never` is the bottom
 		// type), and one declaring no props at all — which every panel in this repo currently does, and
 		// which `svelte2tsx` compiles to a type that REJECTS extra props. Mounting needs the widened

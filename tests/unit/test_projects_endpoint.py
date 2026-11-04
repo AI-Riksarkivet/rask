@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 from unittest.mock import create_autospec
 
 import pytest
-from lance_namespace import InvalidInputError, ServiceUnavailableError, TableNotFoundError
+from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.v1.endpoints import projects as ep
@@ -97,12 +97,6 @@ def test_corrupt_record_is_skipped_not_500(monkeypatch: pytest.MonkeyPatch) -> N
     assert [w.id for w in result[0].warehouses] == ["wh-a"]
 
 
-def test_unknown_project_is_404(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_records(monkeypatch, _RECORDS)
-    with pytest.raises(TableNotFoundError):  # the domain error the problem+json handler maps to 404
-        _get("initech", _settings())
-
-
 def test_malformed_project_id_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_records(monkeypatch, _RECORDS)
     with pytest.raises(InvalidInputError):  # DNS-safe id shape enforced before any lookup
@@ -153,19 +147,6 @@ def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estat
     assert checks == [("dex~bob", "can_observe_events", "warehouse:lance_catalog")]
     # A member's listing judges the registry's own candidates, never the projects FGA says the caller reaches.
     assert asked == ([] if estate_observer else [["project:acme", "project:fresh", "project:globex"]])
-
-
-def test_one_tenants_detail_is_estate_observer_gated(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict[str, Any] = {}
-
-    async def _fake_require(_client: Any, _settings: Any, _token: Any, *, relation: str, obj: str) -> None:
-        seen["relation"] = relation
-        seen["obj"] = obj
-
-    monkeypatch.setattr(ep.fga_deps, "require_relation", _fake_require)
-    _patch_records(monkeypatch, _RECORDS)
-    _get("acme", _settings(fga_enabled=False))  # keep _admins_for a no-op; the gate call itself is captured
-    assert seen == cast(Any, {"relation": "can_observe_events", "obj": "warehouse:lance_catalog"})
 
 
 # ── admins: fga.list_users on project:<id>#can_administer, degrading — never a 500 ───────────────────

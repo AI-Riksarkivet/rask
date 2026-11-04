@@ -9,7 +9,7 @@ It is a polyglot monorepo — **Python + Svelte/TypeScript**, managed with
 [uv](https://docs.astral.sh/uv/) (Python 3.13) and [Bun](https://bun.sh) — split
 into two language-pure planes: the Python plane (reusable **`packages/`**
 libraries plus runnable **`services/`**) and the JS/TS plane under
-**`frontend/`**, its own Bun + Turborepo workspace root. Deployables build from
+**`frontend/`**, its own Bun workspace root, which holds the console. Deployables build from
 the root workspace (`uv sync --package <name>`), one dockerfile each under
 `.docker/`, and Dagger builds every image.
 
@@ -23,7 +23,7 @@ flowchart LR
     lin --> notif["A notifier<br/><sub>a client, e.g. the inbox</sub>"]
     lin -->|"OpenLineage"| graph["Graph backend<br/><sub>bring your own</sub>"]
     maint["Maintenance<br/><sub>expiry · purge · reconcile</sub>"] --> store
-    ui["SvelteKit (SSR) zones"] --> cat
+    ui["The console<br/><sub>a single-page app, a client</sub>"] --> cat
     ui --> lin
 ```
 
@@ -34,13 +34,14 @@ flowchart LR
    notifier, a client such as the notifications inbox, tells the right person from the fields each event names
    ([the contract](COMMIT-EVENTS.md#telling-people-the-notifier-contract)).
 3. **Maintenance** expires versions, purges trash, scans for orphans and reconciles stores.
-4. The **SvelteKit** zones read the catalog, lineage, the media services (viewer, search) and the annotator, a client
-   with its own release, through the cluster route: the platform's Gateway serves the chart's HTTPRoutes (and the annotator release's own), one per public `/api/*` prefix.
+4. The **console**, a single-page app with no backend of its own, signs a person in with PKCE and reads the catalog,
+   lineage and the notifications inbox with that person's bearer, through the cluster route: the platform's Gateway
+   serves the chart's HTTPRoutes, one per public `/api/*` prefix, and the console release's own.
 
 ## Where to go next
 
 - **[Getting Started](getting-started/index.md)** — install, run it locally, and deploy to k3s.
-- **[Architecture](architecture/index.md)** — how the catalog, lineage, maintenance, the zones and storage fit together.
+- **[Architecture](architecture/index.md)** — how the catalog, lineage, maintenance, the console and storage fit together.
 - **[Tier Governance](TIER-GOVERNANCE.md)** — what the catalog enforces on a write into a tier.
 - **[Packages](packages/index.md)** — the monorepo's libraries.
 - **[API Reference](reference/storage.md)** — auto-generated from source docstrings.

@@ -70,8 +70,6 @@ FGA="$(svc "$RELEASE-openfga")"      || true
 # The telemetry store is the platform's; on a dev estate, the observability fixture's (deploy/fixtures/observability).
 GREPTIME="$(svc greptimedb observability)" || true
 MAINT="$(svc "$RELEASE-maintenance")" || true
-# The annotator's own release beside rask (deploy/fixtures/annotator), when it is installed.
-ANNOTATOR="$(svc "$RELEASE-annotator")" || true
 # THE BUS THE RELEASE'S PUB/SUB COMPONENTS DIAL (`nats.url`), read off one of them and resolved to that Service's
 # ClusterIP like every address above: the NATS fixture's `rask-nats` on a dev estate. A bus that is no Service in this
 # cluster resolves to nothing, and the suites that read the bus skip.
@@ -135,7 +133,6 @@ url LANCE_E2E_DEX             "$DEX" /dex
 url LANCE_E2E_FGA             "$FGA"
 url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
 url LANCE_E2E_MAINTENANCE_URL "$MAINT"
-url LANCE_E2E_ANNOTATOR_URL   "$ANNOTATOR"
 if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing="$_missing LANCE_E2E_NATS_URL"; fi
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
 export LANCE_E2E_TOKEN="$ALICE"

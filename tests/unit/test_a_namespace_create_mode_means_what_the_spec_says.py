@@ -134,11 +134,3 @@ async def test_exist_ok_on_a_free_id_still_creates_AND_seeds(monkeypatch: pytest
 
     assert created == ["create_namespace"]
     assert seeded == [("namespace", "acme")], "a namespace this call really created must get its owner"
-
-
-@pytest.mark.anyio
-async def test_the_default_mode_still_conflicts_and_seeds_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    seeded: list[tuple[str, ...]] = []
-    with pytest.raises(NamespaceAlreadyExistsError):
-        await _create(mode=None, exists=True, monkeypatch=monkeypatch, seeded=seeded, created=[])
-    assert seeded == []

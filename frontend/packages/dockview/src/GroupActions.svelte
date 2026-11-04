@@ -39,7 +39,7 @@
 		group: IDockviewGroupPanel;
 		chrome: DockChrome;
 		options: DockChromeOptions;
-		/** The zone's catalogue — what the `+` picker lists. */
+		/** The console's catalogue — what the `+` picker lists. */
 		panels: PanelRegistry;
 		/** The dock-wide alert registry, or null when `chrome.alerts` is off. */
 		alerts: DockAlerts | null;
@@ -202,7 +202,7 @@
 	}
 
 	let popoutFailed = $state(false);
-	/** A zone that serves no blank document cannot pop out; say so rather than fail silently. */
+	/** A page that serves no blank document cannot pop out; say so rather than fail silently. */
 	const canPopout = $derived(chrome.popout && options.popoutUrl !== undefined);
 </script>
 

@@ -10,7 +10,7 @@ import { SPLIT_DIRECTIONS } from './split';
  * It is a pure function of (chrome, options, params) returning an array, which makes it one of the
  * few genuinely DOM-free surfaces in this package. Worth pinning because it is also the ONLY place
  * several actions exist at all: with the header offering one split trigger, up/left used to live here
- * exclusively, and `chrome.split === false` silently removing four rows is invisible from any zone.
+ * exclusively, and `chrome.split === false` silently removing four rows is invisible from any page.
  */
 
 /** The labels of the custom rows, ignoring built-in strings and separators. */
@@ -81,7 +81,7 @@ describe('makeTabContextMenu', () => {
 		expect(labels(items).some((l) => /^(Split|Duplicate)/.test(l))).toBe(false);
 	});
 
-	it('offers popout only when the zone actually configured a popout url', () => {
+	it('offers popout only when the app actually configured a popout url', () => {
 		// The header button self-disables and explains itself; a context-menu row has no such surface,
 		// so a row that silently does nothing is the worse failure and must simply not be there.
 		expect(labels(build(DEFAULT_CHROME, {})).some((l) => l === 'Open in a new window')).toBe(false);

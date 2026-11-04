@@ -41,7 +41,7 @@ def _check(label: str, fn: Callable[[], object]) -> bool:
 
 def main() -> int:
     load_dotenv()
-    from storage import configured_endpoint, s3_client
+    from lakehouse_kit.storage import configured_endpoint, s3_client
 
     # `configured_endpoint` rather than a local env chain: this value both reports the backend and
     # decides whether the smoke runs at all, so a copy that omits an alias refuses a backend

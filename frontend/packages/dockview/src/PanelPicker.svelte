@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * The `+` add-panel picker — a searchable list of the zone's catalogue.
+	 * The `+` add-panel picker — a searchable list of the console's catalogue.
 	 *
 	 * SEPARATE from split, and the separation is the point rather than a detail. Split acts on the
 	 * PANE — divide this space in a direction. `+` acts on the CONTENT — put a named panel here.
@@ -13,7 +13,7 @@
 	 *
 	 * Hand-rolled rather than built on Bits UI's Command: this package must not depend on `@rask/ui`
 	 * (which has a `svelte-package` build step, and with it the `^build` ordering + `dist/` watcher
-	 * race), and the deferred bundle headroom is single-digit KB across three zones.
+	 * race), and the deferred bundle headroom is single-digit KB across three pages.
 	 */
 	import { matchesPanel, type PanelChoice } from './panel-search';
 

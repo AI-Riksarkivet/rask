@@ -9,10 +9,6 @@
 			"types": "./src/index.ts",
 			"default": "./src/index.ts"
 		},
-		"./bff": {
-			"types": "./src/bff.ts",
-			"default": "./src/bff.ts"
-		},
 		"./client": {
 			"types": "./src/client.ts",
 			"default": "./src/client.ts"
@@ -50,22 +46,9 @@
 			"types": "./src/observability.ts",
 			"default": "./src/observability.ts"
 		},
-		"./oidc": {
-			"types": "./src/oidc.ts",
-			"default": "./src/oidc.ts"
-		},
 		"./runs-feed": {
 			"types": "./src/runs-feed.ts",
 			"default": "./src/runs-feed.ts"
-		},
-		"./serve-proxy": {
-			"types": "./src/serve-proxy.ts",
-			"default": "./src/serve-proxy.ts"
-		},
-		"./telemetry": "./src/telemetry.ts",
-		"./upstream": {
-			"types": "./src/upstream.ts",
-			"default": "./src/upstream.ts"
 		}
 	},
 	"scripts": {
@@ -77,16 +60,10 @@
 		"fmt:check": "rsvelte-fmt --check ."
 	},
 	"dependencies": {
-		"@opentelemetry/api": "^1.9.1",
-		"@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
-		"@opentelemetry/resources": "^2.10.0",
-		"@opentelemetry/sdk-trace-base": "^2.10.0",
-		"@opentelemetry/sdk-trace-node": "^2.10.0",
 		"valibot": "^1.4.2"
 	},
 	"devDependencies": {
 		"@sveltejs/kit": "^2.70.1",
-		"@types/node": "^26.1.1",
 		"svelte": "^5.56.8",
 		"vitest": "^4.1.10"
 	},

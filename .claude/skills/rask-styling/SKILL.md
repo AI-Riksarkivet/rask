@@ -1,30 +1,32 @@
 ---
 name: rask-styling
-description: Styling, theming and design-system work in the rask frontend — OKLCH tokens, Tailwind 4 `@source`, `tv()` + `cn()`, `data-slot`, dark mode, the legacy `--ink/--line` bridge, export subpaths, Storybook, and vendor stylesheets themed through `layer(base)`. Use when a zone renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component (its subpath export, its story), when a vendor sheet out-specifies Tailwind utilities or a dock needs theming (dockview `--dv-*`, Svelte Flow), or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
+description: Styling, theming and design-system work in the rask console — OKLCH tokens, Tailwind 4 `@source`, `tv()` + `cn()`, `data-slot`, dark mode, the legacy `--ink/--line` bridge, export subpaths, Storybook, and vendor stylesheets themed through `layer(base)`. Use when the console renders unstyled, when picking a colour or writing `class=`, when adding or skinning a `@rask/ui` component (its subpath export, its story), when a vendor sheet out-specifies Tailwind utilities or a dock needs theming (dockview `--dv-*`, Svelte Flow), or when touching `tokens.css` / `app.css` / a `*.stories.svelte`.
 ---
 
 # rask styling (`@rask/ui`)
 
-Every styled surface in rask comes from `frontend/packages/ui`. Zones supply routes and data; **the design system supplies the pixels**. A styled `div` in a zone is a bug report against this package.
+Every styled surface in rask comes from `frontend/packages/ui`. The console supplies routes and data; **the design system supplies the pixels**. A styled `div` in the console is a bug report against this package.
 
 Generic CSS mechanics live in `svelte-skills:svelte-styling` (the `style:` directive, custom properties, `:global`). The component API lineage is `shadcn-svelte`, with **two rask deviations**: commands run under `bunx`, and consumers import from the published subpath `@rask/ui/button` — never `$lib/components/ui/button`.
 
-## Wiring a zone (get this wrong and everything renders unstyled)
+## Wiring the app (get this wrong and everything renders unstyled)
 
-Every zone's `src/app.css` is exactly this, and the `@source` depth is **three** `../`:
+`frontend/console/src/app.css` imports Tailwind, the tokens and the vendor sheets, and points `@source` at the design
+system's build; from `frontend/console/src/` the depth is **two** `../`:
 
 ```css
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import '@rask/ui/styles/tokens.css';
-@source '../../../packages/ui/dist';
+@source '../../packages/ui/dist';
 ```
 
-A zone that mounts a **dock** adds one more line — `@import '@rask/dockview/styles.css' layer(base);` (lakehouse, explorer, compute); the why is § *Third-party stylesheets*.
+The console mounts a **dock** at `/workbench`, so it also imports `@rask/dockview/styles.css` under `layer(base)`; the
+why is § *Third-party stylesheets*.
 
-Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at **`dist`**, so a component edit reaches a zone's CSS only after `svelte-package` reruns (`bun --cwd=frontend/packages/ui run build`, or the `dev` watcher).
+Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at **`dist`**, so a component edit reaches the console's CSS only after `svelte-package` reruns (`bun --cwd=frontend/packages/ui run build`, or the `dev` watcher).
 
-> `frontend/packages/ui/README.md:49` ships this line with **four** `../` — the package's own "In the app's CSS" snippet, so it is the copy a reader is most likely to paste. That copy is wrong; three is correct — verified at `frontend/microfrontends/home/src/app.css:7`.
+> `frontend/packages/ui/README.md:49` ships this line with **four** `../` — the package's own "In the app's CSS" snippet, so it is the copy a reader is most likely to paste. That copy is wrong; two is correct — verified at `frontend/console/src/app.css:21`.
 
 ## Colour comes from tokens
 
@@ -36,14 +38,14 @@ Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed
 
 ## Third-party stylesheets — `layer(base)`, always
 
-A vendor sheet ships unlayered CSS whose selectors out-specify Tailwind utilities, so a zone's own
+A vendor sheet ships unlayered CSS whose selectors out-specify Tailwind utilities, so the console's own
 `class=` on that library's content silently loses. Import it into `base` and every utility sits above
-it, permanently. Three zones import vendor sheets this way:
+it, permanently. The console imports three this way:
 
 ```css
-@import '@xyflow/svelte/dist/style.css' layer(base);   /* lakehouse, explorer */
-@import '@rask/flow/styles.css'         layer(base);   /* …immediately after it, same two zones */
-@import '@rask/dockview/styles.css'     layer(base);   /* lakehouse, explorer, compute */
+@import '@xyflow/svelte/dist/style.css' layer(base);
+@import '@rask/flow/styles.css'         layer(base);   /* …immediately after it */
+@import '@rask/dockview/styles.css'     layer(base);
 ```
 
 The xyflow sheet needs **two** lines, in that order: the vendor sheet, then `@rask/flow/styles.css`,
@@ -88,11 +90,14 @@ same property is a second writer and reads as jank. Animate *inside* a panel if 
 
 ## Dark mode
 
-`@custom-variant dark (&:is(.dark *))` — class-based, toggled by `mode-watcher`'s `toggleMode`. **`ModeWatcher` is not re-exported**, so each zone mounts it in its own root layout. To *read* the mode in JS, use `useColorMode()` from `@rask/ui/color-mode`: a `MutationObserver` on `<html>`'s class returning `{ current, isDark }` as getters, deliberately framework-agnostic so Svelte Flow, the WebGPU atlas, and canvas charts share one source.
+`@custom-variant dark (&:is(.dark *))` — class-based, toggled by `mode-watcher`'s `toggleMode`. **`ModeWatcher` is not re-exported**, so the console mounts it in its root layout (`<ModeWatcher defaultMode="dark" />`). To read the mode in JS, read `mode-watcher`'s own `mode` store; the design system ships no colour-mode hook.
 
 ## View transitions
 
-Cross-document view transitions stay **off** on purpose (`tokens.css:3-11`). Each zone is a separate document with its own shell, so a cross-zone nav would crossfade an identical sidebar and read as a flicker. In-app navs animate through `onNavigate → startViewTransition` in the root layout of five zones (compute, explorer, lakehouse, studio, train); `home` and `annotator` wire it nowhere. Leave the at-rule out either way.
+Cross-document view transitions stay **off** (`tokens.css:3-11`): the console is one document, and its navs are soft, so
+they animate through `onNavigate → startViewTransition` in the root layout (`frontend/console/src/routes/+layout.svelte`)
+and the at-rule would buy nothing. Leave it out. (The comment in `tokens.css` still reasons from separate documents per
+zone; its conclusion holds for the one app.)
 
 ## Authoring a component
 
@@ -128,7 +133,7 @@ Six rules carry that snippet:
 3. **`ref = $bindable(null)` + `bind:this={ref}`** is the ref-forwarding contract, typed by `WithElementRef<T, El>`.
 4. **`data-slot="<name>"`** on the root element — CSS descendant selectors and the e2e harness both locate by it.
 5. **Runes and snippets throughout**: `$props()` destructuring, `{@render children?.()}`. The package contains no `<slot>`. Generic components declare `<script lang="ts" generics="TData">`.
-6. **Stay transport-agnostic.** The library never owns an API client — `GrantsPanel` takes a `client` prop of async functions, `SearchBar` takes `search: (q) => Promise<SearchHit[]>`. Shapes are declared structurally rather than imported from `@rask/api`, and `@rask/ui` imports no `$app/*` or `$lib` (browser detection is `typeof window !== 'undefined'`).
+6. **Stay transport-agnostic.** The library never owns an API client — `GrantsPanel` takes a `client` prop of async functions. Shapes are declared structurally rather than imported from `@rask/api`, and `@rask/ui` imports no `$app/*` or `$lib` (browser detection is `typeof window !== 'undefined'`).
 
 Wrapping a **Bits UI** primitive that needs no skin: re-export it with an explicit `typeof` annotation. A bare re-export infers a non-portable type and silently skips the declaration (`collapsible/index.ts:3-4`).
 
@@ -136,15 +141,15 @@ Shipping it: create the directory + `<name>.svelte` + `index.ts` + a story, then
 
 ## Checklist
 
-- [ ] Colour is a token utility; new semantic colours land in `tokens.css`, not in a zone.
+- [ ] Colour is a token utility; new semantic colours land in `tokens.css`, not in the console.
 - [ ] The component comes from `@rask/ui` via its subpath; new chrome lands in the package.
 - [ ] `class` adjusts layout; variants adjust appearance.
 - [ ] Dynamic values go through `style:` or a custom property.
-- [ ] `bun --cwd=frontend/packages/ui run build` before checking a zone's rendering.
-- [ ] `bun --cwd=frontend run lint fmt check` green.
+- [ ] `bun --cwd=frontend/packages/ui run build` before checking the console's rendering.
+- [ ] `bun --cwd=frontend run lint`, `fmt:check` and `check` green.
 
 ## Where to go deeper
 
-- `references/tokens-and-theming.md` — the full token table, the `@theme inline` mapping, per-zone `@source` variance, the bridge migration, **reading the mode from JS (`useColorMode()` getters + the annotator's `app.html` boot-script exception), the view-transition decision, and why `components.json` is stale scaffolding**.
-- `references/component-catalog.md` — all 41 export subpaths, the three barrel conventions, **the `<Subject>` rule for printing an OIDC `sub`**, the data-table stack, Storybook, **the `vite.config.ts` two-homes test config**, and the known rough edges.
-- `rask-frontend` — zones, routing, data fetching, and the gates that grade this work.
+- `references/tokens-and-theming.md` — the full token table, the `@theme inline` mapping, the `@source` line, the bridge migration, reading the mode from JS, the view-transition decision, and why `components.json` is stale scaffolding.
+- `references/component-catalog.md` — all 31 export subpaths, the three barrel conventions, **the `<Subject>` rule for printing an OIDC `sub`**, the data-table stack, Storybook, **the `vite.config.ts` two-homes test config**, and the known rough edges.
+- `rask-frontend` — the console's routes, data fetching, and the gates that grade this work.

@@ -7,7 +7,7 @@
  * WHY THIS EXISTS AT ALL — the two planes the bell was conflating.
  * Until now the panel rendered `GET /runs`, governed by DATASET visibility: every run whose outputs
  * you may read, whoever started it. The badge therefore counted OTHER PEOPLE'S WORK, and the read
- * state the zone persisted spoke for rows the inbox had never heard of — mark one read and it came
+ * state the app persisted spoke for rows the inbox had never heard of — mark one read and it came
  * back unread on the next reload, because there was no pointer to write. Inbox rows are targeted:
  * they exist because something happened that concerns YOU. Rendering them is what makes the badge
  * and the persistence agree, and it closes the gap by construction rather than by adding a field.
@@ -41,7 +41,7 @@ export function orderedInbox(rows: InboxNotificationLike[]): InboxNotificationLi
 /** The ids of the rows actually RENDERED, for marking read on close.
  *
  * Sliced to `limit` for the reason the run feed learned the hard way: marking the unsliced list read
- * a FAILED row that was pushed past the cap and never seen — and since this set is what the zone
+ * a FAILED row that was pushed past the cap and never seen — and since this set is what the app
  * PERSISTS per subject, that failure was gone for good. */
 export function inboxSeenOnClose(rows: InboxNotificationLike[], limit: number): string[] {
 	return orderedInbox(rows)

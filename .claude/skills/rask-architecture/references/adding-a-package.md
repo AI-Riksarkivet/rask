@@ -13,10 +13,10 @@ The tree is language-first:
 - **Reusable Python library, no entrypoint** → `packages/<name>`. If it grows an
   `app` or a CLI, it's in the wrong layer.
 - **Runnable Python** (an HTTP service, or a Dapr-subscription plane like `notifications`) →
-  `services/<name>`. A model runtime does **not** go here — it goes in the sealed
-  `runners/<name>`, outside every workspace glob, where the runner CLI lives.
-- **A SvelteKit zone** → `frontend/microfrontends/<zone>`.
-- **A reusable TS/Svelte library** → `frontend/packages/<name>`.
+  `services/<name>`. A model runtime or a compute workload does **not** go here: the lakehouse runs no engine
+  (ADR 0155), and a workload is a client in its own repository.
+- **A reusable TS/Svelte library** → `frontend/packages/<name>`. There is one app, `frontend/console`; a second app
+  would be a new workspace entry in `frontend/package.json`, not a new glob.
 - **A one-shot setup/debug script**, shell or python → `scripts/<name>` (flat;
   **not** a workspace member — run it with `uv run python scripts/<name>.py`).
 
@@ -29,7 +29,7 @@ pyproject, no per-deployable lock.
 Neither root manifest enumerates members any more:
 
 - `pyproject.toml` → `[tool.uv.workspace] members = ["packages/*", "services/*"]`
-- `frontend/package.json` → `workspaces = ["microfrontends/*", "packages/*"]`
+- `frontend/package.json` → `workspaces = ["console", "packages/*"]`
   (paths are relative to `frontend/`)
 
 Create the directory in the right plane, give it the manifest its toolchain
@@ -47,9 +47,7 @@ expects, and it is a member. Nothing to append.
 > uv shouts (and the only "fix" is an `exclude` list — enumeration renamed);
 > bun says nothing and the package is simply never installed, built, linted or
 > tested. So: **never put a JS package under root `packages/`/`services/`, and
-> never put a Python package under `frontend/`.** The root `pyproject.toml` also
-> notes `runners/*` is deliberately matched by *no* glob — sealed model envs
-> whose heavy pins must never enter the fleet's resolution.
+> never put a Python package under `frontend/`.**
 
 ## 3. Wire the member's own `pyproject.toml`
 
@@ -58,19 +56,19 @@ with `{ workspace = true }`, and the package name under `[project] dependencies`
 
 ```toml
 [project]
-dependencies = ["service-kit", "storage", "uvicorn>=0.30"]
+dependencies = ["service-kit[governed]", "lineage-kit", "uvicorn>=0.30"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
-storage = { workspace = true }
+lineage-kit = { workspace = true }
 ```
 
 `[tool.hatch.build.targets.wheel] packages = ["src/<import_name>"]` so the
 import name resolves.
 
 A JS member's `package.json` is the equivalent: `workspace:*` for first-party
-deps, plus its own `lint` / `fmt` / `fmt:check` / `check` / `build` scripts —
-those are **per-package turbo tasks**, never centralized in the root.
+deps, plus its own `lint` / `fmt` / `fmt:check` (and `check` / `test` / `build` where it has them) — the root
+scripts run `bun run --filter '*' <task>`, so a package that does not declare a script is simply not run for it.
 
 ## 4. Register the import name for tooling
 
@@ -87,14 +85,10 @@ Nothing to add: `[tool.pytest.ini_options] testpaths` globs `packages/*/tests`
 and `services/*/tests`, so the member's `tests/` is collected by the root suite
 (`--import-mode=importlib`) as soon as it exists, and coverage's
 `source = ["services", "packages"]` already counts its `src`. Only a new TOP-LEVEL
-`tests/<x>/` needs adding to `testpaths` by hand. A sealed `runners/<workload>` has
-its OWN testpaths in its own pyproject — the root pytest cannot see it — and
-`make test` / `make test-slow` loop over every `runners/*/tests`, running each
-from inside its runner directory with `uv run --frozen pytest`, so a runner with a
-suite commits its own `uv.lock`.
+`tests/<x>/` needs adding to `testpaths` by hand.
 
-JS tests are a per-package `test` script picked up by `turbo run test` from
-`frontend/` — no root list to edit.
+JS tests are a per-package `test` script, run by `bun --cwd=frontend run test` (`bun run --filter '*' test`) — no
+root list to edit.
 
 ## 6. If it's deployable
 
@@ -102,23 +96,22 @@ Add `.docker/<name>.dockerfile` (see the existing service dockerfiles — the
 pattern is `uv sync --frozen --no-install-workspace --package <name>
 --no-editable` from bind-mounted root `uv.lock`/`pyproject.toml`, then COPY
 sources + `uv sync --locked --package <name> --no-editable`), and wire it into
-the `Makefile` `k3s-build` fleet list + the chart if it deploys to k3s.
-Everything resolves from the **root** lock — regenerate it (`uv lock`) after
-editing dependencies. A new SvelteKit zone needs **no new dockerfile** — the one
-parametrized `.docker/frontend.dockerfile` is built per zone with
-`--build-arg APP=<zone>`.
+the `Makefile` `COMPOSE_IMAGES` list (which `k3s-build`, `k3s-import` and `kind-images` read) + a chart if it deploys
+to k3s: the product chart for a lakehouse service, the client's own release for a client. Everything resolves from the
+**root** lock — regenerate it (`uv lock`) after editing dependencies. The console's image is
+`.docker/frontend.dockerfile` (`dagger call image --name=frontend`, tagged `web-console`).
 
 ## Checklist
 
 - [ ] correct plane (`packages/` Python lib / `services/` runnable Python /
-      `frontend/packages/` JS lib / `frontend/microfrontends/` zone / `scripts/`)
+      `frontend/packages/` JS lib / `scripts/`)
 - [ ] the dir carries the manifest its glob expects (`pyproject.toml` under
       `packages/`+`services/`, `package.json` under `frontend/*`) — and **no**
       cross-language package was added to either plane
-- [ ] member `pyproject.toml`: `[project] dependencies` + `[tool.uv.sources]` workspace pins + hatch wheel `packages` (JS: `workspace:*` deps + its own turbo scripts)
+- [ ] member `pyproject.toml`: `[project] dependencies` + `[tool.uv.sources]` workspace pins + hatch wheel `packages` (JS: `workspace:*` deps + its own scripts)
 - [ ] `known-first-party` += import name
 - [ ] tests live in `<member>/tests` (the `testpaths` glob collects them; nothing to list)
-- [ ] `.docker/<name>.dockerfile` + `k3s-build` list (if a deployable; zones reuse the parametrized one)
+- [ ] `.docker/<name>.dockerfile` + `COMPOSE_IMAGES` (if a deployable)
 - [ ] `uv sync` resolves clean; first-party import works — and for a JS member,
       `bun --cwd=frontend install` actually **lists** it (a silent skip means the
       glob didn't match)

@@ -12,7 +12,7 @@
 //
 //	dagger call image --name=rest-catalog
 //	dagger call image --name=rest-catalog publish --address=172.17.0.1:5000/lance-rest-catalog:dev
-//	dagger call zone-image --zone=lakehouse publish --address=…
+//	dagger call image --name=frontend publish --address=172.17.0.1:5000/console:dev
 //
 // ── The one host requirement ────────────────────────────────────────────────────────────────────
 // Dagger's engine runs in a container, so `localhost:5000` inside it is the ENGINE, not the host
@@ -27,7 +27,7 @@
 // NOTE ON THE IGNORE LISTS BELOW. They are not only about context size. Dagger snapshots the host
 // directory, and a file that CHANGES DURING that snapshot aborts the whole build:
 //
-//	failed to sync: conflict at "frontend/microfrontends/lakehouse/e2e/admin/access.spec.ts":
+//	failed to sync: conflict at "frontend/console/e2e/admin/access.spec.ts":
 //	size changed from "24995" to "21182" during sync
 //
 // On a repo with a second editor active — another agent session, a watch task, a Playwright run writing
@@ -80,8 +80,7 @@ func extraArgs(kv []string) []dagger.BuildArg {
 
 // Image builds ANY deployable from its own dockerfile under .docker/.
 //
-// `name` is the dockerfile stem: rest-catalog, compute, media, ray-cluster,
-// runner, assist-runner, cnpg-age-ext.
+// `name` is the dockerfile stem: rest-catalog, notifications, frontend (the console), cnpg-age-ext, marquez.
 func (m *Rask) Image(
 	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
@@ -111,67 +110,5 @@ func (m *Rask) Image(
 		Dockerfile: fmt.Sprintf(".docker/%s.dockerfile", name),
 		BuildArgs:  args,
 		Platform:   platform,
-	})
-}
-
-// RunnerImage builds ONE workload's Ray image: the agnostic platform environment plus one sealed
-// runner, from the single parametrized .docker/ray-runner.dockerfile.
-//
-// The sibling of ZoneImage, and for the same reason: one definition, N images, no file per member.
-// It replaced .docker/ray-htr.dockerfile, which opened `FROM ray-cluster:dev` — a tag in the HOST
-// daemon. This module's builds run inside the Dagger engine and BuildKit resolves that against a
-// registry, so that image could not be built by the only seam this repo builds through, and nothing
-// said so. Dagger's DockerBuild exposes no build-context option, so there is no way to hand it a
-// locally-built base; a self-contained dockerfile is the fix that needs no registry.
-//
-// `runner` is a directory under runners/ that ships its own uv.lock — the lock is what seals the
-// workload's environment away from the root one.
-func (m *Rask) RunnerImage(
-	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",
-	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
-	//          "**/coverage", "**/storybook-static", "**/build",
-	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
-	// +defaultPath="/"
-	src *dagger.Directory,
-	// Runner directory under runners/.
-	runner string,
-	// +optional
-	buildDate string,
-	// +optional
-	vcsRef string,
-	// +optional
-	version string,
-) *dagger.Container {
-	args := append(provenance(buildDate, vcsRef, version), dagger.BuildArg{Name: "RUNNER", Value: runner})
-	return src.DockerBuild(dagger.DirectoryDockerBuildOpts{
-		Dockerfile: ".docker/ray-runner.dockerfile",
-		BuildArgs:  args,
-	})
-}
-
-// ZoneImage builds one micro-frontend zone from the single parametrized frontend dockerfile.
-//
-// `zone` is a directory under frontend/microfrontends and becomes the APP build arg, exactly as
-// `make frontend-images` passed it to docker buildx before this module took the build over.
-func (m *Rask) ZoneImage(
-	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",
-	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",
-	//          "**/coverage", "**/storybook-static", "**/build",
-	//          "**/.pytest_cache", "**/__pycache__", "**/.ruff_cache"]
-	// +defaultPath="/"
-	src *dagger.Directory,
-	// Zone directory under frontend/microfrontends.
-	zone string,
-	// +optional
-	buildDate string,
-	// +optional
-	vcsRef string,
-	// +optional
-	version string,
-) *dagger.Container {
-	args := append(provenance(buildDate, vcsRef, version), dagger.BuildArg{Name: "APP", Value: zone})
-	return src.DockerBuild(dagger.DirectoryDockerBuildOpts{
-		Dockerfile: ".docker/frontend.dockerfile",
-		BuildArgs:  args,
 	})
 }

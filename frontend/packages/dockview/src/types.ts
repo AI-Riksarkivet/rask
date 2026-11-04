@@ -1,7 +1,7 @@
 /**
- * The seams a consuming zone injects. Nothing here knows what a panel renders, which zone mounts it,
+ * The seams a consuming page injects. Nothing here knows what a panel renders, which page mounts it,
  * or where a layout is stored — that is the whole point. `@rask/dockview` is estate infrastructure
- * like `@rask/ui`, so every zone-shaped decision arrives as a prop.
+ * like `@rask/ui`, so every page-shaped decision arrives as a prop.
  *
  * This module deliberately re-exports NOTHING from `dockview`. A consumer holds the real
  * `DockviewApi` and calls its documented methods, so it imports those types from `dockview` itself —
@@ -59,11 +59,11 @@ export type PanelComponent<P extends object = Parameters> = Component<PanelProps
  * component to `Component<Record<string, never>>` — a type that REJECTS extra props — and component
  * props are compared contravariantly.
  *
- * It compiled before this type existed only because the zones left `const panels = {…}` unannotated
+ * It compiled before this type existed only because the pages left `const panels = {…}` unannotated
  * and the check happened at the `<Dock>` prop boundary, where Svelte's generated typings are
  * bivariant. That is not a safety net worth relying on: with the annotation removed, an entry missing
  * its required `label` also type-checked clean, which is exactly the mistake the required field exists
- * to prevent. So the union is stated here and the zones annotate.
+ * to prevent. So the union is stated here and the pages annotate.
  */
 export type AnyPanelComponent = PanelComponent<never> | Component<Record<string, never>>;
 
@@ -74,13 +74,13 @@ export type AnyPanelComponent = PanelComponent<never> | Component<Record<string,
  * with its client props: this package must not acquire an icon-library dependency merely to describe
  * one. A lucide icon satisfies it because every member of `LucideProps` is optional.
  *
- * The zone passes the COMPONENT, never a name string — a name would force this package to import
+ * The app passes the COMPONENT, never a name string — a name would force this package to import
  * lucide's barrel to resolve it, defeating tree-shaking over ~1500 icons for the sake of nine.
  */
 export type PanelIcon = Component<{ size?: number | string; class?: string }>;
 
 /**
- * One entry in the zone's panel catalogue: what to render, and what to call it.
+ * One entry in the console's panel catalogue: what to render, and what to call it.
  *
  * `label` is REQUIRED. The add-panel picker lists these, and the only fallback for a missing label is
  * the registry key — a lowercase identifier where a human-readable name belongs. Required makes that
@@ -107,7 +107,7 @@ export interface PanelEntry {
 }
 
 /**
- * The zone's panel catalogue, keyed by the `component` string it passes to `api.addPanel(...)`.
+ * The console's panel catalogue, keyed by the `component` string it passes to `api.addPanel(...)`.
  * dockview resolves a serialized layout by that same string, so these keys are the stable contract
  * between a persisted layout and the code — renaming one orphans every saved layout that used it.
  * The VALUE shape is free to grow; the keys are not.
@@ -129,7 +129,7 @@ export type PanelRegistry = Record<string, PanelEntry>;
  * `unreadable` means one EXISTS and could not be read (schema drift, an owner mismatch, or the
  * store being unreachable). Reported as `absent`, the dock would seed a default layout and the next
  * autosave would overwrite a workspace that is still there. This is the same contract the media
- * zone's `$lib/user-state.ts` already implements against the catalog's 409, and the same reason.
+ * page's `$lib/user-state.ts` already implements against the catalog's 409, and the same reason.
  */
 export type LayoutRead =
 	| { readonly status: 'ok'; readonly layout: SerializedDockview }
@@ -138,7 +138,7 @@ export type LayoutRead =
 
 /**
  * Where a layout lives. Injected, so the package neither knows nor cares whether that is the
- * catalog's per-subject user-state document on the Dapr state store, a zone-local mirror, or
+ * catalog's per-subject user-state document on the Dapr state store, a page-local mirror, or
  * nothing at all.
  */
 export interface LayoutStore {

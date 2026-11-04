@@ -1,35 +1,23 @@
 # Packages
 
-Reusable libraries with **no entrypoints** — pure building blocks imported by
-the runnable components. Each language plane keeps its own: Python libraries in
-the root `packages/`, TS/Svelte libraries in `frontend/packages/`.
+Reusable libraries with **no entrypoints**: building blocks the runnable components import. Each language plane keeps
+its own: Python libraries in the root `packages/`, TS/Svelte libraries in `frontend/packages/`.
 
 | Package | Language | Imported by | Docs |
 |---|---|---|---|
-| `runners/htr` (the sealed HTR runner) | Python | runner, scripts | — |
-| `packages/storage` | Python | runner, lakehouse-kit and the catalog and maintenance, the media viewer (objects browser), scripts | [Storage](storage.md) · [API reference](../reference/storage.md) |
-| `packages/service-kit` | Python | every service: the platform package a client pins by lakehouse tag (the app factory, config, auth plane, naming and guards, and the contract the lakehouse's events publish: `control_events`, `lineage_events`, `governed.subjects`, `signature_doors`) | — |
-| `packages/lakehouse-kit` | Python | catalog, lineage and maintenance (the lakehouse's kernel; every client's import contract forbids it) | — |
-| `packages/client-kit` | Python | viewer, search and the annotator (`client_kit.media`, `client_kit.lancekit`, `client_kit.rate_limit`) | — |
-| `packages/ray-kit` | Python | the compute service | — |
-| `frontend/packages/ui` (`@rask/ui`) | TS / Svelte | all 7 frontend apps | — |
-| `frontend/packages/api` (`@rask/api`) | TS | overview, compute, discover | — |
-| `frontend/packages/zone-contract` (`@rask/zone-contract`) | TS | the cross-zone-reload gate (a test, not a lint rule) | — |
+| `packages/service-kit` | Python | every service, the notifications inbox included: the platform package a client pins by lakehouse tag (the app factory, config, auth plane, naming and guards, and the contract the lakehouse's events publish: `control_events`, `lineage_events`, `governed.subjects`, `signature_doors`), and its pytest plugin | — |
+| `packages/lakehouse-kit` | Python | catalog, lineage and maintenance: the lakehouse's kernel, which no client imports. `lakehouse_kit.storage` is its S3 client, STS and URI seam | [Storage](storage.md) · [API reference](../reference/storage.md) |
+| `packages/lineage-kit` | Python | catalog, lineage, maintenance, and the inbox verifying the lakehouse's signed events | — |
+| `frontend/packages/ui` (`@rask/ui`) | TS / Svelte | the console (design system, Storybook) | — |
+| `frontend/packages/api` (`@rask/api`) | TS | the console: the typed client generated from `docs/catalog-openapi.json` and `docs/lineage-openapi.json`, and the inbox client | — |
+| `frontend/packages/dockview` (`@rask/dockview`) | TS / Svelte | the console's workbench | — |
+| `frontend/packages/flow` (`@rask/flow`) | TS / Svelte | the console's governance views (the project hierarchy, the access graph) | — |
 
 ## Conventions
 
-- **No entrypoints.** A package never defines a CLI or service; it exposes
-  functions and classes via its top-level `__init__`.
-- **Picklable by design.** Anything shipped into a Ray actor (a runner's
-  sources and actors) drops live clients in `__getstate__` and rebuilds them lazily from
-  a factory, so it survives pickling across the cluster.
-- **Membership is globbed, per plane.** The uv workspace takes
-  `members = ["packages/*", "services/*"]` in the root `pyproject.toml`; the Bun
-  workspace takes `["microfrontends/*", "packages/*"]` in `frontend/package.json`.
-  Both work only because each directory is language-pure — a new package is
-  picked up by dropping it in the right plane with its own manifest.
-
-!!! note "`packages/control` is gone"
-    The former `control` package (sync + chunk submission) was absorbed into the
-    core package (`services/core`) service layer (`services/{sync,submission}`).
-    Don't reference it — only stale bytecode remains.
+- **No entrypoints.** A package never defines a CLI or service; it exposes functions and classes via its top-level
+  `__init__`.
+- **Membership is globbed, per plane.** The uv workspace takes `members = ["packages/*", "services/*"]` in the root
+  `pyproject.toml`; the Bun workspace takes `["console", "packages/*"]` in `frontend/package.json`. Both work only
+  because each directory is language-pure: a new package is picked up by dropping it in the right plane with its own
+  manifest.

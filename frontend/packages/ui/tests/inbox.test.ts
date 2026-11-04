@@ -60,7 +60,7 @@ describe('orderedInbox', () => {
 describe('inboxSeenOnClose', () => {
 	it('marks only what was RENDERED, never the whole list', () => {
 		// The rule the run feed learned the hard way: marking past the cap read a FAILED row the user
-		// never saw — and this set is what a zone PERSISTS, so that failure was gone for good.
+		// never saw — and this set is what a page PERSISTS, so that failure was gone for good.
 		const rows = Array.from({ length: 12 }, (_, i) =>
 			row(
 				`r${String(i).padStart(2, '0')}@COMPLETE`,

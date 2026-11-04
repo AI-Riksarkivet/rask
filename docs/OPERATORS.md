@@ -20,8 +20,7 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 
 The lakehouse runs no compute and submits no job ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)):
 KubeRay, Kueue, GPU operators and whatever orchestrates a pipeline belong to the user who runs that pipeline, and no
-lakehouse service imports `ray` or `ray_kit` (the import contract `the-lakehouse-knows-no-client`). The development
-estate runs a Ray engine from the `kuberay-operator`, `ray-cluster` and `compute` fixtures, outside the product chart.
+lakehouse service imports `ray` (the import contract `the-lakehouse-knows-no-client`).
 
 ## 2 · What we never build: a custom lakehouse operator
 
@@ -50,25 +49,10 @@ skill + #115 review): **Dapr Workflow stays un-adopted** — every multi-step pa
 redeliver-the-whole-message model suffices; a workflow engine would add a sidecar state store
 dependency for crash-recovery semantics we already get from idempotency keys.
 
-> **Re-examined 2026-07-28 against the annotation publish saga, and upheld — but the ruling is now
-> load-bearing rather than incidental, so here is what upholding it cost.** The publish saga
-> (project → catalog-created table → tag → publish record → `publish_succeeded`) is the first path
-> with a step that is *not naturally* idempotent: creating a table. The ruling's own criterion is
-> what decided it — the step is made idempotent BY KEY. `AnnotationProject.pending_publish_id` is
-> minted once by the project actor at the `publish` transition and reused by every retry, and the
-> table id is derived from it, so a crashed-and-retried publish converges on the table it already
-> created. Minting the token per attempt would leave one orphan table per crash; minting it at the
-> end (inside `PublishRecord`) would be too late for the step that needs it.
->
-> `tests/unit/test_publish_saga.py` is the evidence, not this paragraph: it kills the saga after each
-> step and re-runs it, asserting one table and one publish record throughout, and it fails loudly if
-> the token is ever re-minted.
->
-> **What the estate DOES now use that this section predates: actors.** The annotator registers
-> `AnnotationTaskActor` and `AnnotationProjectActor`, on its own state store in its own release (ADR 0171). That makes Dapr **placement** load-bearing (the
-> single-activation guarantee is the claim lock) and **scheduler** load-bearing (reminders are how
-> task leases expire). Actors were never covered by the workflow ruling and are not affected by it,
-> but `chart/values.yaml` asserted "no actors" until the same date — corrected there.
+> **What the estate DOES use that this section predates: actors.** The notifications inbox registers `InboxActor`,
+> one per person, on its own state store in the console's release. That makes Dapr **placement** load-bearing (one
+> activation per person serialises that person's inbox). Actors were never covered by the workflow ruling and are not
+> affected by it.
 >
 > **When to reopen this.** If a multi-step path appears whose steps cannot be made idempotent by any
 > caller-chosen key — the honest signal is finding yourself wanting to *generate* an id mid-saga —
@@ -243,7 +227,7 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   OpenBao replacement, so the AGE database and the object store, which keep what they were initialised with, see
   the same values after a re-seed. The seed re-reads the mounted Secret every 5 s and re-seeds when it changes,
   so a rotation never needs the OpenBao pod replaced. The lakehouse uses no third-party credential; one a client
-  uses (a runner's model-download token) is that client's release's to provide (ADR 0189).
+  uses (a model-download token, say) is that client's release's to provide (ADR 0189).
 - **An estate whose stores already exist keeps its credentials.** If the AGE or object-store StatefulSet exists
   and `<release>-dev-credentials` does not, the render refuses (`lookup`, so only against a cluster): generating
   beside live data would lock every consumer out of it. Create the Secret from the credentials the estate holds
@@ -267,8 +251,8 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
      invalidates every outstanding vended credential at once: clients re-vend, and a long write in flight fails.
   4. Restart the consumers at once: a `secretKeyRef` env and the injector's app token are read at pod creation,
      so nothing rolls on its own. AGE: the sidecar Deployments, OpenFGA, the OTel Collector. The root: the
-     sidecar Deployments, GreptimeDB and the Ray head (delete its pod; the RayCluster recreates it). The app
-     token: the sidecar Deployments (an app token rotated as below refuses no delivery in between). The HF token: the Ray head.
+     sidecar Deployments and GreptimeDB. The app token: the sidecar Deployments (an app token rotated as below refuses
+     no delivery in between).
 - **The catalog's store identity needs no rotation (ADR 0170).** It holds no key pair: its pod projects a token for
   `objectStore.identity.audience`, which the kubelet replaces before it expires, and the catalog exchanges it through
   STS `AssumeRoleWithWebIdentity` for an hour's session, again once half of it is used. A catalog whose session cannot

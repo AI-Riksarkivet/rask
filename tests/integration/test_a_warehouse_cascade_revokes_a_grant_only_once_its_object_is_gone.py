@@ -36,9 +36,9 @@ from catalog.core.config import get_settings
 from catalog.core.lineage_emit import HttpLineageEmitter
 from catalog.services import warehouses
 from lakehouse_kit import base_registry, maintenance_policies, object_records, trash
+from lakehouse_kit.storage import S3Client
 from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.storage_options import StorageOptions
-from storage import S3Client
 from tests.integration.openfga_grants import Options, TupleStore, act_as
 
 

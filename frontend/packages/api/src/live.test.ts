@@ -4,10 +4,10 @@
  * These rules existed in three hand-copied files and were verified NOWHERE directly. The only test
  * that touched them was `lakehouse/e2e/lineage/live-refresh.spec.ts`, which counts HTTP reads in a
  * browser — a real test, and a slow, distant one: rule three was learned from an e2e failure in one
- * zone, on one plane, and the two other copies of the rule were never exercised at all. One of them
+ * page, on one plane, and the two other copies of the rule were never exercised at all. One of them
  * had already lost the comment explaining it.
  *
- * The decisions are pure, so they are pinned here, next to the code, where a zone adopting
+ * The decisions are pure, so they are pinned here, next to the code, where a page adopting
  * `@rask/api/live` gets them verified rather than inherited.
  */
 

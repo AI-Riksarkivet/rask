@@ -9,7 +9,7 @@ lakehouse runs no compute, no workflow engine and no annotation tool of its own.
 ### Deployment
 
 **Product chart**:
-The Helm chart that installs rask itself and nothing else: its services, zones and their configuration.
+The Helm chart that installs the lakehouse itself and nothing else: its services and their configuration.
 _Avoid_: umbrella chart, platform chart, the chart
 
 **Prerequisite**:
@@ -30,9 +30,20 @@ _Avoid_: dev stack, bundled copy, stand-in
 **Client**:
 Anything that reaches the lakehouse only through its public doors: the catalog's namespace and management doors, the
 credentials it vends, lineage's event feed, and the identity provider. A user's pipeline on their engine is a client,
-and so is an annotation tool, rask's annotator and Label Studio alike. The lakehouse never calls a client and holds none
-of its state, vocabulary or authorization.
+and so is an annotation tool such as Label Studio, and so are the console and the notifications inbox this repository
+hosts. The lakehouse never calls a client and holds none of its state, vocabulary or authorization.
 _Avoid_: integration, plugin, consumer service
+
+**Console**:
+The single-page app this repository hosts beside the lakehouse: it signs a person in to the platform's issuer and shows
+the catalog, governance, lineage and the inbox through the same public doors any client uses. It has no backend of its
+own and ships in its own release with the notifications inbox.
+_Avoid_: frontend, zone, UI shell
+
+**Notifications inbox**:
+The console's one backend: a client of the lakehouse's events that keeps each person's notifications and their read
+state, so the bell counts that person's work.
+_Avoid_: notification service, bell service
 
 **Engine**:
 The user's bring-your-own compute and orchestrator, which runs their pipeline and writes into the lakehouse through

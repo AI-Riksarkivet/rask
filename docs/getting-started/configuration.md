@@ -38,12 +38,12 @@ authenticates every request itself. The route table:
 
 | Public prefix | Service | Path at the service |
 |---|---|---|
-| `/api/explorer/annotations` | annotator (the annotator fixture chart's own HTTPRoute) | `/api/annotations…` |
 | `/api/catalog` | catalog | `/…` |
 | `/api/lineage` | lineage | `/…` |
-| `/api/ray`, `/api/serve` | compute (the compute fixture chart's own HTTPRoute) | unchanged |
 
-The rewrite is Gateway API `URLRewrite` `ReplacePrefixMatch`. An unmatched `/api/*` is the Gateway's own 404.
+The rewrite is Gateway API `URLRewrite` `ReplacePrefixMatch`. An unmatched `/api/*` is the Gateway's own 404. The
+console's release (`deploy/fixtures/console`) attaches its own HTTPRoute to the same Gateway: `/` to the console's
+static-file server and the inbox's prefix to the inbox, so the page and every API share one origin.
 
 | Value / variable | Meaning |
 |---|---|
@@ -51,16 +51,14 @@ The rewrite is Gateway API `URLRewrite` `ReplacePrefixMatch`. An unmatched `/api
 | `route.hostnames` | Hostnames the platform's Gateway routes to this release. Required on a real deployment, which the render refuses with an empty list; empty, in development, the routes match every host the listener accepts. |
 | `forwardedAllowIps` | The data plane's pod CIDR, trusted for `X-Forwarded-For` by every service the route publishes. |
 
-Locally there is no router: `make dev-micro` runs the fleet only. The zones' SSR reads `RASK_EDGE_URL` (default
-`http://localhost:8888`), and `make dev-frontends-k3s` puts the in-cluster Gateway there by port-forwarding k3s
-Traefik's Service to `:8888`; `make dev-zone ZONE=<z>` runs one zone against its own mocks instead. The zones' Vite
-dev `/api` proxies are per zone: `compute`/`studio` → `VIEWER_BACKEND` (`:8888`), `home`/`lakehouse` →
-`LANCE_BACKEND` (`:8001`).
+Locally there is no router. The console's Vite dev server proxies `/api` to `RASK_EDGE_URL` (default
+`http://localhost:8888`), and `make dev-k3s` puts the in-cluster Gateway there by port-forwarding k3s Traefik's
+Service to `:8888`.
 
 ## Storage
 
 The object store is S3-compatible: the RustFS fixture in development, the platform's S3 in production
-(`objectStore.externalEndpoint`). Services reach it through `packages/storage` and the catalog's vended credentials; the
+(`objectStore.externalEndpoint`). Services reach it through `lakehouse_kit.storage` and the catalog's vended credentials; the
 store's root key is held by the store alone, and each service presents a scoped identity.
 
 Changes to the environment are read once at service startup — restart the relevant service to pick them up.

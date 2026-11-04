@@ -78,11 +78,11 @@ export function pathCrumbs(pathname: string, zoneLabels: Record<string, string> 
 	const segs = pathname.split('/').filter(Boolean);
 	return segs.map((seg, i) => {
 		const id = segs.slice(0, i + 1).join('/');
-		// The FIRST segment is the zone, and its human name is the NAVBAR's, not the directory's.
+		// The FIRST segment is the app, and its human name is the NAVBAR's, not the directory's.
 		// Reported: the trail read "Annotator > Browse" while the bar above it said "Annotate" — the
-		// same zone under two names on one screen. `humanise` can only ever produce the directory
+		// same page under two names on one screen. `humanise` can only ever produce the directory
 		// name, because that is all a URL segment carries; the label lives in `topNav()`. Later
-		// segments keep `humanise`: they are in-zone paths and identifiers, which have no nav entry.
+		// segments keep `humanise`: they are in-app paths and identifiers, which have no nav entry.
 		const label = i === 0 ? (zoneLabels[seg] ?? humanise(seg)) : humanise(seg);
 		return { id, label, href: `/${id}` };
 	});
@@ -98,7 +98,7 @@ export type CrumbTrail = {
 };
 
 /**
- * Fold the MIDDLE of a trail so a deep path fits a narrow bar. Keeps the first crumb (the zone —
+ * Fold the MIDDLE of a trail so a deep path fits a narrow bar. Keeps the first crumb (the app —
  * the anchor that says where you are in the estate) and the last `maxVisible - 1` crumbs (ending
  * at the current page), and hands everything between back as `hidden` for the caller to put behind
  * an ellipsis menu — dropped from the row, never from the DOM, so every ancestor stays reachable.

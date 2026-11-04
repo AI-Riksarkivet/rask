@@ -1,65 +1,53 @@
-# The service fleet: ports, entrypoints, and which package each composes
+# The services: ports, entrypoints, and which package each composes
 
-The fleet (`make dev-micro`, driven by `scripts/dev-micro.sh`) is SIX processes: compute `:8804` + flows
-`:8840` + notifications `:8850` + the explorer trio — viewer `:8101`, search `:8102`, annotator `:8103`.
-(`PORT_OFFSET=<n>` shifts all six so a second fleet can share a host.) It starts no router: the public
-route table is the chart's HTTPRoutes, served by a Gateway (`rask-services-fleet`). In-cluster compute
-ships in its own fixture chart (`deploy/fixtures/compute`), not the product chart, and publishes
-`/api/ray` and `/api/serve` with its own HTTPRoute; the annotator likewise ships in its own client chart
-(`deploy/fixtures/annotator`, ADR 0171) and publishes `/api/explorer/annotations` with its own HTTPRoute.
+Four Python services live in `services/`: the lakehouse's three — `catalog` `:2333`, `lineage` `:8000`, `maintenance`
+`:8000`, all run from ONE image (`.docker/rest-catalog.dockerfile`) with different commands — and the notifications
+inbox `:8850`, a client of the lakehouse's events with its own image (`.docker/notifications.dockerfile`), deployed by
+the console's release (`deploy/fixtures/console`). `make dev-micro` (`scripts/dev-micro.sh`) runs the inbox alone on
+the host. No process routes: the public route table is the two releases' HTTPRoutes, served by the platform's
+Gateway (`rask-services-fleet`).
 
-The zones' Vite `/api` proxies are per zone: `compute`/`studio`/`models` → `VIEWER_BACKEND` (`:8888`),
-`home`/`lakehouse` → `LANCE_BACKEND` (`:8001`, which this fleet does NOT start), and `explorer`/`annotator`
-have no `/api` proxy — they reach `:8101`/`:8102`/`:8103` through their own BFF. Their SSR reads one
-`RASK_EDGE_URL` (default `http://localhost:8888`). An edge on :8888 comes from `make dev-frontends-k3s`
-(k3s Traefik's Gateway, port-forwarded). See `rask-frontend`.
+## Every entrypoint is a thin shell over one of two factories
 
-## Nine HTTP entrypoints are thin shells over one of three factories
+`notifications` imports its routers and its lifespan (`notifications.lifespan`) from its own modules and calls
+`service_kit.make_service_app` — no business logic in the entrypoint (`services/notifications/src/notifications/__init__.py`).
 
-`compute`, `flows` and `notifications` import routers (+ maybe a
-lifespan) from a domain package and call `service_kit.make_service_app` — no business logic in
-the entrypoint. Count by CALL SITE, not by import.
-
-THE OTHER SIX COME OUT OF A FACTORY TOO, because copied boots drift: each repeated the same five-step
+`catalog` (`catalog.main`), `lineage` (`lineage.main`) and `maintenance` (`maintenance.service`) build through
+`lakehouse_kit.lance_app.build_lance_service_app`, because copied boots drift: each once repeated the same five-step
 boot in copied comments (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit"
-DUP-12), and one lost its request-id layer in the copying. `viewer`, `search` and `annotator` build through
-`client_kit.media.app.build_media_app` over one shared `client_kit.media.lifespan`; `catalog`, `lineage` and
-`maintenance` build through `lakehouse_kit.lance_app.build_lance_service_app`. Both still read their own
-`core/config.py` settings and keep the `api/v1/endpoints/` layout — the factory owns the boot, not
-the layout. See rask-architecture's "Three factories are sanctioned".
+DUP-12), and one lost its request-id layer in the copying. They still read their own `core/config.py` settings and
+keep the `api/v1/endpoints/` layout — the factory owns the boot, not the layout.
 
-| Service | Port | Composes package(s) | Lifespan | DB? | Notes |
+| Service | Port | Composes package(s) | Factory | DB? | Notes |
 |---|---|---|---|---|---|
-| `compute` | 8804 | `ray-kit` | `compute.lifespan.make_lifespan` | no | Ray dashboard introspection; `proxy_router` mounts at root so `/api/serve/*` reaches Serve status API. Its fixture chart's own HTTPRoute publishes `/api/ray` and `/api/serve`; deployed by that fixture chart |
-| `viewer` (explorer plane) | 8101 | `client-kit` + `service-kit[governed,lancekit]` + `storage` | own (lazy registry) | no | public `/api/explorer/*`, rewritten to `/api/*` by the route, incl. the S3 objects browser |
+| `catalog` | 2333 | `lakehouse-kit[data]`, `lineage-kit`, `service-kit[governed,arrow]` | `build_lance_service_app` | no | the Lance Namespace doors and the management doors; public `/api/catalog` |
+| `lineage` | 8000 | `lakehouse-kit[data]`, `lineage-kit`, `service-kit[governed,arrow]` | `build_lance_service_app` | no | intake, commit feed, forwarder (ADR 0158); public `/api/lineage` |
+| `maintenance` | 8000 | `lakehouse-kit[data]`, `lineage-kit`, `service-kit[governed,arrow]` | `build_lance_service_app` | no | sweep, reconciler, due list; no public row |
+| `notifications` | 8850 | `service-kit[governed]`, `lineage-kit` | `make_service_app` | its own actor-state Postgres (console release) | the inbox; public `/api/notifications` from the console's HTTPRoute; its import contract forbids `lakehouse_kit` |
 
 ## The lakehouse runs no ingest, no stage and no engine
 
-The lakehouse runs no ingest of its own (ADR 0154): data enters only
-through the catalog's Lance Namespace doors (`CreateTable`, `InsertIntoTable`, `MergeInsertIntoTable`,
-`DeclareTable` + vended credentials, `RegisterTable`), and ingest of an external source is a
-bring-your-own client job (a sealed runner, CP-061) that commits through the catalog.
+The lakehouse runs no ingest of its own (ADR 0154): data enters only through the catalog's Lance Namespace doors
+(`CreateTable`, `InsertIntoTable`, `MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`), and
+ingest of an external source is a bring-your-own client job that commits through the catalog.
 
-**The lakehouse runs no stage, no training and no engine (ADR 0155).** Moving data between tiers is the
-user's pipeline, on their own compute and orchestrator, writing each tier through the catalog's doors.
-The catalog announces every committed write as an OpenLineage `COMPLETE` on lineage, and the NATS
-topics stay internal. A pipeline follows committed writes on lineage's durable `GET /events`, which
-follows forward from a `since=` cursor in the commit-event shape `docs/COMMIT-EVENTS.md` documents (ADR 0156 C7,
-LH-472). Lineage keeps that feed as a Lance table in the catalog's provenance namespace and answers no graph
-query; the graph is bring-your-own, fed by its forwarder (ADR 0158).
+**The lakehouse runs no stage, no training and no engine (ADR 0155).** Moving data between tiers is the user's
+pipeline, on their own compute and orchestrator, writing each tier through the catalog's doors. The catalog announces
+every committed write as an OpenLineage `COMPLETE` on lineage, and the NATS topics stay internal. A pipeline follows
+committed writes on lineage's durable `GET /events`, which follows forward from a `since=` cursor in the commit-event
+shape `docs/COMMIT-EVENTS.md` documents (ADR 0156 C7, LH-472). Lineage keeps that feed as a Lance table in the
+catalog's provenance namespace and answers no graph query; the graph is bring-your-own, fed by its forwarder (ADR 0158).
 
-## Why the fleet services never grow heavy deps
+## Why the platform package never grows heavy deps
 
-`compute` depends only on `service-kit` + `ray-kit` — **no DB**. `service-kit`'s
-core stays dependency-light (no `ray`/`sqlmodel`; the lakehouse's lance deps live in `lakehouse-kit`,
-which no client installs): pulling a heavy dep into the core would force it onto every service and every test
-that imports the factory. What only a client needs (lancedb, slowapi) is in `client-kit`, which no
-lakehouse service installs.
+`service-kit`'s base stays dependency-light (no `ray`, `lancedb` or `sqlmodel`; the auth plane behind `[governed]`, the
+Arrow guards behind `[arrow]`): it is what a client pins by lakehouse tag (XC-186), and pulling a heavy dependency into
+its base forces it onto every client and every test that imports the factory. The lakehouse's Lance dependencies live
+in `lakehouse-kit[data]`, which no client installs.
 
 ## Lifespan injection recap
 
 `make_service_app(lifespan=...)` takes a `LifespanFactory =
-Callable[[Settings], Callable[[FastAPI], AbstractAsyncContextManager[None]]]`.
-Omit it → `default_lifespan` (puts `settings` on `app.state`, nothing else).
-Stateful services pass a factory that opens Lance/S3/Ray clients on enter and
-tears down on exit.
+Callable[[Settings], Callable[[FastAPI], AbstractAsyncContextManager[None]]]`. Omit it → `default_lifespan` (puts
+`settings` on `app.state`, nothing else). A stateful service passes a factory that opens its clients on enter and tears
+them down on exit; the inbox's registers its Dapr actors there, never at import.

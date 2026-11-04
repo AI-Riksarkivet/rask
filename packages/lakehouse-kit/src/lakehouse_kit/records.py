@@ -61,7 +61,7 @@ class RecordExistsError(Exception):
 def _s3_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto3 client has no public stub
     """The S3 client the three conditional branches share, built through ``storage.s3_client``.
 
-    ``packages/storage`` is the estate's canonical S3 seam and owns, in one place, everything a
+    ``lakehouse_kit.storage`` is the estate's canonical S3 seam and owns, in one place, everything a
     hand-rolled client silently forfeits: path-style addressing (matching
     ``lance_storage_options(virtual_hosted=False)`` — RustFS rejects virtual-hosted signing with
     403 SignatureDoesNotMatch), s3v4, adaptive retries, and connect/read timeouts. The timeouts matter
@@ -76,7 +76,7 @@ def _s3_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto
     patching the wrapper would let a regression back to a raw client pass unnoticed — and so the
     local-root branch below needs no S3 stack at all.
     """
-    from storage import s3_client
+    from lakehouse_kit.storage import s3_client
 
     _access_key, _secret_key, _session_token = storage_options.credential_in_clear()
     return s3_client(

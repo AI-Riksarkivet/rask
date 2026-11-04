@@ -10,7 +10,7 @@
  *
  * **Why not dagre or ELK.** They are the correct family — Sugiyama layered layout — and would be
  * better than this at scale. They do not fit: `@dagrejs/dagre` unpacks to 1.1 MB and elkjs to 7.9 MB
- * against ~7 KB of deferred-bundle headroom in this zone (`budget.json`), for a graph the store caps
+ * against ~7 KB of deferred-bundle headroom in the console (`budget.json`), for a graph the store caps
  * at 60 nodes (`MAX_GRAPH`). The part actually missing was one phase of the algorithm, not the whole
  * library. If the cap is ever lifted past a few hundred nodes, dagre behind a dynamic import is the
  * upgrade — it also does proper coordinate assignment and routes long edges through dummy nodes,

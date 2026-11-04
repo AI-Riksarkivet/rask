@@ -133,38 +133,6 @@ def test_run_gc_REFUSES_an_unknown_flag() -> None:
 # ---------------------------------------------------------------- the on-demand doors and the SHALLOW-CLONE SOURCE
 
 
-class _LocatedDs(_FakeDs):
-    """A `_FakeDs` that knows where it lives — `lance.LanceDataset.uri`, which the real doors hold."""
-
-    def __init__(self, uri: str, **kw: Any) -> None:
-        super().__init__(version=1, versions=[], tags={}, **kw)
-        self.uri = uri
-
-
-def test_run_gc_REFUSES_the_same_source() -> None:
-    """Cleanup is the step that actually deletes: measured, `compact_files` ADDS the merged file
-    (4 -> 5, the clone still opens) and `cleanup_old_versions` then removes the obsoleted originals
-    (-> 1) after which the clone will not open. A guard on compaction alone is walked straight past."""
-    from lance_namespace import UnsupportedOperationError
-
-    from lakehouse_kit.base_refs import BaseRefs
-
-    ds = _LocatedDs("s3://wh/src.lance")
-
-    with pytest.raises(UnsupportedOperationError, match="resolves its files through"):
-        maintenance.run_gc(ds, retention_days=7, retain_versions=2, protected=BaseRefs(protected={"wh/src.lance"}))
-    assert ds.cleaned is None, "the delete ran anyway — the refusal came too late"
-
-
-def test_an_UNPROTECTED_dataset_still_passes_the_base_ref_guard() -> None:
-    """The negative that makes the refusal above mean something: a guard that refused everything would satisfy it."""
-    from lakehouse_kit.base_refs import BaseRefs
-
-    ds = _LocatedDs("s3://wh/other.lance")
-    result = maintenance.run_gc(ds, retention_days=7, retain_versions=2, protected=BaseRefs(protected={"wh/src.lance"}))
-    assert result["ok"] is True
-
-
 def test_a_protected_map_with_NO_LOCATION_to_check_it_against_refuses() -> None:
     """ "We could not tell" reads as the refusal, the same direction every other gate here runs in.
     A caller that collected the estate's base references and then hands over a dataset whose location

@@ -98,7 +98,7 @@ def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — 
     not exist). The region rides on ``create_bucket``'s ``LocationConstraint`` where it matters — see
     :func:`provision_bucket` — so it is not threaded through here.
     """
-    from storage import s3_client
+    from lakehouse_kit.storage import s3_client
 
     _access_key, _secret_key, _session_token = storage_options.credential_in_clear()
     return s3_client(

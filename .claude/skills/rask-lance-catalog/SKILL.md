@@ -779,8 +779,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   by count; `require_compactable`), and both need `can_maintain` and no writer rung (ADR 0174): the `maintainer` rung,
   which an owner holds and the grant doors hand a job's own identity (`manage_grants`, or a maintainer holding
   `pass_grants`), with `reader` to read what it rewrites; a service account is never an owner (LH-433). The
-  bring-your-own table-maintenance job (`services/table-maintenance`, its own release `deploy/fixtures/table-maintenance`)
-  compacts each table the due list names it this way. A `CreateIndex` (a build or
+  bring-your-own compaction job compacts each table the due list names it this way. A `CreateIndex` (a build or
   an `optimize_indices`) needs the writer rung, changes no data, and each new segment lives under the table's own
   `_indices/<uuid>/` with its declared files present and the index opening. A compaction is refused 503 while the
   sweep's clone list is missing or older than `cloneListMaxAgeSeconds` (an hour), and 406 when the table is a

@@ -1,11 +1,11 @@
 <script lang="ts">
 	/**
 	 * The dock host. Owns one `DockviewComponent`, hands the consumer the REAL `DockviewApi`, and
-	 * gets out of the way — there is no wrapper over dockview's own methods, deliberately. A zone
+	 * gets out of the way — there is no wrapper over dockview's own methods, deliberately. A page
 	 * calls `api.addPanel(...)`, `api.toJSON()`, `api.onDidActivePanelChange(...)` exactly as the
 	 * dockview docs describe them, so there is one API to learn rather than two.
 	 *
-	 * Zone-agnostic by construction: everything zone-shaped — which panels exist, where a layout is
+	 * Zone-agnostic by construction: everything page-shaped — which panels exist, where a layout is
 	 * stored, what context the panels need — arrives as a prop.
 	 */
 	import { getAllContexts, onMount, untrack } from 'svelte';
@@ -21,7 +21,7 @@
 	import type { LayoutRead, LayoutStore, PanelRegistry } from './types';
 
 	interface Props {
-		/** The zone's panel catalogue, keyed by the `component` string passed to `api.addPanel`. */
+		/** The console's panel catalogue, keyed by the `component` string passed to `api.addPanel`. */
 		panels: PanelRegistry;
 		/**
 		 * Handed the live `DockviewApi` once any stored layout has been restored. `restored` is false
@@ -48,7 +48,7 @@
 		 * EXTRA context for panels, merged over what they already inherit.
 		 *
 		 * Usually unnecessary: this component captures its own context tree with `getAllContexts()` and
-		 * hands it to every panel mount, so a zone sets context the ordinary Svelte way — ideally with
+		 * hands it to every panel mount, so a page sets context the ordinary Svelte way — ideally with
 		 * `createContext`, which the docs prefer over raw keys for type safety — anywhere above `<Dock>`,
 		 * and panels just call the matching getter. Use this only for values that have no component to
 		 * live above the dock.
@@ -62,7 +62,7 @@
 		 * dock deliberately; a partial object opts out of individual pieces.
 		 */
 		chrome?: Partial<DockChrome> | boolean;
-		/** Chrome wiring a zone must supply — today just the popout window's blank document. */
+		/** Chrome wiring a page must supply — today just the popout window's blank document. */
 		chromeOptions?: DockChromeOptions;
 		/** Merged over the rask defaults at construction. Change options later via `api.updateOptions`. */
 		options?: Partial<DockviewOptions>;
@@ -89,7 +89,7 @@
 	// Captured at component INIT — `getAllContexts` must be called synchronously during initialisation,
 	// so it cannot move inside onMount. This is what makes a panel behave like it was rendered here:
 	// `mount()` starts a NEW context tree rooted at nothing, so without this a panel calling
-	// `getContext`/a `createContext` getter would find an empty tree, and every zone would be forced to
+	// `getContext`/a `createContext` getter would find an empty tree, and every page would be forced to
 	// re-declare its state through the `context` prop with hand-rolled keys.
 	const inheritedContext = getAllContexts();
 
@@ -152,7 +152,7 @@
 			// a mode that makes touch, pen and Linux mouse drags all work and the dock testable in CI.
 			// Set `options={{ dndStrategy: 'auto' }}` per dock if cross-window drag matters more.
 			dndStrategy: 'pointer',
-			// The whole-layout edge drop zone is ON in dockview by default — its live target is just
+			// The whole-layout edge drop page is ON in dockview by default — its live target is just
 			// TEN CSS PIXELS wide, which is why "split to any direction" and "snap" read as missing
 			// features rather than as an aiming problem. Widened so it can actually be hit.
 			...(active.edgeDrop ? { dndEdges: EDGE_DROP } : {}),

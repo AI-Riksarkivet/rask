@@ -144,10 +144,10 @@ def _wipe(client: Any, bucket: str) -> None:
 
 @pytest.fixture(scope="module")
 def s3() -> Any:
-    """A client on the real store, via packages/storage's wrapper — never raw boto3 (repo rule)."""
+    """A client on the real store, via lakehouse_kit.storage — never raw boto3 (repo rule)."""
     if not ENDPOINT:
         pytest.skip("set LANCE_E2E_S3_ENDPOINT (see the module docstring / scripts/e2e_stack.sh)")
-    from storage import s3_client
+    from lakehouse_kit.storage import s3_client
 
     client = s3_client(ENDPOINT, access_key=ACCESS_KEY, secret_key=SECRET_KEY)
     try:

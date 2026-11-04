@@ -43,8 +43,8 @@
 	];
 </script>
 
-<!-- WIRED: a zone that has an inbox transport. Badge counts the INBOX (2 unread). This is what every
-     zone renders on a governed stack. -->
+<!-- WIRED: a page that has an inbox transport. Badge counts the INBOX (2 unread). This is what every
+     page renders on a governed stack. -->
 <Story name="With an inbox">
 	<div class="flex justify-end p-8">
 		<NotificationCenter inbox={INBOX} inboxUnread={2} now={NOW} />
@@ -53,7 +53,7 @@
 
 <!-- UNWIRED: `inbox` is undefined — an auth-off dev stack, or a deployment with no notifications
      service. No badge, and the panel says there is no inbox. Kept as a story because it is a SHIPPED
-     state, not a degraded one: `make dev-zone ZONE=home` renders exactly this. -->
+     state, not a degraded one: a console with no inbox behind it renders exactly this. -->
 <Story name="Without an inbox">
 	<div class="flex justify-end p-8">
 		<NotificationCenter now={NOW} />

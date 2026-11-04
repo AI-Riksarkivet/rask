@@ -140,14 +140,10 @@ warehouse, a project, a classification label and a transaction keep their ids.
 | `references/test-cli.md` | OpenFGA CLI usage |
 | `references/workflow-validate.md` | Always validate models |
 
-### SDKs (for integration tasks only)
+### SDK (rask's services are Python)
 | File | Description |
 |------|-------------|
-| `references/sdk-javascript.md` | JavaScript/TypeScript SDK |
-| `references/sdk-go.md` | Go SDK |
 | `references/sdk-python.md` | Python SDK |
-| `references/sdk-java.md` | Java SDK |
-| `references/sdk-dotnet.md` | .NET SDK |
 
 ## Recommended Workflow
 
@@ -189,7 +185,3 @@ fga model test --tests stores/<store>/store.fga.yaml
 7. Only then finalize delivery.
   For touched stores, finish only after validation and tests are green.
   Final rule to check: `workflow-validate`.
-
-## Full Compiled Document
-
-For the complete guide with all rules expanded: `AGENTS.md`

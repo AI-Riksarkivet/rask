@@ -1,6 +1,6 @@
 """The registry's conditional-write client is `storage.s3_client`, never a hand-rolled boto3 one.
 
-`packages/storage` is the estate's canonical S3 seam: path-style addressing, s3v4 signing, adaptive
+`lakehouse_kit.storage` is the estate's canonical S3 seam: path-style addressing, s3v4 signing, adaptive
 retries, connect/read timeouts and the endpoint/CA/insecure env resolution live there ONCE. A raw
 `boto3.client("s3", ...)` here inherits botocore's defaults instead, which include NO timeouts — a
 control-root PUT against an unreachable store then hangs the request rather than failing it, and the
@@ -51,7 +51,7 @@ def seam(monkeypatch: pytest.MonkeyPatch) -> tuple[_RecordingClient, list[tuple[
         built.append((endpoint, kwargs))
         return client
 
-    import storage
+    import lakehouse_kit.storage as storage
 
     monkeypatch.setattr(storage, "s3_client", fake_s3_client)
     return client, built

@@ -4,33 +4,24 @@
 	"license": "Apache-2.0",
 	"packageManager": "bun@1.3.14",
 	"workspaces": [
-		"microfrontends/*",
+		"console",
 		"packages/*"
 	],
 	"scripts": {
-		"build": "turbo run build",
-		"build-storybook": "turbo run build-storybook",
-		"check": "turbo run check",
-		"check:tsgo": "turbo run check:tsgo",
-		"dev": "turbo run dev --filter='./microfrontends/*'",
-		"dev:annotator": "turbo run dev --filter=annotator...",
-		"dev:compute": "turbo run dev --filter=compute...",
-		"dev:explorer": "turbo run dev --filter=explorer...",
-		"dev:home": "turbo run dev --filter=home...",
-		"dev:lakehouse": "turbo run dev --filter=lakehouse...",
-		"dev:studio": "turbo run dev --filter=studio...",
-		"dev:ui": "turbo run dev --filter=@rask/ui",
-		"dev:zones": "turbo run dev --filter='./microfrontends/*'",
-		"fmt": "turbo run fmt",
-		"fmt:check": "turbo run fmt:check",
+		"build": "bun --cwd=packages/ui run build && bun --cwd=console run build",
+		"build-storybook": "bun --cwd=packages/ui run build-storybook",
+		"check": "bun run build && bun run --filter '*' check",
+		"dev": "bun --cwd=packages/ui run build && bun --cwd=console run dev",
+		"fmt": "bun run --filter '*' fmt",
+		"fmt:check": "bun run --filter '*' fmt:check",
 		"gen:types": "bun run gen:types:lineage && bun run gen:types:catalog",
 		"gen:types:catalog": "openapi-typescript ../docs/catalog-openapi.json --default-non-nullable false -o packages/api/src/generated/catalog.ts",
 		"gen:types:lineage": "openapi-typescript ../docs/lineage-openapi.json --default-non-nullable false -o packages/api/src/generated/lineage.ts",
 		"knip": "knip --no-config-hints",
-		"lint": "turbo run lint",
+		"lint": "bun run --filter '*' lint",
 		"storybook": "bun --cwd=packages/ui run storybook",
-		"test": "turbo run test",
-		"test:e2e": "turbo run test:e2e"
+		"test": "bun run build && bun run --filter '*' test",
+		"test:e2e": "bun --cwd=packages/ui run build && bun --cwd=console run test:e2e"
 	},
 	"devDependencies": {
 		"@rsvelte/fmt": "^0.7.12",
@@ -40,13 +31,11 @@
 		"openapi-typescript": "^7.13.0",
 		"oxfmt": "^0.64.0",
 		"oxlint": "^1.79.0",
-		"svelte-check": "^4.7.4",
-		"turbo": "2.10.7",
 		"typescript": "^6.0.3"
 	},
 	"patchedDependencies": {
-		"svelte-adapter-bun@1.0.1": "patches/svelte-adapter-bun@1.0.1.patch",
-		"bits-ui@2.18.1": "patches/bits-ui@2.18.1.patch"
+		"bits-ui@2.18.1": "patches/bits-ui@2.18.1.patch",
+		"apache-arrow@21.2.0": "patches/apache-arrow@21.2.0.patch"
 	},
 	"overrides": {
 		"svelte": "5.56.8"

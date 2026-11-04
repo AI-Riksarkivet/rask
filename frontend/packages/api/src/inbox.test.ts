@@ -1,7 +1,7 @@
 /**
  * The inbox transport's contract with `services/notifications`.
  *
- * Pinned here rather than in a zone because the wire shape is the thing two planes have to agree
+ * Pinned here rather than in a page because the wire shape is the thing two planes have to agree
  * on, and the estate has already paid for the alternative once: the bell's `author` field was
  * dropped from a trim, every row rendered "unknown author", and it was caught by looking at a
  * screenshot. A field the surface reads is not an optional field, and a schema is where that is
@@ -45,7 +45,7 @@ const NOTICE = {
 
 const req = (fetchImpl: typeof globalThis.fetch, bearer?: string) => ({
 	fetch: fetchImpl,
-	base: 'http://gw:8888/api/notifications',
+	base: '/api/notifications',
 	bearer,
 });
 
@@ -55,18 +55,18 @@ describe('readInbox', () => {
 
 		await readInbox(req(rec.fetch));
 
-		expect(rec.calls[0]?.url).toBe('http://gw:8888/api/notifications/inbox');
+		expect(rec.calls[0]?.url).toBe('/api/notifications/inbox');
 	});
 
 	it('sends only the query params the caller actually set', async () => {
 		// The service owns the default filter and the default page size (a settings field, so
 		// measuring it later is a config change). A client that always spelled them out would pin
-		// today's defaults into every zone.
+		// today's defaults into every page.
 		const rec = recorder({ notifications: [], next_cursor: null, unread: 0 });
 
 		await readInbox(req(rec.fetch), { state: 'all', limit: 100 });
 
-		expect(rec.calls[0]?.url).toBe('http://gw:8888/api/notifications/inbox?state=all&limit=100');
+		expect(rec.calls[0]?.url).toBe('/api/notifications/inbox?state=all&limit=100');
 	});
 
 	it('forwards the session bearer — the inbox is addressed by the token sub and nothing else', async () => {
@@ -98,7 +98,7 @@ describe('readInbox', () => {
 
 	it('reads an unknown `reason` rather than refusing the page', async () => {
 		// v2 (project watch) and v3 (governance) add members to a StrEnum that has exactly one today.
-		// A closed picklist here would make a zone that has not shipped yet reject the whole feed
+		// A closed picklist here would make a page that has not shipped yet reject the whole feed
 		// over a field it does not render.
 		const rec = recorder({
 			notifications: [{ ...NOTICE, reason: 'watch' }],
@@ -147,7 +147,7 @@ describe('markInboxSeen', () => {
 
 		const result = await markInboxSeen(req(rec.fetch), ['run-1@FAIL', 'run-2@COMPLETE']);
 
-		expect(rec.calls[0]?.url).toBe('http://gw:8888/api/notifications/inbox/seen');
+		expect(rec.calls[0]?.url).toBe('/api/notifications/inbox/seen');
 		expect(rec.calls[0]?.init?.method).toBe('POST');
 		expect(rec.calls[0]?.init?.body).toBe(
 			JSON.stringify({ notification_ids: ['run-1@FAIL', 'run-2@COMPLETE'] }),
@@ -172,7 +172,7 @@ describe('dismissNotification', () => {
 
 		const result = await dismissNotification(req(rec.fetch), 'run-1@START');
 
-		expect(rec.calls[0]?.url).toBe('http://gw:8888/api/notifications/inbox/dismiss');
+		expect(rec.calls[0]?.url).toBe('/api/notifications/inbox/dismiss');
 		expect(rec.calls[0]?.init?.body).toBe(JSON.stringify({ notification_id: 'run-1@START' }));
 		expect(result).toEqual({ ok: true, data: { dismissed: 1, unread: 0 } });
 	});

@@ -1,4 +1,4 @@
-// @rask/api/lineage — the lineage plane, single-sourced for the admin, data and lineage zones:
-// the OpenAPI-derived domain types + the typed browser client bound to a zone's BffClient.
+// @rask/api/lineage — the lineage plane: the OpenAPI-derived domain types and the typed browser
+// client bound to a lineage transport.
 export * from './types';
 export * from './client';

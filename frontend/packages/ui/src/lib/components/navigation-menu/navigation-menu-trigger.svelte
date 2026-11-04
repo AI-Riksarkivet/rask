@@ -2,7 +2,7 @@
 	import { cn } from '../../utils/index.js';
 	import { tv } from 'tailwind-variants';
 
-	/** The shared entry-chrome for the menubar row. Exported so a PLAIN link (a zone with no
+	/** The shared entry-chrome for the menubar row. Exported so a PLAIN link (a page with no
 	 *  sub-areas, which needs no trigger) sits at exactly the same height, padding and radius as
 	 *  a trigger — the row cannot drift between the two kinds of entry. House tokens, not
 	 *  shadcn's raw defaults: `h-8`/`rounded-lg`/`px-2.5`/`ring-3` mirror the Button base. */

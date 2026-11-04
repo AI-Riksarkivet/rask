@@ -1,12 +1,12 @@
 /* ────────────────────────────────────────────────────────────────────────────────────────────
- * @rask/dockview — the ONE line a consuming zone adds to its app.css:
+ * @rask/dockview — the ONE line a consuming page adds to its app.css:
  *
  *     @import '@rask/dockview/styles.css' layer(base);
  *
  * `layer(base)` matters and is not decoration. dockview ships 124 KB of unlayered CSS whose
  * selectors (`.dv-tab`, `.dv-groupview` …) would otherwise out-specify the Tailwind utilities a
  * panel's own content is styled with. Putting the vendor sheet in `base` puts every utility above
- * it, permanently. The lakehouse zone already imports `@xyflow/svelte`'s stylesheet exactly this
+ * it, permanently. The console already imports `@xyflow/svelte`'s stylesheet exactly this
  * way — same problem, same fix, same line shape.
  *
  * There is no `@source` to add for this package: it ships no Tailwind utility classes of its own.
@@ -68,7 +68,7 @@
 	--dv-context-menu-color: var(--popover-foreground);
 	--dv-icon-hover-background-color: var(--accent);
 
-	/* ── scrollbars. The tab strip's own; panel bodies keep the zone's scrollbar rules. ───── */
+	/* ── scrollbars. The tab strip's own; panel bodies keep the console's scrollbar rules. ───── */
 	--dv-scrollbar-background-color: var(--border);
 	--dv-tabs-container-scrollbar-color: var(--border);
 
@@ -97,7 +97,7 @@
 	 *     semantic choice per group, not a theme surface; overriding them would silently
 	 *     collapse nine distinguishable colours onto the estate palette.
 	 *   --dv-overlay-z-index  — dockview's default sits above the grid and below a Bits UI
-	 *     portal, which is the ordering the estate wants. Changing it is a zone's call. */
+	 *     portal, which is the ordering the estate wants. Changing it is a page's call. */
 }
 
 .rask-dock {

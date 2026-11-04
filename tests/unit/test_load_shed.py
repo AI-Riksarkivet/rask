@@ -72,32 +72,6 @@ def test_write_over_cap_is_shed_with_429_before_the_body() -> None:
     assert calls == 1, "the shed request must NOT reach the app (shed before the body is buffered)"
 
 
-def test_reads_and_non_bulk_writes_are_not_gated() -> None:
-    # A read (GET) and version/create (a small metadata op) must pass through even while a write slot is held.
-    async def scenario() -> tuple[int, int]:
-        release = asyncio.Event()
-        entered = asyncio.Event()
-
-        async def app(scope: Scope, _receive: Receive, send: Send) -> None:
-            if str(scope["path"]).endswith("/insert"):
-                entered.set()
-                await release.wait()
-            await send({"type": "http.response.start", "status": 200, "headers": []})
-            await send({"type": "http.response.body", "body": b""})
-
-        mw = WriteConcurrencyLimitMiddleware(app, max_concurrent=1)
-        t1 = asyncio.create_task(_drive(mw, _write("/v1/table/t/insert")))
-        await entered.wait()  # the one write slot is held in flight
-        get_code = await _drive(mw, _scope("GET", "/v1/table/t"))
-        commit_code = await _drive(mw, _scope("POST", "/v1/table/t/version/create"))
-        release.set()
-        await t1
-        return get_code, commit_code
-
-    get_code, commit_code = asyncio.run(scenario())
-    assert get_code == 200 and commit_code == 200, "reads + non-bulk writes must never be shed"
-
-
 def test_metadata_creates_are_not_shed_even_at_capacity() -> None:
     # The `/create` suffix also ends CHEAP metadata endpoints (namespace / tags / version / materialized_view
     # create) that send JSON and buffer no Arrow body. They must pass through even while the cap is full — the

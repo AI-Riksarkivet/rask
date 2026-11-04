@@ -692,6 +692,19 @@ scoped_secret() {
 {{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api "components" $components) -}}
 {{- end -}}
 {{- end -}}
+{{- $private := include "lance.esoReads" . | fromJsonArray -}}
+{{- range $reads }}{{- $private = concat $private .api .components }}{{- end -}}
+{{- range $app, $reader := ($v.openbao.externalReaders | default dict) -}}
+{{- if not (regexMatch "^[a-z][a-z0-9-]{0,62}$" $app) }}{{- fail (printf "openbao.externalReaders: %q is no Dapr app id" $app) }}{{- end -}}
+{{- if hasKey $reads $app }}{{- fail (printf "openbao.externalReaders: %q is the lakehouse's own app" $app) }}{{- end -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$" (($reader).serviceAccount | default "" | toString)) }}{{- fail (printf "openbao.externalReaders.%s.serviceAccount names no ServiceAccount" $app) }}{{- end -}}
+{{- if not ($reader).secrets }}{{- fail (printf "openbao.externalReaders.%s.secrets names no secret: a reader with no read is no reader" $app) }}{{- end -}}
+{{- range $reader.secrets }}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,252}$" (toString .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is no secret name (a path or a wildcard would widen the store policy)" $app (toString .)) }}{{- end -}}
+{{- if and (has . $private) (not (hasPrefix "signing-public-" .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is the lakehouse's own secret" $app .) }}{{- end -}}
+{{- end -}}
+{{- $_ := set $reads $app (dict "sa" $reader.serviceAccount "api" ($reader.secrets | uniq | sortAlpha) "components" list) -}}
+{{- end -}}
 {{- end -}}
 {{- toJson $reads -}}
 {{- end -}}

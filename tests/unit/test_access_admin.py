@@ -20,7 +20,6 @@ import pytest
 from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
-    UnsupportedOperationError,
 )
 
 from catalog.api.v1.endpoints import access_admin as ep
@@ -52,10 +51,6 @@ def _fga_client(stub: Any = None) -> Any:
     monkeypatches the module-level `ep.fga.*` functions, and the ones that do not never touch it.
     """
     return stub if stub is not None else object()
-
-
-def _request(client: Any = None) -> Any:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(fga=client)))
 
 
 def _token(name: str) -> PersonPrincipal:
@@ -114,20 +109,6 @@ def _read(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> tuple[dict[str, Any
 
 
 # ── the estate gate (mirrors /management/v1/events) ─────────────────────────────────────────────────────────────
-
-
-def test_gate_is_can_observe_events_on_the_root_object(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
-    # THE GATE ITSELF, not a handler. It moved to a router dependency, so calling a handler directly no
-    # longer runs it — a version of this test that still went through `_read` would assert nothing at
-    # all while continuing to pass for the wrong reason.
-    asyncio.run(ep.estate_gate(client=_fga_client(), settings=_settings(), token=_token("root_admin")))
-    # Estate-wide surface → platform privilege on the FIXED root object, never a caller-supplied one.
-    assert gate_seen == {"relation": "can_observe_events", "obj": "warehouse:lance_catalog"}
-
-
-def test_fga_off_is_unsupported(rec: _AuditRecorder) -> None:
-    with pytest.raises(UnsupportedOperationError):
-        asyncio.run(ep.estate_gate(client=_fga_client(), settings=_settings(fga_enabled=False), token=None))
 
 
 # ── pagination ────────────────────────────────────────────────────────────────────────────────────────

@@ -40,16 +40,12 @@ Dockerfile
 .pytest_cache
 
 # JS/TS build artefacts and caches (frontend/ is built inside the image). Use **/ so nested copies
-# like frontend/microfrontends/*/node_modules are excluded too — a bare `node_modules` only matches
+# like frontend/console/node_modules are excluded too — a bare `node_modules` only matches
 # the context root, which would let host node_modules ship and overwrite the clean `bun install`.
 **/node_modules
 dist
 build
 **/.svelte-kit
-# Turborepo's per-package task cache. NOT excluded until 2026-07-29, and it is rewritten by every
-# `turbo run` — so the frontend build context changed after any local lint/check/test, invalidating the
-# directories, none of them wanted in an image.
-**/.turbo
 storybook-static
 test-results
 

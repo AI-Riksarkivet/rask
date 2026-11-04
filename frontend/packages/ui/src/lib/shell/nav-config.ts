@@ -1,29 +1,20 @@
-import {
-	Cpu,
-	Database,
-	FlaskConical,
-	FolderKanban,
-	House,
-	PenLine,
-	Search,
-	Settings,
-} from '@lucide/svelte';
+import { Database, FolderKanban, House, Settings } from '@lucide/svelte';
 import type { InboxNotificationLike } from './inbox.js';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
 export type IconComponent = typeof Database;
 
-/** What a zone hands the shell to light up the navbar's notification bell.
+/** What the app hands the shell to light up the navbar's notification bell.
  *
- *  One optional object rather than threaded props, so a zone opts in with a single `notifications=`
- *  and a zone that has not wired the feed yet renders no bell at all (rather than an empty one that
- *  looks broken). The shell never fetches it: the rows are the zone's own inbox read, and the read
- *  state comes back through the callbacks so the zone — which owns a per-subject store — can persist
- *  it. Ids in `seen`/`dismissed` are NOTIFICATION ids. */
+ *  One optional object rather than threaded props, so an app opts in with a single `notifications=`
+ *  and one that has not wired the feed renders no bell at all (rather than an empty one that looks
+ *  broken). The shell never fetches it: the rows are the app's own inbox read, and the read state
+ *  comes back through the callbacks so the app — which owns a per-subject store — can persist it. Ids
+ *  in `seen`/`dismissed` are NOTIFICATION ids. */
 export type NotificationFeed = {
 	/** The INBOX plane: rows addressed to this subject, durable per subject. `undefined` means this
-	 *  zone has no inbox transport — a different statement from an empty inbox, and the bell renders
-	 *  it differently. */
+	 *  stack has no inbox — a different statement from an empty inbox, and the bell renders it
+	 *  differently. */
 	inbox?: InboxNotificationLike[];
 	/** The server's unread count for the WHOLE inbox, not the page above. */
 	inboxUnread?: number;
@@ -33,18 +24,14 @@ export type NotificationFeed = {
 	ondismiss?: (notificationId: string, dismissed: string[]) => void;
 };
 
-/** A leaf route inside the CURRENT zone's sidebar — same-zone (soft nav) unless `reload` says
- *  otherwise. */
+/** A leaf route in the sidebar. */
 export type ZoneNavLeaf = {
 	title: string;
-	/** ABSOLUTE, domain-relative href (e.g. /lakehouse/catalog/tables). */
+	/** ABSOLUTE, domain-relative href (e.g. /catalog/tables). */
 	href: string;
 	/** Active predicate vs the FULL pathname. */
 	match: (p: string) => boolean;
 	icon?: IconComponent;
-	/** True for a leaf that leaves this zone's route manifest (e.g. the explorer's Annotate → /annotator):
-	 *  the sidebar link then hard-navigates (data-sveltekit-reload) instead of soft-routing. */
-	reload?: boolean;
 	/** Sub-routes, rendered as a `Sidebar.MenuSub` under this leaf and auto-expanded while any of
 	 *  them (or the parent) is active. One level only — a third tier is a sign the ZONE should have
 	 *  been split, not the menu. */
@@ -82,54 +69,37 @@ export type ZoneNavGroup = {
 	defaultCollapsed?: boolean;
 };
 
-/** The zone ROOT row — rendered above every group, with no group label of its own.
- *
- *  A zone root is not a member of any thematic section: it is the landing that SUMMARISES all of
- *  them. Compute's Overview had to sit inside "Cluster" purely because `groups[]` was the only
- *  container on offer, which reads as "cluster overview" when it actually covers jobs and serve
- *  too. Optional on purpose — a zone whose root genuinely belongs to a section (the explorer's Search
- *  really is Explore) should keep it there rather than promote it. */
+/** The ROOT row — rendered above every group, with no group label of its own: the landing that
+ *  SUMMARISES the sections below it rather than a member of one. */
 export type ZoneNavRoot = ZoneNavLeaf;
 
-/** The per-zone sidebar config: each zone passes ITS OWN routes to the shared AppShell. The zone
- *  list itself lives in the top navbar (`topNav`) — the sidebar never renders other zones.
- *
- *  GROUPED, not flat. This was `{ title, leaves[] }` — one unlabelled list — which forced Lakehouse
- *  to swap the WHOLE sidebar per area, keyed off the pathname, so standing in the catalog you
- *  could not see governance or admin at all. Storage was reachable only by typing
- *  its URL, because no area's flat list could mention another area's route. Groups let one zone
- *  present its whole surface at once, which is what the shadcn sidebar primitives were built for
- *  and what the estate already had installed but never used. */
+/** The sidebar config the app passes to the shared AppShell, GROUPED into labelled sections so the
+ *  whole surface is visible at once. */
 export type ZoneNav = {
-	/** The zone's display name — shown as the sidebar's own heading. */
+	/** The display name — shown as the sidebar's own heading. */
 	title: string;
 	/** The landing row, above and outside every group. See {@link ZoneNavRoot}. */
 	root?: ZoneNavRoot;
 	groups: ZoneNavGroup[];
 	/** PINNED TO THE BOTTOM, in `Sidebar.Footer` — it does not scroll with `groups`.
 	 *
-	 *  For a surface that is not one of the zone's AREAS but a place you go to work across them: the
+	 *  For a surface that is not one of the AREAS but a place you go to work across them: the
 	 *  dock is the case this exists for. Rendered by the same `ZoneNav` component as the rail (the
-	 *  sidebar hands it a synthetic one-group nav), so a footer leaf keeps active-state matching, the
-	 *  `reload` flag and its tooltip — and `zoneNavLeaves` walks it, which is what keeps
-	 *  `dock-reachability` able to prove the dock is reachable from its own zone. */
+	 *  sidebar hands it a synthetic one-group nav), so a footer leaf keeps active-state matching and
+	 *  its tooltip, and `zoneNavLeaves` walks it. */
 	footer?: ZoneNavGroup;
 };
 
-/** Every leaf in a zone's nav, flattened depth-first (parents before their children). The shell uses
- *  it to decide whether a rail is worth rendering; `@rask/zone-contract` uses it to walk every href. */
+/** Every leaf in a nav, flattened depth-first (parents before their children). The shell uses it to
+ *  decide whether a rail is worth rendering. */
 export function zoneNavLeaves(nav: ZoneNav | null | undefined): ZoneNavLeaf[] {
 	if (!nav) return [];
 	const out: ZoneNavLeaf[] = [];
-	// The root FIRST, and it must be here: zone-contract walks this list to gate every href
-	// (deploy paths, cross-zone reload, trailing slashes). A root that skipped it would be the one
-	// link in the zone nobody checks.
 	if (nav.root) {
 		out.push(nav.root);
 		if (nav.root.children) out.push(...nav.root.children);
 	}
-	// The footer group is nav, not chrome — walk it too, or every gate that reads this list would
-	// stop seeing the dock the moment it moved to the bottom of the rail.
+	// The footer group is nav, not chrome — walk it too.
 	for (const group of [...nav.groups, ...(nav.footer ? [nav.footer] : [])]) {
 		for (const item of group.items) {
 			out.push(item);
@@ -142,7 +112,7 @@ export function zoneNavLeaves(nav: ZoneNav | null | undefined): ZoneNavLeaf[] {
 /** A selectable project — the sidebar header switcher. One implicit "default" today. */
 export type Project = { name: string; subtitle?: string };
 
-/** The navbar profile identity — populated from the OIDC session (per-zone +layout). */
+/** The navbar profile identity — populated from the OIDC session. */
 export type NavUser = { name: string; email?: string; initials?: string };
 
 /** One project membership row from `/management/v1/me` — the tenant and the caller's role in it. */
@@ -159,16 +129,13 @@ export type Me = {
 	projects: MeProject[];
 };
 
-/** Drop a single trailing slash (except on root "/"). A zone served under a base path reports its ROOT
- *  as `page.url.pathname === '/lakehouse/'` (trailing slash), which would fail an exact compare against
- *  '/lakehouse'; normalizing here makes every matcher trailing-slash-robust. */
+/** Drop a single trailing slash (except on root "/"), so every matcher is trailing-slash-robust. */
 export const norm = (p: string) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p);
 /** prefix-segment match: active when the path equals the href or is nested under it. */
 export const seg = (href: string) => (p: string) =>
 	norm(p) === href || norm(p).startsWith(href + '/');
-/** exact match: active ONLY on this exact path. Used for a root leaf whose href equals its own
- *  zone's href (e.g. Overview=/lakehouse) — `seg` there would over-match every sibling
- *  sub-route (/lakehouse/catalog would light up Overview too), so those leaves match exactly. */
+/** exact match: active ONLY on this exact path. Used for a root leaf whose href is a prefix of its
+ *  siblings' (Overview=/catalog) — `seg` there would light Overview up on /catalog/tables too. */
 export const exact = (href: string) => (p: string) => norm(p) === href;
 /** domain match: active when the path is under any of the given prefixes. */
 export const under =
@@ -176,118 +143,65 @@ export const under =
 	(p: string) =>
 		prefixes.some((pre) => norm(p) === pre || norm(p).startsWith(pre + '/'));
 
-/** One sub-area inside a zone's navbar panel — a first-class view of that zone, with a one-line
- *  description so the panel explains the estate instead of just listing words. */
+/** One sub-area inside a navbar panel, with a one-line description so the panel explains the estate
+ *  instead of just listing words. */
 export type TopNavItem = { title: string; href: string; description: string };
 
-/** A labelled column inside a navbar panel. A trigger that gathers SEVERAL concerns (Lakehouse:
- *  catalog + operations) needs its rows grouped under headings, or the panel is just a
- *  long undifferentiated list — the multi-column NavigationMenu.Content shape. */
+/** A labelled column inside a navbar panel: a trigger that gathers SEVERAL concerns (Lakehouse:
+ *  workspace + catalog + operations) groups its rows under headings. */
 export type TopNavGroup = { label: string; items: TopNavItem[] };
 
-/** One top-navbar entry — a whole microfrontend zone (cross-zone = hard nav). */
+/** One top-navbar entry. */
 export type TopNavEntry = {
 	title: string;
 	href: string;
 	match: (p: string) => boolean;
-	/** The zone's mark in the bar (lucide) — same signature seam as `ZoneNavLeaf.icon`. */
+	/** The entry's mark in the bar (lucide) — same signature seam as `ZoneNavLeaf.icon`. */
 	icon?: IconComponent;
-	/** The zone's sub-areas. Present → the navbar renders a NavigationMenu trigger opening a panel
-	 *  of these; absent → a plain link, because the zone has a single surface and a dropdown with
-	 *  one row in it would be noise. Deliberately a SUBSET of the zone's own sidebar (`ZoneNav`):
-	 *  this is the cross-zone jump list, not a mirror of in-zone navigation. */
+	/** The entry's sub-areas. Present → the navbar renders a NavigationMenu trigger opening a panel of
+	 *  these; absent → a plain link. */
 	items?: TopNavItem[];
-	/** Grouped alternative to `items` — rendered as labelled columns. Used by Lakehouse, whose panel
-	 *  spans the catalog and the operational surfaces. */
+	/** Grouped alternative to `items` — rendered as labelled columns. */
 	groups?: TopNavGroup[];
-	/** Visual weight in the ZONE bar. 'primary' is where the work happens — the lakehouse you govern
-	 *  and the compute that fills it — and those lead the bar. Everything else is a real zone but a
-	 *  destination you go to for a specific task, so it reads one step quieter. Six equally-weighted
-	 *  entries give a newcomer no idea where to start; this is the ONLY thing that says so.
-	 *  The MAIN MENU sets no tier and the shell renders none there: two or three peers are a group,
-	 *  not a hierarchy, and a spacer between them reads as one entry having fallen off the row. */
+	/** Visual weight in the in-project bar: 'primary' leads it. */
 	tier?: 'primary' | 'secondary';
 	/** WHY this entry cannot be opened by the current identity — a short phrase, or absent when it can.
 	 *
 	 *  The `ZoneNavLeaf.unavailable` contract, one level up (#143). An entry carrying it renders as a
 	 *  disabled, non-navigating row with the reason in its tooltip, rather than being dropped from the
-	 *  bar. Same argument as the sidebar's: a bar that silently loses Settings tells a non-admin the
-	 *  estate has no settings, when the true statement is that THEY cannot open them — and only the
-	 *  second tells them what to ask for. */
+	 *  bar: a bar that silently loses Settings tells a non-admin the estate has no settings, when the
+	 *  true statement is that THEY cannot open them — and only the second tells them what to ask for. */
 	unavailable?: string;
 };
 
-// NO `Projects` row here, BY RULING (2026-08-03): there is ONE project concept and it is the TOP of
-// the hierarchy (project > warehouse > namespace > table) — a tenants list inside a project-scoped
-// zone's dropdown inverted it. The list, the per-project overview and the provisioning flow now live
-// at the TOP level in the home zone (`/projects`), carried by this bar's own `Projects` entry below;
-// `/lakehouse/catalog/projects` no longer exists.
+// HIERARCHY ORDER — project > warehouse > namespace > table, identical to the sidebar's Catalog group.
+// No Projects row: a project is the TOP of the hierarchy, so its list is the main menu's.
 const DATA_ITEMS: TopNavItem[] = [
-	// HIERARCHY ORDER — project > warehouse > namespace > table, the chain this zone's own
-	// `nav.ts:60-66` states. It was Tables-first here and Namespaces-first in the sidebar, so the
-	// estate answered the same question two different ways depending on which control you opened —
-	// the exact defect ruling 140315ed named, one level down. The sidebar now matches.
 	{
 		title: 'Warehouses',
-		href: '/lakehouse/catalog/warehouses',
+		href: '/catalog/warehouses',
 		description: "Every project's storage bindings — one bucket per warehouse.",
 	},
 	{
 		title: 'Namespaces',
-		href: '/lakehouse/catalog/namespaces',
+		href: '/catalog/namespaces',
 		description: 'Medallion namespaces and their maintenance policies.',
 	},
 	{
 		title: 'Tables',
-		href: '/lakehouse/catalog/tables',
+		href: '/catalog/tables',
 		description: 'The governed table registry.',
 	},
 	{
-		// R28: the object browser was reachable ONLY by typing the URL — the sidebar is area-scoped,
-		// so no other area linked to it and the panel never listed it. Storage is an area of this
-		// zone, so it belongs in this zone's panel.
 		title: 'Storage',
-		href: '/lakehouse/catalog/storage/',
-		description: 'Objects in the warehouse buckets — browse and preview.',
+		href: '/catalog/storage',
+		description: 'The registered stores, by medallion tier.',
 	},
 ];
-
-const ANNOTATE_ITEMS: TopNavItem[] = [
-	{ title: 'Canvas', href: '/annotator/', description: 'Label pages on the annotation canvas.' },
-	{
-		title: 'Browse',
-		href: '/annotator/browse',
-		description: 'The corpus, filtered to what needs labeling.',
-	},
-];
-
-const EXPLORER_ITEMS: TopNavItem[] = [
-	{ title: 'Search', href: '/explorer/', description: 'Semantic search over the corpus.' },
-	{ title: 'Atlas', href: '/explorer/atlas', description: 'The embedding map of the corpus.' },
-	{ title: 'Tree', href: '/explorer/tree', description: 'The corpus by topic hierarchy.' },
-	{ title: 'Graph', href: '/explorer/graph', description: 'Relations between media entities.' },
-	{
-		// The dock lives INSIDE this zone (its panels are the zone's own components sharing one
-		// search) — so it is a row of the zone's panel, exactly like every other area.
-		title: 'Workbench',
-		href: '/explorer/workbench',
-		description: 'Results, atlas and player in one arrangeable dock.',
-	},
-	{ title: 'Workflow', href: '/explorer/workflow', description: 'The derivation pipeline.' },
-];
-
-// NO `STUDIO_ITEMS`. Studio briefly panelled (Apps + Flows) and is a plain link again, because the
-// launcher and the animation demo were deleted: the zone is ONE surface — the flow canvas at its
-// root — and a dropdown with one row in it is noise. Same rule, opposite direction.
 
 /** The PLATFORM panel — the Settings entry's rows. Each reads across every project and takes none,
- *  which is why they are settings rather than a zone's feature, and why they are SERVED by the home
- *  zone (#105): `/settings/access` and `/settings/audit` are its routes, `/projects` always was.
- *
- *  Deliberately the same three rows, in the same order and under the same names, as `/settings` itself
- *  renders — the navbar panel and the page below it are two controls answering one question, and the
- *  estate has been bitten before by letting them drift (see the lakehouse sidebar's own note). Estate-
- *  admin only. */
+ *  which is why they are settings. The same three rows, in the same order and under the same names, as
+ *  `/settings` itself renders. Estate-admin only. */
 const PLATFORM_ITEMS: TopNavItem[] = [
 	{
 		title: 'Users & roles',
@@ -306,137 +220,60 @@ const PLATFORM_ITEMS: TopNavItem[] = [
 	},
 ];
 
-/** COMPUTE's panel rows — the Ray/job plane. The old overview zone folded in here (R16), so the
- *  zone root IS the overview and rides the panel as its first row (matching exactly, like Media's
- *  Search at /explorer). */
+/** The Lakehouse panel's first column. `TopNavGroup` has no root slot, so the overview is a row. */
 const WORKSPACE_ITEMS: TopNavItem[] = [
-	// The zone root leads its first column — the same shape `COMPUTE_ITEMS` uses, and for the same
-	// reason: `TopNavGroup` has no root slot (only the SIDEBAR's `ZoneNavRoot` does), so a zone
-	// landing has to be a row of some column or be unreachable from the panel entirely.
 	{
 		title: 'Overview',
-		href: '/lakehouse/',
+		href: '/catalog',
 		description: "The active project's hierarchy and the warehouses that claim it.",
 	},
 	{
 		title: 'Workbench',
-		href: '/lakehouse/workbench',
-		description: 'Events, tables and storage in one arrangeable dock.',
-	},
-];
-
-const COMPUTE_ITEMS: TopNavItem[] = [
-	{ title: 'Overview', href: '/compute/', description: 'The Ray plane at a glance.' },
-	{
-		// The zone's own dock — panels are this zone's components over its own remotes, so it is a row
-		// of this panel like every other area of the zone.
-		title: 'Workbench',
-		href: '/compute/workbench',
-		description: 'Jobs, capacity, actors and Serve in one arrangeable dock.',
-	},
-	{
-		// ETL — how data gets INTO the estate, and the one row here that never touches Ray. It was
-		// absent while the zone's own sidebar carried it, so the two nav surfaces disagreed: a user
-		// navigating by the NAVBAR could not reach the ingest plane at all, while one using the RAIL
-		// could. Every other compute area appears in both, and that asymmetry is a large part of why
-		// the plane was hard to find.
-		title: 'ETL',
-		href: '/compute/etl',
-		description: 'Harvest a source into bronze — an S3 prefix, or a local directory.',
-	},
-	{ title: 'Jobs', href: '/compute/jobs', description: 'Submitted Ray jobs and their lifecycle.' },
-	{ title: 'Cluster', href: '/compute/cluster', description: 'Nodes and their resource load.' },
-	{ title: 'Actors', href: '/compute/actors', description: 'Live actors across the cluster.' },
-	{ title: 'Serve', href: '/compute/serve', description: 'Ray Serve apps and deployments.' },
-	{ title: 'Logs', href: '/compute/logviewer', description: 'The cluster log viewer.' },
-	{
-		title: 'API docs',
-		href: '/compute/api-docs',
-		description: 'The compute API, self-documented.',
+		href: '/workbench',
+		description: 'Events and tables in one arrangeable dock.',
 	},
 ];
 
 const OPERATIONS_ITEMS: TopNavItem[] = [
-	{ title: 'Events', href: '/lakehouse/admin/events', description: 'The live control-event feed.' },
+	{ title: 'Events', href: '/admin/events', description: 'The live control-event feed.' },
 	{
 		title: 'Streams',
-		href: '/lakehouse/admin/streams',
+		href: '/admin/streams',
 		description: 'JetStream consumers and their lag.',
 	},
 	{
 		title: 'DLQ',
-		href: '/lakehouse/admin/dlq',
+		href: '/admin/dlq',
 		description: 'Dead-lettered lineage runs, with replay.',
 	},
 ];
 
 /**
- * The top-navbar IA. The zones — home, lakehouse, explorer, annotator, compute, studio — and
- * the bar carries an entry for EVERY one of them (R15: a zone missing from the shared navbar is a
- * defect, regardless of scaffold status). A hop from the catalog to the DLQ is a soft navigation
- * inside one router; every OTHER entry crosses a zone boundary and
- * hard-navigates. The sidebar renders the current zone's routes (`ZoneNav`).
- *
- * A zone with sub-areas carries `items`, and the navbar renders it as a NavigationMenu trigger with
- * a panel — so the estate's shape is reachable from any zone in one hop instead of landing on a
- * zone root and hunting through its sidebar. Zones with a single surface stay plain links.
- *
- * The Operations column appends ONLY for an estate admin (`me.estate_admin` from the frozen `/management/v1/me`
- * contract) — fail-closed: an unresolved/absent `me` renders the base entries. Access is NOT a
- * top-level entry and never was: it is one row of the Settings panel (`/settings/access`), which is
- * where the surface itself now lives.
- */
-/**
- * The MAIN MENU's bar, by ruling (2026-08-03): "we should only see 2 items in topnavbar — projects
- * and settings, nothing else".
- *
- * Standing at the estate root you are not moving between zones, you are choosing what to work on;
- * a full zone list there answers a question nobody asked yet and buries the two things that ARE the
- * main menu. The zone bar returns the moment you are inside a zone, which is where "move me to
- * another zone" is a real question.
+ * The MAIN MENU's bar (ruling 2026-08-03): Home, Projects and Settings — the places you can BE at the
+ * estate level, peers, so no tiers.
  *
  * Settings is estate-admin only, and since #143 that shows as a DISABLED entry rather than an absent
- * one — so the main menu carries three entries for everyone, the third inert for a non-admin. It used
- * to be filtered out, leaving two, which this comment defended as "correct, not a degenerate case".
- * The ruling overturns that: a bar which silently loses Settings does not tell a non-admin they lack
- * a privilege, it tells them the estate has no settings — and the estate manifestly does. Disabled
- * with the reason in the tooltip is the only version of this bar that is TRUE for both identities.
- *
- * NO TIERS here, unlike the zone bar. Weighting is for a row of eight zones, where "start at the
- * lakehouse" is real guidance; these two or three are the places you can BE at this level, peers by
- * construction, and the shell renders them as one uniform group (it also refuses to draw the tier
- * gap in this bar, so a re-tiered entry cannot punch a hole in it).
+ * one: a bar which silently loses Settings tells a non-admin the estate has no settings. Disabled with
+ * the reason in the tooltip is the only version of this bar that is TRUE for both identities.
  */
 export function mainMenuNav(estateAdmin: boolean, deniedReason?: string): TopNavEntry[] {
-	// HOME leads the main menu — and appears ONLY here. The zone bar carries no Home entry (see
-	// `topNav`): inside a project the way back up is the project switcher and the sidebar header, and
-	// a third control to the same place is noise in a bar whose job is moving BETWEEN zones. At the
-	// estate root the opposite holds — Home is not "a way back", it IS one of the three places you
-	// can be, so it has to be nameable.
 	return [
 		{
 			title: 'Home',
 			href: '/',
 			icon: House,
-			// EXACT: '/' must not light up while you are on /projects or /settings — they are its
-			// SIBLINGS at this level, not routes underneath it.
+			// EXACT: '/' must not light up on /projects or /settings — they are its SIBLINGS.
 			match: exact('/'),
 		},
 		PROJECTS_ENTRY,
 		// The default is the FGA denial's own wording, so the bar, the route's 403 and the API all name
-		// the same relation on the same object — a reason that paraphrases sends people hunting for a
-		// setting. `deniedReason` exists because `estateAdmin: false` folds together two callers whose
-		// NEXT STEP differs: a signed-in non-admin must ask for the grant, an anonymous visitor must
-		// sign in first. Both are refused, only one can act on a relation name, and a reason that
-		// cannot be acted on is the dead end this ruling exists to remove.
+		// the same relation on the same object. `deniedReason` tells an anonymous visitor to sign in,
+		// where a signed-in non-admin must ask for the grant.
 		estateAdmin
 			? SETTINGS_ENTRY
 			: {
-					// `items` is DROPPED, not merely left unrendered. Showing the entry must not hand out
-					// its children: `/settings/access` reads the platform's whole tuple store. Relying on
-					// the navbar's branch order to suppress the panel is one edit away from a leak — that
-					// exact regression happened while writing this — so a denied entry carries no rows to
-					// leak, and `rowsOf(mainMenuNav(false))` can keep proving it at the DATA level.
+					// `items` is DROPPED, not merely left unrendered: showing the entry must not hand out its
+					// children (`/settings/access` reads the platform's whole tuple store).
 					...SETTINGS_ENTRY,
 					items: undefined,
 					unavailable:
@@ -448,14 +285,8 @@ export function mainMenuNav(estateAdmin: boolean, deniedReason?: string): TopNav
 /**
  * Is this path the ESTATE level (the main menu) rather than the inside of a project?
  *
- * The two-level rule, in one predicate: `/`, `/projects` and `/settings` are where you choose what to
- * work on; everything else — every zone route, and `/projects/<id>` itself — is somewhere you have
- * already chosen. Opening a project is what puts you inside one, which is why the per-project page
- * gets the ZONE bar and the list above it does not.
- *
- * Deliberately a PATH test, not a stored "active project": scoping is by context, and this is the
- * context. A host-scoped deployment (`acme.localhost`, `projectFromHost`) simply arrives with a zone
- * path already, so it lands on the same answer without a second mechanism to keep in sync.
+ * `/`, `/projects` and `/settings` are where you choose what to work on; everything else — the
+ * lakehouse's pages, and `/projects/<id>` itself — is somewhere you have already chosen.
  */
 export function isMainMenu(pathname: string): boolean {
 	const p = norm(pathname);
@@ -464,110 +295,31 @@ export function isMainMenu(pathname: string): boolean {
 	);
 }
 
+/** The IN-PROJECT bar: the lakehouse, with its workspace, its catalog and — for an estate admin — its
+ *  operations as columns of one panel. Who may do what is not here: that is platform configuration,
+ *  under the main menu's Settings. */
 export function topNav(estateAdmin: boolean): TopNavEntry[] {
-	// LAKEHOUSE gathers everything that describes or governs the one governed estate: the catalog
-	// (projects → warehouses → namespaces → tables) and, for an estate admin,
-	// the operational surfaces on top. A trigger claims a ZONE; it must not advertise another one's
-	// routes. Grouping by DOMAIN rather than by zone is what
-	// keeps a growing product from growing the bar: a new ROUTE becomes a row in a panel column —
-	// only a new ZONE earns a new entry (R15). The project switcher sits at the head of the bar on
-	// every zone (global context belongs in global chrome).
 	const lakehouse: TopNavGroup[] = [
-		// WORKSPACE first, and its own column rather than a row of an area. The dock composes the whole
-		// zone (the event feed + the catalog's tables and object browser), so filing it
-		// under one area is what made it invisible from the others — the placement that was reverted.
 		{ label: 'Workspace', items: WORKSPACE_ITEMS },
 		{ label: 'Catalog', items: DATA_ITEMS },
-		// Trigger = zone, column = area: a new route is a row in a column.
 	];
-	// OPERATIONS stays with the lakehouse; GOVERNANCE does not — by ruling (2026-08-03): "governance
-	// and other setting stuff, more in terms of auth, should be part of the topnavbar when in main
-	// menu, but under settings". Running THIS estate — its streams, its events, its dead letters — is
-	// an operation on the lakehouse and belongs to the lakehouse. Who may do what — users & roles,
-	// projects, the audit trail — is not a lakehouse feature at all; it is PLATFORM configuration, and
-	// it lives under `Settings` below. It is in ONE place, not two: a Governance column here AND a
-	// Settings entry there would be the same duplication the projects ruling deleted. Since #105 the
-	// pages themselves are the home zone's too, so the row and the route finally agree.
 	if (estateAdmin) {
 		lakehouse.push({ label: 'Operations', items: OPERATIONS_ITEMS });
 	}
-	// THIS IS THE IN-PROJECT BAR — one entry per ZONE, and nothing else.
-	//
-	// NO "Home", NO "Projects", NO "Settings". Those three are the ESTATE level and live in
-	// `mainMenuNav()`; putting them here too would make every zone's bar eleven entries long and blur
-	// the one distinction this IA rests on — the estate root is where you choose what to work on, a
-	// zone is where you do it. The way back up from inside a project is the project switcher and the
-	// sidebar header, both of which sit in this same chrome.
-	//
-	// TIERS are a rendering signal, not a grouping: Lakehouse and Compute are where the work happens
-	// — the lakehouse you govern and the compute that fills it — so they lead and the shell sets them
-	// off with a gap. Everything after the gap is a task destination.
 	return [
 		{
 			title: 'Lakehouse',
-			// THE ZONE ROOT, not `/lakehouse/catalog`. That path is not a page — `catalog/+page.ts`
-			// 307s into the table list — so this trigger, the estate's primary way into the zone,
-			// walked straight past the Overview #109 built and landed everyone in a table registry.
-			// The zone's own `nav.ts:39-48` records that 307 as the thing #109 removed; the navbar
-			// never adopted it, which is why the Overview read as missing. Trailing slash for the
-			// same reason as `/compute/` below.
-			href: '/lakehouse/',
+			href: '/catalog',
 			icon: Database,
-			// The whole merged zone — catalog and (for an admin) operations. No
-			// carve-out: every area is a column of this one trigger.
-			match: under('/lakehouse'),
+			match: under('/catalog', '/admin', '/workbench'),
 			groups: lakehouse,
 			tier: 'primary',
-		},
-		{
-			// COMPUTE is the Ray/job plane — the merged rask zone. The old overview zone folded in
-			// here (R16), so the zone root is the overview and the panel lists the Ray surfaces.
-			title: 'Compute',
-			href: '/compute/',
-			icon: Cpu,
-			match: under('/compute'),
-			items: [...COMPUTE_ITEMS],
-			tier: 'primary',
-		},
-		{
-			// EXPLORER is the corpus read plane — the viewer. It was labelled "Search" while the
-			// directory was `media`, on the reasoning that a label should name the task rather than
-			// our folder layout. The zone is now `explorer` on every surface (path, package, image),
-			// so the label and the directory finally agree, and "explore" is the wider truth of what
-			// this zone does: search is ONE of its leaves, beside the atlas, the tree and the graph.
-			title: 'Explorer',
-			href: '/explorer/',
-			icon: Search,
-			match: under('/explorer'),
-			items: [...EXPLORER_ITEMS],
-		},
-		{
-			// ANNOTATE is its own microfrontend (/annotator) and its own job: the write plane over the
-			// same corpus Search reads. One trigger per zone is the rule, so it is a trigger — it was
-			// briefly a row inside Search's panel, which broke that rule and buried the labeling
-			// workflow one hover deep. It carries a PANEL since #113: the "single surface" premise
-			// expired when /browse landed — Canvas and Browse are two real destinations, and the
-			// consistency rule is that every multi-surface zone panels (only Studio remains a link).
-			title: 'Annotate',
-			href: '/annotator/',
-			icon: PenLine,
-			match: under('/annotator'),
-			items: [...ANNOTATE_ITEMS],
-		},
-		{
-			// STUDIO is the sandbox zone (R17) and a PLAIN LINK — one surface, the node-based flow
-			// canvas at the zone root, so there is nothing for a dropdown to list.
-			title: 'Studio',
-			href: '/studio/',
-			icon: FlaskConical,
-			match: under('/studio'),
 		},
 	];
 }
 
-/** PROJECTS — the estate's list. Not a zone: a route in the home zone (`/projects`,
- *  `/projects/<p>`), and a plain link because the list, the per-project overview and the create flow
- *  are one surface. `under` so it stays lit on a project page. */
+/** PROJECTS — the estate's list, and a plain link: the list, the per-project overview and the create
+ *  flow are one surface. `under` so it stays lit on a project page. */
 const PROJECTS_ENTRY: TopNavEntry = {
 	title: 'Projects',
 	href: '/projects',
@@ -575,101 +327,11 @@ const PROJECTS_ENTRY: TopNavEntry = {
 	match: under('/projects'),
 };
 
-/** SETTINGS — PLATFORM configuration: notifications, the defaults a NEW project is created with, and
- *  auth/authz. A real home-zone route (`/settings`), and since #105 so is every row of its panel —
- *  this entry once pointed at `/lakehouse/governance/access`, a placeholder for a page that did not
- *  exist, and then at the real page in another zone. Now the entry, the panel and the pages are one
- *  app.
- *
- *  Estate-admin only, and ABSENT rather than disabled for everyone else — the fail-closed rule the
- *  Governance column had before it moved here: a non-admin's bar must not even NAME a surface they
- *  are barred from, or the IA leaks the shape of the privilege. */
+/** SETTINGS — PLATFORM configuration: users and roles, projects, the audit trail. */
 const SETTINGS_ENTRY: TopNavEntry = {
 	title: 'Settings',
 	href: '/settings',
 	icon: Settings,
-	// `under('/settings')` ALONE now. It also matched `/lakehouse/governance` while the workbench and
-	// the audit trail were still served from there — the bar had to agree with itself across the seam.
-	// #105 closed the seam: those routes are `/settings/access` and `/settings/audit`, the lakehouse
-	// serves no `governance` segment at all, and a matcher for a path nothing serves is a claim that
-	// can only ever be wrong.
 	match: under('/settings'),
 	items: [...PLATFORM_ITEMS],
 };
-
-/**
- * First segments the CATCH-ALL home zone owns as REAL routes, rather than as another zone's base.
- *
- * `home` has no base path, so "first segment = zone" quietly misreads its own routes as zones of
- * their own: `/projects` looked like a `projects` zone. Harmless in one direction (a link from the
- * lakehouse still hard-navigated, which is correct) and wasteful in the other — standing on `/`, the
- * navbar's own Projects link cost a full document load to reach a route THIS app serves.
- *
- * Keep in step with `@rask/zone-contract`'s `HOME_ROUTES`, which enforces the same fact from the
- * other side (a link INTO these from another zone must carry `data-sveltekit-reload`). Two lists
- * because the gate cannot import the shell, and both are one line — a divergence shows up as a
- * cross-zone test failure rather than as silence.
- */
-export const HOME_ROUTES = ['projects', 'settings', 'preferences'];
-
-/** The owning ZONE of a path ('' = the home zone, which serves the origin root and `HOME_ROUTES`).
- *  A link whose zone differs from the current pathname's leaves this app's route manifest, so it
- *  must hard-nav (data-sveltekit-reload); same-zone links stay soft for SPA speed. */
-export const zoneOf = (p: string) => {
-	const first = p.split('/').filter(Boolean)[0] ?? '';
-	return HOME_ROUTES.includes(first) ? '' : first;
-};
-
-const prefetched = new Set<string>();
-
-/** Warm a CROSS-ZONE target document on intent (hover/focus). SvelteKit's own
- *  `data-sveltekit-preload-data` only helps same-zone soft navs — a cross-zone link is a full
- *  document load into another app — so we drop a `<link rel="prefetch">` for the target instead.
- *  Honest scope: this is a browser HINT that warms the HTTP cache for the target zone's document
- *  (Chromium and Firefox honor it; Safari does not), so the hard nav paints from cache instead of
- *  a cold round-trip. Once per href per document; SSR no-op. */
-export function prefetchDocument(href: string) {
-	if (typeof document === 'undefined' || prefetched.has(href)) return;
-	prefetched.add(href);
-	const link = document.createElement('link');
-	link.rel = 'prefetch';
-	link.href = href;
-	document.head.append(link);
-}
-
-/** `{@attach}` factory: warm `href` (prefetchDocument) on pointerenter/focus. Native listeners on
- *  purpose — inside a `child({ props })` snippet the component's own spread props may carry their
- *  own pointer handlers (e.g. the sidebar MenuButton's tooltip trigger), and a plain
- *  `onpointerenter` attribute would be overwritten by (or overwrite) them. */
-export function prefetchOnIntent(href: string) {
-	return (el: HTMLElement) => {
-		const warm = () => prefetchDocument(href);
-		el.addEventListener('pointerenter', warm);
-		el.addEventListener('focus', warm);
-		return () => {
-			el.removeEventListener('pointerenter', warm);
-			el.removeEventListener('focus', warm);
-		};
-	};
-}
-
-/**
- * zone directory segment -> the label the NAVBAR uses for it.
- *
- * Derived from `topNav()` rather than written out, so it cannot drift from the bar: the bar is the
- * thing a person just read, and a breadcrumb that disagreed with it named the same zone twice on one
- * screen ("Annotate" above, "Annotator" below). `annotator` -> `Annotate` is the deliberate
- * label/directory split this exists for; every other zone happens to match, and would still be
- * correct if one stopped matching tomorrow.
- *
- * `estateAdmin` is irrelevant to labels — Settings is the only admin-gated entry and is not a zone —
- * so it is called with `false` and the result is stable.
- */
-export function zoneLabels(): Record<string, string> {
-	const out: Record<string, string> = {};
-	for (const entry of topNav(false)) {
-		const seg = entry.href.split('/').filter(Boolean)[0];
-		if (seg) out[seg] = entry.title;
-	}
-	return out;
-}

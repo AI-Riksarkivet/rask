@@ -195,8 +195,8 @@ or refuse an event and cannot forge one (`packages/lineage-kit/src/lineage_kit/s
 - **What lineage accepts, and from where.** With `signing.enforce` on (the default, rendered only where auth and the
   secret store are on) lineage records an event only when a listed signer's published key verifies it. All four doors
   that record a bus or staged event apply the rule: the `/lineage-events` subscription, the outbox drain, the operator's
-  DLQ replay and the parking route's re-ingest. The authenticated HTTP door (`POST /api/v1/lineage`: a user's pipeline, the web
-  zones, any OpenLineage client) takes no signature; it authenticates the caller's bearer token and strips any
+  DLQ replay and the parking route's re-ingest. The authenticated HTTP door (`POST /api/v1/lineage`: a user's pipeline, any
+  OpenLineage client) takes no signature; it authenticates the caller's bearer token and strips any
   `rask_signature` the body carries. With `signing.enforce` off lineage verifies nothing and ignores a present facet.
 - **What is refused.** An event with no facet (`unsigned`), a malformed facet or an unsupported `alg` or `canon`, an
   identity outside `LINEAGE_SIGNERS` (`signer`), a signer that is not the stamped author and declares no delegation

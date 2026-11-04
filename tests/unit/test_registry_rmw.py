@@ -33,7 +33,7 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
-import storage
+import lakehouse_kit.storage as storage
 from catalog.services import warehouses
 from lakehouse_kit import records
 from service_kit.storage_options import StorageOptions

@@ -1,13 +1,11 @@
-// @rask/api/me — the frozen `GET /management/v1/me` identity contract + the shared BFF-side fetch helper.
+// @rask/api/me — the frozen `GET /management/v1/me` identity contract + its fetch helper.
 //
 // The catalog serves `/management/v1/me` for any VERIFIED bearer: `{ sub, name, email, estate_admin, projects }`
 // (estate_admin = can_observe_events on the FGA root object; projects via the #51 list wrappers, each
 // relation degrading to [] on an FGA outage). Anon is a 401, and with FGA off the backend answers
 // `estate_admin: true, projects: []` (dev parity). Both sides code against THIS shape — no drift.
 //
-// Client-safe on purpose (valibot + fetch only, no node:crypto / $env), so the `Me` type and schema can
-// flow into universal load functions and components; the fetch itself belongs in a zone's server load,
-// where the sealed session's access token lives.
+// Framework-free (valibot + fetch only), so the `Me` type and schema flow into loads and components.
 import * as v from 'valibot';
 
 /** One project membership row from `/management/v1/me` — the tenant and the caller's role in it. */
@@ -34,10 +32,9 @@ const ME_TIMEOUT_MS = 5000;
 /**
  * Fetch the caller's identity from `GET <catalogUrl>/management/v1/me`, forwarding the session bearer.
  *
- * BFF-side (call it from a zone's `+layout.server.ts` with `locals.session?.accessToken`): resolves to
- * the parsed `Me`, or `null` on ANY failure — no token, a 401/403, a network error, a timeout
+ * Resolves to the parsed `Me`, or `null` on ANY failure — no token, a 401/403, a network error, a timeout
  * (`timeoutMs`, default 5s), or a response that drifts from the frozen schema. Never throws: the navbar
- * renders signed-out chrome on `null` rather than 500ing the zone (same degrade posture as the backend's
+ * renders signed-out chrome on `null` rather than 500ing the app (same degrade posture as the backend's
  * own per-relation FGA fallbacks).
  */
 export async function fetchMe(opts: {

@@ -1,0 +1,92 @@
+{{- $name := include "console.web" . -}}
+{{- $selector := include "console.webSelector" . | fromYaml -}}
+{{- $config := merge (dict "issuer" (required "auth.oidc.issuer is rask's issuer: the browser signs in there, and the catalog accepts a token only when its iss equals it" .Values.auth.oidc.issuer)) .Values.web.config -}}
+{{- if not $config.clientId }}{{ fail "web.config.clientId names the identity provider's public client the console signs in with (Dex's rask-web)" }}{{ end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.rask.release }}-sa-console
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-config
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+data:
+  config.json: {{ toJson $config | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.web.port }}
+      targetPort: http
+  selector:
+    {{- toYaml $selector | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- toYaml $selector | nindent 4 }}
+spec:
+  replicas: {{ .Values.web.replicas }}
+  selector:
+    matchLabels:
+      {{- toYaml $selector | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ toJson $config | sha256sum }}
+      labels:
+        {{- toYaml $selector | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.rask.release }}-sa-console
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.web.runAsUser }}
+        runAsGroup: {{ .Values.web.runAsUser }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: console
+          image: "{{ .Values.web.image.repository }}:{{ required "web.image.tag must be set" .Values.web.image.tag }}"
+          imagePullPolicy: {{ .Values.web.image.pullPolicy }}
+          {{- include "console.containerSecurity" . | nindent 10 }}
+          env:
+            - { name: CONSOLE_CONFIG_FILE, value: /etc/console/config.json }
+          ports:
+            - name: http
+              containerPort: {{ .Values.web.port }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: config, mountPath: /etc/console, readOnly: true }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.web.resources | nindent 12 }}
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+        - name: config
+          configMap:
+            name: {{ $name }}-config
+            items: [{ key: config.json, path: config.json }]

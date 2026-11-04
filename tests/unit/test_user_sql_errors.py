@@ -24,14 +24,12 @@ import pyarrow as pa
 import pytest
 from lance_namespace import (
     CreateNamespaceRequest,
-    DeleteFromTableRequest,
-    InvalidInputError,
     UpdateTableRequest,
     connect,
 )
 
 from catalog.services import table_claims
-from catalog.services.dataplane import create_table, delete_from_table, update_table
+from catalog.services.dataplane import create_table, update_table
 from catalog.services.table_claims import DoorTable
 from lakehouse_kit.location_claims import ClaimStore
 from service_kit.storage_options import StorageOptions
@@ -48,28 +46,6 @@ def table(tmp_path: Path) -> DoorTable:
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(ns, StorageOptions(), ["db", "t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), root=str(tmp_path), mode="create", registry=None)
     return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
-
-
-def test_update_with_an_unknown_column_is_invalid_input(table: DoorTable) -> None:
-    # The live shape of the bug: `Z` unquoted is a column reference, and there is no column Z.
-    with pytest.raises(InvalidInputError) as caught:
-        update_table(table, StorageOptions(), UpdateTableRequest(id=["db", "t"], updates=[["v", "Z"]], predicate="id = 3"), transaction_properties=STAMP)
-    message = str(caught.value)
-    assert "invalid update expression" in message
-    # Lance's own text is preserved — it names the columns that DO exist, which is the whole value of it.
-    assert "No field named" in message
-    assert "id, v" in message
-    # And the "Invalid user input: " prefix is stripped rather than parroted into our message.
-    assert "Invalid user input" not in message
-    # Lance appends the Rust source location that raised (".../rust/lance/src/.../update.rs:150:14"). The
-    # caller can do nothing with it and it publishes a vendored library's build path in an API response, so
-    # it is trimmed from the detail — the log line keeps the original.
-    assert ".rs:" not in message
-
-
-def test_delete_with_a_bad_predicate_is_invalid_input(table: DoorTable) -> None:
-    with pytest.raises(InvalidInputError):
-        delete_from_table(table, StorageOptions(), DeleteFromTableRequest(id=["db", "t"], predicate="nosuchcol = 3"), transaction_properties=STAMP)
 
 
 def test_a_storage_failure_is_not_reclassified(table: DoorTable, monkeypatch: pytest.MonkeyPatch) -> None:

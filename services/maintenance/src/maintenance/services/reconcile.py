@@ -1371,10 +1371,10 @@ async def reconcile(
     resolved_namespace_root = namespace_root or f"s3://{settings.s3_bucket}"
     storage_options = settings.storage_options()
     if bucket_client is None and resolved_namespace_root.startswith("s3://"):
-        # Via the canonical wrapper (packages/storage), never boto3 directly, and with the sweep's own
+        # Via the canonical wrapper (lakehouse_kit.storage), never boto3 directly, and with the sweep's own
         # credentials passed explicitly — the env chain is one global pair and this process may address
         # a different backend than the ambient one.
-        from storage import s3_client
+        from lakehouse_kit.storage import s3_client
 
         pair = settings.s3_key_pair()
         bucket_client = s3_client(settings.s3_endpoint, access_key=pair.access_key_id, secret_key=pair.secret_access_key.get_secret_value())

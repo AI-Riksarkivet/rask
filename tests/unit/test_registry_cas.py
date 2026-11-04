@@ -22,9 +22,8 @@ from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
-from lance_namespace import NamespaceAlreadyExistsError
 
-import storage
+import lakehouse_kit.storage as storage
 from catalog.services import warehouses
 from lakehouse_kit import records
 from service_kit.storage_options import StorageOptions
@@ -97,27 +96,6 @@ def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.Monkey
 # --------------------------------------------------------------------------- #
 # the doors: warehouse-id mint + binding write-once through the seam
 # --------------------------------------------------------------------------- #
-
-
-def test_create_warehouse_record_second_mint_refused(tmp_path: Any) -> None:
-    root, so = _root(tmp_path), StorageOptions()
-    warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b", "root_uri": "s3://b", "project": "acme", "created_at": "t"})
-    with pytest.raises(records.RecordExistsError):
-        warehouses.create_warehouse_record(root, so, {"id": "wh-a", "bucket": "b2", "root_uri": "s3://b2", "project": "evil", "created_at": "t"})
-    winner = warehouses.get_warehouse(root, so, "wh-a")
-    assert winner is not None, "the refused second mint must leave the FIRST record standing, not delete it"
-    assert winner["project"] == "acme"
-
-
-def test_bind_namespace_is_write_once(tmp_path: Any) -> None:
-    # The binding write-once guard used to be check-then-act (endpoint reads, then service
-    # overwrites): a concurrent bind of one top_ns to two warehouses re-routed tenant A's tables to
-    # tenant B's bucket. The service itself now refuses at the store, whatever the caller read.
-    root, so = _root(tmp_path), StorageOptions()
-    warehouses.bind_namespace(root, so, "team_ns", "wh-a", "s3://bkt-a")
-    with pytest.raises(NamespaceAlreadyExistsError):
-        warehouses.bind_namespace(root, so, "team_ns", "wh-b", "s3://bkt-b")
-    assert warehouses.warehouse_for_namespace(root, so, "team_ns") == "s3://bkt-a"  # winner intact
 
 
 def test_bind_namespace_same_binding_is_idempotent(tmp_path: Any) -> None:

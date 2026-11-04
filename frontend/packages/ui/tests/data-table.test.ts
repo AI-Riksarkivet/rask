@@ -10,7 +10,7 @@ import {
 import { selectionColumn } from '../src/lib/components/data-table/selection-column';
 
 // Pure helpers of the data-table stack (the reactive createSvelteTable itself needs a component
-// context and is exercised by the consuming zones' e2e).
+// context and is exercised by the consuming pages' e2e).
 describe('mergeObjects', () => {
 	it('later sources win and getter semantics are preserved (read on ACCESS, not merged eagerly)', () => {
 		let hits = 0;

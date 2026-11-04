@@ -2,7 +2,7 @@
  *
  * `@xyflow/svelte/dist/style.css` ships a light-mode default palette in raw hex (#fefefe controls,
  * #f7f9fb edge labels, #b1b1b7 edges). On rask's dark surfaces that renders the Controls widget and
- * every edge label as a white blob — visible today on FOUR surfaces in the lakehouse zone
+ * every edge label as a white blob — visible today on FOUR surfaces in the console
  * (governance/access, lineage/graph, lineage/columns, the table-detail access graph), because nothing
  * in the estate had ever mapped these.
  *
@@ -11,7 +11,7 @@
  * re-declared under `.dark`, so the light/dark flip needs NO JavaScript. `colorMode` on <SvelteFlow>
  * is therefore left alone — it is a second source of truth that can only go stale.
  *
- * Import ONCE per zone, after the vendor sheet, both under `layer(base)` so Tailwind utilities keep
+ * Import ONCE per page, after the vendor sheet, both under `layer(base)` so Tailwind utilities keep
  * winning over both (svelte-flow rule 3).
  */
 

@@ -96,8 +96,8 @@ catalog:
 
 # Per-workload resource tiers (P2): the shared 1-CPU/512Mi default sizes the stateful stores + the Arrow-
 # IPC-buffering catalog like stateless request pods. Give the memory-heavy workloads a real limit (the rest
-# keep resources.default). Requests reserve scheduler headroom. Stage runners/lineage stay on default until load
-# data says otherwise. (prod-readiness P2)
+# keep resources.default). Requests reserve scheduler headroom. Lineage stays on default until load data says
+# otherwise. (prod-readiness P2)
 resources:
   catalog:
     requests: { cpu: 200m, memory: 512Mi }

@@ -6,17 +6,17 @@
 	import { cn } from '../utils/cn.js';
 	import { inboxSeenOnClose, inboxUnreadCount, type InboxNotificationLike } from './inbox.js';
 
-	// The estate's notification surface, in @rask/ui so every zone gets the SAME one — the header was
+	// The estate's notification surface, in @rask/ui so every page gets the SAME one — the header was
 	// forked once already (the annotator hand-rolled its own) and drifted.
 	//
 	// It renders the subject's INBOX: rows addressed to this subject, durable per subject. It does NOT
-	// fetch — the zone owns the transport (that is what keeps @rask/ui free of any BFF coupling and keeps
+	// fetch — the console owns the transport (that is what keeps @rask/ui free of any catalog door coupling and keeps
 	// this testable), and hands the rows in as a prop.
 	//
 	// Read/dismiss state is bindable rather than owned: unbound it works standalone (per-tab memory),
-	// bound it is the zone's to persist per subject. Both sets are keyed by NOTIFICATION id.
+	// bound it is the console's to persist per subject. Both sets are keyed by NOTIFICATION id.
 	//
-	// `inbox === undefined` is the honest un-wired case — an auth-off dev stack or a zone whose
+	// `inbox === undefined` is the honest un-wired case — an auth-off dev stack or a page whose
 	// transport is absent — and there the bell has nothing to count and says so.
 	let {
 		inbox,
@@ -29,15 +29,15 @@
 		now = Date.now(),
 		class: className,
 	}: {
-		/** Inbox rows — targeted, durable. `undefined` = this zone has no inbox transport, which is a
+		/** Inbox rows — targeted, durable. `undefined` = the console has no inbox transport, which is a
 		 *  different statement from an EMPTY inbox and renders differently. */
 		inbox?: InboxNotificationLike[];
 		/** The server's unread count for the WHOLE inbox. Authoritative where present: the rows above
 		 *  are one page, so deriving the badge from them would shrink it as a reader pages. */
 		inboxUnread?: number;
-		/** Notification ids already read. Bindable so a zone can persist them. */
+		/** Notification ids already read. Bindable so a page can persist them. */
 		seen?: string[];
-		/** Notification ids dismissed. Bindable so a zone can persist them. */
+		/** Notification ids dismissed. Bindable so a page can persist them. */
 		dismissed?: string[];
 		/** Called with the FULL seen set after the panel closes — the persistence seam. */
 		onseen?: (seen: string[]) => void;
@@ -52,7 +52,7 @@
 
 	let open = $state(false);
 
-	/** Whether this zone has an inbox at all. */
+	/** Whether the console has an inbox at all. */
 	const hasInbox = $derived(inbox !== undefined);
 	const inboxRows = $derived(inbox ?? []);
 	// Server count wins; the local derivation is the fallback for a page-only caller. `seen` carries

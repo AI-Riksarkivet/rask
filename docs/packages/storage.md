@@ -1,11 +1,10 @@
-# packages/storage
+# lakehouse_kit.storage
 
-A small, **Ray-free** seam over S3-compatible stores: the boto3 S3 client factory, the STS client, key listing with
+The lakehouse kernel's seam over S3-compatible stores (`packages/lakehouse-kit/src/lakehouse_kit/storage`): the boto3 S3 client factory, the STS client, key listing with
 timestamped-prefix retention, S3 URI parsing, and the `StorageError` family every S3 call answers in.
 
 **Protocol-agnostic on purpose.** Nothing here knows one workload's source format or where a workload reads its bytes
-from: a workload's sources and sinks live in that workload (the HTR runner's filesystem, S3 and IIIF sources are in
-`runners/htr/src/htr`).
+from: a workload's sources and sinks live in that workload, outside the lakehouse.
 
 → Auto-generated symbol docs: **[API reference](../reference/storage.md)**.
 

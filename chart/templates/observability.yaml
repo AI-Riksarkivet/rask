@@ -11,6 +11,7 @@ spec:
 {{- $cfgRoot := . }}
 {{- range (splitList "," (include "lance.secretScopes" .) | uniq | compact | sortAlpha) }}
 {{- $app := . }}
+{{- if not (hasKey ($cfgRoot.Values.openbao.externalReaders | default dict) $app) }}
 ---
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
@@ -19,6 +20,7 @@ metadata:
   labels: {{- include "lance.labels" $cfgRoot | nindent 4 }}
 spec:
 {{- include "lance.daprAppSpec" (list $cfgRoot $app) }}
+{{- end }}
 {{- end }}
 {{- end }}
 ---

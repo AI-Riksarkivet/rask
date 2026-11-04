@@ -4,8 +4,8 @@
  *
  * This started as a copy in the lakehouse and a near-identical copy in media, which is exactly the
  * drift the shared data layer exists to prevent: two implementations of a contract whose whole point
- * is that getting it wrong destroys a user's saved work. There is one here now, and a zone supplies
- * only what is genuinely zone-shaped — the endpoint its own BFF serves.
+ * is that getting it wrong destroys a user's saved work. There is one here now, and a caller supplies
+ * only the endpoint of its user-state document.
  *
  * **Generic over the layout type on purpose.** `@rask/api` is the transport layer and must not depend
  * on a UI package, so it never names `SerializedDockview`; `@rask/dockview`'s `LayoutStore` is
@@ -50,19 +50,16 @@ const EnvelopeSchema = v.looseObject({
 });
 
 export interface DockLayoutStoreOptions {
-	/** Namespaces this workbench inside the ONE per-subject document, so zones cannot collide. */
+	/** Namespaces this workbench inside the ONE per-subject document, so workbenches cannot collide. */
 	workbenchId: string;
-	/**
-	 * The zone's own path to the catalog's user-state document — e.g.
-	 * `/lakehouse/capi/management/v1/user-state/dock-layout`. Zone-shaped by necessity: each zone reaches the
-	 * catalog through its own base path and its own BFF proxy.
-	 */
+	/** The path to the catalog's user-state document — e.g.
+	 *  `/api/catalog/management/v1/user-state/dock-layout`. */
 	endpoint: string;
-	/** Injected for tests and for server-side reads (`getRequestEvent().fetch`). */
+	/** Injected for tests and for the app's own adapter (`userStateFetcher`). */
 	fetcher?: typeof fetch;
-	/** Mirror key prefix, so one browser holding two zones cannot cross-write. Defaults per endpoint. */
+	/** Mirror key prefix, so two workbenches cannot cross-write. Defaults per endpoint. */
 	mirrorKey?: string;
-	/** Reports whether the stack has auth ON (wire to the zone layout's `authEnabled`). With auth on,
+	/** Reports whether the stack has auth ON (wire to the layout's `authEnabled`). With auth on,
 	 *  a 401 is an EXPIRED/REFUSED session — treating it as "auth-off dev, mirror is the store" was
 	 *  the review's silent-data-loss finding: saves claimed success while never reaching the
 	 *  per-subject document. Defaults to auth-off (the dev semantics). */
@@ -169,7 +166,7 @@ export function makeDockLayoutStore<T>(options: DockLayoutStoreOptions): StoredL
 
 		async save(layout: T): Promise<boolean> {
 			// Read-modify-write, not a blind PUT: ONE document holds every workbench this user has
-			// arranged, so replacing it wholesale would delete the other zones' layouts. Autosave is
+			// arranged, so replacing it wholesale would delete the other workbenches' layouts. Autosave is
 			// already debounced, which is what bounds the extra round trip.
 			const doc = await readDocument();
 			// Refuse rather than clobber — the second lock behind the caller's own refusal, catching a

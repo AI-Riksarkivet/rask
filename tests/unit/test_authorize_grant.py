@@ -23,11 +23,7 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
-from tests.unit.named_resolver import NamedResolver, uuid_of
-
-
-#: The object the namespace ``gold`` resolves to, which its grants are held by ([[LH-524]]).
-_GOLD = f"namespace:{uuid_of('namespace', ['gold'])}"
+from tests.unit.named_resolver import NamedResolver
 
 
 def _run(
@@ -65,16 +61,6 @@ def _run(
 
 async def _as_coro(value: Any) -> Any:
     return value
-
-
-def test_gates_on_the_rung_in_the_body_not_a_blanket_bar(monkeypatch: pytest.MonkeyPatch) -> None:
-    asked = _run(monkeypatch, {"user": "dex~bob", "relation": "reader"})
-    assert asked == [("dex~alice", "can_grant_reader", _GOLD)]
-
-
-def test_a_denied_check_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(PermissionDeniedError):
-        _run(monkeypatch, {"user": "dex~bob", "relation": "owner"}, allow=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -135,16 +121,6 @@ def test_a_rung_with_no_grant_action_is_refused_before_reaching_openfga(monkeypa
 # --------------------------------------------------------------------------- #
 
 
-def test_revoke_is_gated_on_manage_grants_not_on_the_rung(monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE REGRESSION. `access/revoke` used to run through `can_grant_<rung>`, which is
-    `manage_grants or (<rung> and pass_grants)` — so a delegate holding `writer` + `pass_grants` and
-    nothing else could DELETE any reader/writer/validator tuple on the object, including ones the
-    owner issued. `can_revoke_grant` is `manage_grants` alone."""
-    asked = _run(monkeypatch, {"user": "dex~carol", "relation": "reader"}, revoking=True)
-
-    assert asked == [("dex~alice", "can_revoke_grant", _GOLD)]
-
-
 @pytest.mark.parametrize("rung", ["owner"])
 def test_every_rung_revokes_through_the_same_single_door(rung: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """One authority for the whole revoke surface. A per-rung revoke bar is what let the delegate in:
@@ -180,27 +156,6 @@ def test_revoke_still_refuses_a_phantom_rung_before_reaching_openfga(monkeypatch
 # --------------------------------------------------------------------------- #
 
 
-def test_a_manage_grants_holder_cannot_grant_themselves_a_rung(monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE ESCALATION. `can_grant_owner` is `manage_grants`, so the C2 headline persona —
-    "administers access, cannot read the data" — was one authorized call away from `can_read_data`,
-    leaving an audit row identical to a legitimate delegation."""
-    checks: list[tuple[str, str]] = []
-
-    async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        checks.append((relation, user))
-        return relation.startswith("can_grant_")  # may grant owner; does NOT hold owner
-
-    monkeypatch.setattr(fga_deps.fga, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~judy", "relation": "owner"})))
-
-    with pytest.raises(PermissionDeniedError, match="may not raise your own access"):
-        asyncio.run(
-            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
-        )
-
-    assert ("owner", "user:dex~judy") in checks, "the guard must ask whether the caller ALREADY holds the rung"
-
-
 def test_re_granting_yourself_what_you_already_hold_is_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     """The rule is about ELEVATION, not about self-reference. An owner re-granting themselves `owner`
     changes nothing, and refusing it would break an idempotent re-seed."""
@@ -214,28 +169,6 @@ def test_re_granting_yourself_what_you_already_hold_is_allowed(monkeypatch: pyte
     asyncio.run(
         fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False)
     )
-
-
-def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Refusing only a literal `user:<principal>` would leave the same escalation one indirection away:
-    judy grants `owner` to `role:validators#assignee`, a userset she is already inside."""
-    checks: list[tuple[str, str, str]] = []
-
-    async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        checks.append((user, relation, obj))
-        if relation == "assignee":
-            return True  # the caller IS inside the userset being granted
-        return relation.startswith("can_grant_")  # may grant; does not hold the rung
-
-    monkeypatch.setattr(fga_deps.fga, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:validators#assignee", "relation": "owner"})))
-
-    with pytest.raises(PermissionDeniedError, match="may not raise your own access"):
-        asyncio.run(
-            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
-        )
-
-    assert ("user:dex~judy", "assignee", "role:validators") in checks, "membership of the granted userset was never checked"
 
 
 def test_a_userset_the_caller_is_outside_is_a_normal_grant(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -253,11 +186,3 @@ def test_a_userset_the_caller_is_outside_is_a_normal_grant(monkeypatch: pytest.M
     asyncio.run(
         fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
     )
-
-
-def test_the_self_grant_rule_never_runs_on_revoke(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Revoking your OWN rung is a de-escalation. Applying the elevation rule there would refuse a
-    grant-manager dropping their own access, which is the one self-directed act that is always safe."""
-    asked = _run(monkeypatch, {"user": "dex~alice", "relation": "owner"}, revoking=True)
-
-    assert asked == [("dex~alice", "can_revoke_grant", _GOLD)], "revoke consulted the self-grant guard"

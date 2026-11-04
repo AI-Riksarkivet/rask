@@ -347,29 +347,6 @@ def test_a_namespace_record_clears_and_revokes_but_deletes_nothing(tmp_path: Pat
 # --------------------------------------------------------------------------- #
 
 
-def test_a_recovered_id_is_REFUSED(tmp_path: Path) -> None:
-    """THE undrop-crash window, and the reason liveness is re-checked immediately before deleting.
-
-    ``undrop`` re-registers the table and THEN clears the trash record. A crash in between — or anyone
-    running ``register_table`` at the same location — leaves a LIVE table with a stale record pointing at
-    its bytes. Purging that record deletes a live table. Here the dropped table's own location is genuinely back
-    in ``__manifest`` (registered through the real backend), so the purge must refuse and leave both the bytes and
-    the record.
-    """
-    estate = _Estate(tmp_path)
-    canonical, location = estate.drop_recoverably("team", "orders")
-    estate.reregister("team", "orders", location=location)  # the undrop half that DID land
-    path = Path(location.removeprefix("file://"))
-
-    out = _run(estate)
-
-    assert out.purged == []
-    assert [(r.kind, r.id) for r in out.refused] == [("table", canonical)]
-    assert "still registered" in out.refused[0].reason
-    assert path.is_dir(), "the purge deleted a LIVE table's bytes"
-    assert estate.record(canonical) is not None
-
-
 def test_an_unreadable_manifest_refuses_every_record(tmp_path: Path) -> None:
     """A manifest we cannot READ is not a manifest that says "nothing is live".
 

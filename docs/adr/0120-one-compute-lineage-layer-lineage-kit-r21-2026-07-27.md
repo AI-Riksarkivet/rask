@@ -25,5 +25,5 @@ subprocess via env and via constructor argument.
   [0111](0111-gold-carries-its-lineage-as-a-jsonb-column-r26-2026-07-28.md), and `signing.py`, the Ed25519
   seam for lineage events.
 - Per-stage and per-actor child runs inside the Ray jobs were not yet emitted at the R27 audit
-  ([0122](0122-the-ray-plane-gets-a-standing-audit-r27-2026-07-28.md), item 6); no caller of
+  (0122, item 6; removed with the Ray plane, in git history at `64ef118a9`); no caller of
   `LineageActorMixin` outside `lineage-kit` was found in `runners/`, `scripts/` or `services/`.

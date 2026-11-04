@@ -33,8 +33,8 @@ import pyarrow.fs as pafs
 
 from lakehouse_kit import outbox_metrics
 from lakehouse_kit.objectfs import fs_and_base
+from lakehouse_kit.storage import S3Client, s3_client, split_s3_uri
 from service_kit.storage_options import StorageOptions
-from storage import S3Client, s3_client, split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -101,7 +101,7 @@ def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, e
     need for, to keep a mechanism whose only product is a marker object nobody reads. The exact twin of
     :func:`drop_event`, whose delete re-created that same marker.
 
-    S3 goes through the estate's CLIENT seam (``packages/storage``), a plain PutObject. Everything else
+    S3 goes through the estate's CLIENT seam (``lakehouse_kit.storage``), a plain PutObject. Everything else
     keeps the filesystem path: a local outbox is a real directory and genuinely needs its parent made.
     """
     if storage_options.reaches_by_endpoint(outbox_uri):
@@ -138,7 +138,7 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     for the lifetime of the estate. The drop
     is the only thing that ends that loop.
 
-    S3 goes through the estate's CLIENT seam (`packages/storage`), which issues a plain DeleteObject
+    S3 goes through the estate's CLIENT seam (`lakehouse_kit.storage`), which issues a plain DeleteObject
     and writes nothing. Everything else keeps the filesystem path: a local outbox is a real directory,
     and `delete_file` there needs no object-store permissions at all.
     """

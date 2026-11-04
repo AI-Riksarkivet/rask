@@ -1,0 +1,174 @@
+{{- $appId := .Values.dapr.appId -}}
+{{- $selector := include "console.inboxSelector" . -}}
+apiVersion: dapr.io/v1alpha1
+kind: Configuration
+metadata:
+  name: {{ include "console.daprConfigName" . }}
+  labels:
+    {{- $selector | nindent 4 }}
+spec:
+  {{- include "console.daprSpec" . | nindent 2 }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "console.kubeSecretStore" . }}
+  labels:
+    {{- $selector | nindent 4 }}
+spec:
+  type: secretstores.kubernetes
+  version: v1
+  metadata: []
+scopes:
+  - {{ $appId }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "console.stateStore" . }}
+  labels:
+    {{- $selector | nindent 4 }}
+spec:
+  type: state.postgresql
+  version: v1
+  metadata:
+    - name: connectionString
+      secretKeyRef:
+        name: {{ include "console.stateCluster" . }}-app
+        key: uri
+    - { name: actorStateStore, value: "true" }
+    - { name: tableName, value: state }
+    - { name: metadataTableName, value: dapr_metadata }
+auth:
+  secretStore: {{ include "console.kubeSecretStore" . }}
+scopes:
+  - {{ $appId }}
+---
+# The lineage lane: rask's LINEAGE stream from the moment the durable is made, as a queue group so replicas compete. With
+# `bus.resiliency` the same component reads back the inbox's own dead letters (`dlq.<appId>` on rask's DLQ stream). Each
+# component publishes only the bus watchdog's `probe.<appId>` (service_kit.bus_watchdog), which no stream captures, and
+# the lineage one its dead letters.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "console.lineagePubsub" . }}
+  labels:
+    {{- $selector | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: {{ include "console.natsUrl" . | quote }} }
+    - { name: name, value: {{ printf "rask-%s" $appId | quote }} }
+    - { name: queueGroupName, value: {{ $appId | quote }} }
+    - { name: deliverPolicy, value: "new" }
+    - { name: durableName, value: {{ .Values.bus.durables.lineage | quote }} }
+    - { name: protectedTopics, value: {{ .Values.bus.lineageTopic | quote }} }
+    {{- if .Values.bus.resiliency }}
+    - { name: publishingScopes, value: {{ printf "%s=dlq.%s,probe.%s" $appId $appId $appId | quote }} }
+    - { name: subscriptionScopes, value: {{ printf "%s=dlq.%s,%s" $appId $appId .Values.bus.lineageTopic | quote }} }
+    {{- else }}
+    - { name: publishingScopes, value: {{ printf "%s=probe.%s" $appId $appId | quote }} }
+    - { name: subscriptionScopes, value: {{ printf "%s=%s" $appId .Values.bus.lineageTopic | quote }} }
+    {{- end }}
+    {{- include "console.brokerWindows" . | nindent 4 }}
+    {{- include "console.natsCreds" . | nindent 4 }}
+auth:
+  secretStore: {{ .Values.secretStore.name }}
+scopes:
+  - {{ $appId }}
+---
+# The control lane: rask's CATALOG_CONTROL stream, every grant, revoke and erasure that names a person.
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "console.controlPubsub" . }}
+  labels:
+    {{- $selector | nindent 4 }}
+spec:
+  type: pubsub.jetstream
+  version: v1
+  metadata:
+    - { name: natsURL, value: {{ include "console.natsUrl" . | quote }} }
+    - { name: name, value: {{ printf "rask-%s-control" $appId | quote }} }
+    - { name: queueGroupName, value: {{ $appId | quote }} }
+    - { name: deliverPolicy, value: "new" }
+    - { name: durableName, value: {{ .Values.bus.durables.control | quote }} }
+    - { name: publishingScopes, value: {{ printf "%s=probe.%s" $appId $appId | quote }} }
+    - { name: subscriptionScopes, value: {{ printf "%s=%s" $appId .Values.bus.controlTopic | quote }} }
+    {{- include "console.brokerWindows" . | nindent 4 }}
+    {{- include "console.natsCreds" . | nindent 4 }}
+auth:
+  secretStore: {{ .Values.secretStore.name }}
+scopes:
+  - {{ $appId }}
+---
+# The reconcile tick over lineage's feed. Dapr delivers an input binding to the route named after the Component, so the
+# app is told this name (RASK_NOTIFICATIONS_BINDING_NAME).
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "console.cron" . }}
+  labels:
+    {{- $selector | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.inbox.reconcileSchedule | quote }} }
+scopes:
+  - {{ $appId }}
+{{- with .Values.inbox.email }}
+{{- if .enabled }}
+{{- if or (not .host) (not .from) }}{{ fail "inbox.email.enabled needs inbox.email.host and inbox.email.from" }}{{ end }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ include "console.email" $ }}
+  labels:
+    {{- $selector | nindent 4 }}
+spec:
+  type: bindings.smtp
+  version: v1
+  metadata:
+    - { name: host, value: {{ .host | quote }} }
+    - { name: port, value: {{ .port | quote }} }
+    - { name: emailFrom, value: {{ .from | quote }} }
+    - name: user
+      secretKeyRef: { name: {{ .secretName | quote }}, key: user }
+    - name: password
+      secretKeyRef: { name: {{ .secretName | quote }}, key: password }
+auth:
+  secretStore: {{ $.Values.secretStore.name }}
+scopes:
+  - {{ $appId }}
+{{- end }}
+{{- end }}
+{{- if .Values.bus.resiliency }}
+---
+# A delivery the inbox refuses is retried by the sidecar before the broker's own backOff parks it on `dlq.<appId>`.
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: {{ include "console.inbox" . }}-resiliency
+  labels:
+    {{- $selector | nindent 4 }}
+spec:
+  policies:
+    retries:
+      pubsubDeliveryRetry:
+        policy: constant
+        duration: 120s
+        maxRetries: 4
+  targets:
+    components:
+      {{ include "console.lineagePubsub" . }}:
+        inbound:
+          retry: pubsubDeliveryRetry
+      {{ include "console.controlPubsub" . }}:
+        inbound:
+          retry: pubsubDeliveryRetry
+scopes:
+  - {{ $appId }}
+{{- end }}

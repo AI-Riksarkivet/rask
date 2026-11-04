@@ -50,9 +50,8 @@ rule order.
 | `/api/catalog` | `<fullname>-catalog` | `/…` |
 | `/api/lineage` | `<fullname>-lineage` | `/…` |
 
-Notifications, flows, viewer and search are clients with no row here. Compute's `/api/ray` and
-`/api/serve` are not here either: the compute fixture chart renders its own HTTPRoute
-(`deploy/fixtures/compute/chart/templates/route.yaml`).
+A client has no row here: the console and the notifications inbox are published by the console's own release, which
+renders its own HTTPRoute on the same Gateway (`deploy/fixtures/console`).
 
 An unmatched `/api/*` path is the Gateway's own 404: no rule, no backend. A 401 or 403 always comes from
 the service the prefix names.

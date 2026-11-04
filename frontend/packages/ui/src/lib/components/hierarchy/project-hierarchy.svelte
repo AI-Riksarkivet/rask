@@ -1,14 +1,14 @@
 <script lang="ts" module>
 	import type { HierarchyTier } from './hierarchy-node.svelte';
 
-	/** Mirrors the zones' status-aware `ApiResult` (`@rask/api`'s client.ts): 0 = fetch-level
+	/** Mirrors the pages' status-aware `ApiResult` (`@rask/api`'s client.ts): 0 = fetch-level
 	 *  failure/offline. Declared STRUCTURALLY rather than imported, so the library owns no API
-	 *  client (the GrantsPanel precedent) and a zone can hand its catalog remotes straight in. */
+	 *  client (the GrantsPanel precedent) and a page can hand its catalog remotes straight in. */
 	export type HierarchyResult<T> =
 		| { ok: true; data: T }
 		| { ok: false; status: number; detail: string };
 
-	/** The project→warehouse rung, as both zones' catalog reads already spell it. Structural: a
+	/** The project→warehouse rung, as both pages' catalog reads already spell it. Structural: a
 	 *  richer record (with `status`, `serving`, …) passes without an adapter. */
 	export type HierarchyWarehouse = { id: string; bucket: string };
 
@@ -31,8 +31,8 @@
 	 *
 	 *  The CALLER builds the URL, on the same reasoning that keeps the two rung reads as props: this
 	 *  component is mounted by home's `/projects/<id>` and the lakehouse's Overview, whose route
-	 *  namespaces differ, and zones may not import each other. A library that hardcoded
-	 *  `/lakehouse/catalog/...` would be asserting one zone's routing from inside a shared package. */
+	 *  namespaces differ, and pages may not import each other. A library that hardcoded
+	 *  `/lakehouse/catalog/...` would be asserting one page's routing from inside a shared package. */
 	export type HierarchyHref = (rung: HierarchyRung) => string | null;
 
 	export type ProjectHierarchyProps = {
@@ -58,13 +58,13 @@
 	// on — project › warehouse › namespace › table — drawn as a graph, immediately, not behind a tab.
 	// Mechanism from @rask/flow (StaticFlow: a non-interactive viewer).
 	//
-	// It lives in @rask/ui because TWO zones render it — the home zone's `/projects/<id>` and the
-	// lakehouse's Overview (#109) — and zones may not import each other. TRANSPORT-AGNOSTIC on the
+	// It lives in @rask/ui because TWO pages render it — the console's `/projects/<id>` and the
+	// lakehouse's Overview (#109) — and pages may not import each other. TRANSPORT-AGNOSTIC on the
 	// GrantsPanel precedent (rask-styling rule 6): the library never owns an API client, so the two
-	// rung reads arrive as async props and each zone supplies its OWN remote functions.
+	// rung reads arrive as async props and each page supplies its OWN data functions.
 	//
 	// The one thing a consumer must know: this is the design system's single @rask/flow-backed
-	// component, so a zone mounting it needs `@rask/flow` + `@xyflow/svelte` declared AND their two
+	// component, so a page mounting it needs `@rask/flow` + `@xyflow/svelte` declared AND their two
 	// stylesheets imported `layer(base)` in its app.css (vendor sheet first, then @rask/flow's token
 	// mapping) — otherwise the canvas paints in the vendor's light-mode hex.
 	//

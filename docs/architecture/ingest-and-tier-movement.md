@@ -14,9 +14,9 @@ moves no data between tiers ([ADR 0155](../adr/0155-the-medallion-is-tier-govern
   every committed write on lineage, and the pipeline reads those announcements from lineage's durable `GET /events`
   with its own token, then decides what to run ([LINEAGE.md](../LINEAGE.md); the forward cursor is LH-472, #598).
   What the catalog enforces on those writes is [Tier Governance](../TIER-GOVERNANCE.md).
-- **Annotator output and readiness**:
-  [ADR 0131](../adr/0131-annotations-are-derived-and-readiness-is-the-published-tag.md). The annotator derives its
-  publish target from the tenant rather than a bare tier name.
+- **Annotation output and readiness**:
+  [ADR 0131](../adr/0131-annotations-are-derived-and-readiness-is-the-published-tag.md): a label is derived data, so
+  its tier is silver, and readiness is the `published` tag.
 
 ADRs 0127, 0128, 0129 and 0130 describe the mechanics of an in-lakehouse ingest service; they hold for the ingest runner
 only where CP-061 re-adopts them.

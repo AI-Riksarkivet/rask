@@ -1,10 +1,10 @@
 /**
  * The catalog's identifier grammar.
  *
- * These live in the shared package rather than in a zone because the bug they pin was a CROSS-ZONE
- * one: the lakehouse fixed `parentNamespace` in its own `$lib`, and the `home` zone — which cannot
- * import another zone's `$lib` — kept a copy that split on the first delimiter. A test parked in the
- * lakehouse would have gone on passing while the home zone stayed wrong, which is exactly what
+ * These live in the shared package rather than in a page because the bug they pin was a CROSS-ZONE
+ * one: the lakehouse fixed `parentNamespace` in its own `$lib`, and the `home` page — which cannot
+ * import another page's `$lib` — kept a copy that split on the first delimiter. A test parked in the
+ * lakehouse would have gone on passing while the console stayed wrong, which is exactly what
  * happened.
  */
 
@@ -34,7 +34,7 @@ describe('parentNamespace', () => {
 
 	it('keeps the WHOLE nested namespace, not just its first segment', () => {
 		// THE regression, and the reason this module exists. `indexOf` answers 'acme' here — a different
-		// FGA object from 'acme$bronze', with different grants and its own detail page. The home zone's
+		// FGA object from 'acme$bronze', with different grants and its own detail page. The console's
 		// access explorer built its namespace picker this way, so for any nested table it offered an
 		// object that was not the parent and omitted the one that was.
 		expect(parentNamespace('acme$bronze$pages')).toBe('acme$bronze');

@@ -73,7 +73,7 @@ export function toDate(value: TimestampInput): Date | null {
 
 const pad = (n: number, width = 2) => String(n).padStart(width, '0');
 
-/** `YYYY-MM-DD HH:mm:ss` in the viewer's LOCAL zone (so it reads as the operator's wall clock), or
+/** `YYYY-MM-DD HH:mm:ss` in the viewer's LOCAL page (so it reads as the operator's wall clock), or
  *  `—` when there is nothing to format. Local time means SSR and the browser can disagree: format
  *  where the value is rendered, not where it is fetched. */
 export function formatAbsolute(value: TimestampInput): string {

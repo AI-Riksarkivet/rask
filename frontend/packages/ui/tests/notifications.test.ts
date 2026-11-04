@@ -7,7 +7,7 @@ import type { InboxNotificationLike } from '../src/lib/shell/inbox.js';
 // What a user SEES, asserted on rendered markup rather than on props — a prop assertion passes on a
 // component that renders nothing at all.
 //
-// These render on the SERVER (`svelte/server`), which is exactly how a zone first paints them. That
+// These render on the SERVER (`svelte/server`), which is exactly how a page first paints them. That
 // puts one boundary on this file: the bell's panel is portalled, and a portal emits nothing during
 // SSR, so only the BELL — count, label — is asserted here, by rendering `NotificationCenter`.
 
@@ -69,11 +69,11 @@ describe('the bell', () => {
 		expect(centre({ inboxUnread: 150 })).toContain('aria-label="Notifications, 150 unread"');
 	});
 
-	it('counts nothing when the zone has no inbox transport', () => {
+	it('counts nothing when the app has no inbox transport', () => {
 		expect(centre({ inbox: undefined })).not.toContain('data-slot="notification-count"');
 	});
 
-	it('is absent from the navbar until a zone hands the shell a feed', () => {
+	it('is absent from the navbar until a page hands the shell a feed', () => {
 		// The opt-in half of the contract: no feed, no bell, and the account cluster keeps its position.
 		const bare = render(TopNavbar, { props: { pathname: '/lakehouse' } }).body;
 		expect(bare).not.toContain('Notifications');

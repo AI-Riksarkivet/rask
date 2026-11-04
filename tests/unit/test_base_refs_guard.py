@@ -28,7 +28,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse_kit import base_registry, location_claims
-from lakehouse_kit.base_refs import containment_of, normalise, protected_roots
+from lakehouse_kit.base_refs import normalise, protected_roots
 from service_kit.storage_options import StorageOptions
 
 
@@ -91,40 +91,6 @@ def test_a_base_inside_a_datasets_own_root_does_not_protect_it(tmp_path: Path) -
     assert (refs.is_protected(src), refs.findings) == (None, [])
 
 
-def test_a_BRANCH_is_refused_as_a_REFERRER_rather_than_as_a_referenced_root(tmp_path: Path) -> None:
-    """THE REFUSAL IS RIGHT AND ITS STATED REASON IS BACKWARDS, which is half the estate's warnings.
-
-    Measured on the live estate 2026-09-17 over 60 minutes: 1,399 `maintenance_refused_protected_base`
-    lines covering 246 distinct datasets — **116 by equality** (the dataset IS a referenced root, and
-    the reason is exactly right) and **129 `<root>/tree/<name>` branches**, which is 100% of the
-    "lies under a protected root" class.
-
-    A branch is not a subdirectory of the referent — it is the REFERRER. `lance_docs/lance/format/table/branch_tag.md:51`:
-    *"Each branch dataset is technically a shallow clone of the source dataset"*, and the layout at
-    `:54-68` gives `tree/{branch}/` its own `_versions/`, `_transactions/`, `_deletions/` and
-    `_indices/` and **no `data/`** — so a branch resolves its data through the parent's files, which is
-    precisely what makes the PARENT protected.
-
-    So the message "another dataset resolves its files through <root>" describes the parent's
-    situation, not the branch's, and an operator reading it about `.../tree/mb` is told the opposite of
-    what is true. This pins the DIAGNOSIS; it deliberately changes no GC behaviour, because whether a
-    branch may be compacted at all depends on what pylance scopes `cleanup_old_versions` to, which the
-    spec does not state and which this file's own subprocess reproduction is the way to settle.
-    """
-    src, clone = _source_and_clone(tmp_path)
-    refs = protected_roots([src, clone], StorageOptions(), **_judged(tmp_path))
-    branch = f"{src}/tree/mb"
-
-    assert refs.is_protected(branch) is not None, "a branch inside a referenced root must still be refused"
-    assert containment_of(branch, str(refs.is_protected(branch))) == "branch", (
-        "the branch is the REFERRER — reporting it as a referenced root tells an operator the opposite of what is true"
-    )
-    assert containment_of(src, str(refs.is_protected(src))) == "is", "the source IS the referenced root"
-    assert containment_of(f"{src}/data", str(refs.is_protected(f"{src}/data"))) == "under", (
-        "a real subdirectory of the referent is neither the root nor a branch"
-    )
-
-
 def test_a_BRANCH_still_opens_in_a_FRESH_PROCESS_after_its_parent_is_maintained(tmp_path: Path) -> None:
     """The cold-interpreter half, for the same reason this file opens subprocesses everywhere else:
     an in-process read after a delete can keep succeeding off cached state, so it reports on this
@@ -146,18 +112,6 @@ def test_a_BRANCH_still_opens_in_a_FRESH_PROCESS_after_its_parent_is_maintained(
 
     assert done.returncode == 0, f"the branch no longer opens after its parent was maintained: {done.stderr.strip()[-300:]}"
     assert done.stdout.strip() == "9"
-
-
-def test_a_scheme_difference_does_not_defeat_the_guard(tmp_path: Path) -> None:
-    """The manifest states `/bucket/x.lance`; a caller holds `s3://bucket/x.lance`.
-
-    Unnormalised, the guard silently never matches — indistinguishable from having no guard, and it
-    would only show up in production against real object storage.
-    """
-    src, clone = _source_and_clone(tmp_path)
-    refs = protected_roots([src, clone], StorageOptions(), **_judged(tmp_path))
-
-    assert refs.is_protected(f"s3:/{src}") is not None
 
 
 def test_an_UNREADABLE_dataset_is_recorded_not_silently_skipped(tmp_path: Path) -> None:

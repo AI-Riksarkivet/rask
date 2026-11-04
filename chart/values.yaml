@@ -505,7 +505,7 @@ auth:
   # TWO tuples by the bootstrap-admin post-install/upgrade hook Job, because they are two authorities —
   # `owner` on the default warehouse (warehouse:lance_catalog), which cascades into every namespace and
   # table it parents, and `admin` on the estate root (estate:rask), which every estate-wide surface
-  # (GET /management/v1/events, the object browser, the admin console) gates on. Empty (default) = the human grants
+  # (GET /management/v1/events, the admin console) gates on. Empty (default) = the human grants
   # stay out-of-band (seed scripts / the UI) while the SERVICE grants below still render.
   # Requires auth.enabled.
   # -- The person's principal (`<idp-id>~<user id>`, e.g. `dex~<userID>`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask; a bare name fails the render. Empty = human grants are made out of band.
@@ -1794,6 +1794,8 @@ openbao:
   enabled: true
   # -- Port of the development store's Service.
   port: 8200
+  # -- A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read; supplied from the client's own values, so the lakehouse names none.
+  externalReaders: {}
   # EACH APP'S SIDECAR LOGS IN AS ITSELF ([[XC-165]]). The one `lance-secrets` component logs every sidecar in with the
   # store's Kubernetes auth method (`externalSecrets.kubernetesAuthPath`), as the role `<release>-<app id>` (Dapr fills
   # `{appID}` into a component's metadata), presenting a ServiceAccount token the kubelet projects for `audience` into

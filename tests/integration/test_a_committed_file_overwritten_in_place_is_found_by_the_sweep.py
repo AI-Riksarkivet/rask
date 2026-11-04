@@ -39,6 +39,7 @@ from lakehouse_kit import file_identities
 from lakehouse_kit.base_refs import normalise
 from lakehouse_kit.maintenance_due import CloneList
 from lakehouse_kit.objectfs import lance_storage_options
+from lakehouse_kit.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.due import TableIds
@@ -46,7 +47,6 @@ from maintenance.services.plan import PlanContext
 from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.naming import UUID_PROPERTY
-from storage import S3Client
 
 
 _TABLE_ID: list[str] = ["db", "t"]

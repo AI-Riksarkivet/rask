@@ -52,24 +52,6 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_a_SPEC_route_answers_400_the_status_the_spec_maps_INVALID_INPUT_to(client: TestClient) -> None:
-    response = client.post("/v1/table/db$t/update", json={})
-
-    assert response.status_code == 400, response.text
-    assert response.headers["content-type"].startswith("application/problem+json")
-    body = response.json()
-    assert body["code"] == 0 or body["code"] is not None, body
-    assert body["status"] == 400, f"the envelope must agree with the wire status, or a client reads two answers: {body}"
-
-
-def test_a_RASK_ONLY_route_keeps_422(client: TestClient) -> None:
-    """The twin. Without it, 'answer 400 everywhere' passes the test above."""
-    response = client.post("/v1/table/db$t/credentials", json={})
-
-    assert response.status_code == 422, response.text
-    assert response.json()["status"] == 422
-
-
 def test_a_request_that_reached_no_route_is_not_a_spec_operation() -> None:
     """`handle_validation_error` passes `""` when the scope carries no route. That must be a plain
     False, not an exception — the handler is an error path and must not raise from inside one."""

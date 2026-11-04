@@ -6,7 +6,7 @@ pin authorization and state cohesion as per-domain. The badge it feeds counts YO
 `InboxActor` per subject holding claim-check pointers with durable read state — rather than the
 estate-wide activity projection the bell renders today.
 
-Fleet layout (`make_service_app` + flat modules + an injectable lifespan), like `compute` and `flows`.
+Fleet layout (`make_service_app` + flat modules + an injectable lifespan).
 The public namespace is `/api/notifications`; the cluster route forwards that rule unrewritten because this
 app mounts its routers under `RASK_API_PREFIX` itself.
 """

@@ -5,11 +5,11 @@
 	import ZoneNav from './zone-nav.svelte';
 	import type { MeProject, Project, ZoneNav as ZoneNavConfig } from './nav-config.js';
 
-	// The zone-scoped sidebar: collapsible-to-icon, carrying ONLY the CURRENT zone's own routes
-	// (from the `zoneNav` prop each zone passes). Everything estate-wide moved up into the shell
-	// header — the cross-zone list and identity/theme to the navbar row, the project switcher to
-	// the head of that same row — so the sidebar is in-zone navigation only, plus an OPTIONAL
-	// zone-owned `footer` snippet (e.g. media's live service-status popover).
+	// The app-scoped sidebar: collapsible-to-icon, carrying ONLY the CURRENT page's own routes
+	// (from the `zoneNav` prop each page passes). Everything estate-wide moved up into the shell
+	// header — the full-page list and identity/theme to the navbar row, the project switcher to
+	// the head of that same row — so the sidebar is in-app navigation only, plus an OPTIONAL
+	// app-owned `footer` snippet (e.g. media's live service-status popover).
 	let {
 		pathname = '',
 		zoneNav = null,
@@ -24,7 +24,7 @@
 		/** The caller's project memberships (/management/v1/me) — the switcher's dropdown list. */
 		projects?: MeProject[];
 		footer?: Snippet;
-		/** Zone-owned rail content rendered UNDER the zone nav — e.g. the workbench's saved-views
+		/** Zone-owned rail content rendered UNDER the app nav — e.g. the workbench's saved-views
 		 *  list. A snippet rather than a nav shape because such content is page chrome (it changes
 		 *  as the user works), which `ZoneNav`'s static route table cannot express. */
 		content?: Snippet;

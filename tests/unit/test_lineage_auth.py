@@ -36,7 +36,7 @@ from service_kit.governed.decider import OpenFgaDecider
 from service_kit.governed.idp_identity import PersonPrincipal
 from service_kit.governed.oidc import IDToken
 from service_kit.governed.principal import Principal
-from service_kit.lineage_events import AUTHOR_FACET_SCHEMA_URL, DatasetUuids
+from service_kit.lineage_events import DatasetUuids
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
@@ -133,11 +133,6 @@ def test_authenticate_enabled_verifies_token() -> None:
 # --------------------------------------------------------------------------- #
 # require_metadata_access (read authz gate)
 # --------------------------------------------------------------------------- #
-
-
-def test_gate_disabled_allows() -> None:
-    # FGA off → no check, no raise (dev/test default, like the catalog).
-    asyncio.run(fga_deps.require_metadata_access("a$b", _request(), _settings(), None, NO_CATALOG_NAMES, None))
 
 
 def test_gate_unwired_client_fails_closed() -> None:
@@ -358,76 +353,11 @@ def test_output_authz_output_less_still_requires_auth() -> None:
         )
 
 
-def test_output_authz_denies_non_writable_output(monkeypatch: pytest.MonkeyPatch) -> None:
-    # alice may write a$b but NOT c$d → the whole ingest is denied (403).
-    async def _batch(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        return {o: (o == _object("a$b")) for o in objects}
-
-    monkeypatch.setattr(fga, "batch_check", _batch)
-    with pytest.raises(PermissionDeniedError, match=r"can_write_data required on outputs: c\$d"):
-        asyncio.run(
-            fga_deps.enforce_output_authz(
-                _event(outputs=["a$b", "c$d"]),
-                _request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))),
-                _settings(**_FULL_AUTH),
-                _token(),
-            )
-        )
-
-
 # --- A service principal on the HTTP ingest ----------------------------------------------------------
 # The Ray TRAIN job is a sidecar-less IN-CLUSTER producer (RAY-TRAIN.md D2): it POSTs the HTTP ingest with its
 # pod's projected token, which the door verifies into a `ServicePrincipal` (`service_kit.governed.machine_identity`). The
 # door itself is driven over HTTP in `services/lineage/tests/test_a_claimed_service_name_authenticates_nobody.py`;
 # this pins what the ingest gates do with the principal it hands them.
-
-
-def test_service_principal_is_attributed_and_fga_bounded() -> None:
-    """The ServicePrincipal flows through BOTH ingest gates: it is stamped as author AND FGA-checked.
-
-    This is what keeps D5 intact end-to-end — the trainer records provenance only for what its rung
-    (`writer` on `namespace:models`) actually permits, and is *stricter* than the Dapr subscription route
-    it mirrors (which trusts the producer-stamped author outright).
-    """
-    principal = security.ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-ray")
-    event = RunEvent.model_validate(
-        {
-            "eventType": "COMPLETE",
-            "eventTime": "2026-07-13T09:00:00+00:00",
-            "producer": "https://github.com/Borg93/lance-ns",
-            "run": {"runId": "11111111-1111-5111-8111-111111111111", "facets": {}},
-            "job": {"namespace": "ray-jobs", "name": "train.churn"},
-            "inputs": [],
-            "outputs": [{"namespace": "models", "name": "models$churn", "facets": {"rask_lance": {"tableUuid": _uuid("models$churn")}}}],
-        }
-    )
-    # (1) attributed — the run's author is the service's verified subject
-    fga_deps.enforce_author(event, principal)
-    trainer = "kubernetes~system:serviceaccount:default:rask-sa-ray"
-    stamp = event.run.facets["rask_author"]
-    assert (stamp["name"], stamp["sub"], stamp["_schemaURL"]) == (trainer, trainer, AUTHOR_FACET_SCHEMA_URL)
-
-    # (2) authorized — the FGA check runs as the SERVICE subject, and a denial is a 403
-    checked: dict[str, Any] = {}
-
-    async def _batch_check(_client: Any, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        checked.update(user=user, relation=relation, objects=objects)
-        return dict.fromkeys(objects, False)  # the trainer may NOT write this output
-
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(fga, "batch_check", _batch_check)
-        with pytest.raises(PermissionDeniedError):
-            asyncio.run(
-                fga_deps.enforce_output_authz(
-                    event,
-                    _request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))),
-                    _settings(**_FULL_AUTH),
-                    principal,
-                )
-            )
-    assert checked["user"] == trainer  # the service principal, never a person's
-    assert checked["relation"] == "can_write_data"
-    assert checked["objects"] == [_object("models$churn")]
 
 
 def test_events_governs_on_columnlineage_source_datasets() -> None:

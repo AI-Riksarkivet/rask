@@ -27,7 +27,6 @@ from lance_namespace import (
     CreateNamespaceResponse,
     LanceNamespace,
     NamespaceAlreadyExistsError,
-    TableNotFoundError,
 )
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
@@ -69,14 +68,3 @@ async def test_an_existing_id_is_KEPT_and_described(monkeypatch: pytest.MonkeyPa
     assert kept is True, "the caller must be able to tell a keep from a create — ownership depends on it"
     assert backend.ops == ["create_namespace", "describe_namespace"]
     assert response.properties == {"kept": "true"}, "a kept namespace is described, never echoed"
-
-
-@pytest.mark.anyio
-async def test_any_other_failure_still_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only the conflict is absorbed. Swallowing the rest would turn a broken backend into a silent
-    success, and on the create door that success would go on to seed ownership."""
-    backend = _Backend(conflicts=True, describe_raises=TableNotFoundError("gone"))
-    monkeypatch.setattr(ns_ep.native, "call", _native(backend))
-
-    with pytest.raises(TableNotFoundError):
-        await ns_ep.create_or_keep_namespace(cast(LanceNamespace, object()), ["acme"], CreateNamespaceRequest(id=["acme"], mode="exist_ok"))

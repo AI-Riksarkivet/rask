@@ -9,11 +9,11 @@ alert rules it deploys with, and the platform's development fixtures. Repository
 Makefile), `docs` and the agent instructions are not the product and still build and describe the clients this
 repository hosts.
 
-WHO THE CLIENTS ARE is read off the tree, so this file names none: every workspace member outside the lakehouse, every
-zone, every sealed runner and every fixture that is not the platform's. A client whose name is an English word (a
-runner called `assist`, the zones `home` and `lakehouse`) is matched only where it is used as a name: a path, a service
-account, "<name> service"), and a zone named for the lakehouse itself only as a path. Every other name is matched as a
-whole word.
+WHO THE CLIENTS ARE is read off the tree: every workspace member outside the lakehouse, every app of the frontend
+workspace and every fixture that is not the platform's. The one place this file names clients is `AMBIGUOUS`, the
+names that are also English words, which it must list to match them only where they are used as a name. A client whose name is an English word (the
+console, the notifications inbox) is matched only where it is used as a name: a path, a service account, "<name>
+service". Every other name is matched as a whole word.
 """
 
 from __future__ import annotations
@@ -35,7 +35,6 @@ LAKEHOUSE_MEMBERS = (
     "packages/lakehouse-kit",
     "packages/lineage-kit",
     "packages/service-kit",
-    "packages/storage",
 )
 #: The platform's development fixtures: stand-ins for what a platform team runs, none of them a client.
 PLATFORM_FIXTURES = ("cloudnative-pg", "dapr", "dex", "external-secrets", "marquez", "nats", "observability", "openbao", "rustfs")
@@ -44,20 +43,16 @@ LAKEHOUSE_DEPLOY = ("chart", "deploy/values-local.yaml", "deploy/values-prod.yam
 #: Vendored upstream files the lakehouse does not write.
 VENDORED = ("chart/crds-bootstrap/", "/charts/")
 
-#: Client names that are also English words or another system's vocabulary (OpenFGA's `viewer` relation): matched only
-#: where used as a name (a path, an account, a backticked name, "<name> service"), since "compute the digest", "data
-#: flows through" and `search_path` name no client.
-AMBIGUOUS = frozenset({"assist", "compute", "dummy", "explorer", "flows", "kg", "notifications", "search", "topics", "viewer"})
-#: Zones whose names are the lakehouse's own words (`lakehouse_kit`, "the lakehouse service"): matched only as a path.
-PATH_ONLY = frozenset({"home", "lakehouse"})
+#: Client names that are also English words or another system's vocabulary (RustFS's admin console, a notification
+#: rule): matched only where used as a name (a path, an account, a backticked name, "<name> service").
+AMBIGUOUS = frozenset({"console", "notifications"})
 
 
 def client_names(root: Path) -> set[str]:
     """Every client this repository hosts, read off its trees."""
     members = {f"{kind}/{d.name}" for kind in ("services", "packages") for d in (root / kind).iterdir() if (d / "pyproject.toml").is_file()}
     names = {m.split("/", 1)[1] for m in members - set(LAKEHOUSE_MEMBERS)}
-    names |= {d.name for d in (root / "frontend/microfrontends").iterdir() if (d / "package.json").is_file()}
-    names |= {d.name for d in (root / "runners").iterdir() if (d / "pyproject.toml").is_file()}
+    names |= {d.name for d in (root / "frontend").iterdir() if (d / "package.json").is_file()}
     names |= {d.name for d in (root / "deploy/fixtures").iterdir() if (d / "fixture.env").is_file()} - set(PLATFORM_FIXTURES)
     return names
 
@@ -68,15 +63,14 @@ def pattern(names: set[str]) -> re.Pattern[str]:
     def spellings(name: str) -> list[str]:
         return sorted({re.escape(name), re.escape(name.replace("-", "_"))})
 
-    path = r"(?:services|packages|runners|microfrontends|fixtures)/"
-    plain = [s for n in names - AMBIGUOUS - PATH_ONLY for s in spellings(n)]
+    path = r"(?:services|packages|frontend|fixtures)/"
+    plain = [s for n in names - AMBIGUOUS for s in spellings(n)]
     role = r"(?:service|release|fixture|zone|client|runner|plane|inbox|image|account)"
     forms = (
         r"{path}{s}\b", r"\b(?:sa|rask)-{s}\b", r"\bservices\.{s}\b", r"`{s}`", r"\b{s}'s\b",
         r"\b{s}\.[a-z_]+\.[a-z_]", r"\b{s}-\d", r"\b{s} {role}\b",
     )  # fmt: skip
     named = [form.format(path=path, s=s, role=role) for n in names & AMBIGUOUS for s in spellings(n) for form in forms]
-    named += [rf"{path}{s}\b" for n in names & PATH_ONLY for s in spellings(n)]
     parts = [*named, *([rf"\b(?:{'|'.join(sorted(plain))})\b"] if plain else [])]
     return re.compile("|".join(parts) if parts else r"(?!)", re.IGNORECASE)
 

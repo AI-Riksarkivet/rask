@@ -21,8 +21,8 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse_kit.objectfs import fs_and_base
+from lakehouse_kit.storage import s3_client
 from service_kit.storage_options import StorageOptions
-from storage import s3_client
 
 
 #: The most keys one S3 DeleteObjects request takes.

@@ -29,18 +29,12 @@ DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 
 pytestmark = [pytest.mark.e2e, pytest.mark.edge]
 
-#: One route per public prefix that every caller must authenticate for, with the method that reaches it.
+#: One route per public prefix the lakehouse publishes, each a door that verifies a person's token, with the method that
+#: reaches it.
 _PROBES = [
     ("GET", "/api/catalog/management/v1/me"),
     ("GET", "/api/lineage/events?limit=1"),
-    ("POST", "/api/explorer/annotations/tags"),
-    ("GET", "/api/ray/jobs"),
-    ("GET", "/api/serve/applications/"),
 ]
-
-
-#: The lakehouse's prefixes whose door verifies a person's token.
-_LAKEHOUSE_PROBES = [probe for probe in _PROBES if probe[1].startswith(("/api/catalog/", "/api/lineage/"))]
 
 
 @pytest.fixture(scope="module")
@@ -72,7 +66,7 @@ def test_an_anonymous_request_reaches_the_service_and_is_refused_there(edge: str
     assert response.json()["type"] == "https://lance.org/problems/unauthenticatederror"
 
 
-@pytest.mark.parametrize(("method", "path"), _LAKEHOUSE_PROBES)
+@pytest.mark.parametrize(("method", "path"), _PROBES)
 def test_a_token_issued_for_another_audience_is_refused_at_each_lakehouse_door(edge: str, another_audience: str, method: str, path: str) -> None:
     response = requests.request(method, f"{edge}{path}", headers={"authorization": f"Bearer {another_audience}"}, timeout=15)
 

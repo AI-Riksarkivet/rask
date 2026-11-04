@@ -73,7 +73,7 @@ class IssuedSession(BaseModel):
 @cache
 def _sts(region: str, endpoint: str | None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
     """One unsigned STS client per endpoint; botocore clients are thread-safe, and building one costs a model load."""
-    from storage import sts_client
+    from lakehouse_kit.storage import sts_client
 
     return sts_client(region=region, endpoint=endpoint)
 

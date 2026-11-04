@@ -108,13 +108,14 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   `rask-marquez` lineage's forwarder sends to (ADR 0158); a GPU node with no device plugin yet adds `nvidia-device-plugin`,
   and the SMTP relay `mailpit` is the notifications inbox's, a client's, so it is in no default list).
   **The clients are no prerequisite** (XC-183): `make k3s-up` installs the lakehouse alone, and `make k3s-clients` adds
-  `CLIENTS` after it, each its own release reaching rask by reference: the dev Ray engine ([[XC-125]]) and its companion
-  `compute` service (a local chart, release `compute` in rask's namespace, `WAIT=false`: it reads rask's Dapr token, Dex,
-  catalog and Collector by reference, and asks the catalog's decision door, which answers its account only through
-  `auth.externalDeciders`, a map from each `<namespace>:<serviceaccount>` to the estate roles it holds), the bring-your-own compaction job `table-maintenance` ([[LH-529]]), and the annotator (ADR 0171;
-  local chart, release `annotator` in rask's namespace, `WAIT=false`), which the e2e-stack lane also installs only after
-  Phase 1's acceptance: its own Dapr state store on a CloudNativePG `Cluster` it renders, its own app token and route, and
-  rask's catalog and Dex by reference, with no OpenFGA or store credential; the product chart renders nothing of it. A fixture's `SET_FILES` passes an
+  `CLIENTS` after it, each its own release reaching rask by reference. The one client this repository deploys is the
+  console (`deploy/fixtures/console`, release `console` in rask's namespace, `WAIT=false`): the console's static-file web
+  pod and the notifications inbox, its own Dapr state store on a CloudNativePG `Cluster` it renders, its own app token
+  and HTTPRoute, and rask's catalog, lineage, Dex and NATS by reference. What the lakehouse must admit for it (the inbox
+  in `auth.externalDeciders`, a map from each `<namespace>:<serviceaccount>` to the estate roles it holds; its bus user in
+  `nats.auth.users`; its store reads in `openbao.externalReaders`) is in the console's own `lakehouse-values.yaml`, which
+  `make k3s-up` layers on by glob; the product chart names none of it. The other clients left this repository at XC-192
+  and are recovered from git history (`64ef118a9`) as each moves to its own repository. A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a
   test can render it through `chart_render.render_fixture`). The e2e lanes install ESO, Dapr and NATS through the same
@@ -266,13 +267,6 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
 - **A tokenless daprd needs `dapr.io/disable-builtin-k8s-secret-store`.** daprd initialises its built-in
   Kubernetes secret store at boot from the pod's token and treats a failure as fatal, so dropping the
   annotation from `lance.daprSidecarResources` crash-loops every injected pod (live 2026-07-13).
-- **A RayCluster applies a new pod spec only under `upgradeStrategy: Recreate`** (KubeRay 1.6.2,
-  `shouldRecreatePodsForUpgrade`): without it the head keeps the spec it started with, its SA included,
-  until someone deletes the pod. The hash leaves out replicas, so autoscaling recreates nothing, and the
-  cost is that a change to the cluster's spec ends the jobs running on it, as any singleton's rollout
-  does. KubeRay refuses the field on a cluster a RayService creates. The rask chart renders no RayCluster
-  ([[XC-125]]); this holds for the `ray-cluster` fixture (`deploy/fixtures/ray-cluster/chart`), which
-  carries the field.
 - **Changing the dev OpenBao's pod spec empties its store**, because its server keeps it in memory. The server is not
   `server -dev` (which prints its root token and unseal key to its log): it starts uninitialized, and the seed beside
   it initializes it, mints the store's administrator under an id the fixture generates in-cluster (`rask-openbao-root`,
