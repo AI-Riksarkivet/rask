@@ -98,27 +98,6 @@ def _versions(n: int, *, age_days: int = 100) -> list[dict[str, Any]]:
     return [{"version": v, "timestamp": old} for v in range(1, n + 1)]
 
 
-def test_preview_retains_current_tags_and_recent() -> None:
-    ds = _FakeDs(version=5, versions=_versions(5), tags={"blessed": {"version": 2}})
-    out = maintenance.preview_gc(ds, branch=None, retention_days=None, retain_versions=2)
-    # keep 5 (current) + 4 (retain-2 window) + 2 (tag) → reclaim {3, 1}
-    assert set(out["eligible_versions"]) == {1, 3}
-    assert out["protected_tags"] == {"blessed": 2}
-    assert out["current_version"] == 5
-    assert ds.cleaned is None  # preview NEVER mutates
-
-
-def test_preview_age_cutoff_spares_recent_versions() -> None:
-    # v1-v3 are 100 days old (past a 1-day cutoff → eligible); v4 is fresh (spared); v5 is current.
-    versions = _versions(3) + [
-        {"version": 4, "timestamp": datetime.now(UTC) - timedelta(hours=1)},
-        {"version": 5, "timestamp": datetime.now(UTC)},
-    ]
-    ds = _FakeDs(version=5, versions=versions, tags={})
-    out = maintenance.preview_gc(ds, branch=None, retention_days=1, retain_versions=None)
-    assert set(out["eligible_versions"]) == {1, 2, 3}  # 4 too new, 5 current
-
-
 def test_run_gc_passes_bounds_and_reports_stats() -> None:
     ds = _FakeDs(version=3, versions=_versions(3), tags={}, stats=SimpleNamespace(old_versions=2, bytes_removed=4096))
     out = maintenance.run_gc(ds, retention_days=7, retain_versions=1)

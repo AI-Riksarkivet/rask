@@ -14,7 +14,9 @@ rewrites on its own compute, and commits through ``version/create``, which judge
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Sequence
 from functools import partial
 from typing import Annotated
 
@@ -23,7 +25,6 @@ from fastapi.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
-from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
@@ -140,23 +141,40 @@ async def list_due_maintenance(
     token: CurrentToken,
     client: FgaClientDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
-    page_token: Annotated[str | None, Query(description="Continue after this table id (the previous page's `page_token`).")] = None,
+    page_token: Annotated[str | None, Query(description="Continue after this record (the previous page's `page_token`).")] = None,
 ) -> MaintenanceDueResponse:
-    """The tables a compaction or an index optimize is due on, in table order, listed to a caller holding
-    ``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve
-    their files through it. A record names its table as the table is named now, which a rename since the sweep changed;
-    one whose table is gone is listed to nobody, and the next sweep clears it."""
-    records = await run_in_threadpool(maintenance_due.list_due, settings.registry_root, settings.storage_options())
-    entries = [table_claims.TableRecord(location=record.location, uuid=record.uuid) for record in records]
-    names = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
-    named = [(name, record) for name, record in zip(names, records, strict=True) if name is not None]
-    if (authz := fga_deps.authorization(settings, client, token)) is not None:
-        # Checked on the uuid each record keeps ([[LH-524]]), which is the object the table's grants are held by.
-        allowed = await authz.batch_check("can_maintain", sorted({fga.table_object(record.uuid) for _, record in named}))
-        named = [(name, record) for name, record in named if allowed.get(fga.table_object(record.uuid))]
-    by_key = {f"{name}|{record.uuid}": (name, record) for name, record in named}
-    page, next_token = paginate(sorted(by_key), page_token, limit)
-    return MaintenanceDueResponse(tables=[_due_view(record, table=name) for name, record in (by_key[key] for key in page)], page_token=next_token)
+    """The tables a compaction or an index optimize is due on, listed to a caller holding ``can_maintain`` on each: what
+    made each due, the policy record that governed it, and how many datasets resolve their files through it. A record
+    names its table as the table is named now, which a rename since the sweep changed; one whose table is gone is listed
+    to nobody, and the next sweep clears it.
+
+    Paged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and
+    judges records only as its page fills (:func:`fga_deps.judged_page`, [[LH-562]]), so a walk a page at a time reads
+    each record a few times at most, where reading every record for every page grew with the square of the list."""
+    root, options = settings.registry_root, settings.storage_options()
+    names = sorted(await run_in_threadpool(maintenance_due.due_record_names, root, options))
+    shown: dict[str, DueTable] = {}
+
+    async def judged_on(batch: Sequence[str]) -> list[str | None]:
+        records = await asyncio.gather(*(run_in_threadpool(maintenance_due.read_due_named, root, options, name) for name in batch))
+        held = [(name, record) for name, record in zip(batch, records, strict=True) if record is not None]
+        entries = [table_claims.TableRecord(location=record.location, uuid=record.uuid) for _, record in held]
+        tables = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
+        for (name, record), table in zip(held, tables, strict=True):
+            if table is not None:
+                shown[name] = _due_view(record, table=table)
+        # Judged on the uuid each record keeps ([[LH-524]]), the object the table's grants are held by.
+        return [fga.table_object(shown[name].uuid) if name in shown else None for name in batch]
+
+    page, next_token = await fga_deps.judged_page(
+        fga_deps.authorization(settings, client, token),
+        relation="can_maintain",
+        candidates=[(name, name) for name in names],
+        objects_of=judged_on,
+        page_token=page_token,
+        limit=limit,
+    )
+    return MaintenanceDueResponse(tables=[shown[name] for name in page], page_token=next_token)
 
 
 def _due_view(record: maintenance_due.DueRecord, *, table: str) -> DueTable:

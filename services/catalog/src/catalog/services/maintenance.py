@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 from lance_namespace import InvalidInputError, InvalidTableStateError, UnsupportedOperationError
@@ -26,7 +26,7 @@ from lakehouse_kit import branch_layout
 from lakehouse_kit.base_refs import BaseRefs
 from lakehouse_kit.compaction_gate import compaction_refusal
 from lakehouse_kit.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
-from lakehouse_kit.version_retention import Retention, fork_versions, reclaimable_versions, recorded_branch, tag_versions
+from lakehouse_kit.version_retention import ExplainedDataset, fork_versions, reclaimable_versions, recorded_branch, tag_versions
 
 
 if TYPE_CHECKING:
@@ -77,6 +77,10 @@ class VersionedDataset(Protocol):
     def branches(self) -> BranchIndex: ...
 
     def versions(self) -> Sequence[Mapping[str, Any]]: ...
+
+
+class PreviewedDataset(VersionedDataset, ExplainedDataset, Protocol):
+    """The preview surface PLUS Lance's explanation of the cleanup the run would make."""
 
 
 class ReclaimableDataset(VersionedDataset, ManifestCarrier, Protocol):
@@ -210,7 +214,7 @@ class GcRunData(TypedDict):
     bytes_removed: int
 
 
-def preview_gc(ds: VersionedDataset, *, branch: str | None, retention_days: int | None, retain_versions: int | None) -> GcPreviewData:
+def preview_gc(ds: PreviewedDataset, *, branch: str | None, retention_days: int | None, retain_versions: int | None) -> GcPreviewData:
     """Dry-run the old-version cleanup — the versions GC would reclaim, and the tags protecting others.
 
     ``branch`` names the ref ``ds`` is checked out on, and it is REQUIRED because the handle cannot say:
@@ -218,8 +222,8 @@ def preview_gc(ds: VersionedDataset, *, branch: str | None, retention_days: int 
     same root-scoped maps from every ref. Which of their pins protect a version depends on it.
     """
     current = int(ds.version)
-    retention = Retention(older_than=timedelta(days=retention_days) if retention_days else None, retain_versions=retain_versions)
-    eligible = reclaimable_versions(ds, branch=branch, retention=retention, now=datetime.now(UTC))
+    # The run's own arguments (:func:`run_gc`), so the versions offered are Lance's answer to the cleanup it makes.
+    eligible = reclaimable_versions(ds, older_than=_age_bound(retention_days), retain_versions=retain_versions)
     return {
         "current_version": current,
         "total_versions": len(ds.versions()),
@@ -245,6 +249,11 @@ def refuse_a_reclaim_over_nested_branches(ds: VersionedDataset, branch: str | No
         )
 
 
+def _age_bound(retention_days: int | None) -> timedelta:
+    """The age a reclaimed version must exceed: ``retention_days``, or any age when none is named."""
+    return timedelta(days=retention_days) if retention_days else timedelta(0)
+
+
 def run_gc(
     ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, protected: BaseRefs | None = None, branch: str | None = None
 ) -> GcRunData:
@@ -258,8 +267,7 @@ def run_gc(
     """
     require_reclaimable(ds, protected)
     refuse_a_reclaim_over_nested_branches(ds, branch)
-    older_than = timedelta(days=retention_days) if retention_days else timedelta(0)
-    stats: Any = ds.cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False)
+    stats: Any = ds.cleanup_old_versions(older_than=_age_bound(retention_days), retain_versions=retain_versions, error_if_tagged_old_versions=False)
     return {
         "ok": True,
         "old_versions_removed": int(getattr(stats, "old_versions", 0) or 0),

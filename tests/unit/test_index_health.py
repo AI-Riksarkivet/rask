@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import lance
+import numpy as np
 import pyarrow as pa
 import pytest
 
@@ -34,6 +35,24 @@ def test_UNINDEXED_ROWS_make_the_index_due(tmp_path: Path) -> None:
     lance.write_dataset(pa.table({"id": pa.array(range(200, 260), pa.int64())}), uri, mode="append")
 
     assert due_indices(lance.dataset(uri)) == [IndexDue(name="id_btree", unindexed_rows=60, deltas=1)]
+
+
+def _vectors(rows: int, *, seed: int) -> pa.FixedSizeListArray:
+    return pa.FixedSizeListArray.from_arrays(pa.array(np.random.default_rng(seed).random(rows * 8, dtype=np.float32)), 8)
+
+
+def test_a_vector_index_a_plain_optimize_only_appends_to_is_due_naming_the_merge(tmp_path: Path) -> None:
+    """[[LH-562]], measured on pylance 13.0.0: ``optimize_indices()``, the call ``lance_docs`` tells a writer to
+    make after an append, covers the new rows of an IVF_FLAT index with one more delta segment each round, so the index
+    stays due until its optimize merges; the record names that merge in Lance's own parameter."""
+    uri = str(tmp_path / "t.lance")
+    lance.write_dataset(pa.table({"v": _vectors(512, seed=0)}), uri)
+    lance.dataset(uri).create_index("v", "IVF_FLAT", name="v_ivf", num_partitions=4)
+    for round_ in range(1, 6):
+        lance.write_dataset(pa.table({"v": _vectors(64, seed=round_)}), uri, mode="append")
+        lance.dataset(uri).optimize.optimize_indices()
+
+    assert due_indices(lance.dataset(uri)) == [IndexDue(name="v_ivf", unindexed_rows=0, deltas=5, num_indices_to_merge=5)]
 
 
 def test_a_covering_index_is_not_due(tmp_path: Path) -> None:

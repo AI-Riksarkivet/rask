@@ -30,6 +30,7 @@ def planner(monkeypatch: pytest.MonkeyPatch) -> Any:
     monkeypatch.setattr(sweep_module, "_discover_all", lambda *_a, **_k: list(_LISTED))
     monkeypatch.setattr(sweep_module, "_protected_roots", lambda *_a, **_k: BaseRefs())
     monkeypatch.setattr(sweep_module, "table_ids", lambda *_a, **_k: TableIds())
+    monkeypatch.setattr(sweep_module, "due_record_names", lambda *_a, **_k: frozenset())
     return sweep_module
 
 

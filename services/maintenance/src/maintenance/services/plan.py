@@ -159,7 +159,7 @@ def resolve_plan(uri: str, *, context: PlanContext, owners: PolicyOwners) -> Dat
         return DatasetPlan(older_than=context.older_than)
 
 
-def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceSettings, uri: str, now: datetime) -> str | None:
+def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceSettings, table_uuid: str, uri: str, now: datetime) -> str | None:
     """``policy_interval`` while the policy's ``compact_interval_hours`` has not elapsed since this dataset's stamp.
 
     An unreadable, absent or malformed stamp maintains — never the other way, or a lost stamp would silence maintenance
@@ -169,7 +169,7 @@ def cadence_skip(policy: dict[str, Any], *, settings: MaintenanceSettings, uri: 
     if not interval:
         return None
     try:
-        stamped = maintenance_policies.read_state(settings.resolved_policy_root, settings.storage_options(), policy, uri)
+        stamped = maintenance_policies.read_state(settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=uri)
     except Exception as exc:  # noqa: BLE001 — a lost stamp maintains
         log.warning("compaction_policy_state_unreadable", extra={"policy": policy.get("id"), "uri": uri, "error": str(exc)})
         return None

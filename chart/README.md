@@ -158,8 +158,8 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.policyRoot | string | `""` | S3 root of maintenance policy records. Empty falls back to `controlRoot`, then the primary bucket. |
 | maintenance.port | int | `8000` | HTTP port of the maintenance container. |
 | maintenance.reconcileBindingName | string | `"maintenance-reconcile-cron"` | Name of the Dapr cron binding that fires the drift reconciler (`MAINTENANCE_RECONCILE_BINDING_NAME`). |
-| maintenance.reconcileSchedule | string | `"@every 300s"` | Cadence of the drift reconciler, which only reads OpenFGA, the control-root registries and the bucket listing. |
-| maintenance.schedule | string | `"@every 1800s"` | Backstop sweep cadence: writes the clone list and due records and expires unwritten tables; must stay under `cloneListMaxAgeSeconds`. |
+| maintenance.reconcileSchedule | string | `"0 */5 * * * *"` | Cadence of the drift reconciler, a wall-clock cron like `schedule`: it only reads OpenFGA, the control-root registries and the bucket listing. |
+| maintenance.schedule | string | `"0 */30 * * * *"` | Backstop sweep cadence, a wall-clock cron (`<sec> <min> <hour> <dom> <month> <dow>`): writes the clone list and due records and expires unwritten tables; its period must stay under `cloneListMaxAgeSeconds`. |
 | maintenance.sweepBudgetSeconds | int | `0` | Wall-clock ceiling for one sweep tick, checked between datasets; 0 means unlimited. |
 | maintenance.tombstoneSweep | bool | `false` | Clear trash records whose bytes a probe proves are gone; deletes bookkeeping rows, never bytes. Off by default. |
 | maintenance.tombstoneSweepDryRun | bool | `true` | Plan and report the tombstone sweep without clearing anything. Defaults true. |

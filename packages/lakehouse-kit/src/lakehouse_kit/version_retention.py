@@ -1,21 +1,22 @@
-"""Which of a dataset's versions a retention would reclaim: the one eligibility rule a reclaimer and its preview share.
+"""Which of a dataset's versions its cleanup would reclaim, by version, in Lance's own words; and the refs that pin them.
 
-A version is reclaimable when it is not the current version, no tag on its ref and no branch cut from its ref pins it,
-it lies outside the retain-last-N window, and it is older than the age cutoff. The catalog's GC preview and
-maintenance's expiry threshold ask the same question, so they read the same answer here.
-
-The rule mirrors what ``cleanup_old_versions(older_than, retain_versions, error_if_tagged_old_versions=False)``
-deletes, on the evidence of ``lance_docs/lance/guide/tags_and_branches.md`` (Branches: "Lance ensures that cleanup does not delete files still
-referenced by any branch"; tags exempt a version from cleanup).
+``explain_cleanup_old_versions`` is ``cleanup_old_versions`` asked without deleting (pylance 13.0.0), so a preview built
+on it names exactly what the run removes ([[LH-562]]). It counts versions and lists the files it would remove, each
+version's manifest among them, named as ``lance_docs/lance/format/table/transaction.md`` (Manifest Naming Schemes)
+spells it, so the versions are read off those names. Tags and child branches pin versions
+(``lance_docs/lance/guide/tags_and_branches.md``): :func:`tag_versions` and :func:`fork_versions` name them for a door
+that refuses to delete a pinned version.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime, timedelta
-from typing import Any, Final, Protocol
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from lance.lance import CleanupExplanation
 
 
 #: The default ref. Lance records main as null — a tag's ``branch`` and a branch's ``parentBranch``
@@ -40,11 +41,21 @@ class VersionedDataset(Protocol):
     def branches(self) -> Any: ...  # noqa: ANN401 — pylance's Branches, no protocol
 
 
-class Retention(BaseModel):
-    """How much history a policy keeps: ``older_than`` an age bound, ``retain_versions`` a count; ``None`` is no bound."""
+class ExplainedDataset(Protocol):
+    """The slice of a ``LanceDataset`` :func:`reclaimable_versions` reads: its versions and its cleanup's explanation."""
 
-    older_than: timedelta | None = None
-    retain_versions: int | None = None
+    def versions(self) -> Sequence[Mapping[str, Any]]: ...
+
+    def explain_cleanup_old_versions(
+        self,
+        older_than: timedelta | None = None,
+        retain_versions: int | None = None,
+        *,
+        error_if_tagged_old_versions: bool = True,
+        versions: list[int] | None = None,
+        include_files: bool = False,
+        max_files: int = 1000,
+    ) -> CleanupExplanation: ...
 
 
 def recorded_branch(branch: object) -> str | None:
@@ -88,28 +99,38 @@ def fork_versions(ds: VersionedDataset, branch: str | None) -> dict[str, int]:
     }
 
 
-def _as_utc(ts: object) -> datetime:
-    """A version timestamp as an aware UTC datetime; an unknown shape reads as now, so its version is never eligible.
+#: The candidate files one explanation lists: a version's manifest is one of them, beside its data, transaction,
+#: deletion and index files. Past it, Lance truncates the list and the versions are asked one at a time.
+EXPLAIN_FILE_LIMIT: Final = 100_000
 
-    A NAIVE datetime from ``ds.versions()`` is host-LOCAL wall-clock (pylance builds it with
-    ``datetime.fromtimestamp(ns/1e9)``), so it is ``astimezone(UTC)``, never relabelled as UTC.
-    """
-    if isinstance(ts, datetime):
-        return ts if ts.tzinfo else ts.astimezone(UTC)
-    return datetime.now(UTC)
+#: The highest version number, ``u64::MAX``: a V2 manifest is named ``{u64::MAX - version:020}.manifest``.
+_U64_MAX: Final = 2**64 - 1
 
 
-def _old_enough(version: Mapping[str, Any], cutoff: datetime | None) -> bool:
-    """Whether ``version`` is past the age cutoff; with no cutoff, or no timestamp to read, every version is."""
-    timestamp = version.get("timestamp")
-    return cutoff is None or timestamp is None or _as_utc(timestamp) <= cutoff
+def manifest_version(path: str) -> int | None:
+    """The version a manifest's file name names, V1 ``{version}.manifest`` or V2 ``{u64::MAX - version:020}.manifest``;
+    ``None`` for any other name (a staged ``.manifest-<uuid>``, which no cleanup lists)."""
+    stem, dot, extension = path.rsplit("/", 1)[-1].partition(".")
+    if dot != "." or extension != "manifest" or not stem.isdigit():
+        return None
+    return _U64_MAX - int(stem) if len(stem) == 20 else int(stem)
 
 
-def reclaimable_versions(ds: VersionedDataset, *, branch: str | None, retention: Retention, now: datetime) -> list[int]:
-    """The versions ``retention`` would reclaim on ``branch``, newest first."""
-    versions = sorted(ds.versions(), key=lambda v: int(v["version"]), reverse=True)
-    kept = {int(ds.version), *tag_versions(ds, branch).values(), *fork_versions(ds, branch).values()}
-    if retention.retain_versions:
-        kept |= {int(v["version"]) for v in versions[: retention.retain_versions]}
-    cutoff = now - retention.older_than if retention.older_than is not None else None
-    return [int(v["version"]) for v in versions if int(v["version"]) not in kept and _old_enough(v, cutoff)]
+def reclaimable_versions(ds: ExplainedDataset, *, older_than: timedelta, retain_versions: int | None) -> list[int]:
+    """The versions ``cleanup_old_versions(older_than, retain_versions, error_if_tagged_old_versions=False)`` would
+    remove from the ref ``ds`` is opened on, newest first: its explanation's manifests, or, when Lance truncated the
+    list it gives, its explanation of each version alone."""
+    explained = ds.explain_cleanup_old_versions(
+        older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False, include_files=True, max_files=EXPLAIN_FILE_LIMIT
+    )
+    if not explained.candidate_files_truncated:
+        named = (manifest_version(candidate.path) for candidate in explained.candidate_files if candidate.kind == "manifest")
+        return sorted((version for version in named if version is not None), reverse=True)
+    held = (int(v["version"]) for v in ds.versions())
+    return sorted((version for version in held if _removes(ds, version, older_than=older_than, retain_versions=retain_versions)), reverse=True)
+
+
+def _removes(ds: ExplainedDataset, version: int, *, older_than: timedelta, retain_versions: int | None) -> bool:
+    """Whether the cleanup would remove ``version``, by its explanation of that version alone."""
+    explained = ds.explain_cleanup_old_versions(older_than=older_than, retain_versions=retain_versions, error_if_tagged_old_versions=False, versions=[version])
+    return explained.stats.old_versions > 0

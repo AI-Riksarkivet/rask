@@ -71,9 +71,9 @@ def _run(
     reached: list[str] = []
     real = expiry.count_reclaimable
 
-    def _spy(ds: lance.LanceDataset, uri: str, policy: expiry.ExpiryPolicy) -> int:
-        reached.append(uri)
-        return real(ds, uri, policy)
+    def _spy(ds: lance.LanceDataset, policy: expiry.ExpiryPolicy) -> int:
+        reached.append(ds.uri)
+        return real(ds, policy)
 
     monkeypatch.setattr(sweep_mod, "_s3fs", lambda _s: None)
     monkeypatch.setattr(sweep_mod, "discover_datasets", lambda _fs, _bucket, *, max_depth: Discovery(uris=list(uris)))

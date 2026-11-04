@@ -7757,6 +7757,18 @@
             "title": "Name",
             "type": "string"
           },
+          "num_indices_to_merge": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Indices To Merge"
+          },
           "unindexed_rows": {
             "minimum": 0.0,
             "title": "Unindexed Rows",
@@ -13775,7 +13787,7 @@
     },
     "/management/v1/maintenance/due": {
       "get": {
-        "description": "The tables a compaction or an index optimize is due on, in table order, listed to a caller holding\n``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve\ntheir files through it. A record names its table as the table is named now, which a rename since the sweep changed;\none whose table is gone is listed to nobody, and the next sweep clears it.",
+        "description": "The tables a compaction or an index optimize is due on, listed to a caller holding ``can_maintain`` on each: what\nmade each due, the policy record that governed it, and how many datasets resolve their files through it. A record\nnames its table as the table is named now, which a rename since the sweep changed; one whose table is gone is listed\nto nobody, and the next sweep clears it.\n\nPaged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and\njudges records only as its page fills (:func:`fga_deps.judged_page`, [[LH-562]]), so a walk a page at a time reads\neach record a few times at most, where reading every record for every page grew with the square of the list.",
         "operationId": "list_due_maintenance_management_v1_maintenance_due_get",
         "parameters": [
           {
@@ -13791,7 +13803,7 @@
             }
           },
           {
-            "description": "Continue after this table id (the previous page's `page_token`).",
+            "description": "Continue after this record (the previous page's `page_token`).",
             "in": "query",
             "name": "page_token",
             "required": false,
@@ -13804,7 +13816,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Continue after this table id (the previous page's `page_token`).",
+              "description": "Continue after this record (the previous page's `page_token`).",
               "title": "Page Token"
             }
           },
@@ -15725,7 +15737,7 @@
     },
     "/management/v1/projects/{project_id}": {
       "delete": {
-        "description": "Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and drop its record.\n\nGated on ``project:<id>#can_administer`` \u2014 the tenant's OWN admin bar, not the estate-observer gate the\nread routes use (module docstring). Order, fail-closed and each step earning the next:\nid shape (400) \u2192 existence and authz (both 404, :func:`administered_project`) \u2192 deletion protection (409) \u2192\nemptiness (409) \u2192 revoke tuples \u2192 end its roles \u2192 delete record \u2192 audit + event.\n\n**Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to\nempty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so\nno role of a retired tenant keeps a grant.\n\n**Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses\nrefuses 409 and NAMES them \u2014 a refusal that does not say what blocks it just moves the search to the\nuser. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would\nreach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to\ndestroy a tenant's storage transitively. Emptying goes one rung at a time through\n``DELETE /management/v1/warehouses/{id}``, where the purge is its own separate opt-in.\n\n``force=true`` overrides deletion PROTECTION only (Decision 5) \u2014 the FGA gate above ran first and runs\nidentically with or without it, so forcing cannot delete a project the caller may not administer.",
+        "description": "Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance\npolicy, and drop its record.\n\nGated on ``project:<id>#can_administer`` \u2014 the tenant's OWN admin bar, not the estate-observer gate the\nread routes use (module docstring). Order, fail-closed and each step earning the next:\nid shape (400) \u2192 existence and authz (both 404, :func:`administered_project`) \u2192 deletion protection (409) \u2192\nemptiness (409) \u2192 revoke tuples \u2192 end its roles \u2192 end its maintenance policy \u2192 delete record \u2192 audit + event.\n\n**Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to\nempty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so\nno role of a retired tenant keeps a grant.\n\n**Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses\nrefuses 409 and NAMES them \u2014 a refusal that does not say what blocks it just moves the search to the\nuser. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would\nreach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to\ndestroy a tenant's storage transitively. Emptying goes one rung at a time through\n``DELETE /management/v1/warehouses/{id}``, where the purge is its own separate opt-in.\n\n``force=true`` overrides deletion PROTECTION only (Decision 5) \u2014 the FGA gate above ran first and runs\nidentically with or without it, so forcing cannot delete a project the caller may not administer.",
         "operationId": "delete_project_management_v1_projects__project_id__delete",
         "parameters": [
           {
@@ -16466,7 +16478,7 @@
     },
     "/management/v1/projects/{project_id}/roles/{role_id}/assignees": {
       "delete": {
-        "description": "Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.\n\nRefused 409 (code 14) for the last assignee of a role that is its project's only direct admin\n(:func:`subject_tuples.unassign`, arbitrated by the store as the members door's revoke is).",
+        "description": "Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.\n\nRefused 409 (code 14) for the last assignee of a role that is its project's only direct admin\n(:func:`role_membership.unassign`, arbitrated by the store as the members door's revoke is).",
         "operationId": "unassign_role_management_v1_projects__project_id__roles__role_id__assignees_delete",
         "parameters": [
           {

@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from lakehouse_kit import stored_objects
 from lakehouse_kit.base_refs import BaseRefs
 from lakehouse_kit.record_store import delete_record, get_record, list_records, put_record, record_key
 
@@ -57,6 +58,11 @@ class IndexDue(BaseModel):
     name: str
     unindexed_rows: int = Field(ge=0)
     deltas: int = Field(ge=0)
+    #: The ``num_indices_to_merge`` the index's optimize passes, set when the index carries more delta segments than
+    #: tolerated: a plain ``optimize_indices()`` appends a delta to a vector index each round rather than merging
+    #: (measured on pylance 13.0.0, IVF_FLAT one more per round while BTREE and INVERTED stay at 1), so only a merge of
+    #: this many clears it. ``None`` when covering the unindexed rows is all the index needs.
+    num_indices_to_merge: int | None = Field(default=None, ge=1)
 
 
 class DueRecord(BaseModel):
@@ -145,6 +151,27 @@ def list_due(control_root: str, storage_options: StorageOptions) -> list[DueReco
     """Every readable record, in table order; one that does not parse is logged and left out."""
     records = (_parsed(raw) for raw in list_records(control_root, storage_options, DUE_PREFIX, event="maintenance_due"))
     return sorted((record for record in records if record is not None), key=lambda record: record.table)
+
+
+def due_record_names(control_root: str, storage_options: StorageOptions) -> frozenset[str]:
+    """The file name of every due record held now, reading none of them: what a sweep tick may judge at its end."""
+    listed = stored_objects.list_under(f"{control_root.rstrip('/')}/{DUE_PREFIX}", storage_options)
+    names = (stored.path.rsplit("/", 1)[-1] for stored in listed)
+    return frozenset(name for name in names if _is_a_record(name))
+
+
+def read_due_named(control_root: str, storage_options: StorageOptions, name: str) -> DueRecord | None:
+    """The due record held under the file name ``name`` (one :func:`due_record_names` listed), or ``None``."""
+    return _parsed(get_record(control_root, storage_options, f"{DUE_PREFIX}/{name}", event="maintenance_due"))
+
+
+def due_record_name(table_uuid: str) -> str:
+    """The file name of the due record of the table ``table_uuid``."""
+    return due_key(table_uuid).rsplit("/", 1)[-1]
+
+
+def _is_a_record(name: str) -> bool:
+    return name.startswith("table-") and name.endswith(".json")
 
 
 def write_clone_list(control_root: str, storage_options: StorageOptions, clones: CloneList) -> None:

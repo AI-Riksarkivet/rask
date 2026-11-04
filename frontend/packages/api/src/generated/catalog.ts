@@ -499,10 +499,14 @@ export interface paths {
         };
         /**
          * List Due Maintenance
-         * @description The tables a compaction or an index optimize is due on, in table order, listed to a caller holding
-         *     ``can_maintain`` on each: what made each due, the policy record that governed it, and how many datasets resolve
-         *     their files through it. A record names its table as the table is named now, which a rename since the sweep changed;
-         *     one whose table is gone is listed to nobody, and the next sweep clears it.
+         * @description The tables a compaction or an index optimize is due on, listed to a caller holding ``can_maintain`` on each: what
+         *     made each due, the policy record that governed it, and how many datasets resolve their files through it. A record
+         *     names its table as the table is named now, which a rename since the sweep changed; one whose table is gone is listed
+         *     to nobody, and the next sweep clears it.
+         *
+         *     Paged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and
+         *     judges records only as its page fills (:func:`fga_deps.judged_page`, [[LH-562]]), so a walk a page at a time reads
+         *     each record a few times at most, where reading every record for every page grew with the square of the list.
          */
         get: operations["list_due_maintenance_management_v1_maintenance_due_get"];
         put?: never;
@@ -1116,12 +1120,13 @@ export interface paths {
         post?: never;
         /**
          * Delete Project
-         * @description Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and drop its record.
+         * @description Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance
+         *     policy, and drop its record.
          *
          *     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
          *     read routes use (module docstring). Order, fail-closed and each step earning the next:
          *     id shape (400) → existence and authz (both 404, :func:`administered_project`) → deletion protection (409) →
-         *     emptiness (409) → revoke tuples → end its roles → delete record → audit + event.
+         *     emptiness (409) → revoke tuples → end its roles → end its maintenance policy → delete record → audit + event.
          *
          *     **Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to
          *     empty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so
@@ -1291,7 +1296,7 @@ export interface paths {
          * @description Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.
          *
          *     Refused 409 (code 14) for the last assignee of a role that is its project's only direct admin
-         *     (:func:`subject_tuples.unassign`, arbitrated by the store as the members door's revoke is).
+         *     (:func:`role_membership.unassign`, arbitrated by the store as the members door's revoke is).
          */
         delete: operations["unassign_role_management_v1_projects__project_id__roles__role_id__assignees_delete"];
         options?: never;
@@ -7346,6 +7351,8 @@ export interface components {
             deltas: number;
             /** Name */
             name: string;
+            /** Num Indices To Merge */
+            num_indices_to_merge?: number | null;
             /** Unindexed Rows */
             unindexed_rows: number;
         };
@@ -10123,7 +10130,7 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                /** @description Continue after this table id (the previous page's `page_token`). */
+                /** @description Continue after this record (the previous page's `page_token`). */
                 page_token?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;

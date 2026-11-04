@@ -43,7 +43,7 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core.config import Settings, get_settings
 from catalog.services.dataplane import create_table
-from lakehouse_kit import base_registry
+from lakehouse_kit import base_registry, version_retention
 from service_kit.ns_errors import install_problem_handlers
 from service_kit.storage_options import StorageOptions
 
@@ -108,16 +108,27 @@ def _versions(namespace: LanceNamespace, *, branch: str | None) -> set[int]:
 
 
 @pytest.mark.parametrize("retain_versions", [1])
-@pytest.mark.parametrize("branch", [None, "main", BRANCH], ids=["main", "main-by-name", "branch"])
+@pytest.mark.parametrize(
+    ("branch", "file_limit"),
+    [
+        pytest.param(None, version_retention.EXPLAIN_FILE_LIMIT, id="main"),
+        pytest.param("main", version_retention.EXPLAIN_FILE_LIMIT, id="main-by-name"),
+        pytest.param(BRANCH, version_retention.EXPLAIN_FILE_LIMIT, id="branch"),
+        pytest.param(None, 1, id="main-when-lance-truncates-the-files-it-lists"),
+    ],
+)
 def test_the_preview_offers_exactly_the_versions_the_run_deletes(
-    client: TestClient, namespace: LanceNamespace, branch: str | None, retain_versions: int
+    client: TestClient, namespace: LanceNamespace, branch: str | None, file_limit: int, retain_versions: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """THE DEFECT. A preview that honours every listed tag and no fork offers main's v2 (the fork
     ``work`` stands on) and withholds main's v3 (tagged only on ``work``), while the run keeps v2 and
     deletes v3.
 
     ``main-by-name`` is its own case because Lance records main as null, never as ``"main"``: a
-    request spelling the default ref must meet the same pins as one that omits it."""
+    request spelling the default ref must meet the same pins as one that omits it. The versions offered are Lance's own
+    answer ([[LH-562]]): the manifests its explanation lists, or, where Lance truncates that list, its explanation of
+    each version alone."""
+    monkeypatch.setattr(version_retention, "EXPLAIN_FILE_LIMIT", file_limit)
     before = _versions(namespace, branch=branch)
 
     preview = _call(client, "preview", branch=branch, retain_versions=retain_versions)

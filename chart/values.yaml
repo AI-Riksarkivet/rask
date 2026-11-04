@@ -787,8 +787,12 @@ maintenance:
   # the bus is provably incomplete (external OpenLineage producers emit over HTTP only) and an idle table
   # has no write to react to. The cadence must stay below `cloneListMaxAgeSeconds`, or the commit judge
   # and the write-event lane read a clone list they refuse as stale.
-  # -- Backstop sweep cadence: writes the clone list and due records and expires unwritten tables; must stay under `cloneListMaxAgeSeconds`.
-  schedule: "@every 1800s"
+  # A WALL-CLOCK cron (Dapr's six fields, seconds first), never `@every`: an interval restarts with the pod and the
+  # lifespan runs no tick at start, so a pod restarted more often than the interval never sweeps, its clone list ages
+  # past `cloneListMaxAgeSeconds` and the catalog refuses every stock compaction 503 ([[LH-562]]; measured live, a pod
+  # started 14:54:23Z first swept at 15:24:32Z). The schema refuses any other shape.
+  # -- Backstop sweep cadence, a wall-clock cron (`<sec> <min> <hour> <dom> <month> <dow>`): writes the clone list and due records and expires unwritten tables; its period must stay under `cloneListMaxAgeSeconds`.
+  schedule: "0 */30 * * * *" # @schema pattern: ^[0-9*,/-]+( [0-9*,/?A-Za-z-]+){5}$
   # One value for both readers of the clone list the sweep writes: the catalog refuses a stock compaction
   # 503 while the list is older (`LANCE_CLONE_LIST_MAX_AGE_SECONDS`), and the write-event lane leaves expiry
   # to the sweep (`MAINTENANCE_CLONE_LIST_MAX_AGE_SECONDS`). Both fail closed: a clone's source must not lose
@@ -800,8 +804,8 @@ maintenance:
   # backstop for expiry and the clone list, and a drift report answers a different question.
   # -- Name of the Dapr cron binding that fires the drift reconciler (`MAINTENANCE_RECONCILE_BINDING_NAME`).
   reconcileBindingName: maintenance-reconcile-cron
-  # -- Cadence of the drift reconciler, which only reads OpenFGA, the control-root registries and the bucket listing.
-  reconcileSchedule: "@every 300s"
+  # -- Cadence of the drift reconciler, a wall-clock cron like `schedule`: it only reads OpenFGA, the control-root registries and the bucket listing.
+  reconcileSchedule: "0 */5 * * * *" # @schema pattern: ^[0-9*,/-]+( [0-9*,/?A-Za-z-]+){5}$
   # THE WRITE-EVENT LANE. On, maintenance subscribes `lineage.events.v1` (its own durable,
   # `<daprAppId>-durable`), expires the written table's old versions and refreshes its due record,
   # carrying the clone list from the last sweep, so a table that a write made due is listed before the

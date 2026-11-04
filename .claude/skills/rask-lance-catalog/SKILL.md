@@ -560,7 +560,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   a caller holding `can_maintain`; the list is advisory. **Expiry is commit-driven**: the write-event lane
   (`/maintenance-arrival`) expires the table just written once it has `minVersionsToExpire` (20) reclaimable
   versions, and the sweep, every 30 minutes, is the backstop that also writes the clone list and the due records. The same pass deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
-  Both ask one eligibility rule, `lakehouse_kit.version_retention`, which the catalog's GC preview shares.
+  Both count what a pass would reclaim with Lance's own `explain_cleanup_old_versions`, under the arguments the pass's `cleanup_old_versions` takes ([[LH-562]]); the catalog's GC preview names the versions by `lakehouse_kit.version_retention`, since Lance's explanation counts them only.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
   `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,
   [[LH-493]], below). The maintain vend tier goes to the maintenance identity only (LH-473, #599).

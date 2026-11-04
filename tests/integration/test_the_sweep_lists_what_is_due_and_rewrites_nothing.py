@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 import boto3
@@ -34,8 +35,9 @@ from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse_kit import location_claims, maintenance_policies
-from lakehouse_kit.maintenance_due import read_due
+from lakehouse_kit.maintenance_due import DueRecord, read_due, write_due
 from lakehouse_kit.objectfs import lance_storage_options
+from maintenance.services import sweep
 from service_kit.governed.store_credential import S3KeyPair
 from service_kit.lineage_events import DatasetUuids, dataset_uuids
 from service_kit.storage_options import StorageOptions
@@ -56,6 +58,10 @@ BRANCH = f"{BRANCHED}/tree/work"
 #: A dataset in the catalog's layout that no `__manifest` row names.
 UNNAMED = f"{ROOT}/5e3b2a1c-9d8f-4e7a-b6c5-d4e3f2a1b0c9"
 CATALOG = "http://catalog.test"
+#: A table dropped before the tick, whose due record the tick's clean-up clears.
+DROPPED_UUID = "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+#: A table created during the tick, whose due record the write-event lane writes after the tick read the manifests.
+CREATED_UUID = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f"
 
 
 @pytest.fixture(scope="module")
@@ -145,7 +151,23 @@ def _vends_for(asked: list[str], options: dict[str, str]) -> respx.MockRouter:
     return router
 
 
-def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(estate: StorageOptions, maintenance: TestClient) -> None:
+def _due(table: str, table_uuid: str) -> DueRecord:
+    return DueRecord(table=table, uuid=table_uuid, location=f"{ROOT}/{table_uuid}", version=1, evaluated_at=datetime.now(UTC))
+
+
+def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(
+    estate: StorageOptions, maintenance: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tick's clean-up clears the record of a table dropped before it and keeps the one the write-event lane writes
+    meanwhile for a table created since, which no manifest the tick read could name ([[LH-562]])."""
+    write_due(ROOT, estate, _due("db$dropped", DROPPED_UUID))
+    writes_the_clone_list = sweep.write_clone_list
+
+    def _the_lane_writes_meanwhile(*args: Any) -> None:
+        writes_the_clone_list(*args)
+        write_due(ROOT, estate, _due("db$created", CREATED_UUID))
+
+    monkeypatch.setattr(sweep, "write_clone_list", _the_lane_writes_meanwhile)
     before = lance.dataset(URI, storage_options=estate.in_clear())
     fragments = [fragment.fragment_id for fragment in before.get_fragments()]
     asked: list[str] = []
@@ -170,5 +192,6 @@ def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(estate
         "tasks": 1,
         "target_rows_per_fragment": 1000,
     }
+    assert (read_due(ROOT, estate, DROPPED_UUID), read_due(ROOT, estate, CREATED_UUID) is not None) == (None, True)
     named = [dataset_uuids(output) for event in _Sidecar.published for output in event["outputs"] if output["name"] == TABLE]
     assert named == [DatasetUuids(table_uuid=LOCATION, namespace_uuid=NAMESPACE_UUID)], json.dumps(_Sidecar.published)

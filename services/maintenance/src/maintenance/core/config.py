@@ -92,8 +92,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     event_min_versions: int = Field(default=10, ge=1, alias="MAINTENANCE_EVENT_MIN_VERSIONS")
     #: Expire a table's versions only once at least this many are RECLAIMABLE under its policy — Lakekeeper's
     #: `min-snapshots-to-expire`. Both lanes ask it: an expiry pass that reclaims one version a tick costs a vend, a
-    #: manifest commit read and a listing for almost nothing. Eligibility is
-    #: :func:`lakehouse_kit.version_retention.reclaimable_versions`, the rule the catalog's GC preview shows.
+    #: manifest commit read and a listing for almost nothing. The count is Lance's own, ``explain_cleanup_old_versions``
+    #: with the arguments the pass's ``cleanup_old_versions`` takes ([[LH-562]]).
     min_versions_to_expire: int = Field(default=20, ge=1, alias="MAINTENANCE_MIN_VERSIONS_TO_EXPIRE")
     #: How old a manifest a stock writer staged for a version its table already holds must be before expiry removes it
     #: ([[LH-529]]): one whose commit lost its version is garbage Lance's own cleanup never lists, and the grace outlasts any

@@ -1665,15 +1665,18 @@ async def judged_page[T](
     """The page of ``candidates`` the caller holds ``relation`` on, and the page token after it.
 
     Each candidate is its listing key (sorted, unique) and its item; ``objects_of`` answers the FGA object each item of a
-    batch is judged on, ``None`` for one that holds no grant and is left out. The page fills batch by batch
-    (``LISTING_BATCH``), so a listing judges only as many candidates as its page needs. The token is the last key served,
-    a ``None`` token meaning every candidate was judged. ``authz`` is ``None`` only with FGA off (:func:`authorization`),
-    when every decision allows, so the listing still pages on one path.
+    batch is judged on, ``None`` for one that holds no grant and is left out. The page fills batch by batch, the first
+    batch as large as the page still needs and each after it twice the one before, up to ``LISTING_BATCH`` ([[LH-562]]):
+    a page judges at most its own size beyond twice the candidates it serves or passes over, so a walk a page at a time
+    judges little past each page rather than the rest of a ``LISTING_BATCH`` again on every page. The token
+    is the last key served, a ``None`` token meaning every candidate was judged. ``authz`` is ``None`` only with FGA off
+    (:func:`authorization`), when every decision allows, so the listing still pages on one path.
     """
     remaining = [(key, item) for key, item in candidates if not page_token or key > page_token]
     page: list[T] = []
-    for start in range(0, len(remaining), LISTING_BATCH):
-        batch = remaining[start : start + LISTING_BATCH]
+    start, size = 0, min(LISTING_BATCH, limit or LISTING_BATCH)
+    while start < len(remaining):
+        batch = remaining[start : start + size]
         objects = await objects_of([item for _, item in batch])
         present = sorted({obj for obj in objects if obj is not None})
         allowed = dict.fromkeys(present, True) if authz is None else await authz.batch_check(relation, present) if present else {}
@@ -1684,6 +1687,7 @@ async def judged_page[T](
             if limit is not None and len(page) == limit:
                 more = start + offset + 1 < len(remaining)
                 return page, key if more else None
+        start, size = start + len(batch), min(LISTING_BATCH, size * 2)
     return page, None
 
 

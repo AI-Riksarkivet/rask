@@ -39,7 +39,7 @@ from lakehouse_kit import auto_cleanup, base_refs, base_registry, data_directori
 from lakehouse_kit.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from lakehouse_kit.history_fences import TableHistory
 from lakehouse_kit.lance_session import affordable_cache_bytes
-from lakehouse_kit.maintenance_due import CloneList, DueRecord, delete_due, list_due, write_clone_list
+from lakehouse_kit.maintenance_due import CloneList, DueRecord, delete_due, due_record_name, due_record_names, list_due, write_clone_list
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
@@ -239,6 +239,9 @@ class SweepPlan(BaseModel):
     protected: base_refs.BaseRefs = Field(default_factory=base_refs.BaseRefs)
     clones: CloneList
     table_ids: TableIds = Field(default_factory=TableIds)
+    #: The file name of every due record held before ``table_ids`` was read: the records the tick's clean-up may judge.
+    #: One written since, by the write-event lane for a table those manifests could not name yet, is the next tick's.
+    due_judged: frozenset[str] = frozenset()
     context: PlanContext
 
 
@@ -270,12 +273,17 @@ def plan_sweep(settings: MaintenanceSettings) -> SweepPlan:
     uris, decided = _exclude_trashed(uris, trashed_by_path)
     # Discovery order is deterministic, so a pass that consistently dies at dataset N would never reach what follows.
     random.shuffle(uris)
+    # The due records are listed before the `__manifest` rows are read, so every record the clean-up judges is one those
+    # rows could name ([[LH-562]]).
+    due_judged = due_record_names(settings.resolved_control_root, options)
+    named = table_ids({f"s3://{bucket}" for bucket in buckets}, options)
     return SweepPlan(
         uris=uris,
         decided=decided,
         protected=protected,
         clones=CloneList.taken(protected, at=now),
-        table_ids=table_ids({f"s3://{bucket}" for bucket in buckets}, options),
+        table_ids=named,
+        due_judged=due_judged,
         context=PlanContext(policies=policies, now=now, older_than=timedelta(days=settings.older_than_days)),
     )
 
@@ -306,7 +314,7 @@ def _probe_before_vending(
     try:
         ds = lance.dataset(uri, storage_options=options.in_clear(), session=shared_lance_session())
         armed = bool(auto_cleanup.armed_keys(ds.config()))
-        reclaimable = policy.cleanup_enabled and count_reclaimable(ds, uri, policy) >= policy.min_reclaimable
+        reclaimable = policy.cleanup_enabled and count_reclaimable(ds, policy) >= policy.min_reclaimable
         stranded = policy.cleanup_enabled and bool(directories) and bool(base_reclaim.unreferenced(ds, directories, options, now=now))
         return WriteProbe(
             may_write=armed or reclaimable or stranded,
@@ -466,7 +474,9 @@ def _evaluate_due(uri: str, named: NamedDataset, plan: DatasetPlan, *, sweep: Sw
 def _plan_for(uri: str, named: NamedDataset, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetPlan:
     """The dataset's plan, with the policy cadence applied."""
     plan = resolve_plan(uri, context=sweep.context, owners=named.owners)
-    if plan.policy is not None and (skipped := cadence_skip(plan.policy, settings=settings, uri=uri, now=sweep.context.now)):
+    if plan.policy is not None and (
+        skipped := cadence_skip(plan.policy, settings=settings, table_uuid=named.owners.table_uuid, uri=uri, now=sweep.context.now)
+    ):
         plan.skipped = skipped
     return plan
 
@@ -483,7 +493,7 @@ def maintain_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSetting
     result = _expire_in_span(uri, named, plan, sweep=sweep, settings=settings)
     result.due = _evaluate_due(uri, named, plan, sweep=sweep, settings=settings)
     _check_committed_files(result, named, sweep=sweep, settings=settings)
-    _finish(result, plan=plan, now=sweep.context.now, settings=settings)
+    _finish(result, named=named, plan=plan, now=sweep.context.now, settings=settings)
     return result
 
 
@@ -524,7 +534,7 @@ def expire_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings)
     if plan.skipped is not None:
         return _skipped(uri, plan, settings=settings)
     result = _expire_in_span(uri, named, plan, sweep=sweep, settings=settings)
-    _finish(result, plan=plan, now=sweep.context.now, settings=settings)
+    _finish(result, named=named, plan=plan, now=sweep.context.now, settings=settings)
     return result
 
 
@@ -560,13 +570,13 @@ def _skipped(uri: str, plan: DatasetPlan, *, settings: MaintenanceSettings) -> D
     return skipped
 
 
-def _finish(result: DatasetResult, *, plan: DatasetPlan, now: datetime, settings: MaintenanceSettings) -> None:
-    _stamp_cadence(result, plan=plan, settings=settings, now=now)
+def _finish(result: DatasetResult, *, named: NamedDataset, plan: DatasetPlan, now: datetime, settings: MaintenanceSettings) -> None:
+    _stamp_cadence(result, table_uuid=named.owners.table_uuid, plan=plan, settings=settings, now=now)
     _record_dataset_metrics(result)
     _record_dataset_outcome(result, subject=settings.catalog_service_identity)
 
 
-def _stamp_cadence(result: DatasetResult, *, plan: DatasetPlan, settings: MaintenanceSettings, now: datetime) -> None:
+def _stamp_cadence(result: DatasetResult, *, table_uuid: str, plan: DatasetPlan, settings: MaintenanceSettings, now: datetime) -> None:
     """Record this dataset's ``last_maintained_at`` — only after a pass that could actually DO something.
 
     A refusal carries ``error=None``, so without ``refused is None`` a dataset the sweep can never maintain would read
@@ -576,7 +586,9 @@ def _stamp_cadence(result: DatasetResult, *, plan: DatasetPlan, settings: Mainte
     if policy is None or not policy.get("compact_interval_hours") or result.error is not None or result.refused is not None or result.skipped is not None:
         return
     try:
-        maintenance_policies.write_state(settings.resolved_policy_root, settings.storage_options(), policy, result.uri, now.isoformat())
+        maintenance_policies.write_state(
+            settings.resolved_policy_root, settings.storage_options(), policy, table_uuid=table_uuid, uri=result.uri, at=now.isoformat()
+        )
     except Exception as exc:  # noqa: BLE001 — a lost stamp re-paces one dataset; it must not fail the tick
         log.warning("compaction_policy_stamp_failed", extra={"policy": policy.get("id"), "uri": result.uri, "error": str(exc)})
 
@@ -685,18 +697,21 @@ def _bucket_of(uri: str) -> str:
     return uri.removeprefix("s3://").split("/", 1)[0] if uri.startswith("s3://") else uri
 
 
-def clear_stale_due(settings: MaintenanceSettings, *, named: TableIds) -> int:
+def clear_stale_due(settings: MaintenanceSettings, *, named: TableIds, judged: frozenset[str]) -> int:
     """Delete the due record of every table no ``__manifest`` names any more; how many were deleted.
 
     A record is a table's while a row names its location and that table holds the record's uuid: a table registered at
-    the location since holds another. Skipped when a manifest could not be read, since a table missing from an
+    the location since holds another. Only the records ``judged`` names are judged, those held before ``named`` was
+    read: the write-event lane takes no sweep lock, so a record it wrote for a table created since is not one those
+    manifests could name ([[LH-562]]). Skipped when a manifest could not be read, since a table missing from an
     incomplete read may exist; a record whose table's uuid cannot be read is kept.
     """
     if not named.complete:
         log.warning("maintenance_due_clear_skipped_incomplete_manifests")
         return 0
     options = settings.storage_options()
-    stale = [record for record in list_due(settings.resolved_control_root, options) if _is_stale(record, named, settings)]
+    held = [record for record in list_due(settings.resolved_control_root, options) if due_record_name(record.uuid) in judged]
+    stale = [record for record in held if _is_stale(record, named, settings)]
     for record in stale:
         delete_due(settings.resolved_control_root, options, record.uuid)
     if stale:
@@ -728,7 +743,7 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     results.extend(
         execute_within_budget(sweep.uris, run=partial(maintain_dataset, sweep=sweep, settings=settings), budget_seconds=settings.sweep_budget_seconds)
     )
-    clear_stale_due(settings, named=sweep.table_ids)
+    clear_stale_due(settings, named=sweep.table_ids, judged=sweep.due_judged)
     report_bucket_coverage(planned=sweep.uris, maintained=[result.uri for result in results])
     # The completion half of the `record_run_started` pair: started minus completed is the lost-pass count.
     record_run()

@@ -17,6 +17,8 @@ from typing import Any
 
 import pytest
 
+from catalog.core.config import get_settings
+from lakehouse_kit import maintenance_policies
 from service_kit.naming import CONTROL_ID_RE
 
 
@@ -98,13 +100,19 @@ def test_only_its_admins_arm_and_clear_it(
 
 
 @pytest.mark.parametrize(
-    ("force", "answered", "read_after"),
+    ("force", "answered", "read_after", "policy_after"),
     [
-        pytest.param("false", (409, "application/problem+json", 3, REFUSED_UNLESS_FORCED), 200, id="refused-unless-forced"),
-        pytest.param("true", (200, {"project": PROJECT, "tuples_revoked": 3}), 404, id="forced"),
+        pytest.param("false", (409, "application/problem+json", 3, REFUSED_UNLESS_FORCED), 200, True, id="refused-unless-forced"),
+        pytest.param("true", (200, {"project": PROJECT, "tuples_revoked": 3}), 404, False, id="forced"),
     ],
 )
-def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force: str, answered: tuple[Any, ...], read_after: int) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force: str, answered: tuple[Any, ...], read_after: int, policy_after: bool) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """A delete that retires the project ends its maintenance policy too ([[LH-562]]): a project created again under the
+    id is another tenant, which a policy kept for the id would govern as soon as it named a bucket."""
+    settings = get_settings()
+    maintenance_policies.put_policy(
+        settings.registry_root, settings.storage_options(), {"kind": "project", "id": PROJECT, "buckets": ["acme-lake"], "retain_versions": 1}
+    )
     armed = estate.client.post(f"/management/v1/projects/{PROJECT}/protection", json={"protected": True}, headers=estate.bearer(CO_ADMIN))
     assert armed.status_code == 200, armed.text
 
@@ -115,3 +123,4 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
     else:
         assert (answer.status_code, answer.headers["content-type"], answer.json()["code"], answer.json()["detail"]) == answered
     assert estate.client.get(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN)).status_code == read_after
+    assert (maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "project", PROJECT) is not None) is policy_after

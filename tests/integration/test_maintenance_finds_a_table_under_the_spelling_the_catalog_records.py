@@ -177,7 +177,11 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     dropped = estate.recorded(table)
     location = str(dropped["location"])
     policy_uuid = estate.policy_uuids[table]
-    assert maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid) is not None, "precondition: the drop kept the policy for an undrop"
+    policy = maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid)
+    assert policy is not None, "precondition: the drop kept the policy for an undrop"
+    # The stamps the sweep and the write-event lane took while the table stood ([[LH-562]]).
+    maintenance_policies.write_state(estate.root, estate.key, policy, table_uuid=policy_uuid, uri=location, at=datetime.now(UTC).isoformat())
+    maintenance_policies.write_planned_version(estate.root, estate.key, policy_uuid, 3)
     trash.put(estate.root, estate.key, {**dropped, "expires_at": (datetime.now(UTC) - timedelta(days=29)).isoformat()})
     # A table created since under the dropped table's name, which the purge of the dropped one must leave as it is.
     estate.made(table)
@@ -211,6 +215,11 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     assert estate.reads(table) == (3, 3), "the purge reached the table created since under the name"
     assert {key: size for key, size in estate.objects().items() if not key.startswith("spelled/")} == standing
     assert maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid) is None, "the policy outlived the table it governed"
+    stamps = (
+        maintenance_policies.read_state(estate.root, estate.key, policy, table_uuid=policy_uuid, uri=location),
+        maintenance_policies.read_planned_version(estate.root, estate.key, policy_uuid),
+    )
+    assert stamps == (None, None), "the table's maintenance stamps outlived it"
     registry = base_registry.BaseRegistry(control_root=estate.root, storage_options=estate.key)
     assert base_registry.read_base_record(registry, location) is None, "the table's base record outlived its bytes"
 

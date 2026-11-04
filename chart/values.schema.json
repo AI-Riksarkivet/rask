@@ -668,12 +668,14 @@
                     "type": "string"
                 },
                 "reconcileSchedule": {
-                    "description": "Cadence of the drift reconciler, which only reads OpenFGA, the control-root registries and the bucket listing.",
-                    "type": "string"
+                    "description": "Cadence of the drift reconciler, a wall-clock cron like `schedule`: it only reads OpenFGA, the control-root registries and the bucket listing.",
+                    "type": "string",
+                    "pattern": "^[0-9*,/-]+( [0-9*,/?A-Za-z-]+){5}$"
                 },
                 "schedule": {
-                    "description": "Backstop sweep cadence: writes the clone list and due records and expires unwritten tables; must stay under `cloneListMaxAgeSeconds`.",
-                    "type": "string"
+                    "description": "Backstop sweep cadence, a wall-clock cron (`\u003csec\u003e \u003cmin\u003e \u003chour\u003e \u003cdom\u003e \u003cmonth\u003e \u003cdow\u003e`): writes the clone list and due records and expires unwritten tables; its period must stay under `cloneListMaxAgeSeconds`.",
+                    "type": "string",
+                    "pattern": "^[0-9*,/-]+( [0-9*,/?A-Za-z-]+){5}$"
                 },
                 "sweepBudgetSeconds": {
                     "description": "Wall-clock ceiling for one sweep tick, checked between datasets; 0 means unlimited.",

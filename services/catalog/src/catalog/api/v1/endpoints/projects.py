@@ -77,7 +77,7 @@ from catalog.schemas import (
 from catalog.services import projects as project_registry
 from catalog.services import role_grants, roles, warehouses
 from catalog.services.control_records import ProtectionChange
-from lakehouse_kit import protection
+from lakehouse_kit import maintenance_policies, protection
 from lakehouse_kit.control_emit import emit_control
 from lakehouse_kit.records import RecordExistsError, RecordMissingError
 from service_kit.governed import fga
@@ -437,12 +437,13 @@ async def delete_project(
     control: ControlEmitterDep,
     force: bool = False,
 ) -> DeleteProjectResponse:
-    """Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and drop its record.
+    """Retire a tenant: refuse while it still holds warehouses, else revoke its tuples, end its roles and its maintenance
+    policy, and drop its record.
 
     Gated on ``project:<id>#can_administer`` — the tenant's OWN admin bar, not the estate-observer gate the
     read routes use (module docstring). Order, fail-closed and each step earning the next:
     id shape (400) → existence and authz (both 404, :func:`administered_project`) → deletion protection (409) →
-    emptiness (409) → revoke tuples → end its roles → delete record → audit + event.
+    emptiness (409) → revoke tuples → end its roles → end its maintenance policy → delete record → audit + event.
 
     **Its roles go with it** ([[LH-557]]): a role belongs to one project and holds no data, so it is no content to
     empty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so
@@ -516,6 +517,9 @@ async def delete_project(
     # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse
     # record claims this project, and a warehouse's delete revokes its own tuples (that edge among them) before its
     # record goes.
+    # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant,
+    # and a policy kept for the id would govern that tenant's buckets as soon as it named them.
+    await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
     await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
 
     actor = f"user:{token.subject}" if token else None

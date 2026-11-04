@@ -62,21 +62,27 @@ def test_state_stamps_live_apart_from_policies(tmp_path: Path) -> None:
     record = _policy(compact_interval_hours=6)
     uri = "s3://bkt/u1_db$t"
     mp.put_policy(root, StorageOptions(), record)
-    assert mp.read_state(root, StorageOptions(), record, uri) is None
-    mp.write_state(root, StorageOptions(), record, uri, "2026-07-16T00:00:00+00:00")
-    assert mp.read_state(root, StorageOptions(), record, uri) == "2026-07-16T00:00:00+00:00"
+    assert mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri) is None
+    mp.write_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri, at="2026-07-16T00:00:00+00:00")
+    assert mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=uri) == "2026-07-16T00:00:00+00:00"
     assert len(mp.list_policies(root, StorageOptions())) == 1
 
 
-def test_state_stamps_are_per_dataset_not_per_policy(tmp_path: Path) -> None:
-    # CONTRACT (audit 2026-07-16): a namespace policy covers many datasets, and a per-policy stamp let
-    # the first dataset in discovery order starve every sibling (stamped fresh the same tick, siblings
-    # skipped forever). One stamp per (policy, dataset).
+def test_a_stamp_paces_only_its_dataset_under_the_policy_that_took_it(tmp_path: Path) -> None:
+    # CONTRACT (audit 2026-07-16): a per-policy stamp let the first dataset in discovery order starve every sibling, so
+    # each dataset (a branch is one of its own under its table's uuid) keeps its own; and a stamp taken under another
+    # policy paces nothing, since the policy that governs now has not maintained it ([[LH-562]]).
     root = str(tmp_path)
     record = _policy(kind="namespace", id_="silver", uuid="ns-silver", compact_interval_hours=6)
-    mp.write_state(root, StorageOptions(), record, "s3://bkt/medallion/silver/a", "2026-07-16T00:00:00+00:00")
-    assert mp.read_state(root, StorageOptions(), record, "s3://bkt/medallion/silver/b") is None
-    assert mp.read_state(root, StorageOptions(), record, "s3://bkt/medallion/silver/a") is not None
+    main, branch = f"s3://bkt/{TABLE_UUID}", f"s3://bkt/{TABLE_UUID}/tree/work"
+    mp.write_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=main, at="2026-07-16T00:00:00+00:00")
+    replaced = _policy(compact_interval_hours=6)
+    read = [
+        mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=main),
+        mp.read_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=branch),
+        mp.read_state(root, StorageOptions(), replaced, table_uuid=TABLE_UUID, uri=main),
+    ]
+    assert read == ["2026-07-16T00:00:00+00:00", None, None]
 
 
 def test_list_policies_skips_a_corrupt_record(tmp_path: Path) -> None:
@@ -204,12 +210,12 @@ def test_the_cadence_skips_inside_the_interval(tmp_path: Path) -> None:
     cadenced = _policy(compact_interval_hours=6)
     mp.put_policy(str(tmp_path), StorageOptions(), cadenced)
     # No stamp yet → maintain (an absent/lost stamp must never silence maintenance).
-    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) is None
+    assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) is None
     # Fresh stamp → skip; stale stamp → maintain.
-    mp.write_state(str(tmp_path), StorageOptions(), cadenced, uri, (now - timedelta(hours=1)).isoformat())
-    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) == "policy_interval"
-    mp.write_state(str(tmp_path), StorageOptions(), cadenced, uri, (now - timedelta(hours=7)).isoformat())
-    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) is None
+    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at=(now - timedelta(hours=1)).isoformat())
+    assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) == "policy_interval"
+    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at=(now - timedelta(hours=7)).isoformat())
+    assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) is None
 
 
 def test_a_naive_or_malformed_stamp_maintains_instead_of_raising(tmp_path: Path) -> None:
@@ -219,10 +225,10 @@ def test_a_naive_or_malformed_stamp_maintains_instead_of_raising(tmp_path: Path)
     now = datetime.now(UTC)
     uri = "s3://bkt/u1_db$t"
     cadenced = _policy(compact_interval_hours=6)
-    mp.write_state(str(tmp_path), StorageOptions(), cadenced, uri, datetime.now().isoformat())
-    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) is None
-    mp.write_state(str(tmp_path), StorageOptions(), cadenced, uri, "not-a-timestamp")
-    assert cadence_skip(cadenced, settings=settings, uri=uri, now=now) is None
+    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at=datetime.now().isoformat())
+    assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) is None
+    mp.write_state(str(tmp_path), StorageOptions(), cadenced, table_uuid=TABLE_UUID, uri=uri, at="not-a-timestamp")
+    assert cadence_skip(cadenced, settings=settings, table_uuid=TABLE_UUID, uri=uri, now=now) is None
 
 
 def test_tag_pinned_version_survives_any_retention_policy(tmp_path: Path) -> None:

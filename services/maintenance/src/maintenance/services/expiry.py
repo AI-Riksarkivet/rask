@@ -31,7 +31,6 @@ from lakehouse_kit.features import (
 )
 from lakehouse_kit.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse_kit.stored_objects import delete_objects, list_under
-from lakehouse_kit.version_retention import Retention, reclaimable_versions
 from maintenance.core.config import shared_lance_session
 from maintenance.core.metrics import CatalogRefusal
 from maintenance.services import base_reclaim
@@ -132,9 +131,6 @@ class ExpiryPolicy(BaseModel):
     #: How long a manifest staged for a version the ref already holds is kept before the pass removes it
     #: (``MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS``): past any commit still deciding its outcome.
     staged_grace: timedelta = timedelta(minutes=10)
-
-    def retention(self) -> Retention:
-        return Retention(older_than=self.older_than, retain_versions=self.retain_versions)
 
 
 class ExpiryTarget(BaseModel):
@@ -328,10 +324,14 @@ def _refusal(opened: _Opened, target: ExpiryTarget) -> DatasetResult | None:
     )
 
 
-def count_reclaimable(ds: lance.LanceDataset, uri: str, policy: ExpiryPolicy) -> int:
-    """How many versions ``policy`` would reclaim on the ref ``uri`` opens: the catalog's GC-preview rule."""
-    branch = branch_named_by(uri, list(ds.branches.list())) if f"/{BRANCH_CONTAINER}/" in uri else None
-    return len(reclaimable_versions(ds, branch=branch, retention=policy.retention(), now=datetime.now(UTC)))
+def count_reclaimable(ds: lance.LanceDataset, policy: ExpiryPolicy) -> int:
+    """How many versions the pass's own ``cleanup_old_versions`` would reclaim on the ref ``ds`` is opened on.
+
+    Lance's own answer, ``explain_cleanup_old_versions`` with the arguments the pass's cleanup takes, so the threshold
+    counts exactly what the cleanup would delete, under any pylance ([[LH-562]]).
+    """
+    explained = ds.explain_cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
+    return explained.stats.old_versions
 
 
 #: A manifest a stock writer stages, `<inverted version>.manifest-<uuid>` (ADR 0157). Lance's listing drops the name
@@ -449,7 +449,7 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult
     result.table_id = target.table_id
     try:
         if policy.cleanup_enabled:
-            result.reclaimable_versions = count_reclaimable(opened.ds, result.uri, policy)
+            result.reclaimable_versions = count_reclaimable(opened.ds, policy)
         with _history_held(result, target, policy):
             _reclaim_versions(opened.ds, result=result, target=target, policy=policy)
             _reclaim_data_directories(opened.ds, result=result, target=target, policy=policy)

@@ -59,7 +59,8 @@ def _readable_stats(ds: Any, index: Any) -> tuple[str, dict[str, Any]] | None:  
 
 
 def due_indices(ds: Any, *, max_deltas: int = DEFAULT_MAX_DELTAS) -> list[IndexDue]:  # noqa: ANN401 — LanceDataset, no protocol
-    """Every user index an optimize is due on: one with unindexed rows, or with more than ``max_deltas`` deltas."""
+    """Every user index an optimize is due on: one with unindexed rows, or with more than ``max_deltas`` deltas, which
+    names the merge that clears them (:attr:`IndexDue.num_indices_to_merge`)."""
     try:
         described = list(ds.describe_indices())
     except Exception as exc:
@@ -74,5 +75,5 @@ def due_indices(ds: Any, *, max_deltas: int = DEFAULT_MAX_DELTAS) -> list[IndexD
         unindexed_rows = int(stats.get("num_unindexed_rows") or 0)
         deltas = int(stats.get("num_indices") or 0)
         if unindexed_rows > 0 or deltas > max_deltas:
-            due.append(IndexDue(name=name, unindexed_rows=unindexed_rows, deltas=deltas))
+            due.append(IndexDue(name=name, unindexed_rows=unindexed_rows, deltas=deltas, num_indices_to_merge=deltas if deltas > max_deltas else None))
     return due

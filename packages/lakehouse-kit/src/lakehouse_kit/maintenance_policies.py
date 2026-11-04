@@ -27,7 +27,7 @@ Fields: ``retention_days`` / ``retain_versions`` (old-version cleanup overrides 
 tag-pinned versions from cleanup, so ``published`` and every other tag survive any policy), ``compact_enabled``
 (opt a dataset out of maintenance entirely), ``compact_interval_hours`` (cadence — the sweep skips the
 dataset until the interval has elapsed since its last maintenance; the sweep records that stamp under
-``_policies/state/``, a separate prefix so the two writers never contend). All IO is blocking; callers
+``_policies/state/<table uuid>/``, a separate prefix so the two writers never contend, which the table's ending ends). All IO is blocking; callers
 threadpool it.
 """
 
@@ -37,6 +37,7 @@ import logging
 from collections.abc import Sequence
 from typing import Any, Final
 
+from lakehouse_kit import stored_objects
 from lakehouse_kit.record_store import delete_record, get_record, list_records, put_record, record_key
 from service_kit.storage_options import StorageOptions
 
@@ -145,34 +146,45 @@ def _project_policy(records: list[dict[str, Any]], uri: str) -> dict[str, Any] |
     return hits[0] if hits else None
 
 
-def _state_key(record: dict[str, Any], uri: str) -> str:
-    # Per (policy, DATASET): a namespace policy covers many datasets, and a shared stamp would let the
-    # first success starve every sibling until the interval elapsed (audit 2026-07-16). The policy half is
-    # the record's own key, its object's uuid, so a rename keeps the stamp with the policy.
-    return record_key(f"{PREFIX}/state", str(record["kind"]), f"{policy_key(record)}:{uri}")
+#: The sweep's and the event lane's stamps, one directory per table uuid ([[LH-562]]), so a table's ending ends them all
+#: (:func:`end_table_state`, at the control root, which is the policy root the stamps are written at, as the policy
+#: records the catalog writes there already require) and none outlives the table it paced. A table registered later at
+#: the same location holds another uuid and starts unstamped.
+STATE_PREFIX: Final = f"{PREFIX}/state"
 
 
-def read_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], uri: str) -> str | None:
-    """The sweep's ``last_maintained_at`` stamp for one dataset under a policy, or ``None``. State lives
-    under ``_policies/state/`` — a separate prefix the sweep owns, so the catalog's policy writes and the
-    sweep's stamps never contend."""
-    stamped = get_record(control_root, storage_options, _state_key(record, uri), event="maintenance_policy_state")
-    if stamped is None:
+def _table_state(table_uuid: str) -> str:
+    return f"{STATE_PREFIX}/{table_uuid}"
+
+
+def _cadence_key(table_uuid: str, uri: str) -> str:
+    # Per DATASET: a branch is a dataset of its own under its table's uuid, and a shared stamp would let one ref's pass
+    # starve the others until the interval elapsed (audit 2026-07-16).
+    return record_key(_table_state(table_uuid), "cadence", uri)
+
+
+def _policy_of(record: dict[str, Any]) -> str:
+    return f"{record['kind']}:{policy_key(record)}"
+
+
+def read_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, table_uuid: str, uri: str) -> str | None:
+    """The sweep's ``last_maintained_at`` stamp for the dataset ``uri`` of the table ``table_uuid`` under the policy
+    ``record``, or ``None``. A stamp taken under another policy paces nothing: the policy that governs now has not
+    maintained the dataset yet."""
+    stamped = get_record(control_root, storage_options, _cadence_key(table_uuid, uri), event="maintenance_policy_state")
+    if stamped is None or stamped.get("policy") != _policy_of(record):
         return None
     value = stamped.get("last_maintained_at")
     return value if isinstance(value, str) else None
 
 
-def write_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], uri: str, at: str) -> None:
-    """Persist the sweep's ``last_maintained_at`` stamp for one dataset under a policy (overwrite)."""
-    put_record(control_root, storage_options, _state_key(record, uri), {"last_maintained_at": at})
+def write_state(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, table_uuid: str, uri: str, at: str) -> None:
+    """Persist the sweep's ``last_maintained_at`` stamp for one dataset under the policy ``record`` (overwrite)."""
+    put_record(control_root, storage_options, _cadence_key(table_uuid, uri), {"policy": _policy_of(record), "last_maintained_at": at})
 
 
-#: The event lane's per-TABLE stamp, keyed by the table's uuid. Not `_state_key`, which derives from a
-#: policy record: that key exists only for datasets carrying a policy with an interval, so an unpoliced
-#: table would have nowhere to stamp, and unpoliced is the default. Same `state/` prefix, its own kind, so
-#: both live in one place an operator can list.
-_EVENT_STATE_KIND = "table"
+def _planned_key(table_uuid: str) -> str:
+    return f"{_table_state(table_uuid)}/planned.json"
 
 
 def read_planned_version(control_root: str, storage_options: StorageOptions, table_uuid: str) -> int | None:
@@ -180,14 +192,21 @@ def read_planned_version(control_root: str, storage_options: StorageOptions, tab
 
     ``None`` also covers an unreadable or malformed stamp, and that is the safe direction: it maintains.
     Treating an unreadable stamp as "recently planned" would silence maintenance for that table until
-    someone noticed, which is the failure mode the cadence stamp's own docstring warns about. Keyed by the
-    uuid, so a table registered later at the same location starts unstamped.
+    someone noticed, which is the failure mode the cadence stamp's own docstring warns about.
     """
-    record = get_record(control_root, storage_options, record_key(f"{PREFIX}/state", _EVENT_STATE_KIND, table_uuid), event="maintenance_event_state")
+    record = get_record(control_root, storage_options, _planned_key(table_uuid), event="maintenance_event_state")
     value = record.get("last_planned_version") if record else None
     return value if isinstance(value, int) else None
 
 
 def write_planned_version(control_root: str, storage_options: StorageOptions, table_uuid: str, version: int) -> None:
     """Stamp the version this lane planned at (overwrite — only the latest matters)."""
-    put_record(control_root, storage_options, record_key(f"{PREFIX}/state", _EVENT_STATE_KIND, table_uuid), {"last_planned_version": version})
+    put_record(control_root, storage_options, _planned_key(table_uuid), {"last_planned_version": version})
+
+
+def end_table_state(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
+    """Delete every stamp the table ``table_uuid`` holds; whether any existed. Writes no directory marker
+    (:func:`stored_objects.delete_objects`), since maintenance, which ends a purged table's records, may put none here."""
+    listed = stored_objects.list_under(f"{control_root.rstrip('/')}/{_table_state(table_uuid)}", storage_options)
+    stored_objects.delete_objects(control_root, storage_options, [stored.path for stored in listed])
+    return bool(listed)

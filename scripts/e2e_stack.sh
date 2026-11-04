@@ -477,7 +477,7 @@ DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.t
 [ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
 # A FRESH ESTATE REFUSES EVERY COMPACTION UNTIL MAINTENANCE HAS SWEPT ONCE: `version/create` judges a compaction against
 # the clone list the sweep writes, and a missing list refuses (ADR 0162). The sweep that writes it is the backstop on
-# `maintenance.schedule`, every 1800 s, so the lane runs the first one itself, on the route the cron binding posts to,
+# `maintenance.schedule`, on the hour and the half hour, so the lane runs the first one itself, on the route the cron binding posts to,
 # and the erasure drill's compaction a minute later is judged as it would be on an estate that has run for a while.
 # A SWEEP RAN WHEN ITS SUMMARY CAME BACK, and nothing else counts: the route answers `skipped` while the signing key is
 # unresolved or another sweep holds the lock, and the forward answers nothing while the pod is out of its Service, which

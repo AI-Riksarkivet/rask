@@ -34,8 +34,9 @@ OBJECT_RECORD_PREFIXES: Final = (protection.PREFIX, maintenance_policies.PREFIX,
 def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, uuid: str) -> list[str]:
     """Delete every record the object ``uuid`` names holds, and return the prefixes of the records that existed.
 
-    A table also holds one record per stock commit whose author the catalog recorded (:mod:`commit_records`) and one
-    per commit that added a file (:mod:`file_identities`), each under a directory of its uuid, which go with the rest.
+    A table also holds one record per stock commit whose author the catalog recorded (:mod:`commit_records`), one per
+    commit that added a file (:mod:`file_identities`) and maintenance's stamps (:func:`maintenance_policies.end_table_state`),
+    each under a directory of its uuid, which go with the rest.
     """
     ended: list[str] = []
     for prefix in OBJECT_RECORD_PREFIXES:
@@ -45,4 +46,6 @@ def end_object_records(control_root: str, storage_options: StorageOptions, kind:
         ended.append(commit_records.AUTHORS_PREFIX)
     if kind == "table" and file_identities.end(control_root, storage_options, uuid):
         ended.append(file_identities.PREFIX)
+    if kind == "table" and maintenance_policies.end_table_state(control_root, storage_options, uuid):
+        ended.append(maintenance_policies.STATE_PREFIX)
     return ended
