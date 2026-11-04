@@ -71,20 +71,3 @@ class _BlockImport:
         if fullname == self.blocked or fullname.startswith(f"{self.blocked}."):
             raise ModuleNotFoundError(f"No module named {fullname!r}", name=fullname)
         return
-
-
-def test_the_body_limit_code_still_matches_the_lance_namespace_enum() -> None:
-    """The hard-coded wire constant must not drift from the enum it stands for.
-
-    `body_limit` cannot import `ErrorCode` — that is the whole point — so it spells the number. This
-    test runs where the extra IS installed and is the only thing standing between that literal and a
-    silent divergence from the spec's own code.
-    """
-    lance_namespace = pytest.importorskip("lance_namespace", reason="the [governed] extra is absent, so there is no enum to compare against")
-    from service_kit.body_limit import _INVALID_INPUT
-
-    assert int(lance_namespace.ErrorCode.INVALID_INPUT) == _INVALID_INPUT, (
-        f"body_limit spells INVALID_INPUT as {_INVALID_INPUT}, but the Lance-Namespace enum now says "
-        f"{int(lance_namespace.ErrorCode.INVALID_INPUT)} — a body-too-large response is quoting the wrong "
-        "spec code to every client that dispatches on it."
-    )

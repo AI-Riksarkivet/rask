@@ -1,54 +1,79 @@
-"""Six apps buffered request bodies with no ceiling; the cap existed in one service only.
+"""Every app the factory builds refuses a body over its cap before a handler buffers it, with the spec's problem body.
 
-`BodySizeLimitMiddleware` was written for the catalog's Arrow-IPC write endpoints, which read the
-whole body into memory before the handler runs — a single unbounded POST OOMs the worker. It lived in
-`services/catalog/src/catalog/api/body_limit.py` and applied to the catalog alone.
+`BodySizeLimitMiddleware` is registered by `service_kit.middleware.register_middleware` (owner ruling 2026-08-26), so a
+service cannot be added without a cap and a route cannot arrive uncapped. The cap is a DoS ceiling, not a business
+rule: it stops a multi-GB body reaching a buffer, and a route that wants a tighter bound states it itself.
 
-Every other app got CORS + RequestID + Timing and nothing else. That includes the GATEWAY, which
-buffers every proxied request body whole before forwarding it, and is the one app published at the
-edge — so the estate's least-protected body path was also its most exposed.
-
-Owner ruling 2026-08-26: body caps land as ONE SEAM in `service_kit.middleware.register_middleware`,
-so a service cannot be added without one and a new route cannot arrive uncapped.
-
-THE CAP IS A DoS CEILING, NOT A BUSINESS RULE. It is deliberately generous: it exists to stop a
-multi-GB body reaching a buffer, not to express what a payload should be. A route that wants a
-tighter bound states it itself — the catalog keeps its own 256 MiB for Arrow-IPC, which is larger
-than the shared default and set explicitly for that reason.
+The refusal is built by pure-ASGI middleware, which answers before the body is buffered and so cannot raise into the
+problem handlers; it spells the spec's `INVALID_INPUT` itself, because `body_limit` stays importable without the
+Lance-Namespace extra, and a generated client validating the body requires that `code`. Each test drives the app the
+factory builds, whose `TimingMiddleware` is a `BaseHTTPMiddleware`: its task group wraps an app exception in an
+`ExceptionGroup`, which the streaming refusal must still answer as a 413 rather than a 500.
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
+from lance_namespace import ErrorCode
 
 from service_kit import make_service_app
 from service_kit.config import Settings
 
 
-def test_an_oversized_body_is_REFUSED_with_413() -> None:
-    """End to end through a real app built by the factory."""
-    app = make_service_app(title="capped", routers=[])
+CAP = 1000
+
+
+def _capped_app() -> FastAPI:
+    app = make_service_app(title="capped", routers=[], settings=Settings(max_body_bytes=CAP))
 
     @app.post("/echo")
-    async def _echo() -> dict[str, str]:
-        return {"ok": "yes"}
+    async def _echo(request: Request) -> dict[str, int]:
+        return {"len": len(await request.body())}
 
-    cap = Settings().max_body_bytes
-    with TestClient(app) as client:
-        resp = client.post("/echo", content=b"x" * (cap + 1))
-
-    assert resp.status_code == 413, f"an over-cap body answered {resp.status_code}, not 413"
+    return app
 
 
-def test_a_normal_body_still_passes() -> None:
+def test_a_body_over_the_cap_is_refused_with_the_specs_problem_body() -> None:
+    with TestClient(_capped_app()) as client:
+        resp = client.post("/echo", content=b"x" * (CAP + 1))
+
+    body = resp.json()
+    assert (resp.status_code, resp.headers["content-type"]) == (413, "application/problem+json")
+    assert (body["status"], body["code"], set(body)) == (413, int(ErrorCode.INVALID_INPUT), {"type", "title", "status", "detail", "code", "error"})
+
+
+def test_a_body_at_the_cap_is_served() -> None:
+    with TestClient(_capped_app()) as client:
+        resp = client.post("/echo", content=b"x" * CAP)
+
+    assert (resp.status_code, resp.json()) == (200, {"len": CAP})
+
+
+def test_a_chunked_body_over_the_cap_is_refused_while_it_streams() -> None:
+    """With no Content-Length the fast path cannot fire, so the streaming byte counter refuses it."""
+
+    def stream() -> Iterator[bytes]:
+        for _ in range(4):
+            yield b"x" * 500
+
+    with TestClient(_capped_app()) as client:
+        resp = client.post("/echo", content=stream())
+
+    assert (resp.status_code, resp.json()["code"]) == (413, int(ErrorCode.INVALID_INPUT))
+
+
+def test_an_ordinary_body_is_served_under_the_default_cap() -> None:
     """The guard that stops the ceiling being tightened into a business rule."""
-    app = make_service_app(title="capped2", routers=[])
+    app = make_service_app(title="default-cap", routers=[])
 
     @app.post("/echo")
-    async def _echo() -> dict[str, str]:
-        return {"ok": "yes"}
+    async def _echo(request: Request) -> dict[str, int]:
+        return {"len": len(await request.body())}
 
     with TestClient(app) as client:
         resp = client.post("/echo", content=b"x" * 1024)
 
-    assert resp.status_code == 200
+    assert (resp.status_code, resp.json()) == (200, {"len": 1024})

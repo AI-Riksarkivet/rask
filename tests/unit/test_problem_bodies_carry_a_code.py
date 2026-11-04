@@ -37,24 +37,8 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from service_kit.body_limit import BodySizeLimitMiddleware
-
 
 REQUIRED_KEYS = {"type", "title", "status", "detail", "code", "error"}
-
-
-def test_the_body_cap_refusal_carries_a_code() -> None:
-    """Pure-ASGI middleware: it must answer before the body is buffered, so it cannot raise."""
-    app = FastAPI()
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=16)
-
-    @app.post("/write")
-    async def write() -> dict[str, str]:
-        return {"ok": "yes"}
-
-    response = TestClient(app).post("/write", content=b"x" * 64)
-    assert response.status_code == 413
-    assert set(response.json()) >= REQUIRED_KEYS, f"413 body omits {REQUIRED_KEYS - set(response.json())}"
 
 
 def test_the_maintenance_refusal_carries_a_code_and_keeps_retry_after() -> None:

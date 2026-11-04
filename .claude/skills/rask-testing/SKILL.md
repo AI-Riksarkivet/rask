@@ -142,22 +142,25 @@ consequences it does not spell out.
 A failure that appears under `make test` and not under `check-fast` points at a test that depends on
 sharing a worker with the rest of its file.
 
-### What the root `conftest.py` already does
+### What the root `conftest.py` and service-kit's plugin already do
 
-Don't redo any of it in a suite. At import, before collection builds any app, it:
+Don't redo any of it in a suite. At import, before collection builds any app, the root `conftest.py`:
 
 - strips the OTLP endpoint, header and protocol variables a harness injects (Dagger sets
   `OTEL_EXPORTER_OTLP_ENDPOINT` for its own telemetry), and strips them again once per session;
 - sets `RASK_INSECURE_ALLOW_UNAUTHENTICATED=true` and `RASK_ALLOW_UNAUTHENTICATED_DAPR=true` with
   `setdefault`, so an app builds with auth off unless a test turns it on. A test of those guards
-  removes the variable with `monkeypatch.delenv` or passes the value to the guard directly;
-- makes bare `@respx.mock` strict (`assert_all_called`). A test whose unused routes are the point takes
-  the `respx_allows_unused_routes` fixture.
+  removes the variable with `monkeypatch.delenv` or passes the value to the guard directly.
 
-Around every test, as autouse fixtures, it bounds the Dapr sidecar handshake to 1 s, clears Dapr's
-process-global actor-proxy factory, gives the test a fresh cache of secret-store reads
-(`service_kit.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its
-own clock), and writes the projected service-account token files the catalog's and lineage's doors read.
+The platform's test seam is not the root conftest's: `service-kit` ships it as a pytest plugin
+(`service_kit.pytest_plugin`, entry point `pytest11` `service_kit`, [[XC-190]]), which pytest loads wherever the
+package is installed, so a client's suite in its own repository gets the same seam with the version it pins. It
+makes bare `@respx.mock` strict (`assert_all_called`; a test whose unused routes are the point takes the
+`respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it bounds the Dapr sidecar
+handshake to 1 s, clears Dapr's process-global actor-proxy factory, gives the test a fresh cache of secret-store reads
+(`service_kit.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its own clock),
+and writes the projected service-account token files the catalog's and lineage's doors read. A fixture guarding state
+`service-kit` or its `dapr` dependency keeps across a process belongs in the plugin, never in the root conftest.
 
 On request it serves the identity and authorization plane for real: `sa_issuer` and `dex_issuer` (loopback issuers
 that mint tokens), `openfga` (the pinned OpenFGA server in memory, one per xdist worker, failing the test when the

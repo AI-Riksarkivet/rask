@@ -33,7 +33,7 @@ from service_kit.ns_errors import install_problem_handlers
 
 @pytest.fixture(autouse=True)
 def _store_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every test here runs a store-mode door; the root conftest starts each one on an unread store."""
+    """Every test here runs a store-mode door; service-kit's pytest plugin starts each one on an unread store."""
     monkeypatch.setenv("RASK_APP_TOKEN_FROM_STORE", "true")
     monkeypatch.delenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", raising=False)
 
