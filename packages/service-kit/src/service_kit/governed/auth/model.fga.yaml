@@ -381,7 +381,7 @@ tests:
     check:
       # Each subject here HOLDS a live relation on the object, which is what the negatives above lack:
       # alice and dave hold nothing on warehouse:lance_catalog, so they deny under any model. The
-      # `reader: true` / `writer: true` / `viewer: true` line is load-bearing — it proves the tuple is
+      # `reader: true` / `writer: true` line is load-bearing — it proves the tuple is
       # still there, so removing it can never quietly turn these negatives vacuous again.
       - user: user:olive
         object: warehouse:lance_catalog
@@ -1507,7 +1507,7 @@ tests:
       - user: user:a-notifier
         relation: member_expander
         object: estate:rask
-      - user: user:viewer
+      - user: user:a-check-only-service
         relation: decider
         object: estate:rask
     check:
@@ -1521,7 +1521,7 @@ tests:
           can_expand_members: false
           can_observe_events: false
           can_read_event_feed: false
-      - user: user:viewer
+      - user: user:a-check-only-service
         object: estate:rask
         assertions:
           can_decide_access: true

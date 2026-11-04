@@ -1,7 +1,7 @@
 """What a bus door does with an event once its signature has been checked ([[XC-078]]).
 
 Every bus door makes the same decision: maintenance's `/maintenance-arrival` in the lakehouse, and a client's door on
-the lakehouse's events (the notifications inbox's `/control-events` and `/lineage-events`). The decision has to catch
+the lakehouse's events (a notifier's subscriptions to the control lane and the lineage feed). The decision has to catch
 this package's own
 exceptions, so it is written once here and each door only translates the verdict into its transport's answer.
 

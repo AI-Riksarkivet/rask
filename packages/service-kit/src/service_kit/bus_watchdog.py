@@ -7,7 +7,7 @@ outlasts them closes the connection for good (`nats.go:2985-2990`): every subscr
 `nats: connection closed`, and daprd re-creates no component without a restart, since the estate runs without Dapr's
 hot reload. Its probes stay green, the sidecar's liveness a TCP check and its readiness blind to components. Measured on
 the e2e-stack lane 2026-10-17 (runs 39041664646, 39041873349, 39041873578): with NATS held down 150 s, lineage's and
-notifications' durables acknowledged nothing for the sixteen minutes that followed and both of the catalog's outboxes
+a client's durables acknowledged nothing for the sixteen minutes that followed and both of the catalog's outboxes
 kept their backlog, every pod Ready. The defect is components-contrib#4563 and its fix #4564 (`MaxReconnects(-1)`); once
 a Dapr release ships that fix, this module and its callers are deleted.
 

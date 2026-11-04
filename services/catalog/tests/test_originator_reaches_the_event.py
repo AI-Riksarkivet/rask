@@ -6,7 +6,7 @@ body" doing its job — so a catalog write made by a service for a human can nev
 protocol, no-op, HTTP emitter and the run-event builder all take `originator`.
 
 Nothing could set it. `emit_write_event` is the trailer every catalog write goes through, and it had
-no channel for one, so the capability was unreachable from any door. The annotator publishes a
+no channel for one, so the capability was unreachable from any door. A client publishes a
 project on a person's behalf with a service bearer; that publish reached the author's own inbox as
 the SERVICE and the human's not at all.
 
@@ -58,7 +58,7 @@ def _emit(bound: Any) -> None:
         emit_write_event(
             bound,
             ["acme", "silver", "features"],
-            author="service-annotator",
+            author="service-labelling",
             version=3,
             operation="create_table",
             authorization=None,

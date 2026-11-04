@@ -62,9 +62,13 @@ def test_the_catalog_seeds_maintenance_no_data_rung() -> None:
 
 def test_the_provenance_tables_are_maintained_by_the_accounts_the_estate_names() -> None:
     """The estate's catalog keeps the provenance tables' declared versions and grants their compaction to exactly the
-    ServiceAccount the estate's values name, `<namespace>:<name>` rendered as that account's subject. A list rendered
-    empty grants nobody, and the tables grow unbounded with nothing reporting it."""
-    estate = render("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
+    ServiceAccount a compaction job's values name, `<namespace>:<name>` rendered as that account's subject. A list
+    rendered empty grants nobody, and the tables grow unbounded with nothing reporting it. The job's own release supplies
+    the account (XC-191), so the estate's overlay is given one here as that release would give it."""
+    estate = render(
+        "--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"),
+        "--set-json", 'services.lineage.provenanceMaintainers=["default:a-compactor"]',
+    )  # fmt: skip
     catalog = next(
         env_of(container)
         for doc in estate
@@ -73,5 +77,5 @@ def test_the_provenance_tables_are_maintained_by_the_accounts_the_estate_names()
         if container["name"] == "catalog"
     )
 
-    assert json.loads(catalog["LANCE_PROVENANCE_MAINTAINERS"]) == ["kubernetes~system:serviceaccount:default:rask-sa-table-maintenance"]
+    assert json.loads(catalog["LANCE_PROVENANCE_MAINTAINERS"]) == ["kubernetes~system:serviceaccount:default:a-compactor"]
     assert catalog["LANCE_PROVENANCE_RETAIN_VERSIONS"] == "20"

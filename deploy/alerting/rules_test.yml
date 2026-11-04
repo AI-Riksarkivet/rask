@@ -422,7 +422,7 @@ tests:
               severity: "critical"
               service: "maintenance"
             exp_annotations:
-              summary: "No table-maintenance sweep has COMPLETED in two hours"
+              summary: "No maintenance sweep has COMPLETED in two hours"
               description: "At a 30-minute cadence roughly four passes should have completed. Either the Dapr cron binding is not delivering or every pass is dying mid-flight — compare with compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count."
 
   # M24 h. A sweep completing once every 30-minute tick must not page.
@@ -754,16 +754,16 @@ tests:
   # 15000, so the 95th percentile is in the top bucket.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="1000"}'
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="1000"}'
         values: "0+0x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="15000"}'
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="15000"}'
         values: "0+0x25"
       # A FINITE bucket above the threshold. With observations only in `+Inf`, histogram_quantile has
       # no upper bound to interpolate against and yields +Inf, which produced no sample at all — the
       # rule looked broken when the FIXTURE was.
-      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="30000"}'
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="30000"}'
         values: "0+10x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="+Inf"}'
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="+Inf"}'
         values: "0+10x25"
     alert_rule_test:
       - eval_time: 20m
@@ -772,7 +772,7 @@ tests:
           - exp_labels:
               severity: warning
               service: fleet
-              service_name: viewer
+              service_name: catalog
             exp_annotations:
               summary: "One service's p95 HTTP latency is above 15s"
               description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. `maintenance` legitimately runs long during a sweep; any other service here is a defect. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
@@ -780,13 +780,13 @@ tests:
   # A fast service must not page — every observation under 1s.
   - interval: 1m
     input_series:
-      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="1000"}'
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="1000"}'
         values: "0+10x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="15000"}'
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="15000"}'
         values: "0+10x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="30000"}'
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="30000"}'
         values: "0+10x25"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="viewer",le="+Inf"}'
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog",le="+Inf"}'
         values: "0+10x25"
     alert_rule_test:
       - eval_time: 20m

@@ -25,7 +25,7 @@ def test_head_on_a_missing_bucket_is_always_a_storage_error() -> None:
     which is indistinguishable from a missing key and therefore lands on the key branch.
     Pinned as a `StorageError` either way — the taxonomy's contract is "never a raw
     botocore exception", and disambiguating a body-less 404 needs a bucket probe, which is
-    the CALLER's job (see `_resolve_missing` in the viewer's objects endpoints).
+    the CALLER's job.
     """
     client = _client()
     with pytest.raises(StorageError), s3_errors(bucket="ghost", key="k"):

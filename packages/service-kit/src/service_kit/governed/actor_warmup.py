@@ -3,7 +3,7 @@
 MEASURED, not theorised. `ActorProxy.create` builds a process-global `ActorProxyFactory` on first
 use, and that constructor reaches `DaprHealth.wait_for_sidecar()` — a synchronous
 `urllib` + `time.sleep` loop with a 60 s default (`DAPR_HEALTH_TIMEOUT`). It is therefore the FIRST
-actor call in a process that pays it, and it pays it **on the event loop**: driving the notifications
+actor call in a process that pays it, and it pays it **on the event loop**: driving an actor-hosting
 service against a stub sidecar, one `POST` to the reconcile cron hung the whole app for 60 s and the
 pass's own `asyncio.timeout` never fired — because the loop the timer would fire on was the blocked
 one. A wall-clock budget cannot bound work that blocks the scheduler.

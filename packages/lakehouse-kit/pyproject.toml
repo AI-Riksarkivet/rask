@@ -21,7 +21,7 @@ data = [
     "service-kit[governed,arrow]",
     "pyarrow",
     # Every Lance reader and writer moves together: pylance 8 could not read a 9-written blob-v2
-    # dataset (packages/ray-cluster-env). 11 does read a 12-written (file format 2.2) one, measured 2026-09-25;
+    # dataset. 11 does read a 12-written (file format 2.2) one, measured 2026-09-25;
     # 12 and 13 read and write each other's 2.2 stable-row-id tables, measured 2026-10-12.
     "pylance[otel]>=13.0.0",
     # pylance 13.0.0 itself requires lance-namespace >=0.11.1,<0.12 (its PyPI requires_dist), and 0.12

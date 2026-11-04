@@ -1,0 +1,7 @@
+# What this client supplies to the lakehouse release it runs beside ([[XC-191]]): the lakehouse names no client, so the
+# admission lives here. `make k3s-up` layers every fixture's `lakehouse-values.yaml` onto the lakehouse release, so an
+# install from git admits it. The catalog grants this job's account the compaction rungs on the provenance namespace
+# ([[LH-529]]).
+services:
+  lineage:
+    provenanceMaintainers: ["default:rask-sa-table-maintenance"]

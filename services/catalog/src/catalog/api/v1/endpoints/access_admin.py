@@ -411,7 +411,7 @@ async def check_access(client: EstateFgaClient, token: CurrentToken, body: Acces
 
     ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
     ``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one
-    wins, which is how the explorer asks "was this true at 14:00?".
+    wins, which is how a caller asks "was this true at 14:00?".
     """
     obj = _validated_object(body.object)
     fga_type = obj.partition(":")[0]
@@ -442,7 +442,7 @@ def _validated_relation(obj_or_type: str, relation: str) -> str:
 async def list_access_objects(client: EstateFgaClient, token: CurrentToken, body: AccessListObjectsRequest) -> AccessListObjectsResponse:
     """ "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
 
-    The forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs
+    The forward half of a who-reaches-what view, and the answer ``GET /tuples`` structurally cannot give: Read needs
     an object type per call and returns only STORED tuples, so enumerating a subject meant one audited
     read per model type and still missed everything derived. ListObjects expands the model, so a table
     reached through role → project → warehouse → namespace shows up here and nowhere else.

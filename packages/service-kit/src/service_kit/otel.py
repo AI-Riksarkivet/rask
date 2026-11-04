@@ -51,7 +51,7 @@ def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
     safe on a streamed body such as a 206 Range response — a `BaseHTTPMiddleware` layer
     fully buffers the response body, so a streaming route cannot carry one.
 
-    IT APPLIES ONLY WHERE `setup_otel` RUNS: the `make_service_app` services, the clients' (compute, flows, the inbox). A
+    IT APPLIES ONLY WHERE `setup_otel` RUNS: the `make_service_app` services, which are the clients'. A
     hook is a Python callable passed to `FastAPIInstrumentor.instrument_app`, and
     `opentelemetry-instrument` builds the instrumentor from an entry point with no way to carry one —
     so the apps the chart launches under it (the lance-plane services) carry the id in
@@ -80,7 +80,7 @@ def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
 #: service it exists to catch ran at 39.5 seconds.
 #:
 #: CHOSEN FROM MEASURED DURATIONS, not doubled arbitrarily. The same store at the same moment:
-#: notifications ~30 ms, catalog ~34 ms, lineage ~370 ms, maintenance
+#: catalog ~34 ms, lineage ~370 ms, maintenance
 #: ~39,500 ms. So the sub-100 ms resolution the fast services depend on is kept exactly as it was, and the
 #: tail is extended past a sweep with room for one that degrades. Reaching further must not blind the
 #: estate to its fast services, which is the obvious wrong fix.

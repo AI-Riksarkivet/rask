@@ -139,7 +139,7 @@ RENAME_TABLE = "rename_table"
 #: The tag gate (ADR 0156 C1, [[LH-466]]): a table's ``published`` tag moved, so readers of its tier now read
 #: ``version``, the tag's target. It mints no version, and it is a run of its own so the project's watchers are told
 #: that new data is live: a notifier targets them by this event's ``rask_lance.project``
-#: (`.claude/skills/rask-notifications`, WATCH).
+#: (`docs/COMMIT-EVENTS.md`, WATCH).
 PUBLISH_TABLE = "publish_table"
 
 #: The operations that move a tag and commit no version: the ``version`` their event names is the tag's target, a version

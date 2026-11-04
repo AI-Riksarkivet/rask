@@ -44,10 +44,6 @@ maintenance:
   floorRaise: true
   floorRaiseDryRun: true
 
-# The compute fixture (deploy/fixtures/compute) is its own release; the catalog's decision door answers its account by name.
-auth:
-  externalDeciders: {"default:rask-sa-compute": ["decider"]}
-
 # Interactive API docs (/docs, /redoc, /openapi.json) across the release.
 #
 # ON here and OFF in the chart default, which is the split the audit asked for: a local k3s cluster is
@@ -117,9 +113,6 @@ services:
       # The development graph backend, the marquez fixture (deploy/fixtures/marquez): lineage forwards every event it
       # records there, as it would to a platform's own (ADR 0158).
       url: http://rask-marquez:5000
-    # The table-maintenance fixture (deploy/fixtures/table-maintenance) is its own release: the catalog grants its
-    # account the compaction rungs on the provenance namespace by name ([[LH-529]]).
-    provenanceMaintainers: ["default:rask-sa-table-maintenance"]
 
 # The edge on k3s is Traefik's Gateway provider (`make k3s-install` switches it on; deploy/k3s/traefik-gateway.yaml):
 # its `traefik-gateway` in kube-system, listener `web`, the same entrypoint the node's port 80 serves. uvicorn trusts the

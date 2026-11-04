@@ -89,7 +89,7 @@ class ProjectSource(Protocol):
 #: LITERALS the canonical set carries (`ray`, `data_eng`, `analyst`, `anon`, `system`, `service`).
 #: Measured on that version, `publication_originator("data_eng", …)` returned `"data_eng"`, so a failed
 #: gold stage still wrote a row into an inbox actor named after a role — verbatim the symptom this
-#: door was added to eliminate (`.claude/skills/rask-notifications`, trap 1).
+#: door was added to eliminate (`docs/COMMIT-EVENTS.md`, telling people).
 
 
 def publication_originator(claimed: str, token: Caller | None) -> str:
@@ -170,7 +170,7 @@ async def publication_extra(
     """
     extra: dict[str, Any] = {"from_version": from_version, "to_version": to_version, "location": location}
     # A publication that WAIVED a finding is a different governance fact from a clean one, and the
-    # audit viewer must be able to tell them apart. Omitted when empty so an ordinary publish is
+    # audit's reader must be able to tell them apart. Omitted when empty so an ordinary publish is
     # byte-identical to before.
     if accepted:
         extra["accepted_assertions"] = list(accepted)

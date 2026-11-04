@@ -16,7 +16,7 @@ than provisioning a second, near-empty project beside it:
   fleet-red    — rask's fleet RED view (OTLP http.server metrics from service_kit.setup_otel)
   lineage      — lance-ns ingest domain signal + HTTP RED
   service-flow — per-service activity of the event-driven services
-  maintenance  — the 120s table-maintenance sweep: coverage, refusals, and what it RECLAIMED
+  maintenance  — the 120s maintenance sweep: coverage, refusals, and what it RECLAIMED
 
 Gated on observability.enabled ALONE, matching Chart.yaml's `condition: observability.enabled`
 on the perses dependency — so the dashboards exist exactly when Perses does. (Both charts

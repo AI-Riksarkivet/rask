@@ -201,7 +201,7 @@ async def _republish(publisher: object, settings: Settings, event_json: str) -> 
 
     The staged ``event_id`` is also what makes the redelivery IDEMPOTENT: every subscriber on this topic
     keys on it — the catalog's own ring buffer dedupes on ``event_id``, and a notifier keys what it delivers on it
-    too (the inbox client's ledger on ``<event_id>@<ACTION>``).
+    too (a ledger on ``<event_id>@<ACTION>``).
     """
     await dapr_publish.publish_event(  # noqa: TID251
         publisher,

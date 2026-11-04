@@ -7,7 +7,7 @@ migration windows (flip on, migrate, flip off). Mutating = anything other than
 GET / HEAD / OPTIONS; health and read endpoints stay available. Default OFF, so
 this is a no-op unless explicitly enabled.
 
-NOT the table-maintenance surface: version cleanup is ``services/maintenance``'s expiry pass
+NOT the table maintenance surface: version cleanup is ``services/maintenance``'s expiry pass
 (``maintenance.services.expiry``), and compaction and index builds are bring-your-own jobs whose commits are judged
 at ``version/create`` (ADR 0174). This module only gates writes.
 """

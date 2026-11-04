@@ -17,8 +17,7 @@ Construct as ``ValidationError("stable detail msg")``; the message becomes ``exc
 (log that instead). A refusal whose substance does not fit one string carries it as RFC 9457 §3.2
 EXTENSION MEMBERS — ``raise Refused("2 problem(s)", extensions={"problems": [...]})`` — and a
 subclass that wants to NAME its failure sets ``problem_type``. Both exist so a domain never has to
-build a problem body beside this module: that is what one route doing it cost
-(``FLOWS-422-BYPASSES-HIERARCHY``).
+build a problem body beside this module, as one route once had to.
 
 The lakehouse services (catalog, lineage, medallion, compaction) deliberately use a DIFFERENT
 taxonomy — the ``lance_namespace`` error hierarchy via
@@ -78,7 +77,7 @@ class DomainError(HTTPException):
         # them a refusal whose substance is STRUCTURED had no way to use this hierarchy at all:
         # `_problem` flattened everything to one `detail` string, so a route hand-built
         # its own body and declared a `| JSONResponse` return, an escape hatch around the estate's
-        # single error plane (FLOWS-422-BYPASSES-HIERARCHY). They can never shadow a standard member
+        # single error plane. They can never shadow a standard member
         # — see `_problem`.
         super().__init__(status_code=self.status_code, detail=detail or self.title, headers=headers)
         self.extensions: dict[str, Any] = dict(extensions or {})

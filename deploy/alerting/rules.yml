@@ -517,7 +517,7 @@ groups:
           severity: critical
           service: maintenance
         annotations:
-          summary: "No table-maintenance sweep has COMPLETED in two hours"
+          summary: "No maintenance sweep has COMPLETED in two hours"
           description: >-
             At a 30-minute cadence roughly four passes should have completed. Either the Dapr cron binding
             is not delivering or every pass is dying mid-flight — compare with
@@ -678,7 +678,7 @@ groups:
       # THE LOAD-BEARING ONE. A ratio, not a count: absolute 5xx tells you nothing without traffic,
       # and a service that serves ten requests an hour would never cross a count threshold however
       # broken it is. `service_name` is the instrumentor's own label (verified live: catalog, gateway,
-      # lineage, notifications and maintenance all report it).
+      # lineage and maintenance all report it).
       - alert: HttpServerErrorRatioHigh
         expr: sum by (service_name) (rate(http_server_duration_milliseconds_count{http_status_code=~"5.."}[5m])) / sum by (service_name) (rate(http_server_duration_milliseconds_count[5m])) > 0.05
         for: 10m
@@ -694,7 +694,7 @@ groups:
             docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
 
       # LATENCY, and the threshold is deliberately far above the observed estate rather than tuned to
-      # it. Measured over a 10m window on 2026-08-26: lineage 500ms, notifications 463ms, maintenance
+      # it. Measured over a 10m window on 2026-08-26: lineage 500ms, maintenance
       # 10s — maintenance runs long BY DESIGN (its sweeps are the request), which is exactly why this
       # fires at 15s rather than at a value that would page on a healthy sweep. A latency rule that
       # cries wolf is one people mute, and a muted rule is worse than none.

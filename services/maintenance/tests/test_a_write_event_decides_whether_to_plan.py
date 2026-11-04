@@ -153,7 +153,7 @@ async def test_an_evaluation_that_could_NOT_decide_is_RETRIED_and_not_debounced(
 
 
 SIGNER = "service-catalog"
-OUTSIDER = "service-annotator"
+OUTSIDER = "service-outsider"
 AUTHOR = "alice"
 URI = "s3://bucket/abc12345_db$t"
 TOKEN = "the-estate-app-token"

@@ -330,7 +330,7 @@ class CatalogLineageSettings(BaseSettings):
     #: (`kubernetes~system:serviceaccount:<ns>:<sa>`). Each is granted `writer` on the namespace at boot, which
     #: reaches every table in it and nothing outside it. A bare name is refused when the settings are read.
     provenance_writers: list[PrincipalKey] = Field(default_factory=list, alias="LANCE_PROVENANCE_WRITERS")
-    #: The principals that compact the provenance namespace's tables: a bring-your-own table-maintenance job's
+    #: The principals that compact the provenance namespace's tables: a bring-your-own compaction job's
     #: service-account principal. Each is granted `reader` and `maintainer` on the namespace at boot, what a compaction
     #: needs (it reads every row and rewrites how they are stored), and never `writer`, so no commit of its changes what
     #: the provenance says; the write tier it is vended can still put over a committed data file, as a writer's can

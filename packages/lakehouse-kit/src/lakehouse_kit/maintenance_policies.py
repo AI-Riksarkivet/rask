@@ -1,4 +1,4 @@
-"""Table-maintenance policy registry (#50) — the catalog↔compaction contract, so it lives in service_kit
+"""Maintenance policy registry (#50) — the catalog↔compaction contract, so it lives in service_kit
 (the same reasoning as the outbox: one service writes the records, another enforces them, and a
 per-service copy of the format would drift).
 

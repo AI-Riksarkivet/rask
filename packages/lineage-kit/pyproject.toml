@@ -13,7 +13,7 @@ dependencies = [
     "pydantic-settings>=2.14",
     # The metrics API ONLY (never the SDK): a dropped lineage event has to leave a series behind, and
     # an API-only dependency is a no-op until the host process installs a MeterProvider — the same
-    # bargain `ray-kit` takes for the trace propagator. No ray/lance/fastapi rides along with it.
+    # bargain a trace propagator takes. No ray/lance/fastapi rides along with it.
     "opentelemetry-api>=1.27",
     # Ed25519 for `lineage_kit.signing` ([[LH-064]]). Declared here and never left transitive, because the
     # wheel is imported lazily inside the key-load, sign and verify functions: sealed runners import this

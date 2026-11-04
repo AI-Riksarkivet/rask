@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 
 class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
-    """Config for the table-maintenance service + its S3 access to the lakehouse buckets."""
+    """Config for the maintenance service + its S3 access to the lakehouse buckets."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
     # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
@@ -363,7 +363,7 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
     #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
-    #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
+    #: (the one every service reads); the per-service alias stays FIRST so a single service can
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MAINTENANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
     #: Maintenance's own secret in the store: its scoped pair, readable by maintenance alone ([[XC-165]]).

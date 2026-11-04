@@ -1,7 +1,7 @@
 # NOT FOR PRODUCTION (deploy/fixtures/README.md). The observability chain a platform team runs for rask's OTel
 # Collector to export to: GreptimeDB, Perses, vmalert and Alertmanager, in the `observability` namespace.
 
-# The store rask's Collector writes and the zones' audit viewer reads (rask `observability.export` / `query`).
+# The store rask's Collector writes and its readers query (rask `observability.export` / `query`).
 store:
   # -- GreptimeDB HTTP port: /v1/otlp (ingest), /v1/prometheus (PromQL), /v1/sql, /health.
   port: 4000

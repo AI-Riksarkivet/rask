@@ -10,9 +10,8 @@ global:
     enabled: true
 
 # rask uses pub/sub, bindings, secret stores, service invocation and ACTORS, so placement and the scheduler are
-# load-bearing: the annotator's AnnotationTaskActor and AnnotationProjectActor rely on placement's single-activation
-# guarantee to serialise two annotators claiming one task, and the scheduler backs actor REMINDERS, which is how task
-# leases expire. daprd also connects to both at startup unconditionally and never becomes Ready without them.
+# load-bearing: placement's single-activation guarantee is what serialises concurrent calls to one actor, and the
+# scheduler backs actor REMINDERS, which is how a lease an actor holds expires. daprd also connects to both at startup unconditionally and never becomes Ready without them.
 
 # Controller loops rather than data paths, so all sized as controllers. The injector's `resources` bound the injector
 # itself; each daprd sidecar is sized by rask's `dapr.sidecarResources` annotations.

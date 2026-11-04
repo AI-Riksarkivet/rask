@@ -480,8 +480,8 @@ def get_storage_options(settings: SettingsDep) -> StorageOptions:
 StorageOptionsDep = Annotated[StorageOptions, Depends(get_storage_options)]
 
 
-#: The longest an originator claim may be. It becomes an inbox actor id, so an unbounded header would
-#: be an unbounded actor name in somebody else's durable state.
+#: The longest an originator claim may be. A notifier keys a recipient's durable state by it, so an unbounded
+#: header would be an unbounded key in somebody else's durable state.
 _MAX_ORIGINATOR = 128
 
 
@@ -493,7 +493,7 @@ def originator_hint(raw: str | None) -> str | None:
     owner can already see the run's outputs. That is what makes an unverified header sound here — and
     it is also why the value must still be a PERSON. A userset (``role:<id>#assignee``), a wildcard, a
     ``user:``-prefixed object id and a role literal each address either everyone or nobody; the estate
-    has written into an inbox actor literally named ``*`` before.
+    has addressed a recipient literally named ``*`` before.
 
     Dropped rather than coerced, on the same reasoning the project facet uses: an omitted originator
     reaches the author and no one else, while a repaired one could reach the wrong person.

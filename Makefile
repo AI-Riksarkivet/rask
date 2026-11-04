@@ -96,6 +96,7 @@ test-slow: $(OPENFGA_BIN)
 
 lint:
 	uv run ruff check .
+	uv run python scripts/lakehouse_names_no_client.py
 	bun --cwd=frontend run lint
 
 # The import-layer contracts in `.importlinter` (the lakehouse's, which name no client module), then each client's
@@ -763,6 +764,7 @@ k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fix
 	  --take-ownership \
 	  $$IMGARGS \
 	  -f deploy/values-local.yaml \
+	  $(foreach f,$(sort $(wildcard deploy/fixtures/*/lakehouse-values.yaml)),-f $(f)) \
 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) \
 	  --set-string vending.endpoint=$(DEV_VENDED_ENDPOINT) \
 	  $(DROP_CREDENTIAL_VALUES) \

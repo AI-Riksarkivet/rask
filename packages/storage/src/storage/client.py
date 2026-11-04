@@ -22,8 +22,8 @@ type S3Client = Any
 # `s3_client` below, which is exactly the kind of thing a settings model would own. The surface is
 # small (three optional families) and the coercion is one line, so a settings class buys uniformity
 # and almost no behaviour. Weighed against that: `boto3` is this package's ONLY runtime dependency, and
-# `runners/htr` + `runners/dummy` hold the package as a path dep resolved into their own sealed
-# locks, so `pydantic-settings` (in neither) is a relock of two model environments for a change
+# a sealed client environment may hold the package as a path dep resolved into its own lock, so
+# `pydantic-settings` is a relock of each such environment for a change
 # nothing can observe. The semantics also differ where it matters here: `_env_first` skips an EMPTY
 # value, where `AliasChoices` stops at the first name that is SET. Callers get the precedence from
 # `configured_endpoint` instead of copying this list.

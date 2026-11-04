@@ -2,11 +2,9 @@
 
 RFC 9457 §3.2 says a problem detail object may carry additional members beyond the five it
 standardises, and that consumers must ignore ones they do not recognise. `_problem` built exactly
-four keys and nothing else, so a refusal whose whole point is a STRUCTURED payload — the flows
-service's `422` carries the list of graph problems its builder highlights nodes from — could not use
-the hierarchy at all. `flows.routes.create_run` therefore hand-built its own body and declared
-`-> RunState | JSONResponse`, an escape hatch around the estate's one error plane
-(FLOWS-422-BYPASSES-HIERARCHY).
+four keys and nothing else, so a refusal whose whole point is a STRUCTURED payload (a `422` carrying the
+list of problems a client highlights) could not use the hierarchy at all, and a route had to hand-build its
+own body and declare `-> Model | JSONResponse`, an escape hatch around the estate's one error plane.
 
 Two properties, and the second is the one that makes this safe to have:
 

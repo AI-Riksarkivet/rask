@@ -118,7 +118,7 @@ def test_round_trip_through_the_official_serializer() -> None:
 def test_job_facets_survive_to_wire_and_back() -> None:
     # The lineage consumer reads job facets today (sourceCodeLocation, ownership) —
     # the shape must carry them verbatim, never silently drop them.
-    source = custom_facet(type="git", url="https://github.com/Borg93/rask", path="runners/dummy")
+    source = custom_facet(type="git", url="https://github.com/Borg93/rask", path="pipelines/ingest")
     event = RunEvent(
         event_type=RunState.COMPLETE,
         event_time=_EVENT_TIME,

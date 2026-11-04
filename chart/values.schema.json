@@ -81,7 +81,7 @@
                     "type": "boolean"
                 },
                 "externalDeciders": {
-                    "description": "ServiceAccounts outside this release granted estate roles, each `\u003cnamespace\u003e:\u003cname\u003e` mapped to its roles from `decider`, `member_expander` and `event_reader` (e.g. `{\"default:rask-sa-compute\": [\"decider\"]}` for the compute fixture); bootstrap-admin grants each exactly these and revokes what is no longer named. Read only with auth on.",
+                    "description": "ServiceAccounts outside this release granted estate roles, each `\u003cnamespace\u003e:\u003cname\u003e` mapped to its roles from `decider`, `member_expander` and `event_reader` (e.g. `{\"\u003cnamespace\u003e:\u003cname\u003e\": [\"decider\"]}`, supplied from the client's own values); bootstrap-admin grants each exactly these and revokes what is no longer named. Read only with auth on.",
                     "type": "object"
                 },
                 "fgaApiUrl": {
@@ -1595,7 +1595,7 @@
                             "type": "integer"
                         },
                         "provenanceMaintainers": {
-                            "description": "ServiceAccounts outside this release that compact the provenance tables, each `\u003cnamespace\u003e:\u003cname\u003e` (e.g. `default:rask-sa-table-maintenance` for the table-maintenance fixture); the catalog grants each `reader` and `maintainer` on the namespace at boot (`LANCE_PROVENANCE_MAINTAINERS`). Read only with auth on.",
+                            "description": "ServiceAccounts outside this release that compact the provenance tables, each `\u003cnamespace\u003e:\u003cname\u003e` (e.g. `\u003cnamespace\u003e:\u003cname\u003e`, which a compaction job's own release supplies); the catalog grants each `reader` and `maintainer` on the namespace at boot (`LANCE_PROVENANCE_MAINTAINERS`). Read only with auth on.",
                             "type": "array"
                         },
                         "provenanceNamespace": {

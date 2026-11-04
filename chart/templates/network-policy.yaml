@@ -317,8 +317,8 @@ spec:
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
                   - backup-control-root # the control-root backup copies the registries to _backups/control/
                   - object-store-scoped-users # the identity-provisioning hook — blocked, every scoped user is absent
-                  # A client reading a governed table on the credential the catalog vends it (the annotator's or the
-                  # media plane's release, an engine's workers, a user's pipeline) is admitted by
+                  # A client reading a governed table on the credential the catalog vends it (a client's release, an
+                  # engine's workers, a user's pipeline) is admitted by
                   # `networkPolicy.objectStoreExtraFrom`, by a selector its deployment states.
         {{- with .Values.networkPolicy.objectStoreExtraFrom }}
         {{- toYaml . | nindent 8 }}

@@ -22,7 +22,7 @@ from service_kit.lifecycle import is_draining, is_started
 
 
 def _bare_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-    """A lifespan exactly like compute's: it sets `settings` and nothing else."""
+    """A minimal service's lifespan: it sets `settings` and nothing else."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:

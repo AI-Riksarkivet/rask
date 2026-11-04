@@ -30,8 +30,8 @@ from service_kit.governed import fga
 
 #: Lineage's service-account principal, the namespace's writer, as the chart names it.
 _LINEAGE = "kubernetes~system:serviceaccount:rask:rask-sa-lineage"
-#: A bring-your-own table-maintenance job's principal, in a release of its own.
-_COMPACTOR = "kubernetes~system:serviceaccount:rask:table-maintenance"
+#: A bring-your-own compaction job's principal, in a release of its own.
+_COMPACTOR = "kubernetes~system:serviceaccount:rask:compactor"
 #: A writer an earlier release named and this one does not.
 _RETIRED = "kubernetes~system:serviceaccount:rask:rask-sa-retired"
 #: A person granted reading the namespace through the access door.

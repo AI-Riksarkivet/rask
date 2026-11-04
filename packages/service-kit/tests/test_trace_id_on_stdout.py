@@ -163,8 +163,8 @@ def test_a_LIBRARYS_ambient_record_field_is_not_a_diagnostic(stdout_lines: io.St
     """Two libraries in this estate stamp their own fields on records, and neither is a diagnostic.
 
     `_ray_timestamp_ns` is not hypothetical: importing Ray installs a log record factory that puts it
-    on EVERY record in the process (`ray/_private/log.py:71-88`), which covers the compute service and
-    the whole Ray lane. It was caught here by this test failing in the full suite while passing alone —
+    on EVERY record in the process (`ray/_private/log.py:71-88`), which covers any process
+    that imports Ray. It was caught here by this test failing in the full suite while passing alone —
     the first version of the formatter appended a nanosecond integer to every line.
 
     uvicorn's `color_message` is the second: an ANSI-escaped copy of the same message, for uvicorn's own

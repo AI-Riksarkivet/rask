@@ -43,7 +43,7 @@ data:
         userID: {{ .Values.publisher.userID | quote }}
     staticClients:
       - id: {{ .Values.clientId }}
-        name: Web zones
+        name: Sign-in
         secret: {{ .Values.clientSecret }}
         public: true
         redirectURIs:
