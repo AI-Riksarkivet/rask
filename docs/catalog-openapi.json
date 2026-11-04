@@ -12341,7 +12341,7 @@
     },
     "/management/v1/access/check": {
       "post": {
-        "description": "One ``(user, relation, object)`` OpenFGA Check over ANY model type \u2014 the estate-wide extension of\nthe per-object ``\u2026/access/check`` playground (#68), which stays as-is for table/namespace owners.\n\nAny relation the compiled model defines on the type may be probed (base rungs included \u2014 an admin\ndebugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.\n``checked`` echoes the resolved tuple so the verdict is unambiguous.\n\n``context`` supplies the runtime values a CONDITION needs \u2014 ``current_time`` for the model's\n``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one\nwins, which is how the explorer asks \"was this true at 14:00?\".",
+        "description": "One ``(user, relation, object)`` OpenFGA Check over ANY model type \u2014 the estate-wide extension of\nthe per-object ``\u2026/access/check`` playground (#68), which stays as-is for table/namespace owners.\n\nAny relation the compiled model defines on the type may be probed (base rungs included \u2014 an admin\ndebugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.\n``checked`` echoes the resolved tuple so the verdict is unambiguous.\n\n``context`` supplies the runtime values a CONDITION needs \u2014 ``current_time`` for the model's\n``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one\nwins, which is how a caller asks \"was this true at 14:00?\".",
         "operationId": "check_access_management_v1_access_check_post",
         "parameters": [
           {
@@ -12475,7 +12475,7 @@
     },
     "/management/v1/access/list-objects": {
       "post": {
-        "description": "\"What can this subject reach?\" \u2014 every ``type`` object on which ``user`` holds ``relation``.\n\nThe forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs\nan object type per call and returns only STORED tuples, so enumerating a subject meant one audited\nread per model type and still missed everything derived. ListObjects expands the model, so a table\nreached through role \u2192 project \u2192 warehouse \u2192 namespace shows up here and nowhere else.\n\nThe subject may be a userset (``role:<id>#assignee``), which matters because a grant to a role reaches\ndata through the role, and only the userset question shows that.",
+        "description": "\"What can this subject reach?\" \u2014 every ``type`` object on which ``user`` holds ``relation``.\n\nThe forward half of a who-reaches-what view, and the answer ``GET /tuples`` structurally cannot give: Read needs\nan object type per call and returns only STORED tuples, so enumerating a subject meant one audited\nread per model type and still missed everything derived. ListObjects expands the model, so a table\nreached through role \u2192 project \u2192 warehouse \u2192 namespace shows up here and nowhere else.\n\nThe subject may be a userset (``role:<id>#assignee``), which matters because a grant to a role reaches\ndata through the role, and only the userset question shows that.",
         "operationId": "list_access_objects_management_v1_access_list_objects_post",
         "parameters": [
           {

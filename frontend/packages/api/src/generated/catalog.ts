@@ -58,7 +58,7 @@ export interface paths {
          *
          *     ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
          *     ``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one
-         *     wins, which is how the explorer asks "was this true at 14:00?".
+         *     wins, which is how a caller asks "was this true at 14:00?".
          */
         post: operations["check_access_management_v1_access_check_post"];
         delete?: never;
@@ -110,7 +110,7 @@ export interface paths {
          * List Access Objects
          * @description "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
          *
-         *     The forward half of the explorer, and the answer ``GET /tuples`` structurally cannot give: Read needs
+         *     The forward half of a who-reaches-what view, and the answer ``GET /tuples`` structurally cannot give: Read needs
          *     an object type per call and returns only STORED tuples, so enumerating a subject meant one audited
          *     read per model type and still missed everything derived. ListObjects expands the model, so a table
          *     reached through role → project → warehouse → namespace shows up here and nowhere else.
