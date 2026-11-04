@@ -10,6 +10,12 @@
 #
 # CHART is the chart to install: this tree's ./chart by default, or a published release's OCI reference with
 # CHART_VERSION naming its version ([[XC-187]]).
+#
+# A client's e2e against a pinned lakehouse ([[XC-189]]) passes the integration its own release sets: VALUES names a
+# values file (`auth.externalDeciders`, `networkPolicy.objectStoreExtraFrom`; a key HELM_SET sets stays the stack's, as Helm
+# applies `--set` over every values file), and
+# DEX_CLIENT, DEX_CLIENT_SECRET and DEX_REDIRECT_URIS (a JSON list) register the client's own sign-in client with the Dex
+# fixture (its `clients`), which the lakehouse's audience trusts.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,6 +23,14 @@ RELEASE="${RELEASE:-rask}"
 TAG="${TAG:-dev}"
 CHART="${CHART:-./chart}"
 CHART_VERSION="${CHART_VERSION:-}"
+VALUES="${VALUES:-}"
+DEX_VALUES=()
+if [ -n "${DEX_CLIENT:-}" ]; then
+  # JSON is YAML, and json.dumps quotes whatever the secret holds; the file is the install's alone.
+  dex_values="$(mktemp)"
+  python3 -c 'import json, os; print(json.dumps({"clients": [{"id": os.environ["DEX_CLIENT"], "secret": os.environ["DEX_CLIENT_SECRET"], "redirectURIs": json.loads(os.environ.get("DEX_REDIRECT_URIS") or "[]")}]}))' >"$dex_values"
+  DEX_VALUES=(-- -f "$dex_values")
+fi
 TIMEOUT="${TIMEOUT:-900s}"
 # shellcheck source=scripts/stack_values.sh
 . scripts/stack_values.sh
@@ -25,6 +39,8 @@ JOB_LOGS="$(mktemp -d)"
 RECORDER=""
 diagnose() {
   local rc=$?
+  # The client's secret leaves with the install.
+  [ -n "${dex_values:-}" ] && rm -f "$dex_values"
   [ -n "$RECORDER" ] && kill "$RECORDER" 2>/dev/null
   [ "$rc" -eq 0 ] && return 0
   echo "==> install-from-empty FAILED (exit $rc)"
@@ -42,7 +58,9 @@ diagnose() {
 trap diagnose EXIT
 
 echo "==> fixtures"
-scripts/fixtures.sh external-secrets dapr nats dex openbao
+scripts/fixtures.sh external-secrets dapr nats
+scripts/fixtures.sh dex "${DEX_VALUES[@]}"
+scripts/fixtures.sh openbao
 # The object store runs the upstream RustFS image its fixture pins by digest, which the node pulls itself.
 scripts/fixtures.sh rustfs
 
@@ -61,7 +79,7 @@ echo "==> rask"
     done
   done ) &
 RECORDER=$!
-scripts/helm.sh upgrade --install "$RELEASE" "$CHART" ${CHART_VERSION:+--version "$CHART_VERSION"} --timeout "$TIMEOUT" "${HELM_SET[@]}"
+scripts/helm.sh upgrade --install "$RELEASE" "$CHART" ${CHART_VERSION:+--version "$CHART_VERSION"} --timeout "$TIMEOUT" "${HELM_SET[@]}" ${VALUES:+-f "$VALUES"}
 
 echo "==> ready"
 kubectl wait --for=condition=Available deploy --all --timeout="$TIMEOUT"

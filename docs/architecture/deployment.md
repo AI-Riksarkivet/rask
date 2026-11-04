@@ -357,7 +357,7 @@ token:
 | The catalog image, amd64 and arm64 in one index | `ghcr.io/ai-riksarkivet/lance-rest-catalog@sha256:…` (the chart already names it) |
 | The product chart, pinned to that index's digest | `oci://ghcr.io/ai-riksarkivet/charts/rask`, `--version X.Y.Z` |
 | The platform package (XC-186) | `service-kit[governed] @ git+https://github.com/AI-Riksarkivet/rask@lakehouse-vX.Y.Z#subdirectory=packages/service-kit` |
-| A lakehouse for its e2e | `dagger install github.com/AI-Riksarkivet/rask@lakehouse-vX.Y.Z`, then `dag.Rask().Lakehouse("X.Y.Z")` |
+| A lakehouse for its e2e | `dagger install github.com/AI-Riksarkivet/rask@lakehouse-vX.Y.Z`, then `dag.Rask().Lakehouse("X.Y.Z", …)` |
 
 A new GHCR package is private until its visibility is set, and a job token cannot set it. So on the first release, the
 org's package settings make each of the two packages public once: `lance-rest-catalog` and `charts/rask`. Every later
@@ -369,9 +369,23 @@ chart with `scripts/pin_chart_release.py`'s pin. The released chart is a real de
 development stand-ins until an install names the platform's services. `Lakehouse` is the exception: it stands the
 release up as the local estate it is. It copies the pinned image into a registry inside the session, installs the
 published chart with the development fixtures (`scripts/install_from_empty.sh`, `CHART` and `CHART_VERSION`), and
-returns one service serving the catalog on 2333, Dex on 5556 and the object store on 9000. Bind that service as
-`rask-catalog`, `rask-dex` and `rask-rustfs`, so a token's issuer and a vended endpoint resolve under the names the
-catalog uses.
+returns a `RaskLakehouse` whose `Service` serves the catalog on 2333, lineage on 8000 (its OpenLineage intake,
+`POST /api/v1/lineage`), Dex on 5556 and the object store on 9000. Bind that service as `rask-catalog`, `rask-lineage`,
+`rask-dex` and `rask-rustfs`, so a token's issuer and a vended endpoint resolve under the names the catalog uses.
+
+A client integrates with it as its production release does ([[XC-189]]), with nothing done by hand:
+
+- `values` is a values file with the chart values the client's release sets: the `auth.externalDeciders` entry naming
+  its ServiceAccount and the roles it holds, `networkPolicy.objectStoreExtraFrom`. A key the stack sets with `--set`
+  (`scripts/stack_values.sh`) stays the stack's, because Helm applies `--set` over every values file; `route.enabled` is
+  one, since the session's cluster runs no Gateway.
+- `dexClient`, `dexClientSecret` and `dexRedirectUris` register the client's own sign-in client with the Dex fixture
+  (its `clients`), which the lakehouse's audience trusts, so a person signed in through it holds a token the doors take.
+- `ServiceAccountToken(account, audience)` is the token the client's pod would project, for a client running outside
+  the cluster: `account` is the `<namespace>:<name>` its `externalDeciders` entry names, and `audience` one door's,
+  `rask-catalog` (the decision door included) or `rask-lineage` (the intake). The ServiceAccount is created as the
+  client's own release would render it, and holds what the values grant it; an account the release or a fixture
+  renders is refused, so a client cannot act as a lakehouse service.
 
 ## State stores
 

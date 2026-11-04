@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -157,10 +158,12 @@ func registryHost(registry string) string {
 // the digest its chart pins into a registry inside the session, which the cluster mirrors, so the cluster runs the
 // published bytes as the local estate it is (image.localImages); nothing is built.
 //
-// Returns the lakehouse as one service serving the catalog on 2333, Dex on 5556 and the object store on 9000. Bind it
-// under the in-cluster names, `rask-catalog`, `rask-dex` and `rask-rustfs`, so a token's issuer
-// (http://rask-dex:5556/dex) and a vended endpoint resolve as the catalog names them. The estate admin is
-// alice@example.com (password `password`), whom the Dex fixture serves.
+// A client integrates as its production release does ([[XC-189]]): `values` is the chart values that release sets
+// (`auth.externalDeciders` naming its ServiceAccount, `networkPolicy.objectStoreExtraFrom`), and `dexClient` registers
+// the client's own sign-in client with Dex, trusted by the lakehouse's audience. A key the stack sets with `--set`
+// (scripts/stack_values.sh) is the stack's, because Helm applies `--set` over every values file: `route.enabled` among
+// them, since the session's cluster runs no Gateway. A client outside the cluster asks the result for its
+// ServiceAccount's token (ServiceAccountToken).
 //
 // Cached per session: the services it starts live as long as the session, so a result cached across sessions would
 // name a cluster nobody installed (measured on engine v0.21.8: by default a second `dagger call` returns the first
@@ -180,9 +183,30 @@ func (m *Rask) Lakehouse(
 	// +optional
 	// +default="oci://ghcr.io/ai-riksarkivet/charts/rask"
 	chart string,
-) (*dagger.Service, error) {
+	// The chart values the client's own release sets; a key the stack sets with --set stays the stack's.
+	// +optional
+	values *dagger.File,
+	// The client's own Dex sign-in client, which the lakehouse's audience trusts; empty registers none.
+	// +optional
+	dexClient string,
+	// The sign-in client's secret; required with dexClient.
+	// +optional
+	dexClientSecret *dagger.Secret,
+	// The sign-in client's OIDC redirect URIs.
+	// +optional
+	dexRedirectUris []string,
+) (*Lakehouse, error) {
 	if err := requireReleaseVersion(version); err != nil {
 		return nil, err
+	}
+	if (dexClient == "") != (dexClientSecret == nil) {
+		return nil, fmt.Errorf("dexClient and dexClientSecret are given together")
+	}
+	if dexClient == "" && len(dexRedirectUris) > 0 {
+		return nil, fmt.Errorf("dexRedirectUris names a sign-in client's redirects, and no dexClient is given")
+	}
+	if dexClient != "" && !dexClientID.MatchString(dexClient) {
+		return nil, fmt.Errorf("dexClient %q is not a client id (%s)", dexClient, dexClientID)
 	}
 	run := time.Now().UTC().Format(time.RFC3339Nano)
 	tool := withRenderableChart(m.tools(src))
@@ -211,17 +235,104 @@ func (m *Rask) Lakehouse(
 		return nil, fmt.Errorf("starting the cluster: %w", err)
 	}
 	cluster := installer(tool, k3s, kubeconfig, run)
-	if _, err := runInstall(ctx, cluster.WithEnvVariable("CHART", chart).WithEnvVariable("CHART_VERSION", version), "lakehouse "+version); err != nil {
+	install := cluster.WithEnvVariable("CHART", chart).WithEnvVariable("CHART_VERSION", version)
+	if values != nil {
+		install = install.WithMountedFile("/client/values.yaml", values).WithEnvVariable("VALUES", "/client/values.yaml")
+	}
+	if dexClient != "" {
+		uris, err := json.Marshal(append([]string{}, dexRedirectUris...))
+		if err != nil {
+			return nil, err
+		}
+		install = install.
+			WithEnvVariable("DEX_CLIENT", dexClient).
+			WithEnvVariable("DEX_REDIRECT_URIS", string(uris)).
+			WithSecretVariable("DEX_CLIENT_SECRET", dexClientSecret)
+	}
+	if _, err := runInstall(ctx, install, "lakehouse "+version); err != nil {
 		return nil, err
 	}
 
-	return cluster.
+	service, err := cluster.
 		WithExposedPort(2333).
+		WithExposedPort(8000).
 		WithExposedPort(5556).
 		WithExposedPort(9000).
 		AsService(dagger.ContainerAsServiceOpts{Args: []string{"bash", "-c", clusterReady +
 			"kubectl port-forward --address 0.0.0.0 svc/rask-catalog 2333:2333 & " +
+			"kubectl port-forward --address 0.0.0.0 svc/rask-lineage 8000:8000 & " +
 			"kubectl port-forward --address 0.0.0.0 svc/rask-dex 5556:5556 & " +
 			"kubectl port-forward --address 0.0.0.0 svc/rask-rustfs 9000:9000 & wait -n; exit 1"}}).
 		Start(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &Lakehouse{Service: service, Cluster: cluster}, nil
+}
+
+var (
+	dexClientID  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+	k8sAccount   = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]*[a-z0-9])?):([a-z0-9]([a-z0-9.-]*[a-z0-9])?)$`)
+	doorAudience = map[string]bool{"rask-catalog": true, "rask-lineage": true}
+)
+
+// clientAccountLabel marks a ServiceAccount ServiceAccountToken created for a client, the only kind it mints for.
+const clientAccountLabel = "rask.dev/client-account"
+
+// Lakehouse is a published release the Lakehouse function stood up, for the life of the session.
+type Lakehouse struct {
+	// The lakehouse as one service: the catalog on 2333, lineage on 8000 (its OpenLineage intake is
+	// `POST /api/v1/lineage`), Dex on 5556 and the object store on 9000. Bind it under the in-cluster names,
+	// `rask-catalog`, `rask-lineage`, `rask-dex` and `rask-rustfs`, so a token's issuer (http://rask-dex:5556/dex) and a
+	// vended endpoint resolve as the catalog names them. The estate admin is alice@example.com (password `password`),
+	// whom the Dex fixture serves.
+	Service *dagger.Service
+	// The installer bound to the session's cluster, which ServiceAccountToken asks.
+	// +private
+	Cluster *dagger.Container
+}
+
+// ServiceAccountToken is a token for the ServiceAccount `account` (`<namespace>:<name>`, the key its
+// `auth.externalDeciders` entry names) with the audience of one lakehouse door, `rask-catalog` (the decision door
+// included) or `rask-lineage` (the OpenLineage intake): what the account's pod would project, for a client running
+// outside the cluster. The account is created as the client's own release would render it, labelled as a client's, and
+// holds only what the release's values grant it; an account the release or a fixture renders is refused, so a client
+// cannot act as a lakehouse service. The token lives `duration` (10m at the least, the API server's floor).
+//
+// +cache="session"
+func (l *Lakehouse) ServiceAccountToken(
+	ctx context.Context,
+	account string,
+	audience string,
+	// +optional
+	// +default="1h"
+	duration string,
+) (*dagger.Secret, error) {
+	parts := k8sAccount.FindStringSubmatch(account)
+	if parts == nil {
+		return nil, fmt.Errorf("account %q is not <namespace>:<serviceaccount>", account)
+	}
+	if !doorAudience[audience] {
+		return nil, fmt.Errorf("audience %q is not a lakehouse door's (rask-catalog, rask-lineage)", audience)
+	}
+	if _, err := time.ParseDuration(duration); err != nil {
+		return nil, fmt.Errorf("duration %q: %w", duration, err)
+	}
+	namespace, name := parts[1], parts[3]
+	token, err := l.Cluster.
+		WithEnvVariable("TOKEN_REQUEST", time.Now().UTC().Format(time.RFC3339Nano)).
+		WithExec([]string{"bash", "-c", clusterReady +
+			fmt.Sprintf("kubectl create namespace %s --dry-run=client -o yaml | kubectl apply -f - >/dev/null\n", namespace) +
+			fmt.Sprintf("if kubectl -n %[1]s get serviceaccount %[2]s >/dev/null 2>&1; then\n"+
+				"  [ \"$(kubectl -n %[1]s get serviceaccount %[2]s -o jsonpath='{.metadata.labels.%[3]s}')\" = true ] ||"+
+				" { echo \"%[1]s:%[2]s is the release's or a fixture's account, not a client's\" >&2; exit 3; }\n"+
+				"else\n  kubectl -n %[1]s create serviceaccount %[2]s >/dev/null && kubectl -n %[1]s label serviceaccount %[2]s %[4]s=true >/dev/null\nfi\n",
+				namespace, name, strings.ReplaceAll(clientAccountLabel, ".", "\\."), clientAccountLabel) +
+			fmt.Sprintf("kubectl -n %s create token %s --audience %s --duration %s > /tmp/token\n", namespace, name, audience, duration)}).
+		File("/tmp/token").
+		Contents(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("minting %s's token for %s: %w", account, audience, err)
+	}
+	return dag.SetSecret(fmt.Sprintf("lakehouse-token-%s-%s-%s-%s", namespace, name, audience, duration), strings.TrimSpace(token)), nil
 }

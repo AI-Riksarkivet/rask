@@ -23,6 +23,10 @@ audienceSecret: rask-lakehouse-held-by-no-client
 # machine `dex-client~<id>` (ADR 0181). The audience client trusts each, so its token is issued for the lakehouse.
 machineClients:
   - { id: rask-pipeline, secret: rask-pipeline-dev-secret }
+# A client release's own sign-in clients, each `{id, secret, redirectURIs}`: a person signs in to that client through
+# it, and the audience client trusts it, so the person's token is issued for the lakehouse. Empty here; the pinned
+# lakehouse a client's e2e stands up (`Lakehouse` in .dagger/release.go) registers the client it is given ([[XC-189]]).
+clients: []
 # Demo identities with one password. The hash is bcrypt of "password". alice and bob make the governed demo's allow and
 # deny: alice creates a table and is granted it, bob is refused reading it. carol, dave and erin are the writer, the
 # reader and the outsider of criterion 2's principal matrix (tests/e2e-py/test_the_catalog_is_correct.py), so each rung

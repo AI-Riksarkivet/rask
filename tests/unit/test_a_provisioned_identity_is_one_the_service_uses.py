@@ -23,6 +23,7 @@ root key.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -152,11 +153,14 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     token whose `aud` is `[<audience>, <client>]`, and only when the audience client lists it in `trustedPeers`; any
     other client is refused 400 for the scope. A public audience client would let anyone sign in as it (200, `aud` the
     audience alone) and skip the trust. So the doors' audience is the dev Dex's audience client, distinct from its
-    sign-in client, confidential and trusting exactly the clients the fixture declares: the sign-in client and each machine
-    client, which signs in for itself with the client-credentials grant (ADR 0181).
+    sign-in client, confidential and trusting exactly the clients the fixture declares: the sign-in client, each machine
+    client, which signs in for itself with the client-credentials grant (ADR 0181), and each client release's own sign-in
+    client, which a pinned lakehouse registers for that client's e2e ([[XC-189]]).
     """
     chart = render("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
-    [config] = [yaml.safe_load(doc["data"]["config.yaml"]) for doc in render_fixture("dex") if doc.get("kind") == "ConfigMap"]
+    client = {"id": "a-client", "secret": "a-client-secret", "redirectURIs": ["http://localhost:9999/auth/callback"]}
+    fixture = render_fixture("dex", "--set-json", f"clients=[{json.dumps(client)}]")
+    [config] = [yaml.safe_load(doc["data"]["config.yaml"]) for doc in fixture if doc.get("kind") == "ConfigMap"]
     clients = {client["id"]: client for client in config["staticClients"]}
     doors = {
         doc["metadata"]["name"]: env_of(container).get("RASK_OIDC_AUDIENCE")
@@ -169,3 +173,4 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     others = sorted(set(clients) - {audience})
     assert sorted(doors) == sorted(_LAKEHOUSE_DOORS)
     assert (clients[audience].get("public", False), sorted(clients[audience].get("trustedPeers", []))) == (False, others)
+    assert clients["a-client"] == {"name": "a-client", **client}
