@@ -41,7 +41,7 @@ from pydantic import BaseModel, InstanceOf
 
 from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
-from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, table_claims
+from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, row_digests, table_claims
 from lakehouse_kit import base_refs, base_registry, commit_records, commit_turns, features, file_identities, maintenance_due
 from lakehouse_kit.branch_layout import BRANCH_CONTAINER
 from service_kit.outage import reads_as_store_outage
@@ -657,25 +657,33 @@ def _refuse_a_rewrite_that_changes_rows(version: _Judged) -> None:
 
 
 def _refuse_rows_not_carried(version: _Judged, *, replaced: set[int], written: set[int]) -> None:
-    """The fragments a rewrite writes hold the live rows of those it replaces: by stable row id, else by count.
+    """The fragments a rewrite writes hold the live rows of those it replaces, each with the values it held ([[LH-561]]).
 
-    A compaction keeps a row's stable row id, so ids compare the rows themselves; the values under an unchanged id are
-    not compared. A table without stable row ids can only be held to its count.
+    A compaction keeps a row's stable row id, so each row's digest (:mod:`row_digests`) is compared under its id, and
+    each side is read once. A table without stable row ids is held to the rows' digests as a multiset.
     """
+    columns = version.followed.schema.names
+    before = row_digests.of_fragments(version.followed, replaced, columns)
+    after = row_digests.of_fragments(version.proposed, written, columns)
     if not version.proposed.has_stable_row_ids:
-        live = sum(fragment.count_rows() for fragment in version.followed.get_fragments() if fragment.fragment_id in replaced)
-        carried = sum(fragment.count_rows() for fragment in version.proposed.get_fragments() if fragment.fragment_id in written)
-        if live != carried:
-            raise InvalidInputError(f"commit refused: a Rewrite carries exactly the {live} live rows of the fragments it replaces, not {carried}")
+        held_rows, written_rows = Counter(before.digests.tolist()), Counter(after.digests.tolist())
+        if held_rows != written_rows:
+            lost, extra = (held_rows - written_rows).total(), (written_rows - held_rows).total()
+            raise InvalidInputError(
+                f"commit refused: a Rewrite carries exactly the live rows of the fragments it replaces, with their values; "
+                f"it loses {lost} and writes {extra} that none of them held"
+            )
         return
-    before, after = Counter(_row_ids(version.followed, replaced)), Counter(_row_ids(version.proposed, written))
-    if before == after:
-        return
-    lost, extra = sorted((before - after).elements()), sorted((after - before).elements())
-    raise InvalidInputError(
-        f"commit refused: a Rewrite carries exactly the live rows of the fragments it replaces; it loses {len(lost)} "
-        f"(stable row ids {lost[:5]}) and adds or repeats {len(extra)} (stable row ids {extra[:5]})"
-    )
+    held, carried = Counter(before.row_ids.tolist()), Counter(after.row_ids.tolist())
+    if held != carried:
+        lost, extra = sorted((held - carried).elements()), sorted((carried - held).elements())
+        raise InvalidInputError(
+            f"commit refused: a Rewrite carries exactly the live rows of the fragments it replaces; it loses {len(lost)} "
+            f"(stable row ids {lost[:5]}) and adds or repeats {len(extra)} (stable row ids {extra[:5]})"
+        )
+    changed = before.row_ids[before.digests != after.digests].tolist()
+    if changed:
+        raise InvalidInputError(f"commit refused: a Rewrite keeps the values of every row it carries; it changes {len(changed)} (stable row ids {changed[:5]})")
 
 
 def _refuse_a_compaction_others_read_through(version: _Judged) -> None:

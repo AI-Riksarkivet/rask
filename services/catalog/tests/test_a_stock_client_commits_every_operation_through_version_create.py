@@ -284,10 +284,26 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
     assert signed == [("dex~alice", True)] * 6
 
 
-def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_create(served_on_s3: Served, caplog: pytest.LogCaptureFixture) -> None:
-    """Lance's own distributed protocol (``lance_docs/lance/format/table/transaction.md`` § Rewrite): reserve the new fragment ids, then
-    commit the rewrite. Both are commits a stock client stages, so both are judged here, and the job that stages them
-    holds no writer rung: a maintainer rewrites how a table is stored and never what it says (``model.fga``)."""
+def _compact_distributed(dataset: lance.LanceDataset) -> None:
+    plan = Compaction.plan(dataset, {"target_rows_per_fragment": 1024})
+    Compaction.commit(dataset, [task.execute(dataset) for task in plan.tasks])
+
+
+def _compact_files(dataset: lance.LanceDataset) -> None:
+    dataset.optimize.compact_files(target_rows_per_fragment=1024)
+
+
+@pytest.mark.parametrize(
+    "compact", [pytest.param(_compact_distributed, id="the-distributed-plan-and-commit"), pytest.param(_compact_files, id="compact-files")]
+)
+def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_create(
+    served_on_s3: Served, caplog: pytest.LogCaptureFixture, compact: Callable[[lance.LanceDataset], None]
+) -> None:
+    """Lance's own compactions (``lance_docs/lance/format/table/transaction.md`` § Rewrite) reserve the new fragment ids, then
+    commit the rewrite; measured on pylance 13.0.0, ``compact_files`` makes the same two commits as the distributed
+    protocol. Both are commits a stock client stages, so both are judged here, the rewrite row by row on its values
+    ([[LH-561]]), and the job that stages them holds no writer rung: a maintainer rewrites how a table is stored and
+    never what it says (``model.fga``)."""
     stock = _created(served_on_s3)
     for row, value in ((4, "d"), (5, "e"), (6, "f")):
         lance.write_dataset(_keyed([row], [value]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=served_on_s3.storage_options)
@@ -296,9 +312,7 @@ def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_c
     caplog.clear()
 
     with caplog.at_level(logging.INFO, logger="lance.audit"):
-        dataset = _opened(stock, served_on_s3.storage_options)
-        plan = Compaction.plan(dataset, {"target_rows_per_fragment": 1024})
-        Compaction.commit(dataset, [task.execute(dataset) for task in plan.tasks])
+        compact(_opened(stock, served_on_s3.storage_options))
 
     compacted = _opened(stock, served_on_s3.storage_options)
     assert (compacted.version, len(compacted.get_fragments())) == (6, 1)
@@ -539,12 +553,13 @@ def _compact_a_table_a_clone_reads_through(stock: lance_namespace.LanceNamespace
 _UNKEYED = ["db", "u"]
 
 
-def _rewrite(stock: lance_namespace.LanceNamespace, *, compacted: list[int], replaced: list[int]) -> None:
+def _rewrite(stock: lance_namespace.LanceNamespace, *, compacted: list[int], replaced: list[int], values: list[int] | None = None) -> None:
     """A Rewrite of a keyless ``db$u`` (fragments ``[1, 2]``, ``[3]``, ``[4]``) claiming to replace ``replaced``.
 
     Its one new fragment is what Lance's own compaction task writes for fragments ``compacted``, so it carries their
-    rows and stable row ids. Measured on pylance 13.0.0, Lance commits the claim whatever fragments it names. Keyless,
-    because on a keyed table the primary key judge refuses a duplicated row first.
+    rows and stable row ids, unless ``values`` names the rows its files hold instead, under those same row ids.
+    Measured on pylance 13.0.0, Lance commits the claim whatever fragments it names and whatever its files hold.
+    Keyless, because on a keyed table the primary key judge refuses a duplicated row first.
     """
     lance.write_dataset(
         pa.table({"n": [1, 2]}), namespace_client=stock, table_id=_UNKEYED, mode="create", data_storage_version="2.2", enable_stable_row_ids=True
@@ -556,7 +571,8 @@ def _rewrite(stock: lance_namespace.LanceNamespace, *, compacted: list[int], rep
     excluded = sorted(set(held) - set(compacted))
     (task,) = Compaction.plan(dataset, {"target_rows_per_fragment": 1024, "excluded_fragment_ids": excluded}).tasks
     (written,) = task.execute(dataset).new_fragments
-    new = lance.FragmentMetadata(id=max(held) + 1, files=written.files, physical_rows=written.physical_rows, row_id_meta=written.row_id_meta)
+    files = written.files if values is None else lance.fragment.write_fragments(pa.table({"n": values}), dataset)[0].files
+    new = lance.FragmentMetadata(id=max(held) + 1, files=files, physical_rows=written.physical_rows, row_id_meta=written.row_id_meta)
     group = lance.LanceOperation.RewriteGroup(old_fragments=[held[index] for index in replaced], new_fragments=[new])
     lance.LanceDataset.commit(
         dataset,
@@ -574,6 +590,10 @@ def _rewrite_losing_a_replaced_fragments_rows(stock: lance_namespace.LanceNamesp
 
 def _rewrite_duplicating_a_carried_fragments_rows(stock: lance_namespace.LanceNamespace) -> None:
     _rewrite(stock, compacted=[0, 1], replaced=[0])
+
+
+def _rewrite_changing_a_carried_rows_value(stock: lance_namespace.LanceNamespace) -> None:
+    _rewrite(stock, compacted=[0, 1], replaced=[0, 1], values=[1, 2, 30])
 
 
 def _index(*, base_id: int | None) -> Index:
@@ -708,6 +728,7 @@ def _data_staged_under_an_index_label(stock: lance_namespace.LanceNamespace) -> 
         pytest.param(_compact_a_table_a_clone_reads_through, set(), False, 406, 0, ("db$t", 4), id="a-table-a-clone-reads-through-is-not-compacted"),
         pytest.param(_rewrite_losing_a_replaced_fragments_rows, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-loses-no-row"),
         pytest.param(_rewrite_duplicating_a_carried_fragments_rows, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-duplicates-no-row"),
+        pytest.param(_rewrite_changing_a_carried_rows_value, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-changes-no-value"),
         pytest.param(_index_read_through_a_base, set(), False, 400, 13, ("db$t", 4), id="an-index-is-read-from-the-tables-own-indices"),
         pytest.param(_index_with_no_files, set(), False, 400, 13, ("db$t", 4), id="an-index-names-files-that-are-there"),
         pytest.param(_data_staged_under_an_index_label, set(), False, 400, 13, ("db$t", 4), id="an-index-commit-changes-no-data"),
