@@ -23,8 +23,8 @@ THE ROOT SECRET IS READ FROM A FILE, and so is every scoped secret: none travels
 spec, `ps` or a crash report would carry it. Requests are SigV4-signed (service `s3`) with botocore and sent with
 urllib; the bodies are plain JSON, which the `/rustfs/admin` prefix takes (the admin API's compatibility alias expects
 encrypted bodies). Measured on rustfs/rustfs 1.0.1 and 1.0.3 for the three provisioning calls
-(docs/audits/2026-10-18/rustfs-zero-trust.md, "Measured on RustFS"), and on 1.0.3 for `list-users` and `remove-user`
-(docs/audits/2026-10-18/rustfs_web_identity_measure.py); a refused policy fails the run before it binds anyone, and a
+on 2026-10-18 (scripts/rustfs_sts_measure.py), and on 1.0.3 for `list-users` and `remove-user`
+(scripts/rustfs_web_identity_measure.py); a refused policy fails the run before it binds anyone, and a
 pruning run removes what it does not declare (tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py).
 
     python scripts/rustfs_admin.py --endpoint http://rask-rustfs:9000 --root-access-key rustfsadmin \\

@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
-import { query } from '$lib/remote.svelte';
+import { query } from '#lib/reads.svelte.ts';
 
 // The audit trail's read. The trail is the `lance.audit` log every lakehouse service emits over
 // OpenTelemetry, stored and queried by the platform's telemetry backend; no lakehouse door serves it

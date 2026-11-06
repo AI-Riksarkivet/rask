@@ -7,8 +7,7 @@
 # the single source of truth; only the driver moved.
 #
 #   scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
-#   scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
-#   scripts/dagger-image.sh --name frontend     --tag console:dev
+#   scripts/dagger-image.sh --name frontend     --tag web-console:dev
 #   scripts/dagger-image.sh --name cnpg-age-ext --tag cnpg-age:dev --arg AGE_REF=v1.5.0
 #   scripts/dagger-image.sh --name rest-catalog --out build/k3s-images/lance-rest-catalog.tar   (no docker: what k3s-build does)
 #

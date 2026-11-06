@@ -22,7 +22,8 @@ gave `image.tag`.
 
 Emits `<image> <stem>` so the caller needs to know neither rule: the stem is what
 `scripts/dagger-image.sh --name` takes, and `lance-rest-catalog` -> `rest-catalog` is the only place a
-rendered name and its `.docker/<stem>.dockerfile` differ anywhere in the estate.
+name the product chart renders and its `.docker/<stem>.dockerfile` differ. The console's `web-console`
+(built from `frontend`) differs too, but the console's release renders it and this script never reads that render.
 
 Usage:  helm template ... | uv run python scripts/side_loaded_images.py --tag dev
 Pinned by `tests/unit/test_a_stack_builds_every_image_it_side_loads.py`, which imports the two

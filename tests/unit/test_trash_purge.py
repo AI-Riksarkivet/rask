@@ -599,9 +599,9 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
     """A reclamation is a governance change, so it lands on the control stream — one event per record.
 
     The verbs are the PURGE's own — `table_purged` / `namespace_purged`, not the drop actions (diff2
-    F10 item 6). Reusing `table_dropped` made an automated reclamation indistinguishable from a person
-    deleting the table unless a consumer read `extra.reason`, and the console's governance feed does
-    not: it rendered a purge as a deletion with a service identity in the actor column. Two different
+    F10 item 6). Under `table_dropped` an automated reclamation reads as a person deleting the table to
+    every consumer that does not read `extra.reason`: a governance feed shows a deletion with a service
+    identity in the actor column. Two different
     facts — "someone decided to remove this" and "the grace period ran out" — differ in cause, in
     appealability, and in finality, so they get two names.
 

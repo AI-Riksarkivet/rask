@@ -334,24 +334,72 @@ def test_every_secret_in_the_dev_store_has_exactly_its_readers_and_no_published_
     assert presenters == {f"{STORE_POD}/seed", "Job/rask-object-store-scoped-users-r1/provision"}, sorted(presenters)
 
 
-#: A client's store reader as a client's own values supply it (`openbao.externalReaders`): its bus user and a signer's
-#: public key, which every verifier may read.
-_CLIENT_READER: Final = '{"client":{"serviceAccount":"rask-sa-client","secrets":["nats-user-client","signing-public-rask-sa-catalog"]}}'
+#: A client's store reader as a client's own values supply it (`openbao.externalReaders`): its bus user, a name of its
+#: own and a signer's public key, which every verifier may read: the three kinds a reader may hold.
+_CLIENT_READER: Final = '{"client":{"serviceAccount":"rask-sa-client","secrets":["nats-user-client","client-token","signing-public-rask-sa-catalog"]}}'
 
 
 @pytest.mark.parametrize(
-    ("secrets", "refusal"),
+    ("app", "service_account", "secrets", "refusal"),
     [
-        pytest.param('["*"]', "is no secret name", id="a-wildcard"),
-        pytest.param('["a/b"]', "is no secret name", id="a-path"),
-        pytest.param('["signing-key-rask-sa-catalog"]', "is the lakehouse's own secret", id="a-signer-key"),
-        pytest.param('["object-store-root"]', "is the lakehouse's own secret", id="an-operator-read"),
+        pytest.param("Client_1", "rask-sa-client", '["client-x"]', '"Client_1" is no Dapr app id', id="no-dapr-app-id"),
+        pytest.param("client", "rask-sa-client", '["*"]', '"*" is no secret name', id="a-wildcard"),
+        pytest.param("client", "rask-sa-client", '["a/b"]', '"a/b" is no secret name', id="a-path"),
+        pytest.param("client", "rask-sa-client", '["nats-root"]', '"nats-root" is not the reader\'s own', id="the-bus-trust-root"),
+        pytest.param(
+            "client", "rask-sa-client", '["signing-key-rask-sa-catalog"]', '"signing-key-rask-sa-catalog" is not the reader\'s own', id="a-signer-key"
+        ),
+        pytest.param(
+            "openbao",
+            "rask-sa-client",
+            '["openbao-seeded"]',
+            '"openbao" is a reserved app id: its own names would cover openbao-seeded',
+            id="an-app-id-covering-a-seeded-name",
+        ),
+        pytest.param(
+            "nats-user-foo",
+            "rask-sa-client",
+            '["nats-user-foo-bar"]',
+            '"nats-user-foo" is a reserved app id: its own names (nats-user-foo-<name>) would cover the store\'s nats-user-<name> secrets',
+            id="an-app-id-covering-another-bus-user",
+        ),
+        pytest.param("catalog", "rask-sa-client", '["catalog-x"]', '"catalog" is the lakehouse\'s own app', id="a-lakehouse-app-id"),
+        pytest.param("client", "Rask_SA", '["client-x"]', "client.serviceAccount names no ServiceAccount", id="a-bad-service-account"),
+        pytest.param("client", "default", '["client-x"]', 'client.serviceAccount: "default" is the lakehouse\'s own', id="the-shared-default-account"),
+        pytest.param("client", "rask-sa-catalog", '["client-x"]', 'client.serviceAccount: "rask-sa-catalog" is the lakehouse\'s own', id="a-lakehouse-account"),
+        pytest.param("client", "rask-sa-client", "[]", "client.secrets names no secret", id="no-secret"),
     ],
 )
-def test_a_client_store_reader_is_refused_any_read_that_is_not_its_own(secrets: str, refusal: str) -> None:
-    reader = f'openbao.externalReaders={{"client":{{"serviceAccount":"rask-sa-client","secrets":{secrets}}}}}'
+def test_a_client_store_reader_is_refused_any_read_that_is_not_its_own(app: str, service_account: str, secrets: str, refusal: str) -> None:
+    reader = f'openbao.externalReaders={{"{app}":{{"serviceAccount":"{service_account}","secrets":{secrets}}}}}'
+    #: A client's bus user, as a client's own values add it to the issued table.
+    bus_user = 'nats.auth.users.foo-bar={"publish":["dlq.foo-bar"],"subscribe":["_INBOX.>"]}'
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        render_chart_text(REPO / "chart", *DEV_ESTATE, "--set-json", reader)
+        render_chart_text(REPO / "chart", *DEV_ESTATE, "--set-json", bus_user, "--set-json", reader)
+    assert refusal in refused.value.stderr
+
+
+@pytest.mark.parametrize(
+    ("readers", "values", "refusal"),
+    [
+        pytest.param(
+            {"client": ["client-x"], "client-x": ["client-x-token"]},
+            (),
+            '"client" is a reserved app id: its own names would cover client-x\'s names',
+            id="another-readers-id-as-a-prefix",
+        ),
+        pytest.param(
+            {"client": ["client-x"]},
+            ("--set", "externalSecrets.role=rask-client"),
+            '"client" would log in as rask-client, the External Secrets Operator\'s own role',
+            id="the-operators-role",
+        ),
+    ],
+)
+def test_a_client_store_reader_is_refused_an_identity_that_is_not_its_own(readers: dict[str, list[str]], values: tuple[str, ...], refusal: str) -> None:
+    supplied = {app: {"serviceAccount": f"sa-{app}", "secrets": secrets} for app, secrets in readers.items()}
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render_chart_text(REPO / "chart", *DEV_ESTATE, *values, "--set-json", f"openbao.externalReaders={json.dumps(supplied)}")
     assert refusal in refused.value.stderr
 
 
@@ -361,5 +409,11 @@ def test_a_client_store_reader_is_granted_exactly_what_its_values_name() -> None
     policies = _documents(chart, "policy-")
     roles = _documents(chart, "role-")
 
-    assert _granted(policies["rask-client"]) == {"nats-user-client", "signing-public-rask-sa-catalog"}
+    assert _granted(policies["rask-client"]) == {"nats-user-client", "client-token", "signing-public-rask-sa-catalog"}
     assert roles["rask-client"]["bound_service_account_names"] == ["rask-sa-client"]
+    # A client's sidecar runs its own release's Configuration: the product chart renders none for it.
+    assert _configurations(chart) == _configurations(render(*DEV_ESTATE))
+
+
+def _configurations(chart: tuple[dict, ...]) -> list[str]:
+    return sorted(doc["metadata"]["name"] for doc in chart if doc.get("kind") == "Configuration")

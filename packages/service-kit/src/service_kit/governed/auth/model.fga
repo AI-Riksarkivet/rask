@@ -170,7 +170,7 @@ type estate
         # ITS OWN RUNG, not `can_observe_events`. `can_observe_events` also creates tenants and edits the
         # authorization graph (the consumer list above), so a reconciler holding it would hold both. Lakekeeper
         # keeps its machine identities on narrow per-purpose relations for the same reason
-        # (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 items 2 and 4).
+        # (read 2026-09-25, git history at 64ef118a9: the Lakekeeper authz deep read, §8 items 2 and 4).
         #
         # What the door sends is narrower than the feed row: the run, its state and time, the `author` and
         # `rask_lance` facets, and the output names (`lineage/api/v1/endpoints/events.py::targeting_view`).

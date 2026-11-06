@@ -68,6 +68,10 @@ class Query<T> implements Promise<T> {
 	#run: () => Promise<T>;
 	#promise: Promise<T>;
 	#settledAt = 0;
+	/** Which start is the latest. Only the latest writes `current`, `error` and `loading`: a refresh
+	 *  started while an older read is in flight supersedes it, and the older answer, however late it
+	 *  lands, must not overwrite the newer one or clear `loading` while the newer is still out. */
+	#generation = 0;
 
 	constructor(run: () => Promise<T>) {
 		this.#run = run;
@@ -75,19 +79,25 @@ class Query<T> implements Promise<T> {
 	}
 
 	#start(): Promise<T> {
+		const generation = ++this.#generation;
+		const latest = (): boolean => generation === this.#generation;
 		this.loading = true;
 		const promise = this.#run().then(
 			(value) => {
-				this.current = value;
-				this.error = undefined;
-				this.loading = false;
-				this.#settledAt = Date.now();
+				if (latest()) {
+					this.current = value;
+					this.error = undefined;
+					this.loading = false;
+					this.#settledAt = Date.now();
+				}
 				return value;
 			},
 			(err: unknown) => {
-				this.error = err;
-				this.loading = false;
-				this.#settledAt = Date.now();
+				if (latest()) {
+					this.error = err;
+					this.loading = false;
+					this.#settledAt = Date.now();
+				}
 				throw err;
 			},
 		);
@@ -145,6 +155,10 @@ export function query(
 		| [() => Promise<unknown>]
 		| [StandardSchema<unknown, unknown> | 'unchecked', (input: unknown) => Promise<unknown>]
 ): Read<unknown[], unknown> {
+	// UNBOUNDED, on purpose. Same arguments, same instance is what lets a write's `read().refresh()`
+	// reach every holder; evicting an instance a component still holds would leave that holder on a
+	// copy no refresh reaches. The map lives one page life (tokens are in memory, so a reload starts
+	// a new one) and grows by the distinct argument sets a person opens in it.
 	const instances = new Map<string, Query<unknown>>();
 	const [schema, run] = declared.length === 1 ? (['unchecked', declared[0]] as const) : declared;
 	return (...args: unknown[]) =>
@@ -217,6 +231,8 @@ class LiveQuery<T> implements PromiseLike<T> {
 query.live = function live<A extends unknown[], T>(
 	open: (...args: A) => AsyncGenerator<T>,
 ): (...args: A) => LiveQuery<T> {
+	// Unbounded for the reason `query`'s map is; every live read declared today takes no argument,
+	// so each holds one instance.
 	const instances = new Map<string, LiveQuery<T>>();
 	return (...args: A) =>
 		untrack(() => {

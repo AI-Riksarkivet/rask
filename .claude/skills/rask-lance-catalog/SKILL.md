@@ -67,7 +67,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   (`tests/integration/test_a_lease_is_timed_on_the_stores_clock.py`). Pinned by
   `tests/integration/test_concurrent_renames_leave_one_id_per_location.py` (with a drop, a recoverable drop and a
   deregister racing a rename, the rival landed after the door read its claim and as it acts) and
-  `packages/service-kit/tests/test_a_release_frees_only_the_claim_it_read.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
+  `packages/lakehouse-kit/tests/test_a_release_frees_only_the_claim_it_read.py`. The spec's *minimum* is 8 metadata ops; we carry the whole list
   including versioning, tags, branches, indices and transactions.
 - **Every other table door acts on that resolution too** ([[LH-530]]): each door that reads or writes a table's data or
   metadata takes `DoorTableDep` (`table_claims.DoorTable`), opens and commits at the location the resolution read, never
@@ -388,9 +388,9 @@ suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
 ## Lifecycle
 
 Reclamation, scheduling and the GC design live in `services/maintenance` itself — read
-`services/maintenance/services/{sweep,expiry,arrival,due,plan,purge,reconcile,index_health}.py` — plus
+`services/maintenance/src/maintenance/services/{sweep,expiry,arrival,due,plan,purge,reconcile,index_health}.py` — plus
 `packages/lakehouse-kit/src/lakehouse_kit/base_refs.py`, the shallow-clone-source pre-pass, which
-lives in service-kit rather than the service because the catalog (`maintenance/run` and the `version/create`
+lives in lakehouse-kit rather than the service because the catalog (`maintenance/run` and the `version/create`
 judge, `catalog/services/maintenance.py`) must apply the same refusal and cannot import the sweep. Read
 them before changing anything the sweep, the reconciler or the orphan scan touches. The
 per-table/namespace/project POLICY that governs a sweep is
@@ -401,7 +401,7 @@ uuids `__manifest` and the location claims record (`maintenance.services.naming.
 an ancestor's, cannot be read is refused (gate `unidentified`), never maintained under the defaults, since the record it
 cannot find may be a legal hold. Any surface showing an effective policy must say
 which record won; an inherited value rendered identically to a set one is how nobody can tell what is
-governing their data. The project-scoped surface is home's `/projects/<p>` § Maintenance.
+governing their data. The project-scoped surface is the console's project page, `frontend/console/src/routes/projects/[project]/+page.svelte`, § Maintenance.
 
 - Creates are top-down: parent must EXIST (registry), gated on the parent's `can_*`.
 - Deletes are bottom-up: a container refuses **409, naming its contents**; `cascade` is explicit;
@@ -612,7 +612,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   rung, ADR 0099, [[LH-415]]); the
   platform writes them with pylance directly, and a client creating from an upstream's schema strips its
   schema metadata first. `description` is the one user-facing reserved key (the
-  lakehouse renders it under the table name); everything else in that map is opaque user data.
+  console renders it under the table name); everything else in that map is opaque user data.
 - **`drop_columns` / `alter_columns` refuse to drop, rename or re-type provenance** ([[LH-208]]): the
   column `source_rowid` by name (`stage` and `lineage` are the writer's, ADR 0156 C9), and every field carrying
   `lance-schema:unenforced-primary-key` plus its ancestors, by metadata, in any table. Measured on pylance
@@ -673,7 +673,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   the branch's commits with it, and `can_write_data` writes every branch. Measured on MinIO
   `RELEASE.2025-04-22T22-12-26Z`, that grant leaves a write credential fitting a table prefix of 89 characters at a
   63-character bucket, inside a 2,048-byte session policy; RustFS enforces the same 2,048-byte limit, counted after it
-  re-serialises the policy, and its boundary is unmeasured (`docs/audits/2026-10-18/rustfs-zero-trust.md` R5). The catalog sends the policy as compact JSON and refuses one past 2,048 characters before any exchange, 500 code 18 titled `SessionPolicyTooLong` with its length and the limit as extension members; with `vending.encryption` naming an SSE-KMS key (its key ARN, refused at boot otherwise) every tier's session may `kms:Decrypt` with that key, and write and maintain also `kms:GenerateDataKey`, only through S3 (`kms:ViaService`). The warehouse create door's probe then writes and reads back an object encrypted with it (`encrypted_write`), so a store whose role holds no grant on the key is refused 400 code 13 ([[LH-262]]). The
+  re-serialises the policy, and its boundary is unmeasured (measured 2026-10-18; `rask-rustfs` §2). The catalog sends the policy as compact JSON and refuses one past 2,048 characters before any exchange, 500 code 18 titled `SessionPolicyTooLong` with its length and the limit as extension members; with `vending.encryption` naming an SSE-KMS key (its key ARN, refused at boot otherwise) every tier's session may `kms:Decrypt` with that key, and write and maintain also `kms:GenerateDataKey`, only through S3 (`kms:ViaService`). The warehouse create door's probe then writes and reads back an object encrypted with it (`encrypted_write`), so a store whose role holds no grant on the key is refused 400 code 13 ([[LH-262]]). The
   Deny is load-bearing, measured on MinIO (LH-469, #594) and enforced by RustFS's Deny-first evaluation (R3): the
   staged Allow also matches
   `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest, and `tree/*` reaches every branch's
@@ -1094,7 +1094,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `packages/lakehouse-kit/src/lakehouse_kit/features.py` reads
   `reader_feature_flags`/`writer_feature_flags` as varints at
   protobuf fields 9/10 of `LanceDataset._ds.serialized_manifest()` — pylance exposes neither field
-  but its own pickle path uses that blob. The masks live in service-kit because `services/maintenance`
+  but its own pickle path uses that blob. The masks live in `lakehouse_kit/features.py` because `services/maintenance`
   and `catalog/services/maintenance.py` both consume them, and a mask widened for one must not silently
   widen for the other. Measured on pylance 9.0.0: plain `(0,0)`,
   `delete()` `(1,1)`, `enable_stable_row_ids` `(2,2)`, `add_bases`/`shallow_clone` set 16, a committed

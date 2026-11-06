@@ -100,6 +100,17 @@ def _caller(key: str) -> PersonPrincipal:
     return PersonPrincipal(principal=principal, claims=IDToken(iss="i", sub=principal.subject, aud="lance", exp=1, iat=1))
 
 
+def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An OpenFGA outage is a 503, never a fall-through: no decision is not a denial."""
+
+    async def outage(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
+        raise ServiceUnavailableError("openfga down")
+
+    monkeypatch.setattr(fga_module, "check", outage)
+    with pytest.raises(ServiceUnavailableError):
+        asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
+
+
 _TOKEN = _caller("dex~alice")
 
 
@@ -373,6 +384,21 @@ def test_binding_lookup_fails_closed_on_read_error(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(warehouses, "binding_for_namespace", boom)
     with pytest.raises(ServiceUnavailableError):
+        asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
+
+
+def test_resolver_refuses_when_warehouse_record_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The fail-closed "missing warehouse record → refuse" branch: a bound namespace whose warehouse record
+    # has vanished must 403, NOT silently route to the orphaned bucket.
+    monkeypatch.setattr(
+        warehouses,
+        "binding_for_namespace",
+        lambda *_a, **_k: {"warehouse_id": "wh-a", "root_uri": "s3://bkt-a"},
+    )
+    # The resolver reads the WHOLE record ([[LH-067]] needs its `endpoint` too, at the same one GET), so a
+    # vanished record is a `get_warehouse` returning None.
+    monkeypatch.setattr(warehouses, "get_warehouse", lambda *_a, **_k: None)  # record gone
+    with pytest.raises(PermissionDeniedError):
         asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
 
 

@@ -18,7 +18,7 @@ a notifier, a client such as the **notifications** inbox, turns the events into 
 ingest and training are the user's pipeline, on the user's own compute and orchestrator
 ([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)). The HTTP backend sits behind the
 **platform's Gateway** (Kubernetes Gateway API), whose HTTPRoutes the chart renders, one per public `/api/*` prefix
-([ADR 0165](../adr/0165-the-edge-is-the-platforms-gateway-api.md)). The **console**, a SvelteKit 2 + Svelte 5
+([ADR 0165](../adr/0165-the-edge-is-the-platforms-gateway-api.md)). The **console**, a SvelteKit 3 + Svelte 5
 single-page app with no backend of its own, is a client of those doors: the browser signs in with PKCE and calls them
 with its bearer, and its release adds its own HTTPRoute on the same Gateway.
 

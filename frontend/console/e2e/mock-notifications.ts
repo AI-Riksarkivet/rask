@@ -1,4 +1,4 @@
-// The mock NOTIFICATIONS service the watch-enrolment page reads through.
+// The mock NOTIFICATIONS service the bell and the watch-enrolment page read through.
 //
 // Served at `/api/notifications` behind the e2e edge, with the prefix kept, as the inbox serves it.
 //
@@ -9,6 +9,7 @@
 // A per-bearer seeding mechanism would be machinery for a fixture nobody varies. It keeps state in
 // memory per bearer so a toggle round-trip still behaves like the real thing.
 
+import { MOCK_INBOX } from './notifications/inbox-fixture';
 import { MOCK_NOTIFICATIONS_PORT } from './ports';
 
 const watchesByBearer = new Map<string, Set<string>>();
@@ -31,6 +32,13 @@ Bun.serve({
 		const url = new URL(req.url);
 		const bearer = (req.headers.get('authorization') ?? '').replace(/^Bearer /, '');
 
+		if (url.pathname === '/api/notifications/inbox' && req.method === 'GET') {
+			// The inbox is subject-derived, so the real service refuses a read with no token: a console
+			// that reads before its session exists meets that 401 here too.
+			if (!bearer) return json({ detail: 'a bearer token is required' }, 401);
+			return json(MOCK_INBOX);
+		}
+
 		if (url.pathname === '/api/notifications/watches' && req.method === 'GET') {
 			// BOTH keys, exactly as `WatchListSchema` declares them (`{projects: string[], total: number}`).
 			// `requestWatches` parses with valibot and swallows a parse failure into `null` — which the
@@ -41,9 +49,9 @@ Bun.serve({
 			return json({ projects, total: projects.length });
 		}
 
-		const toggle = /^\/api\/notifications\/watches\/(.+)$/.exec(url.pathname);
-		if (toggle) {
-			const project = decodeURIComponent(toggle[1]);
+		const toggled = /^\/api\/notifications\/watches\/(.+)$/.exec(url.pathname)?.[1];
+		if (toggled !== undefined) {
+			const project = decodeURIComponent(toggled);
 			if (req.method === 'PUT') {
 				watchesOf(bearer).add(project);
 				return json({ project, watching: true });

@@ -132,10 +132,10 @@ class IngressSettings(SignatureDoorSettings, BaseSettings):
     def feed_base_url(self) -> str:
         """Where the reconciler reads lineage's feed: THROUGH THE SIDECAR when Dapr is on.
 
-        Through service invocation the sidecar retries the read: `<release>-invocation-resiliency`
-        targets `lineage` with `invokeRetry` (constant 2 s, three retries, `408,429,500-599`, never a
-        4xx, because a 403's answer will not change) and is scoped to `notifications`, the one
-        service-invocation caller. A pass that still fails leaves the cursor where it was, since it
+        Through service invocation the sidecar retries the read: the console release's
+        `<rask>-notifications-invocation-resiliency` targets `lineage` with `invokeRetry` (constant 2 s,
+        three retries, `408,429,500-599`, never a 4xx, because a 403's answer will not change) and is
+        scoped to `notifications`, the one service-invocation caller. A pass that still fails leaves the cursor where it was, since it
         advances only on a pass that completes, so the next cron tick re-walks it (`reconcile_cron`).
 
         The credential crosses the sidecar intact: the feed client sends this pod's projected

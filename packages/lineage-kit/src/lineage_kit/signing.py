@@ -268,7 +268,7 @@ class SigningKey(BaseModel):
             TypeError: `seed` is not a string.
             ValueError: `seed` is not a well-formed NKEY user seed. The message never echoes it.
         """
-        # Imported here, not at module scope: sealed runners import lineage_kit to emit over HTTP and never sign,
+        # Imported here, not at module scope: an emitter that only sends over HTTP imports lineage_kit and never signs,
         # so the wheel is needed only where a key is loaded.
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 

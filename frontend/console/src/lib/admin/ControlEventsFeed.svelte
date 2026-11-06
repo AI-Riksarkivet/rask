@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { controlEvents } from '$lib/admin/remote/admin.api';
-	import type { ControlEvent } from '$lib/admin/control';
+	import { controlEvents } from '#lib/admin/remote/admin.api.ts';
+	import type { ControlEvent } from '#lib/admin/control.ts';
 	import { Activity, ShieldAlert } from '@lucide/svelte';
 	import { Subject } from '@rask/ui/identity';
 

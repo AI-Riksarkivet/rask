@@ -12,7 +12,7 @@ the version under its own credential. So the writer tier never reaches a final `
 version hint or `_refs/`, and that refusal is an explicit Deny: an Allow on `_versions/*.manifest-*` alone
 also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest. Measured with stock
 pylance 13.0.0 on a throwaway store and on the deployed one (LH-469, #594); RustFS lets an explicit Deny win
-(R3, `docs/audits/2026-10-18/rustfs-zero-trust.md`). Whole-prefix write and delete belong to `can_maintain`.
+(R3, measured 2026-10-18, git history at 64ef118a9). Whole-prefix write and delete belong to `can_maintain`.
 
 DRIVEN THROUGH THE REAL DOOR AND THE REAL VENDOR. The catalog runs on a moto server, the vendor is the one its
 lifespan builds, and its token exchange goes to moto's STS, which records the session policy each session carries.

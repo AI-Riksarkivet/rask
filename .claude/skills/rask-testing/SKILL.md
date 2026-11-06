@@ -98,7 +98,7 @@ consequences it does not spell out.
   means a live stack: `tests/e2e-py/conftest.py` applies it to everything collected there, and each
   per-suite selector (`cas`, `nats_auth`, ...) rides on top of it. Neither `strict_markers` nor
   `--strict-markers` is configured, so pass `--strict-markers` when you add or use a marker (the whole
-  suite, 5,077 tests, collects cleanly under it, measured 2026-10-31).
+  suite, 4,214 tests, collects cleanly under it, measured 2026-11-06; `make test`'s filter selects 3,726 of them).
 - **An empty parametrize is a collection error.** `empty_parameter_set_mark = "fail_at_collect"`, so a test whose
   cases come off a walk (the routes, the rendered chart) fails collection when the walk finds nothing, instead of
   skipping and asserting nothing. Walk a FastAPI app's routes with `services/catalog/tests/router_walk.py`'s
@@ -144,6 +144,11 @@ Don't redo any of it in a suite. At import, before collection builds any app, th
   `setdefault`, so an app builds with auth off unless a test turns it on. A test of those guards
   removes the variable with `monkeypatch.delenv` or passes the value to the guard directly.
 
+On request the root `conftest.py` also serves the identity and authorization plane for real: `sa_issuer` and
+`dex_issuer` (loopback issuers that mint tokens), `openfga` (the pinned OpenFGA server in memory, one per xdist worker,
+failing the test when the binary is missing) and `openfga_store` (a fresh store on it holding the bundled model, with
+`write()` for seeding tuples as the chart's bootstrap hook does).
+
 The platform's test seam is not the root conftest's: `service-kit` ships it as a pytest plugin
 (`service_kit.pytest_plugin`, entry point `pytest11` `service_kit`, [[XC-190]]), which pytest loads wherever the
 package is installed, so a client's suite in its own repository gets the same seam with the version it pins. It
@@ -154,18 +159,13 @@ handshake to 1 s, clears Dapr's process-global actor-proxy factory, gives the te
 and writes the projected service-account token files the catalog's and lineage's doors read. A fixture guarding state
 `service-kit` or its `dapr` dependency keeps across a process belongs in the plugin, never in the root conftest.
 
-On request it serves the identity and authorization plane for real: `sa_issuer` and `dex_issuer` (loopback issuers
-that mint tokens), `openfga` (the pinned OpenFGA server in memory, one per xdist worker, failing the test when the
-binary is missing) and `openfga_store` (a fresh store on it holding the bundled model, with `write()` for seeding
-tuples as the chart's bootstrap hook does).
-
 ## What stands in for what
 
 | Collaborator                  | In a test                                                                                                   |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | A service app                 | the real app under `with TestClient(app)`, set up per the service's settings shape: `references/fixtures.md` § A service app |
 | Lance / lance-namespace       | real pylance on `tmp_path`: `tests/integration/conftest.py::real_ns_client`, `tests/unit/conftest.py::overlay_dataset`. The `MagicMock(spec=LanceNamespace)` behind `::client` cannot see what Lance writes (a table landed at the wrong file version passes), so it serves only routing and error-mapping claims |
-| S3 through boto3 / `storage`  | moto `mock_aws()`                                                                                           |
+| S3 through boto3 / `lakehouse_kit.storage` | moto `mock_aws()`                                                                                           |
 | S3 read by pylance or pyarrow | a moto server, `tests/integration/test_moto_s3.py::moto_endpoint`: `mock_aws()` patches botocore, which the native Lance and Arrow clients never go through |
 | Outbound HTTPX                | `respx` (`services/maintenance/tests/test_a_table_the_catalog_does_not_govern_is_left_alone.py`)            |
 | NATS JetStream                | a real broker through Dagger (`references/fixtures.md` § NATS); the `nats-auth` lane brings its own         |
@@ -179,8 +179,7 @@ tuples as the chart's bootstrap hook does).
   file `git grep -l 'helm not available'` lists. CI provides helm,
   so the skip only hides the test on a developer box.
 - **Shapes not to copy**: a test that reads the Makefile, `pyproject.toml`, source or prose instead of running
-  code (measured 2026-10-31: no root-suite test imports `ast`, and none of the 96 tests in the lakehouse suites that
-  execute no production line reads source or file names). Don't write a new test in that shape: a code-shape rule goes to ruff or an import-linter contract, and a behaviour claim
+  code (measured 2026-11-06: no test under `tests/`, `packages/*/tests` or `services/*/tests` imports `ast`). Don't write a new test in that shape: a code-shape rule goes to ruff or an import-linter contract, and a behaviour claim
   drives the code.
 - **Test docstrings and comments follow CLAUDE.md's comment rule**: rationale and provenance, never
   history. The `comment-history-gate` prek hook checks staged lines; `make comment-gate` checks the

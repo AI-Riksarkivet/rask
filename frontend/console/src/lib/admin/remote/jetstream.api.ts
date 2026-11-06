@@ -1,5 +1,5 @@
 import type { ApiResult } from '@rask/api/client';
-import { query } from '$lib/remote.svelte';
+import { query } from '#lib/reads.svelte.ts';
 import type { JetStreamOverview } from '../jetstream';
 
 // `/admin/streams`' read. The JetStream state lives in the NATS monitor (`/jsz`), which is

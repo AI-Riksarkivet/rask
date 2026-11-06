@@ -42,8 +42,9 @@
 	--sidebar-ring: oklch(0.45 0.18 250);
 
 	/* --- Legacy palette bridge -------------------------------------------------------------
-	   45 components across data/lineage/admin/models (and a few @rask/ui ones) still style with
-	   the pre-shadcn palette (--ink/--mut/--line/--panel/…, ~800 references). Those names were
+	   33 components across the console's catalog, lineage and admin views (and one @rask/ui
+	   component) still style with the pre-shadcn palette (--ink/--mut/--line/--panel/…, 506
+	   references, measured 2026-11-06). Those names were
 	   never defined here, so every one resolved to an INVALID value: a card's
 	   `background: var(--panel)` fell back to transparent and — worst — `border-color:
 	   var(--line)` fell back to `currentColor`, painting every hairline in the full text colour.

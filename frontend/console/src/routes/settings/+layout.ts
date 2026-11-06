@@ -1,4 +1,4 @@
-import { requireEstateAdmin } from '$lib/estate-admin';
+import { requireEstateAdmin } from '#lib/estate-admin.ts';
 import type { LayoutLoad } from './$types';
 
 // `/settings/**` — PLATFORM configuration. A LAYOUT load, so a new child page cannot be left ungated;

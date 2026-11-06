@@ -25,8 +25,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   branches, and a unit test covering what an integration test covers is deleted, not kept. A change adds at most
   one test per closes-when clause and replaces the test of the same seam rather than adding beside it; state the
   net test delta in the commit. No test reads source text, an AST, prose or file names: a code-shape rule belongs in
-  ruff or an import-linter contract, or nowhere. Measured 2026-09-28: 12,066 tests in 1,291 files (231k test lines
-  against 120k production lines), and 2,743 of them (22.7%) execute no production line at all.
+  ruff or an import-linter contract, or nowhere. Measured 2026-11-06 (`pytest --collect-only`): 4,214 tests in
+  601 files (99k test lines against 82k production lines); measured 2026-09-28, before XC-192, 2,743 of the 12,066
+  tests then collected (22.7%) executed no production line at all.
 - **No silent scope-cuts.** If you bound coverage, sample, or defer something, say so
   explicitly. Don't let "partially done" read as "done".
 - **No backward compatibility — the estate is pre-production.** No migration shims, dual read paths,
@@ -158,15 +159,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Run the app locally
 
 ```bash
-make dev               # the console with Vite HMR on :5173, /api proxied to RASK_EDGE_URL (default :8888)
-make dev-k3s           # the same against the IN-CLUSTER edge (port-forwards k3s Traefik's Service to :8888)
+make dev               # the console with Vite HMR on :5173, /config.json from frontend/console/dev/config.json, /api proxied to RASK_EDGE_URL (default :8080)
+make dev-k3s           # the same against the IN-CLUSTER edge and Dex (port-forwards k3s Traefik's Service to :8080, or reuses :8080 when it already serves /dex)
 make dev-micro         # the notifications inbox on the host (:8850, scripts/dev-micro.sh); no edge in front
 ```
 
 **The console is one static single-page app with no server of its own** (`frontend/console`): the browser signs in to
-Dex with PKCE on the public `rask-web` client, keeps its tokens in memory, and calls the lakehouse's `/api/*` and the
+Dex with PKCE on its own public client `rask-console`, keeps its tokens in memory, and calls the lakehouse's `/api/*` and the
 inbox's `/api/notifications/*` with its bearer, same-origin through the Gateway. `make dev` therefore needs an edge on
-`RASK_EDGE_URL`: `make dev-k3s` provides the cluster's. Its Playwright suite needs none: it serves the BUILT app behind
+`RASK_EDGE_URL` that also serves the issuer `frontend/console/dev/config.json` names (`http://localhost:8080/dex`,
+client `rask-console`; `CONSOLE_CONFIG_FILE` names another file): `make dev-k3s` provides the cluster's. Its Playwright suite needs none: it serves the BUILT app behind
 `frontend/console/e2e/edge.ts` with mocked upstreams and a mock OIDC issuer (`e2e/mock-oidc.ts`), so the real PKCE
 path runs. See `.claude/skills/rask-frontend`.
 
@@ -292,9 +294,9 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     registry (LH-558). There is no protocol-specific ingest door, and adding one would make that protocol privileged.
 - `frontend/` — the **JS/TS plane** and its own bun workspace root: `package.json` (plain bun scripts, no Turborepo),
   `bun.lock`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/`.
-  - `frontend/console` — **the console**: ONE SvelteKit 2 + Svelte 5 single-page app (`adapter-static`, `ssr = false`,
+  - `frontend/console` — **the console**: ONE SvelteKit 3 + Svelte 5 single-page app (`adapter-static`, `ssr = false`,
     fallback `index.html`) with no backend of its own, Lakekeeper-style. The browser signs in to Dex with OIDC and PKCE
-    on the public `rask-web` client (`oidc-client-ts`, tokens in memory, only the transient PKCE state in
+    on its own public client `rask-console`, declared in `deploy/fixtures/console/dex-values.yaml` (`oidc-client-ts`, tokens in memory, only the transient PKCE state in
     sessionStorage), reads its issuer, client and scopes from `/config.json` at boot (rendered by its chart), and calls
     the catalog, lineage and inbox APIs with its bearer, same-origin. `serve.ts` is its static server: the build with an
     SPA fallback, `/config.json` from `$CONSOLE_CONFIG_FILE`, and the strict CSP SvelteKit computes, sent as a header.
@@ -310,7 +312,7 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
   - `frontend/packages/dockview` — `@rask/dockview`, the workbench's dock; `frontend/packages/flow` — `@rask/flow`, the
     graph views the governance pages draw with.
 - `tests/` — `tests/unit`, `tests/integration` and `tests/e2e-py` (the live suites) for the lakehouse; `tests/e2e` holds
-  the inbox's two browser verify scripts.
+  the inbox's two browser verify scripts and their `console.mjs` helper, run with `bun`, read-only unless `--write`.
 - `scripts/` — **all** dev/ops scripts, shell + Python. **No production-state-changing CLIs** — data enters, and moves
   between tiers, only through the catalog's namespace doors.
 - `deploy/` — the overlays (`values-*.yaml`), the alert rules, kind and k3s configs, and `deploy/fixtures/<name>`: the
@@ -400,7 +402,7 @@ Key facts that aren't obvious from any single file:
 
 ## Conventions
 
-- **The console calls `/api/*` same-origin, in development too.** `vite dev` proxies `/api` to `RASK_EDGE_URL` (default `http://localhost:8888`, an edge: `make dev-k3s` port-forwards k3s Traefik's Service there); the built app is served by `serve.ts` behind the platform's Gateway. See `.claude/skills/rask-services-fleet` and `rask-frontend`.
+- **The console calls `/api/*` same-origin, in development too.** `vite dev` proxies `/api` to `RASK_EDGE_URL` (default `http://localhost:8080`, an edge: `make dev-k3s` port-forwards k3s Traefik's Service there); the built app is served by `serve.ts` behind the platform's Gateway. See `.claude/skills/rask-services-fleet` and `rask-frontend`.
 - **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are globbed (`testpaths` names `packages/*/tests`, `services/*/tests` and the three root suites), not discovered from the rootdir.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
 - **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across the console and every package under `frontend/packages`. Prettier is gone.
@@ -468,6 +470,7 @@ Single-context: root `CONTEXT.md` plus `docs/adr/`. See `docs/agents/domain.md`.
 | --- | --- |
 | Where code belongs; workspace globs; `pyproject.toml`; a new member or deployable | `rask-architecture` |
 | The cluster route, an endpoint's public prefix, a 404/401/403 through `/api/*`, ports | `rask-services-fleet` |
+| A catalog endpoint, the spec's error codes, the hierarchy guards, trash/protection, maintenance | `rask-lance-catalog` |
 | The console: a route, sign-in, data fetching, the CSP, the frontend gates and e2e | `rask-frontend` |
 | `@rask/ui`, tokens, `class=`, an unstyled page, a new component | `rask-styling` |
 | Whether a feature should tell a PERSON something — emitting a run/control event, a notification that never fired, a new `ControlAction`/`NotificationReason` | `rask-notifications` |

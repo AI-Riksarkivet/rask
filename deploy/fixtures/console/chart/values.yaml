@@ -1,7 +1,11 @@
 # The rask release this console sits beside. Every rask name below derives from it: the objects this release renders
-# (`<rask>-console`, `<rask>-notifications`, the ServiceAccounts `<rask>-sa-console` and `<rask>-sa-notifications`) and
-# the rask objects it reaches by reference (`<rask>-catalog`, `<rask>-lineage`, `<rask>-dex`, `<rask>-openbao`,
-# `<rask>-otel-collector`, `<rask>-nats`).
+# (the Services `<rask>-console` and `<rask>-notifications`, the ServiceAccounts `<rask>-sa-console` and
+# `<rask>-sa-notifications`) and the rask objects it reaches by reference (`<rask>-catalog`, `<rask>-lineage`,
+# `<rask>-dex`, `<rask>-openbao`, `<rask>-otel-collector`, `<rask>-nats`). The two Deployments are named by THIS release
+# (`<release>-web`, `<release>-<dapr.appId>`), because their pods' selector carries `app.kubernetes.io/instance:
+# <release>` and a selector is immutable: a Deployment named by its selector's release is replaced in one upgrade
+# whenever that release changes, by Helm or any reconciler that prunes, and no object is deleted by hand. Nothing
+# reaches either Deployment by name: the Services, the HTTPRoute, the NetworkPolicies and the Dapr app id select pods.
 rask:
   release: rask
 
@@ -35,14 +39,14 @@ web:
     pullPolicy: IfNotPresent
   replicas: 1
   port: 3000
-  # The image's non-root user (oven/bun's `bun`), named by number so `runAsNonRoot` can verify it.
-  runAsUser: 1000
+  # The image's non-root uid (`USER 10001` in .docker/frontend.dockerfile), named by number so `runAsNonRoot` can verify it.
+  runAsUser: 10001
   # What the browser is told at boot, served as `/config.json` with `issuer` set to `auth.oidc.issuer` (the catalog
-  # accepts a token only when its `iss` equals it): the public client it signs in to with PKCE (Dex's `rask-web`) and the
+  # accepts a token only when its `iss` equals it): the public client it signs in to with PKCE (`rask-console`, which the console's `dex-values.yaml` declares) and the
   # scopes it asks for, among them the lakehouse's audience and `federated:id`, without which every governed door
   # refuses the token. Nothing here is a secret: a public client holds none.
   config:
-    clientId: rask-web
+    clientId: rask-console
     scopes: [openid, profile, email, groups, "federated:id", "audience:server:client_id:rask-lakehouse"]
   resources:
     requests: { cpu: 10m, memory: 32Mi }
@@ -136,10 +140,25 @@ dapr:
     memoryLimit: 256Mi
 
 # The inbox's own state: its actors' rows on a CloudNativePG Postgres this release renders (the CloudNativePG operator
-# is a prerequisite: in development the `cloudnative-pg` fixture). Only this release's ServiceAccount may read the
-# Cluster's generated `<cluster>-app` credential, through a Kubernetes secret store scoped to this app, and the sidecar
-# verifies the server against the Cluster's own CA.
+# is a prerequisite: in development the `cloudnative-pg` fixture), or on the platform's Postgres named in `external`.
+# Only this release's ServiceAccount may read the connection credential, through a Kubernetes secret store scoped to
+# this app, so the connection string reaches the sidecar alone and never an env; the sidecar verifies the server against
+# the CA it is given.
 state:
+  # A platform's Postgres in place of the bundled Cluster: platform services are named, never bundled. Empty
+  # `connectionSecret` renders the bundled Cluster below; set, this release renders no Cluster, and the platform (its
+  # ESO, its operator) owns the Secret.
+  external:
+    # The Secret in this namespace holding the connection string under `uri`, as CloudNativePG's `<cluster>-app` does: a
+    # libpq URI. Leave `sslmode` out of it: the sidecar connects with `PGSSLMODE=verify-full`, and an `sslmode` the URI
+    # names overrides that, so `disable` or `require` would send the password to a server nothing verified.
+    connectionSecret: ""
+    # A Secret holding the server's CA certificate under `ca.crt`, which the sidecar verifies the server against. Empty
+    # verifies it against the sidecar's system roots: `verify-full` either way.
+    caSecret: ""
+    # The egress rules reaching the server, as rask's `networkPolicy.apiServerEgress` names its peers. Required while
+    # `networkPolicy.enabled`: rask's default-deny also denies egress, and the server is outside the namespace.
+    egress: []
   instances: 1
   storage: 2Gi
   # The Postgres image the Cluster runs; empty takes the operator's default for its version.

@@ -85,7 +85,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
 ## Where it CAN bite — the real gaps (honest)
 
 1. **The catalog outbox gap (the #1 weakness).** The catalog emits lineage **inline-awaited + best-effort**
-   *after* the Lance write commits to S3 (`services/catalog/core/lineage_emit.py`) — awaited (not a
+   *after* the Lance write commits to S3 (`services/catalog/src/catalog/core/lineage_emit.py`) — awaited (not a
    BackgroundTasks fire-and-forget) so the event reaches the durable Dapr/JetStream transport before the
    response returns, but its errors are swallowed so a lineage outage never fails the write. If the catalog
    crashes (or its sidecar is down) **between the S3 write and the publish**, the data exists on storage but

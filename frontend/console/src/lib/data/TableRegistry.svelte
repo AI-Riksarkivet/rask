@@ -29,7 +29,7 @@
 	} from '@rask/ui/data-table';
 	import { Select } from '@rask/ui/select';
 	import { Plus, RefreshCw, ShieldAlert } from '@lucide/svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { tableFromJSON, tableToIPC } from 'apache-arrow';
 	import { createTableWithRows } from './catalog';
@@ -37,10 +37,7 @@
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOfTable, type StageInfo } from './stage';
 	import StageBadge from './StageBadge.svelte';
-	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
+	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 
 	let tables = $state<string[] | null>(null);
 	let lastStatus = $state(0);
@@ -279,7 +276,7 @@
 {#snippet tableCell(row: Row)}
 	<a
 		class="rowlink mono"
-		href={`${base}/catalog/tables/${encodeURIComponent(row.id)}`}
+		href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(row.id) })}
 		onclick={(e) => e.stopPropagation()}>{row.id}</a
 	>
 {/snippet}
@@ -289,7 +286,7 @@
 {#snippet nsCell(row: Row)}
 	<a
 		class="nslink mono"
-		href={`${base}/catalog/namespaces/${encodeURIComponent(row.namespace)}`}
+		href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(row.namespace) })}
 		onclick={(e) => e.stopPropagation()}>{row.namespace}</a
 	>
 {/snippet}
@@ -363,7 +360,9 @@
 		<div class="empty">
 			<ShieldAlert size={16} />
 			<p>
-				This stack is governed — <a href={loginHref}>sign in</a> to browse the catalog.
+				This stack is governed — <a
+					href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>sign in</a
+				> to browse the catalog.
 			</p>
 		</div>
 	{:else if offline}
@@ -409,8 +408,9 @@
 			<dd>
 				<a
 					class="mono jump"
-					href={`${base}/catalog/namespaces/${encodeURIComponent(drawerRow.namespace)}`}
-					>{drawerRow.namespace}</a
+					href={resolve('/catalog/namespaces/[id]', {
+						id: encodeURIComponent(drawerRow.namespace),
+					})}>{drawerRow.namespace}</a
 				>
 			</dd>
 			<dt>medallion stage</dt>
@@ -421,16 +421,24 @@
 			</dd>
 		</dl>
 		<div class="jumps">
-			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}`}
+			<a
+				class="btn"
+				href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(drawerRow.id) })}
 				>Open detail</a
 			>
 			<!-- R18 table previewer: deep-link onto the detail pane's preview tab, which reads the
 			     first N rows through the catalog's query door onto the shared data-table. -->
-			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}?tab=preview`}
-				>Preview</a
+			<a
+				class="btn"
+				href={resolve('/catalog/tables/[table]?tab=preview', {
+					table: encodeURIComponent(drawerRow.id),
+				})}>Preview</a
 			>
-			<a class="btn" href={`${base}/catalog/tables/${encodeURIComponent(drawerRow.id)}?tab=access`}
-				>Access tab</a
+			<a
+				class="btn"
+				href={resolve('/catalog/tables/[table]?tab=access', {
+					table: encodeURIComponent(drawerRow.id),
+				})}>Access tab</a
 			>
 		</div>
 	{/if}

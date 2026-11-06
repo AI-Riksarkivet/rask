@@ -9,7 +9,14 @@
 # Built by Dagger through scripts/dagger-image.sh, the one build seam (never docker).
 
 # ---- builder: bun install (workspace) + prebuild packages/ui + build the console -----
-FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f AS builder
+# The bun the workspace pins (frontend/package.json `packageManager`, .dagger/frontend.go's lanes), so the image builds
+# with the toolchain its gates ran. Of this stage only the build, the bun binary and tini-static ship.
+FROM oven/bun:1.4.4-debian@sha256:93d5032fe06d163427822dc1598f420363759bb18155c9cc90eb1be05a64a19e AS builder
+
+# tini-static for the runtime stage, which has no package manager to install it with.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends tini
 
 WORKDIR /src
 
@@ -42,8 +49,13 @@ RUN bun run --cwd=packages/ui build
 # hadolint ignore=DL3059
 RUN bun run --cwd=console build
 
-# ---- final: the Bun runtime serving the built files ---------------------------
-FROM oven/bun:1-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f
+# ---- final: the bun binary on distroless, serving the built files ---------------
+# Distroless rather than an oven/bun runtime tag: the server needs only bun and glibc (`ldd /usr/local/bin/bun` lists
+# libc, libpthread, libdl and libm), and an oven/bun tag is built once per bun release and never refreshed, so its
+# Debian packages age with the bun version the workspace pins. distroless/base-nossl is glibc, CA certificates and
+# tzdata with no shell, package manager or OpenSSL, rebuilt by Google as Debian publishes fixes.
+# hadolint ignore=DL3026  # Reason: gcr.io/distroless is Google's official distroless registry; digest-pinned.
+FROM gcr.io/distroless/base-nossl-debian13@sha256:d710a5c8bfe4cf7e726d7e1afd73e363a9fb02c2a11ad893d2d6185c1b9a89cb
 
 ARG BUILD_DATE
 ARG VCS_REF
@@ -56,9 +68,8 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.description="rask console: the single-page app and its static server"
 
 # tini as PID 1, so SIGTERM reaches the server and a rollout drains it.
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt,sharing=locked \
-    apt-get update && apt-get install -y --no-install-recommends tini
+COPY --from=builder /usr/bin/tini-static /usr/bin/tini
+COPY --from=builder /usr/local/bin/bun /usr/local/bin/bun
 
 WORKDIR /app
 
@@ -66,14 +77,19 @@ WORKDIR /app
 COPY --from=builder --chown=0:0 /src/console/build ./build
 COPY --from=builder --chown=0:0 /src/console/serve.ts ./serve.ts
 
-# The base image's `bun` user (uid 1000), which the console release runs as.
-USER 1000
+# uid 10001, as the lakehouse's and the inbox's images run, and the console release's `runAsUser`
+# (deploy/fixtures/console/chart/values.yaml): a non-root uid of 10000 or more. Numeric, so the kubelet can verify
+# `runAsNonRoot`; the uid needs no passwd entry, and HOME points at the release's /tmp mount.
+USER 10001
+# BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 keeps bun from writing a transpiler cache, which a read-only root refuses.
 ENV PORT=3000 \
-    HOME=/tmp
+    HOME=/tmp \
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH=0
 EXPOSE 3000
 
+# Exec form: the image has no shell.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
-  CMD bun -e "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD ["bun", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
 
 ENTRYPOINT ["tini", "--"]
 CMD ["bun", "serve.ts"]

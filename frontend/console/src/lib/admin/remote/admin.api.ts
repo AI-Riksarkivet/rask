@@ -1,8 +1,8 @@
 import { error } from '@sveltejs/kit';
-import { getRequestEvent, query } from '$lib/remote.svelte';
-import { CATALOG_API } from '$lib/upstreams';
+import { getRequestEvent, query } from '#lib/reads.svelte.ts';
+import { CATALOG_API } from '#lib/upstreams.ts';
 import { parse } from '@rask/api';
-import { EventsPageSchema, type ControlEvent } from '$lib/admin/control';
+import { EventsPageSchema, type ControlEvent } from '#lib/admin/control.ts';
 
 const POLL_MS = 5000;
 const WINDOW = 200; // the recent window the console renders (older events fall off)

@@ -643,6 +643,20 @@ The subject one of the release's own services is: `kubernetes~system:serviceacco
 names for a service is this, so none can name a subject the pod does not authenticate as.
 Call: include "lance.saSubject" (list $root <name>).
 
+## `{{- define "lance.saComponents" -}}`
+
+The first-party services each given a ServiceAccount of their own, `<release>-sa-<component>` (security-sa.yaml):
+one list, so the accounts the chart renders and the accounts an external store reader may not bind
+(`lance.serviceAccounts`) cannot drift apart.
+
+## `{{- define "lance.serviceAccounts" -}}`
+
+Every ServiceAccount the product chart renders: the `lance.saComponents` accounts and the three a template renders
+beside its own workload (the backup snapshot, the Dapr dashboard, the OTel Collector). `lance.storeReads` refuses an
+external reader whose role would bind one of them, or the namespace's shared `default`: a role bound to the lakehouse's
+own account hands that reader's reads to a lakehouse pod, and one bound to `default` hands them to every pod that names
+no account ([[XC-165]]).
+
 ## `{{- define "lance.saAccount" -}}`
 
 The ServiceAccount username one of the release's services runs as, `system:serviceaccount:<release namespace>:<release>-sa-<name>`:
@@ -731,7 +745,8 @@ a ServiceAccount outside this release, `<namespace>:<name>`, whose subject is
 `kubernetes~system:serviceaccount:<namespace>:<name>`, the one the doors verify that account's projected token as,
 mapped to the roles it holds: `decider`, `member_expander` (the door's `list-users` over a membership userset) and
 `event_reader` (lineage's whole run feed, `GET /events/projection`). So a client of the lakehouse, none of which this
-chart renders, holds exactly the routes it calls: the compute fixture `decider` alone, a notifier all three.
+chart renders, holds exactly the routes it calls: a client that only asks for decisions `decider` alone, a notifier
+all three.
 
 THE RENDER FAILS rather than grant what nobody declared: a key that is not `<namespace>:<serviceaccount>` (lower-case
 letters, digits and `-`, and `.` in the name), an account mapped to no role, and a role outside those three.
@@ -808,6 +823,17 @@ lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enf
 `signing.doors`), and a signer reads its own pair. The pub/sub condition restates `dapr-component.yaml`'s, so
 `tests/unit/test_a_dapr_component_names_a_secret_something_can_resolve.py` checks, over every overlay CI deploys, that
 each scoped sidecar's own policy reads every secret its components name.
+
+A CLIENT'S READER (`openbao.externalReaders`) is an ALLOWLIST, because the store grants by name and a client's values are
+not the lakehouse's to trust: `<app>` may hold only `nats-user-<app>`, names of its own (`<app>-<name>`) and
+`signing-public-<name>`. Each refusal closes one way a client's values could reach a name another identity holds: an
+app id that is no Dapr id, a lakehouse app (enabled or not), one whose own names would cover a family the store issues
+per identity (`nats-user-<name>`, for every user of the issued table including a client's own, `signing-key-<name>`,
+`signing-public-<name>`), one whose own names would cover a name ESO, a lakehouse identity or the dev store's seed holds
+(the seed-only names are listed here, beside the ones the table and `lance.esoReads` derive) or another reader's id, a
+role `<release>-<app>` equal to ESO's (`externalSecrets.role`, whose policy and role keys the identities ConfigMap
+would carry twice), a ServiceAccount the lakehouse renders or `default` (`lance.serviceAccounts`), and an empty or
+non-name secret list. Pinned by tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py.
 
 ## `{{- define "lance.esoReads" -}}`
 
@@ -987,8 +1013,9 @@ dapr_error_code_total — a closed set of daprd error codes, so bounded by const
 ## `increasedCardinality: false`
 
 THE POINT OF THIS BLOCK. At the upstream default (still `true` in 1.18.1) the sidecar stamps the
-RAW remainder of a service-invocation URL onto the `path` label. Measured live on this cluster:
-dapr_http_server_request_count{app_id="gateway",path="/v1.0/invoke/compute/method/api/ray/jobs"}
+RAW remainder of a service-invocation URL onto the `path` label, as
+`dapr_http_server_request_count{app_id="<caller>",path="/v1.0/invoke/<app>/method/<the rest of the URL>"}` (measured
+live on this cluster; the series is in git history at `64ef118a9`).
 An invoked catalog or lineage path carries its table, namespace and project ids, so that is one
 series per id, forever, in a store nothing authorizes reads against.
 
@@ -1147,5 +1174,5 @@ The rows mirror the gates of the templates that render each backend: catalog and
 (services.yaml), so the route never names a Service that did not render.
 
 A new public prefix is a row here plus a row in
-`tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py`. Compute's `/api/ray` and
-`/api/serve` are not rows: the compute fixture chart publishes them with its own HTTPRoute.
+`tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py`. A client's own prefixes are not rows: its
+release publishes them with an HTTPRoute of its own.

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	// The table-detail PREVIEW tab (goal cond 5): the first N rows through the explicit POST catalog door
 	// route onto the catalog's /query (Arrow-IPC file), parsed browser-side with apache-arrow and
 	// rendered as a typed grid on the shared @rask/ui DataTable. Blob cells render an honest
@@ -17,16 +18,13 @@
 	import { untrack } from 'svelte';
 	import { page } from '$app/state';
 	import { tableFromIPC } from 'apache-arrow';
-	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
+	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 	import { queryTableRows } from './catalog';
 
 	let { table }: { table: string } = $props();
 
 	const DEFAULT_LIMIT = 50;
 	const MAX_LIMIT = 500;
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	type Field = { name: string; type: string };
 	type Row = Record<string, unknown>;
@@ -86,10 +84,10 @@
 		untrack(() => load());
 	});
 
-	// #73: the Arrow preview was read ONCE per table and never again, so a compaction, a stage runner run or
-	// anyone else's write left it showing rows that no longer exist — silently, because a stale table
-	// looks exactly like a fresh one. It rides the SAME `lineageFeed` the shell's bell does, so the
-	// preview and the notification above it can never disagree about when the estate changed.
+	// #73: a preview read once per table would keep showing rows a compaction, a pipeline's write or
+	// anyone else's commit has replaced, silently, because a stale table looks exactly like a fresh
+	// one. It re-reads on the ONE shared `lineageFeed`, so the preview and every
+	// other lineage-backed surface on the page agree about when the estate changed.
 	//
 	// `load()` alone, deliberately NOT the reset `$effect` above: a cursor tick is not a table change,
 	// so re-running the reset would clobber a limit the user typed back to the default while they were
@@ -201,7 +199,9 @@
 		<div class="empty">
 			<ShieldAlert size={16} />
 			<p>
-				This stack is governed — <a href={loginHref}>sign in</a> to preview rows.
+				This stack is governed — <a
+					href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>sign in</a
+				> to preview rows.
 			</p>
 		</div>
 	{:else if denied}

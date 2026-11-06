@@ -14,11 +14,6 @@ The categories held here, all verified by reading the call site:
   · pydantic `model_config` + `@model_validator` / `@field_validator` methods — invoked by pydantic.
   · pydantic MODEL FIELDS on response/claims schemas — "used" via serialization, not by name.
   · Test hooks and unittest.mock attributes (return_value / side_effect).
-
-NOT whitelisted on purpose: services/common/sinks.py (SinkAdapter/LocalDirSink/S3Sink). No SERVICE imports
-it — its only consumers are its own unit test and scripts/media_pipeline_e2e.py. It is the un-wired "gold
-sink" seam from the data-zone architecture. It is left visible so it keeps showing up as an architectural
-gap to either wire or delete, rather than being quietly blessed as fine.
 """
 
 model_config  # unused variable (services/catalog/core/config.py:23)

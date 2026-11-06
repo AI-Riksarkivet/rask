@@ -92,7 +92,7 @@ def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — 
     credential is a session (ADR 0170), and a session's key signed without its token is an identity the
     store does not hold.
 
-    Via ``storage.s3_client``, the estate's canonical S3 seam, never a raw ``boto3.client``: path-style
+    Via ``lakehouse_kit.storage.s3_client``, the estate's canonical S3 seam, never a raw ``boto3.client``: path-style
     addressing, s3v4 signing, retries and timeouts live there once, and a hand-rolled client silently
     forfeits all of them (against RustFS, virtual-hosted addressing resolves a DNS name that does
     not exist). The region rides on ``create_bucket``'s ``LocationConstraint`` where it matters — see

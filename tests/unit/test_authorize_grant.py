@@ -23,7 +23,11 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
-from tests.unit.named_resolver import NamedResolver
+from tests.unit.named_resolver import NamedResolver, uuid_of
+
+
+#: The object the namespace ``gold`` resolves to, which its grants are held by ([[LH-524]]).
+_GOLD = f"namespace:{uuid_of('namespace', ['gold'])}"
 
 
 def _run(
@@ -61,6 +65,16 @@ def _run(
 
 async def _as_coro(value: Any) -> Any:
     return value
+
+
+def test_gates_on_the_rung_in_the_body_not_a_blanket_bar(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked = _run(monkeypatch, {"user": "dex~bob", "relation": "reader"})
+    assert asked == [("dex~alice", "can_grant_reader", _GOLD)]
+
+
+def test_a_denied_check_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(PermissionDeniedError):
+        _run(monkeypatch, {"user": "dex~bob", "relation": "owner"}, allow=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -171,6 +185,24 @@ def test_re_granting_yourself_what_you_already_hold_is_allowed(monkeypatch: pyte
     )
 
 
+def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refusing only a literal `user:<principal>` would leave the same escalation one indirection away:
+    judy grants `owner` to `role:validators#assignee`, a userset she is already inside."""
+
+    async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
+        if relation == "assignee":
+            return True  # the caller IS inside the userset being granted
+        return relation.startswith("can_grant_")  # may grant; does not hold the rung
+
+    monkeypatch.setattr(fga_deps.fga, "check", fake_check)
+    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:validators#assignee", "relation": "owner"})))
+
+    with pytest.raises(PermissionDeniedError, match="may not raise your own access"):
+        asyncio.run(
+            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
+        )
+
+
 def test_a_userset_the_caller_is_outside_is_a_normal_grant(monkeypatch: pytest.MonkeyPatch) -> None:
     """The guard must not turn every userset grant into a refusal — that would break the role-based
     delegation `role:validators#assignee` exists for."""
@@ -186,3 +218,11 @@ def test_a_userset_the_caller_is_outside_is_a_normal_grant(monkeypatch: pytest.M
     asyncio.run(
         fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
     )
+
+
+def test_the_self_grant_rule_never_runs_on_revoke(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Revoking your OWN rung is a de-escalation. Applying the elevation rule there would refuse a
+    grant-manager dropping their own access, which is the one self-directed act that is always safe."""
+    asked = _run(monkeypatch, {"user": "dex~alice", "relation": "owner"}, revoking=True)
+
+    assert asked == [("dex~alice", "can_revoke_grant", _GOLD)], "revoke consulted the self-grant guard"

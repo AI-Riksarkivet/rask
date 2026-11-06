@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-// The auth-OFF preview: no `/config.json`, so the console signs nobody in. The `/auth/*` pages must
-// still exist and FAIL SAFE (back to the landing, never a 404), and the landing must show no auth
-// affordance, the main-menu bar (no estate-admin entries: `me` resolves null) and its honest scaffold.
-// The real sign-in round trip runs in the auth-ON previews against the mock issuer.
+// The auth-OFF preview: its `/config.json` is `{"signIn": false}`, so the console signs nobody in.
+// The `/auth/*` pages must still exist and FAIL SAFE (back to the landing, never a 404), and the
+// landing must show no auth affordance, the main-menu bar (no estate-admin entries: `me` resolves
+// null) and its honest scaffold. The real sign-in round trip runs in the auth-ON previews against
+// the mock issuer.
 
 test('/auth/login is a fail-safe no-op back to the landing when sign-in is not configured', async ({
 	page,

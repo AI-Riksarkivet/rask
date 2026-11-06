@@ -1080,7 +1080,7 @@
                     "type": "string"
                 },
                 "externalReaders": {
-                    "description": "A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read; supplied from the client's own values, so the lakehouse names none.",
+                    "description": "A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id `\u003capp\u003e`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-\u003capp\u003e`, names of its own (`\u003capp\u003e-\u003cname\u003e`) and `signing-public-\u003cname\u003e`; the render refuses an app id that is no Dapr id, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-\u003cname\u003e`, `signing-key-\u003cname\u003e`, `signing-public-\u003cname\u003e`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `\u003crelease\u003e-\u003capp\u003e` is ESO's; and a ServiceAccount the lakehouse renders or `default`.",
                     "type": "object"
                 },
                 "identity": {

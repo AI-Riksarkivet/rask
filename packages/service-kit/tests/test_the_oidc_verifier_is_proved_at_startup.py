@@ -1,7 +1,7 @@
 """`OIDC verifier ready` must be a measurement, not an assertion.
 
 Found by the same external comparison as the 503 fix beside it
-(`docs/audits/2026-09-20-polaris-k8s-comparison.md`): the upstream operator resolves its auth plane
+(read 2026-09-20, git history at 64ef118a9): the upstream operator resolves its auth plane
 once at startup and carries the verdict, rather than discovering it on the first request.
 
 WHAT THE LINE CLAIMED. `attach_governed_auth` constructs `OIDCVerifier(...)` and logs

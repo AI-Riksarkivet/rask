@@ -1,15 +1,18 @@
 diff --git a/builder/valid.js b/builder/valid.js
-index b35a5f5e1f399c483e5852481970245893a8d1d8..66f90f8b7b63835a52dbb62a8610bc7ec41dad9d 100644
+index b35a5f5..89f72bd 100644
 --- a/builder/valid.js
 +++ b/builder/valid.js
-@@ -43,21 +43,16 @@ function createIsValidFunction(nullValues) {
+@@ -43,21 +43,99 @@ function createIsValidFunction(nullValues) {
          // @ts-ignore
          return function isValid(value) { return true; };
      }
 -    let fnBody = '';
 +    // A closure instead of a compiled function: `new Function` is refused under a content security
-+    // policy without 'unsafe-eval'. A Set's SameValueZero matches the switch's strict equality for every
-+    // value except NaN, which is checked explicitly, as before.
++    // policy without 'unsafe-eval'. It keeps the compiled switch's semantics: NaN is checked apart,
++    // and every other null value is compared by `===` with the value its case expression
++    // (`valueToCase`) evaluates to, so an array or object, whose case builds a fresh one, never
++    // matches, as no `case [1]:` ever does. It evaluates no code: a case that is not a literal it
++    // reads throws a SyntaxError here, at creation (`caseValue`).
      const noNaNs = nullValues.filter((x) => x === x);
 -    if (noNaNs.length > 0) {
 -        fnBody = `
@@ -17,34 +20,115 @@ index b35a5f5e1f399c483e5852481970245893a8d1d8..66f90f8b7b63835a52dbb62a8610bc7e
 -        case ${valueToCase(x)}:`).join('')}
 -            return false;
 -    }`;
--    }
++    const checksNaN = nullValues.length !== noNaNs.length;
++    const cases = noNaNs.map((x) => caseValue(valueToCase(x))).filter((c) => c.matches).map((c) => c.value);
++    return function isValid(x) {
++        if (checksNaN && x !== x) return false;
++        for (const value of cases) {
++            if (x === value) return false;
++        }
++        return true;
++    };
++}
++/** What the case expression `text` evaluates to, for the expressions `valueToCase` writes: `null`,
++ *  `undefined`, a boolean, a number or bigint as `valueToString` writes one, a double-quoted string
++ *  literal, or an array or object literal, which matches nothing. Any other text (an object's own
++ *  `Symbol.toPrimitive` answer, a string whose quote closes early) is an expression the compiled switch
++ *  would evaluate at its first call; this throws a SyntaxError for it instead. */
++function caseValue(text) {
++    switch (text) {
++        case 'null': return { matches: true, value: null };
++        case 'undefined': return { matches: true, value: undefined };
++        case 'true': return { matches: true, value: true };
++        case 'false': return { matches: true, value: false };
++    }
++    if (text.startsWith('[') || text.startsWith('{')) return { matches: false };
++    if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
++        const value = stringLiteralValue(text.slice(1, -1));
++        if (value !== undefined) return { matches: true, value };
++    }
++    else if (/^-?\d+n$/.test(text) && `${BigInt(text.slice(0, -1))}n` === text) {
++        return { matches: true, value: BigInt(text.slice(0, -1)) };
+     }
 -    // NaN doesn't equal anything including itself, so it doesn't work as a
 -    // switch case. Instead we must explicitly check for NaN before the switch.
 -    if (nullValues.length !== noNaNs.length) {
 -        fnBody = `if (x !== x) return false;\n${fnBody}`;
--    }
++    else if (`${Number(text)}` === text) {
++        return { matches: true, value: Number(text) };
++    }
++    throw new SyntaxError(`a null value's case does not evaluate to a value: case ${text}:`);
++}
++/** The value of a double-quoted string literal's body as a sloppy-mode function reads it (a
++ *  `new Function` body is sloppy), or undefined when the body is not one literal. */
++function stringLiteralValue(body) {
++    let value = '';
++    for (let i = 0; i < body.length;) {
++        const c = body[i];
++        if (c === '"' || c === '\n' || c === '\r') return undefined;
++        if (c !== '\\') {
++            value += c;
++            i += 1;
++            continue;
++        }
++        const e = body[i + 1];
++        if (e === undefined) return undefined;
++        const simple = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' }[e];
++        if (simple !== undefined) {
++            value += simple;
++            i += 2;
++        }
++        else if (e === '\r' && body[i + 2] === '\n') {
++            i += 3;
++        }
++        else if (e === '\n' || e === '\r' || e === ' ' || e === ' ') {
++            i += 2;
++        }
++        else if (e === 'x') {
++            const hex = body.slice(i + 2, i + 4);
++            if (!/^[0-9a-fA-F]{2}$/.test(hex)) return undefined;
++            value += String.fromCharCode(parseInt(hex, 16));
++            i += 4;
++        }
++        else if (e === 'u') {
++            const braced = /^\{([0-9a-fA-F]+)\}/.exec(body.slice(i + 2));
++            const hex = braced ? braced[1] : body.slice(i + 2, i + 6);
++            if (!braced && !/^[0-9a-fA-F]{4}$/.test(hex)) return undefined;
++            const point = parseInt(hex, 16);
++            if (point > 0x10ffff) return undefined;
++            value += String.fromCodePoint(point);
++            i += 2 + (braced ? braced[0].length : 4);
++        }
++        else if (/[0-7]/.test(e)) {
++            const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1))[0].slice(0, e <= '3' ? 3 : 2);
++            value += String.fromCharCode(parseInt(octal, 8));
++            i += 1 + octal.length;
++        }
++        else {
++            value += e;
++            i += 2;
++        }
+     }
 -    return new Function(`x`, `${fnBody}\nreturn true;`);
-+    const checksNaN = nullValues.length !== noNaNs.length;
-+    const nulls = new Set(noNaNs);
-+    return function isValid(x) {
-+        if (checksNaN && x !== x) return false;
-+        return !nulls.has(x);
-+    };
++    return value;
  }
  exports.createIsValidFunction = createIsValidFunction;
  /** @ignore */
 diff --git a/builder/valid.mjs b/builder/valid.mjs
-index 3a08f9af7f6d578581927043ba1285b060ecb465..5fd7395d6e9c27b8346bbd97aa1657bb032089c6 100644
+index 3a08f9a..76d2584 100644
 --- a/builder/valid.mjs
 +++ b/builder/valid.mjs
-@@ -40,21 +40,16 @@ export function createIsValidFunction(nullValues) {
+@@ -40,21 +40,99 @@ export function createIsValidFunction(nullValues) {
          // @ts-ignore
          return function isValid(value) { return true; };
      }
 -    let fnBody = '';
 +    // A closure instead of a compiled function: `new Function` is refused under a content security
-+    // policy without 'unsafe-eval'. A Set's SameValueZero matches the switch's strict equality for every
-+    // value except NaN, which is checked explicitly, as before.
++    // policy without 'unsafe-eval'. It keeps the compiled switch's semantics: NaN is checked apart,
++    // and every other null value is compared by `===` with the value its case expression
++    // (`valueToCase`) evaluates to, so an array or object, whose case builds a fresh one, never
++    // matches, as no `case [1]:` ever does. It evaluates no code: a case that is not a literal it
++    // reads throws a SyntaxError here, at creation (`caseValue`).
      const noNaNs = nullValues.filter((x) => x === x);
 -    if (noNaNs.length > 0) {
 -        fnBody = `
@@ -52,19 +136,97 @@ index 3a08f9af7f6d578581927043ba1285b060ecb465..5fd7395d6e9c27b8346bbd97aa1657bb
 -        case ${valueToCase(x)}:`).join('')}
 -            return false;
 -    }`;
--    }
++    const checksNaN = nullValues.length !== noNaNs.length;
++    const cases = noNaNs.map((x) => caseValue(valueToCase(x))).filter((c) => c.matches).map((c) => c.value);
++    return function isValid(x) {
++        if (checksNaN && x !== x) return false;
++        for (const value of cases) {
++            if (x === value) return false;
++        }
++        return true;
++    };
++}
++/** What the case expression `text` evaluates to, for the expressions `valueToCase` writes: `null`,
++ *  `undefined`, a boolean, a number or bigint as `valueToString` writes one, a double-quoted string
++ *  literal, or an array or object literal, which matches nothing. Any other text (an object's own
++ *  `Symbol.toPrimitive` answer, a string whose quote closes early) is an expression the compiled switch
++ *  would evaluate at its first call; this throws a SyntaxError for it instead. */
++function caseValue(text) {
++    switch (text) {
++        case 'null': return { matches: true, value: null };
++        case 'undefined': return { matches: true, value: undefined };
++        case 'true': return { matches: true, value: true };
++        case 'false': return { matches: true, value: false };
++    }
++    if (text.startsWith('[') || text.startsWith('{')) return { matches: false };
++    if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
++        const value = stringLiteralValue(text.slice(1, -1));
++        if (value !== undefined) return { matches: true, value };
++    }
++    else if (/^-?\d+n$/.test(text) && `${BigInt(text.slice(0, -1))}n` === text) {
++        return { matches: true, value: BigInt(text.slice(0, -1)) };
+     }
 -    // NaN doesn't equal anything including itself, so it doesn't work as a
 -    // switch case. Instead we must explicitly check for NaN before the switch.
 -    if (nullValues.length !== noNaNs.length) {
 -        fnBody = `if (x !== x) return false;\n${fnBody}`;
--    }
++    else if (`${Number(text)}` === text) {
++        return { matches: true, value: Number(text) };
++    }
++    throw new SyntaxError(`a null value's case does not evaluate to a value: case ${text}:`);
++}
++/** The value of a double-quoted string literal's body as a sloppy-mode function reads it (a
++ *  `new Function` body is sloppy), or undefined when the body is not one literal. */
++function stringLiteralValue(body) {
++    let value = '';
++    for (let i = 0; i < body.length;) {
++        const c = body[i];
++        if (c === '"' || c === '\n' || c === '\r') return undefined;
++        if (c !== '\\') {
++            value += c;
++            i += 1;
++            continue;
++        }
++        const e = body[i + 1];
++        if (e === undefined) return undefined;
++        const simple = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t', v: '\v' }[e];
++        if (simple !== undefined) {
++            value += simple;
++            i += 2;
++        }
++        else if (e === '\r' && body[i + 2] === '\n') {
++            i += 3;
++        }
++        else if (e === '\n' || e === '\r' || e === ' ' || e === ' ') {
++            i += 2;
++        }
++        else if (e === 'x') {
++            const hex = body.slice(i + 2, i + 4);
++            if (!/^[0-9a-fA-F]{2}$/.test(hex)) return undefined;
++            value += String.fromCharCode(parseInt(hex, 16));
++            i += 4;
++        }
++        else if (e === 'u') {
++            const braced = /^\{([0-9a-fA-F]+)\}/.exec(body.slice(i + 2));
++            const hex = braced ? braced[1] : body.slice(i + 2, i + 6);
++            if (!braced && !/^[0-9a-fA-F]{4}$/.test(hex)) return undefined;
++            const point = parseInt(hex, 16);
++            if (point > 0x10ffff) return undefined;
++            value += String.fromCodePoint(point);
++            i += 2 + (braced ? braced[0].length : 4);
++        }
++        else if (/[0-7]/.test(e)) {
++            const octal = /^[0-7]{1,3}/.exec(body.slice(i + 1))[0].slice(0, e <= '3' ? 3 : 2);
++            value += String.fromCharCode(parseInt(octal, 8));
++            i += 1 + octal.length;
++        }
++        else {
++            value += e;
++            i += 2;
++        }
+     }
 -    return new Function(`x`, `${fnBody}\nreturn true;`);
-+    const checksNaN = nullValues.length !== noNaNs.length;
-+    const nulls = new Set(noNaNs);
-+    return function isValid(x) {
-+        if (checksNaN && x !== x) return false;
-+        return !nulls.has(x);
-+    };
++    return value;
  }
  /** @ignore */
  function valueToCase(x) {

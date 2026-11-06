@@ -32,10 +32,21 @@ decides authorization — it decides **disclosure**.
 The console is a single-page app with no backend of its own, as Lakekeeper's console is:
 
 - **One credential, the person's own.** The browser signs in to the platform's issuer (Dex in development) with
-  OIDC and PKCE on the public `rask-web` client and attaches that person's access token to every call. There is no
-  service credential anywhere in the console, so no anonymous or signed-out read reaches a door with anyone's authority.
+  OIDC and PKCE on its own public client (`rask-console` in development, declared in `deploy/fixtures/console/dex-values.yaml`)
+  and attaches that person's access token to every call. The development Dex binds every authorization code to an S256
+  challenge (`oauth2.pkce.enforce`), and its own sign-in client `rask-web` is confidential, with no redirect, so no
+  browser signs in through it. There is no service credential anywhere in the console, so no anonymous or signed-out
+  read reaches a door with anyone's authority.
+- **Sign-out ends the issuer's session where the issuer offers it.** When discovery advertises an
+  `end_session_endpoint`, the console redirects there with the held id token as `id_token_hint`, which also drops the
+  user; otherwise it drops the user and sends the next sign-in with `prompt=login`, so an issuer that keeps a session
+  authenticates the person again rather than reusing it (`logout` in `frontend/console/src/lib/auth.svelte.ts`). The
+  dev Dex advertises no end-session endpoint and keeps no session: Dex v2.46.1 does both, and reads `prompt`, only
+  with its sessions flag on (`DEX_SESSIONS_ENABLED`, off by default, unset in the fixture), so it shows its login form
+  on every sign-in.
 - **Tokens live in memory.** Nothing is written to `localStorage` or a cookie; only the transient PKCE state survives
-  the sign-in redirect. A reload signs in again through the issuer's own session. A strict Content Security Policy,
+  the sign-in redirect. A reload signs in again through the issuer: at once from an issuer that keeps a session,
+  through the login form of the dev Dex, which keeps none. A strict Content Security Policy,
   set by the console's own server, limits where the page may load code from and connect to.
 - **Same origin, no CORS.** The console's release attaches an HTTPRoute to the platform's Gateway beside the
   lakehouse's, so the page and the APIs share one origin.

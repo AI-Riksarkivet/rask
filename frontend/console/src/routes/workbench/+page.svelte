@@ -23,10 +23,10 @@
 	import { makeDockLayoutStore } from '@rask/api/dock-layout';
 	import { makeDockViewsStore } from '@rask/api/dock-views';
 	import { page } from '$app/state';
-	import { createBench, setBench } from '$lib/dock/bench.svelte';
-	import { userStateFetcher } from '$lib/dock/user-state-fetch';
-	import EventsPanel from '$lib/dock/panels/EventsPanel.svelte';
-	import TablesPanel from '$lib/dock/panels/TablesPanel.svelte';
+	import { createBench, setBench } from '#lib/dock/bench.svelte.ts';
+	import { userStateFetcher } from '#lib/dock/user-state-fetch.ts';
+	import EventsPanel from '#lib/dock/panels/EventsPanel.svelte';
+	import TablesPanel from '#lib/dock/panels/TablesPanel.svelte';
 
 	const store = createBench();
 	setBench(store);

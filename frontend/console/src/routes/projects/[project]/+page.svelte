@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	// `/projects/<p>` — ONE project: its metadata and overview (the warehouses claiming it, its
 	// effective admins). A project is the top of the hierarchy — project › warehouse › namespace ›
 	// table — so the page describing one is a top-level page in the main menu, and every rung BELOW it
@@ -10,22 +11,22 @@
 	import { ProjectHierarchy, type HierarchyHref } from '@rask/ui/hierarchy';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { writeActiveProject } from '$lib/active-project';
-	import type { ProjectSummary } from '$lib/catalog';
-	import { policyRequestFrom, type PolicyDraft, type ProjectPolicies } from '$lib/policies';
-	import ProjectDeleteDialog from '$lib/ProjectDeleteDialog.svelte';
+	import { writeActiveProject } from '#lib/active-project.ts';
+	import type { ProjectSummary } from '#lib/catalog.ts';
+	import { policyRequestFrom, type PolicyDraft, type ProjectPolicies } from '#lib/policies.ts';
+	import ProjectDeleteDialog from '#lib/ProjectDeleteDialog.svelte';
 	import {
 		deleteProjectPolicy,
 		fetchProjectPolicies,
 		setProjectPolicy,
-	} from '$lib/remote/policies.api';
+	} from '#lib/remote/policies.api.ts';
 	import {
 		fetchProject,
 		namespaceTables,
 		projectEvents,
 		warehouseNamespaces,
 		type ProjectEvent,
-	} from '$lib/remote/warehouses.api';
+	} from '#lib/remote/warehouses.api.ts';
 
 	const project = $derived(page.params.project ?? '');
 
@@ -42,13 +43,12 @@
 	// `project` returns null: from `/projects/<id>`, the project rung IS this page.
 	const rungHref: HierarchyHref = (rung) => {
 		if (rung.tier === 'project') return null;
-		if (rung.tier === 'warehouse') return `/catalog/warehouses/${encodeURIComponent(rung.id)}`;
-		if (rung.tier === 'namespace') return `/catalog/namespaces/${encodeURIComponent(rung.id)}`;
-		return `/catalog/tables/${encodeURIComponent(rung.id)}`;
+		if (rung.tier === 'warehouse')
+			return resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(rung.id) });
+		if (rung.tier === 'namespace')
+			return resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(rung.id) });
+		return resolve('/catalog/tables/[table]', { table: encodeURIComponent(rung.id) });
 	};
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, navbar-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	let detail = $state<ProjectSummary | null>(null);
 	// #71 the project's 10 most recent control events. `denied` is its own quiet state — the events
@@ -225,7 +225,7 @@
 
 <div class="page">
 	<header>
-		<a class="back" href="/projects">Projects</a>
+		<a class="back" href={resolve('/projects')}>Projects</a>
 		<span class="sep">/</span>
 		<FolderKanban size={15} />
 		<h1 class="mono">{project}</h1>
@@ -235,7 +235,9 @@
 		<div class="empty">
 			<ShieldAlert size={16} />
 			<p>
-				This stack is governed — <a href={loginHref}>sign in</a> to view this project.
+				This stack is governed — <a
+					href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>sign in</a
+				> to view this project.
 			</p>
 		</div>
 	{:else if denied}
@@ -268,7 +270,7 @@
 		<!-- The hierarchy FIRST (#104's ruling): the relationship the estate is built on —
 		     project › warehouse › namespace › table — shown the moment the page opens.
 
-		     The VIEW is @rask/ui's (#109 hoisted it out of the console's $lib when the lakehouse Overview
+		     The VIEW is @rask/ui's (#109 hoisted it out of the console's #lib when the lakehouse Overview
 		     needed the same picture and pages may not import each other); the TRANSPORT stays here —
 		     the library takes the two rung reads as async props and the console hands it its own remote
 		     functions, so the catalog's gate is still enforced against this user's bearer. -->
@@ -294,7 +296,9 @@
 							<tr>
 								<td>
 									<!-- DOWN a rung: the warehouse's own catalog page. -->
-									<a class="mono whlink" href={`/catalog/warehouses/${encodeURIComponent(w.id)}`}
+									<a
+										class="mono whlink"
+										href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(w.id) })}
 										>{w.id}</a
 									>
 								</td>
@@ -325,7 +329,7 @@
 			{#if eventsDenied}
 				<p class="mut">
 					The event feed is estate-admin gated — ask an estate admin, or check
-					<a href="/admin/events">the estate stream</a>.
+					<a href={resolve('/admin/events')}>the estate stream</a>.
 				</p>
 			{:else if events === null}
 				<p class="mut">Events unavailable right now.</p>
@@ -342,7 +346,7 @@
 					{/each}
 				</ul>
 				<p class="mut">
-					<a href="/admin/events">All events, live and filterable →</a>
+					<a href={resolve('/admin/events')}>All events, live and filterable →</a>
 				</p>
 			{/if}
 		</section>
@@ -487,7 +491,9 @@
 										<!-- DOWN a rung: the namespace's or table's own catalog page. -->
 										<a
 											class="mono whlink"
-											href={`/catalog/${p.kind === 'table' ? 'tables' : 'namespaces'}/${encodeURIComponent(p.id)}`}
+											href={p.kind === 'table'
+												? resolve('/catalog/tables/[table]', { table: encodeURIComponent(p.id) })
+												: resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(p.id) })}
 											>{p.id}</a
 										>
 									</td>
@@ -529,7 +535,7 @@
 			ondeleted={() => {
 				// The project is gone — this very route's read would 404 on the next tick. Back to the
 				// estate list, re-read from the server so the retired tenant is not still on it.
-				goto('/projects', { invalidateAll: true });
+				goto(resolve('/projects'), { refreshAll: true });
 			}}
 		/>
 	{/if}

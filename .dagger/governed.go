@@ -234,7 +234,7 @@ func (m *Rask) lineageToken(ctx context.Context, src *dagger.Directory, dex *dag
 		WithServiceBinding("dex", dex).
 		WithExec([]string{"uv", "run", "--no-sync", "python", "-c", `
 import base64, json, pathlib, time, urllib.parse, urllib.request
-form = urllib.parse.urlencode({"grant_type": "password", "client_id": "rask-web", "username": "` + lineageIdentity + `", "password": "password", "scope": "openid email federated:id audience:server:client_id:rask-lakehouse"}).encode()
+form = urllib.parse.urlencode({"grant_type": "password", "client_id": "rask-web", "client_secret": "lance-catalog-secret", "username": "` + lineageIdentity + `", "password": "password", "scope": "openid email federated:id audience:server:client_id:rask-lakehouse"}).encode()
 for _ in range(60):
     try:
         body = json.load(urllib.request.urlopen("http://dex:5556/dex/token", form, timeout=5))
@@ -360,24 +360,20 @@ for i in $(seq 1 90); do
   sleep 2
 done
 echo "lineage-api never became ready"; exit 1`}).
-		// `LANCE_E2E_DEX_SECRET=` IN THE SHELL, not via WithEnvVariable — and the difference is not
-		// cosmetic. Dagger's `WithEnvVariable(name, "")` leaves the variable UNSET rather than setting
-		// it to empty (measured: the container reported `'<UNSET>'`), and this test distinguishes the
-		// two: it DEFAULTS `LANCE_E2E_DEX_SECRET` to "lance-catalog-secret" when unset, then sends
-		// that secret to a client both Dex configs declare `public: true`, which answers
-		// `401 invalid_client`. A secretless grant against the same Dex returns 200, verified directly.
-		//
-		// `scripts/governance_e2e.sh` never set this variable at all, so it could not have passed
-		// against the stack it stood up — the "exists but cannot run" shape again.
+		// The suite and the demo sign in as `rask-web`, a confidential client in `.docker/dex.config.yaml` as in the Dex
+		// fixture, with its secret: the suite's `LANCE_E2E_DEX_SECRET` and the demo's `DEX_CLIENT_SECRET` both default to
+		// the dev Dex's `lance-catalog-secret`, so neither is set here. Dagger's `WithEnvVariable(name, "")` leaves a
+		// variable UNSET rather than empty (measured: the container reported `'<UNSET>'`), which is why no empty value is
+		// passed that way either.
 		With(func(c *dagger.Container) *dagger.Container {
 			// `DEMO=1` on the retired script ran the narrated walkthrough instead of the assertions
 			// against the SAME stack. Keeping it as a flag preserves that without a second function —
 			// and a demo that stands up its own stack is how a demo drifts from what the tests prove.
 			if demo {
-				return c.WithExec([]string{"sh", "-c", "LANCE_E2E_DEX_SECRET= uv run --no-sync python scripts/governance_demo.py"})
+				return c.WithExec([]string{"sh", "-c", "uv run --no-sync python scripts/governance_demo.py"})
 			}
 			// `--require-live`: a skip in a lane that stood its stack up is a test that ran nowhere, so it fails the lane.
-			return c.WithExec([]string{"sh", "-c", "LANCE_E2E_DEX_SECRET= uv run --no-sync pytest tests/e2e-py/test_governance_e2e.py -v -rs --require-live"})
+			return c.WithExec([]string{"sh", "-c", "uv run --no-sync pytest tests/e2e-py/test_governance_e2e.py -v -rs --require-live"})
 		}).
 		Stdout(ctx)
 }

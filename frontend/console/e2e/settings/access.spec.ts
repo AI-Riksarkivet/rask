@@ -187,8 +187,9 @@ test('query, seed and facets live in the URL, so the view is a link', async ({ p
 	});
 	await expect(page.getByText('ALLOWED')).toBeVisible();
 
+	// The address bar is written by `goto`, a navigation that settles after the verdict can render.
+	await expect(page).toHaveURL((u) => u.searchParams.get('q') === 'why');
 	const url = new URL(page.url());
-	expect(url.searchParams.get('q')).toBe('why');
 	expect(url.searchParams.get('user')).toBe('user:alice');
 	expect(url.searchParams.get('relation')).toBe('can_read_data');
 	expect(url.searchParams.get('object')).toBe('table:db1$t');
@@ -358,7 +359,7 @@ test('a time-boxed grant sends its condition to the store', async ({ page }) => 
 	expect(ctx.grant_duration).toBe('4h');
 	// Blank timestamp means "now" — the window opens when the grant is written, which is what
 	// "for the next 4 hours" means. Asserted as a real ISO instant, not merely present.
-	expect(Date.parse(ctx.grant_time)).not.toBeNaN();
+	expect(Date.parse(ctx.grant_time ?? '')).not.toBeNaN();
 	expect('current_time' in ctx).toBe(false);
 });
 

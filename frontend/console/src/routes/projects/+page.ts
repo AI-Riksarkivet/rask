@@ -1,5 +1,5 @@
-import { loadGallery } from '$lib/gallery';
-import { readProjectsView } from '$lib/remote/view-prefs.api';
+import { loadGallery } from '#lib/gallery.ts';
+import { readProjectsView } from '#lib/remote/view-prefs.api.ts';
 import type { PageLoad } from './$types';
 
 // `/projects` — the estate's project list. The saved VIEW (gallery or table) is resolved in the load

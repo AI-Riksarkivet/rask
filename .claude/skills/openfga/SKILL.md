@@ -1,6 +1,6 @@
 ---
 name: openfga
-description: OpenFGA authorization modeling best practices for defining types and relations, writing relationship tuples, deriving can_* permissions, applying type restrictions and usersets, and authoring .fga.yaml check/list_objects/list_users tests. Use when authoring, reviewing, or refactoring OpenFGA models, tuples, permissions, .fga files, .fga.yaml test files, or OpenFGA SDK integrations in JavaScript, TypeScript, Go, Python, Java, or .NET.
+description: OpenFGA authorization modeling best practices for defining types and relations, writing relationship tuples, deriving can_* permissions, applying type restrictions and usersets, and authoring .fga.yaml check/list_objects/list_users tests. Use when authoring, reviewing, or refactoring OpenFGA models, tuples, permissions, .fga files, .fga.yaml test files, or OpenFGA SDK integrations in Python.
 license: Apache-2.0
 metadata:
   author: openfga
@@ -168,7 +168,7 @@ warehouse, a project, a classification label and a transaction keep their ids.
   Run:
 
 ```bash
-fga model validate --file stores/<store>/model.fga
+fga model validate --file packages/service-kit/src/service_kit/governed/auth/model.fga
 ```
 
   If validation fails: read the reported relation or type errors, fix the model, and re-run validation before continuing.
@@ -177,10 +177,11 @@ fga model validate --file stores/<store>/model.fga
   Run:
 
 ```bash
-fga model test --tests stores/<store>/store.fga.yaml
+fga model test --tests packages/service-kit/src/service_kit/governed/auth/model.fga.yaml
 ```
 
   If tests fail: update tuples, assertions, or permission definitions, then re-run tests until all checks and list queries pass.
+  In rask, `make fga-test` runs steps 5 and 6 and also fails when `model.json` drifted from `model.fga`.
 
 7. Only then finalize delivery.
   For touched stores, finish only after validation and tests are green.

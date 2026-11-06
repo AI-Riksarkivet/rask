@@ -5,7 +5,7 @@
  * calls onto `readUserStateDoc`/`writeUserStateDoc` and answers with a real `Response`, so the
  * store's THREE outcomes (ok / absent / unreadable) survive unchanged: a status is a status.
  */
-import { readUserStateDoc, writeUserStateDoc } from '$lib/data/remote/catalog.api';
+import { readUserStateDoc, writeUserStateDoc } from '#lib/data/remote/catalog.api.ts';
 
 /** The two documents the console's dock owns. */
 type UserStateDocument = 'dock-layout' | 'dock-layout-library';

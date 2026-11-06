@@ -21,10 +21,10 @@
 	// the main menu, not inside one project's catalog.
 	import { Dialog } from '@rask/ui/dialog';
 	import { toast } from 'svelte-sonner';
-	import { createProject, createWarehouse } from '$lib/remote/warehouses.api';
+	import { createProject, createWarehouse } from '#lib/remote/warehouses.api.ts';
 	// The grant goes through the SAME remote command the FGA workbench writes with — one write door,
 	// so every raw tuple write is validated, audited, control-event-emitting and single-flight alike.
-	import { writeTuple } from '$lib/remote/access.api';
+	import { writeTuple } from '#lib/remote/access.api.ts';
 
 	let {
 		open = $bindable(false),

@@ -31,7 +31,6 @@ __all__ = [
     "blob_descriptors",
     "blob_field_names",
     "carry_external_descriptor",
-    "dangling_blob_columns",
     "holds_blob",
     "is_blob_field",
     "nested_fields",
@@ -144,8 +143,3 @@ def blob_column_resolves(ds: lance.LanceDataset, column: str) -> bool:
         log.warning("blob_resolve_failed", extra={"column": column, "error": str(exc)})
         return False
     return True
-
-
-def dangling_blob_columns(ds: lance.LanceDataset) -> list[str]:
-    """The blob-v2 columns of ``ds`` whose payloads do NOT dereference (empty = healthy or no blobs)."""
-    return [column for column in blob_field_names(ds.schema) if not blob_column_resolves(ds, column)]

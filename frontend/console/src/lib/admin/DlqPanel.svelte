@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	// `/dlq` — the #83 lineage DLQ / transactional-outbox ops panel. The outbox holds events staged before
 	// publish and dropped on ack; a surviving object is a committed write whose lineage was not yet confirmed
 	// delivered — the at-risk set the reconcile relay drains on a timer. This panel surfaces that set and lets
@@ -23,12 +23,9 @@
 	import * as Sheet from '@rask/ui/sheet';
 	import { ExternalLink, RefreshCw, RotateCcw, ShieldAlert, Inbox } from '@lucide/svelte';
 	import { page } from '$app/state';
-	import { fetchDlq, replayDlq } from '$lib/lineage/remote/lineage.api';
+	import { fetchDlq, replayDlq } from '#lib/lineage/remote/lineage.api.ts';
 	import type { DlqBacklog, DlqEvent } from '@rask/api/lineage';
-	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
+	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 
 	let backlog = $state<DlqBacklog | null>(null);
 	let lastStatus = $state(0);
@@ -233,7 +230,9 @@
 
 	{#if unauthorized}
 		<div class="empty">
-			<ShieldAlert size={15} /> <a href={loginHref}>Sign in</a> to view the lineage DLQ.
+			<ShieldAlert size={15} />
+			<a href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>Sign in</a> to
+			view the lineage DLQ.
 		</div>
 	{:else if offline}
 		<div class="empty"><RefreshCw size={15} /> DLQ store unreachable (HTTP {lastStatus}).</div>
@@ -301,7 +300,10 @@
 					{/if}
 					{#each drawerEvent.outputs ?? [] as out (out)}
 						<!-- The output dataset's table page is in the catalog AREA of the console — soft nav. -->
-						<a class="btn jumplink" href={`${base}/catalog/tables/${encodeURIComponent(out)}`}>
+						<a
+							class="btn jumplink"
+							href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(out) })}
+						>
 							<ExternalLink size={12} />
 							{out} ↗
 						</a>

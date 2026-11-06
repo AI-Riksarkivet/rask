@@ -19,7 +19,7 @@ of three properties the storage and bus already have, plus two enforcement point
 
 | Layer | The contract | Where it lives |
 |---|---|---|
-| **Storage** | **The Lance manifest IS the schema; the version IS the handshake.** Every write commits an immutable, numbered version whose manifest embeds the full schema — data is self-describing, so there is nothing separate to register or drift from. A consumer that pins `(dataset, version)` gets bit-identical data + schema forever (time travel). | Lance format itself; CAS commit (put-if-not-exists), proven per store by `tests/e2e/test_object_store_cas_e2e.py` (`make e2e-cas`), verdict in `docs/DURABILITY.md` |
+| **Storage** | **The Lance manifest IS the schema; the version IS the handshake.** Every write commits an immutable, numbered version whose manifest embeds the full schema — data is self-describing, so there is nothing separate to register or drift from. A consumer that pins `(dataset, version)` gets bit-identical data + schema forever (time travel). | Lance format itself; CAS commit (put-if-not-exists), proven per store by `tests/e2e-py/test_object_store_cas_e2e.py` (`make e2e-cas`), verdict in `docs/DURABILITY.md` |
 | **Bus** | **Events carry POINTERS, never data** (claim-check): a catalog write announcement names the table, its Lance version, its branch and its author; a control event names an object and an action. The OpenLineage facets' `_schemaURL`s ARE the event-shape contract — official spec URLs, pinned in code. | `catalog/core/lineage_emit.py`; facet URLs in `packages/lakehouse-kit/src/lakehouse_kit/openlineage.py` |
 | **Identity** | One uuid threads all planes: the catalog mints it for a table and keeps it across a rename (ADR 0173), and it is the OpenFGA object (`table:<uuid>`), the table's location (`<root>/<uuid>`) and the key lineage's edge list records; the name is how a caller addresses the table — so the contract's subject is never ambiguous, even across a rename. | catalog (`table_claims`) + `model.fga` + `lineage/services/provenance.py` |
 
@@ -44,7 +44,7 @@ Plus the provenance guard: a writer cannot drop, rename or rewrite the provenanc
 **Enforced today and proven (unit and/or live):**
 - Immutable versions + CAS commits — the storage half of the contract rests on put-if-not-exists, which the
   3-tier contended-write harness proved against RustFS (`docs/DURABILITY.md`), and 16 racing conditional writers
-  left one winner in each of 20 rounds on RustFS 1.0.1 (`docs/audits/2026-10-18/rustfs-zero-trust.md`).
+  left one winner in each of 20 rounds on RustFS 1.0.1 (measured 2026-10-18 by `scripts/rustfs_sts_measure.py`; the audit is in git history at 64ef118a9).
 - The publish-time quality gate, FGA gates and the provenance guard — all shipped with tests.
 - **Additive** schema evolution is safe *by construction*: `add_columns` makes a new version;
   old versions stay readable; each version's manifest carries its own schema.

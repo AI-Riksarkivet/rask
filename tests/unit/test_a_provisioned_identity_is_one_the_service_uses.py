@@ -100,8 +100,8 @@ def test_the_catalog_presents_the_store_identity_the_chart_provisions_for_its_ac
     """[[XC-083]] The catalog holds no store key: the store grants its token the policy the hook names after its account.
 
     The catalog's pod projects a token for the audience the dev store trusts as its identity provider's client, and the
-    store grants a token exactly the canned policy its `sub` names, with no role policy (ADR 0170; measured on RustFS
-    1.0.3, `docs/audits/2026-10-18/rustfs_web_identity_measure.py`). Each part alone is a distinct failure: a policy named
+    store grants a token exactly the canned policy its `sub` names, with no role policy (ADR 0170; measured 2026-10-18 on RustFS
+    1.0.3, `scripts/rustfs_web_identity_measure.py`). Each part alone is a distinct failure: a policy named
     for another account leaves the catalog's token mapping to nothing, so every exchange is refused; an audience the
     store does not trust is refused at verification; a role policy grants the catalog's data plane to every
     ServiceAccount token in the cluster; and a discovery URL that is not rask's issuer mirror leaves the store unable to
@@ -155,11 +155,15 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     audience alone) and skip the trust. So the doors' audience is the dev Dex's audience client, distinct from its
     sign-in client, confidential and trusting exactly the clients the fixture declares: the sign-in client, each machine
     client, which signs in for itself with the client-credentials grant (ADR 0181), and each client release's own sign-in
-    client, which a pinned lakehouse registers for that client's e2e ([[XC-189]]).
+    client, which a pinned lakehouse registers for that client's e2e ([[XC-189]]). A browser app's client is public and
+    holds no secret, so its code is bound to an S256 challenge Dex enforces for every client; the fixture's own sign-in
+    client, which the live lanes sign in as with the password grant, is confidential and registers no redirect, so no
+    browser signs in through it (owner decision D2, #769).
     """
     chart = render("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
     client = {"id": "a-client", "secret": "a-client-secret", "redirectURIs": ["http://localhost:9999/auth/callback"]}
-    fixture = render_fixture("dex", "--set-json", f"clients=[{json.dumps(client)}]")
+    browser = {"id": "a-browser-app", "public": True, "redirectURIs": ["http://localhost:9999/auth/callback"]}
+    fixture = render_fixture("dex", "--set-json", f"clients=[{json.dumps(client)},{json.dumps(browser)}]")
     [config] = [yaml.safe_load(doc["data"]["config.yaml"]) for doc in fixture if doc.get("kind") == "ConfigMap"]
     clients = {client["id"]: client for client in config["staticClients"]}
     doors = {
@@ -174,3 +178,29 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     assert sorted(doors) == sorted(_LAKEHOUSE_DOORS)
     assert (clients[audience].get("public", False), sorted(clients[audience].get("trustedPeers", []))) == (False, others)
     assert clients["a-client"] == {"name": "a-client", **client}
+    assert clients["a-browser-app"] == {"name": "a-browser-app", **browser}
+    assert (sorted(clients["rask-web"]), config["oauth2"]["pkce"]) == (["id", "name", "secret"], {"enforce": True, "codeChallengeMethodsSupported": ["S256"]})
+
+
+@pytest.mark.parametrize(
+    ("browser", "refusal"),
+    [
+        pytest.param(
+            {"id": "a-browser-app", "public": True, "secret": "leaked", "redirectURIs": ["http://localhost:9999/auth/callback"]},
+            'clients "a-browser-app" is public and names a secret: a public client holds none',
+            id="a-secret",
+        ),
+        pytest.param(
+            {"id": "a-browser-app", "public": True},
+            'clients "a-browser-app" is public and names no redirectURIs: Dex then accepts any loopback, out-of-band or device redirect',
+            id="no-redirect",
+        ),
+    ],
+)
+def test_a_public_dex_client_is_refused_unless_it_holds_no_secret_and_names_its_redirects(browser: dict[str, object], refusal: str) -> None:
+    """A public client holds no secret, and names each redirect it may receive a code at: one that names a secret is a
+    confidential client mis-declared, and one with no redirect is a client Dex hands a code to at any loopback,
+    out-of-band or device callback (v2.46.1 `server/authflow/request.go:96-113`), so either is refused at the render."""
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render_fixture("dex", "--set-json", f"clients=[{json.dumps(browser)}]")
+    assert refusal in refused.value.stderr

@@ -2,9 +2,8 @@
 // Importing the module is browser-only; only *calling* gsap touches window/document, so the project
 // defaults are set inside a browser guard. Components import { gsap } from './gsap'.
 //
-// The browser check is `typeof window` — NOT SvelteKit's `$app/environment` — because this lib must
-// load outside a Kit app (the exports test forbids `$app`/`$lib`; `$app/environment` was the one
-// SvelteKit tie the extraction from apps/web had to cut). Same SSR semantics: false on the server.
+// The browser check is `typeof window` — NOT SvelteKit's `$app/env` — because this lib loads outside
+// a Kit app (Storybook, vitest), where no `$app/*` module resolves. Same SSR semantics: false on the server.
 //
 // GSAP + every plugin is free since Webflow acquired GreenSock — public `gsap` package, no token.
 import { gsap } from 'gsap';

@@ -77,7 +77,17 @@ Bun.serve({
 			if (!config) return new Response('no config', { status: 404, headers: SECURITY_HEADERS });
 			return page(config, 'application/json', 'no-store');
 		}
-		const path = normalize(join(ROOT, decodeURIComponent(pathname)));
+		// A malformed percent-escape names no file and no route: the request is the client's error.
+		let decoded: string;
+		try {
+			decoded = decodeURIComponent(pathname);
+		} catch {
+			return new Response('malformed percent-escape in the path', {
+				status: 400,
+				headers: SECURITY_HEADERS,
+			});
+		}
+		const path = normalize(join(ROOT, decoded));
 		if (path.startsWith(ROOT + '/') && !path.endsWith('/index.html')) {
 			const file = Bun.file(path);
 			if (await file.exists()) {

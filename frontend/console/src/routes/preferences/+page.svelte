@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { Bell } from '@lucide/svelte';
 
 	// PREFERENCES — the per-SUBJECT level, and the third thing the estate configures.
@@ -30,7 +31,7 @@
 		</p>
 	</header>
 
-	<a href="/preferences/notifications" class={ROW}>
+	<a href={resolve('/preferences/notifications')} class={ROW}>
 		<Bell class="size-5 shrink-0" aria-hidden="true" />
 		<span class="flex min-w-0 flex-col">
 			<span class="font-medium">Notifications</span>

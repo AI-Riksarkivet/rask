@@ -42,11 +42,10 @@ one-line `# --` comment directly above its key in `values.yaml`, from which helm
 `chart/README.md` (`make chart-docs`; `make chart-docs-check`, in `make check` and `dagger call charts`,
 fails on a stale README or a value with no description). A section banner in `values.yaml` is `# ===`, never
 `# ---`: helm-docs reads any `# --` line as the start of a description. The environment overlays live in
-`deploy/` (`values-local.yaml`, `values-prod.yaml`, `values-live-pins.yaml`), outside `chart.files`. Moving
-the 647 comment blocks out took the packed release from 98.1% to about 70% of the ceiling, with a
-byte-identical render. A YAML `#` comment inside a template is different: it is part of the rendered
-manifest (1,024 such lines, mostly in embedded scripts), so moving one changes what is deployed. An empty `{{/**/}}` left in a template is load-bearing whitespace control: deleting it
-lets a neighbouring `-}}` trim text the comment used to shield.
+`deploy/` (`values-local.yaml`, `values-prod.yaml`, `values-live-pins.yaml`), outside `chart.files`. Template comments
+cost the release in full on every revision and render nothing, so keeping them out is free headroom. A YAML `#` comment inside a template is different: it is part of the rendered
+manifest (measured 2026-11-06: 274 `#` lines in the default render, 66 of them Helm's `# Source:` headers, and 348 in the deployed overlay's), so moving one changes what is deployed. An empty `{{/**/}}` left in a template is load-bearing whitespace control: deleting it
+lets a neighbouring `-}}` trim text the comment shields.
 
 **Measure before applying, the way Helm's Go code encodes it:**
 
@@ -69,13 +68,9 @@ revision that the API server refuses.
 ([[XC-127]]): `deploy/alerting/rules.yml` is an artefact the platform's evaluator loads; `rules_test.yml` alone,
 when it still sat in the chart, was 40,912 packed bytes.
 
-**It has hit the ceiling three times**, each time answered by trimming rather than by removing what
-fills it. v35 on 2026-08-15 (`HELM_DRIVER=sql`, then CNPG's CRDs moved out in `b56a49c9`); the SQL
-store was dropped on 2026-09-08 when it split-brained against the Secret store (SQL rev 42 vs Secret
-rev 108). v194 on 2026-09-21 (template YAML comments turned into `{{/* */}}`, `80783647`). v239 on
-2026-09-24 (`.helmignore` and the `required` guards, `c352a232`/`4bff1036`). `docs/adr/0038-helm-release-storage-the-sql-driver-stands-the-chart-is-not.md`'s
-2026-08-15 entry attributes the size to `chart/charts/*.tgz`; by Helm's source those bytes are never
-stored, so that entry's premise is false and its chosen answer no longer applies.
+**Answer the ceiling by removing what fills it, not by trimming around it**: what fills it is rendered output and
+template source (above), never `chart/charts/*.tgz`, which by Helm's source is not stored. The ceiling's chronology
+and the storage-driver decision are `docs/adr/0038-helm-release-storage-the-sql-driver-stands-the-chart-is-not.md`'s.
 
 ## 2. Operators do not belong in the app chart
 
@@ -94,9 +89,6 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   `templates/crd/` with no switch — 0.18.1 and 0.19.6 alike, and the upstream request to move them was
   closed as not-planned. The conversion webhook's service name and namespace are templated, so a
   vendored copy must be pre-rendered with release `rask` and namespace `default` baked in.
-- **Kueue is a workload concern in a platform seam.** `values.yaml` sizes it as "how many projects
-  transcribe at once" — one runner's GPU admission. No rask template sets `kueue.x-k8s.io/queue-name`,
-  and rask's own queue has admitted zero workloads.
 - `docs/adr/0038-helm-release-storage-the-sql-driver-stands-the-chart-is-not.md` (2026-08-15) already calls infra-separated-from-app "the architecturally correct
   answer and … the intended end state". It was deferred, not rejected; ADR 0153 decides it.
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
@@ -105,17 +97,35 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   cloudnative-pg dex rustfs openbao observability marquez`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
   JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the CloudNativePG operator in
   cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex`, object store `rask-rustfs` ([[XC-163]], ADR 0168) and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the telemetry chain the Collector exports to ([[XC-127]]), and the OpenLineage graph backend
-  `rask-marquez` lineage's forwarder sends to (ADR 0158); a GPU node with no device plugin yet adds `nvidia-device-plugin`,
-  and the SMTP relay `mailpit` is the notifications inbox's, a client's, so it is in no default list).
+  `rask-marquez` lineage's forwarder sends to (ADR 0158); the SMTP relay `mailpit` is the notifications inbox's, a
+  client's, so it is in no default list). **The Dex fixture** (`deploy/fixtures/dex/chart`) enforces PKCE for every
+  authorization code (`oauth2.pkce.enforce: true`, `codeChallengeMethodsSupported: [S256]`; the password,
+  client-credentials and token-exchange grants never pass `/auth`), serves no device grant (its `/auth` leg carries no
+  challenge, so under enforced PKCE it could not complete), and answers CORS only for the origins its `allowedOrigins`
+  value lists (empty by default, rendering no `web.allowedOrigins`). Its own sign-in client `rask-web` is confidential:
+  no `public`, no redirect URI, its secret `required`, signed in as only by the live lanes' password grant. A browser
+  client is a client's own entry in `clients`, supplied from its tree with its redirect URIs and any dev-server origin
+  (the console's `rask-console`, public, and `allowedOrigins: [http://localhost:5173]` for the Vite dev server, in
+  `deploy/fixtures/console/dex-values.yaml`, layered on by `make k3s-fixtures`).
   **The clients are no prerequisite** (XC-183): `make k3s-up` installs the lakehouse alone, and `make k3s-clients` adds
   `CLIENTS` after it, each its own release reaching rask by reference. The one client this repository deploys is the
-  console (`deploy/fixtures/console`, release `console` in rask's namespace, `WAIT=false`): the console's static-file web
-  pod and the notifications inbox, its own Dapr state store on a CloudNativePG `Cluster` it renders, its own app token
-  and HTTPRoute, and rask's catalog, lineage, Dex and NATS by reference. What the lakehouse must admit for it (the inbox
+  console (`deploy/fixtures/console`, release `console` in rask's namespace; `make k3s-clients` waits up to 600 s for its
+  pods): the console's static-file web pod and the notifications inbox, its own Dapr state store (on a CloudNativePG
+  `Cluster` it renders, or, with `state.external.connectionSecret`, on the platform's Postgres, which skips the Cluster,
+  its NetworkPolicy and the `-ca` mount; the sidecar connects `PGSSLMODE=verify-full` either way, against
+  `state.external.caSecret` or, without one, its system roots, and `state.external.egress`,
+  required under `networkPolicy.enabled`, admits the server), its own app token and HTTPRoute, its own invocation Resiliency
+  (`<release>-notifications-invocation-resiliency`: constant 2 s × 3 on `408,429,500-599`, target app `lineage`,
+  scoped to the inbox, the one retry layer of its reads of lineage's feed), and rask's catalog, lineage, Dex and NATS by
+  reference. Its pods carry `app.kubernetes.io/instance: console`, the release that renders them, in their immutable
+  selector, so its two Deployments are named by that release (`console-web`, `console-notifications`): a selector change
+  comes with a new name, which one upgrade (or any reconciler that prunes) replaces with no hand-run delete.
+  `scripts/k3s-pins.sh` also captures the console's running images into the gitignored
+  `deploy/fixtures/console/values-live-pins.yaml`, which `scripts/fixtures.sh` layers on. What the lakehouse must admit for it (the inbox
   in `auth.externalDeciders`, a map from each `<namespace>:<serviceaccount>` to the estate roles it holds; its bus user in
   `nats.auth.users`; its store reads in `openbao.externalReaders`) is in the console's own `lakehouse-values.yaml`, which
-  `make k3s-up` layers on by glob; the product chart names none of it. The other clients left this repository at XC-192
-  and are recovered from git history (`64ef118a9`) as each moves to its own repository. A fixture's `SET_FILES` passes an
+  `make k3s-up` layers on by glob; the product chart names none of it. The other clients live outside this repository
+  (XC-192) and are recovered from git history (`64ef118a9`) as each moves to its own repository. A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a
   test can render it through `chart_render.render_fixture`). The e2e lanes install ESO, Dapr and NATS through the same
@@ -132,7 +142,7 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
 A CRD rendered from a template is an ordinary resource owned by release `rask`. Drop the subchart —
 `kueue.enabled=false`, or deleting it from `Chart.yaml` — and the next upgrade **deletes all its CRDs,
 and with them every custom resource in the cluster**. For Kueue on 2026-09-25 that was 11 CRDs, 2
-ClusterQueues, 2 LocalQueues, 2 ResourceFlavors and 8 live Workloads in `htr-batch`.
+ClusterQueues, 2 LocalQueues, 2 ResourceFlavors and 8 live Workloads.
 
 Before ANY change that removes a CRD-owning subchart:
 
@@ -147,12 +157,15 @@ then hand them to the new owner (`helm install … --take-ownership`). CNPG's CR
 ## 4. Upgrade flags — `--reset-then-reuse-values`, never `--reuse-values`
 
 `--reuse-values` keeps the previous release's values and **ignores this chart's defaults**. A key
-added after that release arrives nil, and `{{ .Values.x | quote }}` renders nil as `""`. On 2026-09-25
-that put `MAINTENANCE_RECYCLE_AT_MEMORY_FRACTION=''` into the maintenance worker and pydantic refused
-it at boot (CrashLoopBackOff, contained only because the rolling update kept the old pods serving).
+added after that release arrives nil, and `{{ .Values.x | quote }}` renders nil as `""`: a typed setting such as
+`LANCE_ERASURE_RELEASE_GRACE_DAYS` would reach its pod as `''` and pydantic refuse it at boot (CrashLoopBackOff,
+measured 2026-09-25 on a maintenance setting, contained only because the rolling update kept the old pods serving).
 
 - Use `--reset-then-reuse-values` (helm ≥ 3.14; this estate runs 3.20): chart defaults, then the
   release's values, then any `--set`.
+- A fixture's install takes `--reset-values` (`scripts/fixtures.sh`): its values are its chart's defaults, its files in
+  git and the caller's arguments, which every caller passes on each run, so a value set once by hand, or a client's
+  `dex-values.yaml` deleted from the tree, does not outlive the next run.
 - Guard every value a typed setting depends on with `required`, so absence fails the RENDER with a
   message rather than a pod: see `LANCE_ERASURE_RELEASE_GRACE_DAYS` in `chart/templates/services.yaml`.
 - `helm diff upgrade` shows a `''` before it ships.
@@ -193,9 +206,9 @@ provisioned by its operator and attested by `signing.provisioned`).
   before any pod starts. A misspelled or missing key does not: the generated schema carries no `required` and no
   `additionalProperties: false` (measured 2026-10-31 on the dev overlay: `--set age.enabled=notabool` is refused, while
   `--set catalogg.replicas=1` renders byte-identical; XC-086 #289). rask's is generated from `values.yaml`'s types and `# --` comments by helm-values-schema-json
-  (`make chart-docs`, beside the README; `make chart-docs-check` fails on a stale one). It caught a live `--set-string`
-  float on its first deploy (2026-10-12: `recycleAtMemoryFraction: "0.70"`, re-imposed every `make k3s-up` by `-f
-  <live values>`); `--set` keeps a float a string, so set one with `--set-json`. It costs ~49 KB of the release.
+  (`make chart-docs`, beside the README; `make chart-docs-check` fails on a stale one). It refuses a number passed as a
+  string (measured 2026-10-12: a `--set-string` float re-imposed every `make k3s-up` by `-f <live values>`); `--set`
+  keeps a float a string, so set one with `--set-json`. It costs ~49 KB of the release.
 - **Lint and the empty-cluster install run in Dagger**: `dagger call charts` lints through the helm Dagger module
   (disaster37/dagger-library-go/helm, pinned) on the pinned helm, and `dagger call install-from-empty` installs the
   fixtures then the chart onto an empty k3s until every workload is Ready ([[XC-133]]).
@@ -228,7 +241,7 @@ that: `dapr_rbac.secretReader` (`enabled: true, namespace: default`) binds `secr
 `default`, for daprd's built-in Kubernetes secret store. Measured live 2026-09-25 (audit, read-only),
 while Dapr was still a subchart of rask's release:
 `kubectl auth can-i get secrets --as=system:serviceaccount:default:default` answered yes, and the
-catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` with a mounted token.
+catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mounted token.
 
 - **The Dapr control plane is a prerequisite ([[XC-128]]), and the dev fixture sets
   `dapr_rbac.secretReader.enabled: false`** (deploy/fixtures/dapr/values.yaml). No sidecar uses that store:
@@ -248,7 +261,8 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   finds it from the previous revision. The one upgrade that INTRODUCES an ordinary SA runs its `pre-upgrade`
   hooks before the manifest creates it (measured 2026-10-02 on rev 259: `serviceaccount "rask-sa-jobs" not
   found`, the release stuck `pending-upgrade`): create it by hand first and let `make k3s-up`'s
-  `--take-ownership` adopt it. The gate is that test file's identity test: the `identities rendered as hooks`
+  `--take-ownership` adopt it. The gate is the identity test of
+  `tests/unit/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py`: the `identities rendered as hooks`
   bucket, and a pre-upgrade hook may run only as an SA in its `_ESTABLISHED` set, so naming a new one is a
   deliberate edit there, which is the reminder to pre-create it.
 - **A hook that removes what git no longer declares runs post-upgrade** ([[XC-083]], ADR 0170).
@@ -315,6 +329,17 @@ catalog, lineage, maintenance, the medallion, OpenBao and Dex ran as `default` w
   (`lance.storeIdentity`); each role's policy reads exactly that app's reads. The roles and policies render in every
   mode as `role-*.json`/`policy-*.json` in `<release>-secret-store-identities`, which the dev seed applies and a platform
   store's operator creates. A new secret a service reads is a row there, or its read is refused at both layers.
+  A client's sidecar reads through the same table from `openbao.externalReaders` (`<app>: {serviceAccount, secrets}`,
+  supplied from the client's tree, empty by default), and it is an allowlist: an external reader `<app>` may hold only
+  `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`. The render refuses an app id that is
+  no Dapr id, a lakehouse app (catalog, lineage, maintenance, even disabled), one whose own names would cover a family
+  the store issues per identity (`nats-user-<name>` for every user of the issued table, a client's own included,
+  `signing-key-<name>`, `signing-public-<name>`), a name ESO, a lakehouse identity or the dev store's seed holds
+  (`nats-root`, `object-store-root`, `postgres`, `dapr-app-token`, `*-s3`, …) or another reader's id, or one whose role
+  `<release>-<app>` is ESO's (`externalSecrets.role`); a ServiceAccount that is no name, one the lakehouse renders
+  (`lance.serviceAccounts`) or `default`; and an empty or non-name secret list. An external reader gets a
+  store role and policy but no product Dapr Configuration (`observability.yaml`). The gate is
+  `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
 - **OpenFGA and its Postgres are optional, and production names the platform's** ([[XC-132]]): `openfga.enabled` and
   `age.enabled` off, `auth.fgaApiUrl` and `age.externalHost` set (the render refuses either empty). Every FGA client
   dials `lance.openfgaUrl` and every Postgres client `lance.ageConnectHost` (on the AGE-on-CNPG path, `lance-pg-rw`);

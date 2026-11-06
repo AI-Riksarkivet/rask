@@ -14,14 +14,23 @@ import asyncio
 from typing import Any
 
 import pytest
+from lance_namespace import PermissionDeniedError
 
 from lineage.core.config import LineageSettings
-from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.dapr_auth import assert_app_token_configured, require_dapr_token
 
 
 # --------------------------------------------------------------------------- #
 # require_dapr_token — the per-request header check.
 # --------------------------------------------------------------------------- #
+
+
+def test_non_ascii_header_is_a_clean_403(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The compare is over bytes: ``secrets.compare_digest`` on str raises ``TypeError`` for non-ASCII, which would turn
+    an attacker-controlled header into a 500 instead of the 403 a ``PermissionDeniedError`` renders as."""
+    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
+    with pytest.raises(PermissionDeniedError):
+        require_dapr_token("sécrét")
 
 
 # --------------------------------------------------------------------------- #

@@ -1,178 +1,97 @@
-/** The ORIGINATOR lane, driven against the deployed estate.
+/**
+ * The ORIGINATOR lane, driven against the deployed estate: a run whose author is not you still reaches you, because
+ * it names you as the person the work was for.
  *
- * The claim under test is the one no unit test can make: that a run whose AUTHOR is not you still
- * reaches you, on a real Dapr actor plane, because you are named as the human the work is for.
+ * WHY THE ROLES ARE SPLIT THIS WAY. `enforce_author` (lineage/api/fga_deps.py) overwrites the author facet with the
+ * caller's verified subject, so the run is posted as ALICE (its author, as the estate insists) and names BOB in
+ * `rask_lance.originator`. Bob therefore receives a row for a run he did not author and does not watch, which no other
+ * targeting source can produce. In production the author is a SERVICE writing on a person's behalf; a drive holding
+ * only people's credentials cannot be one, and the originator field is the same either way.
  *
- * WHY THE ROLES ARE SPLIT THIS WAY. `enforce_author` (lineage/api/fga_deps.py) overwrites the author
- * facet with the CALLER's verified sub — that is the whole point of the HTTP door, and it is why a
- * producer cannot self-assert someone else's identity. So the drive posts as ALICE (making her the
- * author, exactly as the estate insists) while naming BOB in `lance.originator`. Bob therefore
- * receives a row for a run he did not author and does not watch, which is possible under no other
- * targeting source in the plane. In production the same shape occurs with a SERVICE as the author —
- * a service writing through the catalog on a person's behalf — and that case is unreachable from a drive holding only
- * human credentials.
+ *   ALICE  author     -> a row, reason `author`     (the control)
+ *   BOB    originator -> a row, reason `originator` (the claim)
  *
- *   ALICE  author     -> a row, reason `author`     (v1, unchanged — the control)
- *   BOB    originator -> a row, reason `originator` (v5, the thing being proven)
+ * TWO PHASES, AND ONLY THE FIRST RUNS BY DEFAULT.
+ *   read (always) — both sign in to the console through Dex with its PKCE round trip, and each one's inbox and badge
+ *     door answer their own bearer. Nothing is written.
+ *   write (`--write --table <id>`) — alice posts ONE FAIL run on the table to lineage's OpenLineage door, naming bob as
+ *     its originator. `--table` names a governed table alice may write and bob may read (delivery asks
+ *     `can_be_notified` per recipient), ideally a scratch table, since the run is recorded in its lineage. The run
+ *     reaches the inbox on its reconcile tick over lineage's feed (`@every 30s`).
  *
- * Run, against an estate where the notifications inbox runs:
- *   FGA_TOKEN_FILE=<file> ORIGIN=http://localhost:8080 node tests/e2e/verify_originator_lane.mjs
- * No lane runs this drive while the product chart deploys no inbox (ADR 0190).
+ * Prerequisites as for verify_notifications_two_users.mjs:
+ *   kubectl -n kube-system port-forward svc/traefik 8080:80 &
+ *   cd tests/e2e && bun verify_originator_lane.mjs
  */
+import { randomUUID } from 'node:crypto';
 
-import { readFileSync } from 'node:fs';
+import { ORIGIN, api, checker, launch, parseArgs, signIn, subjectOf, until } from './console.mjs';
 
-const ORIGIN = process.env.ORIGIN ?? 'http://localhost:8080';
-const LINEAGE_URL = process.env.LINEAGE_URL ?? `${ORIGIN}/api/lineage`;
-const GATEWAY_URL = process.env.GATEWAY_URL ?? ORIGIN;
-const FGA_API_URL = process.env.FGA_API_URL ?? 'http://localhost:18099';
-const FGA_STORE_NAME = process.env.FGA_STORE_NAME ?? 'lance-catalog';
-/** OpenFGA admits only a projected `rask-openfga` token (XC-077): mint one into FGA_TOKEN_FILE with
- *  `kubectl create token <release>-sa-jobs --audience rask-openfga`; it is read again on every call. */
-const FGA_TOKEN_FILE = process.env.FGA_TOKEN_FILE;
-function fgaAuth() {
-	if (!FGA_TOKEN_FILE) throw new Error('set FGA_TOKEN_FILE to a rask-openfga token (kubectl create token <release>-sa-jobs --audience rask-openfga)');
-	return { authorization: `Bearer ${readFileSync(FGA_TOKEN_FILE, 'utf8').trim()}` };
-}
-const TOKEN_URL = process.env.TOKEN_URL ?? `${ORIGIN}/dex/token`;
-const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'rask-web';
-const CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET ?? 'lance-catalog-secret';
-const PASSWORD = process.env.DEX_PASSWORD ?? 'password';
-const OUTPUT = process.env.DRIVE_OUTPUT ?? 'bronze$events';
-const SETTLE_MS = Number(process.env.SETTLE_MS ?? 4000);
+const USAGE = `usage: bun verify_originator_lane.mjs [--write --table <namespace$table>]
 
-let failures = 0;
-const check = (label, ok, detail = '') => {
-	console.log(`${ok ? '  ✔' : '  ✘'} ${label}${detail ? ` — ${detail}` : ''}`);
-	if (!ok) failures += 1;
-};
+  (no flags)  the read phase only: sign-in and GETs; nothing is written
+  --write     also post one FAIL run as alice that names bob as its originator
+  --table     a governed table alice may write and bob may read
 
-async function mintToken(email) {
-	const res = await fetch(TOKEN_URL, {
-		method: 'POST',
-		headers: {
-			'content-type': 'application/x-www-form-urlencoded',
-			authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
-		},
-		body: new URLSearchParams({ grant_type: 'password', username: email, password: PASSWORD, scope: 'openid profile email federated:id audience:server:client_id:rask-lakehouse' }),
-	});
-	if (!res.ok) throw new Error(`dex refused ${email}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-	const json = await res.json();
-	const token = json.id_token ?? json.access_token;
-	if (!token) throw new Error(`dex returned no token for ${email}`);
-	return token;
+env: ORIGIN (default http://localhost:8080), WAIT_MS (default 120000), DEX_PASSWORD`;
+
+const args = parseArgs(process.argv.slice(2), USAGE);
+const { table: TABLE } = args.values;
+if (args.write && !TABLE) throw new Error(`--write needs --table\n\n${USAGE}`);
+const WAIT_MS = Number(process.env.WAIT_MS ?? 120_000);
+
+const checks = checker();
+const { check } = checks;
+const browser = await launch();
+console.log(`\n> originator lane against ${ORIGIN} (${args.write ? 'read and write' : 'read only'})\n`);
+
+const alice = await signIn(browser, 'alice@example.com', { write: args.write });
+const bob = await signIn(browser, 'bob@example.com', { write: args.write });
+const aliceSub = subjectOf(alice.bearer);
+const bobSub = subjectOf(bob.bearer);
+check('alice and bob are two subjects', aliceSub !== bobSub);
+
+const unread = async (s) => api(s, 'GET', '/api/notifications/inbox/unread');
+for (const [who, s] of [['alice', alice], ['bob', bob]]) {
+	const badgeDoor = await unread(s);
+	const inbox = await api(s, 'GET', '/api/notifications/inbox?state=unread&limit=100');
+	check(`${who}'s inbox answers their bearer`, badgeDoor.status === 200 && inbox.status === 200, `GET /inbox/unread ${badgeDoor.status}, GET /inbox ${inbox.status}`);
 }
 
-/** The principal a Dex token proves (LH-063): the idp id the chart gives the development Dex's connector `local`
- *  (`dex`, `lance.oidcConnectors`) and the user id Dex reports in `federated_claims`, which it does only when the
- *  client asks for `federated:id`. It is simultaneously the FGA principal, the InboxActor id and what
- *  `enforce_author` stamps, so all three come from here. */
-function subjectOf(token) {
-	const json = Buffer.from(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-	const federated = JSON.parse(json).federated_claims;
-	if (!federated?.user_id) throw new Error('token carries no federated_claims (ask Dex for federated:id)');
-	return `dex~${federated.user_id}`;
-}
-
-/** The OpenFGA user a principal is: `user:` and the key percent-encoded as `fga.user_object` encodes it. */
-function fgaUser(principal) {
-	return `user:${encodeURIComponent(principal).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`;
-}
-
-async function fgaStoreId() {
-	let page;
-	do {
-		const res = await fetch(`${FGA_API_URL}/stores?page_size=50${page ? `&continuation_token=${page}` : ''}`, { headers: fgaAuth() });
-		if (!res.ok) throw new Error(`openfga /stores: HTTP ${res.status}`);
-		const body = await res.json();
-		const hit = (body.stores ?? []).filter((s) => s.name === FGA_STORE_NAME);
-		if (hit.length) return hit.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).pop().id;
-		page = body.continuation_token || null;
-	} while (page);
-	throw new Error(`no OpenFGA store named ${FGA_STORE_NAME}`);
-}
-
-/** Idempotent: a duplicate grant is success, so the drive is runnable twice in a row. */
-async function seedGrants(storeId, tuples) {
-	for (const key of tuples) {
-		const res = await fetch(`${FGA_API_URL}/stores/${storeId}/write`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json', ...fgaAuth() },
-			body: JSON.stringify({ writes: { tuple_keys: [key] } }),
-		});
-		if (res.ok) continue;
-		const text = await res.text();
-		if (res.status === 400 && text.includes('already exists')) continue;
-		throw new Error(`grant ${key.user} ${key.relation} ${key.object}: HTTP ${res.status} ${text.slice(0, 160)}`);
-	}
-}
-
-/** Unread rows for the token's holder, straight off the inbox door the bell reads. */
-async function unread(token) {
-	const res = await fetch(`${GATEWAY_URL}/api/notifications/inbox?filter=unread`, {
-		headers: { authorization: `Bearer ${token}` },
-	});
-	if (!res.ok) throw new Error(`inbox: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-	const body = await res.json();
-	return body.rows ?? body.items ?? body.notifications ?? [];
-}
-
-/** One terminal run. The author facet is deliberately NOT sent — `enforce_author` overwrites it, and
- *  sending one would invite the reader to believe it had an effect. `lance.originator` is the field
- *  under test; it is stamped by the producer and read by `originator_subject`. */
-async function emitRun({ runId, originatorSub }) {
-	const res = await fetch(`${LINEAGE_URL}/api/v1/lineage`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json', authorization: `Bearer ${aliceToken}` },
-		body: JSON.stringify({
+if (args.write) {
+	const counts = async () => ({ alice: (await unread(alice)).json?.unread, bob: (await unread(bob)).json?.unread });
+	const before = await counts();
+	console.log(`   before: unread alice=${before.alice} bob=${before.bob}`);
+	const runId = randomUUID();
+	const emitted = await api(alice, 'POST', '/api/lineage/api/v1/lineage', {
+		write: true,
+		body: {
 			eventType: 'FAIL',
 			eventTime: new Date().toISOString(),
-			producer: 'rask://verify_originator_lane',
-			job: { namespace: 'rask-drive', name: `originator_${runId}` },
-			run: { runId, facets: { lance: { operation: 'embed_features', originator: originatorSub } } },
-			outputs: [{ namespace: OUTPUT.split('$')[0], name: OUTPUT }],
-		}),
+			producer: 'rask://tests/e2e/verify_originator_lane',
+			schemaURL: 'https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent',
+			job: { namespace: 'rask-verify', name: 'originator' },
+			// `originator` is the field under test, read by `originator_subject`: a targeting hint that authorizes
+			// nothing, since delivery re-checks bob's own grant on the output.
+			run: { runId, facets: { rask_lance: { originator: bobSub } } },
+			outputs: [{ namespace: TABLE.slice(0, TABLE.lastIndexOf('$')), name: TABLE }],
+		},
 	});
-	return { status: res.status, body: (await res.text().catch(() => '')).slice(0, 300) };
+	check('lineage recorded the run', emitted.status === 201, `POST /api/v1/lineage ${emitted.status} ${emitted.detail}`);
+	const after = await until(counts, (c) => c.alice > before.alice && c.bob > before.bob, WAIT_MS);
+	console.log(`   after:  unread alice=${after.alice} bob=${after.bob}`);
+	check('alice was told as the AUTHOR', after.alice === before.alice + 1, `${before.alice} -> ${after.alice}`);
+	check('bob was told as the ORIGINATOR', after.bob === before.bob + 1, `${before.bob} -> ${after.bob}`);
+	const rows = (await api(bob, 'GET', '/api/notifications/inbox?limit=100')).json?.notifications ?? [];
+	const row = rows.find((r) => r.notification_id.startsWith(`${runId}@`));
+	check('bob’s row is for this run', Boolean(row), row ? '' : `saw ${rows.length} row(s)`);
+	check('and its stored reason is `originator`, not `author`', row?.reason === 'originator', `reason=${row?.reason}`);
 }
 
-console.log(`\n▸ originator-lane drive against ${ORIGIN}\n`);
-
-const aliceToken = await mintToken('alice@example.com');
-const bobToken = await mintToken('bob@example.com');
-const aliceSub = subjectOf(aliceToken);
-const bobSub = subjectOf(bobToken);
-console.log(`  alice = ${aliceSub}\n  bob   = ${bobSub}\n`);
-
-// Both must be able to SEE the run's output or the delivery gate hides it — the plane re-derives
-// visibility per recipient, which is exactly why an originator cannot be used to leak anything.
-const storeId = await fgaStoreId();
-await seedGrants(storeId, [
-	{ user: fgaUser(aliceSub), relation: 'writer', object: `table:${OUTPUT}` },
-	{ user: fgaUser(bobSub), relation: 'writer', object: `table:${OUTPUT}` },
-]);
-
-const before = { alice: (await unread(aliceToken)).length, bob: (await unread(bobToken)).length };
-console.log(`  before: alice unread ${before.alice}, bob unread ${before.bob}`);
-
-const runId = `originator-${Date.now()}`;
-const emitted = await emitRun({ runId, originatorSub: bobSub });
-check('the run was accepted by lineage', emitted.status < 300, `HTTP ${emitted.status} ${emitted.body}`);
-
-await new Promise((r) => setTimeout(r, SETTLE_MS));
-
-const after = { alice: (await unread(aliceToken)).length, bob: (await unread(bobToken)).length };
-console.log(`  after:  alice unread ${after.alice}, bob unread ${after.bob}\n`);
-
-check('alice was told as the AUTHOR (v1, the control)', after.alice === before.alice + 1, `${before.alice} -> ${after.alice}`);
-check('bob was told as the ORIGINATOR (v5)', after.bob === before.bob + 1, `${before.bob} -> ${after.bob}`);
-
-const bobRows = await unread(bobToken);
-const row = bobRows.find((r) => String(r.notification_id ?? r.notificationId ?? '').startsWith(runId));
-check('bob’s row exists for this run', Boolean(row), row ? '' : `saw ${bobRows.length} unread row(s)`);
-if (row) {
-	check('and its stored reason is `originator`, not `author`', row.reason === 'originator', `reason = ${row.reason}`);
+for (const [who, s] of [['alice', alice], ['bob', bob]]) {
+	console.log(` ${who}: writes the guard refused: ${s.refused.length ? s.refused.join(', ') : 'none'}`);
+	await s.context.close();
 }
-
-console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
-process.exit(failures === 0 ? 0 : 1);
+await browser.close();
+console.log(`\n${checks.failures === 0 ? 'all checks passed' : `${checks.failures} check(s) failed`}\n`);
+process.exit(checks.failures === 0 ? 0 : 1);

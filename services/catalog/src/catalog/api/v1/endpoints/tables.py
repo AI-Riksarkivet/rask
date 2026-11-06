@@ -495,7 +495,7 @@ async def describe_table(
     (``lance_ray.utils``, which calls ``describe_table(DescribeTableRequest(id=...))`` and merges
     ``storage_options``) got a location and NO credentials, and any version pin silently read latest.
     Both forms are now accepted: **a field present in the body wins**, because the body is the spec's form
-    and the query is rask's own older shorthand that its zones and tests still speak. Presence is decided by
+    and the query is rask's own older shorthand that existing callers and its tests speak. Presence is decided by
     the JSON keys actually sent, not by the model's defaults. The body is OPTIONAL here (the spec marks it
     required) so those existing query-only callers keep working — a superset, not a deviation in meaning.
 

@@ -7,7 +7,7 @@ license = "Apache-2.0"
 dependencies = [
     # The official client is the transport + the spec authority the tests round-trip against.
     # Deliberately LIGHT (attrs/httpx/requests/pyyaml/dateutil) — this package must be importable
-    # by every plane, including the sealed runners, so no ray/lance/fastapi may ride along.
+    # by every emitter, a client's process that carries no ray, lance or fastapi included, so none of them may ride along.
     "openlineage-python>=1.52.0",
     "pydantic>=2.13",
     "pydantic-settings>=2.14",
@@ -16,8 +16,8 @@ dependencies = [
     # bargain a trace propagator takes. No ray/lance/fastapi rides along with it.
     "opentelemetry-api>=1.27",
     # Ed25519 for `lineage_kit.signing` ([[LH-064]]). Declared here and never left transitive, because the
-    # wheel is imported lazily inside the key-load, sign and verify functions: sealed runners import this
-    # package to emit over HTTP and never sign, so the import must not need it, but every service that does
+    # wheel is imported lazily inside the key-load, sign and verify functions: an emitter that only sends over HTTP
+    # imports this package and never signs, so the import must not need it, but every service that does
     # sign or verify resolves it through this one declaration.
     "cryptography>=49",
 ]

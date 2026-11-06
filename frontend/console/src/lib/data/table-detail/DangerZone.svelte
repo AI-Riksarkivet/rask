@@ -10,7 +10,7 @@
 	import { namespacePrefix } from '@rask/api/identifiers';
 	import { Trash2 } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { deregisterTable, dropTable, renameTable } from '../remote/catalog.api';
 
 	let { table }: { table: string } = $props();
@@ -48,7 +48,7 @@
 		try {
 			const res = action === 'drop' ? await dropTable({ table }) : await deregisterTable({ table });
 			if (res.ok) {
-				await goto(`${base}/catalog/tables`); // the id no longer names a table — back to the registry
+				await goto(resolve('/catalog/tables')); // the id no longer names a table — back to the registry
 			} else {
 				dangerFail(action, res.status, res.detail);
 			}
@@ -75,7 +75,7 @@
 			if (res.ok) {
 				renameTableTo = '';
 				// the old id no longer exists — follow the table to its renamed detail page
-				await goto(`${base}/catalog/tables/${encodeURIComponent(newId)}`);
+				await goto(resolve('/catalog/tables/[table]', { table: encodeURIComponent(newId) }));
 			} else if (res.status === 409) {
 				dangerError = `Denied: a table named ${newId} already exists.`;
 			} else {

@@ -1,0 +1,12 @@
+{
+	"issuer": "http://localhost:8080/dex",
+	"clientId": "rask-console",
+	"scopes": [
+		"openid",
+		"profile",
+		"email",
+		"groups",
+		"federated:id",
+		"audience:server:client_id:rask-lakehouse"
+	]
+}

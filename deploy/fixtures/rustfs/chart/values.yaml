@@ -5,7 +5,7 @@
 name: rask-rustfs
 # The upstream image at the GA tag and digest the Dagger lanes run (`.dagger/storage.go`), its multi-arch OCI index
 # (Docker Hub, `rustfs/rustfs:1.0.3`, read from the registry 2026-10-18): the image carries no signature to verify, so
-# the digest is what makes the server the one measured (docs/audits/2026-10-18/rustfs-zero-trust.md). The bare tag is
+# the digest is what makes the server the one measured (measured 2026-10-18, git history at 64ef118a9). The bare tag is
 # the musl build, which leaves the console to the env below.
 image:
   repository: rustfs/rustfs
@@ -31,7 +31,7 @@ region: us-east-1
 # -- The identity provider the store trusts for web identity ([[XC-083]], ADR 0170): the cluster's ServiceAccount issuer,
 # read through rask's issuer mirror, since k3s serves its discovery and keys only to a bearer. The store grants a token
 # the canned policy its `sub` names and sets no role policy, so only an account rask's scoped-users hook names a policy
-# for is exchanged (measured on 1.0.3, docs/audits/2026-10-18/rustfs_web_identity_measure.py). Empty `configUrl` wires no
+# for is exchanged (measured 2026-10-18 on 1.0.3, scripts/rustfs_web_identity_measure.py). Empty `configUrl` wires no
 # provider.
 identityProvider:
   # The discovery document rask's issuer mirror serves (`<release>-issuer-mirror:8080`), whose `issuer` is the cluster's.

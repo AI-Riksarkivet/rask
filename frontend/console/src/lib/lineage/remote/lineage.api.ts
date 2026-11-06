@@ -1,9 +1,9 @@
-import { command, query } from '$lib/remote.svelte';
-import { LINEAGE_API } from '$lib/upstreams';
+import { command, query } from '#lib/reads.svelte.ts';
+import { LINEAGE_API } from '#lib/upstreams.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import { getJSON, requestJSON } from '@rask/api/client';
-import { auth } from '$lib/auth.svelte';
+import { auth } from '#lib/auth.svelte.ts';
 import { createLineageClient, type DlqBacklog, type DlqReplayResponse } from '@rask/api/lineage';
 
 // The lineage plane's DLQ surface (its backlog read and its replay write). It wraps the SHARED

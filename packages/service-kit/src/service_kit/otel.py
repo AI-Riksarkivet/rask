@@ -259,9 +259,9 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings) -> bool:
 
         AioHttpClientInstrumentor().instrument(tracer_provider=tracer_provider, meter_provider=meter_provider)
 
-    # botocore — THE OBJECT STORE. Every S3 call in the estate rode this uninstrumented: vending
+    # botocore — THE OBJECT STORE. Every boto3 S3 and STS call in the estate goes through it: vending
     # (`catalog/core/vending.py`), the warehouse registry (`catalog/services/warehouses.py`), the
-    # records plane (`lakehouse_kit/records.py`) and `storage/client.py`. boto3 is built on
+    # records plane (`lakehouse_kit/records.py`) and `lakehouse_kit/storage/client.py`. boto3 is built on
     # botocore, so instrumenting the lower layer covers every client the estate constructs without
     # any of them changing.
     #

@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, ME_MEMBER, signIn, TOKEN } from '../session';
 import { seed as seedFor } from '../mock-client';
 
-// The gallery's DEGRADE contract — the behaviour `$lib/gallery.ts` exists for and that nothing tested
+// The gallery's DEGRADE contract — the behaviour `#lib/gallery.ts` exists for and that nothing tested
 // anywhere before this file. Memberships come from the frozen `/management/v1/me`; an estate admin ALSO gets the
 // estate-wide listing through the console's `/api/catalog/management/v1/projects` pass-through; and when that listing
 // fails, the caller still sees their own projects. "Degrade, never 500" is only a claim until a run

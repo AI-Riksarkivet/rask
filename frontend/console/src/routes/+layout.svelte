@@ -1,14 +1,15 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import '../app.css';
 	import { onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '@rask/ui/shell';
-	import { onMount, type Snippet } from 'svelte';
-	import { auth, expired, login } from '$lib/auth.svelte';
-	import { dismiss, markSeen, readInboxFeed, readInboxState } from '$lib/live/inbox.api';
-	import { areaOf, ESTATE_NAV, inLakehouse, lakehouseSidebar } from '$lib/nav';
+	import type { Snippet } from 'svelte';
+	import { auth, expired, login } from '#lib/auth.svelte.ts';
+	import { ANONYMOUS, dismiss, markSeen, readInboxFeed } from '#lib/live/inbox.api.ts';
+	import { areaOf, ESTATE_NAV, inLakehouse, lakehouseSidebar } from '#lib/nav.ts';
 	import type { LayoutData } from './$types';
 
 	let { children, data }: { children: Snippet; data: LayoutData } = $props();
@@ -26,37 +27,33 @@
 	const canvasArea = $derived(areaOf(page.url.pathname) === 'workbench');
 
 	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell
-	// owns the surface and never fetches — the app owns the transport, `$lib/live/inbox.api`.
+	// owns the surface and never fetches — the app owns the transport, `#lib/live/inbox.api`.
 	//
-	// The read state: per SUBJECT for the rows the inbox holds, per TAB for the rest.
-	let seen = $state<string[]>([]);
-	let dismissed = $state<string[]>([]);
+	// Whom the bell reads for: the signed-in person, or, on a stack that signs nobody in, its one
+	// anonymous inbox. `null` while sign-in is still completing: the inbox derives whose inbox it is
+	// from the token, so a read sent before one exists is refused and would hold the bell empty.
+	const reader = $derived(auth.enabled ? (auth.session?.sub ?? null) : ANONYMOUS);
 
-	// The query OBJECT, held once: `.refresh()` re-reads it and `.current` reads the value back, and
-	// the previous value stays readable while the next is in flight, so the badge never flickers.
-	// `null` until mounted; the panel's value `null` is the un-wired case (no session, no service).
-	let inboxQuery = $state<ReturnType<typeof readInboxFeed> | null>(null);
+	// The query OBJECT, one per person: `.refresh()` re-reads it and `.current` reads the value back,
+	// and the previous value stays readable while the next is in flight, so the badge never flickers.
+	// Reading it never holds a page's paint: the read starts here, and the bell fills when it answers.
+	const inboxQuery = $derived(reader === null ? null : readInboxFeed(reader));
 	const inbox = $derived(inboxQuery?.current ?? null);
 
-	onMount(() => {
-		// Seeded on mount, never during render: no page may wait on the notification plane to paint.
-		inboxQuery = readInboxFeed();
-		// UNION, not replace — anything this tab marked while the read was in flight stays marked.
-		void readInboxState()
-			.then((state) => {
-				// Null is the auth-off case and the outage case alike; the bell then falls back to the
-				// component's own per-tab memory rather than to a blank panel.
-				if (!state) return;
-				seen = [...new Set([...seen, ...state.seen])];
-				dismissed = [...new Set([...dismissed, ...state.dismissed])];
-			})
-			.catch(() => {
-				/* the per-tab fallback stands — a bell that cannot persist still has to ring */
-			});
-	});
+	// The read state: what the inbox holds for this person, united with what this tab marked since
+	// (UNION, not replace: a mark made while a read was in flight stays marked). The tab's own marks
+	// are a writable derived of the person, so a different person starts from none of them.
+	const marksOf = (_person: string | null): string[] => [];
+	const union = (here: string[], held: string[] | undefined): string[] =>
+		held ? [...new Set([...here, ...held])] : here;
+	let seenHere = $derived(marksOf(reader));
+	let dismissedHere = $derived(marksOf(reader));
+	const seen = $derived(union(seenHere, inbox?.held.seen));
+	const dismissed = $derived(union(dismissedHere, inbox?.held.dismissed));
 
 	// The session ends when its token does: there is no refresh token in memory, so the browser goes
-	// back to the issuer, which answers at once while it still holds a session, and returns here.
+	// back to the issuer and returns here: an issuer that keeps a session answers at once, and the dev
+	// Dex, which keeps none, shows its login form.
 	$effect(() => {
 		const session = auth.session;
 		if (!session || session.expiresAt === 0) return;
@@ -72,19 +69,19 @@
 	const notifications = $derived({
 		// `undefined`, never `[]`, when the inbox did not answer: an EMPTY inbox is a fact worth
 		// rendering ("nothing addressed to you"), while an ABSENT one means this stack has no inbox.
-		inbox: inbox?.rows,
-		inboxUnread: inbox?.unread,
+		inbox: inbox?.panel.rows,
+		inboxUnread: inbox?.panel.unread,
 		seen,
 		dismissed,
 		onseen: (next: string[]) => {
-			seen = next;
+			seenHere = next;
 			void markSeen(next)
 				// The badge is the server's count, so a write that changed something has to move it.
 				.then(() => inboxQuery?.refresh())
 				.catch(() => {});
 		},
 		ondismiss: (notificationId: string, next: string[]) => {
-			dismissed = next;
+			dismissedHere = next;
 			void dismiss(notificationId)
 				.then(() => inboxQuery?.refresh())
 				.catch(() => {});
@@ -112,7 +109,7 @@
 	<nav aria-label="Project" class="flex flex-col gap-0.5 px-2 py-1">
 		<span class="text-muted-foreground px-2 py-1 text-xs">Project</span>
 		<a
-			href="/projects"
+			href={resolve('/projects')}
 			class="text-muted-foreground hover:text-foreground hover:bg-accent/40 rounded-md px-2 py-1.5 text-sm transition-colors"
 			>All projects</a
 		>

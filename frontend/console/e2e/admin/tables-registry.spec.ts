@@ -153,3 +153,20 @@ test('a bare declare says the reserved id holds no data yet', async ({ page }) =
 	await expect(page.locator('.banner.ok')).toContainText('no data yet');
 	await expect(page.locator('.banner.ok')).toContainText('appending rows to it is refused');
 });
+
+test('a namespace named like a route group links to its own page, not the list', async ({
+	page,
+}) => {
+	// The catalog takes `(staging)` as a name, and a pathname given to resolve() loses a segment shaped
+	// like a route group: the row's links must still name the namespace and the table.
+	await seed(page, { 'GET /v1/table': { tables: ['(staging)$pages'] } });
+	await page.goto('/catalog/tables');
+	await expect(page.getByRole('link', { name: '(staging)$pages' })).toHaveAttribute(
+		'href',
+		'/catalog/tables/(staging)%24pages',
+	);
+	await expect(page.getByRole('link', { name: '(staging)', exact: true })).toHaveAttribute(
+		'href',
+		'/catalog/namespaces/(staging)',
+	);
+});

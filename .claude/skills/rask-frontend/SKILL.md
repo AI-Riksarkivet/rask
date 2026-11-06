@@ -1,11 +1,11 @@
 ---
 name: rask-frontend
-description: The console — rask's one SvelteKit 2 + Svelte 5 single-page app in `frontend/` with no backend of its own: its route tree and navbars, browser sign-in (OIDC + PKCE against Dex, tokens in memory, `/config.json`, the CSP `serve.ts` sends), the browser data layer (`remote.svelte.ts`, `*.api.ts`, the bearer provider, same-origin `/api/*` per service), `@rask/dockview` workbenches, and the gates (oxlint/oxfmt, svelte-check, vitest, the Playwright suite behind `e2e/edge.ts` and a mock issuer). Use when touching any `.svelte` or `frontend/` file, `@rask/api`, `@rask/dockview` or `@rask/flow`; when adding a route, a page, a read or write, or a frontend dependency; when wiring nav or a guard; when building a dock or panel; or when sign-in loops, a call 401s/404s from the browser, the CSP blocks something, or a frontend gate fails.
+description: The console — rask's one SvelteKit 3 + Svelte 5 single-page app in `frontend/` with no backend of its own: its route tree and navbars, browser sign-in (OIDC + PKCE against Dex, tokens in memory, `/config.json`, the CSP `serve.ts` sends), the browser data layer (`reads.svelte.ts`, `*.api.ts`, the bearer provider, same-origin `/api/*` per service), `@rask/dockview` workbenches, and the gates (oxlint/oxfmt, svelte-check, vitest, the Playwright suite behind `e2e/edge.ts` and a mock issuer). Use when touching any `.svelte` or `frontend/` file, `@rask/api`, `@rask/dockview` or `@rask/flow`; when adding a route, a page, a read or write, or a frontend dependency; when wiring nav or a guard; when building a dock or panel; or when sign-in loops, a call 401s/404s from the browser, the CSP blocks something, or a frontend gate fails.
 ---
 
 # rask frontend — the console
 
-Every JS/TS file lives under `frontend/`, its own bun 1.3.14 workspace root (`package.json`, `bun.lock`, `knip.json`,
+Every JS/TS file lives under `frontend/`, its own bun 1.4.4 workspace root (`package.json`, `bun.lock`, `knip.json`,
 `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/`). Invoke everything scoped: `bun --cwd=frontend run <task>`.
 The `--cwd=` form matters — `bun --cwd <path>` with a space silently no-ops. There is no Turborepo: the root scripts
 are plain bun (`bun run --filter '*' <task>` or explicit sequences), so a task over a package runs only if that
@@ -27,7 +27,18 @@ their published doors, and the lakehouse names it nowhere (`scripts/lakehouse_na
 `frontend/console` (package `console`) is a SvelteKit app built with `@sveltejs/adapter-static` and
 `fallback: 'index.html'`; the root `+layout.ts` sets `ssr = false` and `prerender = false`. Nothing renders on a
 server, so browser globals are fine anywhere, and there is no `+server.ts`, `+page.server.ts`, `hooks.server.ts` or
-`$lib/server` — adding one is adding a backend, which the owner ruled out ("SPA, no backend", 2026-11-04).
+`server` directory — adding one is adding a backend, which the owner ruled out ("SPA, no backend", 2026-11-04).
+
+**SvelteKit 3's config and filename rules.** The project config is the `sveltekit({...})` call in
+`console/vite.config.ts` (adapter-static, the CSP, `compilerOptions.experimental.async`); a `svelte.config.js` in the
+console is a build error. `#lib/*` is a Node subpath import declared in the console's `package.json` `imports` and
+written with the file's extension (`#lib/doors.ts`, `#lib/reads.svelte.ts`, `#lib/data/StageBadge.svelte`), as
+`sv migrate sveltekit-3` writes it and `$app/tsconfig`'s `allowImportingTsExtensions` allows. Kit 3 reads a file named
+`remote.*` (`/[/.]remote\.[^/]+$/`) as a remote-functions module, which is a build error without
+`experimental.remoteFunctions`, and any `server` directory or `*.server.*` / `server.*` file as server-only
+(`src/exports/vite/utils.js`); a directory named `remote` does not match, so the `remote/` folders of `*.api.ts`
+modules are fine, and the data layer is `reads.svelte.ts`. `tsconfig.json` extends `$app/tsconfig`, which
+`svelte-kit sync` writes into `node_modules/$app/`.
 
 | path | what it is |
 |---|---|
@@ -36,12 +47,22 @@ server, so browser globals are fine anywhere, and there is no `+server.ts`, `+pa
 | `/notifications`, `/preferences`, `/preferences/notifications` | the inbox behind the bell, and a person's notification preferences |
 | `/settings`, `/settings/access`, `/settings/audit` | estate configuration, estate-admin only (`settings/+layout.ts`) |
 | `/catalog` | the lakehouse overview of the active project |
-| `/catalog/{warehouses,namespaces,tables,promotions,storage}` (+ `[id]`, `[table]`, `[instance_id]`) | the catalog; `storage` is the tier view (`/catalog/stores` redirects there) |
+| `/catalog/{warehouses,namespaces,tables,promotions,storage}` (`warehouses/[id]`, `namespaces/[id]`, `tables/[table]`, `promotions/[table]`) | the catalog; `storage` is the tier view, which states the catalog's refusal (below) |
 | `/admin`, `/admin/{events,streams,dlq}` | operations, estate-admin only (`admin/+layout.ts`) |
 | `/workbench` | the dock (events, tables) |
 | `/auth/{login,callback,logout}` | the sign-in round trip, client pages |
 
-There is no zone and no base path: every link is a plain in-app link, and SvelteKit soft-navigates all of them.
+There is no base path (the `sveltekit()` options set no `paths.base`), and SvelteKit soft-navigates every in-app link. Every `href` and
+`goto` still goes through `resolve()` from `$app/paths`, which fills a route id's parameters: oxlint's
+`svelte/no-navigation-without-resolve` is an error (`frontend/.oxlintrc.json`), and the two `-without-base` rules are off
+because they flag `resolve()` itself (`frontend/TOOLING.md`). A path that carries a catalog name or id is written in the
+route-id form, `resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(ns) })`: kit 3 reads any string that
+starts with `/` as a route id, and a name interpolated into one is split into segments with one shaped like a route
+group dropped, so a namespace named `(staging)` would link to the list page
+(`e2e/admin/tables-registry.spec.ts` pins it). A pathname
+with a query is written without the leading `/`, ``resolve(`auth/login?redirect=${…}`)``, and `goto` takes kit 3's options
+(`replace`, `reset: false`, `refreshAll`) and rejects a URL that names no route. `@rask/ui` cannot import `$app/paths`, so the rule is off under
+`packages/ui/**`; its root paths are what `resolve()` gives in the console.
 
 **Two navbars, chosen by path.** `isMainMenu(pathname)` in `@rask/ui`'s `shell/nav-config.ts` decides which bar
 renders: `/`, `/projects` and `/settings/**` are the ESTATE level (`mainMenuNav()`: Home · Projects · Settings),
@@ -52,37 +73,53 @@ links.
 
 **The audit and streams pages cannot work.** They need the platform's telemetry store and the NATS monitor (`/jsz`),
 which no Gateway route serves to a browser; the owner kept them anyway (2026-11-04), so `audit.api.ts` and
-`jetstream.api.ts` answer with that failure, naming what is missing, without a request. Promotions read the catalog's own doors:
+`jetstream.api.ts` answer with that failure, naming what is missing, without a request. So do the doors the catalog does not serve:
+`#lib/storage/remote/storage.api.ts` (the stores-by-tier registry and its attach write), `catalog.api.ts`'s user-state
+read and write, and `#lib/remote/view-prefs.api.ts` each answer an honest 501 with a `detail` naming what no door
+keeps, and the storage page renders that refusal ("The stores registry is unavailable (HTTP 501) — …"). The e2e mocks
+serve only doors that exist. Promotions read the catalog's own doors:
 `GET /management/v1/promotions` for the open holds, and `POST /management/v1/table/{id}/promotion/{approve,reject}` for a
 decision, keyed by table.
 
 ## Sign-in and tokens
 
-`$lib/auth.svelte.ts`, on `oidc-client-ts`: OpenID Connect authorization code with PKCE, as a PUBLIC client (Dex's
-`rask-web`, which holds no secret). Tokens live **in memory only** (`InMemoryWebStorage` user store); only the
+`#lib/auth.svelte.ts`, on `oidc-client-ts`: OpenID Connect authorization code with PKCE, as a PUBLIC client
+(`rask-console`, which holds no secret: `deploy/fixtures/console/dex-values.yaml` declares it in the dev Dex, with
+redirects to `http://localhost:8080/auth/callback` and `http://localhost:5173/auth/callback`). The dev Dex enforces PKCE
+for every authorization code (`oauth2.pkce.enforce: true`, `codeChallengeMethodsSupported: [S256]`,
+`deploy/fixtures/dex/chart/templates/dex.yaml`), and its own `rask-web` client is confidential with no redirect, signed in
+as by the live lanes' password grant, so no browser signs in through it. Tokens live **in memory only** (`InMemoryWebStorage` user store); only the
 transient PKCE state rides `sessionStorage` for one redirect. A reload therefore starts signed out and goes back to the
-issuer, which answers at once while it still holds a session. The root `+layout.ts` sends a signed-out visit to the
-issuer and returns to the requested path; the `/auth/*` pages are the round trip.
+issuer: one that keeps a session answers at once, and the dev Dex, which keeps none, shows its login form. The root `+layout.ts` sends a signed-out visit to the
+issuer and returns to the requested path; the `/auth/*` pages are the round trip. Sign-out (`logout()`) calls
+`signoutRedirect()` while the user is still held, so the end-session request carries `id_token_hint`; `signoutRedirect`
+removes the user itself before it navigates. Without an `end_session_endpoint` it removes the user and goes to
+`/auth/login?prompt=login`, so an issuer that keeps a session authenticates whoever signs in next instead of reusing it.
+The dev Dex keeps no session: Dex v2.46.1 keeps sessions, reads `prompt` (`server/authflow/login.go`) and advertises its
+end-session endpoint (`server/discovery/discovery.go`) only with its sessions flag on, `DEX_SESSIONS_ENABLED`, which is
+off by default and unset in the fixture, so it shows its login form on every sign-in and takes the `prompt=login` path.
 
 **The issuer, client and scopes come from `/config.json`** (`{issuer, clientId, scopes}`, validated with valibot),
 which the release renders from its values, so the built app carries no environment. `issuer` may be absolute or a
-same-origin path. A stack that serves no config runs with sign-in OFF (no bearer is sent), which is what the auth-off
-Playwright project and a bare `make dev` exercise.
+same-origin path. Sign-in is OFF only where the config says so, `{"signIn": false}` (no bearer is sent; the auth-off
+Playwright project serves `e2e/console-config.off.json`). A missing or malformed `/config.json` fails closed:
+`auth.svelte.ts` sets `configError`, and the root `+layout.ts` answers 503 saying why, with no `/api` call.
 
 **The scopes are load-bearing.** The lakehouse's governed doors refuse a token without `federated:id`
 (`service_kit.governed.idp_identity`: "a client asks for the federated:id scope") and one whose `aud` does not name the
 lakehouse, which Dex grants through `audience:server:client_id:<audience>`. The chart's default scopes carry both
 (`deploy/fixtures/console/chart/values.yaml` `web.config.scopes`).
 
-**The CSP travels with the app.** `svelte.config.js` declares it (`kit.csp`, mode `hash`: `default-src 'self'`,
+**The CSP travels with the app.** The `csp` option of `sveltekit()` in `vite.config.ts` declares it (mode `hash`: `default-src 'self'`,
 `script-src 'self'` plus the bootstrap hash, `connect-src 'self'`, `style-src 'self' 'unsafe-inline'` for Svelte's and
 Bits UI's inline styles). `serve.ts` lifts that policy out of the built `index.html`, removes the meta tag, and sends it
 as a HEADER, adding the configured issuer's origin to `connect-src` and `frame-ancestors 'none'`, plus
 `X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. The meta tag must go: a meta policy and a header
 policy both apply, so a meta `connect-src 'self'` would block a cross-origin issuer whatever the header said. A library
 that compiles code at runtime is blocked by `script-src`: `patches/apache-arrow@21.2.0.patch` replaces apache-arrow's
-`new Function` null check with a closure of the same semantics, without which the insert-rows and create-with-rows
-forms break.
+`new Function` null check with a closure that keeps upstream's semantics (held to upstream's compiled function by
+`console/src/lib/arrow-null-values.test.ts`; the one divergence is in `frontend/TOOLING.md`), without which the
+insert-rows and create-with-rows forms break.
 
 **A client guard is disclosure, not authorization.** `admin/+layout.ts` and `settings/+layout.ts` refuse a non-admin
 in the browser, and a person can bypass them. What authorizes is the catalog's and lineage's own check on every request
@@ -91,7 +128,7 @@ in the browser, and a person can bypass them. What authorizes is the catalog's a
 ## Fetching data
 
 The browser calls every API itself, **same-origin**, with the signed-in person's bearer; the platform's Gateway routes
-each prefix to its service (`rask-services-fleet`). `$lib/upstreams.ts` is the one table of bases, the same bytes on
+each prefix to its service (`rask-services-fleet`). `#lib/upstreams.ts` is the one table of bases, the same bytes on
 every estate:
 
 | base | service | what the browser sends |
@@ -102,18 +139,21 @@ every estate:
 
 **The bearer is attached in one place.** `@rask/api/client` takes a provider the app installs once
 (`setBearerProvider`, called by `auth.svelte.ts`), and `upstreamJSON` / `requestJSON` send it on every call;
-`$lib/doors.ts::catalogJSON` is the catalog's door over it. The result is the shared `ApiResult` union: 0 unreachable, n
+`#lib/doors.ts::catalogJSON` is the catalog's door over it. The result is the shared `ApiResult` union: 0 unreachable, n
 answered-n with the upstream's `{detail}`, 502 contract drift (a payload that fails its valibot schema).
 
-**`$lib/remote.svelte.ts` is the data layer**: `query` (a cached, refreshable read), `query.live` (a cursor that
-advances), and `command` (a write), in the browser. Every `*.api.ts` module (`$lib/remote/`, `$lib/data/remote/`,
-`$lib/admin/remote/`, `$lib/lineage/remote/`, `$lib/live/`, `$lib/storage/remote/`) declares its reads and writes with
+**`#lib/reads.svelte.ts` is the data layer**: `query` (a cached, refreshable read), `query.live` (a cursor that
+advances), and `command` (a write), in the browser. Every `*.api.ts` module (`#lib/remote/`, `#lib/data/remote/`,
+`#lib/admin/remote/`, `#lib/lineage/remote/`, `#lib/live/`, `#lib/storage/remote/`) declares its reads and writes with
 them, and a component holds a read as `await read()`, `read().current`, `read().refresh()`. Calling a read with the same
 arguments returns the SAME instance, so a write's `void read().refresh()` updates every holder; a read settled within
-1 s is reused (a burst deduplicates), and a failing read rejects and leaves `.current` as it was. Input is validated
+1 s is reused (a burst deduplicates), and a failing read rejects and leaves `.current` as it was. A generation fence
+lets only the latest start write a read's state: a refresh started while an older read is in flight supersedes it, so
+the older answer, however late, never overwrites the newer one or clears `loading` early. The instance caches stay
+unbounded on purpose, because "same arguments, same instance" is what a write's refresh relies on. Input is validated
 against the function's valibot schema, defaults applied, so a command's body carries its schema's defaults.
 
-**Liveness rides cursors, not timers.** `$lib/live/tick.svelte.ts` wraps the shared `lineageFeed`/`controlCursor` streams
+**Liveness rides cursors, not timers.** `#lib/live/tick.svelte.ts` wraps the shared `lineageFeed`/`controlCursor` streams
 of `feeds.api.ts` as `lineageTick`/`controlTick`, read through `liveRead` (`@rask/api/live`), which opens on mount and
 treats a cursor's arrival as no change. Data mutations move the lineage cursor; governance mutations (grants,
 warehouses, tenants) move the control cursor. A timer is right only when nothing publishes the change (a liveness probe)
@@ -122,14 +162,15 @@ or time itself is the change (a countdown).
 ## Workbenches — `@rask/dockview`
 
 The dock lives at `/workbench` with two panels, `EventsPanel` (lineage's `GET /events` through the dock's one
-`EventFeed`, `$lib/dock/bench.svelte.ts`) and `TablesPanel` (the very registry the catalog page renders). A panel
+`EventFeed`, `#lib/dock/bench.svelte.ts`) and `TablesPanel` (the very registry the catalog page renders). A panel
 RENDERS THE PAGE'S COMPONENT: it is not a smaller re-implementation, and when its data differs it passes rows as a prop
 rather than giving the board its own fetch. A panel with no page counterpart (`EventsPanel`) is fine.
 
-Layout persistence goes through `$lib/dock/user-state-fetch.ts`, which maps the dock stores' two calls onto the
-catalog's user-state read and write and keeps their three outcomes (`ok` / `absent` / **`unreadable`**, which must refuse
-to save). **The catalog serves no user-state door** ([[LH-513]]): those calls answer 404, so no layout or named view
-persists until a client keeps that state in its own release.
+Layout persistence goes through `#lib/dock/user-state-fetch.ts`, which maps the dock stores' two calls onto the
+user-state read and write of `catalog.api.ts` and keeps their three outcomes (`ok` / `absent` / **`unreadable`**, which
+must refuse to save). **The catalog serves no user-state door** ([[LH-513]]): those two answer 501 without a request,
+which the store reads as `unreadable`, so no layout or named view persists until a client keeps that state in its own
+release.
 
 It is a **thin binding, not a wrapper**: consumers hold the real `DockviewApi`. Depend on **`dockview`, never
 `dockview-core`**: `dockview`'s runtime entry registers ContextMenu, KeyboardDocking, AdvancedDnD, TabGroupChips and
@@ -153,15 +194,19 @@ Accessibility, and with core all five are silently absent.
 
 | loop | command | what runs |
 |---|---|---|
-| UI against the cluster | `make dev-k3s` | port-forwards k3s Traefik to :8888 and runs `vite dev` (:5173) with `/api` proxied there |
-| UI against an edge you name | `make dev` (`RASK_EDGE_URL`, default `http://localhost:8888`) | builds `@rask/ui`, then `vite dev` on :5173 |
+| UI against the cluster | `make dev-k3s` | reuses :8080 when it already serves the issuer, else port-forwards `kube-system/traefik` 8080:80, waits for `/dex` and `/api/lineage/livez`, runs `vite dev` (:5173) with `/api` proxied there, and stops the forward by PID |
+| UI against an edge you name | `make dev` (`RASK_EDGE_URL`, default `http://localhost:8080`) | builds `@rask/ui`, then `vite dev` on :5173 |
 | the design system live | `bun --cwd=frontend/packages/ui run dev` in a second terminal | `svelte-package -w` for `@rask/ui` |
 | Storybook | `make storybook` | `@rask/ui`'s Storybook on :6006 |
 
-`vite.config.ts` serves `/config.json` from `CONSOLE_CONFIG_FILE` exactly as `serve.ts` does, so a dev server signs in
-against whichever issuer that file names, and runs with sign-in off without it. The image is `.docker/frontend.dockerfile`
+`vite.config.ts` serves `/config.json` from `CONSOLE_CONFIG_FILE`, else the committed `frontend/console/dev/config.json`
+(issuer `http://localhost:8080/dex`, client `rask-console`, the chart's scopes), so a dev server signs in against whichever
+issuer that file names. Under `vite dev` SvelteKit sends that `csp` as a header (measured on kit 3.1.1), so the dev server widens `connect-src` by
+exactly the issuer's origin, as `serve.ts` does for the image; the built app's own policy is untouched. The Vite origin
+(:5173) is cross-origin to Dex on :8080, which answers CORS for it (`allowedOrigins` in
+`deploy/fixtures/console/dex-values.yaml`). The image is `.docker/frontend.dockerfile`
 (`make console-image` → `web-console:<tag>`, through `dagger call image --name=frontend`): a builder stage builds
-`@rask/ui` and the app, the runtime stage holds only `build/` and `serve.ts`, runs as uid 1000 under tini on :3000, and
+`@rask/ui` and the app, the runtime stage holds only `build/` and `serve.ts`, runs as uid 10001 under tini on :3000, and
 fits a read-only root filesystem.
 
 ## Gates
@@ -169,35 +214,45 @@ fits a read-only root filesystem.
 | command | runs |
 |---|---|
 | `bun --cwd=frontend run build` | `@rask/ui`'s `svelte-package`, then the app's `vite build` |
-| `bun --cwd=frontend run check` | build, then `svelte-check` in every package that declares `check` |
-| `bun --cwd=frontend run test` | build, then vitest in every package that declares `test` (`api`, `dockview`, `ui`, `console`) |
+| `bun --cwd=frontend run check` | build, then `svelte-check` in every package that declares `check` (the console's twice: the app, then `tsconfig.tools.json` for `serve.ts` and the e2e code) |
+| `bun --cwd=frontend run test` | build, then vitest in every package that declares `test` (`api`, `dockview`, `flow`, `ui`, `console`) |
 | `bun --cwd=frontend run lint` / `fmt:check` | oxlint / rsvelte-fmt in every package |
 | `bun --cwd=frontend run knip` | the whole JS graph at once (`knip.json`) |
 | `bun --cwd=frontend run test:e2e` | builds, then the console's Playwright suite |
 | `make frontend-check` | check, lint, fmt:check, test and knip |
 | CI | `dagger call frontend` (check, test, lint, fmt:check, every one run and the job failing if any did) and `web-e2e` (`test:e2e`) |
 
-Lint is **oxlint** (`svelte/require-each-key: error`, `svelte/no-reactive-reassign: error`, via `@rsvelte/oxlint-plugin`);
+Lint is **oxlint** (`svelte/require-each-key: error`, `svelte/no-reactive-reassign: error`,
+`svelte/no-navigation-without-resolve: error`, via `@rsvelte/oxlint-plugin`);
 format is **oxfmt** with tabs, single quotes, `printWidth: 100`. ESLint and Prettier are not installed.
 
 **The Playwright suite runs the BUILT app** (`frontend/console/playwright.config.ts`) behind `e2e/edge.ts`, a Bun-native
 stand-in for the Gateway: one origin that routes each `/api/*` prefix to a seed-driven mock upstream (`e2e/mock-*.ts`,
 `e2e/*/mock-*.ts`) and everything else to the shipped `serve.ts`, so its CSP and SPA fallback are what the specs meet.
 Vite preview is not used: it crashes under Bun's `node:http` proxy, and the host has no Node. Three origins of the one
-build, one per family of specs: **auth-off** (`e2e/*.spec.ts`, `e2e/catalog/`, no `/config.json`), **estate**
-(`e2e/projects/`, `e2e/settings/`, `e2e/notifications/`) and **lakehouse** (`e2e/admin/`). An auth-on origin serves
-`e2e/console-config.json`, naming `e2e/mock-oidc.ts` under `/oidc`, so sign-in runs the app's real PKCE round trip;
-there is no test-only bypass in the app. Ports are declared in `e2e/ports.ts` and `e2e/admin/ports.ts`. A read the
+build, one per family of specs: **auth-off** (`e2e/*.spec.ts`, `e2e/catalog/`, served `e2e/console-config.off.json`,
+`{"signIn": false}`), **estate** (`e2e/projects/`, `e2e/settings/`, `e2e/notifications/`) and **admin** (`e2e/admin/`).
+An auth-on origin serves `e2e/console-config.json`, naming `e2e/mock-oidc.ts` under `/oidc`, so sign-in runs the app's
+real PKCE round trip: the mock issuer refuses, at `/auth`, any client but `rask-console`, a `redirect_uri` other than
+the origin's `/auth/callback` and a request without an S256 challenge, and at `/token` a verifier that does not match it, and serves an `end_session_endpoint` (omitted for a context
+carrying the `mock_oidc_no_end_session` cookie, `withoutEndSession()` in `e2e/admin/session.ts`). Its session is the
+identity cookie, and like an issuer that keeps one, it answers `prompt=login` with its login page even while it holds it. There is no test-only
+bypass in the app. Ports are declared in `e2e/ports.ts` and `e2e/admin/ports.ts`. A read the
 browser makes can also be stubbed per spec with `page.route`.
 
-`tests/e2e` is not the frontend suite: it holds only the notifications inbox's two browser verify scripts, run by hand
-against a deployed estate.
+`tests/e2e` is not the frontend suite: it holds two browser verify scripts against a deployed estate,
+`verify_notifications_two_users.mjs` (two people, every page, the bell, the admin gate) and `verify_originator_lane.mjs`,
+plus their shared helper `console.mjs`. Each runs with `bun` from `tests/e2e`, signs in through the real PKCE round trip
+as `rask-console`, and is read-only unless given `--write` (with `--table`, and `--project` for the two-user script).
 
 **TypeScript.** `strict` and `noUncheckedIndexedAccess` are on in the app (`frontend/console/tsconfig.json`);
 `exactOptionalPropertyTypes` only in `@rask/api`, and it stays off in Svelte code for an upstream reason (Bits UI "union
-too complex"). Validation is **valibot**.
+too complex"). The app's `tsconfig.json` extends `$app/tsconfig` and covers `src`; the console's `check` runs
+`svelte-check` a second time with `tsconfig.tools.json`, which type-checks the code that runs under Bun and Playwright
+rather than in the browser (`serve.ts`, `playwright.config.ts`, `e2e/**`, with `types: ["bun"]`). Validation is
+**valibot**.
 
-**`derived_inert` is UPSTREAM.** Svelte 5.56 warns `Reading a derived belonging to a now-destroyed effect` from bits-ui's
+**`derived_inert` is UPSTREAM.** Svelte 5.56 and 5.57.3 warn `Reading a derived belonging to a now-destroyed effect` from bits-ui's
 dismissible layer (`watch([() => this.opts.enabled.current, () => this.opts.ref.current], …)` reading prop-boxed deriveds
 while a panel closes); `patches/bits-ui@2.18.1.patch` snapshots the global layer maps, the minor instance, and the
 watch itself cannot be patched without breaking it. To locate such a warning in a browser, use CDP

@@ -6,7 +6,7 @@ moves no data between tiers ([ADR 0155](../adr/0155-the-medallion-is-tier-govern
 - **The way in is the catalog's Lance Namespace doors** (`CreateTable`, `InsertIntoTable`, `MergeInsertIntoTable`,
   `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`). No lakehouse service
   fetches source bytes, lists an external store or writes a governed table except through the catalog.
-- **Ingest of an external source is a client job on bring-your-own compute**: a sealed runner (CP-061) that writes
+- **Ingest of an external source is a client job on bring-your-own compute** (CP-061, not yet built): a job that writes
   Lance files with vended credentials, commits through the catalog and emits its own OpenLineage run. Until it lands,
   data reaches bronze only from a client that speaks the namespace doors, as the live lane
   `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` does with stock pylance.

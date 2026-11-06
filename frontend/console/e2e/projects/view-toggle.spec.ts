@@ -2,17 +2,12 @@ import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
 import { calls, seed as seedFor } from '../mock-client';
 
-// THE PROJECTS VIEW TOGGLE — gallery or table, remembered per user.
+// THE PROJECTS VIEW TOGGLE — gallery or table.
 //
-// The behaviour worth pinning is not "clicking swaps the markup" (it obviously does); it is that the
-// choice SURVIVES A RELOAD, and that it survives it the right way — read in the page's `load`, so the
-// first paint is already the chosen view rather than a gallery that blinks into a table. A toggle that only
-// works in memory looks identical in a screenshot and is a different feature.
-//
-// It rides the catalog's `dock-layout` user-state document, the estate's ONE per-subject store, under
-// its own key inside the shared `workbenches` map. The read-modify-write in `view-prefs.api.ts` is
-// load-bearing for the same reason and is asserted below: PUTting only this key would delete every
-// dock layout the user owns.
+// No door on this stack keeps per-person state (`view-prefs.api.ts`), so the toggle switches the view
+// for the page it is on and remembers nothing: no request goes anywhere for it, and a reload paints the
+// default again. Pinned so a console that starts calling a door the catalog does not serve fails here,
+// rather than as a 404 on the estate that a mock would hide.
 
 let token: string;
 
@@ -41,14 +36,17 @@ test.beforeEach(async ({ context }, testInfo) => {
 	await signIn(context, { token });
 });
 
-test('the toggle switches views, and the choice SURVIVES a reload', async ({ page }) => {
+test('the toggle switches views, sends nothing, and a reload paints the default', async ({
+	page,
+}) => {
 	await seed(page, {
 		'GET /management/v1/me': ME_WITH_PROJECTS,
 		'GET /management/v1/projects': ESTATE,
-		// No saved preference yet: the document exists but carries no projects-view key. This is the
-		// "never chosen" path, which must render the DEFAULT rather than an error or an empty list.
-		'GET /management/v1/user-state/dock-layout': { exists: true, value: { workbenches: {} } },
-		'PUT /management/v1/user-state/dock-layout': { ok: true },
+	});
+	const sent: string[] = [];
+	page.on('request', (req) => {
+		const path = new URL(req.url()).pathname;
+		if (path.startsWith('/api/') && req.method() !== 'GET') sent.push(`${req.method()} ${path}`);
 	});
 	await page.goto('/projects');
 
@@ -71,77 +69,10 @@ test('the toggle switches views, and the choice SURVIVES a reload', async ({ pag
 		'/projects/acme',
 	);
 
-	// THE WRITE. Asserted through the mock's ledger rather than by trusting the UI: the toggle is
-	// optimistic, so the view flips whether or not anything was ever sent.
-	await expect
-		.poll(async () => (await calls(page, token)).map((c) => `${c.method} ${c.path}`))
-		.toContain('PUT /management/v1/user-state/dock-layout');
-	const put = (await calls(page, token)).find((c) => c.method === 'PUT');
-	expect(put?.body).toEqual({ workbenches: { 'projects-view': 'table' } });
-
-	// THE RELOAD — the actual contract. The saved value now comes back from the store, and the page
-	// must render the table on the FIRST paint. `page.reload()` starts the app afresh and re-runs the
-	// page's load, so a value only held in component state cannot survive this.
-	await seed(page, {
-		'GET /management/v1/user-state/dock-layout': {
-			exists: true,
-			value: { workbenches: { 'projects-view': 'table' } },
-		},
-	});
 	await page.reload();
-	await expect(table(page)).toHaveAttribute('aria-checked', 'true');
-	await expect(page.getByRole('table')).toBeVisible();
-});
-
-test('saving a view PRESERVES the other workbenches in the shared document', async ({ page }) => {
-	// The read-modify-write, pinned. The `dock-layout` document holds every saved workbench in the
-	// estate; a naive PUT of just this key would delete them all, and the only visible symptom would be
-	// someone's docked layout quietly reverting to defaults days later.
-	await seed(page, {
-		'GET /management/v1/me': ME_WITH_PROJECTS,
-		'GET /management/v1/projects': ESTATE,
-		'GET /management/v1/user-state/dock-layout': {
-			exists: true,
-			value: {
-				workbenches: {
-					'lakehouse-workbench': { grid: 'a-real-saved-layout' },
-					'media-workbench': { grid: 'another-one' },
-				},
-			},
-		},
-		'PUT /management/v1/user-state/dock-layout': { ok: true },
-	});
-	await page.goto('/projects');
-	await table(page).click();
-
-	await expect
-		.poll(async () => (await calls(page, token)).some((c) => c.method === 'PUT'))
-		.toBe(true);
-	const put = (await calls(page, token)).find((c) => c.method === 'PUT');
-	expect(put?.body).toEqual({
-		workbenches: {
-			'lakehouse-workbench': { grid: 'a-real-saved-layout' },
-			'media-workbench': { grid: 'another-one' },
-			'projects-view': 'table',
-		},
-	});
-});
-
-test('an unreadable preference degrades to the default view, not to an error', async ({ page }) => {
-	// Every failure path answers null, so the page renders the gallery. A preference is not data: a
-	// store that cannot be read must cost the user their remembered view and nothing else.
-	await seed(page, {
-		'GET /management/v1/me': ME_WITH_PROJECTS,
-		'GET /management/v1/projects': ESTATE,
-		'GET /management/v1/user-state/dock-layout': {
-			status: 500,
-			body: { detail: 'state store down' },
-		},
-	});
-	const res = await page.goto('/projects');
-	expect(res?.status()).toBe(200);
 	await expect(gallery(page)).toHaveAttribute('aria-checked', 'true');
-	await expect(page.getByRole('link', { name: 'acme' })).toBeVisible();
+	expect(sent).toEqual([]);
+	expect(await calls(page, token)).toEqual([]);
 });
 
 test('the toggle is absent when there is nothing to arrange', async ({ page }) => {
@@ -149,7 +80,6 @@ test('the toggle is absent when there is nothing to arrange', async ({ page }) =
 	// at nothing is noise, and the empty state is the answer to the question they actually have.
 	await seed(page, {
 		'GET /management/v1/me': { ...ME_ADMIN, estate_admin: false, projects: [] },
-		'GET /management/v1/user-state/dock-layout': { exists: true, value: { workbenches: {} } },
 	});
 	await page.goto('/projects');
 	await expect(page.getByText('You are not a member of any project yet')).toBeVisible();

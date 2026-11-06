@@ -9,14 +9,14 @@
 	import { GrantsPanel, type GrantsClient } from '@rask/ui/grants-panel';
 	import { subjectDisplay } from '@rask/ui/identity';
 	import { Boxes, Network, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { fetchTables } from '$lib/data/remote/catalog.api';
-	import DetailTabs from '$lib/data/DetailTabs.svelte';
-	import StageBadge from '$lib/data/StageBadge.svelte';
-	import { namespaceOfTable, stageOf } from '$lib/data/stage';
-	import { policyRequestFrom } from '$lib/data/namespace';
-	import type { AccessGraph, NamespacePolicy } from '$lib/data/namespace';
+	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
+	import DetailTabs from '#lib/data/DetailTabs.svelte';
+	import StageBadge from '#lib/data/StageBadge.svelte';
+	import { namespaceOfTable, stageOf } from '#lib/data/stage.ts';
+	import { policyRequestFrom } from '#lib/data/namespace.ts';
+	import type { AccessGraph, NamespacePolicy } from '#lib/data/namespace.ts';
 	import {
 		checkAccess,
 		fetchAccess,
@@ -25,12 +25,12 @@
 		fetchMyPermissions,
 		grantAccess,
 		revokeAccess,
-	} from '$lib/data/remote/access-objects.api';
+	} from '#lib/data/remote/access-objects.api.ts';
 	import {
 		deleteNamespacePolicy,
 		fetchNamespacePolicy,
 		setNamespacePolicy,
-	} from '$lib/data/remote/namespace.api';
+	} from '#lib/data/remote/namespace.api.ts';
 
 	const ns = $derived(page.params.id ?? '');
 
@@ -51,9 +51,6 @@
 		// the console owns the transport — so the seam gains a fifth member like the four above.
 		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
 	};
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	let tables = $state<string[] | null>(null);
 	let lastStatus = $state(0);
@@ -306,7 +303,7 @@
 
 <div class="page">
 	<header>
-		<a class="back" href={`${base}/catalog/namespaces`}>Namespaces</a>
+		<a class="back" href={resolve('/catalog/namespaces')}>Namespaces</a>
 		<span class="sep">/</span>
 		<Boxes size={15} />
 		<h1 class="mono">{ns}</h1>
@@ -320,7 +317,9 @@
 		<div class="empty">
 			<ShieldAlert size={16} />
 			<p>
-				This stack is governed — <a href={loginHref}>sign in</a> to view this namespace.
+				This stack is governed — <a
+					href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>sign in</a
+				> to view this namespace.
 			</p>
 		</div>
 	{:else if offline}
@@ -342,7 +341,10 @@
 					<ul class="list">
 						{#each members as t (t)}
 							<li>
-								<a class="row mono" href={`${base}/catalog/tables/${encodeURIComponent(t)}`}>{t}</a>
+								<a
+									class="row mono"
+									href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(t) })}>{t}</a
+								>
 							</li>
 						{/each}
 					</ul>

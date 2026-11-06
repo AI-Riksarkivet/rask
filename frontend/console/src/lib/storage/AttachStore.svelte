@@ -1,8 +1,7 @@
 <script lang="ts">
 	// Attach a bucket so it can be BROWSED. This registers a location; it reads nothing, copies
-	// nothing and ingests nothing — which is why it lives in the storage view and not near the
-	// cascade. The catalog is the authority: it gates on estate-admin, forces `read_only`, refuses a
-	// duplicate name, and returns the whole registry, which is what this re-renders from.
+	// nothing and ingests nothing. No door on this stack keeps such a registry, so the write answers
+	// that refusal and the form shows it (`remote/storage.api.ts`).
 	import { Plus, X } from '@lucide/svelte';
 	import { attachStore } from './remote/storage.api';
 	import type { StorageRole, Store, StoreDraft } from './storage';
@@ -38,9 +37,7 @@
 		const res = await attachStore(draft);
 		saving = false;
 		if (!res.ok) {
-			// The server's own detail, not a generic message: 403 (not estate-admin), 409 (name taken)
-			// and 503 (state store unreachable) are different problems with different fixes, and only
-			// the server knows which happened.
+			// The refusal's own detail, not a generic message: it names what is missing.
 			error =
 				res.detail ||
 				(res.status === 403

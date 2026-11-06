@@ -1,4 +1,4 @@
-import { command, query } from '$lib/remote.svelte';
+import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import { DropNamespaceResponseSchema, type DropNamespace } from '../catalog';
@@ -10,8 +10,8 @@ import {
 	type NamespacePolicyDelete,
 } from '../namespace';
 
-import { catalogJSON, parsed } from '$lib/doors';
-// Transport: the console's catalog door, `$lib/doors`.
+import { catalogJSON, parsed } from '#lib/doors.ts';
+// Transport: the console's catalog door, `#lib/doors`.
 // The NAMESPACE-scoped lifecycle + maintenance-policy surfaces, declared with `query`/`command` and
 // answering the shared `ApiResult` union. Owner-gated by the CATALOG (can_delete on namespace:<id>)
 // against the signed-in user's own bearer.

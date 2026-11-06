@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { Badge } from '@rask/ui/badge';
 	import { Card } from '@rask/ui/card';
 	import { FolderKanban, KeyRound, ScrollText, SlidersHorizontal, Users } from '@lucide/svelte';
@@ -89,21 +90,21 @@
 			three are served by this app, so opening one keeps the main menu: they are ordinary in-app
 			navigations, not hops into another app's chrome.
 		</p>
-		<a href="/settings/access" class={PLATFORM_ROW}>
+		<a href={resolve('/settings/access')} class={PLATFORM_ROW}>
 			{@render platformRow(
 				Users,
 				'Users & roles',
 				'Who may do what, platform-wide — the FGA workbench over the whole tuple store.',
 			)}
 		</a>
-		<a href="/projects" class={PLATFORM_ROW}>
+		<a href={resolve('/projects')} class={PLATFORM_ROW}>
 			{@render platformRow(
 				FolderKanban,
 				'Projects',
 				'Every project the platform knows, its warehouses and their effective admins.',
 			)}
 		</a>
-		<a href="/settings/audit" class={PLATFORM_ROW}>
+		<a href={resolve('/settings/audit')} class={PLATFORM_ROW}>
 			{@render platformRow(
 				ScrollText,
 				'Audit',

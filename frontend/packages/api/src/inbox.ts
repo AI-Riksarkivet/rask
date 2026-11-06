@@ -234,22 +234,11 @@ export interface InboxReadState {
 }
 
 /**
- * Project one page of the inbox onto the bell's read state.
+ * Project one page of the inbox onto the bell's read state: the ids it holds as seen, and as dismissed.
  *
- * IT SPEAKS ONLY FOR THE ROWS THE INBOX HOLDS, which is not the set the bell renders: the panel's
- * rows are `GET /runs`, governed by dataset visibility (every run whose outputs you may read), while
- * the inbox is filled by authorship on terminal states alone. A run you can see but did not author is
- * absent from every page this is ever handed, so it contributes to neither set and its read state
- * stays per tab. That is a property of the two planes rather than of this projection, and it closes
- * when the panel renders inbox rows.
- *
- * `seen` is the whole point and it is exact. `dismissed` comes back EMPTY today and will keep
- * coming back empty until S3, because the service drops dismissed rows from both filters — so a
- * dismissal survives in the inbox (the count is right, and S3's inbox-only badge will be right) but
- * cannot be re-read to re-filter a bell whose rows still come from `GET /runs`. Stated rather than
- * hidden: in S1 a dismissed run reappears in the panel after a reload exactly as it does today, and
- * S3 closes the gap by construction rather than by adding a field — once the panel renders inbox
- * rows, a dismissed row is simply absent and there is no set to reconstruct.
+ * `dismissed` comes back empty from this door: the service drops dismissed rows from both filters, so
+ * a dismissed notification is absent from the page rather than present and flagged, and the bell, which
+ * renders these rows, simply does not show it.
  */
 export function inboxReadState(feed: InboxFeed): InboxReadState {
 	return {

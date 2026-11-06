@@ -2,8 +2,8 @@
 
 THE SERVICE HOLDS NO KEY. Its pod projects a token for the object store's audience, the store trusts the cluster's
 ServiceAccount issuer and grants the token the policy its subject names, and STS `AssumeRoleWithWebIdentity` exchanges
-the token for a temporary credential under that policy (measured on RustFS 1.0.3,
-`docs/audits/2026-10-18/rustfs_web_identity_measure.py`). The exchange carries no signature, because the token is the
+the token for a temporary credential under that policy (measured 2026-10-18 on RustFS 1.0.3,
+`scripts/rustfs_web_identity_measure.py`). The exchange carries no signature, because the token is the
 credential. The kubelet replaces the projected token before it expires, so the file is read at every exchange.
 
 READS NEVER TOUCH THE STORE, as with a store-held pair (`service_kit.governed.store_credential`): `storage_options()` is

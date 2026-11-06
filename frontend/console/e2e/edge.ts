@@ -8,7 +8,7 @@
 //   LINEAGE_API         /api/lineage  → its root paths (the Gateway's own rewrite)
 //   NOTIFICATIONS_API   /api/notifications  (kept: the inbox serves the prefix itself)
 //   OIDC_MOCK           /oidc → the mock issuer, told this origin's host in `x-forwarded-host`
-//   CONSOLE_CONFIG_FILE passed through to serve.ts (absent: sign-in off)
+//   CONSOLE_CONFIG_FILE passed through to serve.ts (absent: /config.json 404s and the console refuses to run)
 //   INNER is PORT + 1000, where serve.ts listens behind this edge.
 
 const PORT = Number(process.env.PORT);

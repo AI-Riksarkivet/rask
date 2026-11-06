@@ -1,9 +1,9 @@
-import { command, getRequestEvent, query } from '$lib/remote.svelte';
+import { command, getRequestEvent, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import { fetchMe, type Me } from '@rask/api';
 import type { ApiResult } from '@rask/api/client';
-import { catalogJSON, parsed } from '$lib/doors';
-import { CATALOG_API } from '$lib/upstreams';
+import { catalogJSON, parsed } from '#lib/doors.ts';
+import { CATALOG_API } from '#lib/upstreams.ts';
 import {
 	AccessModelSchema,
 	CheckVerdictSchema,
@@ -24,7 +24,7 @@ import {
 	type TuplesPage,
 } from '../access';
 
-// The FGA workbench's data plane, declared with `$lib/remote.svelte`'s `query`/`command`. The functions
+// The FGA workbench's data plane, declared with `#lib/reads.svelte.ts`'s `query`/`command`. The functions
 // run in the browser, reach the catalog same-origin with the signed-in session's bearer, and PARSE at
 // the wire boundary in this module, so a contract drift is an `{ok:false}` the component renders
 // honestly, never a cast.

@@ -31,7 +31,7 @@
 		listObjects,
 		listUsers,
 	} from '../remote/access.api';
-	import { controlTick, liveRead } from '$lib/live/tick.svelte';
+	import { controlTick, liveRead } from '#lib/live/tick.svelte.ts';
 	import FacetRail from './FacetRail.svelte';
 	import Inspector from './Inspector.svelte';
 	import QueryBar from './QueryBar.svelte';
@@ -73,11 +73,11 @@
 	 *  throw away the query you were reading. */
 	let view = $state<'data' | 'model'>('data');
 	/** Recent queries. The URL makes ONE query shareable; this makes the SEQUENCE retraceable, which
-	 *  `replaceState` (used so the address bar does not fill with keystrokes) otherwise destroys. */
+	 *  replacing the history entry (done so the address bar does not fill with keystrokes) otherwise destroys. */
 	let history = $state<HistoryEntry[]>([]);
 
 	// The exact query string this component last wrote. Hydration compares against it so our own
-	// replaceState does not bounce back into the fields mid-typing, while a real history navigation
+	// replacing `goto` does not bounce back into the fields mid-typing, while a real history navigation
 	// (back/forward, or a pasted link) still does. An earlier version stamped a synthetic `_w` token
 	// into the URL to achieve this — which worked, but put a meaningless parameter in every link the
 	// view exists to make shareable.
@@ -138,7 +138,8 @@
 		set('view', view === 'model' ? 'model' : '');
 		for (const [key, value] of Object.entries(extra)) set(key, value);
 		lastPushed = next.toString();
-		void goto(`?${lastPushed}`, { replaceState: true, keepFocus: true, noScroll: true });
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- a query on the current page, and resolve() refuses one that does not start with /
+		void goto(`?${lastPushed}`, { replace: true, reset: false });
 	}
 
 	// ── data ──
@@ -566,6 +567,14 @@
 	);
 
 	/** Reset EVERYTHING — query, answer, facets, selection — back to the whole graph at rest. */
+	/** Replay a stored query VERBATIM through the same hydration path a pasted link takes, so a re-run
+	 *  cannot diverge from what the history entry says it was. */
+	function replay(query: string): void {
+		lastPushed = null;
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- a query on the current page, and resolve() refuses one that does not start with /
+		void goto(`?${query}`, { reset: false });
+	}
+
 	function clearAll(): void {
 		kind = 'why';
 		user = me?.sub ?? '';
@@ -582,7 +591,8 @@
 		chain = [];
 		failure = null;
 		lastPushed = '';
-		void goto('?', { replaceState: true, keepFocus: true, noScroll: true });
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- a query on the current page, and resolve() refuses one that does not start with /
+		void goto('?', { replace: true, reset: false });
 	}
 
 	function onNodeClick(event: { node: { id: string } }): void {
@@ -642,12 +652,7 @@
 						<button
 							class="w-full truncate rounded px-1.5 py-1 text-left font-mono text-[11px] hover:bg-muted"
 							title={entry.label}
-							onclick={() => {
-								// Replay the stored query VERBATIM through the same hydration path a pasted link takes — so a
-								// re-run cannot diverge from what the entry says it was.
-								lastPushed = null;
-								void goto(`?${entry.query}`, { keepFocus: true, noScroll: true });
-							}}
+							onclick={() => replay(entry.query)}
 						>
 							{entry.label}
 						</button>

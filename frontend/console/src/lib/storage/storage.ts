@@ -1,4 +1,4 @@
-// The stores registry's shapes. The transport (list / tiers / attach) lives in `remote/storage.api.ts`.
+// The stores registry's shapes. The reads and the attach write live in `remote/storage.api.ts`.
 
 /** Where a store sits in the cascade. The three GOVERNED tiers are exactly bronze/silver/gold (R23) —
  *  raw is the external world, never a tier, and derived/observability sit alongside the medallion. */

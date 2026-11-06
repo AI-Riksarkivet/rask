@@ -165,6 +165,21 @@ def test_sidecar_delivery_reaches_the_store_through_the_route(
     assert [e.run.run_id for e in repo.ingested] == ["r1"]
 
 
+def test_forged_delivery_without_the_app_token_is_403_before_the_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CONTRACT (the security audit's prod-blocker): the delivery route is co-mounted on the public API
+    app, so an unauthenticated POST would let anyone inject fabricated nodes into the authoritative
+    feed — self-asserting any ``author`` — EVEN WITH OIDC/FGA on. Only the route tier can prove the
+    guard is attached: ``handle_cloud_event`` has no idea the dependency exists."""
+    client, repo = _delivery_app(monkeypatch)
+    forged = client.post("/lineage-events", json=_CLOUD_EVENT)
+    assert forged.status_code == 403
+    wrong = client.post("/lineage-events", json=_CLOUD_EVENT, headers={"dapr-api-token": "nope"})
+    assert wrong.status_code == 403
+    assert repo.ingested == []  # nothing reached the feed
+
+
 # --------------------------------------------------------------------------- #
 # Redelivery — the NORMAL case for at-least-once delivery
 # --------------------------------------------------------------------------- #
@@ -216,3 +231,9 @@ def test_dlq_route_parks_with_an_error_log_acks_and_counts_the_loss(monkeypatch:
     parked = [r for r in caplog.records if r.message == "dapr_dead_letter_parked"]
     assert parked and getattr(parked[0], "event_id", None) == "ce-9"  # attributable to the lost delivery
     assert recorded == [(Outcome.DEAD_LETTERED, Door.DEAD_LETTER)]
+
+
+def test_dlq_route_rejects_forged_deliveries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A forged POST must not be able to fake (or hide) a parked message — same token guard."""
+    client, _ = _delivery_app(monkeypatch, dlq_topic="dlq.lineage.events")
+    assert client.post("/lineage-dlq", json={"id": "x"}).status_code == 403

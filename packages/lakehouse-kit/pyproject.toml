@@ -6,10 +6,14 @@ requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
     "service-kit[governed]",
-    # The S3 client, STS and URI seam (`lakehouse_kit.storage`).
+    # The S3 client, STS and URI seam (`lakehouse_kit.storage`), which also calls `urllib3` itself for an endpoint whose
+    # certificate it does not verify.
     "boto3>=1.35",
+    "urllib3>=2.8.0",
     "fastapi>=0.115",
     "pydantic>=2.7",
+    # The S3 seam's environment (`lakehouse_kit.storage.client.S3EnvSettings`, `AwsRegionSettings`).
+    "pydantic-settings>=2.5",
     "dapr>=1.18.1",
     "opentelemetry-sdk>=1.44.0",
 ]

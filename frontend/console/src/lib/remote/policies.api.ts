@@ -1,4 +1,4 @@
-import { command, query } from '$lib/remote.svelte';
+import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import {
@@ -8,8 +8,8 @@ import {
 	type ProjectPolicies,
 	type ProjectPolicy,
 	type ProjectPolicyDelete,
-} from '$lib/policies';
-import { catalogJSON, parsed } from '$lib/doors';
+} from '#lib/policies.ts';
+import { catalogJSON, parsed } from '#lib/doors.ts';
 
 // The project's MAINTENANCE plane (#65): the tenant-scoped view of every compaction/retention policy
 // governing its data, plus the set/delete pair for the project's own record.

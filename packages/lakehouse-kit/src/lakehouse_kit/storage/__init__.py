@@ -1,8 +1,8 @@
-"""storage — the S3 client, STS and URI seam (no Ray dependency).
+"""lakehouse_kit.storage — the S3 client, STS and URI seam.
 
 PROTOCOL-AGNOSTIC ON PURPOSE: a generic S3 client, the STS client, key listing and URI parsing, and nothing that
 knows one workload's source format or where a workload reads its bytes from. A workload's own sources and sinks live
-in that workload (a sealed runner's are in `runners/<name>`).
+in that workload, outside the lakehouse.
 """
 
 from lakehouse_kit.storage.client import S3Client as S3Client

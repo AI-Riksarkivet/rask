@@ -1,8 +1,8 @@
 # Adding (or moving) a workspace member without breaking resolution
 
-Membership itself is now **globbed**, so the old "you forgot to register it"
-failure is mostly gone — but it is replaced by a sharper one: put the package in
-the **wrong-language plane** and uv errors hard while bun says nothing at all.
+Membership is **globbed**, so a member needs no registration — but that has a
+sharper failure: put the package in the **wrong-language plane** and uv errors
+hard while bun says nothing at all.
 Everything else (sources, first-party naming, dockerfile) is still a manual
 edit; test enrolment is globbed too (step 5). Do every step that applies.
 
@@ -20,13 +20,13 @@ The tree is language-first:
 - **A one-shot setup/debug script**, shell or python → `scripts/<name>` (flat;
   **not** a workspace member — run it with `uv run python scripts/<name>.py`).
 
-There is **no `projects/` layer** (removed 2026-07). A deployable is an ordinary
+There is **no `projects/` layer**. A deployable is an ordinary
 workspace member plus a `.docker/<name>.dockerfile` — no per-deployable
 pyproject, no per-deployable lock.
 
 ## 2. Membership is a glob — the plane IS the registration
 
-Neither root manifest enumerates members any more:
+Neither root manifest enumerates members:
 
 - `pyproject.toml` → `[tool.uv.workspace] members = ["packages/*", "services/*"]`
 - `frontend/package.json` → `workspaces = ["console", "packages/*"]`
@@ -96,8 +96,12 @@ Add `.docker/<name>.dockerfile` (see the existing service dockerfiles — the
 pattern is `uv sync --frozen --no-install-workspace --package <name>
 --no-editable` from bind-mounted root `uv.lock`/`pyproject.toml`, then COPY
 sources + `uv sync --locked --package <name> --no-editable`), and wire it into
-the `Makefile` `COMPOSE_IMAGES` list (which `k3s-build`, `k3s-import` and `kind-images` read) + a chart if it deploys
-to k3s: the product chart for a lakehouse service, the client's own release for a client. Everything resolves from the
+the `Makefile`: add it to `COMPOSE_IMAGES` when the dockerfile stem equals the image name (as `notifications` does;
+`k3s-build` loops over it, and `K3S_IMAGES` includes it); otherwise a hand-wired line in `k3s-build` plus an entry in
+`K3S_IMAGES`, as `web-console` (stem `frontend`) and `lance-rest-catalog` (stem `rest-catalog`) are. `k3s-import`
+side-loads every `K3S_IMAGES` tarball from `build/k3s-images`. The kind lane needs no line: `make e2e-ci`
+(`scripts/e2e_stack.sh`) builds every image its render side-loads (`scripts/side_loaded_images.py`) as a tarball and loads
+it with `kind load image-archive`. Then a chart if it deploys to k3s: the product chart for a lakehouse service, the client's own release for a client. Everything resolves from the
 **root** lock — regenerate it (`uv lock`) after editing dependencies. The console's image is
 `.docker/frontend.dockerfile` (`dagger call image --name=frontend`, tagged `web-console`).
 
@@ -111,7 +115,7 @@ to k3s: the product chart for a lakehouse service, the client's own release for 
 - [ ] member `pyproject.toml`: `[project] dependencies` + `[tool.uv.sources]` workspace pins + hatch wheel `packages` (JS: `workspace:*` deps + its own scripts)
 - [ ] `known-first-party` += import name
 - [ ] tests live in `<member>/tests` (the `testpaths` glob collects them; nothing to list)
-- [ ] `.docker/<name>.dockerfile` + `COMPOSE_IMAGES` (if a deployable)
+- [ ] `.docker/<name>.dockerfile` + `COMPOSE_IMAGES` or a hand-wired build line and `K3S_IMAGES` (if a deployable)
 - [ ] `uv sync` resolves clean; first-party import works — and for a JS member,
       `bun --cwd=frontend install` actually **lists** it (a silent skip means the
       glob didn't match)

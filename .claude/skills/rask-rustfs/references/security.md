@@ -98,7 +98,7 @@ GitOps first: GitOps, cloud native, Lance-namespace/table-idiomatic, zero trust 
   `..._ISSUER`, discovery is fetched from `..._CONFIG_URL` and the discovered `issuer` must equal the explicit one
   (`provider.rs:498-588`), which is how the store reads rask's issuer mirror (k3s answers discovery only to a bearer)
   while verifying tokens whose `iss` is the cluster's. Measured on 1.0.3 with a stand-in issuer, 20 of 20
-  (`docs/audits/2026-10-18/rustfs_web_identity_measure.py`): the catalog-subject token is issued a session bounded by
+  (`scripts/rustfs_web_identity_measure.py`): the catalog-subject token is issued a session bounded by
   its canned policy and the session policy; another account's, a same-named account in another namespace, another
   audience's, an expired, a forged and another issuer's token are refused.
 - Outbound OIDC discovery/JWKS goes through an egress guard that refuses loopback, private, shared and reserved
@@ -111,7 +111,7 @@ GitOps first: GitOps, cloud native, Lance-namespace/table-idiomatic, zero trust 
 ## Provisioning (the hook)
 
 Native admin API under `/rustfs/admin/v3`, SigV4 (service `s3`) with the root pair, plain JSON bodies; measured
-2026-10-18 for add-canned-policy, add-user and set-user-or-group-policy (audit § Measured):
+2026-10-18 for add-canned-policy, add-user and set-user-or-group-policy (the 2026-10-18 audit's § Measured, git history at `64ef118a9`):
 
 - `PUT add-canned-policy?name=` (`rustfs@1.0.3:rustfs/src/admin/handlers/policies.rs:71`)
 - `PUT add-user?accessKey=`, body `{"secretKey":"…","status":"enabled"}` (`rustfs@1.0.3:rustfs/src/admin/handlers/user_lifecycle.rs:44`)
@@ -201,7 +201,7 @@ entry; an open design choice.
 
 ## Platform store checklist
 
-What rask demands of a production store, beyond the audit's list (R1-R11, R13, R15):
+What rask demands of a production store, beyond the 2026-10-18 audit's list (R1-R11, R13, R15; git history at `64ef118a9`):
 
 - No default root credential; root held by the platform only (STS tokens are signed with it).
 - STS `AssumeRoleWithWebIdentity` trusting the cluster's ServiceAccount issuer for the catalog's audience

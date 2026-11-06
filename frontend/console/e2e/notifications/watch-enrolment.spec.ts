@@ -17,7 +17,7 @@ import { seed as seedFor } from '../mock-client';
 // to turn watching on. Nobody could enrol, and the message pointed at the wrong service.
 //
 // Memberships now come from `me.projects`, the frozen `/management/v1/me` contract the layout already resolves
-// for every page, which is the same source `$lib/gallery.ts` reads. These tests exercise the page with
+// for every page, which is the same source `#lib/gallery.ts` reads. These tests exercise the page with
 // NO controlplane answer of any kind seeded — the mock catalog 404s anything unstubbed — so a
 // regression that reintroduces the dependency fails here rather than in a cluster.
 

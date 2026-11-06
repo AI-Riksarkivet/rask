@@ -39,7 +39,8 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2
         with:
-          bun-version: latest
+          # The workspace's own pin (`packageManager`), so the docs build runs the bun the lockfile was written by.
+          bun-version-file: frontend/package.json
       # `frontend/` is the JS/TS workspace ROOT — its own package.json + bun.lock. There is no
       # package.json at the repo root, which is exactly what killed every previous run. Using
       # `working-directory` rather than `bun --cwd=frontend` on purpose: the `--cwd <path>` form with a

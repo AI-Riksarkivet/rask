@@ -1,12 +1,7 @@
 // A tiny in-memory stand-in for the catalog the lakehouse pages call, served at `/api/catalog` behind
 // the e2e edge: `GET /management/v1/events` (the control-events feed's live poll), `GET /management/v1/me`
-// (the admin area's door), the stores registry and `/v1/table`. Test-control endpoints
-// (`__mock/*`) seed events, simulate a governance mutation, toggle 403, and expose what the store
-// writes received.
-//
-// The whole `/v1/access` surface LEFT with #105 — the FGA workbench is the console's
-// `/settings/access` now, and its mock lives beside its spec there. What stayed is the store half of
-// the same per-bearer ledger, because `attach-store.spec.ts` reads it.
+// (the admin area's door) and `/v1/table`. Test-control endpoints (`__mock/*`) seed responses, seed
+// events, simulate a governance mutation and toggle 403. It serves only doors the catalog serves.
 //
 // EVERYTHING mutable is keyed by the BEARER, never by shared server state: the suite is fullyParallel,
 // so a spec that flipped a shared "current identity" — or read a shared request log — would race every
@@ -14,7 +9,6 @@
 // suffix), so each test carries its own identity and nothing is shared.
 
 import { ME_ADMIN, ME_MEMBER, TOKEN } from './session';
-import { STORES } from './store-fixtures';
 import { MOCK_CATALOG_PORT } from './ports';
 
 type ControlEvent = {
@@ -36,11 +30,6 @@ type ControlEvent = {
 // it vacuously with a foreign event.
 const eventsByBearer = new Map<string, ControlEvent[]>();
 const modeByBearer = new Map<string, 'ok' | 'forbidden'>();
-/** How many times each bearer's server has polled `/management/v1/events`. The live-update spec waits for ≥1
- *  before injecting its event: the control cursor SWALLOWS whatever its first successful probe sees
- *  (that read is the baseline, not a move — feeds.api.ts), so an event injected before the first
- *  probe lands would be absorbed and the spec would time out flakily instead of testing the tick. */
-const probesByBearer = new Map<string, number>();
 const eventsOf = (bearer: string): ControlEvent[] => {
 	let list = eventsByBearer.get(bearer);
 	if (!list) {
@@ -59,22 +48,13 @@ const identityOf = (bearer: string): unknown => {
 	return undefined;
 };
 
-type Body = Record<string, unknown>;
-
-/** What one test's WRITES did — request shapes recorded per bearer. */
-type AccessState = {
-	/** Store drafts POSTed to /management/v1/stores by this bearer (the attach-store flow). */
-	attachedStores: Body[];
-	/** Set via `__mock/access/config`: the next store WRITE 403s — the partial-outcome / denied-form
-	 *  lever (a failed write must be NAMED, never rolled into a fake success). */
-	failWrites: boolean;
-};
-
 /** GENERIC per-bearer surface for the transport-migrated specs: `__mock/seed` stores exact
  *  responses keyed by "METHOD /path" (with-query tried first, then without), `__mock/calls` returns
  *  every mutating request this bearer's server made. A spec seeds precisely the JSON its old
  *  page.route served — mechanical translation, no per-endpoint mock code, no shared mutable state. */
 const seededByBearer = new Map<string, Map<string, unknown>>();
+type Body = Record<string, unknown>;
+
 const callsByBearer = new Map<string, Body[]>();
 const seededOf = (bearer: string): Map<string, unknown> => {
 	let m = seededByBearer.get(bearer);
@@ -91,16 +71,6 @@ const callsOf = (bearer: string): Body[] => {
 		callsByBearer.set(bearer, list);
 	}
 	return list;
-};
-
-const accessStates = new Map<string, AccessState>();
-const accessStateOf = (bearer: string): AccessState => {
-	let state = accessStates.get(bearer);
-	if (!state) {
-		state = { attachedStores: [], failWrites: false };
-		accessStates.set(bearer, state);
-	}
-	return state;
 };
 
 const json = (data: unknown, status = 200): Response =>
@@ -140,7 +110,6 @@ Bun.serve({
 			if ((modeByBearer.get(bearer) ?? 'ok') === 'forbidden') {
 				return json({ detail: 'not authorized' }, 403);
 			}
-			probesByBearer.set(bearer, (probesByBearer.get(bearer) ?? 0) + 1);
 			const since = Number(url.searchParams.get('since') ?? '0');
 			const list = eventsOf(bearer);
 			return json({ events: list.slice(since), cursor: list.length, reset: false });
@@ -178,40 +147,7 @@ Bun.serve({
 		// point of serving it at all) while adding no row to fixtures that never mentioned one. A
 		// static `db1` here silently appended a phantom namespace to every other spec's world.
 		if (url.pathname === '/management/v1/warehouses/-/bindings') return json({ bindings: {} });
-		// The stores registry (the storage area's data functions). Reads are STATIC; the write is
-		// per-bearer and failWrites-aware, echoing the whole registry exactly like the real catalog.
-		if (url.pathname === '/management/v1/stores' && req.method === 'GET')
-			return json({ stores: STORES });
-		if (url.pathname === '/management/v1/stores/tiers') {
-			const tiers: Record<string, unknown[]> = {};
-			for (const s of STORES) (tiers[s.role] ??= []).push(s);
-			return json(tiers);
-		}
-		if (url.pathname === '/management/v1/stores' && req.method === 'POST') {
-			const state = accessStateOf(bearer);
-			if (state.failWrites) return json({ detail: 'forbidden' }, 403);
-			const body = (await req.json()) as Body;
-			state.attachedStores.push(body);
-			const attached = {
-				name: body.name,
-				bucket: body.bucket,
-				role: body.role,
-				description: body.description ?? '',
-				read_only: true,
-			};
-			return json({ stores: [...STORES, attached] });
-		}
 		// ── test control plane ──
-		// What the store writes RECEIVED, keyed by the caller's own bearer. The name
-		// is `__mock/access` for the same reason `AccessState` is: the failWrites lever is an
-		// AUTHORIZATION lever, and attach-store is the one flow left that pulls it.
-		if (url.pathname === '/__mock/access' && req.method === 'GET') {
-			return json({ ...accessStateOf(bearer), eventProbes: probesByBearer.get(bearer) ?? 0 });
-		}
-		// A tuple landing from ELSEWHERE (another admin, the grant API, a bootstrap job): visible only to
-		// the given bearer's reads, so a parallel test's canvas cannot inherit it. Pair with `__mock/add`
-		// to move the control cursor — landing a grant AND announcing it is exactly what the real catalog
-		// does now (access_admin emits `grant_added` on every raw-tuple write).
 		if (url.pathname === '/__mock/seed' && req.method === 'POST') {
 			const body = (await req.json()) as { bearer: string; routes: Record<string, unknown> };
 			const seeded = seededOf(body.bearer);
@@ -220,11 +156,6 @@ Bun.serve({
 		}
 		if (url.pathname === '/__mock/calls' && req.method === 'GET') {
 			return json({ calls: callsOf(bearer) });
-		}
-		if (url.pathname === '/__mock/access/config' && req.method === 'POST') {
-			const body = (await req.json()) as { bearer: string; failWrites?: boolean };
-			accessStateOf(body.bearer).failWrites = body.failWrites ?? false;
-			return json({ ok: true });
 		}
 		if (url.pathname === '/__mock/add' && req.method === 'POST') {
 			const body = (await req.json().catch(() => ({}))) as Partial<ControlEvent> & {

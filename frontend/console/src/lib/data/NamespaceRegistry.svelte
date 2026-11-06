@@ -22,7 +22,7 @@
 		type SortingState,
 	} from '@rask/ui/data-table';
 	import { Plus, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { fetchTables } from './remote/catalog.api';
 	import { dropNamespace } from './remote/namespace.api';
@@ -30,10 +30,7 @@
 	import RowDrawer from './RowDrawer.svelte';
 	import { namespaceOfTable, stageOf, type StageInfo } from './stage';
 	import StageBadge from './StageBadge.svelte';
-	import { lineageTick, liveRead } from '$lib/live/tick.svelte';
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
+	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
 
 	let tables = $state<string[] | null>(null);
 	// #83 the namespaces BOUND in the registry — the same source the drop door consults. Without it
@@ -260,7 +257,7 @@
 {#snippet nsCell(row: Row)}
 	<a
 		class="ns-name mono"
-		href={`${base}/catalog/namespaces/${encodeURIComponent(row.ns)}`}
+		href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(row.ns) })}
 		onclick={(e) => e.stopPropagation()}>{row.ns}</a
 	>
 {/snippet}
@@ -274,7 +271,7 @@
 	{#if row.warehouse}
 		<a
 			class="wh"
-			href={`${base}/catalog/warehouses/${row.warehouse}`}
+			href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(row.warehouse) })}
 			onclick={(e) => e.stopPropagation()}
 		>
 			{row.warehouse}
@@ -304,7 +301,7 @@
 		>
 		<a
 			class="new"
-			href={`${base}/catalog/warehouses`}
+			href={resolve('/catalog/warehouses')}
 			title="Namespaces are created through the governed warehouse-bind flow"
 		>
 			<Plus size={12} /> New namespace
@@ -332,7 +329,9 @@
 		<div class="empty">
 			<ShieldAlert size={16} />
 			<p>
-				This stack is governed — <a href={loginHref}>sign in</a> to browse namespaces.
+				This stack is governed — <a
+					href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>sign in</a
+				> to browse namespaces.
 			</p>
 		</div>
 	{:else if offline}
@@ -372,7 +371,9 @@
 			<dd class="mono">{drawerRow.count}</dd>
 		</dl>
 		<div class="jumps">
-			<a class="jbtn" href={`${base}/catalog/namespaces/${encodeURIComponent(drawerRow.ns)}`}
+			<a
+				class="jbtn"
+				href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(drawerRow.ns) })}
 				>Open detail</a
 			>
 		</div>

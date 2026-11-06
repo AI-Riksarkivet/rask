@@ -272,9 +272,9 @@ jobs:
   # because the language dependencies inside the image are the same ones the lockfiles pinned. What it
   # DOES add is the layer no lockfile describes: Debian CVEs in the trixie/bun base images.
   #
-  # A SUBSET, said plainly: the inbox and the console. The lakehouse's own image is scanned by the release
-  # workflow's publish; cnpg-age-ext and marquez are NOT scanned by this job. Widening it is a matter of adding matrix
-  # rows and paying the build minutes.
+  # The three deployables: the lakehouse (rest-catalog), the inbox and the console. The development fixtures'
+  # images, cnpg-age-ext and marquez, are NOT scanned by this job. Widening it is a matter of adding matrix rows and
+  # paying the build minutes.
   supply-chain-images:
     name: supply-chain-image-${{ matrix.image }}
     if: github.event_name == 'schedule'
@@ -283,7 +283,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [notifications, frontend]
+        image: [rest-catalog, notifications, frontend]
     steps:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
@@ -412,7 +412,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@4bc047ad259df6fc24a6c9b0f9a0cb08cf17fbe5 # v2
+        with:
+          # The workspace's own pin (`packageManager`), so `--frozen-lockfile` meets the bun that wrote the lockfile.
+          bun-version-file: frontend/package.json
 
       - name: Install (frozen lockfile)
         working-directory: frontend

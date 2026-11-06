@@ -2,21 +2,33 @@
 
 {{- define "console.inbox" -}}{{ printf "%s-%s" .Values.rask.release .Values.dapr.appId }}{{- end -}}
 
+{{- define "console.webWorkload" -}}{{ printf "%s-web" .Release.Name }}{{- end -}}
+
+{{- define "console.inboxWorkload" -}}{{ printf "%s-%s" .Release.Name .Values.dapr.appId }}{{- end -}}
+
 {{- define "console.webSelector" -}}
 app.kubernetes.io/name: rask
-app.kubernetes.io/instance: {{ .Values.rask.release }}
+app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: console
 {{- end -}}
 
 {{- define "console.inboxSelector" -}}
 app.kubernetes.io/name: rask
-app.kubernetes.io/instance: {{ .Values.rask.release }}
+app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: {{ .Values.dapr.appId }}
 {{- end -}}
 
 {{- define "console.inboxSa" -}}{{ printf "%s-sa-%s" .Values.rask.release .Values.dapr.appId }}{{- end -}}
 
 {{- define "console.stateCluster" -}}{{ printf "%s-state" (include "console.inbox" .) }}{{- end -}}
+
+{{- define "console.stateCredential" -}}
+{{- .Values.state.external.connectionSecret | default (printf "%s-app" (include "console.stateCluster" .)) -}}
+{{- end -}}
+
+{{- define "console.stateCa" -}}
+{{- if .Values.state.external.connectionSecret -}}{{ .Values.state.external.caSecret }}{{- else -}}{{ printf "%s-ca" (include "console.stateCluster" .) }}{{- end -}}
+{{- end -}}
 
 {{- define "console.kubeSecretStore" -}}{{ printf "%s-kubernetes" (include "console.inbox" .) }}{{- end -}}
 

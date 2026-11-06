@@ -23,7 +23,7 @@ dependencies = [
     "openfga-sdk>=0.10.4",
     # Declared for the `botocore.exceptions` imports (`ClientError` handling in the credentials door
     # and the warehouse registry). Every CLIENT — S3 and STS alike — is built by `lakehouse_kit.storage`.
-    "boto3>=1.34",
+    "boto3>=1.35",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",
     "opentelemetry-instrumentation-grpc>=0.65b0",

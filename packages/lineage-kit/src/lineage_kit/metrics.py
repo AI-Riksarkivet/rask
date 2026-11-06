@@ -14,7 +14,7 @@ own rule. Per-event detail belongs on the log line, where it is
 indexed rather than multiplied.
 
 API ONLY, never the SDK. ``get_meter`` returns a proxy that binds if and when the host process
-installs a ``MeterProvider``, so a Ray driver, a sealed runner and a FastAPI service can all import
+installs a ``MeterProvider``, so a batch job, a client's process and a FastAPI service can all import
 this and only the instrumented ones pay anything.
 """
 

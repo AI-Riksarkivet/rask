@@ -1,0 +1,13 @@
+# What the console supplies to the development Dex it signs in through (the lakehouse names no client, so its sign-in
+# client lives here, and `make k3s-fixtures` layers every fixture's `dex-values.yaml` onto the Dex release by glob): a
+# public client, which holds no secret and signs in with PKCE (S256, which the fixture enforces), redirecting to the
+# console's callback on the origin the dev Gateway is forwarded to (:8080) and on the Vite dev server's (:5173, `make dev`
+# and `make dev-k3s`). The audience client trusts every entry here, so the person's token is issued for the lakehouse.
+# A platform's own IdP registers the same client by the platform's means.
+clients:
+  - id: rask-console
+    public: true
+    redirectURIs: [http://localhost:8080/auth/callback, http://localhost:5173/auth/callback]
+# The Vite dev server is an origin of its own, so its discovery read, key read and code exchange at Dex on :8080 are
+# cross-origin: Dex answers CORS for it. The console served through the Gateway is same-origin with Dex and needs none.
+allowedOrigins: [http://localhost:5173]

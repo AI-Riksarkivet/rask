@@ -15,7 +15,7 @@
 	// already on screen (no refetch), and the inspector sits beside it. The state lives in the URL, so
 	// an access question is a link you can paste into an incident channel.
 	import { ShieldCheck } from '@lucide/svelte';
-	import Explorer from '$lib/access/Explorer.svelte';
+	import Explorer from '#lib/access/Explorer.svelte';
 </script>
 
 <svelte:head><title>Access · rask</title></svelte:head>

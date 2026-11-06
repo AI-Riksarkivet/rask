@@ -1,11 +1,8 @@
 """Env-driven transport configuration — ``RASK_*`` first, official OpenLineage names accepted.
 
 Follows the repo convention: `RASK_*` env vars, with ``AliasChoices`` so the official client's own
-variable names (``OPENLINEAGE_URL`` and friends) keep working. This used to cite
-``lakehouse_kit.storage``'s ``RASK_S3_ENDPOINT_URL`` as the exemplar of that pattern; it is not one —
-storage resolves the same kind of canonical-first precedence BY HAND (``_env_first`` over three name
-tuples) and imports no pydantic-settings, deliberately, because two sealed runners take it as a path
-dependency and neither carries pydantic. The convention is the env NAMES; the mechanism differs.
+variable names (``OPENLINEAGE_URL`` and friends) are read too. ``AliasChoices`` takes the first name that is set, and
+an empty variable counts as set: ``RASK_LINEAGE_IDENTITY_TOKEN_FILE=""`` is how a producer presents no credential.
 
 No endpoint configured is a VALID configuration: the emitter degrades to a logged no-op and the
 pipeline runs unlineaged rather than crashing.

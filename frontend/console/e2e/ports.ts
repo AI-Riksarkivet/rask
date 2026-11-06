@@ -3,7 +3,7 @@
  * and the specs. `reuseExistingServer` is on locally, so a duplicate does not fail with EADDRINUSE: it
  * silently ADOPTS whatever is already listening, and a suite would drive a real server as its "mock".
  *
- * Three origins of the one build, one per family of specs: auth-OFF (no config, so sign-in is off),
+ * Three origins of the one build, one per family of specs: auth-OFF (a config of `{"signIn": false}`),
  * auth-ON for the estate pages (projects, settings, notifications) and auth-ON for the lakehouse's
  * pages (`admin/`), each with the mock upstreams its specs seed (`admin/ports.ts` has the latter's).
  */

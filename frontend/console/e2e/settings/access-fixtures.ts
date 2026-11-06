@@ -1,8 +1,6 @@
 // The FGA access surface's e2e fixtures, shared by `access.spec.ts` and `../mock-catalog.ts`: they feed
 // the mock catalog behind `/api/catalog`, and the spec asserts what the surface sent through
 // `/__mock/access`.
-//
-// The stores registry's fixtures are a different surface's, in `../admin/store-fixtures.ts`.
 
 export type FixtureTuple = {
 	user: string;

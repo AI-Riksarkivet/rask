@@ -196,11 +196,15 @@ for item in items(sys.stdin.read()):
   # So the marks below are written whatever the install's outcome, and its status is returned after them.
   # WAIT=false is for a stand-in whose pod needs something rask's own install creates (the object store's root credential,
   # which ESO writes from rask's dev store): on an empty cluster it starts once rask is installed.
+  # --reset-values: a fixture's values are its chart's defaults, the files above and the caller's arguments, and nothing
+  # an earlier install was given. Every caller passes what a fixture needs on each run (the Makefile, e2e_stack.sh,
+  # install_from_empty.sh), so git and the command line are the whole of it: a client's dex-values.yaml deleted from the
+  # tree takes its Dex clients and origins with it on the next run, and a value set once by hand does not outlive it.
   READY=(--wait --timeout 600s)
   [ "$WAIT" = "false" ] && READY=()
   installed=0
   "$HELM" upgrade --install "$RELEASE" "${SOURCE[@]}" \
-    --namespace "$NAMESPACE" --create-namespace --reset-then-reuse-values "${VALUES[@]}" "${OWN[@]}" "${EXTRA[@]}" \
+    --namespace "$NAMESPACE" --create-namespace --reset-values "${VALUES[@]}" "${OWN[@]}" "${EXTRA[@]}" \
     --description "rask fixture: not for production" "${READY[@]}" || installed=$?
   for entry in "${REPARENTED[@]}"; do
     IFS=/ read -r kind obj ns old <<<"$entry"

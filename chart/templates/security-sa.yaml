@@ -1,9 +1,5 @@
 
-{{- $components := list "catalog" "lineage" "maintenance" "jobs" "issuer-mirror" "hooks" }}
-{{- if .Values.age.enabled }}
-{{- $components = append $components "age" }}
-{{- end }}
-{{- range $c := $components }}
+{{- range $c := include "lance.saComponents" . | fromJsonArray }}
 ---
 apiVersion: v1
 kind: ServiceAccount

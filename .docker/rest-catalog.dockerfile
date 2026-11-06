@@ -11,7 +11,7 @@
 # Build context = repo root:  scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 
 # ── builder: two-step uv sync against the ROOT uv.lock ───────────────────────
-FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:7820aa74c8a3147ab13553c127432656969548971fbe350ba46a975b59dd42b2 AS builder
+FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:6ff812e34a0e14b4b8bc9ddf25e77b3e16bac6e0c4d9b67641f40366fa382d4c AS builder
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
@@ -48,7 +48,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 # ── final: minimum runtime surface ───────────────────────────────────────────
-FROM python:3.13-slim-trixie@sha256:c33f0bc4364a6881bed1ec0cc2665e6c53c87a43e774aaeab88e6f17af105e4f AS final
+FROM python:3.13-slim-trixie@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc AS final
 
 ARG BUILD_DATE
 ARG VCS_REF
@@ -68,6 +68,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 10001 --no-create-home --shell /usr/sbin/nologin app
 
+# The base image's own pip (with its vendored msgpack and urllib3) and ensurepip's bundled pip wheel are a package
+# manager nothing here runs: uv builds the venv in the builder without seeding pip, and the lakehouse's locked closure
+# holds no pip or setuptools. The trailing checks fail the build if a base bump leaves pip importable, or leaves a pip
+# wheel or dist-info anywhere under /usr/local, which is what an image scanner reads.
+RUN rm -rf /usr/local/lib/python3*/site-packages/pip /usr/local/lib/python3*/site-packages/pip-*.dist-info \
+           /usr/local/lib/python3*/ensurepip /usr/local/bin/pip /usr/local/bin/pip3* \
+    && ! python3 -c "import pip" 2>/dev/null \
+    && test -z "$(find /usr/local \( -name 'pip-*.whl' -o -name 'pip-*.dist-info' \) -print -quit)"
+
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
@@ -82,9 +91,9 @@ ENV OMP_NUM_THREADS=1
 WORKDIR /srv
 # The venv is root-owned and the app runs as 10001, so it is immutable to the account running it.
 COPY --from=builder --link /opt/venv /opt/venv
-# FOUR FILES OUT OF `scripts/`, NAMED ONE BY ONE. Each is run by a chart workload, so each has to
+# THREE FILES OUT OF `scripts/`, NAMED ONE BY ONE. Each is run by a chart workload, so each has to
 # exist in an image; copying the whole directory would put every dev and ops script into a
-# request-serving image for the sake of four. Each imports stdlib plus what the venv above already
+# request-serving image for the sake of three. Each imports stdlib plus what the venv above already
 # carries (`lakehouse_kit.storage`, boto3/botocore, pydantic), so none adds a dependency, and no chart Job needs a
 # third-party image that a registry could withdraw.
 #

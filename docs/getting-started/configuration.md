@@ -38,12 +38,14 @@ authenticates every request itself. The route table:
 
 | Public prefix | Service | Path at the service |
 |---|---|---|
-| `/api/catalog` | catalog | `/…` |
+| `/api/catalog` | catalog | `/api/catalog/…` (unrewritten: the catalog strips its public prefix itself, `LANCE_PUBLIC_PATH_PREFIX`) |
 | `/api/lineage` | lineage | `/…` |
 
-The rewrite is Gateway API `URLRewrite` `ReplacePrefixMatch`. An unmatched `/api/*` is the Gateway's own 404. The
-console's release (`deploy/fixtures/console`) attaches its own HTTPRoute to the same Gateway: `/` to the console's
-static-file server and the inbox's prefix to the inbox, so the page and every API share one origin.
+Only lineage's rule rewrites, with Gateway API `URLRewrite` `ReplacePrefixMatch`. The console's release
+(`deploy/fixtures/console`) attaches its own HTTPRoute to the same Gateway: `/` to the console's static-file server and
+the inbox's prefix to the inbox, so the page and every API share one origin. An unmatched `/api/*` is then caught by the
+console's `/` rule, and its server (`frontend/console/serve.ts`) answers it 404 rather than the page; with no console
+release it is the Gateway's own 404.
 
 | Value / variable | Meaning |
 |---|---|
@@ -51,9 +53,11 @@ static-file server and the inbox's prefix to the inbox, so the page and every AP
 | `route.hostnames` | Hostnames the platform's Gateway routes to this release. Required on a real deployment, which the render refuses with an empty list; empty, in development, the routes match every host the listener accepts. |
 | `forwardedAllowIps` | The data plane's pod CIDR, trusted for `X-Forwarded-For` by every service the route publishes. |
 
-Locally there is no router. The console's Vite dev server proxies `/api` to `RASK_EDGE_URL` (default
-`http://localhost:8888`), and `make dev-k3s` puts the in-cluster Gateway there by port-forwarding k3s Traefik's
-Service to `:8888`.
+Locally there is no router. The console's Vite dev server serves `frontend/console/dev/config.json` as `/config.json`
+(the issuer `http://localhost:8080/dex` and the public client `rask-console`; `CONSOLE_CONFIG_FILE` names another file)
+and proxies `/api` to `RASK_EDGE_URL` (default `http://localhost:8080`), and `make dev-k3s` puts the in-cluster
+Gateway and Dex there by port-forwarding k3s Traefik's Service to `:8080`, or reuses `:8080` when it already serves
+the issuer.
 
 ## Storage
 

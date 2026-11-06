@@ -7,7 +7,7 @@
  * So the hierarchy is joined with a delimiter — `bronze$pages` is the table `pages` inside the
  * namespace `bronze`, and `acme$bronze$pages` is the same table one level deeper.
  *
- * This lives in `@rask/api` rather than a page's `$lib` because pages do not share `$lib` and more than
+ * This lives in `@rask/api` rather than a page's `#lib` because pages do not share `#lib` and more than
  * one page splits these ids. It previously lived in the lakehouse alone, so the `home` page carried its
  * own copy — and that copy was WRONG (see `parentNamespace`). A grammar that belongs to the catalog
  * contract belongs beside the catalog client, not inside whichever page happened to need it first.

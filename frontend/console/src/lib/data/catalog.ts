@@ -15,8 +15,8 @@ import {
 	requestBinary as requestBin,
 	requestBytes as requestBytesRaw,
 	requestJSON as request,
-} from '$lib/http';
-import { CATALOG_API } from '$lib/upstreams';
+} from '#lib/http.ts';
+import { CATALOG_API } from '#lib/upstreams.ts';
 
 export type TableDescribe = components['schemas']['DescribeTableResponse'];
 export type TableStats = components['schemas']['GetTableStatsResponse'];

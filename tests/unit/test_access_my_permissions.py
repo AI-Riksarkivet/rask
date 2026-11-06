@@ -21,7 +21,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from lance_namespace import ServiceUnavailableError, UnauthenticatedError
+from lance_namespace import ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
 from openfga_sdk.client import OpenFgaClient
 
 from catalog.api.v1.endpoints import access
@@ -84,6 +84,13 @@ def test_no_token_is_refused_rather_than_answered_for_anonymous(monkeypatch: pyt
     every Check, so an anonymous fallback would silently answer a different question."""
     with pytest.raises(UnauthenticatedError):
         _run(monkeypatch, token_present=False)
+
+
+def test_auth_off_stack_is_unsupported_not_all_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With FGA off there are no verdicts to report. Answering all-true would make a dev stack teach
+    the UI the wrong shape; answering all-false would hide every control from everyone."""
+    with pytest.raises(UnsupportedOperationError):
+        _run(monkeypatch, fga_enabled=False)
 
 
 def test_fga_outage_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

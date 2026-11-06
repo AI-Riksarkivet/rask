@@ -36,7 +36,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ $name }}
+  name: {{ include "console.inboxWorkload" . }}
   labels:
     {{- toYaml $selector | nindent 4 }}
 spec:
@@ -63,8 +63,13 @@ spec:
         dapr.io/config: {{ include "console.daprConfigName" . }}
         # The sidecar alone holds the store logins: its Kubernetes API identity for the state credential, a token for
         # rask's secret store, and the state Cluster's CA. The app container mounts none of them.
+        {{- if include "console.stateCa" . }}
         dapr.io/volume-mounts: "kube-api:/var/run/secrets/kubernetes.io/serviceaccount,openbao-identity:/var/run/secrets/rask/openbao,state-ca:/var/run/secrets/notifications/state-ca"
         dapr.io/env: "PGSSLMODE=verify-full,PGSSLROOTCERT=/var/run/secrets/notifications/state-ca/ca.crt"
+        {{- else }}
+        dapr.io/volume-mounts: "kube-api:/var/run/secrets/kubernetes.io/serviceaccount,openbao-identity:/var/run/secrets/rask/openbao"
+        dapr.io/env: "PGSSLMODE=verify-full"
+        {{- end }}
       labels:
         {{- toYaml $selector | nindent 8 }}
         dapr.io/enabled: "true"
@@ -203,8 +208,10 @@ spec:
               - serviceAccountToken: { path: token, expirationSeconds: 600 }
               - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
               - downwardAPI: { items: [{ path: namespace, fieldRef: { fieldPath: metadata.namespace } }] }
-        # The Cluster's CA certificate alone, never its key.
+        {{- with include "console.stateCa" . }}
+        # The state server's CA certificate alone, never its key.
         - name: state-ca
           secret:
-            secretName: {{ include "console.stateCluster" . }}-ca
+            secretName: {{ . }}
             items: [{ key: ca.crt, path: ca.crt }]
+        {{- end }}

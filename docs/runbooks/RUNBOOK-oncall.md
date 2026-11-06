@@ -4,19 +4,20 @@ Symptom → cause → action for the known failure modes of the Lance-lakehouse 
 stack actually fails. The proven rules (`deploy/alerting/rules.yml`) page through the platform's evaluator; in
 development the observability fixture's vmalert → Alertmanager evaluates them — note the live vmalert→GreptimeDB
 round-trip is still an unrehearsed drill (see [docs/adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md "P3b"](../adr/0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md)). Without an evaluator,
-these are found by watching the Perses dashboards (`make dashboards`) or a user report — not a page.
+these are found by watching the Perses dashboards (`perses.observability:8080` in development, the observability
+fixture's) or a user report — not a page.
 
 ## Orientation
 
 - **Services** (FastAPI): `catalog` (REST catalog and tier governance), `lineage`
   (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `provenance` namespace;
-  the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (planner + worker),
-  and, in the console's own release, the console and the notifications inbox; public `/api/*` reaches them through the platform's Gateway on the chart's HTTPRoutes. The lakehouse runs no stage and no pipeline: moving data
+  the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (the sweep, the write-event lane, the reconciler),
+  and, in the console's own release, the console and the notifications inbox; public `/api/*` reaches the lakehouse through the platform's Gateway on the chart's HTTPRoutes, and the console and the inbox on the console release's own HTTPRoute (`deploy/fixtures/console/chart/templates/route.yaml`). The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
 - **Stores**: `age-postgres` (OpenFGA's datastore),
   the object store (RustFS in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), the secret store (the openbao
   fixture in development; the platform's Vault or OpenBao in production), `greptimedb` (metrics), `dex` (OIDC).
-- **Signals**: Perses panels (`make dashboards`), `kubectl logs`, and the domain metrics —
+- **Signals**: Perses panels, `kubectl logs`, and the domain metrics —
   `lineage_events_processed_total{lance_lineage_outcome}` (incl. `DEAD_LETTERED`),
   `outbox_depth` / `outbox_oldest_age_seconds`.
 - **First move for any pod issue**: `kubectl get pods -o wide`, then `kubectl logs <pod> --all-containers

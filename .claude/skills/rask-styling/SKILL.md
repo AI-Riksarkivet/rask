@@ -26,15 +26,13 @@ why is § *Third-party stylesheets*.
 
 Tailwind 4 skips `node_modules`, so without `@source` every `@rask/ui` class is silently dropped — no error, no warning, just an unstyled page. It points at **`dist`**, so a component edit reaches the console's CSS only after `svelte-package` reruns (`bun --cwd=frontend/packages/ui run build`, or the `dev` watcher).
 
-> `frontend/packages/ui/README.md:49` ships this line with **four** `../` — the package's own "In the app's CSS" snippet, so it is the copy a reader is most likely to paste. That copy is wrong; two is correct — verified at `frontend/console/src/app.css:21`.
-
 ## Colour comes from tokens
 
 `frontend/packages/ui/src/lib/styles/tokens.css` declares raw OKLCH under `:root` and `.dark`, then `@theme inline` maps each to a `--color-*` utility. Reach for the utility (`bg-card`, `text-muted-foreground`, `border-border`), which themes both modes at once.
 
 Beyond the shadcn set, rask defines **`success` / `warning`** pairs — consumed by `badgeVariants` (`badge.svelte:14-15`).
 
-**The legacy bridge** (`tokens.css:48-68`) aliases `--ink/--mut/--faint/--line/--panel/--panel-2/--ok/--fail/--warn/--amber` onto the real tokens. Those names were referenced by ~800 sites across 45 components while being **undefined** — so `border-color: var(--line)` fell back to `currentColor` and painted every hairline in full text colour. That was the estate's long-standing "why does this look weird". When you touch a component still on the bridge, migrate it to the token name; the block retires when `grep -r "var(--ink" frontend/` comes back empty.
+**The legacy bridge** (`tokens.css:44-65`) aliases `--ink/--mut/--faint/--line/--panel/--panel-2/--ok/--fail/--warn/--amber` onto the real tokens. Those names carry ~500 references in 34 files under `frontend/` (measured 2026-11-06), and without the bridge each is **undefined**, so `border-color: var(--line)` falls back to `currentColor` and paints every hairline in full text colour. When you touch a component still on the bridge, migrate it to the token name; the block retires when `grep -r "var(--ink" frontend/` comes back empty.
 
 ## Third-party stylesheets — `layer(base)`, always
 
@@ -81,7 +79,7 @@ a static field on a theme object and would be a second source of truth that coul
 `--dv-overlay-z-index` is the opposite case — **map it (rask uses 999)**. dockview does not theme it
 at all: only the built-in theme classes define it, so a custom theme that skips it leaves the
 PopupService wrapper (the tab-overflow dropdown) at `z-index: auto`, painted UNDER the dock it is
-prepended to. The dropdown opened invisibly for as long as that assumption stood (fixed 2026-08-03).
+prepended to, and the dropdown opens invisibly (`frontend/packages/dockview/src/styles.css` sets it).
 
 The non-CSS half lives in `theme.ts` (`gap`, `dndTabIndicator`, `tabAnimation`, `dndOverlayMounting`,
 `tabGroupIndicator`) — behavioural fields CSS cannot express. **Do not add GSAP to the dock chrome:**
@@ -94,10 +92,10 @@ same property is a second writer and reads as jank. Animate *inside* a panel if 
 
 ## View transitions
 
-Cross-document view transitions stay **off** (`tokens.css:3-11`): the console is one document, and its navs are soft, so
-they animate through `onNavigate → startViewTransition` in the root layout (`frontend/console/src/routes/+layout.svelte`)
-and the at-rule would buy nothing. Leave it out. (The comment in `tokens.css` still reasons from separate documents per
-zone; its conclusion holds for the one app.)
+Cross-document view transitions stay **off** (`tokens.css:3-7`): the console is one document, its only cross-document
+navigations are the sign-in round trip (where a whole-viewport crossfade reads as a flicker), and its soft navs animate
+through `onNavigate → startViewTransition` in the root layout (`frontend/console/src/routes/+layout.svelte`). Leave it
+out.
 
 ## Authoring a component
 
@@ -128,12 +126,12 @@ The canonical shape — `button.svelte`, `badge.svelte`, `table-cell.svelte`, `s
 
 Six rules carry that snippet:
 
-1. **`tv()` lives in the module script and is exported.** Variants use `tailwind-variants`, not cva. Exporting the `tv` call lets a caller put the same **chrome** on a plain element — `top-navbar.svelte:101` applies `navigationMenuTriggerStyle()` to bare links so triggers and links stay dimensionally identical.
+1. **`tv()` lives in the module script and is exported.** Variants use `tailwind-variants`, not cva. Exporting the `tv` call lets a caller put the same **chrome** on a plain element — `shell/top-navbar.svelte:86` takes `chrome = navigationMenuTriggerStyle()` and applies it (`:164, :250, :345`) to bare links and placeholders so triggers and links stay dimensionally identical.
 2. **`className` is the last argument to `cn()`**, so the consumer wins. `cn = twMerge(clsx(…))`.
 3. **`ref = $bindable(null)` + `bind:this={ref}`** is the ref-forwarding contract, typed by `WithElementRef<T, El>`.
 4. **`data-slot="<name>"`** on the root element — CSS descendant selectors and the e2e harness both locate by it.
 5. **Runes and snippets throughout**: `$props()` destructuring, `{@render children?.()}`. The package contains no `<slot>`. Generic components declare `<script lang="ts" generics="TData">`.
-6. **Stay transport-agnostic.** The library never owns an API client — `GrantsPanel` takes a `client` prop of async functions. Shapes are declared structurally rather than imported from `@rask/api`, and `@rask/ui` imports no `$app/*` or `$lib` (browser detection is `typeof window !== 'undefined'`).
+6. **Stay transport-agnostic.** The library never owns an API client — `GrantsPanel` takes a `client` prop of async functions. Shapes are declared structurally rather than imported from `@rask/api`, and `@rask/ui` imports no `$app/*` or the console's `#lib/*` (browser detection is `typeof window !== 'undefined'`).
 
 Wrapping a **Bits UI** primitive that needs no skin: re-export it with an explicit `typeof` annotation. A bare re-export infers a non-portable type and silently skips the declaration (`collapsible/index.ts:3-4`).
 

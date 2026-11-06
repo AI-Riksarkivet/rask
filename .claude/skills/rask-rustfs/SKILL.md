@@ -16,7 +16,8 @@ Every factual line cites RustFS source as `rustfs@1.0.3:<path>:<line>` (tag `1.0
 `331fb896285a7686f927baf8d9d4dc2d3d3a10a9`, 2026-10-17: the server the fixture and the lanes run), a docs page as
 `docs:<path under content/en>`, or a rask file by its repo path. **Where the docs and the source disagree, the source
 wins**, and the contradiction is listed in the reference that covers it. The evidence for rask's own requirements
-(R1-R20) is `docs/audits/2026-10-18/rustfs-zero-trust.md`, which also holds the live measurement on 1.0.1 and 1.0.3.
+(R1-R20) is the audit measured 2026-10-18, `docs/audits/2026-10-18/rustfs-zero-trust.md` (git history at `64ef118a9`), which also holds the live measurement on 1.0.1 and 1.0.3; its two
+measurement scripts are `scripts/rustfs_sts_measure.py` and `scripts/rustfs_web_identity_measure.py`.
 
 ## 1. Read the source, not the integration pages
 
@@ -34,8 +35,8 @@ wins**, and the contradiction is listed in the reference that covers it. The evi
 
 ## 2. What rask relies on, and its measured status
 
-Measured live on `rustfs/rustfs:1.0.3` (the pin) and `1.0.1`, each a fresh single node, 2026-10-18 (audit § "Measured
-on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as rask needs them, on both. Summary
+Measured live on `rustfs/rustfs:1.0.3` (the pin) and `1.0.1`, each a fresh single node, 2026-10-18 (the audit's § "Measured
+on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 checks, all as rask needs them, on both. Summary
 (details and the full list in `references/s3-compat.md`):
 
 | Need | Status |
@@ -53,7 +54,7 @@ on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as r
 | Conditional CompleteMultipartUpload (R11) | source only (`rustfs@1.0.3:crates/ecstore/src/set_disk/ops/multipart.rs:2702-2742`) |
 | Warehouse purge: DeleteObjects then DeleteBucket (R13) | not measured |
 | Session policy at the 2,048-byte boundary (R5) | source only (`rustfs@1.0.3:rustfs/src/admin/service/session_policy.rs:34-39`) |
-| AssumeRoleWithWebIdentity for a Kubernetes-shaped token, granted the canned policy its `sub` names; another account's, another audience's, an expired, forged or other-issuer token refused (R18) | measured on 1.0.3 with a stand-in issuer, 20 of 20 (`docs/audits/2026-10-18/rustfs_web_identity_measure.py`) |
+| AssumeRoleWithWebIdentity for a Kubernetes-shaped token, granted the canned policy its `sub` names; another account's, another audience's, an expired, forged or other-issuer token refused (R18) | measured on 1.0.3 with a stand-in issuer, 20 of 20 (`scripts/rustfs_web_identity_measure.py`) |
 | Conditional writes exclusive across nodes (multi-node) | source only: the precondition is re-checked under a namespace write lock that, on a distributed store, needs a majority of the set's lockers (`rustfs@1.0.3:crates/ecstore/src/set_disk/ops/locking.rs:46-61`); not measured |
 
 ## 3. The zero-trust model rask relies on
@@ -79,8 +80,8 @@ on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as r
   login: only the store pod, the dev secret store that seeds it and the provisioning hook read it. It sits at
   `secret/object-store-root`, which only ESO's store policy reads, and in a Secret of its own,
   `<release>-object-store-root`; `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows every
-  path the chart hands a secret through. Each plane presents a scoped identity instead, the media readers and the
-  backups included, and a blank one fails the render. The dev OpenBao publishes no token: each app's sidecar logs in as
+  path the chart hands a secret through. Each plane presents a scoped identity instead, the backups
+  included, and a blank one fails the render. The dev OpenBao publishes no token: each app's sidecar logs in as
   its own ServiceAccount and reads only its own secrets, and the store's administrator token is generated in-cluster and
   held by its seed (ADR 0169).
 - **An SSE-KMS vend names its key and grants its use** ([[LH-262]]): `vending.encryption.kmsKeyId` is the key ARN under
@@ -120,7 +121,7 @@ on RustFS", `docs/audits/2026-10-18/rustfs_sts_measure.py`): 26 checks, all as r
 
 rask's runtime makes no admin call (R17). Users, policies and buckets are made once, by a hook, with the root pair.
 **Use RustFS's native admin API with SigV4 and plain JSON** — the 2026-10-18 measurement drove exactly these
-(audit § Measured):
+(the audit's § Measured, git history at `64ef118a9`):
 
 | Step | Call | Source |
 |---|---|---|
@@ -147,7 +148,7 @@ breaks SigV4 credential scope, `docs:operations/credentials.md`); bucket names m
 Do not build on `rc`: its reference page documents no user or policy command (`docs:operations/rc.mdx`); only the
 site-replication page shows `rc admin user add` and `rc admin policy attach`, and no page shows creating a canned
 policy (`docs:operations/high-availability/site-replication.md:146-152`). The `rc` source is not in the clone, and the
-integration pages run it as `rustfs/rc:latest`, a mutable tag (`docs:developer/integration/observability/loki.md:111`). `mc` through `/minio/admin` is unmeasured and its upstream is archived (audit § MinIO's status).
+integration pages run it as `rustfs/rc:latest`, a mutable tag (`docs:developer/integration/observability/loki.md:111`). `mc` through `/minio/admin` is unmeasured and its upstream is archived (the audit's § MinIO's status, git history at `64ef118a9`).
 Details in `references/security.md` § Provisioning.
 
 ## 5. The fixture's shape
@@ -191,7 +192,7 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
   (`packages/lakehouse-kit/src/lakehouse_kit/objectfs.py:37,45`); keep vended options path-style too.
 - **A pre-GA image refused pyarrow 25's multipart.** 1.0.0-alpha.60 answered `UploadPart` with
   `XAmzContentSHA256Mismatch`; 1.0.1 and 1.0.3 take it (`.dagger/storage.go`; `docs/agents/lessons.md:97-101`). Pin a
-  GA tag, by digest, and re-run rask's own writer and `docs/audits/2026-10-18/rustfs_sts_measure.py` on every bump.
+  GA tag, by digest, and re-run rask's own writer and `scripts/rustfs_sts_measure.py` on every bump.
 - **pyarrow cannot write through a vended credential.** Before a write, pyarrow's `S3FileSystem` asks `HeadBucket`,
   which RustFS authorizes as an unprefixed `s3:ListBucket` (`rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960`), as
   AWS does; a session scoped to a table's prefix is refused it (measured on 1.0.1 and 1.0.3). rask writes its records
@@ -244,7 +245,7 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
 ## 7. Testing against RustFS
 
 Load `rask-testing` first. The proofs that matter run against a real RustFS, never moto: the CAS harness
-(`tests/e2e-py/test_object_store_cas_e2e.py`), the STS/session-policy checks (`docs/audits/2026-10-18/rustfs_sts_measure.py`),
+(`tests/e2e-py/test_object_store_cas_e2e.py`), the STS/session-policy checks (`scripts/rustfs_sts_measure.py`),
 a Lance write through a vended credential, and the provisioning hook's refusal path
 (`tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py`, `dagger call rustfs-provisioning`, whose
 store boots from files as the fixture's does). A Dagger lane brings RustFS up as a service bound to one exec
@@ -264,7 +265,8 @@ store before rask relies on it; it is not a contention test, so the CAS harness 
 
 ## 8. What rask demands of a platform store
 
-The audit's requirement list (§ "What rask must demand of ANY platform store") plus these, each argued in
+The audit's requirement list (§ "What rask must demand of ANY platform store", measured 2026-10-18, git history at
+`64ef118a9`) plus these, each argued in
 `references/security.md` § Platform store checklist: no default root credential; root held by the platform only; an
 explicit `RUSTFS_RPC_SECRET` on multi-node; TLS with a CA rask trusts; console unreachable from workload namespaces;
 path-style accepted or the server domain named; durability `strict`; rask buckets versioned, with a noncurrent-version

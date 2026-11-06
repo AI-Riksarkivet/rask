@@ -1236,8 +1236,8 @@ async def set_namespace_protection(
     control: ControlEmitterDep,
 ) -> ProtectionResponse:
     """Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router
-    (``protection`` maps to ``can_delete`` — whoever may delete the namespace decides whether
-    deleting it needs a second thought). Same control-root record contract as the table door."""
+    (``protection`` maps to ``can_set_protection``, held by the namespace's owner, so a writer cannot arm or disarm the
+    safety on what it writes). Same control-root record contract as the table door."""
     segments = parse_identifier(id)
     canonical = fga.canonical_object_id(segments)
     namespace = await fga_deps.identify(ns, settings, "namespace", segments)

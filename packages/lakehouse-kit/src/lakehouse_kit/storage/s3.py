@@ -1,8 +1,8 @@
 """Key listing and timestamped-prefix retention over an S3 client.
 
 The ``list_objects_v2`` pagination lives once, in :func:`_paginate_keys`, and every S3 call is wrapped in
-:func:`~storage.errors.s3_errors`, so a missing bucket reaches a caller as storage's own
-:class:`~storage.errors.BucketNotFoundError` rather than a raw botocore ``ClientError`` it cannot name.
+:func:`~lakehouse_kit.storage.errors.s3_errors`, so a missing bucket reaches a caller as storage's own
+:class:`~lakehouse_kit.storage.errors.BucketNotFoundError` rather than a raw botocore ``ClientError`` it cannot name.
 """
 
 from __future__ import annotations

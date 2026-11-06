@@ -33,7 +33,7 @@ import httpx
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 from pydantic import BaseModel
@@ -276,6 +276,23 @@ def _governed_app() -> FastAPI:
         return {"subject": subject}
 
     return app
+
+
+def test_a_missing_bearer_is_refused_in_the_spec_taxonomy() -> None:
+    """A missing bearer is answered in the envelope a bad one is (SKG-05).
+
+    A bad bearer leaves `authenticate` as a `lance_namespace.UnauthenticatedError` raised inside `verify`, which renders
+    with the numeric `code` a Lance-Namespace client parses. The missing one is the same refusal, so it carries the same
+    code: a door describes "you are not authenticated" one way, whichever half failed.
+    """
+    with TestClient(_governed_app(), raise_server_exceptions=False) as client:
+        client.app.state.oidc = object()
+        refusal = client.get("/gated")
+
+    assert refusal.status_code == 401
+    assert refusal.headers["content-type"].startswith("application/problem+json")
+    body = refusal.json()
+    assert (body.get("code"), body["detail"]) == (int(UnauthenticatedError("x").code), "Missing bearer token")
 
 
 def test_the_unwired_verifier_503_still_names_the_knob() -> None:

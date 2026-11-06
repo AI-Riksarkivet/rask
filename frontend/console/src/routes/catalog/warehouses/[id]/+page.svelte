@@ -6,18 +6,15 @@
 	// said "no namespaces" while the delete door refused 409 naming one (observed live, #66). The
 	// table registry now only ENRICHES each bound namespace with its table count.
 	import { RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import type { Warehouse } from '$lib/data/catalog';
-	import { fetchTables } from '$lib/data/remote/catalog.api';
-	import { fetchWarehouse, fetchWarehouseNamespaces } from '$lib/data/remote/warehouses.api';
-	import { namespaceOfTable, stageOf } from '$lib/data/stage';
-	import StageBadge from '$lib/data/StageBadge.svelte';
+	import type { Warehouse } from '#lib/data/catalog.ts';
+	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
+	import { fetchWarehouse, fetchWarehouseNamespaces } from '#lib/data/remote/warehouses.api.ts';
+	import { namespaceOfTable, stageOf } from '#lib/data/stage.ts';
+	import StageBadge from '#lib/data/StageBadge.svelte';
 
 	const id = $derived(page.params.id ?? '');
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	let wh = $state<Warehouse | null>(null);
 	let tables = $state<string[] | null>(null);
@@ -85,7 +82,7 @@
 
 <div class="page">
 	<header>
-		<a class="back" href={`${base}/catalog/warehouses`}>Warehouses</a>
+		<a class="back" href={resolve('/catalog/warehouses')}>Warehouses</a>
 		<span class="sep">/</span>
 		<WarehouseIcon size={15} />
 		<h1 class="mono">{id}</h1>
@@ -98,7 +95,9 @@
 		<div class="empty">
 			<ShieldAlert size={16} />
 			<p>
-				This stack is governed — <a href={loginHref}>sign in</a> to view this warehouse.
+				This stack is governed — <a
+					href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>sign in</a
+				> to view this warehouse.
 			</p>
 		</div>
 	{:else if denied}
@@ -122,7 +121,9 @@
 				<!-- The rung ABOVE this one: a project is the top of the hierarchy and its page is
 				     `/projects/<p>` (2026-08-03 ruling). -->
 				<span
-					>project <a class="plink" href={`/projects/${encodeURIComponent(wh.project)}`}
+					>project <a
+						class="plink"
+						href={resolve('/projects/[project]', { project: encodeURIComponent(wh.project) })}
 						>{wh.project}</a
 					></span
 				>
@@ -146,7 +147,10 @@
 				<ul class="list">
 					{#each namespaces as { ns, count, info } (ns)}
 						<li>
-							<a class="row" href={`${base}/catalog/namespaces/${encodeURIComponent(ns)}`}>
+							<a
+								class="row"
+								href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(ns) })}
+							>
 								<span class="mono">{ns}</span>
 								{#if info}<StageBadge {info} />{/if}
 								<span class="count">{count} table{count === 1 ? '' : 's'}</span>

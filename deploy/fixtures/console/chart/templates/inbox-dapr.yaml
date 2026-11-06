@@ -34,7 +34,7 @@ spec:
   metadata:
     - name: connectionString
       secretKeyRef:
-        name: {{ include "console.stateCluster" . }}-app
+        name: {{ include "console.stateCredential" . }}
         key: uri
     - { name: actorStateStore, value: "true" }
     - { name: tableName, value: state }
@@ -172,3 +172,30 @@ spec:
 scopes:
   - {{ $appId }}
 {{- end }}
+---
+# The reconcile tick reads lineage's feed through service invocation (`/v1.0/invoke/lineage/method`), and Dapr applies an
+# invocation policy on the CALLING sidecar, so the retry is this release's, scoped to the inbox. Constant, the one policy
+# whose `duration` holds (dapr/kit reads it under `constant` alone); never a 4xx, because a 403's answer will not change.
+# The reconciler has no retry of its own, and the app's per-request timeout (RASK_NOTIFICATIONS_FEED_TIMEOUT_SECONDS)
+# bounds the whole call, retries included. A pass that still fails is walked again by the next tick from the same mark.
+apiVersion: dapr.io/v1alpha1
+kind: Resiliency
+metadata:
+  name: {{ include "console.inbox" . }}-invocation-resiliency
+  labels:
+    {{- $selector | nindent 4 }}
+spec:
+  policies:
+    retries:
+      invokeRetry:
+        policy: constant
+        duration: 2s
+        maxRetries: 3
+        matching:
+          httpStatusCodes: 408,429,500-599
+  targets:
+    apps:
+      lineage:
+        retry: invokeRetry
+scopes:
+  - {{ $appId }}

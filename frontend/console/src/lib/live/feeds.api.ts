@@ -2,8 +2,8 @@ import { parse } from '@rask/api';
 import { authorizedFetch } from '@rask/api/client';
 import { lineagePulse, POLL_MS, PROBE_TIMEOUT_MS, type LineagePulse } from '@rask/api/runs-feed';
 import * as v from 'valibot';
-import { query } from '$lib/remote.svelte';
-import { CATALOG_API, LINEAGE_API } from '$lib/upstreams';
+import { query } from '#lib/reads.svelte.ts';
+import { CATALOG_API, LINEAGE_API } from '#lib/upstreams.ts';
 
 export type { LineagePulse } from '@rask/api/runs-feed';
 

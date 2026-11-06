@@ -7,25 +7,26 @@ around them: `UnauthenticatedError` when the PRESENTED TOKEN is at fault (401, a
 Exception` branch and is recorded as `invalid_token` against the caller, so each 503 case below also pins that its
 raise site uses the subclass the Lance-taxonomy doors catch.
 
-Measured 2026-09-25 on pyjwt 2.13.0 / httpx 0.28.1 / pydantic 2.13, these paths reach the door as a third type
-unless `oidc.py` classifies them:
+Measured 2026-11-06 on PyJWT 2.15.1 / httpx 0.28.1, these paths reach the door as a type outside PyJWT's own
+taxonomy unless `oidc.py` classifies them:
 
-* a discovery document that is not JSON (a proxy's sign-in page) — `json.JSONDecodeError` out of `response.json()`;
-* a key set that is not JSON — `json.JSONDecodeError` out of `PyJWKClient.fetch_data`, which classifies only
-  transport failures;
-* a key-set connection that closes before the status line, or a body cut short of its `Content-Length` —
-  `http.client.RemoteDisconnected` / `IncompleteRead`, because urllib wraps only the SEND in `URLError`;
-* key material `cryptography` refuses — a bare `ValueError`, because `PyJWKSet` skips only keys failing with
-  `PyJWTError`;
-* a key set PyJWT cannot read — an entry that is not an object (`AttributeError`), a non-string `n` or `alg`
-  (`TypeError`), a body nested past the JSON parser's depth (`RecursionError`);
+* a discovery document that is not JSON (a proxy's sign-in page) — pydantic's `ValidationError`, or
+  `json.JSONDecodeError` were it read through `response.json()`;
+* a key set that is not JSON — `json.JSONDecodeError` out of `PyJWKClient.fetch_data`, which wraps only transport
+  failures;
+* a key-set connection reset while its body is read — a bare `ConnectionResetError`, an `OSError` `fetch_data` does
+  not wrap;
+* a key whose `alg` is not a string — `TypeError` (unhashable) out of `PyJWK`, which `PyJWKSet` does not skip, since it
+  skips only keys failing with `PyJWTError`;
+* a key set nested past the JSON parser's depth — `RecursionError`;
 * a token whose `alg` names another key family than the key its `kid` selects — `TypeError` out of PyJWT's
   `prepare_key` when `jwt.decode` is handed the raw key rather than the `PyJWK` that binds its algorithm. This is the
   one a CALLER chooses, so it must be a 401.
 
-The key-set cases also cover the failures PyJWT does type (`PyJWKClientConnectionError`, `PyJWKClientError`,
-`PyJWKSetError`): none of them reads the token either, so they are the provider's too, and a 401 for them would tell a
-caller holding a good bearer that it is bad — the same misattribution
+The key-set cases also cover the failures PyJWT does type: `PyJWKClientConnectionError` (a connection closed before
+the status line, a body cut short, both `http.client.HTTPException`s `fetch_data` wraps), `PyJWKClientError` and
+`PyJWKSetError` (a set with no key, or none PyJWK can build). None of them reads the token either, so they are the
+provider's too, and a 401 for them would tell a caller holding a good bearer that it is bad — the same misattribution
 `test_an_unreachable_idp_is_not_the_callers_fault.py` refuses for the discovery document.
 
 THE IdP IS A REAL HTTP SERVER ON LOOPBACK. Neither httpx nor urllib is patched, so both fetches run the libraries'
@@ -94,8 +95,8 @@ class _Fault(StrEnum):
 
     CLOSED_BEFORE_ANSWERING = "closed-before-answering"
     BODY_CUT_SHORT = "body-cut-short"
-    #: A pod killed mid-response: the reader gets a bare `ConnectionResetError`, an `OSError` that is not also an
-    #: `http.client.HTTPException` — the one case only `_key_set`'s `OSError` member catches.
+    #: A pod killed mid-response: the reader gets a bare `ConnectionResetError`, which `fetch_data` does not wrap in
+    #: `PyJWKClientConnectionError` — the one case only `_key_set`'s `OSError` member catches.
     RESET_MID_BODY = "reset-mid-body"
 
 
@@ -108,6 +109,8 @@ class _IdP(BaseModel):
     #: Paths answered after `SLOW_ANSWER_SECONDS`: long enough that every request in a concurrent burst reaches the
     #: verifier while the first one's fetch is still in flight.
     slow: set[str] = set()
+    #: Paths answered 302 with the mapped URL as their `Location`.
+    redirects: dict[str, str] = {}
     #: Requests served, by path.
     fetches: dict[str, int] = {}
 
@@ -125,9 +128,9 @@ def _discovery(issuer: str, *, jwks_path: str = JWKS_PATH, algorithms: tuple[str
     return json.dumps({"issuer": issuer, "jwks_uri": f"{issuer}{jwks_path}", "id_token_signing_alg_values_supported": list(algorithms)}).encode()
 
 
-def _key_set(key: rsa.RSAPrivateKey, kid: str) -> bytes:
+def _key_set(key: rsa.RSAPrivateKey, kid: str, *, use: str = "sig") -> bytes:
     public = key.public_key().public_numbers()
-    jwk = {"kty": "RSA", "kid": kid, "use": "sig", "alg": "RS256", "n": _b64url_uint(public.n), "e": _b64url_uint(public.e)}
+    jwk = {"kty": "RSA", "kid": kid, "use": use, "alg": "RS256", "n": _b64url_uint(public.n), "e": _b64url_uint(public.e)}
     return json.dumps({"keys": [jwk]}).encode()
 
 
@@ -153,6 +156,12 @@ def idp(rsa_key: rsa.RSAPrivateKey) -> Iterator[_IdP]:
             body = served.documents.get(self.path)
             if self.path in served.slow:
                 time.sleep(SLOW_ANSWER_SECONDS)
+            if (location := served.redirects.get(self.path)) is not None:
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if fault is _Fault.CLOSED_BEFORE_ANSWERING:
                 self.close_connection = True
                 return
@@ -389,6 +398,26 @@ def test_a_key_set_url_that_answers_404_is_ours(door: str, idp: _IdP, rsa_key: r
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
+@pytest.mark.parametrize("door", ["/gated"])
+def test_a_key_set_url_that_redirects_is_ours_and_the_redirect_is_not_followed(
+    door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture
+) -> None:
+    """A key-set fetch follows no redirect, so the bearer it carries reaches no host but the one the key-set URL names.
+
+    The redirect here points at the issuer's own key set, which would verify the token: a fetch that followed it would
+    accept the caller.
+    """
+    idp.documents[DISCOVERY_PATH] = _discovery(idp.issuer, jwks_path="/moved")
+    idp.redirects["/moved"] = f"{idp.issuer}{JWKS_PATH}"
+
+    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+
+    assert status == 503, body
+    assert json.loads(body)["detail"] == f"The OIDC key set could not be reached at {idp.issuer}/moved"
+    assert JWKS_PATH not in idp.fetches
+    assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
+
+
 @pytest.mark.parametrize("fault", list(_Fault))
 @pytest.mark.parametrize("door", ["/gated"])
 def test_a_key_set_the_idp_drops_mid_answer_is_ours(
@@ -404,16 +433,16 @@ def test_a_key_set_the_idp_drops_mid_answer_is_ours(
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
-#: A zero modulus: every field of the right type, and a key `cryptography` will not build.
-_ZERO_MODULUS_JWK = {"kty": "RSA", "kid": KID, "use": "sig", "alg": "RS256", "n": "AA", "e": "AQAB"}
-
-#: Key-set bodies the provider could serve, none of which the token has any part in.
+#: Key-set bodies the provider could serve, none of which the token has any part in: one per exception family that
+#: reaches `_key_set`'s catch-all on PyJWT 2.15.1, so narrowing it to a tuple that leaves a family out answers 500.
 UNUSABLE_KEY_SETS = {
+    # `json.JSONDecodeError`, a `ValueError`.
     "not-json": SIGN_IN_PAGE,
+    # `PyJWKSetError`, a `PyJWTError`.
     "no-keys": json.dumps({"keys": []}).encode(),
-    "entry-not-an-object": json.dumps({"keys": [1]}).encode(),
-    "n-not-a-string": json.dumps({"keys": [{**_ZERO_MODULUS_JWK, "n": 5}]}).encode(),
-    # `RecursionError`, a family none of the others raise.
+    # `TypeError`: PyJWK looks the `alg` up in a dict.
+    "alg-not-a-string": json.dumps({"keys": [{"kty": "RSA", "kid": KID, "use": "sig", "alg": ["RS256"], "n": "AQAB", "e": "AQAB"}]}).encode(),
+    # `RecursionError`.
     "nested-past-the-parsers-depth": b"[" * 100_000 + b"]" * 100_000,
 }
 
@@ -430,32 +459,32 @@ def test_a_key_set_with_no_usable_key_is_ours(door: str, key_set: bytes, idp: _I
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
-@pytest.mark.parametrize("key_set", [UNUSABLE_KEY_SETS["not-json"], UNUSABLE_KEY_SETS["no-keys"]], ids=["not-json", "no-keys"])
 @pytest.mark.parametrize("door", ["/gated"])
-def test_a_key_set_the_idp_has_since_fixed_is_believed_at_once(door: str, key_set: bytes, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
-    """`PyJWKClient` caches a body before parsing it, so an unusable set it cached would otherwise be served for the
-    cache's whole lifespan (300 s) after the provider replaced it — every caller refused for an outage that is over."""
+def test_a_key_set_the_idp_has_since_fixed_is_believed_at_once(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+    """A set the cache holds that has no signing key would otherwise be served for the cache's whole lifespan (300 s)
+    after the provider replaced it: every caller refused for an outage that is over. The set's one key is for
+    encryption, so PyJWT parses and caches it; the unusable bodies above never reach the cache, since `fetch_data`
+    caches only a body that parses into at least one key."""
     client = _client(idp)
     token = _token(idp, rsa_key, "RS256")
     usable = idp.documents[JWKS_PATH]
-    idp.documents[JWKS_PATH] = key_set
+    idp.documents[JWKS_PATH] = _key_set(rsa_key, KID, use="enc")
     assert _call(idp, door, token, client=client)[0] == 503
 
     idp.documents[JWKS_PATH] = usable
     status, body = _call(idp, door, token, client=client)
 
     assert status == 200, body
-    # Two fetches in all: the first request's, and the second request's, which finds the fixed set. That second is a
-    # refetch for a body the cache kept, and a first read for one never cached (not JSON, or nested past the parser's depth).
+    # Two fetches in all: the first request's, and the second request's refetch for the set the cache kept.
     assert idp.fetches[JWKS_PATH] == 2
 
 
-@pytest.mark.parametrize("key_set", [UNUSABLE_KEY_SETS["not-json"], UNUSABLE_KEY_SETS["no-keys"]], ids=["not-json", "no-keys"])
 @pytest.mark.parametrize("door", ["/gated"])
-def test_a_key_set_that_arrived_unusable_is_fetched_once_per_request(door: str, key_set: bytes, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+def test_a_key_set_that_arrived_unusable_is_fetched_once_per_request(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
     """The refetch is for a set the CACHE served. One fetched in this request is already fresh, and asking again only
-    doubles the load on an IdP serving garbage and the time each request is held."""
-    idp.documents[JWKS_PATH] = key_set
+    doubles the load on an IdP serving garbage and the time each request is held. The first request fetches into an
+    empty cache; the second is served the cached set and refetches once."""
+    idp.documents[JWKS_PATH] = _key_set(rsa_key, KID, use="enc")
     client = _client(idp)
     token = _token(idp, rsa_key, "RS256")
 

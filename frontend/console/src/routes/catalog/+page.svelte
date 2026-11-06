@@ -4,33 +4,31 @@
 	// It owns no transport: every rung is read with this user's bearer against the catalog's own gate,
 	// and a rung the caller cannot read draws as "unreadable" rather than absent.
 	import { FolderKanban, RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { ProjectHierarchy, type HierarchyHref } from '@rask/ui/hierarchy';
-	import type { WarehouseRecord } from '$lib/data/catalog';
-	import { fetchNamespaceTables } from '$lib/data/remote/namespace.api';
-	import { fetchWarehouseNamespaces, fetchWarehouses } from '$lib/data/remote/warehouses.api';
+	import type { WarehouseRecord } from '#lib/data/catalog.ts';
+	import { fetchNamespaceTables } from '#lib/data/remote/namespace.api.ts';
+	import { fetchWarehouseNamespaces, fetchWarehouses } from '#lib/data/remote/warehouses.api.ts';
 	import type { PageData } from './$types';
 
 	let { data }: { data: PageData } = $props();
-	const LH = base;
 	// TODO 4a: the graph is a MAP. Every rung links to the page that owns that object, and the URLs are
 	// built HERE because they are the console's routes.
 	//
 	// `project` returns null deliberately: from a project view, the project rung IS this page.
 	const rungHref: HierarchyHref = (rung) => {
 		if (rung.tier === 'project') return null;
-		if (rung.tier === 'warehouse') return `${LH}/catalog/warehouses/${encodeURIComponent(rung.id)}`;
-		if (rung.tier === 'namespace') return `${LH}/catalog/namespaces/${encodeURIComponent(rung.id)}`;
-		return `${LH}/catalog/tables/${encodeURIComponent(rung.id)}`;
+		if (rung.tier === 'warehouse')
+			return resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(rung.id) });
+		if (rung.tier === 'namespace')
+			return resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(rung.id) });
+		return resolve('/catalog/tables/[table]', { table: encodeURIComponent(rung.id) });
 	};
 
 	// `zoneLayoutLoad` defaults the cookie to '' — an empty string is "no project is open", which is a
 	// real state of the estate and not a loading one.
 	const project = $derived(data.activeProject);
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	// The registry read is estate-wide (`GET /management/v1/warehouses` shows the caller what they may see) and
 	// filtered to the active project HERE. A per-project catalog read deliberately does not live on this
@@ -79,7 +77,7 @@
 		     namespaces and tables all hang beneath one", and that was false. Checked in the code rather
 		     than assumed: `fetchTables` calls `/v1/table`, `fetchNamespaceTables` calls
 		     `/v1/namespace/<ns>/table/list`, the lineage remotes name no project at all, and
-		     `catalogJSON` ($lib/server/doors.ts) forwards the session bearer and NOTHING else — no
+		     `catalogJSON` (#lib/doors.ts) forwards the session bearer and NOTHING else — no
 		     project header, no project query. Those surfaces are estate-wide reads filtered by the
 		     caller's own FGA grants, and they render fine with no project open. The navbar's Lakehouse
 		     trigger points straight at one of them.
@@ -104,7 +102,9 @@
 				Lineage list every table, namespace and run your grants allow, across the estate.
 			</p>
 			<p class="mt-4 text-sm">
-				<a class="underline underline-offset-4" href="/projects"> Open one from Projects → </a>
+				<a class="underline underline-offset-4" href={resolve('/projects')}>
+					Open one from Projects →
+				</a>
 			</p>
 		</div>
 	{:else}
@@ -119,7 +119,8 @@
 			<!-- UP a rung: the project record's own page. -->
 			<a
 				class="text-foreground underline underline-offset-4"
-				href={`/projects/${encodeURIComponent(project)}`}>Project settings and admins →</a
+				href={resolve('/projects/[project]', { project: encodeURIComponent(project) })}
+				>Project settings and admins →</a
 			>
 		</p>
 
@@ -127,7 +128,9 @@
 			<div class="text-muted-foreground flex items-center gap-2 py-8">
 				<ShieldAlert size={16} />
 				<p class="text-sm">
-					This stack is governed — <a class="underline underline-offset-4" href={loginHref}
+					This stack is governed — <a
+						class="underline underline-offset-4"
+						href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}
 						>sign in</a
 					> to see this project's warehouses.
 				</p>
@@ -169,7 +172,8 @@
 						provisioned from
 						<a
 							class="text-foreground underline underline-offset-4"
-							href={`/projects/${encodeURIComponent(project)}`}>the project page</a
+							href={resolve('/projects/[project]', { project: encodeURIComponent(project) })}
+							>the project page</a
 						>.
 					</p>
 				{:else}
@@ -187,11 +191,11 @@
 								{#each mine as w (w.id)}
 									<tr class="border-border/45 border-b">
 										<td class="py-1.5 pr-4">
-											<!-- DOWN a rung, same page: the warehouse page is the console's own, so it
-											     stays a soft nav written against {base}. -->
+											<!-- DOWN a rung: the warehouse page is the console's own, so it is a soft
+											     nav through resolve(). -->
 											<a
 												class="font-mono underline-offset-4 hover:underline"
-												href={`${base}/catalog/warehouses/${encodeURIComponent(w.id)}`}
+												href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(w.id) })}
 											>
 												<WarehouseIcon size={12} class="inline align-[-1px]" />
 												{w.id}

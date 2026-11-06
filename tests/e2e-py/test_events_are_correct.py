@@ -317,7 +317,7 @@ def test_lineage_recorded_each_event_as_the_person_who_called_the_catalogs_door(
 def test_each_event_names_the_person_it_grants_and_the_table_it_wrote_by_the_uuid_the_catalog_answers(
     captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun
 ) -> None:
-    """What a notifier targets by, and the lakehouse writes (`docs/COMMIT-EVENTS.md`, `rask-notifications`): a grant
+    """What a notifier targets by, and the lakehouse writes (`docs/COMMIT-EVENTS.md`): a grant
     reaches the person its `extra.subject` names, and a write reaches whoever may read the table its `tableUuid` names,
     so a rename or a name taken again sends it nowhere else. The drive made the admin the project's admin, the pipeline a
     writer on bronze and silver, and the validator a validator on silver, and granted none of them anything else."""

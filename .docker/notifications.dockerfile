@@ -8,7 +8,7 @@
 
 # ---- builder stage: install deps via uv ------------------------------------
 # hadolint ignore=DL3026  # Reason: python:slim-bookworm is the official Docker Hub image; digest-pinned for reproducibility.
-FROM python:3.13-slim-bookworm@sha256:e4fa1f978c539608a10cdf74700ac32a3f719dfc6e8b6b6001da82deb36302a2 AS builder
+FROM python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72 AS builder
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
@@ -41,7 +41,7 @@ RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 # ---- final stage: minimum runtime surface ----------------------------------
 # hadolint ignore=DL3026  # Reason: python:slim-bookworm is the official Docker Hub image; digest-pinned for reproducibility.
-FROM python:3.13-slim-bookworm@sha256:e4fa1f978c539608a10cdf74700ac32a3f719dfc6e8b6b6001da82deb36302a2
+FROM python:3.13-slim-bookworm@sha256:a5a7017efc5969e00ae2b91c8eb0631049a569652aa4ffc4501769049ae45c72
 
 ARG BUILD_DATE
 ARG VCS_REF
@@ -58,6 +58,15 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends tini ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r --no-create-home --shell /usr/sbin/nologin --uid 10001 app
+
+# The base image's own pip (with its vendored msgpack and urllib3) and ensurepip's bundled pip wheel are a package
+# manager nothing here runs: uv builds the venv in the builder without seeding pip, and the inbox's locked closure
+# holds no pip or setuptools. The trailing checks fail the build if a base bump leaves pip importable, or leaves a pip
+# wheel or dist-info anywhere under /usr/local, which is what an image scanner reads.
+RUN rm -rf /usr/local/lib/python3*/site-packages/pip /usr/local/lib/python3*/site-packages/pip-*.dist-info \
+           /usr/local/lib/python3*/ensurepip /usr/local/bin/pip /usr/local/bin/pip3* \
+ && ! python3 -c "import pip" 2>/dev/null \
+ && test -z "$(find /usr/local \( -name 'pip-*.whl' -o -name 'pip-*.dist-info' \) -print -quit)"
 
 # cp -a from a mount rather than COPY --from: a COPY of a large venv can trip BuildKit's
 # exit code 2 and silently fall back to a full rebuild. Dev builds pass 10001:10001; prod stays root.

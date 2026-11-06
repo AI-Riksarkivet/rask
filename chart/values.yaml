@@ -523,7 +523,7 @@ vending:
   # SCOPED SHORT-LIVED CREDENTIALS ARE THE ZERO-TRUST POSTURE, and `mode_b` vends nothing at all — under it no
   # worker can ever hold a per-table credential, so every direct reader routes its bytes through the server.
   #
-  # MEASURED on rustfs/rustfs 1.0.3 on 2026-10-18 (docs/audits/2026-10-18/rustfs_web_identity_measure.py): a
+  # MEASURED on rustfs/rustfs 1.0.3 on 2026-10-18 (scripts/rustfs_web_identity_measure.py): a
   # Kubernetes-shaped token for the store's audience whose subject names a canned policy is exchanged; its session
   # policy is enforced as an intersection (a read session's GET in scope 200, another prefix, another tenant and a PUT
   # 403; a session policy naming a bucket the canned policy lacks grants nothing); Lance creates and appends on the
@@ -1174,8 +1174,8 @@ objectStore:
   enabled: true
   # The scoped-users hook runs rask's OWN image (the rest-catalog image: python, boto3, botocore, sh, sha256sum), so
   # no third-party CLI image sits in the upgrade path. It makes the platform buckets and the scoped users through
-  # RustFS's native admin API (`scripts/rustfs_admin.py`), measured on rustfs/rustfs 1.0.1 and 1.0.3
-  # (docs/audits/2026-10-18/rustfs-zero-trust.md).
+  # RustFS's native admin API (`scripts/rustfs_admin.py`), measured on rustfs/rustfs 1.0.1 and 1.0.3 on 2026-10-18
+  # (`scripts/rustfs_sts_measure.py`; the audit is in git history at 64ef118a9).
   # -- S3 API port of the development store's Service.
   port: 9000
   # THE STORE'S ROOT ACCOUNT. Every scoped identity below exists so that nothing in the fleet presents
@@ -1794,7 +1794,7 @@ openbao:
   enabled: true
   # -- Port of the development store's Service.
   port: 8200
-  # -- A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read; supplied from the client's own values, so the lakehouse names none.
+  # -- A client's sidecar that reads the store through `lance-secrets`, keyed by its Dapr app id `<app>`: `{serviceAccount, secrets}`, its ServiceAccount in this namespace and the secrets its role may read, supplied from the client's own values so the lakehouse names none. An allowlist: a reader holds only `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`; the render refuses an app id that is no Dapr id, a lakehouse app, one whose own names would cover a store-issued family (`nats-user-<name>`, `signing-key-<name>`, `signing-public-<name>`) or a name a lakehouse identity, ESO, the dev store's seed or another reader holds, or one whose role `<release>-<app>` is ESO's; and a ServiceAccount the lakehouse renders or `default`.
   externalReaders: {}
   # EACH APP'S SIDECAR LOGS IN AS ITSELF ([[XC-165]]). The one `lance-secrets` component logs every sidecar in with the
   # store's Kubernetes auth method (`externalSecrets.kubernetesAuthPath`), as the role `<release>-<app id>` (Dapr fills

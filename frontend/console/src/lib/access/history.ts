@@ -2,7 +2,7 @@
 //
 // The URL already makes any ONE query shareable, which is the better primitive for handing a finding to
 // someone else. It is the wrong primitive for retracing your own steps: an investigation is a sequence,
-// and `replaceState` (deliberately, so the address bar does not fill with keystrokes) means the back
+// and replacing the history entry (deliberately, so the address bar does not fill with keystrokes) means the back
 // button cannot walk it. This is that sequence.
 //
 // STORAGE RULE: nothing here is not already in the URL. Every entry is a query string that

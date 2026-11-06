@@ -7,10 +7,13 @@ image: ghcr.io/dexidp/dex:v2.46.1
 port: 5556
 # The issuer Dex serves, rask's `auth.oidc.issuer`; `make k3s-fixtures` passes DEV_ISSUER, as it does to rask.
 issuer: http://rask-dex:5556/dex
-# The origin of a browser client, whose OIDC callback `<publicOrigin>/auth/callback` the sign-in client registers; empty
-# registers none. `make k3s-fixtures` passes DEV_ORIGIN.
-publicOrigin: ""
-# The fixture's own sign-in client, which the live lanes (and any web client) sign in as, and its secret.
+# -- The browser origins Dex answers CORS for (`web.allowedOrigins`) on every door it serves with CORS (v2.46.1: discovery,
+# `/keys`, `/token`, `/token/introspect`, `/userinfo` and its landing page `/`), with no credentials and only gorilla's
+# default request headers (`web.allowedHeaders` unset); empty answers none. A browser app served from another origin than
+# the issuer's lists its origin from its own tree.
+allowedOrigins: []
+# The fixture's own sign-in client, which the live lanes sign in as with the password grant, and its secret: confidential,
+# with no redirect, so no browser signs in through it.
 clientId: rask-web
 clientSecret: lance-catalog-secret
 # The lakehouse's audience: rask's `auth.oidc.audience`, which every governed door checks. Declared as a client that trusts
@@ -23,8 +26,13 @@ audienceSecret: rask-lakehouse-held-by-no-client
 # machine `dex-client~<id>` (ADR 0181). The audience client trusts each, so its token is issued for the lakehouse.
 machineClients:
   - { id: rask-pipeline, secret: rask-pipeline-dev-secret }
-# A client release's own sign-in clients, each `{id, secret, redirectURIs}`: a person signs in to that client through
-# it, and the audience client trusts it, so the person's token is issued for the lakehouse. Empty here; the pinned
+# A client release's own sign-in clients, each `{id, secret, redirectURIs}`, or `{id, public: true, redirectURIs}` for a
+# browser app that holds no secret and signs in with PKCE (S256, which this Dex enforces): a person signs in to that
+# client through it, and the audience client trusts it, so the person's token is issued for the lakehouse. A public
+# client's residual is this fixture's: Dex serves the password grant to every client (`oauth2.grantTypes` is global, and
+# a client has no grant list of its own), so anyone holding a public client's id may trade a password at /token for a
+# lakehouse token without a browser. A platform's IdP that limits grants per client closes it. Empty here: a client supplies its own entry from
+# its tree (`deploy/fixtures/<client>/dex-values.yaml`, which `make k3s-fixtures` layers on by glob), and the pinned
 # lakehouse a client's e2e stands up (`Lakehouse` in .dagger/release.go) registers the client it is given ([[XC-189]]).
 clients: []
 # Demo identities with one password. The hash is bcrypt of "password". alice and bob make the governed demo's allow and

@@ -457,7 +457,7 @@ export type Positioned = GraphNode & { x: number; y: number };
  *
  * The first version here put each depth in a column and sorted rows alphabetically. That is layer
  * ASSIGNMENT with no ordering phase, so nothing tried to put connected nodes near one another and the
- * edges crossed arbitrarily — which is the whole of "the graph looks noisy". `$lib/lineage/layout`
+ * edges crossed arbitrarily — which is the whole of "the graph looks noisy". `#lib/lineage/layout`
  * already solves exactly this, with the barycentre crossing-minimisation sweep that was missing, and
  * it exists in the console *because* dagre (1.1 MB) and elkjs (7.9 MB) do not fit its bundle budget.
  * Adding one of those here would have re-litigated a decision the console already made and documented.

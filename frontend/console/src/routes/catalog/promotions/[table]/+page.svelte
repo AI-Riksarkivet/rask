@@ -5,8 +5,8 @@
 	import { Card } from '@rask/ui/card';
 	import { GatedAction } from '@rask/ui/gated-action';
 	import { formatAbsolute } from '@rask/ui/utils';
-	import { reasonLabel } from '$lib/data/promotions';
-	import { decidePromotion, getPromotion } from '$lib/data/remote/promotions.api';
+	import { reasonLabel } from '#lib/data/promotions.ts';
+	import { decidePromotion, getPromotion } from '#lib/data/remote/promotions.api.ts';
 
 	// One table's open hold, keyed by the table's id as it is named now.
 	const table = $derived(page.params.table ?? '');

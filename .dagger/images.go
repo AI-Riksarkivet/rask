@@ -12,7 +12,7 @@
 //
 //	dagger call image --name=rest-catalog
 //	dagger call image --name=rest-catalog publish --address=172.17.0.1:5000/lance-rest-catalog:dev
-//	dagger call image --name=frontend publish --address=172.17.0.1:5000/console:dev
+//	dagger call image --name=frontend publish --address=172.17.0.1:5000/web-console:dev
 //
 // ── The one host requirement ────────────────────────────────────────────────────────────────────
 // Dagger's engine runs in a container, so `localhost:5000` inside it is the ENGINE, not the host

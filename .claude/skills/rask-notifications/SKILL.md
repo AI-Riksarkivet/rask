@@ -68,11 +68,10 @@ edge list kept as Lance tables in the catalog's provenance namespace, and a forw
 (ADR 0158). It answers no graph query: a notification cannot be targeted on an upstream or downstream walk, only on what
 the event itself names.
 
-**Long-running jobs need the identity in TWO places, and they are not interchangeable.** Ray's own
-`metadata` (`rask.originator`, returned by `GET /api/jobs/<id>`) is how an OUTSIDE observer recovers who
-a job was for *after* it died — including a job that died before emitting anything. `runtime_env.env_vars`
-is the job's own copy, for the events it emits itself. Put it in only one and you lose either the
-self-emitted lane or the post-mortem one.
+**Long-running jobs need the identity in TWO places, and they are not interchangeable.** A detached job that emits its
+own events carries the person in `rask_lance.originator` on every event, and in whatever record its own orchestrator
+keeps, so a job that dies before emitting can still be traced. Put it in only one and you lose either the self-emitted
+lane or the post-mortem one.
 
 `AUTHOR` needs no registry and no opt-in — you may always be told about your own run
 (`api/fanout.py:102`, in `audience_for`). `WATCH` is an explicit `project#member`-gated opt-in: **membership gates watching and
@@ -89,11 +88,11 @@ the one event they most need. **Being named IS the targeting.**
 
 ## Lane 1 — lineage (`lineage.events.v1`)
 
-Four things must ALL hold. `notifiable()` (`notifications/api/lineage_events.py:232`) returns
+Four things must ALL hold. `notifiable()` (`notifications/api/lineage_events.py:239`) returns
 `None` — "ack it, tell nobody" — on any miss, and **that ack is a SUCCESS**, so nothing anywhere
 reports the loss. This is the estate's most expensive silent failure mode.
 
-1. **Terminal state** — `COMPLETE` / `FAIL` / `ABORT` (`TERMINAL_STATES`, `lineage_events.py:35`).
+1. **Terminal state** — `COMPLETE` / `FAIL` / `ABORT` (`TERMINAL_STATES`, `lineage_events.py:39`).
    `START`/`RUNNING` notify nobody by product decision. `RECONCILED` is excluded on purpose: it is
    lineage's REPAIR marker for a run whose real terminal event was lost, not an outcome anyone chose.
 2. **A VERIFIED `rask_author.sub`** — see the trap below. This is the one that keeps biting.
@@ -112,8 +111,11 @@ does not verify. Notifications' `/lineage-events` checks the same signature agai
 `notifications_signature_refused_total`), `observe` delivers it and counts it, and `off`, the default, verifies nothing,
 so an unsigned event still rings the bell for a run lineage's feed never recorded (trap 5, `docs/LINEAGE.md` § Signed events).
 The inbox's release names those signer sets (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`,
-`RASK_CONTROL_SIGNER_ROLES`, `service_kit.signature_doors`) and gives its sidecar read of each signer's
-`signing-public-<identity>`; no store role the product chart renders grants a client that read.
+`RASK_CONTROL_SIGNER_ROLES`, `service_kit.signature_doors`), and its sidecar reads each signer's
+`signing-public-<identity>` through the product chart's `openbao.externalReaders`, an allowlist the client's own values
+fill (`deploy/fixtures/console/lakehouse-values.yaml` grants the inbox `nats-user-notifications` and the catalog's and
+maintenance's `signing-public-*`): a reader may hold only `nats-user-<app>`, `<app>-<name>` and `signing-public-<name>`,
+and the render refuses anything wider (`lance.storeReads`, `chart/templates/_helpers.tpl`).
 
 ```python
 event = {
@@ -282,7 +284,7 @@ so it must read as a reason a person would accept; and `notification-center.stor
    that verified the caller: a `ServicePrincipal` (a projected service-account token, [[LH-220]]) is a
    service, and an IdP token is a person whatever claims it carries.
 2. **A service token SUBSTITUTES the author.** If your emit runs behind a service bearer,
-   `enforce_author` (`lineage/api/fga_deps.py:296`) **overwrites** the facet with that service's
+   `enforce_author` (`lineage/api/fga_deps.py:297`) **overwrites** the facet with that service's
    sub — "never trust the request body" is doing its job, and your human is gone. Carrying the human's
    sub through your own call graph is the only fix.
 3. **No `rask_lance.project` disables WATCH silently.** `api/fanout.py:108` skips the watcher loop entirely when
@@ -325,7 +327,9 @@ the lane and the tick would still log success. Each row carries only the targeti
 time, the `rask_author`, `rask_lance` and `parent` facets, and each output's name with its own `rask_lance` facet, which carries the table's
 uuids), because addressing people needs nothing more. A
 deployment that forgets the grant gets a 403 on every tick, and no retry helps: the invocation retry the inbox's
-release scopes to its app-id retries `408,429,500-599` and never a 4xx, because a 403's answer will not change.
+release renders (`<rask.release>-notifications-invocation-resiliency`, `deploy/fixtures/console/chart/templates/inbox-dapr.yaml`:
+constant 2 s, 3 retries, targeting app `lineage`, scoped to the inbox's app id) retries `408,429,500-599` and never a 4xx,
+because a 403's answer will not change.
 Delivery needs `can_be_notified` and render needs `can_get_metadata` on `table:<output uuid>` per recipient, each asked
 through the catalog's decision door (`check`, on the account's `decider` role); an FGA outage is fail-closed (RETRY),
 never a delivery.

@@ -7,8 +7,8 @@
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation.
 	import { Select } from '@rask/ui/select';
-	import { requestBinary } from '$lib/http';
-	import { CATALOG_API } from '$lib/upstreams';
+	import { requestBinary } from '#lib/http.ts';
+	import { CATALOG_API } from '#lib/upstreams.ts';
 	import { typeName, type SchemaField } from './type-name';
 
 	let { table, fields }: { table: string; fields: SchemaField[] } = $props();
@@ -72,6 +72,7 @@
 		{#if blobSrc}
 			{#if blobFailed}
 				<p class="mut">
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- a blob: URL, not a route -->
 					Not an inline-previewable image — <a href={blobSrc} download>save the blob</a>.
 				</p>
 			{:else}

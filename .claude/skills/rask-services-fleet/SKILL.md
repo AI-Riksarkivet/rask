@@ -73,7 +73,10 @@ run feed (`GET /events/projection?since=`) forward from a persisted cursor. **Li
 tick** (`lineage-relay-cron`, past `services.lineage.eventsRetentionDays`) and cannot consult this cursor, so the feed
 reports `oldest_seq` and the reconciler compares it against its own mark: a mark below that floor is
 `ReconcileResult.gapped`, an ERROR (`lineage_feed_pruned_below_cursor`) and the `notifications.feed.gaps` counter. That
-cron route is **root-mounted**, not under the api prefix: Dapr delivers an input binding to `POST /<component name>` at
+reconciler has no retry of its own: its reads of lineage go through service invocation, and the console release's
+invocation Resiliency (`<rask>-notifications-invocation-resiliency`, constant 2 s × 3 on `408,429,500-599`, target app
+`lineage`, scoped to the inbox) is that call's one retry layer; a pass that still fails is walked again by the next tick
+from the same mark. That cron route is **root-mounted**, not under the api prefix: Dapr delivers an input binding to `POST /<component name>` at
 the pod root, so the Component name, `RASK_NOTIFICATIONS_BINDING_NAME` and the served path are one string.
 
 What the lakehouse admits for it lives in the console's `deploy/fixtures/console/lakehouse-values.yaml`, layered onto
@@ -81,7 +84,8 @@ the lakehouse release by `make k3s-up`: its ServiceAccount in `auth.externalDeci
 `event_reader`), its bus user in `nats.auth.users`, and its store reads in `openbao.externalReaders`. The reconciler
 presents its pod's projected `rask-lineage` token ([[LH-220]]); the projection is gated on `can_read_event_feed` at the
 estate root ([[CTL-021]]), so an account without `event_reader` 403s every tick. Without an actor state store scoped to
-its app-id (the console release renders one on CloudNativePG) actor hosting is disabled: a healthy pod with a
+its app-id (the console release renders one on a CloudNativePG Cluster by default, or names the platform's Postgres
+through `state.external.connectionSecret`) actor hosting is disabled: a healthy pod with a
 permanently empty bell.
 
 ## Dev loops and the edge
@@ -89,10 +93,12 @@ permanently empty bell.
 There is no local router. `make dev-micro` (`scripts/dev-micro.sh`) runs the inbox alone on :8850 with no sidecar and
 no edge: `require_actor_plane` then answers every inbox route `503` with the reason, and the bus subscription is
 declared but nothing delivers to it. The console's `/api` needs an edge on `RASK_EDGE_URL` (default
-`http://localhost:8888`):
+`http://localhost:8080`), and the dev server signs in at the Dex that edge serves under `/dex`
+(`frontend/console/dev/config.json`):
 
-- **`make dev-k3s`** port-forwards k3s Traefik's Service (`kube-system/traefik`, the Gateway that serves both releases'
-  HTTPRoutes) to :8888 and runs the console with Vite HMR against it. Needs `make k3s-up` and `make k3s-clients`.
+- **`make dev-k3s`** uses :8080 when it already serves the issuer; otherwise it port-forwards k3s Traefik's Service
+  (`kube-system/traefik`, the Gateway that serves both releases' HTTPRoutes) to :8080, waits until `/dex` and
+  `/api/lineage/livez` answer, and runs the console with Vite HMR against it. Needs `make k3s-up` and `make k3s-clients`.
 - **`make dev`** runs the console against whatever edge `RASK_EDGE_URL` names.
 
 The console has one Vite `/api` proxy (`frontend/console/vite.config.ts`), to `RASK_EDGE_URL`; it never addresses a
@@ -108,9 +114,9 @@ service directly. See `rask-frontend`.
    resources the service doesn't use.
 3. **Longest prefix wins, and there is NO `/api` catch-all.** Gateway API resolves overlapping `PathPrefix` matches
    longest-first and matches path elements, so `/api/lineage` beats the console's `/`, and `/api/catalog` never matches
-   `/api/catalogx`. An `/api/*` path no row names falls to the console's `/` rule, so the web pod answers it with the
-   SPA's `index.html`, not a 404: a browser `fetch` to a wrong prefix gets HTML with status 200. A new public prefix
-   needs its own row.
+   `/api/catalogx`. An `/api/*` path no row names falls to the console's `/` rule, and the web pod's `serve.ts`
+   answers `/api` and `/api/*` 404 `{"detail": "no route serves <path>"}` rather than the SPA, so a wrong prefix is
+   visible. A new public prefix needs its own row.
 4. **A 5xx with no rask body is the Gateway's.** A backend Service with no ready endpoint, or a port the Service does
    not expose, is answered by the Gateway implementation (Traefik, kgateway, …) with its own status and body, never a
    problem+json. Use that to tell "backend down" from "the service refused": every rask service answers with its own

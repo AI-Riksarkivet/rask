@@ -188,18 +188,22 @@ make k3s-install      # one-time: k3s + helm (sudo)
 make k3s-build        # build the lakehouse image, the inbox and the console as :dev, through Dagger
 make k3s-import       # side-load the :dev images into k3s containerd
 make k3s-up           # the fixtures (FIXTURES), each its own release, then helm upgrade --install rask ./chart --wait
-make k3s-clients      # the console's release (web + inbox), after the lakehouse
-make e2e              # the browser e2e against the deployed console (run after k3s-clients)
+make k3s-clients      # the console's release (web + inbox), after the lakehouse; waits (up to 600 s) for its pods
 make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
 `lance-rest-catalog` (the lakehouse image that serves catalog, lineage and maintenance), `notifications` (the inbox)
-and `console` (the console's static-file image). `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
+and `web-console` (the console's static-file image, from `frontend.dockerfile`). `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
 `sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
 `default`, the fixtures' namespace), and `values-live-pins.yaml` files are per-host state from `make k3s-pins`, never
-committed ([[XC-152]]). The dev-registry path (`make dev-registry`, then `dagger call image --name=<stem> publish
+committed ([[XC-152]]); `scripts/k3s-pins.sh` also writes `deploy/fixtures/console/values-live-pins.yaml` (the web and
+inbox images the console release runs), which `scripts/fixtures.sh` layers last onto `make k3s-clients`. The dev-registry path (`make dev-registry`, then `dagger call image --name=<stem> publish
 --address=172.17.0.1:5000/<stem>:<tag>`) remains for the in-cluster loop `CLAUDE.md` describes.
+
+The kind lane (`make e2e-ci`, `scripts/e2e_stack.sh`) builds the same set the same way: every image the lane's render
+side-loads (`scripts/side_loaded_images.py`) becomes an OCI tarball through `scripts/dagger-image.sh --tag … --out`, and
+`kind load image-archive` loads it; nothing runs docker.
 
 ## Container images (`.docker/`)
 
@@ -211,7 +215,7 @@ locally and in CI.
 |---|---|---|
 | `lance-rest-catalog` | `rest-catalog.dockerfile` | The lakehouse image, one image for several deployments: `catalog`, `lineage` and `maintenance`, plus the chart's Jobs and hooks. It installs no client, so deleting a client changes nothing it builds. |
 | `notifications` | `notifications.dockerfile` | The inbox, `uv sync --frozen --package notifications` against the root `uv.lock`; the console's release deploys it (`deploy/fixtures/console`). |
-| `console` | `frontend.dockerfile` | The console: the single-page app built to static files, served by its own small Bun server (`frontend/console/serve.ts`) with the runtime `config.json` the console's chart mounts. No server-side rendering, no backend of its own; tini as PID 1, non-root UID 10001. |
+| `web-console` | `frontend.dockerfile` | The console: the single-page app built to static files, served by its own small Bun server (`frontend/console/serve.ts`) with the runtime `config.json` the console's chart mounts. No server-side rendering, no backend of its own; tini as PID 1, non-root `USER 1000`. |
 
 The console's topology (one route tree, the shared `@rask/ui` shell, browser sign-in with PKCE) is documented in the
 `rask-frontend` project skill (`.claude/skills/rask-frontend`).
@@ -224,7 +228,7 @@ they run, and it writes through the catalog's namespace doors. The chart install
 operator, no RayCluster or RayService, no GPU reservation and no Serve application.
 
 A compute engine's companions (a Ray dashboard client, a Serve proxy, the engine's own fixtures) are clients outside
-this repository; they were here until git history at `64ef118a9`. The product chart names no part of an engine: no
+this repository (git history at `64ef118a9` holds them). The product chart names no part of an engine: no
 address, token, scrape job, alert or network peer (ADR 0189).
 
 ## Helm chart (`chart/`)
@@ -253,9 +257,28 @@ address, token, scrape job, alert or network peer (ADR 0189).
 
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
 `deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, Dapr, NATS, the CloudNativePG operator,
-Dex, RustFS, OpenBao, the telemetry chain, the lineage graph backend and the SMTP relay. It installs no client:
-`make k3s-clients` adds the console's release after it (the web image, the inbox and their HTTPRoute), reaching the
-lakehouse by reference. A platform brings its own.
+Dex, RustFS, OpenBao, the telemetry chain and the lineage graph backend (the SMTP relay only with
+`FIXTURES=mailpit`). It installs no client: `make k3s-clients` adds the console's release after it (the web image, the
+inbox and their HTTPRoute), reaching the lakehouse by reference, and waits up to 600 s for its pods. A platform brings
+its own.
+
+The console's release (`deploy/fixtures/console/chart`) carries what the console and the inbox need, and the lakehouse
+names none of it:
+
+- **Its sign-in client.** `deploy/fixtures/console/dex-values.yaml` declares the public client `rask-console` (PKCE,
+  redirecting to `/auth/callback` on `:8080` and the Vite dev server's `:5173`, the dev server's origin allowed for
+  CORS), which `make k3s-fixtures` layers onto Dex by glob. The Dex fixture enforces S256 PKCE on every authorization
+  code and serves no device grant; its own client `rask-web` is confidential, for the live lanes' password grant.
+- **Its admissions.** `deploy/fixtures/console/lakehouse-values.yaml` maps the inbox's ServiceAccount to its estate roles
+  (`auth.externalDeciders`) and grants its sidecar its secret-store reads through `openbao.externalReaders`, an
+  allowlist: a reader may hold only `nats-user-<app>`, `<app>-<name>` and `signing-public-<name>`, and the render
+  refuses a lakehouse app id or any name another identity holds.
+- **The inbox's state.** A CloudNativePG `Cluster` the release renders by default, or a platform's Postgres named by
+  `state.external.connectionSecret` (with `caSecret` for `verify-full` and `egress` for the NetworkPolicy), in which
+  case no Cluster is rendered.
+- **Its one retry layer on lineage's feed.** The Resiliency `<rask release>-notifications-invocation-resiliency`
+  retries the inbox's invocations of app `lineage` (constant 2 s, 3 retries, `408,429,500-599`, never a 4xx); a sidecar
+  reads it on restart.
 
 ### The first estate admin
 

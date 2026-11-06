@@ -4,7 +4,7 @@
 	// granted a rung (edges subject→object labelled owner/writer/reader/validator), and the parent/project
 	// container edge. Click a subject to prefill the grant form; grant/revoke re-fetches so the graph
 	// reflects the change. SvelteFlow (reusing the LineageExplorer pattern) + @rask/ui Select + GSAP.
-	import AccessNode, { type AccessNodeType } from '$lib/data/AccessNode.svelte';
+	import AccessNode, { type AccessNodeType } from '#lib/data/AccessNode.svelte';
 	import type { NodeTypes } from '@xyflow/svelte';
 
 	// svelte-flow rule 5: register node components ONCE at module scope, not inline.

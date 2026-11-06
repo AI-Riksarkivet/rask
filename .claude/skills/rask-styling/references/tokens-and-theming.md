@@ -1,14 +1,14 @@
 # Tokens & theming
 
-Source: `frontend/packages/ui/src/lib/styles/tokens.css` (154 lines). Tailwind 4 CSS-first — there is no `tailwind.config.js`.
+Source: `frontend/packages/ui/src/lib/styles/tokens.css` (151 lines). Tailwind 4 CSS-first — there is no `tailwind.config.js`.
 
 ## The five blocks
 
 1. `@custom-variant dark (&:is(.dark *))` — line 1. Class-based dark mode.
-2. `:root` (13-69) — light OKLCH values + the legacy bridge.
-3. `.dark` (71-103) — dark OKLCH values.
-4. `@theme inline` (105-142) — maps every raw name to a `--color-*` Tailwind utility, plus radii and fonts.
-5. `@layer base` (144-154) — `border-border` on `*`; `bg-background text-foreground antialiased` on `body`, with `font-feature-settings: 'cv02','cv03','cv04','cv11'`.
+2. `:root` (9-66) — light OKLCH values + the legacy bridge.
+3. `.dark` (68-100) — dark OKLCH values.
+4. `@theme inline` (102-139) — maps every raw name to a `--color-*` Tailwind utility, plus radii and fonts.
+5. `@layer base` (141-151) — `border-border` on `*`; `bg-background text-foreground antialiased` on `body`, with `font-feature-settings: 'cv02','cv03','cv04','cv11'`.
 
 Declaring a raw value without the matching `@theme inline` line gives you a custom property with **no utility class**. Add both.
 
@@ -29,7 +29,7 @@ Declaring a raw value without the matching `@theme inline` line gives you a cust
 | `input` | `0.905 0.008 260` | `oklch(1 0 0 / 12%)` | `border-input` |
 | `ring` | `0.45 0.18 250` | `0.68 0.16 250` | `ring-ring` |
 | **`success`** / `success-foreground` | `0.65 0.2 145` | same | `bg-success` |
-| **`warning`** / `warning-foreground` | `0.75 0.18 75` | same | `bg-warning` |
+| **`warning`** / `warning-foreground` | `0.75 0.18 75` / `0.16 0.006 270` | `0.75 0.18 75` / `0.985 0 0` | `bg-warning` |
 | `sidebar*` (7 tokens) | `0.965 0.004 260` | `0.16 0.008 260` | `bg-sidebar` |
 
 `success` and `warning` are rask additions to the shadcn set — `badgeVariants` (`badge.svelte:14-15`) is the reference consumer. Note the dark `border`/`input` are **alpha-on-white**, not opaque; a hand-written hairline that hardcodes an opaque grey will not match.
@@ -37,7 +37,7 @@ Declaring a raw value without the matching `@theme inline` line gives you a cust
 Radii: `--radius: 0.625rem`, with `--radius-sm/md/lg/xl` derived by `calc()` (−4px, −2px, +0, +4px).
 Fonts: `--font-sans: 'Inter'`, `--font-mono: 'JetBrains Mono'`.
 
-## The legacy bridge (`tokens.css:48-68`)
+## The legacy bridge (`tokens.css:44-65`)
 
 ```css
 --ink: var(--foreground);      --mut:     var(--muted-foreground);
@@ -47,7 +47,7 @@ Fonts: `--font-sans: 'Inter'`, `--font-mono: 'JetBrains Mono'`.
 --warn: var(--warning);        --amber:   var(--warning);
 ```
 
-These names predate the shadcn migration and were referenced by ~800 sites across 45 components **while undefined**. An undefined custom property makes the whole declaration invalid: `background: var(--panel)` fell back to transparent, and `border-color: var(--line)` fell back to `currentColor` — every hairline painted in full text colour. The bridge repairs all of them in both themes at once, because the targets are themselves re-declared under `.dark`.
+These names predate the shadcn set and carry ~500 references in 34 files under `frontend/` (measured 2026-11-06). Without the bridge each is **undefined**, and an undefined custom property makes the whole declaration invalid: `background: var(--panel)` falls back to transparent, and `border-color: var(--line)` falls back to `currentColor`, painting every hairline in full text colour. The bridge repairs all of them in both themes at once, because the targets are themselves re-declared under `.dark`.
 
 Migration is opportunistic: when you touch a component still on a legacy name, swap it for the token. Delete the block when `grep -r "var(--ink" frontend/` is empty.
 
@@ -71,9 +71,9 @@ an inline script would be refused unless its hash were added to the policy. The 
 
 ## View transitions
 
-`tokens.css:3-11` keeps cross-document view transitions off. The console is one document whose navs are soft, so they
-animate through `onNavigate → startViewTransition` in the root layout, and the at-rule would buy nothing. (The comment
-in `tokens.css` reasons from separate documents per zone; its conclusion holds for the one app.)
+`tokens.css:3-7` keeps cross-document view transitions off. The console is one document: its only cross-document
+navigations are the sign-in round trip, where a whole-viewport crossfade reads as a flicker, and its soft navs animate
+through `onNavigate → startViewTransition` in the root layout, independent of the at-rule.
 
 ## `components.json` is stale scaffolding
 

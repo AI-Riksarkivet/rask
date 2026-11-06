@@ -21,7 +21,7 @@ import logging
 #: The top-level app packages whose module loggers (``logging.getLogger(__name__)``) must emit INFO. Their
 #: effective level inherits from these package loggers, so raising the package raises the whole tree.
 #: These are the lakehouse's own packages. A client of the lakehouse names its own packages when it calls
-#: :func:`configure_app_logging`, and a sealed runner configures its own logging: naming either here would put a
+#: :func:`configure_app_logging`, and a workload configures its own logging: naming either here would put a
 #: tool's or a workload's name in a shared seam.
 _APP_LOGGERS = (
     "catalog",

@@ -3,7 +3,7 @@ import { mockMe, signIn, TOKEN } from './session';
 import { MOCK_LINEAGE } from './ports';
 
 // Hermetic /dlq coverage (#83): the ops panel reads the transactional-outbox backlog and replays one
-// staged event (`$lib/lineage/remote/lineage.api.ts`). The outbox is seeded on the mock lineage
+// staged event (`#lib/lineage/remote/lineage.api.ts`). The outbox is seeded on the mock lineage
 // service per BEARER, and the replay is asserted through that service's own ledger: the events render,
 // a replay drains the event out of the list, poison is
 // unreplayable, and the nav exposes the route.

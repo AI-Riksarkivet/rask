@@ -82,6 +82,14 @@ def _grant(h: _Harness, user: str, relation: str) -> members.MemberList:
     return asyncio.run(members.grant_member("acme", body, _client(), _control(), _settings(), _token()))
 
 
+def test_a_denied_gate_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    h = _Harness(allow=False)
+    h.install(monkeypatch)
+    with pytest.raises(ForbiddenError):
+        _grant(h, "dex~bob", "admin")
+    assert h.written == []
+
+
 # --------------------------------------------------------------------------- #
 # The gate, on the project object
 # --------------------------------------------------------------------------- #

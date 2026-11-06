@@ -126,7 +126,7 @@ no third-party CLI image a registry could withdraw ([[XC-075]]).
 ## `- name: provision`
 
 RustFS's NATIVE admin API under `/rustfs/admin/v3`, SigV4-signed (service `s3`) with the root pair and plain JSON
-bodies, the calls the 2026-10-18 measurement drove (docs/audits/2026-10-18/rustfs-zero-trust.md). The admin
+bodies, the calls the 2026-10-18 measurement drove (`scripts/rustfs_sts_measure.py`; the audit is in git history at 64ef118a9). The admin
 API's compatibility alias wants encrypted bodies and is not used. `scripts/rustfs_admin.py` reads the root
 secret and every scoped secret from files and prints no secret; a store that never answers fails it after a bounded
 wait.
@@ -198,7 +198,7 @@ NO USER HOLDS IT ([[XC-083]], ADR 0170). It is written under the catalog's accou
 verified token exactly the canned policy its `sub` names, with no role policy (deploy/fixtures/rustfs
 `identityProvider`). So the catalog's projected token is exchanged for sessions under this policy, its own IO and every
 vend, the vend's narrowed further by a per-table session policy, and every other account's token maps to no policy
-and is refused (measured on rustfs/rustfs 1.0.3, docs/audits/2026-10-18/rustfs_web_identity_measure.py). There is no
+and is refused (measured 2026-10-18 on rustfs/rustfs 1.0.3, scripts/rustfs_web_identity_measure.py). There is no
 key to rotate: each session lives an hour at most, and the kubelet rotates the token it is exchanged for.
 
 The DATA grant cannot be narrowed by bucket: warehouse buckets are minted at RUNTIME by

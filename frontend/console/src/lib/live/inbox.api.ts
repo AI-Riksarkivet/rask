@@ -1,5 +1,5 @@
-import { command, getRequestEvent, query } from '$lib/remote.svelte';
-import { NOTIFICATIONS_API } from '$lib/upstreams';
+import { command, getRequestEvent, query } from '#lib/reads.svelte.ts';
+import { NOTIFICATIONS_API } from '#lib/upstreams.ts';
 import {
 	dismissNotification,
 	INBOX_PAGE_LIMIT_MAX,
@@ -39,31 +39,37 @@ function inboxRequest() {
  *  is a key into the caller's own actor state. */
 const NotificationIdSchema = v.pipe(v.string(), v.minLength(1), v.maxLength(512));
 
+/** The reader of a stack that signs nobody in: the inbox serves it one anonymous inbox. */
+export const ANONYMOUS = 'anonymous';
+
+/** A person the bell reads for: the session's `sub`, or the one anonymous inbox of a stack that signs
+ *  nobody in. It keys the read's cache, so each person gets an inbox of their own in this tab. */
+const BellReaderSchema = v.pipe(v.string(), v.minLength(1), v.maxLength(512));
+
+/** What the bell renders: one page of rows, the badge for the whole inbox, and the read state the
+ *  inbox holds for those rows. */
+export interface InboxBell {
+	panel: InboxPanel;
+	held: InboxReadState;
+}
+
 /**
- * The read state this subject's inbox already holds, or `null` when it did not answer.
+ * The bell's one read of `GET /inbox`, or `null` when the inbox did not answer (the outage case and an
+ * unrouted stack alike: the bell then renders on its own per-tab memory rather than a blank panel).
  *
- * NULL IS NOT AN ERROR — it is the auth-off dev case and the outage case, and both must leave the
- * bell rendering on the component's own per-tab memory.
+ * ONE call answers both halves: the rows and the badge (`inboxPanel`), and the seen/dismissed sets the
+ * inbox already holds for them (`inboxReadState`), so a page load sends the request once.
  *
- * ONE PAGE, at the service's own ceiling. The bell renders a 20-row window (`NOTICE_WINDOW`), so
- * the newest 100 delivered notifications cover anything it can still be displaying in every
- * realistic case; the one that escapes is an old FAILED run, which the run feed sorts to the front
- * while the inbox keeps it in date order. That row then renders UNREAD — the safe direction for a
- * notification surface, and the reason this is a bound worth naming rather than a loop worth
- * writing.
+ * Keyed by `reader`, never read from it: the request carries the signed-in person's bearer, and the
+ * inbox derives whose inbox it is from that token. The key is what makes a different person a
+ * different read, so signing in as someone else never shows the previous person's rows.
  *
- * THE ROWS THIS CAN SPEAK FOR ARE THE ONES YOU AUTHORED, and that is the bound worth reading twice.
- * The panel's rows come from `GET /runs` — governed by DATASET visibility, so every run whose outputs
- * you can `can_get_metadata`, whoever ran it. The inbox is filled by AUTHORSHIP (D4's v1 targeting:
- * `audience_for(notice)` is `(notice.author,)`) and only on COMPLETE/FAIL/ABORT. A stage runner's failed run
- * you can see but did not start therefore has no pointer here, `markSeen` on it stores nothing, and it
- * is unread again after a reload — S1 does not regress that, and it does not fix it either. Closing it
- * is S3 (the panel renders inbox rows) or S4 (project watch widens the audience); it is not a loop to
- * add here, because there is nothing on the wire to read back.
+ * ONE PAGE, at the service's ceiling (`INBOX_PAGE_LIMIT_MAX`): the bell renders a 20-row window, and
+ * an older row outside the page renders unread, the safe direction for a notification surface.
  */
-export const readInboxState = query(async (): Promise<InboxReadState | null> => {
+export const readInboxFeed = query(BellReaderSchema, async (_reader): Promise<InboxBell | null> => {
 	const result = await readInbox(inboxRequest(), { state: 'all', limit: INBOX_PAGE_LIMIT_MAX });
-	return result.ok ? inboxReadState(result.data) : null;
+	return result.ok ? { panel: inboxPanel(result.data), held: inboxReadState(result.data) } : null;
 });
 
 /**
@@ -87,25 +93,6 @@ export const dismiss = command(
 	(notificationId): Promise<ApiResult<DismissResult>> =>
 		dismissNotification(inboxRequest(), notificationId),
 );
-
-/**
- * The Inbox tab's ROWS — S3's half of this file, and the one that closes S1's stated gap.
- *
- * `readInboxState` above projects the inbox onto the RUN feed's read state, which could only ever
- * speak for runs you authored: the panel rendered `GET /runs` (dataset-governed, everyone's work)
- * while the inbox holds pointers addressed to you, so marking a row you did not author wrote into a
- * mailbox with no pointer for it and the mark evaporated on reload. Rendering these rows directly is
- * what makes the two sets one set — a dismissed row is simply absent, and there is no read state to
- * reconstruct.
- *
- * `null` is the un-wired answer, not an error: no session (auth-off dev), or no notifications
- * service. The bell then renders NO tabs and falls back to the run feed, which is what keeps a dev
- * server working with no cluster behind it.
- */
-export const readInboxFeed = query(async (): Promise<InboxPanel | null> => {
-	const result = await readInbox(inboxRequest(), { state: 'all', limit: INBOX_PAGE_LIMIT_MAX });
-	return result.ok ? inboxPanel(result.data) : null;
-});
 
 /** One watched project, as the notifications service records it. */
 const WatchListSchema = v.object({

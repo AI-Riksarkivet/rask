@@ -35,7 +35,7 @@ const TABLES = [
 	'acme-bronze$very-long-table-identifier-for-overflow-checking',
 	'acme-silver$another-extremely-long-table-identifier-here',
 	'acme-gold$catalog',
-];
+] as const;
 
 const WIDTHS = [1440, 1024, 900, 768, 600];
 

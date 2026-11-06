@@ -1,6 +1,6 @@
 # Lance blob v2 — measured behaviour, and one landmine
 
-> Empirical notes for the medallion bronze page-image datasets. Every claim here was produced by
+> Empirical notes for blob-v2 columns in governed tables. Every claim here was produced by
 > running against the installed pylance, not read from documentation. Reproduce with the scripts
 > described at the bottom.
 >
@@ -77,7 +77,7 @@ take_blobs returned: 2          -> nulls silently dropped
 scanner(blob_handling="all_binary") -> 3 rows, the null correctly None
 ```
 
-**Why this matters here.** The bronze page-image dataset is read by row. Any code shaped like
+**Why this matters here.** A blob-bearing table is read by row. Any code shaped like
 
 ```python
 for key, (_addr, payload) in zip(page_keys, ds.read_blobs("blob", indices=idx)):   # WRONG
@@ -91,17 +91,16 @@ class, exactly the kind this estate's gates exist to catch.
 
 1. Use `scanner(columns=[…], blob_handling="all_binary")` — it preserves cardinality correctly, nulls
    included, and it returns the tabular columns in the SAME scan, so alignment holds by construction with
-   no mask to maintain. In this repo that is `lakehouse_kit.blobs.read_aligned_table`, which the
-   viewer's page reads use.
+   no mask to maintain. Inside the lakehouse that is `lakehouse_kit.blobs.read_aligned_table`; a client, which
+   imports no lakehouse-kit, makes the same scanner call itself.
 2. Key off the row address the API already returns — `read_blobs` yields `(row_address, payload)` and
    `read_blob_ranges` yields `(request_index, row_address, payload)`; map results back by that
    identifier rather than by position.
 3. If positional access is unavoidable, filter the selection to non-null rows first (`is_valid`) so the
    input and output cardinalities agree by construction — **and only on pylance ≥ 9** (see below).
-4. Where neither is possible (a Ray actor that only receives row ids), assert
-   `len(payloads) == len(row_ids)` and fail with the cause named. `ratch`'s `_BlobActor` and
-   `engine._read_blobs` do this: a broadcasting UDF could otherwise return the right length from short
-   input and turn a loud error into silent misattribution.
+4. Where neither is possible (a distributed worker that only receives row ids), assert
+   `len(payloads) == len(row_ids)` and fail with the cause named: a broadcasting UDF could otherwise
+   return the right length from short input and turn a loud error into silent misattribution.
 
 **Note the reference implementation.** `lance_ray`'s own `datasource._read_fragments` handles exactly this
 case explicitly: it compares `len(blob_files)` with the number of scanned descriptors and switches between
@@ -132,17 +131,16 @@ Related `lance-ray` version facts measured in the same pass:
   `merge_columns_from`, `vector_search` and the reusable global Ray Pool are 0.5.0-only too.
 - `lance_ray.create_scalar_index` fails at 0.4.2 + pylance 8.0.0 with *"BTREE distributed indexing uses
   `create_index_uncommitted(..., index_type="BTREE", fragment_ids=...)`"* — **even though 8.0.0 has both
-  parameters**, contrary to what `ray_lance_job.py` recorded. The conclusion (fall back to the native
+  parameters**, contrary to what `ray_lance_job.py` (git history at `64ef118a9`) recorded. The conclusion (fall back to the native
   build) held; the stated reason did not.
 - `lance_ray.read_lance(uri, scanner_options={"with_row_id": True})` **does** surface `_rowid` (verified at
   both 0.4.2 and 0.5.0) — see ADR 0122 (in git history at `64ef118a9`).
 
-## Sizing note for rask's page images
+## Sizing note for large payloads
 
-Riksarkivet page scans run ~5 MB (the ra-hcp profile says so itself). Against the 2 MiB default that
-puts **every page in its own dedicated `.blob` file** — fine for a 10-page proof, but 100k pages means
-100k objects on RustFS. Whether pages should pack instead is a deliberate tuning decision the bronze
-ingest head should own (via `blob_field(..., dedicated_size_threshold=…)`), not inherit by default.
+A ~5 MB payload against the 2 MiB default puts **every row's blob in its own dedicated `.blob` file**:
+fine for a 10-row proof, but 100k rows means 100k objects in the store. Whether payloads should pack
+instead is a deliberate tuning decision the table's writer should own (via `blob_field(..., dedicated_size_threshold=…)`), not inherit by default.
 
 ## Reproducing
 
@@ -157,5 +155,6 @@ the cardinality bug in particular should be re-checked, and this note updated if
 
 ## Who relies on this
 
-A client's blob read path is what these measurements govern: the document viewer was the first, and it is now a
-client outside this repository (git history at `64ef118a9`).
+A client's blob read path is what these measurements govern. In this repository the catalog's blob serving
+(`services/catalog/src/catalog/services/blob_serving.py`) and its fragment checks (`client_fragments.py`) read blob
+columns through `lakehouse_kit.blobs`.

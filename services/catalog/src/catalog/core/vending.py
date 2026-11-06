@@ -14,7 +14,7 @@ to reach object storage directly. The target is **S3-compatible** storage: the p
 
 WHAT THE DEVELOPMENT STORE ANSWERS IS MEASURED, not inferred, because getting it backwards costs the whole data
 plane: a vendor the store refuses vends nothing, and every direct-to-store read falls back or fails. Measured
-2026-10-18 on ``rustfs/rustfs`` 1.0.3 (`docs/audits/2026-10-18/rustfs_web_identity_measure.py`): a Kubernetes-shaped
+2026-10-18 on ``rustfs/rustfs`` 1.0.3 (`scripts/rustfs_web_identity_measure.py`): a Kubernetes-shaped
 token for the store's audience whose subject names a canned policy is exchanged; its session policy is enforced as an
 intersection with that policy (a read session's GET in scope 200, another prefix, another tenant and a PUT 403, and a
 session policy naming a bucket the canned policy lacks grants nothing); Lance creates and appends a dataset on the

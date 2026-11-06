@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from contextlib import AbstractContextManager, nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -354,10 +355,60 @@ def test_output_authz_output_less_still_requires_auth() -> None:
 
 
 # --- A service principal on the HTTP ingest ----------------------------------------------------------
-# The Ray TRAIN job is a sidecar-less IN-CLUSTER producer (RAY-TRAIN.md D2): it POSTs the HTTP ingest with its
-# pod's projected token, which the door verifies into a `ServicePrincipal` (`service_kit.governed.machine_identity`). The
-# door itself is driven over HTTP in `services/lineage/tests/test_a_claimed_service_name_authenticates_nobody.py`;
+# A sidecar-less in-cluster producer (a user's pipeline job on its own compute, ADR 0155) POSTs the HTTP ingest with
+# its pod's projected token, which the door verifies into a `ServicePrincipal` (`service_kit.governed.machine_identity`).
+# The door itself is driven over HTTP in `services/lineage/tests/test_a_claimed_service_name_authenticates_nobody.py`;
 # this pins what the ingest gates do with the principal it hands them.
+
+
+_SERVICE_ACCOUNT = "system:serviceaccount:default:rask-sa-pipeline"
+#: The OpenFGA subject the service principal above is.
+_SERVICE = f"kubernetes~{_SERVICE_ACCOUNT}"
+
+
+def _service_run() -> RunEvent:
+    """A run the service principal posts, writing `gold$scores`."""
+    return RunEvent.model_validate(
+        {
+            "eventType": "COMPLETE",
+            "eventTime": "2026-07-13T09:00:00+00:00",
+            "producer": "https://github.com/Borg93/lance-ns",
+            "run": {"runId": "11111111-1111-5111-8111-111111111111", "facets": {}},
+            "job": {"namespace": "pipelines", "name": "score.daily"},
+            "inputs": [],
+            "outputs": [{"namespace": "gold", "name": "gold$scores", "facets": {"rask_lance": {"tableUuid": _uuid("gold$scores")}}}],
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    ("held", "outcome"),
+    [
+        pytest.param({(_SERVICE, "can_write_data", _object("gold$scores"))}, nullcontext(), id="the-service-writes-the-output"),
+        pytest.param(set(), pytest.raises(PermissionDeniedError), id="the-service-holds-nothing-on-the-output"),
+    ],
+)
+def test_enforce_output_authz_bounds_a_service_principal_by_its_own_rung(held: set[tuple[str, str, str]], outcome: AbstractContextManager[object]) -> None:
+    """A service records provenance only for what its rung (`writer` on the output's namespace) permits.
+
+    The bus route authorizes the subject the event's signature binds (`enforce_bus_authz`); this door authorizes the
+    principal its bearer verified, so the decision is the service's own `can_write_data` on the output and never a
+    person's.
+    """
+
+    async def _batch_check(_client: Any, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
+        return {obj: (user, relation, obj) in held for obj in objects}
+
+    with pytest.MonkeyPatch.context() as mp, outcome:
+        mp.setattr(fga, "batch_check", _batch_check)
+        asyncio.run(
+            fga_deps.enforce_output_authz(
+                _service_run(),
+                _request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))),
+                _settings(**_FULL_AUTH),
+                security.ServicePrincipal.for_account(_SERVICE_ACCOUNT),
+            )
+        )
 
 
 def test_events_governs_on_columnlineage_source_datasets() -> None:

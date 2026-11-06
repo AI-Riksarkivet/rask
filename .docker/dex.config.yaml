@@ -9,12 +9,22 @@ web:
 oauth2:
   passwordConnector: local
   skipApprovalScreen: true
+  # As the dev fixture (deploy/fixtures/dex): every authorization code is bound to an S256 challenge, and the device
+  # grant, whose /auth leg carries none, is not served. The password grant never passes /auth.
+  pkce:
+    enforce: true
+    codeChallengeMethodsSupported: [S256]
+  grantTypes:
+    - authorization_code
+    - refresh_token
+    - password
+    - urn:ietf:params:oauth:grant-type:token-exchange
 staticClients:
+  # The stack's sign-in client, which the e2e and the governance demo sign in as with the password grant: confidential,
+  # with no redirect, so no browser signs in through it. Its secret is the dev fixture's (`clientSecret`).
   - id: rask-web
-    name: Web zones
-    public: true
-    redirectURIs:
-      - http://localhost:2333/auth/callback
+    name: rask web sign-in
+    secret: lance-catalog-secret
   # The lakehouse's audience (RASK_OIDC_AUDIENCE): Dex issues a token for it only to the client it trusts, asked with
   # `audience:server:client_id:rask-lakehouse`. Confidential, with a secret no client is given, so nobody signs in as it.
   - id: rask-lakehouse

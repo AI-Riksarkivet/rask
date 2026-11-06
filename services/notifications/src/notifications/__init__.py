@@ -26,12 +26,9 @@ from notifications.lifespan import actor_plane_ready, build_actor_host, make_lif
 from service_kit import make_service_app
 
 
-# `proxy_router` is `make_service_app`'s root-mount slot (compute already uses it for its cron
-# binding, which is delivered to POST /<name> at the root for the same reason).
-#
-# The PROBES used to be mounted here too, by hand — this was the only service that mounted them at
-# all. They moved into `make_service_app`, which now root-mounts them for every app it builds and
-# takes `ready_check=` for the service-specific half; `actor_plane_ready` is passed below.
+# `proxy_router` is `make_service_app`'s root-mount slot. The probes are not mounted here: `make_service_app`
+# root-mounts them for every app it builds and takes `ready_check=` for the service-specific half;
+# `actor_plane_ready` is passed below.
 _root = APIRouter()
 # The reconciler's cron binding: Dapr delivers an input binding to POST /<component name> at the root,
 # never under the api prefix, so it belongs in this slot rather than in `routers`.

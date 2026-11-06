@@ -75,11 +75,7 @@ line-length = 160
 #
 # `lance_docs/` is vendored upstream text (`lance_docs/PROVENANCE.md`): its bytes are the release's, so
 # formatting the Python blocks inside its Markdown would make the copy disagree with the tag it names.
-#
-# `docs/audits/` keeps a measurement script exactly as it was run against a store: it is the evidence the
-# audit's numbers rest on, and it talks to the store raw on purpose (no `storage.s3_client`, a direct
-# `lance.write_dataset`), so production's code-shape bans do not describe it and a reformat would change it.
-extend-exclude = [".vulture-whitelist.py", "lance_docs", "docs/audits"]
+extend-exclude = [".vulture-whitelist.py", "lance_docs"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "S", "C4", "SIM", "RUF", "C901", "RET", "PERF", "FURB", "A", "ANN"]
@@ -286,7 +282,7 @@ exclude = [
 # adding the directory is a separate act from adding the file, and a suite outside the list is green by
 # absence (measured 2026-08-09: three landed regression suites in services/catalog and services/lineage
 # had never run). pytest expands a glob in `testpaths` (measured, pytest 9.1.1).
-testpaths = ["packages/*/tests", "services/*/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+testpaths = ["packages/*/tests", "services/*/tests", "deploy/fixtures/*/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 # NO `--cov` HERE. It ran on EVERY pytest invocation in the estate and nothing read the result: no
 # `fail_under`, no xml report, no artifact upload, no threshold in `ci.yml` or `.dagger/` — so the
 # measurement was pure cost on the merge path and on every local run. `make coverage` computes it when

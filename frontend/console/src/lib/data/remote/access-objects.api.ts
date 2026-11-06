@@ -1,4 +1,4 @@
-import { command, query } from '$lib/remote.svelte';
+import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import {
@@ -19,8 +19,8 @@ import {
 	type PermissionKind,
 } from '../namespace';
 
-import { catalogJSON, parsed } from '$lib/doors';
-// Transport: the console's catalog door, `$lib/doors`.
+import { catalogJSON, parsed } from '#lib/doors.ts';
+// Transport: the console's catalog door, `#lib/doors`.
 // PER-OBJECT access (a table or a namespace), declared with `query`/`command` and answering the shared
 // `ApiResult` union. This is the OBJECT-scoped surface the catalog mounts under
 // `/v1/{table|namespace}/{id}/access/*`; the estate-wide FGA workbench (`lib/admin/access*`) is a

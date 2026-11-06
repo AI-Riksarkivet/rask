@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createTableWithRows } from './catalog';
 
-/** The real client is exercised, with only the network stubbed — a mocked `$lib/http` would assert
+/** The real client is exercised, with only the network stubbed — a mocked `#lib/http` would assert
  *  the arguments this module passes rather than the request it actually makes. */
 const realFetch = globalThis.fetch;
 afterEach(() => {

@@ -128,8 +128,8 @@ export type PanelRegistry = Record<string, PanelEntry>;
  * `absent` means the user genuinely has no saved layout — seed a default and saving is safe.
  * `unreadable` means one EXISTS and could not be read (schema drift, an owner mismatch, or the
  * store being unreachable). Reported as `absent`, the dock would seed a default layout and the next
- * autosave would overwrite a workspace that is still there. This is the same contract the media
- * page's `$lib/user-state.ts` already implements against the catalog's 409, and the same reason.
+ * autosave would overwrite a workspace that is still there. The console's
+ * `#lib/dock/user-state-fetch.ts` keeps the same three outcomes for the same reason.
  */
 export type LayoutRead =
 	| { readonly status: 'ok'; readonly layout: SerializedDockview }

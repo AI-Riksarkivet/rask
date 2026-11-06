@@ -1,14 +1,13 @@
 <script lang="ts">
 	import { Database, HardDrive, Layers } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
-	import AttachStore from '$lib/storage/AttachStore.svelte';
-	import { listStoresByTier } from '$lib/storage/remote/storage.api';
-	import type { Store } from '$lib/storage/storage';
+	import AttachStore from '#lib/storage/AttachStore.svelte';
+	import { listStoresByTier } from '#lib/storage/remote/storage.api.ts';
+	import type { Store } from '#lib/storage/storage.ts';
 
-	// The tier -> store view (R28). Grouping is done by the CATALOG (`GET /management/v1/stores/tiers`), not
-	// here: a store's tier is a governed fact, and transcribing it into the page that displays it is
-	// exactly the duplication this gate removed — the old hardcoded bucket union was two copies of
-	// one fact in two languages, and a third copy in a template would be no better.
+	// The tier -> store view (R28). A store's tier is a governed fact, so the page renders a registry's
+	// answer and never guesses one from bucket names. No door serves that registry on this stack, so
+	// the read answers the refusal and the page shows its reason (`#lib/storage/remote/storage.api`).
 	let tiers = $state<Record<string, Store[]> | null>(null);
 	let status = $state(0);
 	let detail = $state('');
@@ -49,12 +48,13 @@
 <header class="head">
 	<h1><Layers size={18} /> Stores by tier</h1>
 	<p>
-		Every object store the catalog knows, grouped by the role it was registered with. The medallion
-		is exactly bronze → silver → gold; raw is the external world and never a governed tier.
+		The object stores behind each tier, which needs a stores-by-tier registry; the catalog serves
+		none, so the page says why below. A store is a warehouse's bucket, listed on the warehouses
+		page. The medallion is exactly bronze → silver → gold; raw is the external world and never a
+		governed tier.
 	</p>
-	<!-- Attaching lives HERE rather than on the Browse tab: this view is the registry, and Browse is a
-	     window onto one store's objects. Re-reads from the server's returned registry rather than
-	     splicing the new row in locally — the catalog forces read_only and owns the shape. -->
+	<!-- The attach form answers the same refusal (`#lib/storage/remote/storage.api`); after a write it
+	     would re-read the stores rather than splice a row in. -->
 	<AttachStore onattached={() => void load()} />
 </header>
 
@@ -62,7 +62,7 @@
 	<p class="muted">Loading the registry…</p>
 {:else if status !== 200}
 	<p class="err">
-		Catalog unreachable (HTTP {status}){detail ? ` — ${detail}` : ''}.
+		The stores registry is unavailable (HTTP {status}){detail ? ` — ${detail}` : ''}.
 	</p>
 {:else if tiers}
 	<section class="tiers">

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	// `/settings/audit` — the audit-log viewer over the compliance trail. Events land on the dedicated
 	// `lance.audit` logger → OTLP → the platform's telemetry store; the console has no backend to query
 	// that store, so `fetchAuditTrail` answers 501 and this page renders that state. Kept for now by the
@@ -22,12 +23,9 @@
 	import { formatAbsolute, formatTimestamp } from '@rask/ui/utils';
 	import { ExternalLink, Filter, RefreshCw, ScrollText, ShieldAlert } from '@lucide/svelte';
 	import { page } from '$app/state';
-	import { fetchAuditTrail } from '$lib/remote/audit.api';
-	import { controlCursor } from '$lib/live/feeds.api';
-	import { liveRead } from '$lib/live/tick.svelte';
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
+	import { fetchAuditTrail } from '#lib/remote/audit.api.ts';
+	import { controlCursor } from '#lib/live/feeds.api.ts';
+	import { liveRead } from '#lib/live/tick.svelte.ts';
 
 	type AuditEvent = {
 		timestamp: string;
@@ -166,17 +164,17 @@
 	// ── the row drawer (goal cond 8): click an event → the full record + linked context. ──
 	let drawerEvent = $state<AuditEvent | null>(null);
 
-	/** Map an audit resource id to its estate page, when one exists. These target the console's
-	 *  catalog area, so they are written absolutely and hard-navigate — the console's base is `''`, and a
-	 *  `${base}`-relative href would have silently produced `/catalog/tables/…`, which the catch-all
-	 *  serves as a 404. That is exactly the shape this file got wrong once already, so it is spelled out
-	 *  rather than derived. */
+	/** An audit resource id's console page, resolved, when one exists. */
 	function resourceHref(res: string): string | null {
 		if (res.startsWith('table:'))
-			return `/catalog/tables/${encodeURIComponent(res.slice('table:'.length))}`;
+			return resolve('/catalog/tables/[table]', {
+				table: encodeURIComponent(res.slice('table:'.length)),
+			});
 		if (res.startsWith('namespace:'))
-			return `/catalog/namespaces/${encodeURIComponent(res.slice('namespace:'.length))}`;
-		if (res.startsWith('warehouse:')) return '/catalog/warehouses';
+			return resolve('/catalog/namespaces/[id]', {
+				id: encodeURIComponent(res.slice('namespace:'.length)),
+			});
+		if (res.startsWith('warehouse:')) return resolve('/catalog/warehouses');
 		return null;
 	}
 
@@ -287,7 +285,9 @@
 
 	{#if unauthorized}
 		<div class="empty">
-			<ShieldAlert size={15} /> <a href={loginHref}>Sign in</a> to view the audit trail.
+			<ShieldAlert size={15} />
+			<a href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>Sign in</a> to
+			view the audit trail.
 		</div>
 	{:else if forbidden}
 		<div class="empty">
@@ -355,8 +355,10 @@
 						<button class="btn" onclick={() => filterRelated('resource')}>
 							<Filter size={12} /> Events on this resource
 						</button>
-						{#if resourceHref(drawerEvent.resource)}
-							<a class="btn jumplink" href={resourceHref(drawerEvent.resource)}>
+						{@const target = resourceHref(drawerEvent.resource)}
+						{#if target}
+							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- resolved by resourceHref -->
+							<a class="btn jumplink" href={target}>
 								<ExternalLink size={12} /> Open resource ↗
 							</a>
 						{/if}

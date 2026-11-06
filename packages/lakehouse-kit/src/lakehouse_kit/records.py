@@ -11,7 +11,7 @@ on a read that can go stale between the check and the write.
 
 Two branches, one contract:
 
-- ``s3://`` roots: ``put_object(..., IfNoneMatch="*")`` on a ``storage.s3_client`` — the store rejects
+- ``s3://`` roots: ``put_object(..., IfNoneMatch="*")`` on a ``lakehouse_kit.storage.s3_client`` — the store rejects
   the second create with 412 ``PreconditionFailed``. pyarrow's ``S3FileSystem`` cannot express a
   conditional PUT, which is why this write (alone among the registry IO) goes through an S3 client.
 - local roots (dev/tests): ``open(path, "xb")`` — ``O_CREAT|O_EXCL``, the OS arbitrates. Same
@@ -59,7 +59,7 @@ class RecordExistsError(Exception):
 
 
 def _s3_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """The S3 client the three conditional branches share, built through ``storage.s3_client``.
+    """The S3 client the three conditional branches share, built through ``lakehouse_kit.storage.s3_client``.
 
     ``lakehouse_kit.storage`` is the estate's canonical S3 seam and owns, in one place, everything a
     hand-rolled client silently forfeits: path-style addressing (matching
@@ -72,7 +72,7 @@ def _s3_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto
     vended credentials, a ``session_token``; both are forwarded. A dropped region pins the warehouse
     to ``AWS_REGION``, and a dropped token makes a scoped credential sign as an unknown identity.
 
-    ``storage`` is imported at call time so a test can replace the SEAM rather than this wrapper —
+    ``lakehouse_kit.storage`` is imported at call time so a test can replace the SEAM rather than this wrapper —
     patching the wrapper would let a regression back to a raw client pass unnoticed — and so the
     local-root branch below needs no S3 stack at all.
     """

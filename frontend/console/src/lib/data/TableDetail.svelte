@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	// `/tables/<id>` — the catalog table-detail view (#52): schema, stats, version + tag history, the
 	// #50 maintenance policy (owner-gated set/delete), and the #51 access review. Data comes from the
 	// `fetchTableDetail` query, which fans out the six catalog reads from the browser and answers them as
@@ -60,15 +61,13 @@
 		return TABS.includes(wanted) ? wanted : 'overview';
 	});
 	function selectTab(next: string): void {
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 		if (next === 'overview') url.searchParams.delete('tab');
 		else url.searchParams.set('tab', next);
-		goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+		// eslint-disable-next-line svelte/no-navigation-without-resolve -- the current page's own URL with a new tab parameter
+		goto(url, { replace: true, reset: false });
 	}
 	const stageInfo = $derived(stageOfTable(table));
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	// The console-owned catalog seam the shared @rask/ui GrantsPanel calls (the lib never owns an API
 	// client). The panel's positional signature is bound to the data functions' single argument here.
@@ -190,7 +189,9 @@
 		<div class="empty">
 			<ShieldAlert size={16} />
 			<p>
-				This stack is governed — <a href={loginHref}>sign in</a> to view table details.
+				This stack is governed — <a
+					href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>sign in</a
+				> to view table details.
 			</p>
 		</div>
 	{:else if notInCatalog}

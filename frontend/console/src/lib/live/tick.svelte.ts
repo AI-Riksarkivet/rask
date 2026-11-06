@@ -14,8 +14,8 @@ import { controlCursor, lineageFeed } from './feeds.api';
  */
 export { liveRead, type LiveCursor };
 
-/** The lineage cursor, from the ONE shared `lineageFeed` stream the bell also reads, so every
- *  lineage-backed surface on a page advances on the same number. */
+/** The lineage cursor, from the ONE shared `lineageFeed` stream, so every lineage-backed surface on
+ *  a page advances on the same number. */
 export function lineageTick(): LiveCursor {
 	const feed = lineageFeed();
 	return {

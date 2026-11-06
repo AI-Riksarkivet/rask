@@ -25,7 +25,7 @@ import {
 // THREE origins of the one build, one per family of specs, because each family seeds its own mocks:
 //   · auth-OFF (`e2e/*.spec.ts`, `e2e/catalog/`) — `e2e/console-config.off.json` says sign-in is off.
 //   · auth-ON for the estate pages (`e2e/projects/`, `e2e/settings/`, `e2e/notifications/`).
-//   · auth-ON for the lakehouse's pages (`e2e/admin/`).
+//   · auth-ON for the catalog and operations pages, `e2e/admin/` (the project `admin`).
 // An auth-ON origin serves `e2e/console-config.json`, which names the mock issuer (`e2e/mock-oidc.ts`,
 // same-origin under `/oidc`), so signing in runs the console's real PKCE round trip.
 const CONFIG = './e2e/console-config.json';
@@ -114,7 +114,7 @@ export default defineConfig({
 			use: { ...devices['Desktop Chrome'], baseURL: AUTH_ON },
 		},
 		{
-			name: 'lakehouse',
+			name: 'admin',
 			testMatch: /\/e2e\/admin\/.*\.spec\.ts$/,
 			use: { ...devices['Desktop Chrome'], baseURL: ADMIN },
 		},

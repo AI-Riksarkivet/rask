@@ -6,11 +6,12 @@ import (
 	"dagger/rask/internal/dagger"
 )
 
-// bunImage is the frontend toolchain's base image, pinned by digest,
-// so the Dagger run matches the shipped image rather than trusting the CI setup-bun action's unpinned 'latest'. Bun is
-// the whole toolchain here: oxlint and rsvelte-fmt arrive as frontend/ root devDependencies via
-// `bun install --frozen-lockfile` — no globally installed tool, no second package manager.
-const bunImage = "oven/bun:1.3.14-slim@sha256:d56a2534ffd262e92c12fd3249d3924d296d97086da773f821d7d0477435ea04"
+// bunImage is the frontend toolchain's base image, pinned by digest at the bun the workspace names
+// (`packageManager` in frontend/package.json, which CI's setup-bun also reads, and the builder stage of
+// .docker/frontend.dockerfile), so a bun bump moves all three together. Bun is the whole toolchain here: oxlint and
+// rsvelte-fmt arrive as frontend/ root devDependencies via `bun install --frozen-lockfile` — no globally installed tool,
+// no second package manager.
+const bunImage = "oven/bun:1.4.4-slim@sha256:1846adf22496bd711036aae8be147e57bdebbaea2e5264e3e0b5af1db187d9a4"
 
 // frontendBase returns the installed workspace container: the bun image + source + `bun install --frozen-lockfile`
 // (the console and packages/* from frontend/bun.lock). Unexported → a shared private helper, not a Dagger Function.

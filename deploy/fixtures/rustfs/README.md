@@ -84,8 +84,8 @@ THE POLICY IS CHOSEN BY THE TOKEN'S SUBJECT, NEVER BY A ROLE POLICY. `CLAIM_NAME
 verified token the canned policy its `sub` names, and refuses one whose `sub` names none
 (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-281`; `rustfs@1.0.3:rustfs/src/admin/service/federated_identity.rs:332-410`),
 so only an account rask's scoped-users hook writes a policy for is exchanged. A role policy would be granted to every
-token the issuer signs for the audience, which any pod in the cluster can project. Measured on 1.0.3 against a
-stand-in issuer (`docs/audits/2026-10-18/rustfs_web_identity_measure.py`): the catalog's subject is exchanged and its
+token the issuer signs for the audience, which any pod in the cluster can project. Measured 2026-10-18 on 1.0.3 against a
+stand-in issuer (`scripts/rustfs_web_identity_measure.py`): the catalog's subject is exchanged and its
 session policy enforced; another account's token, another audience, an expired, a forged and another issuer's token are
 each refused. A provider whose discovery is unreachable at boot is recovered in the background, so the store starts
 before rask's mirror does (`rustfs@1.0.3:crates/iam/src/oidc/runtime.rs:151-197`).

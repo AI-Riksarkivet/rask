@@ -3,7 +3,7 @@
 // An unhandled browser error becomes one structured record with an id the person can quote, emitted
 // through a sink the app chooses (the browser console by default), and the person sees the id, never
 // the raw error.
-import type { HandleClientError } from '@sveltejs/kit';
+import type { HandleClientError } from '@sveltejs/kit/hooks';
 
 /** The attributed error record. Flat and JSON-serialisable on purpose — it is a log line. */
 export interface ErrorReport {
@@ -49,15 +49,22 @@ function toReport(
 	};
 }
 
-/** `hooks.client.ts` — report an unhandled client-side error, with an id the person can quote. */
+/** `hooks.client.ts` — report an unhandled client-side error, with an id the person can quote.
+ *  An app error (`error(status, message)`) is the app's own safe message and passes through unreported;
+ *  a framework error (a 404) keeps SvelteKit's safe message, so the page still reads correctly. */
 export function makeClientErrorHandler(
 	app: string,
 	sink: ErrorSink = consoleSink,
 ): HandleClientError {
-	return ({ error, event, status, message }) => {
+	return (caught) => {
+		if (caught.kind === 'app') return caught.error;
 		const eventId = crypto.randomUUID();
-		sink(toReport(app, error, event, status, eventId));
-		// 404s are routing, not faults — keep SvelteKit's own message so the page still reads correctly.
-		return { message: status === 404 ? message : userMessage(eventId) };
+		if (caught.kind === 'framework') {
+			sink(toReport(app, caught.error.message, caught.event, caught.error.status, eventId));
+			return caught.error;
+		}
+		// An unknown error renders as 500, SvelteKit's default for it.
+		sink(toReport(app, caught.error, caught.event, 500, eventId));
+		return { message: userMessage(eventId) };
 	};
 }

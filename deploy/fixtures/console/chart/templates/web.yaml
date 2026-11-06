@@ -1,7 +1,7 @@
 {{- $name := include "console.web" . -}}
 {{- $selector := include "console.webSelector" . | fromYaml -}}
 {{- $config := merge (dict "issuer" (required "auth.oidc.issuer is rask's issuer: the browser signs in there, and the catalog accepts a token only when its iss equals it" .Values.auth.oidc.issuer)) .Values.web.config -}}
-{{- if not $config.clientId }}{{ fail "web.config.clientId names the identity provider's public client the console signs in with (Dex's rask-web)" }}{{ end -}}
+{{- if not $config.clientId }}{{ fail "web.config.clientId names the identity provider's public client the console signs in with (rask-console, declared by the console's dex-values.yaml)" }}{{ end -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -37,7 +37,7 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ $name }}
+  name: {{ include "console.webWorkload" . }}
   labels:
     {{- toYaml $selector | nindent 4 }}
 spec:

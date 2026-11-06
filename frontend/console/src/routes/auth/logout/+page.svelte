@@ -1,7 +1,7 @@
 <script lang="ts">
 	// `/auth/logout` — the shell's sign-out link: drop the in-memory session, end the issuer's.
 	import { onMount } from 'svelte';
-	import { logout } from '$lib/auth.svelte';
+	import { logout } from '#lib/auth.svelte.ts';
 
 	onMount(() => {
 		void logout();

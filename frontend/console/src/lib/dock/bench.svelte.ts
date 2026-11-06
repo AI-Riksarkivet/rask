@@ -4,8 +4,8 @@
  */
 import { createContext } from 'svelte';
 import { createLineageClient, type EventRecord } from '@rask/api/lineage';
-import { getJSON, requestJSON } from '$lib/http';
-import { LINEAGE_API } from '$lib/upstreams';
+import { getJSON, requestJSON } from '#lib/http.ts';
+import { LINEAGE_API } from '#lib/upstreams.ts';
 
 /** How many recent events the panel shows. */
 const EVENTS_WINDOW = 200;

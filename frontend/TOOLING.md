@@ -47,8 +47,32 @@ is named in the config with its reason:
 - `no-unassigned-vars`, in `.svelte` only — oxlint reads the `<script>` and not the markup, so a
   variable assigned by `bind:this={el}` looks unassigned.
 
-`no-navigation-without-base` and `no-goto-without-base` are ON, at the preset's warning level. The
-console has no base path, so their warnings name links that are correct; they do not fail `lint`.
+## In-app links go through `resolve()`
+
+`svelte/no-navigation-without-resolve` is ON, as an error: every in-app `href` and `goto` is written
+`resolve(...)` (`$app/paths`), which adds the base path and fills a route id's parameters, and is
+type-checked against the route tree. SvelteKit 3 reads a string that starts with `/` as a route id and one
+without it as a pathname (`resolve('auth/login?redirect=…')`). A path that carries a catalog name or id is
+written in the route-id form with parameters, `resolve('/catalog/tables/[table]', { table:
+encodeURIComponent(id) })`: a name interpolated into a route id is split into segments and one shaped like
+a route group is dropped (`resolve_route` in kit 3.1.1), so a namespace named `(staging)` would link to the
+list page. `no-navigation-without-base` and `no-goto-without-base` are OFF: they ask for the `base` string
+concatenated by hand, which SvelteKit 3 no longer exports, and report every `resolve(...)` href and `goto`
+(measured with oxlint 1.79.0: 72 errors over the console with both on), so they cannot hold beside the
+resolve rule.
+The rule reports every `href` and every `goto` whose argument is not a `resolve(...)` call, a query
+(`goto('?…')`), a `URL` and a `goto(<call>)` included (measured with oxlint 1.79.0). A navigation that
+is not to a route says why in an
+`eslint-disable-next-line svelte/no-navigation-without-resolve -- <reason>` comment, which oxlint
+honours in `<script>` and in markup: a query on the current page (`Explorer.svelte`, three), the current
+page's own URL with a new tab parameter (`TableDetail.svelte`), the return path read from the OIDC state
+(`auth/callback/+page.svelte`), a `blob:` URL (`BlobPreviewSection.svelte`) and an href `resourceHref`
+already resolved (`AuditViewer.svelte`). `oxlint --report-unused-disable-directives` calls the five in
+`<script>` unused, and so does the Svelte autofixer, whose rule (eslint-plugin-svelte's) does not report
+those forms; both are wrong for this gate: rsvelte's port reports them, and removing any one of the five
+fails the lint. `@rask/ui` is
+exempt: a design system cannot import an app's `$app/paths`, and its root paths are what `resolve()`
+gives in a console with no base path.
 
 ## Type-checking
 
@@ -57,13 +81,33 @@ JavaScript compiler API, and `svelte-check` calls into it, so TypeScript 7 canno
 dependency while `svelte-check` is in the toolchain. `@typescript/native-preview` (`tsgo`, the TS 7
 engine under a second package name) checks `@rask/api`, which is pure TypeScript.
 
+The console's `check` runs `svelte-check` twice. `tsconfig.json` extends `$app/tsconfig` and covers the
+app (`src`, `vite.config.ts`), whose `types: ["$app/types"]` and browser libs describe code that runs in
+the page. `tsconfig.tools.json` covers what never ships to the browser and runs under Bun or Playwright:
+`serve.ts` (the image's server), `playwright.config.ts` and `e2e/**`, with `types: ["bun"]` and `DOM` kept
+in `lib` because a spec's `page.evaluate` callback runs in the page. Both carry the same strictness.
+
 `@rsvelte/svelte-check` takes `--tsgo` and would put the whole workspace on TypeScript 7. Re-measure it
 on each release; it replaces `svelte-check` once it resolves SvelteKit's generated modules and honours
-`compilerOptions.experimental.async` from `svelte.config.js`.
+`compilerOptions.experimental.async` from the `sveltekit()` options in `vite.config.ts`.
 
 ## The Arrow patch
 
 `patches/apache-arrow@21.2.0.patch` replaces apache-arrow's compiled null check
-(`builder/valid`, a `new Function`) with a closure of the same semantics. The console's content security
+(`builder/valid`, a `new Function` over a `switch`) with a closure. The console's content security
 policy has no `'unsafe-eval'`, and without the patch every browser-side Arrow encode (the insert-rows and
-create-with-rows forms) fails with a CSP violation. Re-check on an apache-arrow upgrade.
+create-with-rows forms) fails with a CSP violation.
+
+The closure keeps the switch's semantics: NaN is checked apart, and every other null value is compared
+by `===` with what its `case` expression (upstream's `valueToCase`) evaluates to, so an array or object
+null value never matches, a date's case fails to build as upstream's does, and a string matches the
+value its literal has in the sloppy-mode body `new Function` compiles (every escape, a legacy octal one
+and a line continuation included). `console/src/lib/arrow-null-values.test.ts` holds it to upstream's
+compiled function across every kind of null value. The one difference: the closure evaluates no code, so
+a case that is not a literal in the form `valueToString` writes (an object whose own
+`Symbol.toPrimitive` answers other text, `0x10` among it, or a string whose quote closes early,
+`a" + "b`) throws a SyntaxError at creation, where upstream compiles it and
+evaluates it at the first call; the test pins that refusal, which also fails on an unpatched install.
+Re-check both on an apache-arrow upgrade: the patch is regenerated from the pristine package (bun's
+cache, `~/.bun/install/cache/apache-arrow@<version>@@@1/builder/valid.{js,mjs}`) with `git diff
+--no-index`, and the test copies upstream's body.

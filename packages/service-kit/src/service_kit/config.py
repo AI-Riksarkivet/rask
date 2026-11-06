@@ -4,8 +4,8 @@ Read once at startup via `Settings()`; pass through DI as `SettingsDep`. Never
 re-read env vars in routes or services.
 
 Only the fields the `make_service_app` services read live here. S3 endpoint and
-credential resolution belongs to `storage` (env-driven: RASK_S3_* / AWS_* /
-HCP_* aliases), not to this class.
+credential resolution belongs to the lakehouse's `lakehouse_kit.storage` (env-driven: RASK_S3_* / AWS_* /
+HCP_* names), not to this class.
 """
 
 from pydantic import Field

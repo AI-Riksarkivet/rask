@@ -479,6 +479,19 @@ securityContext:
 {{- printf "kubernetes~%s" (include "lance.saAccount" .) -}}
 {{- end -}}
 
+{{- define "lance.saComponents" -}}
+{{- $components := list "catalog" "lineage" "maintenance" "jobs" "issuer-mirror" "hooks" -}}
+{{- if .Values.age.enabled }}{{- $components = append $components "age" }}{{- end -}}
+{{- toJson $components -}}
+{{- end -}}
+
+{{- define "lance.serviceAccounts" -}}
+{{- $fullname := include "lance.fullname" . -}}
+{{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-dapr-dashboard" $fullname) (printf "%s-otel-collector" $fullname) -}}
+{{- range (include "lance.saComponents" . | fromJsonArray) }}{{- $names = append $names (printf "%s-sa-%s" $fullname .) }}{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
 {{- define "lance.saAccount" -}}
 {{- $root := index . 0 -}}
 {{- printf "system:serviceaccount:%s:%s-sa-%s" $root.Release.Namespace (include "lance.fullname" $root) (index . 1) -}}
@@ -692,16 +705,27 @@ scoped_secret() {
 {{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api "components" $components) -}}
 {{- end -}}
 {{- end -}}
-{{- $private := include "lance.esoReads" . | fromJsonArray -}}
-{{- range $reads }}{{- $private = concat $private .api .components }}{{- end -}}
-{{- range $app, $reader := ($v.openbao.externalReaders | default dict) -}}
+{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "openbao-seeded" "commit-id-key" "lineage-s3" "maintenance-s3" "backup-s3" "otel-collector-export" "object-store-root" "postgres" "dapr-app-token") -}}
+{{- range $reads }}{{- $held = concat $held .api .components }}{{- end -}}
+{{- $lakehouseApps := list $v.services.catalog.daprAppId $v.services.lineage.daprAppId $v.maintenance.daprAppId -}}
+{{- $external := $v.openbao.externalReaders | default dict -}}
+{{- range $app, $reader := $external -}}
 {{- if not (regexMatch "^[a-z][a-z0-9-]{0,62}$" $app) }}{{- fail (printf "openbao.externalReaders: %q is no Dapr app id" $app) }}{{- end -}}
-{{- if hasKey $reads $app }}{{- fail (printf "openbao.externalReaders: %q is the lakehouse's own app" $app) }}{{- end -}}
-{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$" (($reader).serviceAccount | default "" | toString)) }}{{- fail (printf "openbao.externalReaders.%s.serviceAccount names no ServiceAccount" $app) }}{{- end -}}
+{{- if has $app $lakehouseApps }}{{- fail (printf "openbao.externalReaders: %q is the lakehouse's own app" $app) }}{{- end -}}
+{{- $own := printf "%s-" $app -}}
+{{- $claims := list -}}
+{{- range $held }}{{- if or (hasPrefix $own .) (eq . (printf "nats-user-%s" $app)) }}{{- $claims = append $claims . }}{{- end }}{{- end -}}
+{{- range $other, $_ := $external }}{{- if and (ne $other $app) (hasPrefix $own $other) }}{{- $claims = append $claims (printf "%s's names" $other) }}{{- end }}{{- end -}}
+{{- range $family := list "nats-user-" "signing-key-" "signing-public-" }}{{- if or (hasPrefix $own $family) (hasPrefix $family $own) }}{{- fail (printf "openbao.externalReaders: %q is a reserved app id: its own names (%s<name>) would cover the store's %s<name> secrets" $app $own $family) }}{{- end }}{{- end -}}
+{{- if $claims }}{{- fail (printf "openbao.externalReaders: %q is a reserved app id: its own names would cover %s" $app (join ", " ($claims | uniq))) }}{{- end -}}
+{{- if eq (include "lance.storeRole" (list $root $app)) $v.externalSecrets.role }}{{- fail (printf "openbao.externalReaders: %q would log in as %s, the External Secrets Operator's own role (externalSecrets.role)" $app $v.externalSecrets.role) }}{{- end -}}
+{{- $account := ($reader).serviceAccount | default "" | toString -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,251}[a-z0-9])?$" $account) }}{{- fail (printf "openbao.externalReaders.%s.serviceAccount names no ServiceAccount" $app) }}{{- end -}}
+{{- if has $account (append (include "lance.serviceAccounts" $root | fromJsonArray) "default") }}{{- fail (printf "openbao.externalReaders.%s.serviceAccount: %q is the lakehouse's own ServiceAccount or the namespace's shared default: a reader's role binds an identity of its own" $app $account) }}{{- end -}}
 {{- if not ($reader).secrets }}{{- fail (printf "openbao.externalReaders.%s.secrets names no secret: a reader with no read is no reader" $app) }}{{- end -}}
 {{- range $reader.secrets }}
 {{- if not (regexMatch "^[a-z0-9][a-z0-9-]{0,252}$" (toString .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is no secret name (a path or a wildcard would widen the store policy)" $app (toString .)) }}{{- end -}}
-{{- if and (has . $private) (not (hasPrefix "signing-public-" .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is the lakehouse's own secret" $app .) }}{{- end -}}
+{{- if not (or (eq . (printf "nats-user-%s" $app)) (hasPrefix $own .) (hasPrefix "signing-public-" .)) }}{{- fail (printf "openbao.externalReaders.%s.secrets: %q is not the reader's own: a reader holds only nats-user-%s, names of its own (%s<name>) and signing-public-<name>" $app . $app $own) }}{{- end -}}
 {{- end -}}
 {{- $_ := set $reads $app (dict "sa" $reader.serviceAccount "api" ($reader.secrets | uniq | sortAlpha) "components" list) -}}
 {{- end -}}

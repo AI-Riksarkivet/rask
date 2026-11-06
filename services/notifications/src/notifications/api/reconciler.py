@@ -28,8 +28,8 @@ new" would mean replaying the retained feed into people's inboxes on the day the
 — the same failure `deliverPolicy: new` exists to prevent on the bus, arriving by the other door.
 
 **THE RETRY IS THE SIDECAR'S, NOT THIS MODULE'S.** The feed is read through Dapr service invocation
-(`IngressSettings.feed_base_url`), and the chart's `<release>-invocation-resiliency`, scoped to
-`notifications`, retries that hop with `invokeRetry`: `408,429,500-599`, never a 4xx, because a 403's
+(`IngressSettings.feed_base_url`), and the console release's `<rask>-notifications-invocation-resiliency`,
+scoped to `notifications`, retries that hop with `invokeRetry`: `408,429,500-599`, never a 4xx, because a 403's
 answer will not change. A pass that still fails is re-walked by the next cron tick from the same mark,
 because the cursor advances only on a pass that completes.
 

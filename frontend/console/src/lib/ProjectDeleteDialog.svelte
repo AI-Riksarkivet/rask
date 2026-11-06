@@ -24,6 +24,7 @@
 </script>
 
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	// Retiring a tenant — the confirm side of `DELETE /management/v1/projects/{id}`.
 	//
 	// The whole reason this is a dialog and not a one-shot button is the 409: a project that still holds
@@ -41,7 +42,7 @@
 	import { AlertDialog } from '@rask/ui/alert-dialog';
 	import { Button } from '@rask/ui/button';
 	import { toast } from 'svelte-sonner';
-	import { deleteProject } from '$lib/remote/warehouses.api';
+	import { deleteProject } from '#lib/remote/warehouses.api.ts';
 
 	let {
 		open = $bindable(false),
@@ -157,7 +158,10 @@
 						{#each blockers as id (id)}
 							<li>
 								<!-- Each blocking warehouse links to its own page: the fix the refusal hands the user. -->
-								<a class="mono" href={`/catalog/warehouses/${encodeURIComponent(id)}`}>
+								<a
+									class="mono"
+									href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(id) })}
+								>
 									{id}<ExternalLink size={12} />
 								</a>
 							</li>

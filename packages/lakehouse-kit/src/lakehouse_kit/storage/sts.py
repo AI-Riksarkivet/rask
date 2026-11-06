@@ -1,8 +1,8 @@
 """STS clients for the token exchange — the estate's second boto3 client family.
 
-STS is not S3, and this module shares nothing with :mod:`storage.client` but the rule that puts it
-here: ``boto3`` is declared and imported by ``lakehouse_kit.storage`` alone, so every AWS-protocol client
-the estate builds gets an explicit timeout and retry policy rather than botocore's defaults. Those
+STS is not S3, and this module shares nothing with :mod:`lakehouse_kit.storage.client` but the rule that puts it
+here: every ``boto3`` client is built in ``lakehouse_kit.storage`` alone (ruff's TID251 refuses a ``boto3`` import
+anywhere else), so every AWS-protocol client the estate builds gets an explicit timeout and retry policy rather than botocore's defaults. Those
 defaults carry NO connect or read timeout, and an STS exchange sits on the synchronous path of a
 data-plane request — an endpoint that accepts the connection and never answers would hang the worker
 instead of failing the vend.
@@ -11,7 +11,7 @@ instead of failing the vend.
 from typing import Any
 
 
-# Public alias for the boto3 STS client, mirroring `storage.S3Client`: boto3 ships no public stubs,
+# Public alias for the boto3 STS client, mirroring `lakehouse_kit.storage.S3Client`: boto3 ships no public stubs,
 # so this resolves to `Any` at the type level and callers get a name without reaching into
 # `mypy_boto3_sts`.
 type STSClient = Any

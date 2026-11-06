@@ -1,0 +1,21 @@
+{
+	"//": "The console's code that never ships to the browser: `serve.ts` (the image's server, under Bun), `playwright.config.ts` and `e2e/**` (Bun and Playwright). `tsconfig.json` stays on `$app/tsconfig`, whose `types: [\"$app/types\"]` and browser libs describe the app, not these. DOM stays in `lib` because a spec's `page.evaluate` callback runs in the page. Same strictness as the app.",
+	"compilerOptions": {
+		"target": "esnext",
+		"module": "esnext",
+		"moduleResolution": "bundler",
+		"moduleDetection": "force",
+		"lib": ["ESNext", "DOM", "DOM.Iterable"],
+		"types": ["bun"],
+		"allowImportingTsExtensions": true,
+		"resolveJsonModule": true,
+		"verbatimModuleSyntax": true,
+		"isolatedModules": true,
+		"forceConsistentCasingInFileNames": true,
+		"skipLibCheck": true,
+		"noEmit": true,
+		"strict": true,
+		"noUncheckedIndexedAccess": true
+	},
+	"include": ["serve.ts", "playwright.config.ts", "e2e"]
+}

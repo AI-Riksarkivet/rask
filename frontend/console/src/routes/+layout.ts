@@ -1,9 +1,9 @@
 import { error } from '@sveltejs/kit';
 import { fetchMe, MeSchema, parse, type Me } from '@rask/api';
 import { requestJSON } from '@rask/api/client';
-import { auth, initAuth, login, sessionToUser } from '$lib/auth.svelte';
-import { readActiveProject } from '$lib/active-project';
-import { CATALOG_API } from '$lib/upstreams';
+import { auth, initAuth, login, sessionToUser } from '#lib/auth.svelte.ts';
+import { readActiveProject } from '#lib/active-project.ts';
+import { CATALOG_API } from '#lib/upstreams.ts';
 import type { LayoutLoad } from './$types';
 
 // A single-page app: every route renders in the browser, from the static `index.html` fallback.

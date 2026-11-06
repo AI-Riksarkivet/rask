@@ -52,6 +52,13 @@ build:
 PYTEST_WORKERS ?= 16
 PYTEST_PARALLEL = $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS))
 
+# Every dagger call in this file names the engine it runs on. An unscoped CLI that provisions an engine of its own
+# removes the other `dagger-engine-*` containers, the estate's `dagger-engine-rask` among them (measured on dagger
+# 0.21.8 and 1.0), so a call goes to the engine `make dagger-engine` creates or fails. CI calls dagger directly, on the
+# engine its runner provisions, never through these targets.
+DAGGER_ENGINE_NAME ?= dagger-engine-rask
+DAGGER = _EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://$(DAGGER_ENGINE_NAME) dagger
+
 # The OpenFGA server the offline suite asserts authorization outcomes against (root `conftest.py::openfga`, [[LH-235]]):
 # the static binary out of the very image `.dagger/governed.go` pins and `dagger call test` copies onto PATH, so a
 # developer box and CI evaluate the model with one server. It depends on that file, so a bumped pin re-exports it.
@@ -60,7 +67,7 @@ OPENFGA_IMAGE = $(shell sed -n 's/^[[:space:]]*openfgaImage[[:space:]]*=[[:space
 $(OPENFGA_BIN): .dagger/governed.go
 	@test -n "$(OPENFGA_IMAGE)" || { echo "!! no openfgaImage pin read from .dagger/governed.go"; exit 1; }
 	@mkdir -p $(dir $@)
-	dagger core container from --address=$(OPENFGA_IMAGE) file --path=/openfga export --path=$@
+	$(DAGGER) core container from --address=$(OPENFGA_IMAGE) file --path=/openfga export --path=$@
 	@chmod +x $@ && touch $@
 .PHONY: openfga
 openfga: $(OPENFGA_BIN) ## Export the pinned OpenFGA server binary to .localbin, for the suite's authorization tests
@@ -281,7 +288,7 @@ ci: check test
 # scan-image  trivy over an image DAGGER BUILT — needs the build first, so it is minutes, not seconds.
 #             NAME is the .docker/<stem>.dockerfile stem (`frontend` is the console).
 audit:
-	dagger call audit
+	$(DAGGER) call audit
 
 # The Go plane's formatting gate. `.dagger/` implements every CI gate in this estate and nothing
 # checked its own formatting — `gofmt -l` reported two tracked hand-written files unformatted. Same
@@ -292,27 +299,27 @@ audit:
 # `dagger call go-fmt-fixed export --path=.dagger` — because a gate with no paired fixer is a gate
 # people work around, and here the only alternative would be installing a toolchain.
 go-fmt: ## gofmt gate over the .dagger Go plane (fix: dagger call go-fmt-fixed export --path=.dagger)
-	dagger call go-fmt
+	$(DAGGER) call go-fmt
 
 scan-config:
-	dagger call scan-config
+	$(DAGGER) call scan-config
 
 # scan-secrets reads the full GIT HISTORY, not the working tree — a credential committed and later
 # deleted is still public on a public repo. Gates on VERIFIED results only (trufflehog asks the
 # provider whether the key works), so it blocks in CI where the other two legs are report-only.
 scan-secrets:
-	dagger call scan-secrets
+	$(DAGGER) call scan-secrets
 
 scan-image:
 	@test -n "$(NAME)" || { echo "  !! usage: make scan-image NAME=rest-catalog"; exit 1; }
-	dagger call scan-image --name=$(NAME)
+	$(DAGGER) call scan-image --name=$(NAME)
 
 # THE INVENTORY, not a gate. `scan-image` answers "is this image clean today"; this answers "what is
 # IN it", which is the question a new CVE asks and the one nothing here could answer. Emitted from the
 # same tarball the scanner reads, so the SBOM describes the exact bytes that were scanned.
 sbom: ## CycloneDX SBOM for one image (NAME=rest-catalog) — writes ./sbom-<name>.cdx.json
 	@test -n "$(NAME)" || { echo "  !! usage: make sbom NAME=rest-catalog"; exit 1; }
-	dagger call sbom --name=$(NAME) export --path=./sbom-$(NAME).cdx.json
+	$(DAGGER) call sbom --name=$(NAME) export --path=./sbom-$(NAME).cdx.json
 	@echo "  -> ./sbom-$(NAME).cdx.json"
 
 # ---- claude code -----------------------------------------------------------
@@ -335,27 +342,43 @@ claude-bootstrap:
 	@echo "    Authenticate any MCP servers if prompted on first use."
 
 # ---- the inbox on the host --------------------------------------------------
-# The notifications inbox, the console's one backend, as a host process via scripts/dev-micro.sh. There is no edge on
-# the host, so the console reaches the lakehouse through `make dev-k3s` or a cluster.
+# The notifications inbox, the per-person service the console reads beside the lakehouse, as a host process via
+# scripts/dev-micro.sh. There is no edge on the host, so the console reaches the lakehouse through `make dev-k3s` or a
+# cluster.
 dev-micro:
 	uv sync --all-packages
 	./scripts/dev-micro.sh
 
 # ---- the console (one SvelteKit single-page app) --------------------------
 # `frontend/console` builds to static files: no server of its own, the browser signs in to Dex with PKCE and calls the
-# lakehouse's /api/* and the inbox with its bearer. In development Vite proxies /api/* to RASK_EDGE_URL (default
-# :8888, an edge; `make dev-k3s` forwards the cluster's). The design system builds first so the app reads a complete
-# dist/; to live-edit it, run `bun --cwd=frontend/packages/ui run dev` in a second terminal.
-dev:                  # the console with Vite HMR, /api → RASK_EDGE_URL
+# lakehouse's /api/* and the inbox with its bearer. In development Vite serves `frontend/console/dev/config.json` as
+# /config.json: the issuer `http://localhost:8080/dex` (the value DEV_ISSUER defaults to, so the token's `iss` is the one
+# `make k3s-up` gives the estate) and the client `rask-console`. It proxies /api/* to RASK_EDGE_URL (default :8080): one
+# origin on the host that serves both the issuer and the API, as k3s Traefik's Service does. The design system builds
+# first so the app reads a complete dist/; to live-edit it, run `bun --cwd=frontend/packages/ui run dev` beside it.
+dev:                  # the console with Vite HMR, /api → RASK_EDGE_URL, signing in at the issuer dev/config.json names
 	bun --cwd=frontend run dev
 
-dev-k3s:              # the console with Vite HMR against the IN-CLUSTER edge
-	@echo "==> port-forward kube-system/traefik → http://localhost:8888 (Ctrl-C stops both)"
-	@$(KUBECTL) -n kube-system port-forward svc/traefik 8888:80 >/dev/null 2>&1 & \
+# How long dev-k3s waits for the port-forwarded Traefik to serve both the issuer and the edge before it gives up.
+DEV_K3S_WAIT ?= 60
+dev-k3s:              # the console with Vite HMR against the IN-CLUSTER edge and Dex, both through k3s Traefik on :8080
+	@serves() { curl -sf http://localhost:8080/dex/.well-known/openid-configuration >/dev/null 2>&1 && \
+	    curl -sf http://localhost:8080/api/lineage/livez >/dev/null 2>&1; }; \
+	if serves; then \
+	  echo "==> :8080 already serves the issuer and the edge; using it"; \
+	  RASK_EDGE_URL=http://localhost:8080 bun --cwd=frontend run dev; \
+	else \
+	  echo "==> port-forward kube-system/traefik → http://localhost:8080 (Ctrl-C stops both)"; \
+	  $(KUBECTL) -n kube-system port-forward svc/traefik 8080:80 >/dev/null 2>&1 & \
 	  PF=$$!; trap 'kill $$PF 2>/dev/null' EXIT INT TERM; \
-	  until curl -sf http://localhost:8888/api/lineage/livez >/dev/null 2>&1; do sleep 1; done; \
-	  echo "==> edge reachable; starting the console (Vite HMR)"; \
-	  RASK_EDGE_URL=http://localhost:8888 bun --cwd=frontend run dev
+	  deadline=$$(( $$(date +%s) + $(DEV_K3S_WAIT) )); \
+	  until serves; do \
+	    kill -0 $$PF 2>/dev/null || { echo "!! the port-forward exited (is :8080 held by something that is not the estate's edge?)"; exit 1; }; \
+	    [ "$$(date +%s)" -lt "$$deadline" ] || { echo "!! :8080 did not serve both the issuer and /api/lineage/livez within $(DEV_K3S_WAIT) s"; exit 1; }; \
+	    sleep 1; done; \
+	  echo "==> issuer and edge reachable; starting the console (Vite HMR)"; \
+	  RASK_EDGE_URL=http://localhost:8080 bun --cwd=frontend run dev; \
+	fi
 
 frontend-build:       # production-build the console and the design system
 	bun --cwd=frontend run build
@@ -371,7 +394,7 @@ seed-dev: ## Seed the dev estate's projects, warehouses, namespaces and grants t
 	uv run python scripts/seed_estate.py
 
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
-# Prove lakehouse_kit.storage + LanceDB work against a REAL rustfs backend (not moto).
+# Prove lakehouse_kit.storage and pylance work against a REAL rustfs backend (not moto).
 # rustfs serves the S3 API on :9000; rask is storage-agnostic, so this is env-only.
 # ONE command, not three. This replaced `rustfs-up` (a DETACHED `docker run`), `smoke-rustfs` and
 # `rustfs-down` — the last of which an operator had to remember. The service is bound for exactly the
@@ -381,20 +404,20 @@ seed-dev: ## Seed the dev estate's projects, warehouses, namespaces and grants t
 # The old shape's `docker run` was one of the estate's last three, and the stated objection to
 # converting it was that `as-service up` holds a terminal where `up -d` does not. That is true of a
 # two-step shape and irrelevant to a one-step one.
-smoke-rustfs: ## Storage smoke vs a REAL rustfs S3 backend (round-trip + LanceDB over s3://)
-	dagger call smoke-rustfs
+smoke-rustfs: ## Storage smoke vs a REAL rustfs S3 backend (round-trip + a pylance table over s3://)
+	$(DAGGER) call smoke-rustfs
 
 # The storage-AGNOSTIC proof: the catalog lifecycle e2e with the bytes on a RustFS service bound to one
 # exec. Replaced `scripts/rustfs_e2e.sh`, which drove `docker compose up -d --build` over two
 # compose files and was invisible to the estate's own docker gate for most of a day — the gate wanted
 # `up` on the same line as `compose`, and the script wrapped it.
 rustfs-lifecycle: ## Catalog lifecycle e2e with the bytes on RustFS (proves S3-agnosticism)
-	dagger call rustfs-lifecycle
+	$(DAGGER) call rustfs-lifecycle
 
 # The scoped-users hook's provisioning script against a throwaway RustFS that boots as the fixture does (root pair
 # from files): a policy the store refuses fails the run before it binds anyone (XC-163).
 rustfs-provisioning: ## Scoped-users provisioning vs a REAL RustFS (a refused policy fails the hook, binds nobody)
-	dagger call rustfs-provisioning
+	$(DAGGER) call rustfs-provisioning
 
 # The dataops loop: authorization + provenance AUTHORSHIP + medallion lineage, with real Dex tokens
 # and not one hand-written tuple. Replaced `scripts/governance_e2e.sh`, which layered FOUR compose
@@ -406,14 +429,14 @@ rustfs-provisioning: ## Scoped-users provisioning vs a REAL RustFS (a refused po
 # walkthrough against the SAME stack, because a demo that stands up its own is how a demo drifts from
 # what the tests prove.
 governance-chain: ## Governance e2e — authz + provenance authorship + lineage (add --demo for the walkthrough)
-	dagger call governance-chain
+	$(DAGGER) call governance-chain
 
 # The NATS permission table (`nats.auth.users`) on a real broker: the chart's nats-server in operator mode
 # with test-only keys, every bus client driven as its own user and refused on every subject it does not
 # own, and real daprd running the chart's Components against it ([[XC-078]]). `dagger call nats-auth
 # --values=<file>` reads the table from another values file, e.g. a copy with one allowance deleted.
 nats-auth: ## NATS auth e2e — each bus client admitted only to its own subjects (operator-mode broker + daprd)
-	dagger call nats-auth
+	$(DAGGER) call nats-auth
 
 # ---- local k3s ------------------------------------------------------------
 # A service that is in neither this list nor $(K3S_IMAGES) is never built by `make k3s-build` and never
@@ -474,10 +497,9 @@ k3s-import: ## Side-load the k3s-build tarballs into k3s containerd as <image>:d
 
 # The LOCAL dev identity values. auth.enabled is ON in the chart's own defaults (a security default must
 # fail closed), and the chart REFUSES to render it without an issuer, so the local loop supplies the dev
-# Dex's here; DEV_ORIGIN is the browser origin the dex fixture registers a sign-in callback for. Neither is
-# a secret. Override them from the environment for a differently-addressed dev cluster.
+# Dex's here. It is not a secret. Override it from the environment for a differently-addressed dev cluster; each
+# client's sign-in callback lives in its own `deploy/fixtures/<client>/dex-values.yaml`.
 DEV_ISSUER          ?= http://localhost:8080/dex
-DEV_ORIGIN          ?= http://localhost:8080
 # The store address the catalog vends (LH-489): the rustfs fixture's node port on the node's own address, which a pod
 # and this host both reach, where `rask-rustfs:9000` resolves only in the cluster.
 DEV_NODE_IP         ?= $(shell $(KUBECTL) get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
@@ -496,19 +518,19 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null \
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
 # Ready before any pod that wants a sidecar exists; the NATS bus every pub/sub component dials follows. The CloudNativePG
 # operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
-# given the issuer and origin rask is given; rustfs and openbao are the dev object and secret stores, which start once
+# given the issuer rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's; observability is
 # the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to.
 FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao observability marquez
 
 # THE CLIENTS, each its own release and none a prerequisite: `k3s-up` installs the lakehouse alone, and `k3s-clients`
 # adds them after it (XC-183), each reaching the lakehouse by reference. The console is the one client this repository
-# deploys: its web image and the notifications inbox, given the issuer and origin the lakehouse is given.
+# deploys: its web image and the notifications inbox, given the issuer the lakehouse is given.
 CLIENTS ?= console
 
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES)))
-	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) --set-string publicOrigin=$(DEV_ORIGIN))
+	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) $(foreach f,$(sort $(wildcard deploy/fixtures/*/dex-values.yaml)),-f $(f)))
 
 k3s-clients: ## Install the lakehouse's clients (CLIENTS) as their own releases, after `k3s-up`: each reaches it by reference
 	$(if $(filter-out console,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out console,$(CLIENTS)))
@@ -637,14 +659,15 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 
 # ---- kind (throwaway CI-shaped cluster; k3s above is the long-lived local deploy) ----
 # Same chart, same :dev image set, same release name (rask) as k3s — but on a disposable
-# kind cluster, which is what the CI live-proof job (e2e-stack) boots. Toolchain
-# is pinned into .localbin by `make bootstrap` (kind/kubectl/fga; helm + docker from PATH).
-.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-isolation e2e-container-deletes e2e-fga-model
+# kind cluster, which is what the CI live-proof job (e2e-stack) boots. `make e2e-ci` (scripts/e2e_stack.sh) is the one
+# path onto it: it builds the image set as Dagger tarballs, loads them with `kind load image-archive` and installs the
+# fixtures and the chart with the values the lane renders; `kind-up` and `kind-down` only create and delete the cluster.
+# Toolchain is pinned into .localbin by `make bootstrap` (kind/kubectl/fga; helm + docker from PATH).
+.PHONY: bootstrap kind-up kind-down e2e-ci e2e-isolation e2e-container-deletes e2e-fga-model
 
 LOCALBIN     := $(CURDIR)/.localbin
 KIND         := $(LOCALBIN)/kind
 KIND_CLUSTER := rask
-KIND_IMAGES  := $(K3S_IMAGES)
 # OS/arch detection so bootstrap works on Linux/macOS, x86_64/arm64. sed/tr, NOT a shell
 # `case`: a `)` inside $(shell …) prematurely closes make's paren-match.
 HOST_OS   := $(shell uname -s | tr '[:upper:]' '[:lower:]')
@@ -677,45 +700,6 @@ bootstrap: ## Download kind/kubectl/fga/k9s/helm-docs/helm-schema into .localbin
 kind-up: bootstrap ## Create the rask kind cluster (idempotent; deploy/kind/kind-config.yaml)
 	@$(KIND) get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || \
 	  $(KIND) create cluster --name $(KIND_CLUSTER) --config deploy/kind/kind-config.yaml --wait 150s
-
-kind-images: ## Build the full :dev image set into docker's image store, which `kind load docker-image` reads (same builds k3s uses)
-	@for s in $(COMPOSE_IMAGES); do bash scripts/dagger-image.sh --name $$s --tag $$s:dev || exit 1; done
-	bash scripts/dagger-image.sh --name frontend --tag web-console:dev
-	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
-
-kind-load: ## Side-load the :dev image set into the kind cluster
-	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)
-
-# Third-party images the chart pulls (openfga, dex, openbao, otel-collector, …). kind's containerd is a SEPARATE image store from the
-# host's docker, so a fresh cluster re-pulls every one of them from the internet — ~20 minutes of
-# pure network before a single app pod starts. The host docker cache, by contrast, persists across
-# clusters: pull once here, side-load, and every later cluster starts in seconds. Derived from the
-# actual render (not a hand-list, which would rot) with our own :dev images filtered out. An image
-# with NO tag is skipped (a subchart default the render leaves incomplete — the pod that resolves it
-# pulls it). The character classes are DELIBERATELY case-sensitive-inclusive: docker tags allow
-# uppercase, and a lowercase-only class silently TRUNCATES `apache/age:release_PG16_1.5.0` to
-# `apache/age:release_`, so the image the OpenFGA migration blocks on would be the one this target
-# never preloads.
-kind-preload: bootstrap ## Pull the chart's third-party images into the host cache, then side-load them
-	@imgs=$$(helm template rask ./chart \
-	    --set observability.enabled=true 2>/dev/null \
-	  | grep -oE 'image: *"?[A-Za-z0-9./:@_-]+' | sed 's/image: *"\?//' \
-	  | grep -vE "^($$(echo '$(K3S_IMAGES)' | tr ' ' '|'))(:|$$)" \
-	  | grep -E ':[A-Za-z0-9][A-Za-z0-9._-]*$$' | sort -u); \
-	  echo "$$imgs" | sed 's/^/  + /'; \
-	  for i in $$imgs; do docker image inspect $$i >/dev/null 2>&1 || docker pull -q $$i || \
-	    echo "  !! pull failed (skipped): $$i"; done; \
-	  for i in $$imgs; do docker image inspect $$i >/dev/null 2>&1 && \
-	    $(KIND) load docker-image $$i --name $(KIND_CLUSTER) >/dev/null 2>&1 || true; done; \
-	  echo "==> third-party images cached on the host and side-loaded into kind-$(KIND_CLUSTER)"
-
-# `--wait` is SAFE here since the bootstrap Jobs left the hook lifecycle (see "BOOTSTRAP JOBS" in
-# chart/templates/_helpers.tpl). It used to deadlock: the OpenFGA migration was a post-install hook,
-# and post-install hooks run AFTER --wait, which was itself blocked on the server the migration had to
-# unblock. Keeping --wait off was the workaround; keeping it ON is now the regression test.
-kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind cluster
-	$(HELM) upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --wait --wait-for-jobs --timeout 900s
-	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) rollout status deploy/rask-catalog --timeout=300s
 
 kind-down: ## Delete the rask kind cluster
 	$(KIND) delete cluster --name $(KIND_CLUSTER)
@@ -883,8 +867,7 @@ registry-gc: ## Drop all but the newest tags in the dev registry, then sweep blo
 	@bash scripts/registry-gc.sh
 
 dagger-gc: ## Prune the Dagger engine's build cache to its configured ceiling
-	@_EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://$${DAGGER_ENGINE_NAME:-dagger-engine-rask} \
-	  dagger core engine local-cache prune
+	@$(DAGGER) core engine local-cache prune
 
 dev-gc: registry-gc dagger-gc ## Reclaim both the registry and the Dagger cache
 	@df -h / | tail -1 | awk '{print ">> disk: "$$4" free, "$$5" used"}'

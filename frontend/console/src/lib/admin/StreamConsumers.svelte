@@ -17,7 +17,7 @@
 	} from '@rask/ui/data-table';
 	import * as Sheet from '@rask/ui/sheet';
 	import { ExternalLink } from '@lucide/svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import type { JetStreamConsumer } from './jetstream';
 
 	let { consumers, now, stream }: { consumers: JetStreamConsumer[]; now: string; stream: string } =
@@ -188,7 +188,7 @@
 				</p>
 				{#if stream === 'DLQ' || stream.startsWith('DLQ_')}
 					<div class="drawer-links">
-						<a class="btn jumplink" href="{base}/admin/dlq">
+						<a class="btn jumplink" href={resolve('/admin/dlq')}>
 							<ExternalLink size={12} /> Open the DLQ ops panel
 						</a>
 					</div>

@@ -1,12 +1,12 @@
-import { command, query } from '$lib/remote.svelte';
+import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
-import { catalogJSON, parsed } from '$lib/doors';
+import { catalogJSON, parsed } from '#lib/doors.ts';
 import type { CreateWarehouseBody, ProjectSummary, WarehouseRecord } from '../catalog';
 
 // The project + warehouse registry for the estate-level pages (`/projects`, one project's overview).
 // Every call carries only the signed-in person's bearer, so the catalog's own project-admin gate is
-// enforced against a REAL user rather than a service credential. Transport: `$lib/doors`.
+// enforced against a REAL user rather than a service credential. Transport: `#lib/doors`.
 
 const enc = encodeURIComponent;
 
@@ -107,8 +107,8 @@ export const createProject = command(
  *  the catalog seeds the caller as the new project's admin.
  *
  *  No `.refresh()` here, unlike the lakehouse original: the gallery this create sits on is a page
- *  LOAD (`$lib/gallery`), not a `query()`, so there is nothing to single-flight — the dialog's
- *  `oncreated` calls `invalidateAll()` at the call site instead. Inventing a `query()` mirror of the
+ *  LOAD (`#lib/gallery`), not a `query()`, so there is nothing to single-flight — the dialog's
+ *  `oncreated` calls `refreshAll()` at the call site instead. Inventing a `query()` mirror of the
  *  load purely to have something to refresh would be the second implementation of the list this
  *  whole move exists to delete. */
 export const createWarehouse = command(

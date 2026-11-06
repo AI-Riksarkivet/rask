@@ -8,8 +8,8 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 
 - **Two kubeconfigs, one is dead.** The live estate is `/etc/rancher/k3s/k3s.yaml`; `~/.kube/config` is a stale kind
   cluster that still answers.
-- **The object store is RustFS** (ADR 0168). `rask-rustfs-0` in rask's namespace serves the lakehouse in development,
-  and every CI lane runs the same `rustfs/rustfs` tag; the RustFS pod in `htr-batch` is another team's. Measure store
+- **The object store is RustFS** (ADR 0168). `rask-rustfs-0` in rask's namespace serves the lakehouse in development
+  and is the estate's only RustFS pod (measured 2026-11-06); every CI lane runs the same `rustfs/rustfs` tag. Measure store
   behaviour (policy, CAS, STS) on rask's fixture or a Dagger lane, and see `rask-rustfs` before reading its docs.
 - **Current state is test data.** "Destructive on real data" is not a blocker before production; only owner-held facts
   and missing permissions are.
@@ -82,7 +82,6 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **A port-forward hides a keep-alive close.** a server's close of an idle connection reaches the client only as its next request fails (`RemoteDisconnected`, XC-094 on the kind lane, 2026-10-17; again 2026-10-18, a scratch tenant's teardown after 7-8.5 s idle); every e2e client closes each request (`byo_scenario.CLOSE_EACH_REQUEST`), since a POST must not be retried.
 - **An empty JetStream stream has no sequence 0.** a fresh stream reports 0 at both ends and a get of sequence 0 answers 400; read by sequence only while `messages` > 0 (XC-094, 2026-10-17).
 - **A stock client may decline a spec op itself.** pylance's `RestNamespace` implements 51 of the 54: `UpdateFieldMetadata`, `BatchCreateTableVersions` and `BatchCommitTables` fall to the base class, which answers code 0 and sends nothing; a probe read that as the catalog declining (XC-092, 2026-10-17). Drive those through `lance_namespace_urllib3_client`.
-- **Ray under `uv run` starts no worker.** Ray 2.58 relaunches each worker with the driver's own `uv run` command line, which under pytest never starts: five retries and a nine-minute wait, against 2.9 s with `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` (XC-092, 2026-10-17).
 - **A namespace and a table share an id.** the `dir` backend keeps one object-id space, so a table created at a child namespace's id answers 409 code 14 ("concurrently created"), not TableAlreadyExists (XC-092, 2026-10-17).
 - **pylance reports an unreachable host as a door's 503.** its REST client answers `ServiceUnavailableError` (code 17) for a refused connection too, so a probe that must tell the door's verdict from no door at all sends raw HTTP (XC-095, 2026-10-17).
 - **A describe names no version unless asked.** the `dir` backend, and the catalog's DescribeTable that passes the flag through, report `version: None` without `load_detailed_metadata=True` (XC-095, 2026-10-17).

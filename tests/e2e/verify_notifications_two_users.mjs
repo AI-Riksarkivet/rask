@@ -1,430 +1,241 @@
 /**
- * THE TOP GATE: alice's failed run increments ALICE's badge and not bob's.
+ * Two people, one console: each is told about their own work and not the other's, and the console tells them apart.
  *
- * This is the one claim the notification plane exists to make, and the one no lower layer can
- * express. Unit tests prove `audience_for` returns the author; the visibility tests prove a
- * non-recipient is filtered. Neither can prove that two signed-in people, looking at the same estate
- * through the same shared component, see DIFFERENT numbers — which is the exact opposite of the
- * behaviour this plane replaced, where the badge counted everyone's work.
+ * The claim the notification plane exists to make, and the one no lower layer can express: two signed-in people,
+ * looking at the same estate through the same bell, see DIFFERENT numbers. Unit tests prove `audience_for` returns the
+ * author and the visibility tests prove a non-recipient is filtered; neither proves the deployed estate keeps two
+ * people's inboxes apart.
  *
- * WHY THIS FILE EXISTS AT ALL. The drive was performed once (recorded in `e315cb93`) and left no
- * harness that signs in two people, so the plane's central claim was witnessed and then became
- * unreproducible. A claim nobody can re-run is a claim that silently rots.
+ * TWO PHASES, AND ONLY THE FIRST RUNS BY DEFAULT.
  *
- * STATUS: DRIVEN GREEN against local k3s on 2026-08-15 — all nine checks, exit 0. Nothing runs it
- * automatically, so a green CI is still not evidence it passed: say "driven" only after you have
- * watched the output yourself.
+ *   read (always) — alice (an estate admin) and bob (not one) each sign in to the console in a browser of their own,
+ *     through Dex, with the console's own PKCE round trip on its public client. Per person: the sign-in used
+ *     `rask-console` with an S256 challenge; the catalog's `/me` names them, and only alice as an estate admin; every
+ *     page of the console carries one bell; `/admin` opens for alice and refuses bob, and the catalog's own
+ *     estate-admin door answers alice 200 and bob 403, so the difference is the server's and not only the client
+ *     guard's; the inbox, its badge door, the watch list and the preferences answer the person's bearer; the bell's
+ *     badge agrees with the inbox; and the inbox refuses a request with no bearer. Nothing in this phase writes: the
+ *     browser aborts every non-GET to `/api/*` and the run reports each one it refused.
  *
- * IT SEEDS ITS OWN GRANTS (see FGA_API_URL). The first green run was green partly because tuples had
- * been written by hand that afternoon; they lived in no file, so a fresh estate would have failed the
- * run and the next reader would have re-diagnosed a working plane.
+ *   write (`--write --table <id> --project <id>`) — the targeting itself, which needs writes:
+ *     W1 alice posts a FAIL run on the table to lineage's OpenLineage door: alice is told, bob is not (AUTHOR).
+ *     W2 bob posts a COMPLETE run on it: bob is told, alice is not.
+ *     W3 alice watches the project through the inbox's watch door (`project#member`-gated).
+ *     W4 bob posts a FAIL run carrying the project: alice is told as a WATCHER, bob as its author.
+ *     W5 alice opens her bell, which marks what it rendered as seen; a FRESH browser context reads the lower count,
+ *        so read state is the inbox's and not the tab's, and bob's count is untouched. The panel is asserted inside
+ *        its own dialog, and every text row in it is measured for silent clipping.
+ *     W6 alice unwatches the project, unless she watched it before the run.
  *
- * IT COVERS TWO OF THE THREE TARGETING SOURCES. Authorship and project WATCH are both driven here.
- * The third — governance events naming a subject in `extra.subject` — arrives on the catalog's
- * control topic rather than through lineage, so it needs a grant written through the catalog's own
- * door to produce one; it is NOT covered, and saying so is the point.
+ * THE RUNS ARE EMITTED AS THE PEOPLE, with the bearer the console holds. `enforce_author` overwrites the author facet
+ * with the verified caller, so a run cannot be attributed by its body; lineage resolves the output's name to the
+ * table's uuid as the caller sees it, and refuses a caller without `can_write_data` on it. `--table` therefore names
+ * a governed table both people may write, ideally a scratch table, since each run is recorded in its lineage. The
+ * runs reach the inbox on its reconcile tick over lineage's feed (`@every 30s`), not on the bus: lineage's HTTP door
+ * records and publishes nothing.
  *
- * ADDING THE WATCH CASE IMMEDIATELY FOUND A REAL DEFECT, which is the argument for driving all of
- * them: `reconcile()` accepted `watchers` and `push`, the cron route passed both, and the call to
- * `ingest_run_event` forwarded NEITHER. So on the feed lane — the only lane ingest, Ray TRAIN and
- * every external OpenLineage producer ever reach — no project watcher was resolved and no email or
- * Slack was sent, while the tick logged `lineage_feed_reconciled` and the author's row landed.
- *
- * FOUR DEPLOYMENT FACTS IT FOUND, none of which any unit test could have:
- *   1. `notifications` must hold FGA grants of its OWN. The feed is governed, so a deployment that
- *      forgets them gets a reconciler that ticks cleanly, logs `lineage_feed_reconciled`, and
- *      reconciles nothing — measured here as `GET /events` returning 0 rows for `notifications`
- *      while `service-ingest` saw 80.
- *   2. Its `*_OIDC_ISSUER` must be the PUBLIC issuer (`http://localhost:8080/dex`) with discovery
- *      pointed in-cluster — the split-horizon every other governed service uses. Both set to the
- *      in-cluster URL yields `OIDC discovery issuer mismatch` and a permanently 401'd inbox.
- *   3. The output table needs a real grant. `table:bronze$events` had zero tuples, so every emit
- *      403'd on `can_write_data` — and an orphaned table (no `parent` edge) is reachable ONLY by a
- *      direct grant, since `reader from parent` has no parent to walk.
- *   4. The first reconciler tick primes the cursor and notifies nobody, by design. A run emitted
- *      before that tick is never delivered, which looks exactly like a broken plane.
- *
- * PREREQUISITES
- *   - `rask-notifications` deployed WITH a Dapr sidecar, and `notifications` present in
- *     `Component/lance-statestore`'s `scopes` (without it daprd disables actor hosting and every
- *     inbox route 503s — a healthy pod with a permanently empty bell).
- *   - Dex reachable, with the static users `alice` and `bob`.
- *   - The ingress (or a port-forward) on ORIGIN.
- *
- * WHY IT LIVES IN `tests/e2e` AND NOT `scripts/`. It imports `@playwright/test`, and ESM resolves a
- * bare specifier relative to the SCRIPT, not the working directory — so the same file under
- * `scripts/` cannot see the only install of it in this repo (`tests/e2e/node_modules`) no matter
- * where it is invoked from. `tests/e2e` is also where it belongs on its own terms: the standalone
- * Playwright project with its own lockfile, whose whole purpose is driving a RUNNING deploy.
- *
- * RUN, against an estate where the notifications inbox runs (no lane runs this drive while the product chart
- * deploys no inbox, ADR 0190):
- *   kubectl port-forward -n kube-system svc/traefik 8080:80 &
- *   cd tests/e2e && FGA_TOKEN_FILE=<file> node verify_notifications_two_users.mjs
+ * Prerequisites: the lakehouse and the console's release deployed (`make k3s-up`, `make k3s-clients`); the dev Dex
+ * users alice and bob; the Gateway on ORIGIN:
+ *   kubectl -n kube-system port-forward svc/traefik 8080:80 &
+ *   cd tests/e2e && bun verify_notifications_two_users.mjs
  */
-import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 
-import { chromium } from '@playwright/test';
+import { ORIGIN, api, badge, bells, checker, launch, mainText, parseArgs, reload, signIn, subjectOf, until, visit } from './console.mjs';
 
-// 8080, not 8090, and NOT a separate Dex host — both are facts about this deployment, read from it
-// rather than assumed: `rask-web-home` carries `OIDC_ISSUER=http://localhost:8080/dex` and
-// `OIDC_REDIRECT_URI=http://localhost:8080/auth/callback`, and the ingress routes `/dex` to
-// `rask-dex` alongside `/` to the home zone. So ONE origin serves the estate and its issuer, and the
-// `--host-resolver-rules` mapping the older drives need (their Dex was a separate host the browser
-// could not resolve) is unnecessary here and would silently misdirect the token exchange.
-//
-//   kubectl port-forward -n kube-system svc/traefik 8080:80
-const ORIGIN = process.env.ORIGIN ?? 'http://localhost:8080';
+const USAGE = `usage: bun verify_notifications_two_users.mjs [--write --table <namespace$table> --project <project id>]
+
+  (no flags)  the read phase only: sign-in, GETs and page visits; nothing is written
+  --write     also run W1-W6, which post three lineage runs, watch and unwatch a project, and mark alice's rows seen
+  --table     a governed table alice and bob may both write (lineage resolves it as each of them)
+  --project   a project alice is a member of and bob does not watch
+
+env: ORIGIN (default http://localhost:8080), SHOT_DIR, WAIT_MS (default 120000), DEX_PASSWORD`;
+
+const args = parseArgs(process.argv.slice(2), USAGE);
+const { table: TABLE, project: PROJECT } = args.values;
+if (args.write && (!TABLE || !PROJECT)) throw new Error(`--write needs --table and --project\n\n${USAGE}`);
 const SHOT = process.env.SHOT_DIR ?? '/tmp/rask-notifications-drive';
-// Lineage is addressed DIRECTLY (see emitRun) — the cluster route publishes it too, but the door this
-// drive needs is the ingest door and nothing here depends on the route.
-const LINEAGE_URL = process.env.LINEAGE_URL ?? 'http://localhost:8001';
-// THE RUN MUST BE EMITTED AS THE USER, NOT AS A SERVICE, AND THAT IS NOT A DETAIL OF THIS HARNESS.
-//
-// The first version of this drive posted with `dapr-api-token` + `x-lance-service-identity:
-// service-web` and put the intended author in the body as `run.facets.author.sub = 'alice'`. Lineage
-// accepted it — HTTP 201, every time — and alice's badge never moved, which reads exactly like a
-// broken notification plane. It is the opposite: `enforce_author` (services/lineage/api/fga_deps.py)
-// OVERWRITES the claimed facet with the verified token subject, precisely so a producer cannot put a
-// row in a named person's inbox. So the events landed authored by `service-web`, were delivered to
-// `service-web`, and the drive spent three runs measuring a forgery guard doing its job.
-//
-// Two consequences, both load-bearing:
-//   · The emitter must hold the USER's own token. Dex is `enablePasswordDB: true` with
-//     `passwordConnector: local`, so the password grant mints one — the same mechanism the annotator's
-//     publish saga already uses (services/annotator/projects/lakehouse.py), not a test-only backdoor.
-//   · The author subject is DEX's `sub` (`CiQwOGE4…`), never the string `alice`. That is also the
-//     InboxActor's id, which is why the two must come from one place: the token.
-// THE DRIVE SEEDS ITS OWN GRANTS, and that is the difference between a test and an anecdote.
-//
-// The first green run of this drive was green partly because three tuples had been written into the
-// cluster BY HAND that afternoon. They lived in no file, so the run was not reproducible: a fresh
-// estate would have failed it, and the next person would have re-diagnosed a plane that was working.
-// The drive's own header already warns that "a claim nobody can re-run is a claim that silently rots"
-// — it was true of the drive itself.
-//
-// The chart's bootstrap grant does NOT cover this. It grants the notifications principal `reader` on
-// `warehouse:lance_catalog`, which reaches everything BENEATH that warehouse — and the drive's output
-// is `table:bronze$events`, an orphan with no `parent` edge, so `reader from parent` has nothing to
-// walk. A synthetic dataset a producer names in a lineage event is not a catalog table and never gets
-// one. Hence a direct grant, written here, every run.
-//
-// Roles, never `can_*`: `can_write_data` and `can_be_notified` are derived relations and OpenFGA
-// refuses a direct assignment to them. Granting `writer`/`reader` is what makes the derived checks
-// answer true, and it is what the estate's own model prescribes.
-// `/api` on the SAME origin: the cluster route sends `/api/notifications` straight to the
-// notifications Service. Not a separate host — the zone's own bell reaches the inbox this way,
-// so driving the watch door here exercises the path a browser actually uses.
-const GATEWAY_URL = process.env.GATEWAY_URL ?? ORIGIN;
-const FGA_API_URL = process.env.FGA_API_URL ?? 'http://localhost:18099';
-const FGA_STORE_NAME = process.env.FGA_STORE_NAME ?? 'lance-catalog';
-/** OpenFGA admits only a projected `rask-openfga` token (XC-077): mint one into FGA_TOKEN_FILE with
- *  `kubectl create token <release>-sa-jobs --audience rask-openfga`; it is read again on every call. */
-const FGA_TOKEN_FILE = process.env.FGA_TOKEN_FILE;
-function fgaAuth() {
-	if (!FGA_TOKEN_FILE) throw new Error('set FGA_TOKEN_FILE to a rask-openfga token (kubectl create token <release>-sa-jobs --audience rask-openfga)');
-	return { authorization: `Bearer ${readFileSync(FGA_TOKEN_FILE, 'utf8').trim()}` };
+mkdirSync(SHOT, { recursive: true });
+/** Above two reconcile ticks plus a reload's sign-in, so a run that is delivered is seen before the deadline. */
+const WAIT_MS = Number(process.env.WAIT_MS ?? 120_000);
+/** The console's pages a person reaches from its navbars; each renders the shell and its one bell. */
+const PAGES = ['/', '/projects', '/catalog', '/catalog/tables', '/notifications', '/preferences', '/workbench'];
+const PEOPLE = [
+	{ who: 'alice', email: 'alice@example.com', admin: true },
+	{ who: 'bob', email: 'bob@example.com', admin: false },
+];
+
+const checks = checker();
+const { check } = checks;
+const browser = await launch();
+console.log(`\n> two people, one console, against ${ORIGIN} (${args.write ? 'read and write' : 'read only'})\n`);
+
+// ── read ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+const sessions = {};
+for (const person of PEOPLE) {
+	console.log(` ${person.who}`);
+	const s = await signIn(browser, person.email, { write: args.write });
+	sessions[person.who] = s;
+	s.subject = subjectOf(s.bearer);
+	check('signed in on the console’s public client', s.authorize?.clientId === 'rask-console', `client_id=${s.authorize?.clientId}`);
+	check('with a PKCE S256 challenge', s.authorize?.method === 'S256' && s.authorize.hasChallenge, `code_challenge_method=${s.authorize?.method}`);
+
+	const me = await api(s, 'GET', '/api/catalog/management/v1/me');
+	check('the catalog names them', me.status === 200 && me.json?.email === person.email && me.json?.sub === s.subject, `${me.status} ${me.json?.email}`);
+	check(`estate admin: ${person.admin}`, me.json?.estate_admin === person.admin, `estate_admin=${me.json?.estate_admin}`);
+
+	for (const path of PAGES) {
+		await visit(s, path);
+		const n = await bells(s.page);
+		check(`${path} carries one bell`, n === 1, `${n} bell(s)`);
+	}
+	await visit(s, '/admin');
+	s.adminText = await mainText(s.page);
+	await s.page.screenshot({ path: `${SHOT}/${person.who}-admin.png` });
+	const adminDoor = await api(s, 'GET', '/api/catalog/management/v1/events');
+	s.adminStatus = adminDoor.status;
+	if (person.admin) {
+		check('/admin opens', /Events/.test(s.adminText) && !/estate-admin only/.test(s.adminText), s.adminText.slice(0, 80));
+		check('the catalog’s estate-admin door answers', adminDoor.status === 200, `GET /management/v1/events ${adminDoor.status}`);
+	} else {
+		check('/admin refuses, saying why', /Admin is estate-admin only/.test(s.adminText), s.adminText.slice(0, 80));
+		check('the catalog’s estate-admin door refuses', adminDoor.status === 403, `GET /management/v1/events ${adminDoor.status}`);
+	}
+
+	const inbox = await api(s, 'GET', '/api/notifications/inbox?limit=100');
+	const unread = await api(s, 'GET', '/api/notifications/inbox/unread');
+	const watches = await api(s, 'GET', '/api/notifications/watches');
+	const prefs = await api(s, 'GET', '/api/notifications/prefs');
+	check('the inbox answers their bearer', inbox.status === 200, `GET /inbox ${inbox.status}, ${inbox.json?.notifications?.length ?? '?'} row(s)`);
+	check('the badge door answers, and agrees with the inbox', unread.status === 200 && unread.json?.unread === inbox.json?.unread, `GET /inbox/unread ${unread.status} unread=${unread.json?.unread}`);
+	check('the watch list and preferences answer', watches.status === 200 && prefs.status === 200, `GET /watches ${watches.status}, GET /prefs ${prefs.status}`);
+	s.unread = unread.json?.unread;
+	s.watching = (watches.json?.projects ?? []).map((w) => (typeof w === 'string' ? w : w.project_id));
+
+	const bellReads = s.apiCalls.filter((c) => c.endsWith(' GET /api/notifications/inbox'));
+	check('the bell read the inbox with their bearer', bellReads.some((c) => c.startsWith('200 ')), bellReads.join(', ') || 'no read');
+	await reload(s, '/notifications');
+	await s.page.waitForTimeout(2500);
+	const shown = await badge(s.page);
+	check('the bell’s badge is the inbox’s unread count', shown === s.unread, `badge ${shown}, inbox ${s.unread}`);
+	console.log('');
 }
-/** The notifications service's OWN principal — the reconciler reads lineage's governed feed as this,
- *  so it needs its own grant. Its ServiceAccount's subject (`lance.saSubject`), written as the OpenFGA user
- *  it is (`service_kit.governed.fga.user_object`: `%` as `%25`, `:` as `%3A`). */
-const SERVICE_SUBJECT = process.env.NOTIFICATIONS_SUBJECT ?? 'kubernetes~system:serviceaccount:default:rask-sa-notifications';
-const SERVICE_USER = fgaUser(SERVICE_SUBJECT);
-/** The project used to prove WATCH targeting — created as tuples only; no catalog row is needed. */
-const WATCH_PROJECT = process.env.WATCH_PROJECT ?? 'drive-watch-project';
-const TOKEN_URL = process.env.TOKEN_URL ?? `${ORIGIN}/dex/token`;
-const CLIENT_ID = process.env.OIDC_CLIENT_ID ?? 'rask-web';
-const CLIENT_SECRET = process.env.OIDC_CLIENT_SECRET ?? 'lance-catalog-secret';
-const PASSWORD = process.env.DEX_PASSWORD ?? 'password';
-// The output the emitting identity must hold `can_write_data` on (model.fga: `can_write_data: writer`).
-const OUTPUT = process.env.DRIVE_OUTPUT ?? 'bronze$events';
-/** How long to let the bell's live query settle after a reload. */
-const SETTLE_MS = Number(process.env.SETTLE_MS ?? 2500);
-/** WALL-CLOCK bound on one wait, not an attempt count.
- *
- *  The first run of this drive exited 124 because the waits were `for (attempt < 10)` over TWO pages
- *  at 2.5 s each: when the badge never moves — the exact case a FAILED emit produces — that is ~50 s
- *  per phase and the whole run outgrew its timeout, so the harness reported a TIMEOUT where it had
- *  actually finished deciding. A failing assertion must cost about as much as a passing one. */
-const WAIT_MS = Number(process.env.WAIT_MS ?? 45_000);
+check('alice and bob are two subjects', sessions.alice.subject !== sessions.bob.subject);
+check('alice and bob are told apart on /admin', sessions.alice.adminText !== sessions.bob.adminText);
+const anonymous = await api(null, 'GET', '/api/notifications/inbox/unread', { anonymous: true });
+check('the inbox refuses a request with no bearer', anonymous.status === 401, `GET /inbox/unread ${anonymous.status}`);
 
-/** Poll `read()` until `done(value)` or the deadline. Returns the last value either way — this
- *  reports, it never throws, because "it did not move" IS the finding. */
-async function until(read, done) {
-	const deadline = Date.now() + WAIT_MS;
-	let value = await read();
-	while (!done(value) && Date.now() < deadline) value = await read();
-	return value;
-}
-
-const browser = await chromium.launch();
-
-let failures = 0;
-const check = (label, ok, detail = '') => {
-	console.log(`   ${ok ? '✓' : '✗'} ${label}${detail ? ` — ${detail}` : ''}`);
-	if (!ok) failures += 1;
-};
-
-async function signIn(user, startPath = '/lakehouse/') {
-	const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-	const page = await context.newPage();
-	await page.goto(`${ORIGIN}/auth/login?redirect=${encodeURIComponent(startPath)}`, { waitUntil: 'domcontentloaded' });
-	await page.waitForURL(/\/dex\/auth/, { timeout: 20_000 });
-	await page.fill('input[name="login"], input#login, input[type="text"], input[type="email"]', user);
-	await page.fill('input[name="password"], input#password, input[type="password"]', 'password');
-	await page.click('button[type="submit"], input[type="submit"], #submit-login');
-	await page.waitForURL((u) => u.origin === ORIGIN && !u.pathname.startsWith('/auth'), { timeout: 25_000 });
-	return { context, page };
-}
-
-/**
- * The badge, as a NUMBER, read off the shared component's own slot.
- *
- * `0` when the element is absent, because the component renders no badge at zero — that is the
- * distinction the whole drive turns on, so it must not be conflated with "could not read".
- */
-async function badge(page) {
-	await page.reload({ waitUntil: 'domcontentloaded' });
-	// The bell opens a live query on mount; give it a beat to land rather than racing it.
-	await page.waitForTimeout(SETTLE_MS);
-	const text = await page.locator('[data-slot="notification-count"]').first().textContent().catch(() => null);
-	return text === null ? 0 : Number(text.trim().replace('+', ''));
-}
-
-/**
- * Emit ONE terminal OpenLineage event authored by `subject`.
- *
- * Posted through lineage's own HTTP door rather than the bus on purpose: that is the lane the
- * reconciler exists for, so driving it exercises BOTH ingresses' convergence rather than only the
- * subscription. `enforce_author` overwrites whatever the body claims with the token's sub, which is
- * why the author cannot simply be asserted here — it is the door that decides.
- */
-/**
- * Emit ONE terminal OpenLineage event, authored by `subject`, through lineage's SERVICE DOOR.
- *
- * NOT from the browser, and that is a fact about the estate rather than a convenience. A page-side
- * `fetch('/api/lineage/...')` carries no bearer: the session lives in a sealed httpOnly cookie scoped
- * to the ZONE, and nothing at the edge translates cookie to bearer: the cluster route forwards the
- * request as it arrived, so lineage sees no credential and answers 401.
- *
- * So the drive talks to lineage on LINEAGE_URL with the pair the door wants.
- */
-/** Mint `email`'s own OIDC token from Dex via the password grant.
- *
- *  `id_token` first, `access_token` as the fallback — the same order and the same request shape the
- *  annotator's publish identity uses, so this exercises a path the estate already depends on. */
-async function mintToken(email) {
-	const body = new URLSearchParams({
-		grant_type: 'password',
-		username: email,
-		password: PASSWORD,
-		scope: 'openid profile email federated:id audience:server:client_id:rask-lakehouse',
+// ── write ──────────────────────────────────────────────────────────────────────────────────────────────────────────
+if (args.write) {
+	const { alice, bob } = sessions;
+	const namespace = TABLE.slice(0, TABLE.lastIndexOf('$'));
+	const counts = async () => ({
+		alice: (await api(alice, 'GET', '/api/notifications/inbox/unread')).json?.unread,
+		bob: (await api(bob, 'GET', '/api/notifications/inbox/unread')).json?.unread,
 	});
-	const res = await fetch(TOKEN_URL, {
-		method: 'POST',
-		headers: {
-			'content-type': 'application/x-www-form-urlencoded',
-			authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
-		},
-		body,
-	});
-	if (!res.ok) throw new Error(`dex refused ${email}: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
-	const json = await res.json();
-	const token = json.id_token ?? json.access_token;
-	if (!token) throw new Error(`dex returned neither id_token nor access_token for ${email}`);
-	return token;
-}
-
-/** The principal a Dex token proves (LH-063): the idp id the chart gives the development Dex's connector `local`
- *  (`dex`, `lance.oidcConnectors`) and the user id Dex reports in `federated_claims`, which it does only when the
- *  client asks for `federated:id`. It is simultaneously the FGA principal, the InboxActor id and what
- *  `enforce_author` stamps, so all three come from here. */
-function subjectOf(token) {
-	const json = Buffer.from(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8');
-	const federated = JSON.parse(json).federated_claims;
-	if (!federated?.user_id) throw new Error('token carries no federated_claims (ask Dex for federated:id)');
-	return `dex~${federated.user_id}`;
-}
-
-/** The OpenFGA user a principal is: `user:` and the key percent-encoded as `fga.user_object` encodes it. */
-function fgaUser(principal) {
-	return `user:${encodeURIComponent(principal).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`;
-}
-
-/** Resolve the estate's store by NAME, newest-wins — the same tie-break `fga.provision` uses.
- *
- *  Paginated deliberately: a single-page read is how this session concluded a store was "phantom"
- *  when the listing simply had not been walked (it was in fact a stale port-forward, but the
- *  single-page read is what made the wrong answer look complete). */
-async function fgaStoreId() {
-	let token;
-	do {
-		const url = `${FGA_API_URL}/stores?page_size=50${token ? `&continuation_token=${token}` : ''}`;
-		const res = await fetch(url, { headers: fgaAuth() });
-		if (!res.ok) throw new Error(`openfga /stores: HTTP ${res.status}`);
-		const body = await res.json();
-		const hit = (body.stores ?? []).filter((s) => s.name === FGA_STORE_NAME);
-		if (hit.length) return hit.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at))).pop().id;
-		token = body.continuation_token || null;
-	} while (token);
-	throw new Error(`no OpenFGA store named ${FGA_STORE_NAME} at ${FGA_API_URL}`);
-}
-
-/** Write `tuples` idempotently. A duplicate is success — the estate may already be seeded, and a
- *  drive that fails on "already granted" would be unrunnable twice in a row. */
-async function seedGrants(storeId, tuples) {
-	for (const key of tuples) {
-		const res = await fetch(`${FGA_API_URL}/stores/${storeId}/write`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json', ...fgaAuth() },
-			body: JSON.stringify({ writes: { tuple_keys: [key] } }),
+	/** One terminal run, posted as `session`'s person. No author facet: `enforce_author` stamps the caller. */
+	const emit = (session, state, { runId = randomUUID(), project } = {}) =>
+		api(session, 'POST', '/api/lineage/api/v1/lineage', {
+			write: true,
+			body: {
+				eventType: state,
+				eventTime: new Date().toISOString(),
+				producer: 'rask://tests/e2e/verify_notifications_two_users',
+				schemaURL: 'https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent',
+				job: { namespace: 'rask-verify', name: project ? 'two_users_watched' : 'two_users' },
+				// The tenant rides the `rask_lance` run facet, which is what WATCH targets on; the authorship runs carry
+				// none, so they reach their author alone.
+				run: { runId, facets: project ? { rask_lance: { project } } : {} },
+				outputs: [{ namespace, name: TABLE }],
+			},
 		});
-		if (res.ok) continue;
-		const text = await res.text();
-		if (res.status === 400 && text.includes('already exists')) continue;
-		throw new Error(`grant ${key.user} ${key.relation} ${key.object} failed: HTTP ${res.status} ${text.slice(0, 200)}`);
+	/** `session`'s inbox row for `runId`, read off the inbox door (ids are `<runId>@<STATE>`). */
+	const rowFor = async (session, runId) => {
+		const page = await api(session, 'GET', '/api/notifications/inbox?limit=100');
+		return (page.json?.notifications ?? []).find((r) => r.notification_id.startsWith(`${runId}@`));
+	};
+	check('bob does not already watch the project', !bob.watching.includes(PROJECT), `bob watches ${bob.watching.join(', ') || 'nothing'}`);
+	const before = await counts();
+	console.log(` write phase: unread alice=${before.alice} bob=${before.bob}`);
+
+	const w1 = await emit(alice, 'FAIL');
+	check('W1 lineage recorded alice’s FAIL run', w1.status === 201, `POST /api/v1/lineage ${w1.status} ${w1.detail}`);
+	const afterW1 = await until(counts, (c) => c.alice > before.alice, WAIT_MS);
+	check('W1 alice was told about her own run', afterW1.alice === before.alice + 1, `${before.alice} -> ${afterW1.alice}`);
+	check('W1 bob was not', afterW1.bob === before.bob, `${before.bob} -> ${afterW1.bob}`);
+
+	const w2 = await emit(bob, 'COMPLETE');
+	check('W2 lineage recorded bob’s COMPLETE run', w2.status === 201, `POST /api/v1/lineage ${w2.status} ${w2.detail}`);
+	const afterW2 = await until(counts, (c) => c.bob > afterW1.bob, WAIT_MS);
+	check('W2 bob was told about his own run', afterW2.bob === afterW1.bob + 1, `${afterW1.bob} -> ${afterW2.bob}`);
+	check('W2 alice was not', afterW2.alice === afterW1.alice, `${afterW1.alice} -> ${afterW2.alice}`);
+
+	const watchedBefore = alice.watching.includes(PROJECT);
+	if (watchedBefore) console.log('   W3 skipped: alice already watches the project');
+	else {
+		const w3 = await api(alice, 'PUT', `/api/notifications/watches/${encodeURIComponent(PROJECT)}`, { write: true });
+		check('W3 alice watches the project (the member gate admits her)', w3.status === 200, `PUT /watches/${PROJECT} ${w3.status} ${w3.detail}`);
+	}
+	const runW4 = randomUUID();
+	const w4 = await emit(bob, 'FAIL', { runId: runW4, project: PROJECT });
+	check('W4 lineage recorded bob’s run in the watched project', w4.status === 201, `POST /api/v1/lineage ${w4.status} ${w4.detail}`);
+	const afterW4 = await until(counts, (c) => c.alice > afterW2.alice && c.bob > afterW2.bob, WAIT_MS);
+	check('W4 alice was told, though she did not author it', afterW4.alice === afterW2.alice + 1, `${afterW2.alice} -> ${afterW4.alice}`);
+	check('W4 bob was told as its author', afterW4.bob === afterW2.bob + 1, `${afterW2.bob} -> ${afterW4.bob}`);
+	const aliceRow = await rowFor(alice, runW4);
+	const bobRow = await rowFor(bob, runW4);
+	check('W4 alice’s row says why: watch', aliceRow?.reason === 'watch', `reason=${aliceRow?.reason}`);
+	check('W4 bob’s row says why: author', bobRow?.reason === 'author', `reason=${bobRow?.reason}`);
+
+	// W5: the bell's panel, opened by alice in her browser.
+	await reload(alice, '/notifications');
+	await alice.page.waitForTimeout(2500);
+	const openedWith = (await counts()).alice;
+	await alice.page.getByRole('button', { name: /^Notifications/ }).first().click();
+	await alice.page.waitForTimeout(1500);
+	const panel = alice.page.getByRole('dialog', { name: 'Notifications' });
+	check('W5 the bell opens a panel with its own role and name', (await panel.count()) === 1);
+	const panelText = ((await panel.innerText().catch(() => '')) ?? '').replace(/\s+/g, ' ');
+	check('W5 the panel, not the page, names the run alice was told about as a watcher', panelText.length > 0, panelText.slice(0, 80));
+	const clipped = await panel.locator('p, span').filter({ hasText: /\S/ }).evaluateAll((els) =>
+		els.slice(0, 20).flatMap((el) => {
+			const cs = getComputedStyle(el);
+			const overflows = el.clientHeight < el.scrollHeight || el.clientWidth < el.scrollWidth;
+			const marked = (cs.webkitLineClamp !== 'none' && cs.webkitLineClamp !== '') || cs.textOverflow === 'ellipsis';
+			if (!overflows) return [];
+			if (!marked) return [`cut without a marker: ${(el.textContent ?? '').trim().slice(0, 40)}`];
+			return el.getAttribute('title') ? [] : [`truncated with no title=: ${(el.textContent ?? '').trim().slice(0, 40)}`];
+		}),
+	);
+	check('W5 no panel row is cut silently or truncated beyond reach', clipped.length === 0, clipped.join('; '));
+	await panel.screenshot({ path: `${SHOT}/alice-panel.png` }).catch(() => {});
+	await alice.page.keyboard.press('Escape');
+	await alice.page.waitForTimeout(1500);
+	const seenCalls = alice.apiCalls.filter((c) => c.endsWith(' POST /api/notifications/inbox/seen'));
+	check('W5 the panel marked what it rendered as seen', seenCalls.some((c) => c.startsWith('200 ')), seenCalls.join(', ') || 'no POST /inbox/seen');
+
+	const fresh = await signIn(browser, 'alice@example.com', { write: true, startPath: '/notifications' });
+	await fresh.page.waitForTimeout(2500);
+	const freshUnread = (await api(fresh, 'GET', '/api/notifications/inbox/unread')).json?.unread;
+	const freshBadge = await badge(fresh.page);
+	check('W5 a fresh browser reads the lower count: read state is the inbox’s', freshUnread < openedWith, `${openedWith} -> ${freshUnread}`);
+	check('W5 and its badge shows it', freshBadge === freshUnread, `badge ${freshBadge}`);
+	const bobAfter = (await counts()).bob;
+	check('W5 alice’s reading did not touch bob', bobAfter === afterW4.bob, `${afterW4.bob} -> ${bobAfter}`);
+	await fresh.context.close();
+
+	if (!watchedBefore) {
+		const w6 = await api(alice, 'DELETE', `/api/notifications/watches/${encodeURIComponent(PROJECT)}`, { write: true });
+		check('W6 alice unwatches the project again', w6.status === 200, `DELETE /watches/${PROJECT} ${w6.status} ${w6.detail}`);
 	}
 }
 
-/** Emit one run event AS the token's holder. The author facet is deliberately NOT sent: whatever it
- *  said would be overwritten by `enforce_author`, and sending one invites the reader to believe it
- *  had an effect. */
-async function emitRun({ runId, state, token, outputName = OUTPUT, project }) {
-	const res = await fetch(`${LINEAGE_URL}/api/v1/lineage`, {
-		method: 'POST',
-		headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-		body: JSON.stringify({
-			eventType: state,
-			eventTime: new Date().toISOString(),
-			producer: 'rask://verify_notifications_two_users',
-			job: { namespace: 'rask-drive', name: `drive_${runId}` },
-			// The TENANT rides the `lance` run facet — the same bag `runId` uses, and what
-			// `project_id()` reads to find a run's watchers. Omitted entirely for the authorship
-			// cases, so those keep proving v1's behaviour rather than quietly exercising v2.
-			run: project ? { runId, facets: { lance: { project } } } : { runId },
-			outputs: [{ namespace: outputName.split('$')[0], name: outputName }],
-		}),
-	});
-	return { status: res.status, body: await res.text().catch(() => '') };
+for (const [who, s] of Object.entries(sessions)) {
+	console.log(` ${who}: writes the guard refused: ${s.refused.length ? s.refused.join(', ') : 'none'}`);
+	await s.context.close();
 }
-
-/** Register a watch AS the subject, through the estate's own door.
- *
- *  Deliberately the real HTTP route rather than a tuple write: the door is `project#member`-gated,
- *  so driving it proves the gate admits a member — a seeded actor-state row would prove nothing
- *  about authorization and would skip the very check v2 rests on. */
-async function watchProject(token, project) {
-	const res = await fetch(`${GATEWAY_URL}/api/notifications/watches/${encodeURIComponent(project)}`, {
-		method: 'PUT',
-		headers: { authorization: `Bearer ${token}` },
-	});
-	return { status: res.status, body: await res.text().catch(() => '') };
-}
-
-console.log(`\n▸ two-user notification drive against ${ORIGIN}\n`);
-
-const alice = await signIn('alice@example.com');
-const bob = await signIn('bob@example.com');
-
-// Their OWN tokens, minted from the same IdP the browser session came from — see the emitRun note.
-const aliceToken = await mintToken('alice@example.com');
-const bobToken = await mintToken('bob@example.com');
-const aliceSub = subjectOf(aliceToken);
-const bobSub = subjectOf(bobToken);
-
-// ── seed, every run ──────────────────────────────────────────────────────────────────────────────
-// Four grants, each present because a specific check cannot pass without it:
-//   · alice/bob `writer` on the output — `enforce_output_authz` refuses the emit otherwise (403).
-//   · notifications `reader` on the output — the feed is GOVERNED, so without it the reconciler
-//     walks a page it cannot see and delivers nothing, cleanly and silently.
-//   · alice `member` of the watch project — the watch door is `project#member`-gated.
-const storeId = await fgaStoreId();
-await seedGrants(storeId, [
-	{ user: fgaUser(aliceSub), relation: 'writer', object: `table:${OUTPUT}` },
-	{ user: fgaUser(bobSub), relation: 'writer', object: `table:${OUTPUT}` },
-	{ user: SERVICE_USER, relation: 'reader', object: `table:${OUTPUT}` },
-	{ user: fgaUser(aliceSub), relation: 'member', object: `project:${WATCH_PROJECT}` },
-]);
-console.log(`   seeded 4 grants in store ${storeId}`);
-
-const before = { alice: await badge(alice.page), bob: await badge(bob.page) };
-console.log(`   baseline: alice=${before.alice} bob=${before.bob}`);
-
-// ── alice's run FAILS ────────────────────────────────────────────────────────────────────────────
-const runId = `drive-alice-${Date.now()}`;
-const emitted = await emitRun({ runId, state: 'FAIL', token: aliceToken });
-check('lineage accepted the FAIL event', emitted.status < 400, `HTTP ${emitted.status} ${emitted.body.slice(0, 160)}`);
-
-// The bus hop plus the fan-out is not instant; poll rather than sleep once and hope.
-const after = await until(
-	async () => ({ alice: await badge(alice.page), bob: await badge(bob.page) }),
-	(v) => v.alice > before.alice,
-);
-console.log(`   after alice's FAIL: alice=${after.alice} bob=${after.bob}`);
-
-check('alice was told about her own failed run', after.alice > before.alice, `${before.alice} → ${after.alice}`);
-check("bob was NOT told about alice's run", after.bob === before.bob, `${before.bob} → ${after.bob}`);
-
-await alice.page.screenshot({ path: `${SHOT}/alice-after-fail.png` }).catch(() => {});
-await bob.page.screenshot({ path: `${SHOT}/bob-after-fail.png` }).catch(() => {});
-
-// ── the reverse, because one direction proves only that SOMETHING moved ──────────────────────────
-const bobRun = `drive-bob-${Date.now()}`;
-await emitRun({ runId: bobRun, state: 'COMPLETE', token: bobToken });
-const reverse = await until(
-	async () => ({ alice: await badge(alice.page), bob: await badge(bob.page) }),
-	(v) => v.bob > after.bob,
-);
-console.log(`   after bob's COMPLETE: alice=${reverse.alice} bob=${reverse.bob}`);
-check('bob was told about his own completed run', reverse.bob > after.bob, `${after.bob} → ${reverse.bob}`);
-check("alice was NOT told about bob's run", reverse.alice === after.alice, `${after.alice} → ${reverse.alice}`);
-
-// ── v2 targeting: a WATCHER is told about someone else's run ─────────────────────────────────────
-// The second of the plane's targeting sources, and until now the untested one. Everything above
-// proves authorship, which needs no registry and no permission — you may always be told about your
-// own run. A watch is the opposite shape: an explicit, `project#member`-gated opt-in that puts a run
-// in the inbox of somebody who did NOT run it. Nothing in the authorship path exercises the watch
-// registry, the membership gate, or the WATCH delivery reason.
-const watched = await watchProject(aliceToken, WATCH_PROJECT);
-check('alice could register a watch (project#member gate admits a member)', watched.status < 400, `HTTP ${watched.status} ${watched.body.slice(0, 120)}`);
-
-const beforeWatch = { alice: await badge(alice.page), bob: await badge(bob.page) };
-const watchRun = `drive-watch-${Date.now()}`;
-// BOB runs it, carrying the project alice watches. Alice is not the author, so if her badge moves it
-// moved for exactly one reason.
-const watchEmit = await emitRun({ runId: watchRun, state: 'FAIL', token: bobToken, project: WATCH_PROJECT });
-check('lineage accepted the watched-project run', watchEmit.status < 400, `HTTP ${watchEmit.status} ${watchEmit.body.slice(0, 120)}`);
-
-const afterWatch = await until(
-	async () => ({ alice: await badge(alice.page), bob: await badge(bob.page) }),
-	(v) => v.alice > beforeWatch.alice,
-);
-console.log(`   after bob's run in alice's watched project: alice=${afterWatch.alice} bob=${afterWatch.bob}`);
-check("alice was told about a run she did NOT author, because she watches its project", afterWatch.alice > beforeWatch.alice, `${beforeWatch.alice} → ${afterWatch.alice}`);
-check('bob was still told too — he authored it', afterWatch.bob > beforeWatch.bob, `${beforeWatch.bob} → ${afterWatch.bob}`);
-
-await alice.page.screenshot({ path: `${SHOT}/alice-after-watch.png` }).catch(() => {});
-
-// ── B2: read state is DURABLE, not per-tab ───────────────────────────────────────────────────────
-// The acceptance the OPEN-WORK register, row B2 (drained 2026-09-10; in git history) named. Opening and closing the panel marks the rendered rows read;
-// a FRESH BROWSER CONTEXT is what separates "persisted per subject" from "remembered in this tab".
-const bell = alice.page.getByRole('button', { name: /notification/i }).first();
-await bell.click().catch(() => {});
-await alice.page.waitForTimeout(1200);
-await alice.page.keyboard.press('Escape');
-await alice.page.waitForTimeout(1500);
-
-const fresh = await signIn('alice@example.com');
-const freshBadge = await badge(fresh.page);
-check('alice’s read state survived a FRESH browser context', freshBadge === 0, `fresh badge = ${freshBadge}`);
-
-// Against `afterWatch`, not `reverse`: the watch section moved bob's badge too (he authored that
-// run), so comparing to the pre-watch figure would fail for a reason that has nothing to do with
-// read state. The claim is "alice's read did not change BOB's count", so the baseline has to be
-// bob's count at the moment alice read.
-const bobStill = await badge(bob.page);
-check('marking alice read did not touch bob', bobStill === afterWatch.bob, `bob = ${bobStill}, expected ${afterWatch.bob}`);
-
 await browser.close();
-console.log(`\n${failures === 0 ? '✅ all checks passed' : `❌ ${failures} check(s) failed`}\n`);
-process.exit(failures === 0 ? 0 : 1);
+console.log(`\n${checks.failures === 0 ? 'all checks passed' : `${checks.failures} check(s) failed`}\n`);
+process.exit(checks.failures === 0 ? 0 : 1);

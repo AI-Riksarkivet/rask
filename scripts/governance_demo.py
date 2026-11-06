@@ -18,6 +18,7 @@ Config via env (defaults target the local governance stack):
     CATALOG_URL   (default http://localhost:2333)
     LINEAGE_URL   (default http://localhost:8000)
     DEX_URL       (default http://localhost:5556/dex)
+    DEX_CLIENT_SECRET  the confidential sign-in client `rask-web`'s secret (default the dev Dex's, `lance-catalog-secret`)
 
 Exits non-zero if any governance invariant does not hold.
 """
@@ -38,6 +39,7 @@ from lineage.models import author_sub_from_payload
 CATALOG = os.environ.get("CATALOG_URL", "http://localhost:2333").rstrip("/")
 LINEAGE = os.environ.get("LINEAGE_URL", "http://localhost:8000").rstrip("/")
 DEX = os.environ.get("DEX_URL", "http://localhost:5556/dex").rstrip("/")
+DEX_CLIENT_SECRET = os.environ.get("DEX_CLIENT_SECRET", "lance-catalog-secret")
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 GREEN, RED, BOLD, RESET = "\033[32m", "\033[31m", "\033[1m", "\033[0m"
 
@@ -61,6 +63,7 @@ def token(username: str) -> str:
         data={
             "grant_type": "password",
             "client_id": "rask-web",
+            "client_secret": DEX_CLIENT_SECRET,
             "username": username,
             "password": "password",
             "scope": "openid federated:id audience:server:client_id:rask-lakehouse",

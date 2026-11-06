@@ -4,7 +4,7 @@
 	import { Switch } from '@rask/ui/switch';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { readWatches, unwatchProject, watchProject } from '$lib/live/inbox.api';
+	import { readWatches, unwatchProject, watchProject } from '#lib/live/inbox.api.ts';
 
 	// PROJECT WATCHES — v2 targeting's own surface.
 	//
@@ -30,7 +30,7 @@
 	// never needed.
 	//
 	// `me.projects` is the frozen `/management/v1/me` contract, already resolved in the layout for every page, and
-	// it is the SAME source the project gallery reads (`$lib/gallery.ts`). Conforming to it rather than
+	// it is the SAME source the project gallery reads (`#lib/gallery.ts`). Conforming to it rather than
 	// re-inventing keeps one answer to "which projects am I in".
 	//
 	// `null` = un-wired (no session, or no notifications service). Genuinely different from an empty

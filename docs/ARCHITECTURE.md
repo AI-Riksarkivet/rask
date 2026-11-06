@@ -56,7 +56,7 @@ A client asks for a **credential** to reach object storage directly through the 
 `DescribeTable` / `DeclareTable` with `vend_credentials` (`lance_docs/ns_catalog/spec.yaml`), or through rask's
 extension `POST /management/v1/table/{id}/credentials?tier=read|write`, which names a tier. Which tier the spec doors
 vend, and that write credentials never reach `_refs/` or a final manifest, is LH-229 (#149). Two pluggable modes
-(`chart` `vending.mode`; `services/catalog/core/vending.py`, `VendingMode`):
+(`chart` `vending.mode`; `services/catalog/src/catalog/core/vending.py`, `VendingMode`):
 
 1. **Web identity (`WebIdentityVendor`, `web_identity`) — the default.** The catalog exchanges its OWN projected
    ServiceAccount token through the store's STS `AssumeRoleWithWebIdentity` with an **inline session policy** scoped
@@ -100,9 +100,9 @@ flowchart LR
 Code layout (where each concern lives). The catalog service is a uv workspace member, so its
 package sits under `services/catalog/src/catalog/`, layered into `api/` (routes/deps/security),
 `core/` (config + infra), and `services/` (business logic). The cross-service modules
-(`secrets`, `dapr_auth`, `fga`, `oidc`, `audit`, `exceptions`) moved into **`service-kit`** at
-R19 — `services/common` and `packages/common` are both gone, and every service now imports
-`from service_kit.X` (the governed subset lives under `service_kit.governed`):
+(`secrets`, `dapr_auth`, `fga`, `oidc`, `audit`, `exceptions`) live in **`service-kit`**, and every service
+imports them as `from service_kit.X` (the governed subset under `service_kit.governed`); the lakehouse's own kernel
+is `lakehouse-kit`, which only catalog, lineage and maintenance import:
 
 | Path | Responsibility |
 |---|---|
@@ -244,7 +244,7 @@ gate for readers), are in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
 | `project` type + 3-axis governance (teams × projects × tiers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
 | Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); Dapr cron bindings drive maintenance and lineage's relay tick, and NATS/Dapr pub-sub carries the internal events |
 | Lineage (authenticated OpenLineage intake, the commit feed and table-level edges as catalog-governed Lance tables, a forwarder to a bring-your-own graph backend; producer-side emitter) | ✅ service built & deployed; read-side authz implemented (see §9, `docs/LINEAGE.md`) |
-| OTel observability (OTel Collector + GreptimeDB + Perses) | ✅ built, deployed, `make e2e-obs`-verified |
+| OTel observability (OTel Collector + GreptimeDB + Perses) | ✅ built, deployed, `make e2e-observability`-verified |
 
 ---
 

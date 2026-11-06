@@ -290,11 +290,18 @@ if confirm "Build every pinned image and install? (a long run, once)"; then
       *) if [[ -f ".docker/$name.dockerfile" ]]; then push --name "$name" --push "172.17.0.1:5000/$name:$tag"; else note "$name: public image, pulled as-is"; fi ;;
     esac
   done < <(pins deploy/values-live-pins.yaml)
-  for f in deploy/fixtures/console/values-live-pins.yaml; do
-    [[ -f "$f" ]] || continue
-    repo=$(sed -n 's/^ *repository: *"\(.*\)"/\1/p' "$f"); tag=$(sed -n 's/^ *tag: *"\(.*\)"/\1/p' "$f"); stem=${repo##*/}
-    push --name "$stem" --push "172.17.0.1:5000/$stem:$tag"
-  done
+  # The console's release pins its web image and its inbox, one `repository` and `tag` pair each; the web image
+  # `web-console` is built from the `frontend` stem.
+  f=deploy/fixtures/console/values-live-pins.yaml
+  if [[ -f "$f" ]]; then
+    while read -r repo tag; do
+      image=${repo##*/}
+      case "$image" in
+        web-console) push --name frontend --push "172.17.0.1:5000/$image:$tag" ;;
+        *) push --name "$image" --push "172.17.0.1:5000/$image:$tag" ;;
+      esac
+    done < <(paste -d' ' <(sed -n 's/^ *repository: *"\(.*\)"/\1/p' "$f") <(sed -n 's/^ *tag: *"\(.*\)"/\1/p' "$f"))
+  fi
   make k3s-up
   step "rask is installed; checking it"
   make test

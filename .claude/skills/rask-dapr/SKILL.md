@@ -14,7 +14,7 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 
 | Block | Used | Where (verified) |
 | --- | --- | --- |
-| Service invocation | ✅ | No lakehouse service calls another through it, and the product chart renders no invocation Resiliency. The notifications inbox, a client, reads lineage's feed through `/v1.0/invoke/lineage/method` (`feed_base_url`; direct URL when Dapr is off); Dapr applies an invocation policy on the CALLING sidecar, so its retry (`invokeRetry`, constant 2 s ×3, `408,429,500-599`, never a 4xx) is its own release's to scope to its app-id. No policy targets the catalog: no service invokes it through Dapr. Public traffic never rides invocation: the cluster route reaches each app port directly |
+| Service invocation | ✅ | No lakehouse service calls another through it, and the product chart renders no invocation Resiliency. The notifications inbox, a client, reads lineage's feed through `/v1.0/invoke/lineage/method` (`feed_base_url`; direct URL when Dapr is off); Dapr applies an invocation policy on the CALLING sidecar, so its retry is the console release's: `<rask.release>-notifications-invocation-resiliency` (`deploy/fixtures/console/chart/templates/inbox-dapr.yaml`), `invokeRetry`, constant 2 s ×3 on `408,429,500-599` and never a 4xx, targeting app `lineage` and scoped to the inbox's app id, the inbox's one retry layer for those reads. No policy targets the catalog: no service invokes it through Dapr. Public traffic never rides invocation: the cluster route reaches each app port directly |
 | State | ✅ | None in the product chart: no lakehouse service keeps Dapr state. Each client that hosts actors brings its own store in its own release (scopes are load-bearing — see traps): the notifications inbox's, scoped to app-id `notifications` alone on a CloudNativePG Postgres of its own, rendered by the console's release (`deploy/fixtures/console`, ADR 0190) |
 | Pub/sub | ✅ | `pubsub.jetstream`, one Component per app-id that publishes or subscribes, each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers. Unset, the component hands its app ONE message at a time (`concurrencyMode` defaults to single, components-contrib v1.19.0 `pubsub/jetstream/metadata.go:63-65`; measured live 2026-10-23, 61 of 61 lineage deliveries back to back): lineage's subscriber alone says `parallel`, bounded by its durable's `maxAckPending` (`services.lineage.deliveriesInFlight`), so JetStream hands out no more and nothing waits in the sidecar past its `ackWait`. A sidecar cannot rebind a durable whose config changed, so the NATS stream Job recreates `lineage-durable` at a new bound and checks again until a sidecar has recreated it at that value, since the outgoing pod's may recreate it as it was ([[LH-533]]) |
 | Bindings | ✅ | `bindings.cron` ×8 in the product chart: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline), `catalog-commit-reconcile-cron` ([[LH-497]], announcing each committed version lineage's feed lacks), `catalog-manifest-reclaim-cron` ([[LH-251]], ADR 0185, removing each root's `__manifest` versions past their retention); a client's release renders its own (the console's renders the inbox's reconcile cron) — read the cluster for what runs, not the templates. Each cron is an input binding delivered to `POST /<component-name>` at the pod ROOT. The product chart renders no output binding: the notifications inbox's email channel (`bindings.smtp`, its only channel: a push reaches the address its person supplied, never a shared channel, [[CTL-34]]) and its reconcile cron are the console release's |
@@ -67,7 +67,7 @@ actor placement/turn semantics.
   pydantic-settings at boot, and the render-driven invariant tests depend on seeing it; change
   cadence is deliberately rollout-shaped. It solves a problem this estate chose not to have.
 - **Jobs API** (2026-08-28; reasons rewritten 2026-09-03 after four adversarial re-tests — the
-  CONCLUSION held every time, most of the original reasoning did not). The six crons stay
+  CONCLUSION held every time, most of the original reasoning did not). The eight crons stay
   `bindings.cron`. **This entry is deliberately shorter than it was: three of the four counts it used
   to give are falsified, and a refusal defended by dead reasons invites the re-litigation it exists to
   prevent.**
@@ -79,9 +79,7 @@ actor placement/turn semantics.
   per-dataset check can find it ("the evidence lives only on the referring side"). That pre-pass IS
   the scan's dominant cost, so a per-target Job avoids a datetime comparison and avoids nothing that
   is expensive — while either re-running the pre-pass per job (catastrophically worse) or skipping it
-  (re-opening the measured #114/#128d data-loss defect). `work_queue.py` already carries the
-  consequence: a worker "cannot recompute the whole-estate protection verdict", which is why
-  `DatasetWorkItem` ships the reduced `protected_by`.
+  (re-opening the measured #114/#128d data-loss defect).
 
   Secondary, and still true: **the loop must exist anyway** for datasets carrying no policy — they
   have no `_policies/state/` record at all and are maintained on every tick — so Jobs would add a
@@ -90,25 +88,25 @@ actor placement/turn semantics.
   **What was falsified, so nobody re-derives it from this file:** a tier table CAN carry a
   policy (a project record matches at bucket level, `maintenance_policies.py:18,156`); the "60x finer
   resolution" was demo-only arithmetic (prod is `0 */30 * * * *`, i.e. 2x); "per-target wakeups queue
-  on the same lock" stopped describing the queue lane when N4 landed (`41f29fa8` — `routes.on_cron`
-  holds `_sweep_lock` for PLANNING only and `api/work.py::handle_unit` takes no lock); and "creates a
+  on the same lock" does not hold: `routes.on_cron` holds `_sweep_lock` for the whole-estate sweep, and the per-table
+  lane, the write-event subscription (`maintenance/api/arrival.py`), takes no lock; and "creates a
   second stateful store" names the wrong thing — the Scheduler etcd is already deployed and
-  load-bearing for Dapr Workflow and actor reminders, so what per-policy Jobs would create is a second
+  load-bearing for actor reminders (the notifications inbox's), so what per-policy Jobs would create is a second
   authoritative HOME for policy cadence that every create/update/delete/drop/undrop path must mirror,
   invisible to the render gates and to the drift report's three store categories.
 
-  **The event-driven redesign (2026-09-03) shrinks the question rather than reopening it.** With the
-  primary trigger becoming a `lineage.events.v1` subscription and the cron demoted to an hourly
-  backstop, the scheduling mechanism stops driving maintenance at all; the components that need
-  throughput (the event subscriber, the N4 executor) scale on `queueGroupName` competing consumers,
-  which needs no Jobs. **AUDITED ESTATE-WIDE 2026-08-28** (10 time-shaped clusters,
+  **The event-driven lane (2026-09-03) shrinks the question rather than reopening it.** Version expiry is
+  commit-driven: the primary trigger is the `lineage.events.v1` subscription (`maintenance.arrivalEnabled`, on by
+  default) and the sweep's cron (`0 */30 * * * *`) is the backstop, so the scheduling mechanism does not drive
+  maintenance; the component that needs throughput, the write-event subscriber, scales on `queueGroupName` competing
+  consumers, which needs no Jobs. **AUDITED ESTATE-WIDE 2026-08-28** (10 time-shaped clusters,
   adversarial, fable agents): **zero SHOULD_USE_JOBS.** Every hypothesised consumer dissolved on
   inspection — the candidates below are REFUTED and must not be re-proposed without new facts:
   * *auto-purge at trash deadline* → already shipped as a sweep flag (`MAINTENANCE_TRASH_PURGE_ENABLED`,
     report-only default is a recorded destruction posture). A purge tolerates a tick's lateness and
     must re-verify state at execution anyway (`purge.due_records` is the one shared rule), so the
     sweep is the CORRECT mechanism, not a stand-in.
-  * *TTL grants* → already live as an FGA CEL condition (`non_expired_grant`, model.fga:481) —
+  * *TTL grants* → already live as an FGA CEL condition (`non_expired_grant`, `packages/service-kit/src/service_kit/governed/auth/model.fga:707`) —
     check-time evaluation, strictly better than revoke-at-T (no window a crashed revoker leaves open).
   * *per-subject digest one-shots* → actor reminders, correctly (the state lives in the actor's turn;
     reminders ride the same Scheduler Jobs would). The audit's ONE finding here was a repairability
@@ -184,12 +182,10 @@ sidecar.
   verbatim: *"No coordination – each replica runs the schedule independently, causing duplicate
   triggers"* and *"when the target app is scaled to multiple replicas, the schedule will fire on every
   instance"*. There is no lease anywhere in the path, so every multi-replica service must buy the
-  guarantee itself, and the estate answers it FIVE different ways: lineage's relay tick makes every step idempotent (an
+  guarantee itself, and the estate answers it FOUR different ways: lineage's relay tick makes every step idempotent (an
   insert-only merge on each feed row, a forwarder cursor that only moves forward); maintenance is pinned to `replicas: 1`, as the notifications inbox must be; catalog's
   control relay accepts duplicates because a duplicate publish dedupes on `event_id`; catalog's erasure
-  release and promotion expiry move each record by an ETag-guarded write, so one replica wins it; compute's
-  prune accepts them because the operation is convergent (`9489d5e1`: a job another replica had
-  already reclaimed is not a retention FAILURE). A new cron on a service that can scale needs its answer chosen and written down, or its
+  release and promotion expiry move each record by an ETag-guarded write, so one replica wins it. A new cron on a service that can scale needs its answer chosen and written down, or its
   absence reads as an oversight rather than a decision.
 - `ActorProxy` dispatches @actormethod WIRE names, not Python names; mocks cannot catch a mismatch.
 - Missing `dapr.io/app-token-secret` on a bus-subscribing app ⇒ `assert_app_token_configured`

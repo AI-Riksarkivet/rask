@@ -5,8 +5,10 @@ backend is a runtime choice (endpoint + credentials), never a code one. It deriv
 credential of its own: a key pair is passed per client or comes from the standard AWS chain.
 """
 
-import os
 from typing import Any
+
+from pydantic import AliasChoices, Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 # Public alias for the boto3 S3 client. boto3 ships no public stubs, so this
@@ -14,30 +16,42 @@ from typing import Any
 # reaching past storage's boundary into `mypy_boto3_s3`.
 type S3Client = Any
 
-# Env names for the S3 endpoint/insecure/CA, canonical-first. `HCP_ENDPOINT`/`HCP_INSECURE` are
-# aliases the chart's secret and values still set; drop them once everything uses RASK_S3_*.
-#
-# RESOLVED BY HAND rather than by a pydantic-settings model, and the reason is dependency weight, not
-# an absence of validation — there IS one coercion here, the insecure flag parsed to a bool at
-# `s3_client` below, which is exactly the kind of thing a settings model would own. The surface is
-# small (three optional families) and the coercion is one line, so a settings class buys uniformity
-# and almost no behaviour. Weighed against that: `boto3` is this package's ONLY runtime dependency, and
-# a sealed client environment may hold the package as a path dep resolved into its own lock, so
-# `pydantic-settings` is a relock of each such environment for a change
-# nothing can observe. The semantics also differ where it matters here: `_env_first` skips an EMPTY
-# value, where `AliasChoices` stops at the first name that is SET. Callers get the precedence from
-# `configured_endpoint` instead of copying this list.
-_ENDPOINT_ENVS = ("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT")
-_INSECURE_ENVS = ("RASK_S3_INSECURE", "S3_INSECURE", "HCP_INSECURE")
-_CA_BUNDLE_ENVS = ("RASK_S3_CA_BUNDLE", "S3_CA_BUNDLE")
+
+_TRUE_FLAGS = ("1", "true", "yes")
 
 
-def _env_first(names: tuple[str, ...]) -> str | None:
-    """First non-empty value among `names` (canonical-first env resolution)."""
-    for name in names:
-        if value := os.getenv(name):
-            return value
-    return None
+class S3EnvSettings(BaseSettings):
+    """The deployment's own S3 endpoint and TLS posture, as the environment states them.
+
+    Each family is read canonical-first (`RASK_S3_*`, then `S3_*`, then the `HCP_*` names `.env.example` and
+    `scripts/smoke_s3.py` use). With `env_ignore_empty`, a name set to the empty string counts as unset and
+    `AliasChoices` goes on to the next name. Built per client, so a client reads the environment as it is when the
+    client is made.
+    """
+
+    model_config = SettingsConfigDict(case_sensitive=True, extra="ignore", env_ignore_empty=True)
+
+    endpoint: str | None = Field(default=None, validation_alias=AliasChoices("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT"))
+    insecure: bool = Field(default=False, validation_alias=AliasChoices("RASK_S3_INSECURE", "S3_INSECURE", "HCP_INSECURE"))
+    ca_bundle: str | None = Field(default=None, validation_alias=AliasChoices("RASK_S3_CA_BUNDLE", "S3_CA_BUNDLE"))
+
+    @field_validator("insecure", mode="before")
+    @classmethod
+    def _only_a_true_word_skips_verification(cls, value: object) -> object:
+        """Only `1`, `true` or `yes` (any case) turns verification off; any other word leaves it on rather than failing the client."""
+        return value.lower() in _TRUE_FLAGS if isinstance(value, str) else value
+
+
+class AwsRegionSettings(BaseSettings):
+    """`AWS_REGION`, the region a client signs for when its caller names none.
+
+    Kept apart from `S3EnvSettings` because here an empty variable is a value, not an absence: `AWS_REGION=""` reaches
+    boto3 as `""`, as the standard AWS chain reads it.
+    """
+
+    model_config = SettingsConfigDict(case_sensitive=True, extra="ignore")
+
+    aws_region: str = Field(default="us-east-1", validation_alias="AWS_REGION")
 
 
 def configured_endpoint() -> str | None:
@@ -47,7 +61,7 @@ def configured_endpoint() -> str | None:
     IS the default — `RASK_S3_ENDPOINT_URL` and its two aliases are resolved in one place, and a
     second copy of that precedence list in a service is exactly the drift this returns instead.
     """
-    return _env_first(_ENDPOINT_ENVS)
+    return S3EnvSettings().endpoint
 
 
 def s3_client(
@@ -92,9 +106,10 @@ def s3_client(
     )
     if session_token and not (access_key and secret_key):
         raise ValueError("session_token needs access_key and secret_key: botocore drops a lone token and signs with the env credential chain instead")
+    env = S3EnvSettings()
     kwargs: dict = {
-        "endpoint_url": endpoint or configured_endpoint(),
-        "region_name": region or os.getenv("AWS_REGION", "us-east-1"),
+        "endpoint_url": endpoint or env.endpoint,
+        "region_name": region or AwsRegionSettings().aws_region,
         "config": cfg,
     }
     if access_key and secret_key:
@@ -102,8 +117,8 @@ def s3_client(
         kwargs["aws_secret_access_key"] = secret_key
         if session_token:
             kwargs["aws_session_token"] = session_token
-    skip_verify = insecure if insecure is not None else (_env_first(_INSECURE_ENVS) or "").lower() in ("1", "true", "yes")
-    if ca := _env_first(_CA_BUNDLE_ENVS):
+    skip_verify = insecure if insecure is not None else env.insecure
+    if ca := env.ca_bundle:
         kwargs["verify"] = ca
     elif skip_verify:
         import urllib3

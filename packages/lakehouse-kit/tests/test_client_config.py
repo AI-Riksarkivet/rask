@@ -1,4 +1,6 @@
-"""S3 client construction: retry config (PS-01), per-client region and session credentials."""
+"""S3 client construction: retry config (PS-01), per-client region and session credentials, the endpoint env chain."""
+
+import pytest
 
 
 def test_s3_client_retries_transient_errors_to_the_configured_attempts(monkeypatch):
@@ -80,3 +82,27 @@ def test_s3_client_refuses_a_session_token_without_its_key_pair():
 
     with pytest.raises(ValueError, match="session_token"):
         s3_client("http://rf:9000", session_token="tok")
+
+
+_ENDPOINT_NAMES = ("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT")
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [
+        pytest.param(
+            {"RASK_S3_ENDPOINT_URL": "http://rask", "S3_ENDPOINT_URL": "http://s3", "HCP_ENDPOINT": "http://hcp"}, "http://rask", id="canonical-first"
+        ),
+        pytest.param({"RASK_S3_ENDPOINT_URL": "", "S3_ENDPOINT_URL": "http://s3", "HCP_ENDPOINT": "http://hcp"}, "http://s3", id="empty-yields-to-the-next"),
+        pytest.param({"RASK_S3_ENDPOINT_URL": "", "S3_ENDPOINT_URL": ""}, None, id="all-empty-is-unset"),
+    ],
+)
+def test_configured_endpoint_reads_the_first_non_empty_name(monkeypatch: pytest.MonkeyPatch, env: dict[str, str], expected: str | None) -> None:
+    from lakehouse_kit.storage import configured_endpoint
+
+    for name in _ENDPOINT_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    assert configured_endpoint() == expected

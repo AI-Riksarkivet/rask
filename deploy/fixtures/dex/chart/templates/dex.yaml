@@ -18,15 +18,24 @@ data:
       type: memory
     web:
       http: 0.0.0.0:{{ .Values.port }}
+      {{- with .Values.allowedOrigins }}
+      allowedOrigins: {{ toJson . }}
+      {{- end }}
     oauth2:
       skipApprovalScreen: true
       passwordConnector: local
-      # The grants Dex serves by default, and the client-credentials grant, which it serves only when listed.
+      # Every authorization code is bound to an S256 challenge (v2.46.1 `server/authflow/request.go:246-254`); the
+      # password, client-credentials and token-exchange grants never pass /auth, so the rule does not reach them.
+      pkce:
+        enforce: true
+        codeChallengeMethodsSupported: [S256]
+      # The grants Dex serves by default, less the device grant, and the client-credentials grant, which it serves only
+      # when listed. The device flow's own /auth redirect carries no challenge (v2.46.1 `server/device/device.go:276-290`),
+      # so under the enforced PKCE above it could not complete.
       grantTypes:
         - authorization_code
         - refresh_token
         - password
-        - urn:ietf:params:oauth:grant-type:device_code
         - urn:ietf:params:oauth:grant-type:token-exchange
         - client_credentials
     enablePasswordDB: true
@@ -44,13 +53,7 @@ data:
     staticClients:
       - id: {{ .Values.clientId }}
         name: Sign-in
-        secret: {{ .Values.clientSecret }}
-        public: true
-        redirectURIs:
-          - http://localhost:8080/callback
-          {{- with .Values.publicOrigin }}
-          - {{ . | trimSuffix "/" }}/auth/callback
-          {{- end }}
+        secret: {{ required "clientSecret is the sign-in client's secret: it is confidential" .Values.clientSecret }}
       - id: {{ required "audience names the lakehouse's audience client" .Values.audience }}
         name: Lakehouse
         secret: {{ required "audienceSecret is the audience client's secret, which no client is given" .Values.audienceSecret }}
@@ -68,7 +71,13 @@ data:
       {{- range .Values.clients }}
       - id: {{ .id | quote }}
         name: {{ .id | quote }}
-        secret: {{ required (printf "clients %q names no secret" .id) .secret | quote }}
+        {{- if .public }}
+        {{- if .secret }}{{ fail (printf "clients %q is public and names a secret: a public client holds none" .id) }}{{ end }}
+        {{- if not .redirectURIs }}{{ fail (printf "clients %q is public and names no redirectURIs: Dex then accepts any loopback, out-of-band or device redirect for it" .id) }}{{ end }}
+        public: true
+        {{- else }}
+        secret: {{ required (printf "clients %q names no secret (a browser app without one is `public: true`)" .id) .secret | quote }}
+        {{- end }}
         redirectURIs: {{ .redirectURIs | default list | toJson }}
       {{- end }}
 ---

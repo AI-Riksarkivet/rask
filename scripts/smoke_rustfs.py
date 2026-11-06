@@ -9,10 +9,10 @@ or manually against any S3-compatible endpoint (RustFS / AWS / any S3):
     AWS_ACCESS_KEY_ID=rustfsadmin AWS_SECRET_ACCESS_KEY=rustfsadmin \
     RASK_S3_INSECURE=1 uv run python scripts/smoke_rustfs.py
 
-It exercises the SAME code the services use:
-  - `storage.s3_client()` (boto3 — the volumes/core path): bucket + object round-trip.
-  - LanceDB over `s3://` (the search/catalog path — object_store, the strictest
-    S3-compat surface): create a table, read it back.
+It exercises the SAME code the lakehouse uses:
+  - `lakehouse_kit.storage.s3_client()` (boto3, the client the registries' conditional writes use): bucket + object round-trip.
+  - pylance over `s3://` (Lance's object_store, the catalog's data plane and the strictest S3-compat
+    surface): create a 2.2 table with stable row ids, as the catalog's create does, and read it back.
 Exits non-zero on any failure. No credentials are hard-coded; everything is env-driven
 (the agnostic invariant — swap RustFS/AWS/any S3 with env only).
 """
@@ -24,8 +24,12 @@ import sys
 import uuid
 from collections.abc import Callable
 
+import lance
+import pyarrow as pa
 from dotenv import load_dotenv
 
+from lakehouse_kit.storage import configured_endpoint, s3_client
+from lakehouse_kit.storage.client import AwsRegionSettings, S3EnvSettings
 from service_kit.endpoint_scheme import allow_http_for
 
 
@@ -41,8 +45,6 @@ def _check(label: str, fn: Callable[[], object]) -> bool:
 
 def main() -> int:
     load_dotenv()
-    from lakehouse_kit.storage import configured_endpoint, s3_client
-
     # `configured_endpoint` rather than a local env chain: this value both reports the backend and
     # decides whether the smoke runs at all, so a copy that omits an alias refuses a backend
     # `s3_client()` would have reached — a green-looking refusal, the worst answer available here.
@@ -58,8 +60,8 @@ def main() -> int:
     body = b"hello rustfs from rask storage"
     ok = True
 
-    # ---- boto3 path: the storage.s3_client the volumes/core services use ----------
-    print("\n== boto3 path (storage.s3_client) ==", flush=True)
+    # ---- boto3 path: lakehouse_kit.storage.s3_client, the lakehouse's S3 client ----
+    print("\n== boto3 path (lakehouse_kit.storage.s3_client) ==", flush=True)
     c = s3_client()
 
     def ensure_bucket() -> None:
@@ -84,37 +86,31 @@ def main() -> int:
     ok &= _check("head_object", lambda: c.head_object(Bucket=bucket, Key=key))
     ok &= _check("delete_object", lambda: c.delete_object(Bucket=bucket, Key=key))
 
-    # ---- LanceDB path: search/catalog tables over s3:// (object_store) -------------
-    print("\n== LanceDB path (s3:// — search/catalog) ==", flush=True)
-    try:
-        import lancedb
-    except Exception as e:
-        print(f"  SKIP  lancedb not importable here: {e}", flush=True)
-    else:
-        # Same storage_options shape as service_kit.config.lance_storage_options().
-        storage_opts = {
-            "aws_endpoint": endpoint,
-            "aws_access_key_id": os.environ["AWS_ACCESS_KEY_ID"],
-            "aws_secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
-            "aws_region": os.getenv("AWS_REGION", "us-east-1"),
-            "aws_virtual_hosted_style_request": "false",
-            "allow_http": allow_http_for(endpoint),
-        }
-        if os.getenv("RASK_S3_INSECURE", "").lower() in ("1", "true", "yes"):
-            storage_opts["allow_invalid_certificates"] = "true"
-        uri = f"s3://{bucket}/lance-smoke"
+    # ---- Lance path: a table over s3:// through Lance's object_store -------------
+    print("\n== Lance path (s3:// — the catalog's data plane) ==", flush=True)
+    storage_opts = {
+        "aws_endpoint": endpoint,
+        "aws_access_key_id": os.environ["AWS_ACCESS_KEY_ID"],
+        "aws_secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
+        "aws_region": AwsRegionSettings().aws_region,
+        "aws_virtual_hosted_style_request": "false",
+        "allow_http": allow_http_for(endpoint),
+    }
+    if S3EnvSettings().insecure:
+        storage_opts["allow_invalid_certificates"] = "true"
+    # A fresh path per run, so every run is a create: stable row ids are create-time-only
+    # (`lance_docs/lance/format/table/row_id_lineage.md` § Enabling Stable Row IDs), and a write onto an earlier run's
+    # table would not be the create the catalog makes.
+    uri = f"s3://{bucket}/lance-smoke/{uuid.uuid4().hex}"
 
-        def lance_roundtrips() -> None:
-            db = lancedb.connect(uri, storage_options=storage_opts)
-            db.create_table(
-                "t",
-                data=[{"id": 1, "text": "rustfs"}, {"id": 2, "text": "ok"}],
-                mode="overwrite",
-            )
-            n = db.open_table("t").count_rows()
-            assert n == 2, f"expected 2 rows, got {n}"
+    def lance_roundtrips() -> None:
+        table = pa.table({"id": [1, 2], "text": ["rustfs", "ok"]})
+        lance.write_dataset(table, uri, mode="create", storage_options=storage_opts, data_storage_version="2.2", enable_stable_row_ids=True)
+        ds = lance.dataset(uri, storage_options=storage_opts)
+        read = (ds.count_rows(), ds.data_storage_version, ds.has_stable_row_ids)
+        assert read == (2, "2.2", True), f"expected 2 rows at file version 2.2 with stable row ids, read {read}"
 
-        ok &= _check("lancedb create + read over s3://", lance_roundtrips)
+    ok &= _check("pylance create + read over s3://", lance_roundtrips)
 
     print("\n" + ("ALL PASS — rustfs works with rask storage." if ok else "FAILURES above (see ^)."), flush=True)
     return 0 if ok else 1

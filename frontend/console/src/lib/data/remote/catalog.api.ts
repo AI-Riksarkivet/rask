@@ -1,5 +1,5 @@
-import { command, getRequestEvent, query } from '$lib/remote.svelte';
-import { CATALOG_API } from '$lib/upstreams';
+import { command, getRequestEvent, query } from '#lib/reads.svelte.ts';
+import { CATALOG_API } from '#lib/upstreams.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import {
@@ -20,8 +20,8 @@ import {
 	type UpdateRowsResult,
 } from '../catalog';
 
-import { catalogJSON, parsed } from '$lib/doors';
-// Transport: the console's catalog door, `$lib/doors`.
+import { catalogJSON, parsed } from '#lib/doors.ts';
+// Transport: the console's catalog door, `#lib/doors`.
 // The catalog TABLE-LIFECYCLE plane, declared with `query`/`command`: one named function per door, each
 // answering the shared `ApiResult` union, so no call site indexes a door by a client-supplied string.
 //
@@ -420,32 +420,36 @@ export const deleteRows = command(
 		parsed(await post(`/v1/table/${enc(table)}/delete`, { predicate }), DeleteRowsResponseSchema),
 );
 
-/** The user-state documents the console owns — its dock's arrangement and its named views, read and
- *  written through these two like every other JSON value surface in the app. */
+/** The user-state documents the console owns: its dock's arrangement and its named views. */
 const UserStateArg = v.object({
 	document: v.picklist(['dock-layout', 'dock-layout-library']),
 });
 
-/** The catalog's envelope: `{exists, value}` — `exists: false` is a genuine "never saved". */
+/** The envelope a user-state read answers: `{exists, value}`, `exists: false` a genuine "never saved". */
 export interface UserStateEnvelope {
 	exists?: boolean;
 	value?: unknown;
 }
 
+/** Why no user-state read or write can succeed: the lakehouse keeps no per-person documents, and the
+ *  console has no backend of its own to keep them. Answered without a request; the dock store reads
+ *  the 501 as its `unreadable` outcome, so it never saves over a workspace it could not read. */
+const NO_USER_STATE: { ok: false; status: number; detail: string } = {
+	ok: false,
+	status: 501,
+	detail:
+		'no door on this stack keeps per-person state: the dock layout and its named views are not saved',
+};
+
 /** Read the caller's own document. The three-outcome mapping (ok / absent / unreadable) stays in
  *  the dock's store, which is where it is tested — this only carries the status faithfully. */
 export const readUserStateDoc = query(
 	UserStateArg,
-	async ({ document }): Promise<ApiResult<UserStateEnvelope>> =>
-		typedAs<UserStateEnvelope>(await catalogJSON(`/management/v1/user-state/${document}`)),
+	async (): Promise<ApiResult<UserStateEnvelope>> => NO_USER_STATE,
 );
 
 /** Save the caller's own document. A refused write is reported as such — never flattened to ok. */
 export const writeUserStateDoc = command(
 	v.object({ ...UserStateArg.entries, value: v.unknown() }),
-	async ({ document, value }): Promise<ApiResult<unknown>> =>
-		catalogJSON(`/management/v1/user-state/${document}`, {
-			method: 'PUT',
-			body: JSON.stringify(value),
-		}),
+	async (): Promise<ApiResult<unknown>> => NO_USER_STATE,
 );

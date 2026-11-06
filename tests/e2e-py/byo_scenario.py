@@ -320,7 +320,7 @@ def drive(tenant: Tenant) -> ScenarioRun:
         transaction_properties=seed_run.transaction_properties(author=pipeline.principal),
     )
     tenant.tables.append(bronze_table)
-    increment_run = seed_run.model_copy(update={"run_id": "byo-seed-2"})
+    increment_run = seed_run.model_copy(update={"run_id": str(uuid.uuid4())})
     increment = lance.write_dataset(
         rows_of(range(4, 8)),
         namespace_client=stock,

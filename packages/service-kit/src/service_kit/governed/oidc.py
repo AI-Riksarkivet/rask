@@ -43,7 +43,6 @@ Security posture (see CHANGELOG in the task notes):
 from __future__ import annotations
 
 import asyncio
-import http.client
 import logging
 import ssl
 import threading
@@ -177,7 +176,8 @@ class _CredentialedJWKClient(jwt.PyJWKClient):
     """PyJWT's key-set client, carrying the fetch credential read afresh on each fetch.
 
     `PyJWKClient.fetch_data` sends the ``headers`` it was built with; refreshing them first keeps the rest of
-    its contract as shipped, including caching only a set that arrived. A token that cannot be read is an
+    its contract as shipped, including caching only a set that arrived and parses, and following no redirect, so the
+    bearer reaches no host but the one the key-set URL names. A token that cannot be read is an
     ``OSError``, which `OIDCVerifier._key_set` already charges to the provider.
     """
 
@@ -423,20 +423,23 @@ class OIDCVerifier:
         The failures are classified by AUTHOR, not by type: the try body is one third-party call whose every
         input is the provider's response, so whatever it raises is the provider's. Two kinds:
 
-        * the set could not be fetched — `PyJWKClientConnectionError`, or the `OSError` /
-          `http.client.HTTPException` raised once the request is sent (a connection closed before the status
-          line or reset mid-body, a body cut short), which `fetch_data` does not wrap;
-        * anything else: the set arrived and holds no usable signing key. Measured on pyjwt 2.13.0 that is
-          `PyJWTError`, `ValueError`, `AttributeError`, `TypeError` and `RecursionError`, but it is caught
-          whole: PyJWK hands provider values to `cryptography`, whose exceptions are not all `ValueError`s
-          (`UnsupportedAlgorithm` subclasses `Exception` alone), and a type left out of a named tuple would
-          answer 500 and be audited `invalid_token` against the caller.
+        * the set could not be fetched — `PyJWKClientConnectionError`, which `fetch_data` raises for a request
+          that fails, is redirected, or is answered short of a whole response (`http.client.HTTPException`), or
+          an `OSError` it does not wrap: a connection reset while the body is read, or the fetch credential
+          failing to read;
+        * anything else: the set arrived and holds no usable signing key. Measured on PyJWT 2.15.1 (2026-11-06)
+          that is `PyJWTError` (`PyJWKClientError`, `PyJWKSetError`), `ValueError` (a body that is not JSON),
+          `TypeError` (a key whose ``alg`` is not hashable) and `RecursionError` (a body nested past the JSON
+          parser's depth), but it is caught whole: PyJWK hands provider values to `cryptography`, whose
+          exceptions are not all `ValueError`s (`UnsupportedAlgorithm` subclasses `Exception` alone), and a type
+          left out of a named tuple would answer 500 and be audited `invalid_token` against the caller.
 
-        A set the cache served that fails is read once more with ``refresh=True``: `fetch_data` caches a body
-        before it is parsed, so without that read an unusable set outlives the provider's fix by the cache's
-        lifespan (300 s). A set fetched in this call is not asked for again — it is already the provider's
-        current answer, and against a slow IdP a second fetch doubles the time a request is held. Nor is one
-        that never arrived.
+        A set the cache served that fails is read once more with ``refresh=True``. `fetch_data` caches only a body
+        that parses into at least one key, so the cached set that fails here holds keys of which none signs (each
+        is marked for another ``use`` or carries no ``kid``), and without that read it outlives the provider's
+        fix by the cache's lifespan (300 s). A set fetched in this call is not asked for again — it is already the
+        provider's current answer, and against a slow IdP a second fetch doubles the time a request is held. Nor
+        is one that never arrived.
         """
         uri = provider.jwk_client.uri
         cache = provider.jwk_client.jwk_set_cache
@@ -444,7 +447,7 @@ class OIDCVerifier:
         served_from_cache = not refresh and cache is not None and cache.get() is not None
         try:
             return provider.jwk_client.get_signing_keys(refresh=refresh)
-        except (jwt.PyJWKClientConnectionError, OSError, http.client.HTTPException) as exc:
+        except (jwt.PyJWKClientConnectionError, OSError) as exc:
             log.warning("oidc_jwks_unreachable", extra={"jwks_uri": uri, "error": str(exc)})
             raise ProviderUnavailableError(f"The OIDC key set could not be reached at {uri}") from exc
         # Classified by author, not by type — see this docstring.

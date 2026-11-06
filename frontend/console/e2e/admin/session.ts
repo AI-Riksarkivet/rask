@@ -67,3 +67,11 @@ export async function signIn(
 		},
 	]);
 }
+
+/** Make the mock issuer advertise no `end_session_endpoint` to this context, as the dev Dex does not (its sessions are off). */
+export async function withoutEndSession(
+	context: BrowserContext,
+	{ origin = AUTH_ON }: { origin?: string } = {},
+) {
+	await context.addCookies([{ name: 'mock_oidc_no_end_session', value: '1', url: origin }]);
+}

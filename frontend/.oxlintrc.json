@@ -43,8 +43,13 @@
 		"svelte/block-lang": "off",
 		// Carried over from the ESLint config these rules replaced — same rules, same reasons.
 		"svelte/prefer-svelte-reactivity": "off",
-		// Not using shallow routing.
-		"svelte/no-navigation-without-resolve": "off",
+		// Every in-app link and `goto` goes through SvelteKit's `resolve()` (`$app/paths`), which adds
+		// the base path and fills a route id's parameters. The two `-without-base` rules predate it:
+		// they demand the `base` string concatenated by hand, which SvelteKit 3 removes, and they flag
+		// `resolve()` itself, so they cannot both hold. `no-navigation-without-resolve` is the one kept.
+		"svelte/no-navigation-without-base": "off",
+		"svelte/no-goto-without-base": "off",
+		"svelte/no-navigation-without-resolve": "error",
 
 	},
 	"overrides": [
@@ -57,6 +62,15 @@
 				// Carried from the retired ESLint config verbatim: `$effect(() => …)` is an expression
 				// statement, not an assignment — expected Svelte 5 usage, not a dead expression.
 				"no-unused-expressions": "off"
+			}
+		},
+		{
+			// `@rask/ui` is a design system with no routes of its own and cannot import an app's
+			// `$app/paths`. Its components render root paths (`nav-config.ts`, a `href` prop), which are
+			// what `resolve()` gives in the console: its `sveltekit()` options set no `paths.base` (`vite.config.ts`).
+			"files": ["packages/ui/**"],
+			"rules": {
+				"svelte/no-navigation-without-resolve": "off"
 			}
 		},
 		{

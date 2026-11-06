@@ -1,5 +1,5 @@
 <script lang="ts">
-	import TableRegistry from '$lib/data/TableRegistry.svelte';
+	import TableRegistry from '#lib/data/TableRegistry.svelte';
 </script>
 
 <svelte:head><title>Tables · rask</title></svelte:head>

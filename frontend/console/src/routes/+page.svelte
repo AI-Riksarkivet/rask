@@ -3,8 +3,8 @@
 	import { Card } from '@rask/ui/card';
 	import { stagger } from '@rask/ui/motion';
 	import { Activity, Boxes, FolderKanban } from '@lucide/svelte';
-	import DotPattern from '$lib/hero/DotPattern.svelte';
-	import MediaBetweenText from '$lib/hero/MediaBetweenText.svelte';
+	import DotPattern from '#lib/hero/DotPattern.svelte';
+	import MediaBetweenText from '#lib/hero/MediaBetweenText.svelte';
 
 	// HOME — the estate landing, and the first of the main menu's three places (Home · Projects ·
 	// Settings). It is NOT the project gallery any more: that surface is `/projects`, where its

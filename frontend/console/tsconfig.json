@@ -1,18 +1,10 @@
 {
-	"//": "SvelteKit's generated config first, then the estate's strictness: strict with noUncheckedIndexedAccess. exactOptionalPropertyTypes stays OFF (Bits UI 'union too complex' in Svelte code).",
-	"extends": "./.svelte-kit/tsconfig.json",
+	"//": "SvelteKit's generated config first (`$app/tsconfig`, written by `svelte-kit sync`), then the estate's strictness: strict with noUncheckedIndexedAccess. exactOptionalPropertyTypes stays OFF (Bits UI 'union too complex' in Svelte code).",
+	"extends": "$app/tsconfig",
 	"compilerOptions": {
-		"allowJs": true,
-		"checkJs": true,
-		"esModuleInterop": true,
-		"forceConsistentCasingInFileNames": true,
-		"resolveJsonModule": true,
-		"skipLibCheck": true,
 		"sourceMap": true,
 		"strict": true,
-		"noUncheckedIndexedAccess": true,
-		"moduleResolution": "bundler",
-		"module": "esnext",
-		"target": "esnext"
-	}
+		"noUncheckedIndexedAccess": true
+	},
+	"include": ["src", "vite.config.ts"]
 }

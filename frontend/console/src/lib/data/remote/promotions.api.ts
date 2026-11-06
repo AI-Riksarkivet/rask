@@ -1,4 +1,4 @@
-import { command, query } from '$lib/remote.svelte';
+import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import {
@@ -8,7 +8,7 @@ import {
 	type PromotionHold,
 	type PromotionsPage,
 } from '../promotions';
-import { catalogJSON, parsed } from '$lib/doors';
+import { catalogJSON, parsed } from '#lib/doors.ts';
 
 // The held promotions, on the catalog's publication doors. The list is every open hold the caller may
 // see (`can_get_metadata` on its table), one page at a time. A decision is gated on `can_promote` and

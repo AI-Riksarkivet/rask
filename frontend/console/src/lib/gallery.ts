@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import { parse, type Me } from '@rask/api';
 import { authorizedFetch } from '@rask/api/client';
-import { CATALOG_API } from '$lib/upstreams';
+import { CATALOG_API } from '#lib/upstreams.ts';
 
 // The estate's PROJECT GALLERY, as ONE load — mounted by `/projects` (the navbar-addressable surface). Two routes, one implementation: a second copy of the
 // list is exactly the duplication the 2026-08-03 ruling deletes (a project is the TOP of the

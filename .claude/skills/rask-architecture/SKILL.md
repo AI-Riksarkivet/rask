@@ -10,9 +10,9 @@ packages**. Get this wrong and uv/bun resolution breaks (loudly for uv, *silentl
 across layers. Defers Python idioms to `writing-python`, FastAPI routing to `fastapi`, container builds to
 `dockerfile`.
 
-This repository holds **the lakehouse and its console, nothing else** (owner, 2026-11-04). Every other client —
+This repository holds **the lakehouse and its console, nothing else** (owner, 2026-11-04; XC-192). Every other client —
 flows, compute, the annotator, the viewer and search, table-maintenance, the sealed runners, their zones and kits —
-was removed at XC-192 and is recovered from git history at `64ef118a9` when it moves to a repository of its own.
+lives outside it, recovered from git history at `64ef118a9` when it moves to a repository of its own.
 
 > **There is no `projects/` layer.** Deployables are ordinary workspace members built by `.docker/<name>.dockerfile`
 > running `uv sync --frozen --package <name>` against the **root** `uv.lock`. Never recreate per-deployable pyprojects
@@ -68,8 +68,9 @@ enters through the catalog's namespace doors, and moving data between tiers is t
 
 **The product chart deploys the lakehouse and nothing it does not own** (ADR 0153). The prerequisites (the External
 Secrets Operator, the Dapr control plane, NATS JetStream, the CloudNativePG operator, the telemetry store) and the
-development stand-ins (Dex, RustFS, OpenBao, Marquez, and the inbox's SMTP relay Mailpit) are each their own release, installed in development from
-`deploy/fixtures/<name>` by `make k3s-fixtures`; the console's release is installed after the lakehouse by
+development stand-ins (Dex, RustFS, OpenBao, Marquez) are each their own release, installed in development from
+`deploy/fixtures/<name>` by `make k3s-fixtures` (its `FIXTURES` list). Mailpit, the SMTP relay the inbox's optional email
+channel sends to, is a fixture no default list installs: `make k3s-fixtures FIXTURES=mailpit`. The console's release is installed after the lakehouse by
 `make k3s-clients`. A new lakehouse deployable is a chart Deployment; a new piece of infrastructure is a fixture, never a
 subchart (`rask-helm` §2); a client is a release of its own whose admissions live in its own `lakehouse-values.yaml`.
 
@@ -80,7 +81,7 @@ subchart (`rask-helm` §2); a client is a release of its own whose admissions li
 | client | `service_kit.make_service_app` | `notifications` | under `settings.api_prefix` (`RASK_API_PREFIX`); `proxy_router` at the root |
 | lance | `lakehouse_kit.lance_app.build_lance_service_app` | `catalog`, `lineage`, `maintenance` | at the root; each service's own `core/config.py::get_settings()` |
 
-`make_service_app(*, title, routers, proxy_router=None, lifespan=None)` builds the FastAPI app with shared
+`make_service_app(*, title, routers, proxy_router=None, lifespan=None, ready_check=None, settings=None)` builds the FastAPI app with shared
 config/handlers/middleware. The **lifespan is injectable**: a stateless service gets the minimal `default_lifespan`
 (settings only); a stateful one passes a `LifespanFactory`. The lance services keep the `fastapi` skill's
 `api/v1/endpoints/` + `core/` + `services/` layout; the factory owns the boot, not the layout. A `main.py` that opens
@@ -107,7 +108,7 @@ request-id layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
   and `lancedb` at its import gate (`.docker/rest-catalog.dockerfile`, `--absent`). Never add `lancedb`, `ray` or
   `sqlmodel` to either kit.
 - **The lakehouse knows no client.** `.importlinter`'s `the-lakehouse-knows-no-client` forbids every lakehouse module
-  from importing `notifications` or `ray` by any chain, and `scripts/lakehouse_names_no_client.py` (in `make lint`)
+  from importing `notifications`, `ray`, `lance_ray` or `lancedb` by any chain, and `scripts/lakehouse_names_no_client.py` (in `make lint`)
   refuses a client's name in any file the lakehouse owns; it reads the clients off the tree (every member outside the
   lakehouse, every frontend app, every non-platform fixture), so it needs no edit when one is added.
 - **`known-first-party` is COMPLETE — keep it that way.** It lists every first-party import name (`catalog`,
@@ -117,8 +118,7 @@ request-id layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
   member.
 - **Membership is globbed, and so is test enrolment — except at the top level.** `[tool.pytest.ini_options] testpaths`
   globs `packages/*/tests` and `services/*/tests`, so a member's `tests/` runs in the root suite the moment it exists.
-  An explicit list is how suites go missing while the run stays green (`services/catalog` and `services/lineage` ran
-  nowhere until 2026-08-09). A new **top-level** `tests/<x>/` matches no glob and must be added to `testpaths` by hand.
+  An explicit list is how suites go missing while the run stays green. A new **top-level** `tests/<x>/` matches no glob and must be added to `testpaths` by hand.
 
 ## When to load each reference
 

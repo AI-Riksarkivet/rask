@@ -14,14 +14,12 @@ whatever that replica holds is silently skipped. The same thirty polls with affi
 
 RECOVERABLE, NOT CORRUPTING, which is why the fix is affinity rather than a shared buffer: the events
 are hints and the audit trail is the durable record, so nothing is lost that cannot be re-read. What
-is wrong is that the console cannot tell a quiet estate from a replica it is not talking to.
+is wrong is that a poller cannot tell a quiet estate from a replica it is not talking to.
 
 THE CALLER IS A POD, which is what makes `ClientIP` the right key here and is worth pinning because
-it is the assumption the whole fix rests on. The console's `/management/v1/events` poll runs in a SvelteKit
-remote function (`feeds.remote.ts`), server-side, and the home zone reaches
-`CATALOG_API=http://<release>-catalog:<port>` — the catalog Service DIRECTLY, not through the
-gateway. So the source address the Service sees is a stable zone pod, and every other caller (stage
-runners, medallion, maintenance) is its own pod and keeps spreading across replicas.
+it is the assumption the whole fix rests on: a caller inside the cluster reaches the catalog Service
+(`<release>-catalog:<port>`) from a pod of its own, so the source address the Service sees is that pod's.
+Each caller keeps its replica, and different callers still spread across replicas.
 """
 
 from __future__ import annotations
@@ -62,6 +60,6 @@ def test_the_catalog_service_pins_a_caller_to_one_replica() -> None:
     spec = _service(_render(), "-catalog")["spec"]
 
     assert spec.get("sessionAffinity") == "ClientIP", (
-        "the catalog Service load-balances a poll whose cursor is per-replica, so the console's "
+        "the catalog Service load-balances a poll whose cursor is per-replica, so a poller's "
         f"`/management/v1/events` resets on every replica change: {spec.get('sessionAffinity')!r}"
     )

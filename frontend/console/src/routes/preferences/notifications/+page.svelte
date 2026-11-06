@@ -7,7 +7,7 @@
 	import { Bell, Eye, Mail, MessageSquare } from '@lucide/svelte';
 	import { onMount } from 'svelte';
 	import type { ChannelPreferences } from '@rask/api/inbox';
-	import { readPrefs, readWatches, savePrefs, unwatchProject } from '$lib/live/inbox.api';
+	import { readPrefs, readWatches, savePrefs, unwatchProject } from '#lib/live/inbox.api.ts';
 
 	// NOTIFICATIONS — the per-subject half of the notification plane (`GET|PUT /prefs` and `/watches`). The bell tells you what happened; this decides whether
 	// anything ALSO reaches you when the tab is shut.

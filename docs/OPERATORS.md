@@ -70,7 +70,7 @@ DOES have are already owned elsewhere:
 |---|---|---|
 | background maintenance (version expiry, trash purge, orphan scan, reconcile, the due list) | `services/maintenance`: commit-driven expiry plus a 30-minute backstop sweep (FAIL-visible) | shipped; compaction and index builds are a bring-your-own job's, judged at `version/create` (ADR 0162) |
 | stream/bucket/grant provisioning | chart Jobs + seed scripts (idempotent) | shipped; NACK could absorb the stream half |
-| version/feature pinning (`pylance`, `lance-ray`, data_storage_version) | image pins + probe-before-callsite (§0) + `lance_docs/` | process, not software |
+| version/feature pinning (`pylance`, data_storage_version) | image pins + probe-before-callsite (§0) + `lance_docs/` | process, not software |
 
 So: nothing to install for either.
 
@@ -183,10 +183,12 @@ the stream Job and restart every credentialed client after any non-surge OpenBao
 **Switching it on (or after a trust-root change)** takes the bus down for a few minutes, because a reload cannot change
 the operator or the system account and a pod restarted alone into operator mode cannot join the others: quiesce (outboxes at
 depth 0); `kubectl scale statefulset/rask-nats --replicas=0` and wait until no NATS
-pod exists; run `scripts/fixtures.sh nats -- --set nats.auth.server=true`, which restores the three replicas together
-(each waits for ESO's `rask-nats-auth`); then `make k3s-up`, whose stream Job runs as `admin` and recreates the five
-streams empty; then `kubectl rollout restart` every Deployment with a credentialed pub/sub component.
-The fixture release keeps the setting (`--reset-then-reuse-values`), so a later `make k3s-up` leaves operator mode on.
+pod exists; set `nats.auth.server: true` in `deploy/fixtures/nats/chart/values.yaml` and run `scripts/fixtures.sh nats`,
+which restores the three replicas together (each waits for ESO's `rask-nats-auth`); then `make k3s-up`, whose stream Job
+runs as `admin` and recreates the five streams empty; then `kubectl rollout restart` every Deployment with a credentialed
+pub/sub component. Operator mode stays on only while git declares it: `scripts/fixtures.sh` installs with
+`--reset-values`, so a `--set` given on one command line is dropped by the next install, which turns operator mode off and
+restarts the bus into an empty JetStream as above.
 
 **A consumer removal** (RESILIENCE.md gaps #7 and the lineage rebuild) needs `admin`, because nats-box runs as `monitor`.
 Write a creds file into the nats-box pod from the store, without printing it:

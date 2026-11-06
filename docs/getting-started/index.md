@@ -45,18 +45,21 @@ See [Deployment](../architecture/deployment.md) for the prerequisites, the image
 ## Run the console locally
 
 ```bash
-make dev-k3s          # the console with Vite HMR against the in-cluster Gateway (port-forwarded to :8888)
-make dev              # the same, with /api pointed at RASK_EDGE_URL (default :8888)
+make dev-k3s          # the console with Vite HMR against the in-cluster Gateway and Dex (k3s Traefik on :8080)
+make dev              # the same, with /api pointed at RASK_EDGE_URL (default :8080) and /config.json from frontend/console/dev/config.json
 make dev-micro        # the notifications inbox on the host (:8850, scripts/dev-micro.sh); no edge
 ```
 
 The console is a single-page app with no backend of its own: the browser signs in to the estate's Dex and calls the
-lakehouse's `/api/*` with its bearer, so it needs the k3s estate (or another edge on `RASK_EDGE_URL`) behind it.
+lakehouse's `/api/*` with its bearer, so it needs the k3s estate (or another edge on `RASK_EDGE_URL` that also serves
+the issuer `dev/config.json` names) behind it. A missing or malformed `/config.json` answers a 503 that says why.
 Its Playwright suite runs against mocked upstreams instead: `bun --cwd=frontend run test:e2e`.
 
 !!! tip "Frontend host binding"
     The Vite dev server binds loopback-only by default. Start it with `--host`
-    (e.g. `bun --cwd=frontend/console run dev -- --host`) to reach it over IPv4 `localhost` or the LAN.
+    (e.g. `bun --cwd=frontend/console run dev -- --host`) to reach it over IPv4 `localhost` or the LAN. Signing in
+    from another origin needs that origin's `/auth/callback` among `rask-console`'s redirect URIs and the origin in
+    Dex's `allowedOrigins`, both in `deploy/fixtures/console/dex-values.yaml`; only `http://localhost:5173` is there.
 
 ## Common commands
 

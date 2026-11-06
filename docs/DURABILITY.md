@@ -35,7 +35,7 @@ store that silently *ignores* the header accepts both PUTs and silently loses a 
 
 **RustFS enforces CAS: measured 2026-07-05 with the harness below, and again 2026-10-18 on RustFS 1.0.1** (16 writers
 racing `If-None-Match: *` on one key, one winner in each of 20 rounds; `If-Match` with a stale ETag answers 412;
-`docs/audits/2026-10-18/rustfs-zero-trust.md`, [ADR 0168](adr/0168-the-development-object-store-is-rustfs.md)). The `tests/e2e-py/test_object_store_cas_e2e.py` harness (`make
+`scripts/rustfs_sts_measure.py`, the audit in git history at 64ef118a9, [ADR 0168](adr/0168-the-development-object-store-is-rustfs.md)). The `tests/e2e-py/test_object_store_cas_e2e.py` harness (`make
 e2e-cas`) validates it in three tiers against the deployed store, asserting **data invariants** (not S3 error
 names): (1) a second `If-None-Match: *` PUT of a live key is rejected **412** and does not overwrite; (2) 8
 threads racing the same key at a barrier yield **exactly one winner per round** (the silent-ignore detector);

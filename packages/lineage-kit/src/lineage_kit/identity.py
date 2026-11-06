@@ -16,7 +16,7 @@ request. Raising leaves the event unsent, and ``ClientEmitter`` records it as a 
 caller is told it needs recovery.
 
 This package cannot import ``service_kit.governed.machine_identity``, the fleet's reader of the same
-files: the sealed runners take lineage-kit as a dependency and carry no FastAPI. The read rule is the
+files: a client process may take lineage-kit as a dependency and carry no FastAPI. The read rule is the
 same one, kept here for that reason.
 """
 

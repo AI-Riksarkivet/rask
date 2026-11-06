@@ -43,21 +43,22 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
     (the OpenLineage intake, the commit feed and edge list as Lance tables, and the durable `GET /events` log; the
     lineage graph is bring-your-own, ADR 0158), `maintenance` (version expiry, trash purge, the orphan scan,
     cross-store reconcile, and the list of tables due for a bring-your-own compaction or index optimize; ADR 0162)
-  - **the console's backend**: `notifications`, the per-subject inbox behind the console's bell, a client of the
+  - **beside the console**: `notifications`, the per-subject inbox behind the console's bell, a client of the
     lakehouse's events (ADR 0190)
   - **the edge** is the platform's Gateway (Kubernetes Gateway API), not a rask process: the chart's HTTPRoutes
     (`chart/templates/route.yaml`) send each public `/api/*` prefix to its service, and every service authenticates
     each request itself (ADR 0165)
 - `frontend/` — the JS/TS plane; its own Bun workspace root:
-  - `console/` — the console: ONE SvelteKit 2 + Svelte 5 single-page app with no backend of its own. The browser
-    signs in to Dex with PKCE on the public `rask-web` client, keeps its tokens in memory under a strict Content
+  - `console/` — the console: ONE SvelteKit 3 + Svelte 5 single-page app with no backend of its own. The browser
+    signs in to Dex with PKCE on its own public client `rask-console`, keeps its tokens in memory under a strict Content
     Security Policy, and calls the catalog, lineage and inbox APIs with its bearer. A small Bun server (`serve.ts`)
     serves the built files and the runtime `config.json`
   - `packages/` — `@rask/ui` (Svelte 5 + Bits UI + Tailwind 4 design system, Storybook), `@rask/api` (the typed
     client generated from the OpenAPI specs), `@rask/dockview` (the workbench), `@rask/flow` (the governance graphs)
 - `scripts/` — all dev/ops scripts (the e2e stack drivers, the estate seed, the chart and store tooling)
 - `tests/` — cross-service suites: `unit`, `integration`, `e2e-py` (**live**, `-m e2e`, needs a
-  deployed stack), `e2e` (Playwright, its own lockfile)
+  deployed stack), `e2e` (the inbox's two browser verify scripts and their `console.mjs` helper, run with `bun`, its own
+  lockfile; read-only unless `--write`)
 - `chart/` — the product chart: the lakehouse's services and their configuration, with OpenFGA as its only
   (optional) subchart. Dapr, NATS JetStream, the CloudNativePG operator, External Secrets, Dex, the object store
   and observability are prerequisites, installed in development from `deploy/fixtures/` (ADR 0153)
@@ -80,14 +81,14 @@ from the old machine (memory, `.env`, local branches), and the k3s estate instal
 make install     # bun --cwd=frontend install + uv sync --all-packages + git hooks + make k3s-deps + make claude-bootstrap
 make build
 make test        # offline suites (deselects the live `e2e` + long-running `slow` marks)
-make check       # fmt + lint + typecheck + knip
+make check       # fmt + lint + lint-imports + typecheck + knip + fga-test + go-fmt + chart-docs-check
 ```
 
 ## Run locally
 
 ```bash
-make dev         # the console with Vite HMR, /api → RASK_EDGE_URL (default :8888)
-make dev-k3s     # the console against the in-cluster Gateway, port-forwarded to :8888
+make dev         # the console with Vite HMR, /config.json from frontend/console/dev/config.json, /api → RASK_EDGE_URL (default :8080)
+make dev-k3s     # the same against the in-cluster Gateway and Dex, k3s Traefik on :8080 (reused when it already serves /dex)
 make dev-micro   # the notifications inbox on the host (no edge)
 ```
 
@@ -112,8 +113,9 @@ The chart in `chart/` is the single deploy artifact for both.
 - **kind** — throwaway and CI-shaped, used by the live-proof jobs:
 
   ```bash
-  make kind-up kind-images kind-load kind-deploy
-  make e2e-ci        # governed kind stack + the live e2e suites   (== CI e2e-stack job)
+  make e2e-ci        # governed kind stack + the live e2e suites (== CI e2e-stack job): every image the render side-loads
+                     # is a Dagger-built tarball loaded with `kind load image-archive`, no docker
+  make kind-up / kind-down                         # create or delete the bare kind cluster
   ```
 
 > Both clusters can exist at once, and a bare `kubectl` may reach the **kind** one. The k3s release
@@ -144,15 +146,14 @@ Playwright suite. Everything hermetic runs identically on your machine: `dagger 
 | --------------------------------------- | -------------------------------------------------------------------- |
 | `make install` / `make build`           | Install both planes / build everything                               |
 | `make test` / `make test-slow`          | pytest offline (`-m "not slow and not e2e"`) / + slow                |
-| `make check` / `make ci`                | fmt + lint + typecheck + knip / + tests                              |
+| `make check` / `make ci`                | fmt, lint, lint-imports, typecheck, knip, fga-test, go-fmt, chart-docs-check / + tests |
 | `make dev` / `make dev-k3s`             | The console with Vite HMR / against the in-cluster Gateway           |
 | `make dev-micro`                        | The notifications inbox on the host                                  |
 | `make console-image`                    | The console's image through Dagger                                   |
 | `make k3s-build k3s-import k3s-up`      | The long-lived k3s deploy                                            |
 | `make k3s-clients`                      | The console's release, after the lakehouse                           |
-| `make kind-up … kind-deploy`            | Throwaway kind cluster lifecycle                                     |
+| `make kind-up` / `make kind-down`       | Throwaway kind cluster lifecycle                                     |
 | `make e2e-ci`                           | The guarded live proofs (kind)                                       |
-| `make e2e`                              | Playwright browser e2e against a running deploy                      |
 | `make storybook`                        | `@rask/ui` Storybook on `:6006`                                      |
 | `make dev-gc`                           | Reclaim the dev loop's two disk leaks (Dagger cache + dev registry)   |
 

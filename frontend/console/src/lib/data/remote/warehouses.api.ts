@@ -1,10 +1,10 @@
-import { command, query } from '$lib/remote.svelte';
+import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import type { CreateWarehouseBody, WarehouseRecord } from '../catalog';
 
-import { catalogJSON, parsed } from '$lib/doors';
-// Transport: the console's catalog door, `$lib/doors`.
+import { catalogJSON, parsed } from '#lib/doors.ts';
+// Transport: the console's catalog door, `#lib/doors`.
 // The warehouse + project registry, declared with `query`/`command` and answering the shared
 // `ApiResult` union. The catalog's project-admin gate is enforced against a REAL user: these run in the
 // browser and send only the signed-in session's bearer, with one named command per action.

@@ -1,9 +1,8 @@
 <script lang="ts">
-	// The estate's PROJECT GALLERY — ONE implementation, mounted by both `/` (the landing) and
-	// `/projects` (the navbar-addressable surface). A second copy of this list is exactly the
-	// duplication the 2026-08-03 ruling deletes: there is one project concept and it is the TOP of the
-	// hierarchy (project › warehouse › namespace › table), so the estate's list of projects lives in
-	// the main menu, never inside a project-scoped page's catalog.
+	import { resolve } from '$app/paths';
+	// The estate's PROJECT GALLERY, mounted by `/projects`. There is one project concept and it is the
+	// TOP of the hierarchy (project › warehouse › namespace › table), so the estate's list of projects
+	// lives in the main menu, never inside a project-scoped page's catalog.
 	import { untrack } from 'svelte';
 	import { gsap } from 'gsap';
 	import { LayoutGrid, List, Plus } from '@lucide/svelte';
@@ -12,11 +11,10 @@
 	import { Card } from '@rask/ui/card';
 	import { GatedAction } from '@rask/ui/gated-action';
 	import * as Table from '@rask/ui/table';
-	import { invalidateAll } from '$app/navigation';
-	import { page } from '$app/state';
-	import ProjectCreateDialog from '$lib/ProjectCreateDialog.svelte';
-	import type { GalleryData } from '$lib/gallery';
-	import { writeProjectsView, type ProjectsView } from '$lib/remote/view-prefs.api';
+	import { refreshAll } from '$app/navigation';
+	import ProjectCreateDialog from '#lib/ProjectCreateDialog.svelte';
+	import type { GalleryData } from '#lib/gallery.ts';
+	import { writeProjectsView, type ProjectsView } from '#lib/remote/view-prefs.api.ts';
 
 	let {
 		heading,
@@ -44,7 +42,7 @@
 	// The view, SEEDED from the loaded preference so a reload never flashes the other one, then owned
 	// by this component. `untrack` says that deliberately: the prop is the initial value, not a live
 	// binding, and without it Svelte warns (`state_referenced_locally`) — correctly, because the
-	// difference matters. A later load (the create flow calls `invalidateAll`) must NOT yank the view
+	// difference matters. A later load (the create flow calls `refreshAll`) must NOT yank the view
 	// back from under someone who just toggled it.
 	//
 	// Optimistic: the UI switches immediately and the write follows, because a view toggle that waits
@@ -61,13 +59,13 @@
 		void writeProjectsView(next).catch(() => {});
 	}
 
-	// Come back HERE after the OIDC round-trip, whichever of the two routes is mounted (the shell's
-	// ?redirect= contract, navbar-user.svelte).
-	const here = $derived(page.url.pathname);
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(here)}`);
+	// Come back to the gallery after the OIDC round-trip (the shell's ?redirect= contract,
+	// navbar-user.svelte).
+	const here = resolve('/projects');
+	const loginHref = resolve(`auth/login?redirect=${encodeURIComponent(here)}`);
 
 	// ONE-SHOT, and `entered` is what makes that literal. The grid node outlives a count change, so
-	// adding a project (the create flow's `invalidateAll`) already does not re-run the attachment —
+	// adding a project (the create flow's `refreshAll`) already does not re-run the attachment —
 	// but the view toggle DESTROYS the grid, and without the latch every trip through the table
 	// would re-stagger cards the reader was already reading. Component-scoped, not module-scoped: a
 	// fresh mount of the surface should still animate.
@@ -182,7 +180,10 @@
 						<Table.Row>
 							<Table.Cell class="font-medium">
 								<!-- An in-app link: the overview soft-navigates. -->
-								<a href={`/projects/${encodeURIComponent(p.project)}`} class="hover:underline">
+								<a
+									href={resolve('/projects/[project]', { project: encodeURIComponent(p.project) })}
+									class="hover:underline"
+								>
 									{p.project}
 								</a>
 							</Table.Cell>
@@ -207,7 +208,10 @@
 			<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" {@attach cardsEnter}>
 				{#each projects as p (p.project)}
 					<!-- An in-app link: the project overview soft-navigates. -->
-					<a href={`/projects/${encodeURIComponent(p.project)}`} class="group block">
+					<a
+						href={resolve('/projects/[project]', { project: encodeURIComponent(p.project) })}
+						class="group block"
+					>
 						<Card
 							class="hover:border-ring/40 hover:bg-accent flex h-full flex-col gap-2 p-5 transition-colors"
 						>
@@ -267,5 +271,5 @@
 <ProjectCreateDialog
 	bind:open={creating}
 	defaultAdmin={meSubject}
-	oncreated={() => void invalidateAll()}
+	oncreated={() => void refreshAll()}
 />

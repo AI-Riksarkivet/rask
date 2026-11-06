@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	// `/admin/streams` — read-only JetStream diagnostics over the estate's event fabric, from the NATS
 	// monitor's `/jsz` trimmed to a typed overview (`jetstream.api.ts`). No Gateway route serves the monitor
@@ -14,9 +15,6 @@
 	import type { JetStreamOverview } from './jetstream';
 	import { fetchJetstreamOverview } from './remote/jetstream.api';
 	import StreamConsumers from './StreamConsumers.svelte';
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
 
 	let overview = $state<JetStreamOverview | null>(null);
 	// The PREVIOUS successful read's message counts (totals + per-stream), so the panel can show "+N since
@@ -137,7 +135,9 @@
 
 	{#if unauthorized}
 		<div class="empty">
-			<ShieldAlert size={15} /> <a href={loginHref}>Sign in</a> to view JetStream streams.
+			<ShieldAlert size={15} />
+			<a href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>Sign in</a> to
+			view JetStream streams.
 		</div>
 	{:else if forbidden}
 		<div class="empty">

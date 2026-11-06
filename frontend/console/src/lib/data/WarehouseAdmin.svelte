@@ -19,7 +19,7 @@
 	} from '@rask/ui/data-table';
 	import { Select } from '@rask/ui/select';
 	import { RefreshCw, ShieldAlert, Warehouse as WarehouseIcon } from '@lucide/svelte';
-	import { base } from '$app/paths';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import type { Warehouse, WarehouseRecord } from './catalog';
 	import {
@@ -30,11 +30,8 @@
 	} from './remote/warehouses.api';
 	import RowDrawer from './RowDrawer.svelte';
 	import WarehouseDeleteDialog from './WarehouseDeleteDialog.svelte';
-	import { controlCursor } from '$lib/live/feeds.api';
-	import { liveRead } from '$lib/live/tick.svelte';
-
-	// Return here after the OIDC round-trip (the shell's ?redirect= contract, nav-user.svelte).
-	const loginHref = $derived(`/auth/login?redirect=${encodeURIComponent(page.url.pathname)}`);
+	import { controlCursor } from '#lib/live/feeds.api.ts';
+	import { liveRead } from '#lib/live/tick.svelte.ts';
 
 	let warehouses = $state<WarehouseRecord[] | null>(null);
 	let lastStatus = $state(0);
@@ -238,7 +235,7 @@
 {#snippet idCell(w: Warehouse)}
 	<a
 		class="whlink mono"
-		href={`${base}/catalog/warehouses/${encodeURIComponent(w.id)}`}
+		href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(w.id) })}
 		onclick={(e) => e.stopPropagation()}>{w.id}</a
 	>
 {/snippet}
@@ -289,7 +286,9 @@
 		<div class="empty">
 			<ShieldAlert size={16} />
 			<p>
-				This stack is governed — <a href={loginHref}>sign in</a> to view warehouses.
+				This stack is governed — <a
+					href={resolve(`auth/login?redirect=${encodeURIComponent(page.url.pathname)}`)}>sign in</a
+				> to view warehouses.
 			</p>
 		</div>
 	{:else if offline}
@@ -392,7 +391,9 @@
 				     ruling); the console owns warehouse and below. So the href is absolute rather than
 				     base-relative, and it MUST hard-navigate — a soft nav would land in a route the console
 				     does not own. -->
-				<a class="mono jump" href={`/projects/${encodeURIComponent(drawerRow.project)}`}
+				<a
+					class="mono jump"
+					href={resolve('/projects/[project]', { project: encodeURIComponent(drawerRow.project) })}
 					>{drawerRow.project}</a
 				>
 			</dd>
@@ -419,11 +420,17 @@
 			<dd class="mono">{drawerRow.created_at ?? '—'}</dd>
 		</dl>
 		<div class="jumps">
-			<a class="jbtn" href={`${base}/catalog/warehouses/${encodeURIComponent(drawerRow.id)}`}
+			<a
+				class="jbtn"
+				href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(drawerRow.id) })}
 				>Open detail</a
 			>
 			<!-- full-page, same reason as the project cell above -->
-			<a class="jbtn" href={`/projects/${encodeURIComponent(drawerRow.project)}`}>Open project</a>
+			<a
+				class="jbtn"
+				href={resolve('/projects/[project]', { project: encodeURIComponent(drawerRow.project) })}
+				>Open project</a
+			>
 		</div>
 	{/if}
 </RowDrawer>

@@ -69,7 +69,7 @@ test('creates work + gold warehouses and grants the initial admin, with the exac
 	// the admin subject prefilled from /management/v1/me (user:alice) is kept
 	await expect(dialog.getByLabel('Initial admin')).toHaveValue('user:alice');
 	// The estate AFTER the creates — the create makes the project visible on the next estate list,
-	// which is what the dialog's `oncreated` invalidateAll re-reads.
+	// which is what the dialog's `oncreated` `refreshAll` re-reads.
 	await seed(page, {
 		'GET /management/v1/projects': [
 			{

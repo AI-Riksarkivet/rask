@@ -106,7 +106,7 @@ class CatalogStorageSettings(BaseSettings):
     s3_region: str = Field(default="us-east-1", alias="LANCE_S3_REGION")
     s3_virtual_hosted: bool = Field(default=False, alias="LANCE_S3_VIRTUAL_HOSTED")
     #: The role the token is exchanged for. AWS assumes it; a store that grants the policy the token's subject names
-    #: (RustFS, measured in `docs/audits/2026-10-18/rustfs_web_identity_measure.py`) ignores it, and boto3 requires one.
+    #: (RustFS, measured 2026-10-18 by `scripts/rustfs_web_identity_measure.py`) ignores it, and boto3 requires one.
     s3_assume_role_arn: str = Field(default="arn:aws:iam::000000000000:role/lance-vend", alias="LANCE_S3_ASSUME_ROLE_ARN")
     #: ENCRYPTION AT REST, carried INTO the vended credential (§ J5). A client vended credentials writes
     #: straight to object storage with the catalog out of the path, so whatever the estate intends must

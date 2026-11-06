@@ -23,10 +23,14 @@ Every service builds `app` at module import. Pick the fixture by how settings re
 `tests/integration/conftest.py::real_ns_client`. The order is load-bearing:
 
 1. `monkeypatch.setenv` every variable the service needs to build and boot. For the catalog that
-   includes both S3 keys, even on the `dir` backend: with `secrets_from_dapr` off, `Settings` requires
-   `LANCE_S3_ACCESS_KEY_ID` at construction and the lifespan's `require_env_secret` refuses to boot with
-   an empty `LANCE_S3_SECRET_ACCESS_KEY`. With it on, the pair is the store's: drive the sidecar's secret
-   API with respx (`services/catalog/tests/test_a_rotated_credential_is_served_after_its_ttl_without_a_restart.py`).
+   includes both S3 keys, even on the `dir` backend: with no projected token
+   (`LANCE_S3_WEB_IDENTITY_TOKEN_FILE`), `Settings` requires `LANCE_S3_ACCESS_KEY_ID` at construction and
+   the lifespan's `require_env_secret` refuses to boot with an empty `LANCE_S3_SECRET_ACCESS_KEY`. With
+   `LANCE_SECRETS_FROM_DAPR` on, the store identity is that projected token exchanged at STS
+   (`LANCE_S3_STS_ENDPOINT`), a key pair beside it is refused, and the sidecar's secret API serves only
+   the signing keys: answer it with respx, and the STS exchange and the store with the moto server of
+   `services/catalog/tests/conftest.py::two_stores`
+   (`services/catalog/tests/test_the_catalog_signs_for_the_person_it_authenticated.py`, its `boot` fixture).
 2. `.cache_clear()` on that getter, or the previous test's values survive.
 3. Import the app **inside** the fixture.
 4. Set `app.dependency_overrides[...]` on the registered callables (`real_ns_client` overrides
@@ -117,8 +121,8 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
 
 Use one when the claim is about the wire. The rask example is
 `tests/integration/test_a_catalog_reader_reads_a_whole_table_in_bounded_pages.py` (`uvicorn.Config(app, port=0, lifespan="on")` on a
-thread, with a bounded wait for `server.started`). Why it matters here: a query-model binding once passed under `TestClient` while a live uvicorn on fastapi 0.140.13
-answered 422 on every call (measured on a client's search door, in git history at `64ef118a9`).
+thread, with a bounded wait for `server.started`). Why it matters here: a query-model binding can pass under `TestClient` while a live uvicorn answers 422 on every
+call (measured on fastapi 0.140.13).
 
 ## NATS, locally, through Dagger
 

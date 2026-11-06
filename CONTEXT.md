@@ -18,8 +18,9 @@ endpoint, an object store and an OIDC issuer.
 _Avoid_: dependency, bundled service, platform component
 
 **Optional subchart**:
-One of the lakehouse's own stores (OpenFGA, the Postgres behind AGE and OpenFGA) that the product chart can install for
-development and that production replaces with an external instance.
+A dependency the product chart can install for development and that production replaces with an external instance:
+OpenFGA, the chart's one subchart (`chart/Chart.yaml`). The Postgres behind OpenFGA is a first-party template of the
+chart (`chart/templates/age-postgres.yaml`), not a subchart.
 _Avoid_: embedded database, internal service
 
 **Fixture**:
@@ -41,8 +42,8 @@ own and ships in its own release with the notifications inbox.
 _Avoid_: frontend, zone, UI shell
 
 **Notifications inbox**:
-The console's one backend: a client of the lakehouse's events that keeps each person's notifications and their read
-state, so the bell counts that person's work.
+The per-person service the console reads beside the lakehouse: a client of the lakehouse's events that keeps each
+person's notifications and their read state, so the bell counts that person's work.
 _Avoid_: notification service, bell service
 
 **Engine**:

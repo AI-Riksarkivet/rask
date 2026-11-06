@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { Badge } from '@rask/ui/badge';
 	import { Card } from '@rask/ui/card';
-	import { reasonLabel, type PromotionHold } from '$lib/data/promotions';
-	import { listPromotions } from '$lib/data/remote/promotions.api';
+	import { reasonLabel, type PromotionHold } from '#lib/data/promotions.ts';
+	import { listPromotions } from '#lib/data/remote/promotions.api.ts';
 	import { formatAbsolute } from '@rask/ui/utils';
 
 	// The open holds the caller may see, in table order, one page at a time. A hold names its table as
@@ -74,7 +75,9 @@
 							<td class="p-2">
 								<a
 									class="mono underline"
-									href={`/catalog/promotions/${encodeURIComponent(hold.table)}`}>{hold.table}</a
+									href={resolve('/catalog/promotions/[table]', {
+										table: encodeURIComponent(hold.table),
+									})}>{hold.table}</a
 								>
 							</td>
 							<td class="p-2"><Badge variant="warning">v{hold.version}</Badge></td>

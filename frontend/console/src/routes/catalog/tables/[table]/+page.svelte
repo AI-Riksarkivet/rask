@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import TableDetail from '$lib/data/TableDetail.svelte';
+	import TableDetail from '#lib/data/TableDetail.svelte';
 
 	const table = $derived(page.params.table ?? '');
 </script>

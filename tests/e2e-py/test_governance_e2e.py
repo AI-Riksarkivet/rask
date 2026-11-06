@@ -51,9 +51,8 @@ _PRODUCER = "https://github.com/Borg93/lance-ns/tree/main/tests/e2e-py/test_gove
 SERVER = os.environ.get("LANCE_E2E_AUTH_SERVER", "")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
-# The kind Dex registers the sign-in client with a secret (sent here); the docker-compose
-# overlay uses a public client. Default to the kind secret so the suite runs on the canonical stack; set
-# LANCE_E2E_DEX_SECRET="" for a public-client Dex.
+# The sign-in client is confidential in every Dex the suite meets (the Dex fixture and `.docker/dex.config.yaml`), so its
+# password grant carries the client's secret; the default is the dev Dex's.
 DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 
@@ -80,9 +79,8 @@ def _token(username: str) -> str:
         "username": username,
         "password": "password",
         "scope": DEX_SCOPE,
+        "client_secret": DEX_SECRET,
     }
-    if DEX_SECRET:  # confidential client (kind); omit for a public-client Dex (docker-compose)
-        data["client_secret"] = DEX_SECRET
     resp = requests.post(f"{DEX}/token", data=data, timeout=10)
     body = resp.json()
     assert "id_token" in body, f"Dex token grant failed ({resp.status_code}): {body}"
