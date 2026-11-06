@@ -785,8 +785,8 @@ export interface paths {
         /**
          * Set Namespace Protection
          * @description Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router
-         *     (``protection`` maps to ``can_delete`` — whoever may delete the namespace decides whether
-         *     deleting it needs a second thought). Same control-root record contract as the table door.
+         *     (``protection`` maps to ``can_set_protection``, held by the namespace's owner, so a writer cannot arm or disarm the
+         *     safety on what it writes). Same control-root record contract as the table door.
          */
         post: operations["set_namespace_protection_management_v1_namespace__id__protection_post"];
         delete?: never;
@@ -3177,7 +3177,7 @@ export interface paths {
          *     (``lance_ray.utils``, which calls ``describe_table(DescribeTableRequest(id=...))`` and merges
          *     ``storage_options``) got a location and NO credentials, and any version pin silently read latest.
          *     Both forms are now accepted: **a field present in the body wins**, because the body is the spec's form
-         *     and the query is rask's own older shorthand that its zones and tests still speak. Presence is decided by
+         *     and the query is rask's own older shorthand that existing callers and its tests speak. Presence is decided by
          *     the JSON keys actually sent, not by the model's defaults. The body is OPTIONAL here (the spec marks it
          *     required) so those existing query-only callers keep working — a superset, not a deviation in meaning.
          *
