@@ -68,7 +68,7 @@ def test_a_log_record_carries_the_request_id() -> None:
     finally:
         request_id_ctx.reset(token)
 
-    assert record.request_id == "deadbeef"  # ty: ignore[unresolved-attribute]
+    assert vars(record).get("request_id") == "deadbeef"
 
 
 def test_setup_logging_installs_the_filter() -> None:

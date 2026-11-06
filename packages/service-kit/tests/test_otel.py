@@ -59,13 +59,12 @@ def _restore_otel_globals() -> Iterator[None]:
 
         return __init__
 
-    for cls, original in originals:
-        cls.__init__ = _recording(original)  # ty: ignore[invalid-assignment]
     try:
-        yield
+        with pytest.MonkeyPatch.context() as patch:
+            for cls, original in originals:
+                patch.setattr(cls, "__init__", _recording(original))
+            yield
     finally:
-        for cls, original in originals:
-            cls.__init__ = original  # ty: ignore[invalid-assignment]
         for provider in built:
             shutdown = getattr(provider, "shutdown", None)
             if callable(shutdown):

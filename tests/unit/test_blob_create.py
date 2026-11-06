@@ -20,6 +20,7 @@ from lance_namespace import (
     DeclareTableRequest,
     DescribeTableRequest,
     InvalidInputError,
+    LanceNamespace,
     TableAlreadyExistsError,
     connect,
 )
@@ -31,7 +32,7 @@ from lakehouse_kit.location_claims import ClaimStore
 from service_kit.storage_options import StorageOptions
 
 
-def _declare_namespace(ns: object, name: str) -> None:
+def _declare_namespace(ns: LanceNamespace, name: str) -> None:
     """Create a child namespace before putting a table in it.
 
     Required since pylance 9.0: the `dir` backend now answers a child-namespace read with
@@ -39,7 +40,7 @@ def _declare_namespace(ns: object, name: str) -> None:
     treated any directory as one. Renaming ACROSS namespaces therefore needs both ends declared — the
     destination is read before the move.
     """
-    ns.create_namespace(CreateNamespaceRequest(id=[name]))  # ty: ignore[unresolved-attribute]
+    ns.create_namespace(CreateNamespaceRequest(id=[name]))
 
 
 def _blob_schema() -> pa.Schema:
