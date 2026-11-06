@@ -63,7 +63,7 @@ def test_rationale_that_explains_a_past_shape_is_accepted(body: str) -> None:
 # --- kind (2): PROVENANCE — must be ACCEPTED -----------------------------------------------------
 
 PROVENANCE_SAMPLES = [
-    "# Measured 2026-08-26: the ray-cluster export alone takes 238 s, which is why this path caches.\n",
+    "# Measured 2026-08-26: the chart export alone takes 238 s, which is why this path caches.\n",
     "# Pinned by tests/unit/test_invariants.py::test_every_declared_application_is_provided.\n",
 ]
 
@@ -94,4 +94,4 @@ def test_only_added_lines_are_gated_so_existing_prose_is_untouched() -> None:
 def test_markdown_is_out_of_scope_because_docs_keep_a_trail() -> None:
     assert not gate.is_gated("docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md")
     assert gate.is_gated("services/example/src/example/mod.py")
-    assert gate.is_gated("frontend/microfrontends/home/src/lib/x.ts")
+    assert gate.is_gated("frontend/packages/ui/src/lib/x.ts")

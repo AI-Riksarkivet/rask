@@ -1,5 +1,5 @@
 """Unit tests for the derivation primitives in ``service_kit.governed.fga``: ``expand`` / ``expand_tree``,
-plus the two widenings the estate explorer needed from ``list_objects`` / ``list_users``.
+plus the two widenings an estate admin's access questions need from ``list_objects`` / ``list_users``.
 
 What these pin, and why each matters more than it looks:
 

@@ -2,7 +2,7 @@
 
 `image.localImages=true` means a bare `<component>:<tag>` reference resolves on the NODE — so an
 image the script does not build and `kind load` cannot be pulled from anywhere. It is not a slow
-start: containerd asks Docker Hub for `docker.io/library/notifications:dev`, is told
+start: containerd asks Docker Hub for `docker.io/library/<component>:dev`, is told
 `pull access denied, repository does not exist`, and the pod sits in ImagePullBackOff forever.
 
 MEASURED 2026-09-24 on `e2e-stack`: the overlay schedules SEVEN rask images and the script builds
@@ -76,13 +76,13 @@ def test_a_workload_scaled_to_zero_asks_the_node_for_no_image() -> None:
     """
     render = (
         "kind: Deployment\nspec:\n  replicas: 0\n  template:\n    spec:\n      containers:\n"
-        '        - image: "flows:dev"\n        - image: "lance-rest-catalog:dev"\n'
+        '        - image: "scaled-to-zero:dev"\n        - image: "lance-rest-catalog:dev"\n'
         "---\nkind: Deployment\nspec:\n  replicas: 1\n  template:\n    spec:\n      containers:\n"
         '        - image: "lance-rest-catalog:dev"\n'
         "---\nkind: Job\nspec:\n  template:\n    spec:\n      containers:\n"
-        '        - image: "notifications:dev"\n'
+        '        - image: "one-shot:dev"\n'
     )
-    assert _SLI.side_loaded(render, "dev") == ["lance-rest-catalog:dev", "notifications:dev"]
+    assert _SLI.side_loaded(render, "dev") == ["lance-rest-catalog:dev", "one-shot:dev"]
 
 
 def test_an_image_that_is_not_ours_is_left_alone() -> None:

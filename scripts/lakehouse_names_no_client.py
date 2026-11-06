@@ -1,4 +1,4 @@
-"""The lakehouse names no client ([[XC-191]]): fail when a file the lakehouse owns names one of this repository's clients.
+"""The lakehouse names no client ([[XC-191]], [[XC-193]]): fail when a file the lakehouse owns names a client, hosted or departed.
 
 Owner, 2026-11-04: "Lakehouse don't know anything about the other stuff what so ever. It does not eg know flows or
 compute" (CLAUDE.md). The lakehouse ships the generic seam with empty defaults; a client's integration values live in
@@ -11,10 +11,11 @@ Makefile), `docs` and the agent instructions are not the product and still build
 repository hosts.
 
 WHO THE CLIENTS ARE is read off the tree: every workspace member outside the lakehouse, every app of the frontend
-workspace and every fixture that is not the platform's. The one place this file names clients is `AMBIGUOUS`, the
-names that are also English words, which it must list to match them only where they are used as a name. A client whose name is an English word (the
-console, the notifications inbox) is matched only where it is used as a name: a path, a service account, "<name>
-service". Every other name is matched as a whole word.
+workspace and every fixture that is not the platform's. A client that has left the repository has no tree to read its
+name off, so `DEPARTED` lists it. `DEPARTED`, `CONSOLE_ZONES` and `AMBIGUOUS` are the places this file names clients,
+as repository tooling may. A name that is also an English word or another system's vocabulary (`AMBIGUOUS`) is matched only where it
+is used as a name: a path, an account, an image, a module, a backticked name, "<name> service". Every other name is
+matched as a whole word.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 
@@ -45,13 +47,27 @@ LAKEHOUSE_DEPLOY = ("chart", "deploy/values-local.yaml", "deploy/values-prod.yam
 LAKEHOUSE_TESTS = ("tests/unit", "tests/integration", "tests/e2e-py")
 #: Vendored upstream files the lakehouse does not write.
 VENDORED = ("chart/crds-bootstrap/", "/charts/")
-#: The render gate that holds the product chart to naming no client: it names each client to refuse it, as `AMBIGUOUS`
-#: here does, and reads no client's file, so deleting every client leaves it green.
-CLIENT_GATES = ("tests/unit/test_the_product_chart_renders_no_client.py",)
+#: The gates' own tests, the product chart's render gate and this lint's: each names a client to show it is refused, as
+#: `AMBIGUOUS` and `DEPARTED` here do, and reads no client's file, so deleting every client leaves them green.
+CLIENT_GATES = ("tests/unit/test_the_product_chart_renders_no_client.py", "tests/unit/test_the_no_client_lint_sees_a_departed_client.py")
 
-#: Client names that are also English words or another system's vocabulary (RustFS's admin console, a notification
-#: rule): matched only where used as a name (a path, an account, a backticked name, "<name> service").
-AMBIGUOUS = frozenset({"console", "notifications"})
+#: The clients that have left the repository. These are the client names the lint, as it stood at `64ef118a9`, read off
+#: that tree (its services, packages, runners, microfrontends and fixtures outside the lakehouse and the platform; git
+#: still holds each of them), less the ones the tree still holds and the console's former zones (`CONSOLE_ZONES`). A
+#: client that leaves the tree joins this list in the commit that deletes it.
+DEPARTED = frozenset({
+    "annotator", "asr", "assist", "client-kit", "compute", "diarize", "dummy", "explorer", "flows", "htr", "insid3", "kg",
+    "kuberay-operator", "nvidia-device-plugin", "ray-cluster", "ray-cluster-env", "ray-kit", "search", "studio",
+    "table-maintenance", "topics", "viewer", "voiceprint",
+})  # fmt: skip
+#: The zones that became the console. Their names are the lakehouse's own words (`lakehouse_kit`, "the home page"), so
+#: they are matched only as a path under `microfrontends/`, which no lakehouse path has.
+CONSOLE_ZONES = frozenset({"home", "lakehouse"})
+
+#: Client names that are also English words or another system's vocabulary, matched only where used as a name:
+#: "compute the digest", "data flows through", `re.search`, a pub/sub topic, OpenFGA's `viewer` relation, RustFS's admin
+#: console and a notification rule name no client.
+AMBIGUOUS = frozenset({"assist", "compute", "console", "dummy", "explorer", "flows", "kg", "notifications", "search", "topics", "viewer"})
 
 
 def client_names(root: Path) -> set[str]:
@@ -69,14 +85,18 @@ def pattern(names: set[str]) -> re.Pattern[str]:
     def spellings(name: str) -> list[str]:
         return sorted({re.escape(name), re.escape(name.replace("-", "_"))})
 
-    path = r"(?:services|packages|frontend|fixtures)/"
-    plain = [s for n in names - AMBIGUOUS for s in spellings(n)]
+    path = r"(?:services|packages|frontend|fixtures|runners|microfrontends)/"
+    plain = [s for n in names - AMBIGUOUS - CONSOLE_ZONES for s in spellings(n)]
     role = r"(?:service|release|fixture|zone|client|runner|plane|inbox|image|account)"
+    # A name's positions: a tree's path, an account or object (`rask-sa-<name>`), an import, a backticked name, a
+    # possessive, a dotted module, a module file, a path inside its tree, an image (`<name>:<tag>`), a versioned name, and
+    # "<name> service".
     forms = (
-        r"{path}{s}\b", r"\b(?:sa|rask)-{s}\b", r"\bservices\.{s}\b", r"`{s}`", r"\b{s}'s\b",
-        r"\b{s}\.[a-z_]+\.[a-z_]", r"\b{s}-\d", r"\b{s} {role}\b",
+        r"{path}{s}\b", r"\b(?:sa|rask(?:-[a-z0-9]+)*)-{s}\b", r"\bservices\.{s}\b", r"`{s}`", r"\b{s}'s\b",
+        r"\b{s}\.[a-z_]+\.[a-z_]", r"\b{s}\.py\b", r"\b{s}/\w+(?:/|\.py\b)", r"\b{s}:\w[\w.-]*", r"\b{s}-\d", r"\b{s} {role}\b",
     )  # fmt: skip
     named = [form.format(path=path, s=s, role=role) for n in names & AMBIGUOUS for s in spellings(n) for form in forms]
+    named += [rf"\bmicrofrontends/{s}\b" for n in names & CONSOLE_ZONES for s in spellings(n)]
     parts = [*named, *([rf"\b(?:{'|'.join(sorted(plain))})\b"] if plain else [])]
     return re.compile("|".join(parts) if parts else r"(?!)", re.IGNORECASE)
 
@@ -104,11 +124,11 @@ def lakehouse_files(root: Path) -> list[str]:
     return [f for f in names if not any(v in f for v in VENDORED) and f not in CLIENT_GATES]
 
 
-def main() -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=ROOT, help="the repository to judge")
-    args = parser.parse_args()
-    found = pattern(client_names(args.root))
+    args = parser.parse_args(argv)
+    found = pattern(client_names(args.root) | DEPARTED | CONSOLE_ZONES)
     hits = []
     for name in lakehouse_files(args.root):
         try:

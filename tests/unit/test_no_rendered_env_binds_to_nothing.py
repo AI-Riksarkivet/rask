@@ -1,12 +1,10 @@
 """Every namespaced env the chart renders onto a Python service binds to a settings field.
 
 Q17-20's general form. An env var that binds to no setting is indistinguishable from a control when
-read: three live stage runners carried `MEDALLION_RAY_S3_ACCESS_KEY_ID=rask-ray-compute`, and that one
-string was quoted in three documents — `open_goal.md` and the backlog's own zero-trust row among them —
-as the evidence that the Ray lane ran on a scoped storage identity. No service read it and no template
-rendered it — it was residue of the approach `ray_submit.py` abandoned once the Ray Jobs API was found
-to echo `runtime_env` back on an unauthenticated read. The identity was real, on the Ray POD; the
-variable was decoration that three documents mistook for proof.
+read: three live pods carried a scoped storage identity's name in such a variable, and that one string
+was quoted in three documents as the evidence that their lane ran on a scoped storage identity. No
+service read it and no template rendered it. The identity was real, on another pod; the variable was
+decoration that three documents mistook for proof.
 
 WHAT THIS CATCHES AND WHAT IT CANNOT. That instance was live drift, which no render-time gate can
 see — Q17-17 is the row for drift. This closes the half that IS in the repo: a template that renders
@@ -22,13 +20,12 @@ each class's `env_prefix` and `model_fields` are read off the class itself, so a
 by existing here rather than by an edit.
 
 CHECKED AGAINST THE UNION OF EVERY CLASS, deliberately. `LANCE_` is the prefix of
-the catalog, flows and notifications alike; asking whether one particular class binds a name would
+three of the catalog's settings classes; asking whether one particular class binds a name would
 accuse a variable that its own service reads perfectly well. The union under-reports and never
 falsely accuses, which is the right trade for a gate whose whole subject is "binds to NOTHING".
 
-THE WEB ZONES ARE OUT OF THIS GATE'S SCOPE. Their `LINEAGE_SERVICE_TOKEN_FILE`, `LINEAGE_API` and
-`LANCE_GATEWAY_URL` are read by SvelteKit (`bff.ts`), a plane with no `BaseSettings` at all — which is why the gate names the Python plane in its title. The zone and runner
-planes are checked by nothing here.
+THE PYTHON PLANE IS THE GATE'S SCOPE, as its title says: a container whose process reads no
+`BaseSettings` is checked by nothing here.
 """
 
 from __future__ import annotations
@@ -45,10 +42,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 from chart_render import containers, uvicorn_target  # noqa: E402
 from test_invariants import _rendered_docs  # noqa: E402
-
-
-#: Deployments whose env belongs to the JS plane, which binds it in `bff.ts` rather than in pydantic.
-_JS_PLANE = "web-"
 
 
 def _app_modules() -> dict[str, bool]:
@@ -115,8 +108,6 @@ def _rendered_env() -> list[tuple[str, str]]:
         if doc.get("kind") not in {"Deployment", "StatefulSet"}:
             continue
         name = doc["metadata"]["name"]
-        if _JS_PLANE in name:
-            continue
         spec = doc["spec"]["template"]["spec"]
         for container in spec.get("containers", []) + (spec.get("initContainers") or []):
             for env in container.get("env") or []:
@@ -137,9 +128,3 @@ def test_no_rendered_env_binds_to_nothing() -> None:
         "these rendered env vars bind to NO settings field, so nothing reads them and pydantic drops "
         "them silently — a value that looks like configuration and is not: " + "; ".join(f"{env} on {sorted(where)}" for env, where in sorted(unbound.items()))
     )
-
-
-# --------------------------------------------------------------------------------------------- #
-# THE OTHER TWO PLANES. The gate above can only ask a question pydantic can answer, so the zones and
-# the sealed runners — which have no BaseSettings at all — were checked by nothing.
-# --------------------------------------------------------------------------------------------- #

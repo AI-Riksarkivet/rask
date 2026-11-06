@@ -67,17 +67,14 @@ def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
     """CONTRACT (security, standing rule): a scoped storage identity's secret is DERIVED, never the root.
 
     The estate mints scoped users and publishes each one's secret into OpenBao for ESO to sync. Four
-    derived it from the root; `ray-compute` alone read
-    `rayComputeSecretKey | default objectStore.secretKey` — and `rayComputeSecretKey` ships empty, so the
-    published value WAS the RustFS root credential.
+    derived it from the root; the fifth read `<its own key> | default objectStore.secretKey` — and its own
+    key ships empty, so the published value WAS the RustFS root credential.
 
-    MEASURED on the live estate 2026-09-11, by hash so nothing was disclosed: `ray-compute-secret-key`,
-    `ray-compute-access-key` and `object-store-secret-key` in `rask-infra-credentials` were byte-identical,
-    all three 11 bytes. The chart CREATES `rask-ray-compute` with the derived secret
-    (`object-store-scoped-users.yaml`) and PUBLISHED the root one under its name, so the pair can never
-    match: a consumer either signs as root — defeating the scoping entirely — or fails
-    `SignatureDoesNotMatch`. The Ray head's own manifest asserts the opposite in a comment, which is
-    how it survived.
+    MEASURED on the live estate 2026-09-11, by hash so nothing was disclosed: that identity's published
+    secret key and access key and `object-store-secret-key` in `rask-infra-credentials` were byte-identical,
+    all three 11 bytes. The chart CREATED the user with the derived secret (`object-store-scoped-users.yaml`)
+    and PUBLISHED the root one under its name, so the pair can never match: a consumer either signs as
+    root — defeating the scoping entirely — or fails `SignatureDoesNotMatch`.
 
     ASSERTED ON THE RENDER: the root is never in it ([[XC-004]]), so the dev OpenBao's seed writes each
     field from a file, and a scoped field must name a file `scoped_secret` derived (for an identity, or for
@@ -101,18 +98,12 @@ def test_every_first_party_deployment_is_hardened() -> None:
     template). preStop matters most on the gateway: it is the INGRESS, so without a drain delay a rolling
     update drops in-flight requests while kube-proxy is still routing to the terminating pod.
 
-    IT NO LONGER NAMES ITS OWN SUBJECTS. This carried a hand-written tuple of ten name fragments —
-    gateway, catalog, lineage, compaction, web, notifications —
-    which omitted controlplane, compute, flows, ingest, maintenance, viewer, search and annotator. So a
-    gate whose docstring argues that "an every claim in prose is worth nothing" made exactly that kind
-    of claim with a literal list, and controlplane shipped with no preStop at all: a first-party
-    Deployment serving `/api/projects` through the gateway, dropping in-flight project reads on every
-    `helm upgrade` for as long as kube-proxy took to notice the endpoint removal.
-
-    It now derives its subjects from the render (`_first_party_deployments`), so a NEW Deployment is
-    checked by default rather than invisible until somebody remembers it. Per CONTAINER, too — the
-    tuple version matched on the doc text, so a second container in a pod could satisfy the check for
-    the first.
+    ITS SUBJECTS ARE DERIVED FROM THE RENDER (`_first_party_deployments`), never listed: a hand-written
+    list covers a Deployment only once somebody remembers it, which is the kind of "every" claim this
+    docstring calls worthless. A first-party Deployment missing from such a list shipped with no preStop
+    at all, and dropped its in-flight reads on every `helm upgrade` for as long as kube-proxy took to
+    notice the endpoint removal. So a NEW Deployment is checked by default. Per CONTAINER, too, so a
+    second container in a pod cannot satisfy the check for the first.
     """
     unhardened: list[str] = []
     for doc in _first_party_deployments(_rendered_docs()):
@@ -262,7 +253,7 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     """#135 — the chart must be able to describe a fleet that is NOT one tag.
 
     One `image.tag` could not: a live estate ran a catalog tag across 11 services, a different tag on
-    flows/notifications, a third across the 7 zones, and an ingest DIGEST. Rendering all of
+    two others, a third across seven more, and an ingest DIGEST. Rendering all of
     that from one value is what made `helm upgrade` destructive — every image rewritten to a tag the
     node did not hold, whole fleet ImagePullBackOff, recovered by hand. Observed twice on 2026-08-06.
 
@@ -593,7 +584,7 @@ def test_the_sidecars_non_telemetry_config_survives_telemetry_being_off() -> Non
     assert http.get("increasedCardinality") is False, (
         "increasedCardinality is not pinned false. At the upstream default the sidecar stamps the raw remainder of a "
         "service-invocation URL onto the `path` label — measured live: "
-        'dapr_http_server_request_count{app_id="gateway",path="/v1.0/invoke/compute/method/api/ray/jobs"} — which is one '
+        'dapr_http_server_request_count{app_id="gateway",path="/v1.0/invoke/<app-id>/method/<route with its ids>"} — which is one '
         "series per table, namespace and project id, forever."
     )
 
@@ -699,11 +690,9 @@ _UNCOVERED_DEPLOYMENTS = (
 def _first_party_deployments(docs: list[dict]) -> list[dict]:
     """Every rendered Deployment that is OURS, derived rather than listed.
 
-    The gate this replaces carried a hand-written tuple of ten names, and the cost of that is not
-    hypothetical: `compute`, `controlplane`, `flows` and `ingest` were simply absent from it, so the
-    hardening gate skipped four first-party pods silently — a new Deployment was covered only if
-    somebody remembered to add it. Deriving the set means the default is COVERED and an exemption has
-    to be argued for by name.
+    A hand-written list covers a Deployment only once somebody remembers to add it, and the hardening
+    gate skips a pod it does not cover in silence. Deriving the set means the default is COVERED and an
+    exemption has to be argued for by name.
     """
     return [doc for doc in docs if doc.get("kind") == "Deployment" and not any(skip in doc["metadata"]["name"] for skip in _UNCOVERED_DEPLOYMENTS)]
 
@@ -754,8 +743,8 @@ def test_no_workload_references_a_secret_the_render_does_not_create() -> None:
 
     THE FAILURE THIS PINS. `dapr.enabled=false` is a documented, supported toggle, and
     `services.yaml`'s own fail message tells an operator to pair it with `catalog.controlEmit=false`.
-    That pair rendered cleanly — and left THIRTEEN Deployments (all seven zones, maintenance, the
-    producer, three stage runners and lineage) carrying a reference to `-dapr-app-token`, which is gated on
+    That pair rendered cleanly — and left THIRTEEN Deployments, maintenance and lineage among them,
+    carrying a reference to `-dapr-app-token`, which is gated on
     `dapr.enabled` and therefore absent. Each fails with CreateContainerConfigError; nothing in the
     render says why.
 

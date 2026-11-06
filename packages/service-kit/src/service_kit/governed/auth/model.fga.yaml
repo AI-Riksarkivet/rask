@@ -179,7 +179,7 @@ tuples:
   - { user: 'namespace:depth_6', relation: parent, object: 'namespace:depth_7' }
   - { user: 'warehouse:depth_probe', relation: parent, object: 'namespace:depth_1' }
   - { user: 'user:deepest', relation: reader, object: 'namespace:depth_7' }
-  # A STAGE RUNNER'S OWN OUTPUT — the tuple `register_table` writes for itself. Registering calls
+  # A PIPELINE'S OWN OUTPUT — the tuple `register_table` writes for itself. Registering calls
   # `seed_ownership_or_compensate(resource="table")`, so the identity that registered a table is
   # granted `owner` on it. That is what decides whether a pipeline can publish what it just wrote, and
   # nothing in any seed script grants it.

@@ -1,10 +1,10 @@
 """A catalog reader with no limit reads the whole table, in pages the catalog's answer ceiling admits ([[LH-247]]).
 
 `/query` refuses a `k` whose answer could exceed its ceiling, because the native backend builds each
-answer whole in memory. `CatalogTableReader` is how the annotator reads in catalog mode
-(`MEDIA_READ_BACKEND=catalog`), and with no limit it must still return every row: it pages with a
-bounded `k` plus an offset, pinned to one version. Driven over a real socket because the reader's
-transport is the generated urllib3 client, against the real catalog app on a real `dir` namespace.
+answer whole in memory. `CatalogTableReader` reads a table through the catalog's doors, and with no
+limit it must still return every row: it pages with a bounded `k` plus an offset, pinned to one
+version. Driven over a real socket because the reader's transport is the generated urllib3 client,
+against the real catalog app on a real `dir` namespace.
 
 The table is 2,000 rows of 4 KiB, so the catalog's ceiling is about 4,000 rows and the reader's pages
 (64 rows, then about 1,000 at its measured width) take three answers to cover it.

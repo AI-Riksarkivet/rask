@@ -191,8 +191,3 @@ observability:
 # nats (the platform's JetStream, REQUIRED):        # a prerequisite rask never installs (ADR 0153); bus down =
 #   url: nats://nats.internal:4222                   # no lineage ingest, no cascade. The stream Job provisions
 #   streamReplicas: 3                                # rask's streams on it (needs a 3+ node cluster)
-# ray (the one Ray plane):                           # Serve discovery reads it
-#   dashboardUrl: https://ray.internal:8265
-# GPU metrics (NVIDIA DCGM operator): the engine's, beside its KubeRay and Kueue (ADR 0153) — the dcgm-exporter
-# is node-level infra (a DaemonSet the DCGM operator owns), scraped by the OTel Collector's prometheus receiver
-# (the same one that takes the Dapr sidecars). Nothing to flip in this chart until GPU Ray workers land.

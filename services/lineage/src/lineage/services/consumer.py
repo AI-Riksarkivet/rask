@@ -92,10 +92,6 @@ async def handle_cloud_event(
       THE COUNT IS THE WHOLE TRACE an acked event leaves, which is what makes
       `LineageIngestDiscardingUnrepairable` load-bearing rather than decoration: it reads
       `lance_lineage_outcome="unrepairable"`, and without it the discard would be silent.
-
-      `medallion`'s `transform.py` still parks its deterministic DROPs, and deliberately: its stage
-      runners are `deliverPolicy: new`, so a SUCCESS ack there genuinely discards where this lane's
-      stream retains and re-presents. [[LH-151]] carries that lane's retention topic.
     * **ANYTHING ELSE -> RETRY.** An unreachable authorization service is an outage, not a verdict, and
       dropping on one would silently delete provenance for the duration of the outage — the failure
       this whole lane exists to prevent. The absent-vs-unreadable rule, at the ack layer.

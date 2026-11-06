@@ -54,9 +54,6 @@ from tests.unit.test_no_chart_owned_manifest_renders_a_null import _overlays
 REPO = pathlib.Path(__file__).resolve().parents[2]
 STORE = "lance-secrets"
 _POLICY_PATH = re.compile(r'path "[^"/]+/data/([^"]+)"')
-#: Names ANOTHER stage's topic as DAG configuration: a stage runner reads it as a gate input and never publishes it, because
-#: only the catalog's publication advances a tier. Granting it would let a stage runner wake the next tier past that door.
-_NOT_A_TOPIC_THE_APP_USES = frozenset({"MEDALLION_PUB_TOPIC"})
 #: The renders where a component two apps would share is split only under a flag: the control topic's optional publishers, and
 #: maintenance's lineage with no write-event lane to give it a component.
 _SPLIT_UNDER_A_FLAG = [
@@ -139,8 +136,7 @@ def _bus_credential_problems(docs: tuple[dict, ...], components: list[dict]) -> 
         for key, value in env.items():
             if key.endswith("_PUBSUB") and value not in held[app]:
                 problems.append(f"{workload} {key}={value}, a component not scoped to {app}")
-        topics = {value for key, value in env.items() if "TOPIC" in key and value and key not in _NOT_A_TOPIC_THE_APP_USES}
-        topics |= set(json.loads(env.get("MEDALLION_TRANSFORM_ROUTES", "{}")).values())
+        topics = {value for key, value in env.items() if "TOPIC" in key and value}
         publish = users[app][0]
         for topic in sorted(topics):
             stream = next((s for s, subject in streams.items() if chart_render.captures(topic, subject)), None)

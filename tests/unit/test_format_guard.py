@@ -22,7 +22,7 @@ What that settles, so nobody reopens it as a feature request:
   lane carrying a format tag. Lakekeeper's Generic Table is a format-agnostic table; rask's asset
   rung, if it lands, is a governed blob. Those are different things and this ruling is the line
   between them. (Do not enumerate future consumers by workload: rask is a format-agnostic multimodal
-  platform, and HTR/IIIF is one example task, not its identity.)
+  platform, and no one workload's task is its identity.)
 """
 
 from __future__ import annotations

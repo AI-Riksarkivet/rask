@@ -6,7 +6,7 @@ and lineage planes on every install and upgrade. Both were OFF by default —
 identity, provisions it, and then hands the service the root key id anyway.
 
 MEASURED ON THE RUNNING ESTATE 2026-09-08, reading each pod's real environment rather than the
-templates: catalog, lineage, ingest and viewer all present the root key id. The operator had armed
+templates: catalog, lineage, ingest and one client all present the root key id. The operator had armed
 maintenance and medallion by hand in a values file; lineage — whose policy is the TIGHTEST of the
 three, needing no PutObject at all — was still root because nobody knew to name it.
 

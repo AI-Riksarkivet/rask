@@ -5,7 +5,7 @@ public front door serves an unauthenticated aggregated Swagger of the whole esta
 
 TWO DEFECTS, and the second is the one that made the first survive.
 
-**The apps.** Four entrypoints — gateway, annotator, viewer, search — construct `FastAPI(...)` with no
+**The apps.** Four entrypoints — the gateway and three clients' apps — construct `FastAPI(...)` with no
 `docs_url`/`openapi_url` at all, so FastAPI's defaults stand and `/docs`, `/redoc` and `/openapi.json`
 are served. `make_service_app` is worse than silent: it hard-codes all three onto `{api_prefix}`, so
 every service composed through it publishes them with no way to say no.

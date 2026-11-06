@@ -6,8 +6,8 @@ tuple or redelivery could ever fix — and an alert rule in `deploy/alerting/rul
 those. The HTTP ingest door recorded `INGESTED` on success and nothing at all on refusal.
 
 THE ASYMMETRY IS NOT COSMETIC, because the HTTP door is the ONLY door for a producer with no Dapr
-sidecar: the whole Ray lane, every runner, and any external OpenLineage producer. Measured live
-2026-09-21, a dummy-lane job wrote 64 rows to `acme-silver$dummy` and its provenance was refused
+sidecar: a user's pipeline job on its own compute, and any external OpenLineage producer. Measured live
+2026-09-21, a job wrote 64 rows to a silver table and its provenance was refused
 `ingest_denied … relation='can_write_data'`; the write is governed, the run is absent from the feed,
 and the job exited SUCCEEDED ([[LH-184]]).
 
@@ -47,16 +47,16 @@ _RUN_BODY: dict[str, Any] = {
     "producer": "https://github.com/AI-Riksarkivet/rask",
     "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent",
     "run": {"runId": "b1b2c3d4-0000-4000-8000-000000000001"},
-    "job": {"namespace": "lance", "name": "acme-silver$dummy.insert"},
-    "outputs": [{"namespace": "lance", "name": "acme-silver$dummy"}],
+    "job": {"namespace": "lance", "name": "acme-silver$features.insert"},
+    "outputs": [{"namespace": "lance", "name": "acme-silver$features"}],
 }
 
 
 #: The subscriber's classification, which is the REFERENCE this door must match
 #: (`services/lineage/src/lineage/services/consumer.py:101-120`).
 SUBSCRIBER_CLASSIFICATION = [
-    (PermissionDeniedError("can_write_data required on outputs: acme-silver$dummy"), Outcome.REFUSED),
-    (UngovernedOutputError("can_write_data required on outputs: acme-silver$dummy"), Outcome.UNREPAIRABLE),
+    (PermissionDeniedError("can_write_data required on outputs: acme-silver$features"), Outcome.REFUSED),
+    (UngovernedOutputError("can_write_data required on outputs: acme-silver$features"), Outcome.UNREPAIRABLE),
     (UnauthoredRunError("the run carries no author"), Outcome.UNREPAIRABLE),
 ]
 

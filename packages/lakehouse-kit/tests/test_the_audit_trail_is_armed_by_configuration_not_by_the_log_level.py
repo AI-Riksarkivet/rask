@@ -12,7 +12,7 @@ So the factory arms it, the way it already arms the readiness flags and the prob
 same reason: a convention five apps did not hold up is not a convention.
 
 BOTH FACTORIES, one table. `make_service_app` builds the fleet; `build_lance_service_app` builds the
-lakehouse (catalog, lineage, the medallion stage runners, maintenance), and `services/maintenance` is
+lakehouse (catalog, lineage and maintenance), and `services/maintenance` is
 the component that REWRITES BYTES, whose reclamation trail cannot become a governed artifact while the
 logger it writes to is unarmed. There `audit_enabled` is a required keyword, like `docs_enabled` beside
 it, so the type checker makes every new lakehouse service answer it.

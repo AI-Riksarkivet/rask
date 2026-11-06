@@ -48,11 +48,10 @@ def _object_key(run_id: str, event_json: str) -> str:
     therefore made the second event truncate the first, and which one survived was whichever raced
     last.
 
-    `transform.py` documents that destroying the very object this module exists to preserve — "a
-    COMPLETE whose PUBLISH failed left `completed = False`, the handler below staged a FAIL, and that
-    truncating write destroyed the staged COMPLETE — the exact object the outbox exists to preserve, on
-    a run whose Lance write had already committed." The workaround was to set a flag BEFORE the emit;
-    with a per-event key the hazard is gone rather than sequenced around.
+    That destroyed the very object this module exists to preserve: a COMPLETE whose PUBLISH failed left
+    `completed = False`, the handler staged a FAIL, and that truncating write destroyed the staged
+    COMPLETE, on a run whose Lance write had already committed. With a per-event key the hazard is gone
+    rather than sequenced around by a flag set before the emit.
 
     Falls back to the bare run id when the payload carries no readable eventType, which is also what
     keeps the change BACKWARD-COMPATIBLE: `list_events` derives the drop key from the FILENAME, so an

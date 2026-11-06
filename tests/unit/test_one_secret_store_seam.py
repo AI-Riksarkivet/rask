@@ -37,7 +37,7 @@ def _settings_builders() -> list[tuple[str, Any, str]]:
 def test_one_env_var_repoints_every_consumer_of_the_one_secret_store(label: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """DUP-17: `RASK_SECRET_STORE` is the estate-wide name — setting it alone moves every consumer.
 
-    RED before the collapse for six of the eight rows (only viewer and ingest read the shared name):
+    RED before the collapse for six of the eight rows (only two of them read the shared name):
     each of the others answered the hardcoded default `lance-secrets` while the operator believed the
     estate had been repointed.
     """

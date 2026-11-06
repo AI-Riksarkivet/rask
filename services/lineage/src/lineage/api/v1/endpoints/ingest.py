@@ -134,7 +134,7 @@ async def ingest_event(
     it can't write). Both are no-ops when auth is off.
     """
     # A REFUSAL IS COUNTED HERE, not left to the status code. This is the ONLY door for a producer with
-    # no Dapr sidecar — the whole Ray lane, every runner, and any external OpenLineage producer — so a
+    # no Dapr sidecar — a user's pipeline job on its own compute, and any external OpenLineage producer — so a
     # refusal here is a governed write whose run never reaches the feed while the producer exits
     # successfully. `Outcome.REFUSED` exists because that loss "can be a silent, deliberate loss, so it
     # gets its own alert"; counting it only on the subscriber made the same loss alertable on one door

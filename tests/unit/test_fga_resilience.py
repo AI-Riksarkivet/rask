@@ -237,7 +237,7 @@ class _CapturingList:
 
 
 def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:
-    """`qualify=False` is what lets the estate-admin explorer ask a USERSET question.
+    """`qualify=False` is what lets an estate admin ask a USERSET question.
 
     A grant to a role is the userset question that explains a real grant, so prefixing it would make that
     question unaskable.

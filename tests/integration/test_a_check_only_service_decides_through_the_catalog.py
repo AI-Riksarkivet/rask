@@ -3,8 +3,8 @@
 OpenFGA authorizes none of its callers, so a service holding an OpenFGA token can write any tuple. The services that
 only check hold none and ask the catalog: `service_kit.governed.decider.CatalogDecider`, presenting the pod's
 projected `rask-catalog` token, against the real catalog app on a real socket. Each route opens on its own estate
-role, so lineage (a `decider` and `governance_prober`) may check and probe, the viewer (a `decider`) may only check, and
-an account holding neither is refused everything. What may be asked is closed too: a role such as `writer` is not a
+role, so lineage (a `decider` and `governance_prober`) may check and probe, a checker (a `decider` alone) may only check,
+and an account holding neither is refused everything. What may be asked is closed too: a role such as `writer` is not a
 question a decision answers, so a client gates on a lakehouse verb. Every refusal reaches the service as `ServiceUnavailableError`, its gates' 503.
 
 OpenFGA is a stand-in at the client the catalog holds (`openfga_grants.Grants`): it answers each check from the grants
@@ -84,9 +84,9 @@ def catalog(sa_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     store.allowed = {
         (_account("rask-sa-lineage"), "can_decide_access", _ROOT),
         (_account("rask-sa-lineage"), "can_probe_governance", _ROOT),
-        (_account("rask-sa-viewer"), "can_decide_access", _ROOT),
+        (_account("rask-sa-a-checker"), "can_decide_access", _ROOT),
         (_account("rask-sa-a-notifier"), "can_expand_members", _ROOT),
-        (_account("rask-sa-flows"), "can_decide_access", _ROOT),
+        (_account("rask-sa-a-client"), "can_decide_access", _ROOT),
         ("user:dex~alice", "can_observe_events", _ROOT),
         ("user:dex~alice", "can_get_metadata", "table:a"),
         ("user:dex~alice", "member", "project:p"),
@@ -116,13 +116,13 @@ def catalog(sa_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 _CASES = [
     pytest.param("rask-sa-lineage", ("check", "can_get_metadata", ["table:a", "table:b"]), {"table:a": True, "table:b": False}, id="a-decider-checks"),
     pytest.param("rask-sa-lineage", ("governed", [_GOVERNED, _STRAY]), {_GOVERNED: True, _STRAY: False}, id="a-governance-prober-probes"),
-    pytest.param("rask-sa-viewer", ("check", "can_get_metadata", ["table:a"]), {"table:a": True}, id="the-viewer-checks"),
-    pytest.param("rask-sa-viewer", ("governed", [_GOVERNED]), None, id="the-viewer-may-not-probe"),
+    pytest.param("rask-sa-a-checker", ("check", "can_get_metadata", ["table:a"]), {"table:a": True}, id="a-checker-checks"),
+    pytest.param("rask-sa-a-checker", ("governed", [_GOVERNED]), None, id="a-checker-may-not-probe"),
     pytest.param("rask-sa-a-notifier", ("list-users", "assignee", "role:reviewers"), ["dex~bob", "dex~carol"], id="a-member-expander-expands"),
     pytest.param("rask-sa-lineage", ("list-users", "assignee", "role:reviewers"), None, id="lineage-may-not-expand-members"),
     pytest.param("rask-sa-a-notifier", ("list-users", "can_get_metadata", "table:a"), None, id="only-a-membership-userset-expands"),
-    pytest.param("rask-sa-flows", ("check", "can_observe_events", [_ROOT]), {_ROOT: True}, id="a-client-gates-on-the-estate-admin-verb"),
-    pytest.param("rask-sa-search", ("check", "can_get_metadata", ["table:a"]), None, id="an-account-holding-no-decision-role"),
+    pytest.param("rask-sa-a-client", ("check", "can_observe_events", [_ROOT]), {_ROOT: True}, id="a-client-gates-on-the-estate-admin-verb"),
+    pytest.param("rask-sa-an-outsider", ("check", "can_get_metadata", ["table:a"]), None, id="an-account-holding-no-decision-role"),
     pytest.param("rask-sa-lineage", ("check", "member", ["project:p", "project:q"]), {"project:p": True, "project:q": False}, id="a-membership-is-a-question"),
     pytest.param("rask-sa-lineage", ("check", "writer", ["table:a"]), None, id="a-role-is-not-a-question"),
     pytest.param("rask-sa-lineage", ("check", "can_decide_access", [_ROOT]), None, id="the-decision-rungs-are-not-a-question"),

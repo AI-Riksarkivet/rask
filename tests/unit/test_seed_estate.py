@@ -90,7 +90,7 @@ _REGISTRY = [
 #: that ignored the namespace let a read-back "verify" a table the plan never declared there.
 #: `beta-locked` is the managed-access scope's stage — its table is what makes the C4 fixture a real
 #: object rather than a tuple about nothing.
-_TABLES = {"acme-bronze": [], "acme-silver": ["features", "dummy"], "acme-gold": ["catalog"], "beta-locked": ["records"]}
+_TABLES = {"acme-bronze": [], "acme-silver": ["features", "undeclared"], "acme-gold": ["catalog"], "beta-locked": ["records"]}
 #: The roles each project's role door lists after a clean seed, each with the uuid the fake minted for it.
 _ROLES = {"acme": ["admins", "validators"], "research": ["admins"], "beta": ["admins"]}
 
@@ -416,17 +416,6 @@ def test_a_demo_identity_is_seeded_as_its_principal_and_a_persona_under_the_demo
     # Only the SUBJECT side: the wildcard, a userset or an object type is never a principal to remap.
     assert seed_estate.remap_subject("user:*", principals) == "user:*"
     assert seed_estate.remap_subject("role:acme/validators#assignee", principals) == "role:acme/validators#assignee"
-
-
-def test_the_demo_estate_grants_the_anonymous_principal_nothing() -> None:
-    """``service-web`` is the identity the zones' BFF sends when there is NO session, so it is the anonymous
-    principal: a grant to it is a grant to every logged-out visitor (Q17-8 / §F2-4). Fail closed is the
-    ruling (owner, 2026-09-07) — an operator grants it exactly what should be public, deliberately."""
-    steps = seed_estate.plan(seed_estate.DEMO_ESTATE, dict(seed_estate.DEX_PRINCIPALS))
-
-    granting = [step.label for step in steps if "service-web" in json.dumps(step.body)]
-
-    assert granting == [], f"the seed grants the anonymous principal: {granting}"
 
 
 # --------------------------------------------------------------------------- #

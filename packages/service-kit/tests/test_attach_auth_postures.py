@@ -143,9 +143,9 @@ async def test_a_pinned_store_reaches_the_lookup(fga_calls: _Recorder, provision
 
 @pytest.mark.asyncio
 async def test_fatal_True_refuses_to_run_without_the_model_its_image_carries(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
-    """The medallion stage runner and the train trigger read a missing client as "authorization off".
-    A fatal caller whose resolve finds no store, or no model its image carries, must crash rather than
-    come up open ([[LH-201]])."""
+    """A caller that reads a missing client as "authorization off" comes up open, so a fatal one (the
+    catalog's cascade backfill) whose resolve finds no store, or no model its image carries, must crash
+    instead ([[LH-201]])."""
 
     async def resolve(api_url: str, **_: object) -> tuple[str, str] | None:
         fga_calls.calls.append("resolve")
@@ -154,13 +154,13 @@ async def test_fatal_True_refuses_to_run_without_the_model_its_image_carries(mon
     monkeypatch.setattr(fga_mod, "resolve", resolve)
 
     with pytest.raises(Exception, match="no model this image carries"):
-        await build_fga_client(_Settings(), service="stage-runner", provision=False, fatal=True)
+        await build_fga_client(_Settings(), service="cascade-backfill", provision=False, fatal=True)
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
 
 
 @pytest.mark.asyncio
 async def test_fatal_True_reraises_a_failed_fga_build(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
-    """`catalog`, `lineage` and the medallion apps crash on boot today. A refactor that turns that
+    """`catalog` and `lineage` crash on boot. A refactor that turns that
     into a logged line converts a CrashLoopBackOff an operator watches into a 503 nobody does."""
 
     async def boom(api_url: str, **_: object) -> tuple[str, str]:

@@ -90,8 +90,8 @@ FACET_MAX_FIELDS = 512
 def schema_facet(producer: str, fields: object) -> dict[str, object]:
     """The standard ``SchemaDatasetFacet`` payload for an output dataset's column schema.
 
-    One builder for every emitter so the ``_schemaURL`` spec version can never drift between the
-    catalog and the medallion compute (both stamp the per-version schema onto the output dataset, #24).
+    The one builder of this facet, so the ``_schemaURL`` spec version the catalog stamps onto an output
+    dataset is written in one place (#24).
     Caps at ``FACET_MAX_FIELDS`` (loudly): the facet stays spec-true (a shorter ``fields`` list is
     still a valid SchemaDatasetFacet), and the full schema remains readable from storage.
     """

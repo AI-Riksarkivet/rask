@@ -2,7 +2,7 @@
 
 A tuple request that names no `authorization_model_id`, or names the store's newest model, is validated against
 whichever image wrote last. LH-201 lets a legacy image's narrower body stay the newest for as long as that image
-boots (the 2026-09-03 compute, controlplane and flows images still provision their own), and against it every
+boots (an image from 2026-09-03 still provisions its own), and against it every
 `estate:rask` request fails on `type 'estate' not found`. So `make fga-estate-migrate` and the e2e grant helpers
 find their store and model by `write_model.carried_model`, the rule `bootstrap-admin` uses: the pinned store,
 else the newest named `lance-catalog`, and in it the model whose body is the code's own `model.json`.

@@ -54,7 +54,7 @@ from test_invariants import _first_party_deployments, _rendered_docs  # noqa: E4
 _TARGET = re.compile(r"^[\w.]+:\w+$")
 
 #: Ambient config that must not leak into the child — the point is the chart's env, not this shell's.
-_SCRUB = ("RASK_", "LANCE_", "LINEAGE_", "MEDALLION_", "OTEL_", "DAPR_")
+_SCRUB = ("RASK_", "LANCE_", "LINEAGE_", "OTEL_", "DAPR_")
 
 _CHILD = """
 import importlib, json, sys
@@ -96,7 +96,7 @@ def _uvicorn_apps() -> list[tuple[str, str, dict]]:
             argv = [*(container.get("command") or []), *(container.get("args") or [])]
             target = next((a for a in argv if _TARGET.match(a)), None)
             if target is None:
-                continue  # not a python app we can import (the web zones are TCP-probed anyway)
+                continue  # not a Python app this can import
             found.append((f"{doc['metadata']['name']}/{container['name']}", target, {"paths": paths, "env": _env_for(docs, container)}))
     return found
 

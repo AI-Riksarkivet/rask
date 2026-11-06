@@ -449,9 +449,9 @@ def _write_blob(
             data_storage_version="2.2",
             # #5a: durable row identity — ``_rowid`` stays constant across compaction (which rewrites
             # fragments and invalidates row ADDRESSES), gating the row-id index + row-version tracking
-            # (``_row_*_at_version``) that field-level/temporal lineage rests on. CREATE-TIME-ONLY (silently
-            # no-ops on an existing dataset), so it's set on every create/overwrite here — matching the
-            # medallion cascade writes (compute.py).
+            # (``_row_*_at_version``) that field-level/temporal lineage rests on. CREATE-TIME-ONLY: an ordinary
+            # write with it on does not migrate an existing dataset (`lance_docs/lance/format/table/row_id_lineage.md`
+            # § Enabling Stable Row IDs), so it is set on every create and overwrite here.
             enable_stable_row_ids=True,
             initial_bases=initial_bases,
             target_bases=target_bases,

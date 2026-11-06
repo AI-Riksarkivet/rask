@@ -45,7 +45,7 @@ def _settings() -> _Settings:
 
 SettingsDep = Annotated[_Settings, Depends(_settings)]
 
-# MODULE level, mirroring how `viewer/api/security.py` publishes its deps — and the first cut of this
+# MODULE level, mirroring how a service's security module publishes its deps — and the first cut of this
 # file got it wrong in the same way the bug under test does. With `deps` local to the app factory,
 # this module's own `from __future__ import annotations` made `Depends(deps.current_subject)`
 # unresolvable and the route 422'd on `query.subject`. The test reproduced the defect it was written

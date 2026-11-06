@@ -52,8 +52,8 @@ def test_a_retired_name_in_the_environment_is_a_startup_error(monkeypatch: pytes
 #
 # "DELETED" HAS TO MEAN DELETED ON EVERY SOURCE THE CLASS READS, not just the process environment.
 # The refusal guard originally scanned `os.environ` alone, justified by "every deployment path in this
-# estate sets real env vars" — but FOUR settings classes declare `env_file=".env"` (`ingest.auth`,
-# `controlplane`, `gateway`, `flows`), and `ingest.auth` pairs it with `env_prefix="LANCE_"`. So a
+# estate sets real env vars" — but FOUR settings classes declare `env_file=".env"`, and one of them
+# pairs it with `env_prefix="LANCE_"`, which reads the dotenv's prefixed names as its own. So a
 # retired name in a dotenv BOUND, silently, while the guard that exists to stop exactly that stayed
 # quiet — and three shipped docstrings claimed "a retired name must bind nothing, anywhere".
 

@@ -259,9 +259,9 @@ _OptionalSubject = Annotated[str, Depends(_auth_deps.optional_subject)]
 def _governed_app() -> FastAPI:
     """An app wired the way every consumer of `make_auth_deps` actually wires one: BOTH installers.
 
-    Verified rather than assumed — `annotator/main.py:186,196` calls `register_handlers` then
-    `install_problem_handlers`, and `make_service_app` (notifications, controlplane) installs the same
-    pair. Building this with only one of them would prove a defect in a configuration nothing ships.
+    Verified rather than assumed — `lakehouse_kit.lance_app` calls `register_handlers` then
+    `install_problem_handlers`, and `make_service_app` installs the same pair. Building this with only
+    one of them would prove a defect in a configuration nothing ships.
     """
     app = FastAPI()
     register_handlers(app)

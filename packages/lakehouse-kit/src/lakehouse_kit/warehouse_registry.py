@@ -121,9 +121,8 @@ class AmbiguousProjectWarehouseError(UnresolvableProjectError):
 
     A SUBCLASS, deliberately: an ambiguous project is an unresolvable one — the resolver does not know
     the answer — so every path already written to fail closed on :class:`UnresolvableProjectError`
-    covers this the day it is added, rather than depending on someone finding all of them. The live
-    handler (`medallion/services/transform.py`) catches it unchanged, and a caller that wants to tell the
-    two apart still can.
+    covers this the day it is added, rather than depending on someone finding all of them, and a caller
+    that wants to tell the two apart still can.
 
     The refusal NAMES the candidates and the fix (``"primary": true`` on exactly one record, or
     deactivate the rest): an operator who is told only "ambiguous" has to go and read the registry to

@@ -2,7 +2,7 @@
 
 [[LH-162]]. `require_dapr_token` compares the sidecar's `dapr-api-token` header against the app's own
 app-API token. `dapr.io/app-token-secret` gives the SIDECAR that token; nothing in the chart guaranteed
-the APP was told it too. `rask-annotator` was the case: it guards `/api/jobs/apply` and the whole
+the APP was told it too. A client's Deployment was the case: it guards a job door and the whole
 `DaprActor` callback surface, its sidecar stamped a valid header, and the container had no token to
 compare against — so every guarded route admitted every caller. Measured on the running pod
 2026-09-15, `GET /dapr/config` answered 200 with no token presented.
@@ -39,7 +39,7 @@ _TOKEN_SOURCES = ("APP_API_TOKEN", "RASK_APP_TOKEN_FROM_STORE", "RASK_ALLOW_UNAU
 def _deployed_apps() -> list[tuple[str, str, set[str]]]:
     """Every sidecar-bearing Deployment as (app-id, python package, env var names).
 
-    The package comes from the uvicorn target (`annotator.main:app` -> `annotator`), which is the same
+    The package comes from the uvicorn target (`catalog.main:app` -> `catalog`), which is the same
     string the image actually runs — so this cannot drift from what is deployed the way a mapping
     table would.
     """

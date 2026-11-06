@@ -6,10 +6,10 @@ in the SAME pod, so no instance or resource attribute separates them. An operato
 `lance_lineage_outcome="refused"` learned that provenance was lost and nothing about where to look,
 and the three doors fail for different reasons and are fixed in different places: the subscriber's
 refusals are a tuple the bus producer lacks, the HTTP door's are a tuple a SIDECAR-LESS producer lacks
-(the Ray lane, every runner, any external OpenLineage producer), and a dead-letter park is the
-resiliency schedule having given up.
+(a user's pipeline job on its own compute, any external OpenLineage producer), and a dead-letter park
+is the resiliency schedule having given up.
 
-MEASURED 2026-09-21, which is why this is a gate rather than a nicety. A refused dummy-lane ingest was
+MEASURED 2026-09-21, which is why this is a gate rather than a nicety. A refused ingest was
 recorded correctly by the HTTP door and could not be found: `unrepairable` stood at 15,398 and rose by
 3,656 in 47 seconds from the subscriber re-presenting one unauthored run, so a single real loss on
 another door was arithmetically invisible. The fix was observable in a unit test and not in the
