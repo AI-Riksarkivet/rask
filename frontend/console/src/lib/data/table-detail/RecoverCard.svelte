@@ -3,12 +3,11 @@
 	// `recoverable` is the catalog's own trash record: if one exists the bytes are still there and
 	// the deadline is real.
 	//
-	// THE PROBE IS ITS OWN STATE, not an absent record (#147). This card used to render the plain
-	// not-registered copy in every non-record case — including WHILE the lookup was
-	// in flight and FOREVER after it failed — so a reader with a perfectly recoverable table was told
-	// their data was gone, and a catalog outage said the same thing. The catalog answers 200 with an
-	// EMPTY LIST when there is genuinely no trash record (`tables.py`), so `!res.ok` is never the
-	// normal path; it is strictly an anomaly, and it now reads as one.
+	// THE PROBE IS ITS OWN STATE, not an absent record (#147): while the lookup is in flight, or after
+	// it failed, the card must not say the data is gone. The catalog's trash door
+	// (`GET /management/v1/table/{id}/tasks`) answers 404 when there is no trash record the caller
+	// may see, a definite answer that discloses nothing, and the not-registered copy renders for it.
+	// An unreachable catalog (status 0), a 5xx or any other refusal is a read failure and reads as one.
 	//
 	// Split out of TableDetail.svelte (#98). The parent renders it under the 404 branch and passes
 	// `onrecovered` — the undrop bumps the registry, so the parent re-reads the detail.
@@ -38,6 +37,9 @@
 			(res) => {
 				if (res.ok) {
 					recoverable = res.data[0] ?? null;
+					probe = 'done';
+				} else if (res.status === 404) {
+					recoverable = null;
 					probe = 'done';
 				} else {
 					probeError = res.detail;

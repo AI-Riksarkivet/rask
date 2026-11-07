@@ -139,6 +139,23 @@ Bun.serve({
 		}
 
 		// ── the registry defaults (a spec that cares seeds its own; this keeps an unseeded read sane) ──
+		// The trash door answers a name with no trash record the caller may see as the catalog does: a
+		// 404 problem body, which discloses nothing about whether the name ever existed. A spec that
+		// means a recoverable drop seeds the record.
+		const tasks = /^\/management\/v1\/table\/([^/]+)\/tasks$/.exec(url.pathname);
+		if (tasks && req.method === 'GET') {
+			const id = decodeURIComponent(tasks[1] ?? '');
+			return json(
+				{
+					type: 'https://lance.org/problems/tablenotfounderror',
+					title: 'TableNotFoundError',
+					status: 404,
+					code: 4,
+					detail: `table '${id}' not found`,
+				},
+				404,
+			);
+		}
 		if (url.pathname === '/v1/table') return json({ tables: ['db1$t'] });
 		// #86 the estate-wide bindings read the namespaces page loads alongside the table list. An
 		// unserved endpoint would leave the page in its bindings-unavailable state, which is a different

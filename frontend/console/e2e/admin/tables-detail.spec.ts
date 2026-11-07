@@ -687,10 +687,15 @@ const TRASH_ENTRY = {
 	expires_at: '2026-08-08T09:15:00Z',
 };
 
-/** A dropped table: `describe` 404s (it is deregistered) but a trash record still exists. */
-const droppedRoutes = (entry: unknown = TRASH_ENTRY): Record<string, unknown> => ({
+/** `describe` 404s for a dropped (deregistered) table. */
+const notRegistered: Record<string, unknown> = {
 	[`POST /v1/table/${GONE}/describe`]: { status: 404, body: { detail: 'Table not found' } },
-	[`GET /management/v1/table/${GONE}/tasks`]: entry === null ? [] : [entry],
+};
+
+/** A dropped table whose trash record still exists. */
+const droppedRoutes = (): Record<string, unknown> => ({
+	...notRegistered,
+	[`GET /management/v1/table/${GONE}/tasks`]: [TRASH_ENTRY],
 });
 
 test('a dropped-but-recoverable table offers undrop, with the real deadline (#75)', async ({
@@ -717,12 +722,11 @@ test('a dropped-but-recoverable table offers undrop, with the real deadline (#75
 test('an unreadable trash record is NAMED, never rendered as "your data is gone" (#147)', async ({
 	page,
 }) => {
-	// The branch that had no coverage at all, and the reason this card was wrong: a FAILED read used
-	// to render the same not-registered copy as a genuine absence. The catalog
-	// answers 200 with an empty list when there really is no record, so a non-2xx here is strictly an
-	// anomaly — and an anomaly must not be reported to the owner of a recoverable table as a verdict.
+	// A FAILED read is not an absence. The catalog answers 404 when there is no trash record the
+	// caller may see, so any other refusal, a 5xx or an unreachable catalog is an anomaly, and an
+	// anomaly must not be reported to the owner of a recoverable table as a verdict.
 	await seed(page, {
-		[`POST /v1/table/${GONE}/describe`]: { status: 404, body: { detail: 'Table not found' } },
+		...notRegistered,
 		[`GET /management/v1/table/${GONE}/tasks`]: {
 			status: 500,
 			body: { detail: 'trash store unreachable' },
@@ -776,14 +780,18 @@ test('a REFUSED undrop shows the catalog reason verbatim and keeps the panel (#7
 	await expect(page.locator('.recover')).toBeVisible();
 });
 
-test('a table dropped DESTRUCTIVELY offers no recovery it cannot deliver (#75)', async ({
+test('a table with no trash record offers no recovery it cannot deliver (#75)', async ({
 	page,
 }) => {
-	await seed(page, droppedRoutes(null)); // no trash record: the bytes are gone
+	// No trash record is seeded, so the mock answers the trash door as the catalog does: 404 with its
+	// problem body. That is a definite answer (never dropped, dropped destructively, or not the
+	// caller's to see), not a read failure.
+	await seed(page, notRegistered);
 	await page.goto(`/catalog/tables/${GONE}`);
 
 	await expect(page.locator('.recover')).toHaveCount(0);
 	await expect(page.getByText('The catalog registers no table by this name')).toBeVisible();
+	await expect(page.getByText('Could not read this table')).toHaveCount(0);
 });
 
 // NOT TESTED HERE, deliberately: "a live table never probes /tasks". The recovery probe is gated
