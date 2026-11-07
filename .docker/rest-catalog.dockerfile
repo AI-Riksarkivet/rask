@@ -62,8 +62,14 @@ LABEL org.opencontainers.image.title="lance-rest-catalog" \
 
 # tini for correct PID 1 signal handling / zombie reaping. No `|| true` here — a failed apt/useradd
 # MUST fail the build (else the image ships without tini and every container fails to start).
+# DEBIAN'S SECURITY FIXES ARE TAKEN HERE, not left to the next base bump ([[XC-184]]): Debian publishes a fix on
+# trixie-security the day it ships, and the official Python image takes it only when it is rebuilt, so the pinned digest
+# is the starting point and `apt-get upgrade` brings it current. Measured 2026-11-07: the pinned base and the newest
+# python:3.13-slim-trixie both carried zlib1g 1:1.3.dfsg+really1.3.1-1+b1, two HIGH CVEs fixed in trixie-security's
+# +deb13u1, which was the base's only pending upgrade. The nightly scan (.dagger/scan.go) gates what this stage ships.
 # hadolint ignore=DL3008  # Reason: tini has no stable version pin in apt on slim; pinning would break on next base image update.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends tini \
     && rm -rf /var/lib/apt/lists/* \
     && useradd -r -u 10001 --no-create-home --shell /usr/sbin/nologin app
