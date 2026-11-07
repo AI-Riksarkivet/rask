@@ -17,7 +17,7 @@ THE TWO ANSWERS ARE NOT INTERCHANGEABLE, which is why this is a dependency and n
   wrong, which is a lie about a pod that is merely leaving.
 * A sidecar-delivered route gets RETRY, never DROP. DROP is final and there is no DLQ on these
   topics, so dropping a trigger because this replica happened to be draining silently cancels a
-  cascade — the exact class of failure the medallion's own comments call out. RETRY hands it back to
+  cascade. RETRY hands it back to
   the broker, which redelivers to a replica that is still alive.
 
 A route that picks the wrong one is worse than no gate at all: it converts a survivable restart into

@@ -4,18 +4,16 @@
  * silently ADOPTS whatever is already listening, and a suite would drive a real server as its "mock".
  *
  * Three origins of the one build, one per family of specs: auth-OFF (a config of `{"signIn": false}`),
- * auth-ON for the estate pages (projects, settings, notifications) and auth-ON for the lakehouse's
+ * auth-ON for the estate pages (projects, settings, the activity log) and auth-ON for the lakehouse's
  * pages (`admin/`), each with the mock upstreams its specs seed (`admin/ports.ts` has the latter's).
  */
 
 /** The auth-OFF preview: the anonymous landing and the lakehouse's auth-off pages. */
 export const AUTH_OFF_PORT = 5293;
-/** The auth-ON preview for the estate pages (`projects/`, `settings/`, `notifications/`). */
+/** The auth-ON preview for the estate pages (`projects/`, `settings/`, `activity/`). */
 export const AUTH_ON_PORT = 5288;
 /** The mock CATALOG behind the estate pages' `/api/catalog`, seeded per bearer. */
 export const MOCK_CATALOG_PORT = 5287;
-/** The mock NOTIFICATIONS service behind `/api/notifications`. */
-export const MOCK_NOTIFICATIONS_PORT = 5285;
 /** The mock LINEAGE service behind `/api/lineage` (the live cursor, the DLQ). */
 export const MOCK_LINEAGE_PORT = 5291;
 /** The mock OIDC issuer, served same-origin under `/oidc` by every auth-ON preview. */

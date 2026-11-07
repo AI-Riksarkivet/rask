@@ -49,10 +49,8 @@ skill + #115 review): **Dapr Workflow stays un-adopted** — every multi-step pa
 redeliver-the-whole-message model suffices; a workflow engine would add a sidecar state store
 dependency for crash-recovery semantics we already get from idempotency keys.
 
-> **What the estate DOES use that this section predates: actors.** The notifications inbox registers `InboxActor`,
-> one per person, on its own state store in the console's release. That makes Dapr **placement** load-bearing (one
-> activation per person serialises that person's inbox). Actors were never covered by the workflow ruling and are not
-> affected by it.
+> **Actors.** No service in the estate registers a Dapr actor, so placement holds nothing load-bearing; the one
+> actor host, the notifications inbox, is retired ([ADR 0193](adr/0193-the-inbox-is-retired-and-the-console-joins-the-product.md)).
 >
 > **When to reopen this.** If a multi-step path appears whose steps cannot be made idempotent by any
 > caller-chosen key — the honest signal is finding yourself wanting to *generate* an id mid-saga —
@@ -175,7 +173,7 @@ names every secret it needs. The server's own config and route credential are th
 
 **The dev OpenBao mints the fixture bus's trust root.** It writes `nats-server` and `nats-route`, which the fixture's
 ExternalSecrets read into the server's config through rask's SecretStore. Its seed carries `nats-root` (operator and
-account keys) and `nats-route` from the outgoing pod over a surge rollout, re-issues every user under that root, and writes the users before its readiness
+account keys) and `nats-route` from the outgoing pod over a surge rollout, keeps every declared user's key and credential under that root while its grants match (issuing a changed grant under the same key and revoking the old credential, and a new pair for a user whose stored seed is unreadable), revokes every user rask stops declaring, and writes the users before its readiness
 key. A replacement with no outgoing pod mints a new root: a server in operator mode then refuses every client until the
 NATS pods restart onto the new `nats-server`, and that restart starts an empty JetStream. Restart the NATS pods, rerun
 the stream Job and restart every credentialed client after any non-surge OpenBao replacement.

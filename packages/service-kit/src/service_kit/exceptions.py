@@ -3,8 +3,8 @@
 Routes raise these; never ``HTTPException`` directly. Each subclass maps to a status
 code via the registered handler — one place to change the response shape.
 
-This is the estate's ONE copy: one ``_problem`` builder and one pair of handler bodies, bound into
-``make_service_app`` and shared by every caller that raises a domain error, so two copies cannot drift.
+This is the estate's ONE copy: one ``_problem`` builder and one handler, bound by ``register_handlers`` into every
+lakehouse app (``lakehouse_kit.lance_app``), so two copies cannot drift.
 
 ``DomainError`` subclasses :class:`fastapi.HTTPException` because it is load-bearing: importing the exception class does NOT pull in the FastAPI
 app/router/DI machinery, so non-web service/client modules import these freely, and a
@@ -31,7 +31,6 @@ from http import HTTPStatus
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 
@@ -135,10 +134,11 @@ def _problem(exc: DomainError) -> dict[str, Any]:
 
 
 def register_handlers(app: FastAPI) -> None:
-    """Map every :class:`DomainError` and ``RequestValidationError`` to problem+json.
+    """Map every :class:`DomainError` to problem+json.
 
-    Server-class errors (>=500) are logged with the traceback; client-class are not
-    (they're expected).
+    Server-class errors (>=500) are logged with the traceback; client-class are not (they're expected). Request
+    validation and the catch-all belong to :func:`service_kit.ns_errors.install_problem_handlers`, which every
+    lakehouse app installs after this.
     """
 
     @app.exception_handler(DomainError)
@@ -155,48 +155,4 @@ def register_handlers(app: FastAPI) -> None:
             content=_problem(exc),
             media_type=PROBLEM_JSON,
             headers=exc.headers,
-        )
-
-    @app.exception_handler(RequestValidationError)
-    async def _validation(_: Request, exc: RequestValidationError) -> JSONResponse:
-        return JSONResponse(
-            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
-            media_type=PROBLEM_JSON,
-            content={
-                "type": "about:blank#validation",
-                "title": "Validation Error",
-                "status": HTTPStatus.UNPROCESSABLE_ENTITY,
-                "errors": [
-                    {
-                        "field": ".".join(str(p) for p in e["loc"]),
-                        "message": e["msg"],
-                        "type": e["type"],
-                    }
-                    for e in exc.errors()
-                ],
-            },
-        )
-
-    @app.exception_handler(Exception)
-    async def _unexpected(request: Request, exc: Exception) -> JSONResponse:
-        """The CATCH-ALL. Without it anything that is not a `DomainError` fell through to starlette's
-        default — a `text/plain` 500 reading "Internal Server Error" — which is a third error envelope
-        on services whose every other answer is RFC 9457, and one no client parsing problem+json can
-        read.
-
-        A FIXED body, never the exception. The reference is explicit that internals reach logs only:
-        the traceback goes to `log.exception` (inside the active OTel span), and the caller gets a
-        stable title and detail. Leaking `str(exc)` here would put native/Arrow/S3 error text and
-        filesystem paths on the wire for any unhandled fault.
-        """
-        log.exception("unhandled error", extra={"method": request.method, "path": request.url.path})
-        return JSONResponse(
-            status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
-            media_type=PROBLEM_JSON,
-            content={
-                "type": "about:blank#internalerror",
-                "title": "Internal Server Error",
-                "status": HTTPStatus.INTERNAL_SERVER_ERROR,
-                "detail": "Internal Server Error",
-            },
         )

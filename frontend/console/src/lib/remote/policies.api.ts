@@ -59,6 +59,7 @@ export const fetchProjectPolicies = query(
  *
  *  Single-flight: the listing this write changes is refreshed in the same flight. */
 export const setProjectPolicy = command(
+	({ project }) => `Set the maintenance policy of project ${project}`,
 	v.object({ project: v.string(), policy: PolicyDraftSchema }),
 	async ({ project, policy }): Promise<ApiResult<ProjectPolicy>> => {
 		const result = parsed(
@@ -77,6 +78,7 @@ export const setProjectPolicy = command(
  *  defaults. Table and namespace records are untouched: they shadow this one, so removing it changes
  *  nothing for any dataset one of them already governs. Same single-flight refresh. */
 export const deleteProjectPolicy = command(
+	(project) => `Remove the maintenance policy of project ${project}`,
 	v.string(),
 	async (project): Promise<ApiResult<ProjectPolicyDelete>> => {
 		const result = parsed(

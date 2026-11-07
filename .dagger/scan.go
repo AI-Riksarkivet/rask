@@ -13,13 +13,12 @@
 // ── Why two tools and not one ───────────────────────────────────────────────────────────────────
 // OSV-Scanner reads `uv.lock` and `bun.lock` natively, which is the whole ballgame here. The recursion
 // is deliberately NOT narrowed to the workspace roots: a lockfile anywhere in the tree is scanned, so one added
-// later is covered with no edit here. The lockfiles today are `uv.lock` (the lakehouse and the inbox),
-// `frontend/bun.lock` (the console and its packages), `tests/e2e/bun.lock` (the inbox's browser verify scripts) and the
-// Dagger module's own `.dagger/go.mod`.
+// later is covered with no edit here. The lockfiles today are `uv.lock` (the lakehouse), `frontend/bun.lock` (the
+// console and its packages) and the Dagger module's own `.dagger/go.mod`.
 //
 // Trivy is NOT here for a second opinion on those packages. It covers the two layers OSV does not reach
 // at all: the OS packages baked into the trixie/bun BASE images (Debian CVEs never appear in a lockfile),
-// and misconfiguration + secret detection across the 8 dockerfiles and the Helm chart.
+// and misconfiguration + secret detection across the dockerfiles and the Helm chart.
 //
 // ── Why the image scan is not a per-PR gate ─────────────────────────────────────────────────────
 // It cannot be cheap: scanning an image means BUILDING it (a web image measured ~90 s).
@@ -298,8 +297,7 @@ func (m *Rask) scanContainer(
 
 // ScanImage builds a deployable from .docker/<name>.dockerfile and scans that exact image.
 //
-// `name` is the dockerfile stem, identical to `dagger call image --name=…`: rest-catalog, notifications,
-// frontend, …
+// `name` is the dockerfile stem, identical to `dagger call image --name=…`: rest-catalog, frontend, …
 func (m *Rask) ScanImage(
 	ctx context.Context,
 	// +defaultPath="/"

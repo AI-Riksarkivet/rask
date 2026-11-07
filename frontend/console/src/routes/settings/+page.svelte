@@ -22,8 +22,7 @@
 	//     different question at a different level.
 	//
 	//   · NEW-PROJECT DEFAULTS and CREDENTIALS are named but NOT built, and say which
-	//     missing thing blocks each. (NOTIFICATIONS left this page entirely: it is per-SUBJECT, so it
-	//     lives at `/preferences/notifications`, outside this route's estate-admin door.) They are deliberately not controls at all — no toggle, no field,
+	//     missing thing blocks each. They are deliberately not controls at all — no toggle, no field,
 	//     nothing to click — because a settings form that silently discards what you type is worse
 	//     than one that admits it does not exist yet.
 	let { data }: { data: PageData } = $props();

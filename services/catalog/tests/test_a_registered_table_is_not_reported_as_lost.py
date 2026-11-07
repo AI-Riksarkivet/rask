@@ -8,13 +8,12 @@ event, so both carry the relative form.
 
 WHAT THAT COSTS IS A PERMANENT FALSE ALARM. The reconcile sweep opens that `source_uri`; a relative path
 opens as nothing, and `read_storage_version` answers `None`, which classifies MISSING_ON_STORAGE and is
-reported as storage loss — measured by calling it: both `'medallion/bronze'` and `'t.lance'` answer
+reported as storage loss — measured by calling it: both `'pipeline/bronze'` and `'t.lance'` answer
 `None`. So a table that registered successfully and holds data is reported as destroyed on every tick,
 forever, and no re-run clears it because the graph keeps the URI it was given.
 
-IT IS ALSO WHAT THE PUBLISH EVENT CARRIES. `medallion.services.catalog_register` logs
-`location: medallion/bronze` on the live estate — the relative form — and that value rides
-`extra["location"]` to consumers that resolve an upstream by it.
+IT IS ALSO WHAT THE PUBLISH EVENT CARRIES. A writer that registers `pipeline/bronze` gets the relative
+form back, and that value rides `extra["location"]` to consumers that resolve an upstream by it.
 
 ONLY THIS DOOR, checked rather than assumed. `tables.py` emits a `source_uri` at exactly two sites, and
 the sibling is fine: `declare_table` MINTS the location instead of echoing one, so the backend composes

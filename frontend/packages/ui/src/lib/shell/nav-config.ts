@@ -1,31 +1,32 @@
 import { Database, FolderKanban, House, Settings } from '@lucide/svelte';
-import type { InboxNotificationLike } from './inbox.js';
 
 /** All lucide icons share one component signature, so any icon's type fits. */
 export type IconComponent = typeof Database;
 
-/** What the app hands the shell to light up the navbar's notification bell.
- *
- *  One optional object rather than threaded props, so an app opts in with a single `notifications=`
- *  and one that has not wired the feed renders no bell at all (rather than an empty one that looks
- *  broken). The shell never fetches it: the rows are the app's own inbox read, and the read state
- *  comes back through the callbacks so the app — which owns a per-subject store — can persist it. Ids
- *  in `seen`/`dismissed` are NOTIFICATION ids. */
-export type NotificationFeed = {
-	/** The INBOX plane: rows addressed to this subject, durable per subject. `undefined` means this
-	 *  stack has no inbox — a different statement from an empty inbox, and the bell renders it
-	 *  differently. */
-	inbox?: InboxNotificationLike[];
-	/** The server's unread count for the WHOLE inbox, not the page above. */
-	inboxUnread?: number;
-	seen?: string[];
-	dismissed?: string[];
-	onseen?: (seen: string[]) => void;
-	ondismiss?: (notificationId: string, dismissed: string[]) => void;
+/** One entry of the reader's activity log, as the bell renders it: a write the app sent and its
+ *  outcome. Declared structurally, so the app's own store satisfies it without importing from here.
+ *  A failure's `status` is the HTTP status the door answered (0: unreachable), or `null` when the
+ *  write failed before any answer. */
+export type ActivityEntryLike = { id: string; label: string; at: number } & (
+	| { ok: true }
+	| { ok: false; status: number | null; detail: string }
+);
+
+/** What the app hands the shell to light up the navbar's bell: the reader's own activity, newest
+ *  first, which the app keeps. The shell never stores it; opening the panel and clearing the log come
+ *  back through the callbacks. */
+export type ActivityFeed = {
+	entries: readonly ActivityEntryLike[];
+	/** Entries recorded since the panel was last opened. */
+	unread: number;
+	/** The panel opened: the app marks every entry seen. */
+	onopen?: () => void;
+	/** The reader asked to clear the log. */
+	onclear?: () => void;
 };
 
 /** A leaf route in the sidebar. */
-export type ZoneNavLeaf = {
+export type PageNavLeaf = {
 	title: string;
 	/** ABSOLUTE, domain-relative href (e.g. /catalog/tables). */
 	href: string;
@@ -33,9 +34,9 @@ export type ZoneNavLeaf = {
 	match: (p: string) => boolean;
 	icon?: IconComponent;
 	/** Sub-routes, rendered as a `Sidebar.MenuSub` under this leaf and auto-expanded while any of
-	 *  them (or the parent) is active. One level only — a third tier is a sign the ZONE should have
+	 *  them (or the parent) is active. One level only — a third tier is a sign the PAGE should have
 	 *  been split, not the menu. */
-	children?: ZoneNavLeaf[];
+	children?: PageNavLeaf[];
 	/** WHY this area cannot be opened for the thing currently in view — a short phrase, or absent
 	 *  when it can.
 	 *
@@ -58,10 +59,10 @@ export type ZoneNavLeaf = {
 };
 
 /** One labelled section of the sidebar — a `Sidebar.Group` with its own `GroupLabel`. */
-export type ZoneNavGroup = {
+export type PageNavGroup = {
 	/** The section heading (e.g. "Catalog", "Governance"). */
 	label: string;
-	items: ZoneNavLeaf[];
+	items: PageNavLeaf[];
 	/** Collapsible via the label (default true). Set false to pin a section open. */
 	collapsible?: boolean;
 	/** Start collapsed. Ignored while the group contains the active route — a section that hides
@@ -71,30 +72,30 @@ export type ZoneNavGroup = {
 
 /** The ROOT row — rendered above every group, with no group label of its own: the landing that
  *  SUMMARISES the sections below it rather than a member of one. */
-export type ZoneNavRoot = ZoneNavLeaf;
+export type PageNavRoot = PageNavLeaf;
 
 /** The sidebar config the app passes to the shared AppShell, GROUPED into labelled sections so the
  *  whole surface is visible at once. */
-export type ZoneNav = {
+export type PageNav = {
 	/** The display name — shown as the sidebar's own heading. */
 	title: string;
-	/** The landing row, above and outside every group. See {@link ZoneNavRoot}. */
-	root?: ZoneNavRoot;
-	groups: ZoneNavGroup[];
+	/** The landing row, above and outside every group. See {@link PageNavRoot}. */
+	root?: PageNavRoot;
+	groups: PageNavGroup[];
 	/** PINNED TO THE BOTTOM, in `Sidebar.Footer` — it does not scroll with `groups`.
 	 *
 	 *  For a surface that is not one of the AREAS but a place you go to work across them: the
-	 *  dock is the case this exists for. Rendered by the same `ZoneNav` component as the rail (the
+	 *  dock is the case this exists for. Rendered by the same `PageNav` component as the rail (the
 	 *  sidebar hands it a synthetic one-group nav), so a footer leaf keeps active-state matching and
-	 *  its tooltip, and `zoneNavLeaves` walks it. */
-	footer?: ZoneNavGroup;
+	 *  its tooltip, and `pageNavLeaves` walks it. */
+	footer?: PageNavGroup;
 };
 
 /** Every leaf in a nav, flattened depth-first (parents before their children). The shell uses it to
  *  decide whether a rail is worth rendering. */
-export function zoneNavLeaves(nav: ZoneNav | null | undefined): ZoneNavLeaf[] {
+export function pageNavLeaves(nav: PageNav | null | undefined): PageNavLeaf[] {
 	if (!nav) return [];
-	const out: ZoneNavLeaf[] = [];
+	const out: PageNavLeaf[] = [];
 	if (nav.root) {
 		out.push(nav.root);
 		if (nav.root.children) out.push(...nav.root.children);
@@ -156,7 +157,7 @@ export type TopNavEntry = {
 	title: string;
 	href: string;
 	match: (p: string) => boolean;
-	/** The entry's mark in the bar (lucide) — same signature seam as `ZoneNavLeaf.icon`. */
+	/** The entry's mark in the bar (lucide) — same signature seam as `PageNavLeaf.icon`. */
 	icon?: IconComponent;
 	/** The entry's sub-areas. Present → the navbar renders a NavigationMenu trigger opening a panel of
 	 *  these; absent → a plain link. */
@@ -167,7 +168,7 @@ export type TopNavEntry = {
 	tier?: 'primary' | 'secondary';
 	/** WHY this entry cannot be opened by the current identity — a short phrase, or absent when it can.
 	 *
-	 *  The `ZoneNavLeaf.unavailable` contract, one level up (#143). An entry carrying it renders as a
+	 *  The `PageNavLeaf.unavailable` contract, one level up (#143). An entry carrying it renders as a
 	 *  disabled, non-navigating row with the reason in its tooltip, rather than being dropped from the
 	 *  bar: a bar that silently loses Settings tells a non-admin the estate has no settings, when the
 	 *  true statement is that THEY cannot open them — and only the second tells them what to ask for. */

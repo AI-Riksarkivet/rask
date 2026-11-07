@@ -16,6 +16,7 @@ import {
 	requestBytes as requestBytesRaw,
 	requestJSON as request,
 } from '#lib/http.ts';
+import { command } from '#lib/reads.svelte.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 
 export type TableDescribe = components['schemas']['DescribeTableResponse'];
@@ -124,6 +125,13 @@ export const fetchTableHistory = async (
 	return res.ok ? { ok: true, data: parse(TableHistorySchema, res.data) } : res;
 };
 
+/** A write of Arrow-IPC rows (built in the browser via apache-arrow) into one table. The bytes are
+ *  not a schema-validated value, so the two row writes are declared `unchecked`. */
+interface RowsWrite {
+	table: string;
+	arrow: Uint8Array;
+}
+
 /** The FIRST write of a table — create it FROM Arrow-IPC rows (built in the browser via apache-arrow).
  *
  * This is the door {@link insertRows} cannot be. An insert opens the table's dataset to coerce the
@@ -135,14 +143,22 @@ export const fetchTableHistory = async (
  *
  * Gated `can_create_table` on the parent namespace at the catalog.
  */
-export const createTableWithRows = (table: string, arrow: Uint8Array) =>
-	requestBytes(`v1/table/${enc(table)}/create`, arrow as BodyInit);
+export const createTableWithRows = command(
+	({ table }: RowsWrite) => `Create table ${table} with rows`,
+	'unchecked',
+	async ({ table, arrow }: RowsWrite) =>
+		requestBytes(`v1/table/${enc(table)}/create`, arrow as BodyInit),
+);
 
 /** #64 data-plane row insert — append Arrow-IPC rows (built in the browser via apache-arrow). Writer-gated
  * (can_write_data) at the catalog. `mode=append` never rewrites existing versions.
  * Requires a table that already HOLDS data — see {@link createTableWithRows} for the first write. */
-export const insertRows = (table: string, arrow: Uint8Array) =>
-	requestBytes(`v1/table/${enc(table)}/insert?mode=append`, arrow as BodyInit);
+export const insertRows = command(
+	({ table }: RowsWrite) => `Insert rows into table ${table}`,
+	'unchecked',
+	async ({ table, arrow }: RowsWrite) =>
+		requestBytes(`v1/table/${enc(table)}/insert?mode=append`, arrow as BodyInit),
+);
 
 // Schema evolution (#74: add / rename / drop / re-type a column, the field- and table-level property
 // writes) and index build/drop (#73) live in `remote/catalog.api.ts`, one function per operation.

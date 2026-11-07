@@ -21,9 +21,9 @@ carries the tag the chart was rendered with. Hence `--tag`, which the caller pas
 gave `image.tag`.
 
 Emits `<image> <stem>` so the caller needs to know neither rule: the stem is what
-`scripts/dagger-image.sh --name` takes, and `lance-rest-catalog` -> `rest-catalog` is the only place a
-name the product chart renders and its `.docker/<stem>.dockerfile` differ. The console's `web-console`
-(built from `frontend`) differs too, but the console's release renders it and this script never reads that render.
+`scripts/dagger-image.sh --name` takes, and the two names the product chart renders that differ from
+their `.docker/<stem>.dockerfile` are `lance-rest-catalog` (`rest-catalog`) and the console's `web-console`
+(`frontend`).
 
 Usage:  helm template ... | uv run python scripts/side_loaded_images.py --tag dev
 Pinned by `tests/unit/test_a_stack_builds_every_image_it_side_loads.py`, which imports the two
@@ -43,13 +43,14 @@ import yaml
 #: A side-loaded reference: a bare name, no registry path and no digest.
 _BARE = re.compile(r"^[a-z0-9][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
 
-#: The prefix a rendered image name carries that its dockerfile stem does not.
-_STEM_PREFIX = "lance-"
+#: The rendered image names whose dockerfile stem is another name.
+_STEMS = {"lance-rest-catalog": "rest-catalog", "web-console": "frontend"}
 
 
 def dockerfile_stem(image: str) -> str:
     """The `.docker/<stem>.dockerfile` that builds this rendered image name."""
-    return image.split(":")[0].removeprefix(_STEM_PREFIX)
+    name = image.split(":")[0]
+    return _STEMS.get(name, name)
 
 
 def _images(node: object) -> Iterator[str]:

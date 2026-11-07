@@ -197,7 +197,7 @@ def test_admins_degrade_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_admins_degrade_on_a_slow_fga(monkeypatch: pytest.MonkeyPatch) -> None:
     # A BROWNOUT (slow, not down): a lookup that outlives the per-call budget must degrade to [] on
-    # expiry — never ride the wrapper's retry ladder toward the BFF's 8s request deadline.
+    # expiry — never ride the wrapper's retry ladder toward the caller's request deadline.
     _an_estate_observer(monkeypatch)
     _patch_records(monkeypatch, _RECORDS)
     monkeypatch.setattr(ep, "_ADMINS_TIMEOUT_SECONDS", 0.05)

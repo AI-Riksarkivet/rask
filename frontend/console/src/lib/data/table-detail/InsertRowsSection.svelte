@@ -36,7 +36,7 @@
 			// Browser-side Arrow-IPC encode (apache-arrow) → the catalog's Arrow-body insert. The inferred
 			// schema must match the table's — a mismatch is the catalog's honest error, surfaced below.
 			const arrow = tableToIPC(tableFromJSON(rows), 'stream');
-			const res = await insertRows(table, arrow);
+			const res = await insertRows({ table, arrow });
 			if (res.ok) {
 				insertMsg = {
 					ok: true,

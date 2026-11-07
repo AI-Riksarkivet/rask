@@ -4,8 +4,8 @@ Run as `python /tmp/import-gate.py <pkg> [<pkg> ...] [--absent <module> ...]` fr
 the runtime stage actually ships. A non-zero exit fails the build.
 
 `--absent` names what the image must NOT ship: each module after it fails the build when the venv can import it. The
-lakehouse image names the notifications inbox and lancedb, so a dependency that drags a client or a client's library
-into the lakehouse is refused at the build that would ship it ([[XC-178]]).
+lakehouse image names lancedb, so a dependency that drags a client's library into the lakehouse is refused at the build
+that would ship it ([[XC-178]]).
 
 **Why this exists.** A deployable's module can import `service_kit.governed.fga` while its member
 declares a bare `"service-kit"` — openfga-sdk lives behind that library's `[governed]` extra. The

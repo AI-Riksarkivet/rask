@@ -30,9 +30,12 @@ wayfinder tickets:
 - **Pick from the map.** The next row is the first one in the pinned map's order that is unassigned and
   has no open blocker: the frontier query under *Wayfinding operations*, run over the map's rows.
   Blocking edges are native issue dependencies (same section); a row whose blocker is open waits.
-- **One row, one commit, straight to `main`** (owner, 2026-10-14). One person works the repo, so a row is one commit
-  on `main`, proven by the local gates, pushed, then deployed and read back. No branch and no PR: a CI round costs
-  30-40 minutes and catches nothing the local gates miss.
+- **Coherent rows ship together, straight to `main`** (owner, 2026-10-14 and 2026-11-07). One person works the repo,
+  so open rows that touch the same seam or the same deploy are one change: one review round, one commit on `main`
+  naming each row with `Refs`, proven by the local gates once, pushed, then built, deployed and read back once, each
+  row closed by hand on its own closes-when. No branch and no PR: a CI round costs 30-40 minutes and catches nothing
+  the local gates miss. A real defect found while working is fixed in that change when it is in or next to the work,
+  case by case, instead of being written down for later.
 - **One open row per defect.** A row found to describe the same defect as another is closed with the
   `duplicate` label and a comment naming the survivor, and its evidence is copied onto the survivor. A
   row that a spec ticket fixes stays its own row, gets a `blocked_by` edge on that ticket, and the ticket

@@ -17,27 +17,12 @@ export type Crumb = {
 
 /** Route words that are INITIALISMS, so sentence-casing does not turn them into words.
  *
- *  `/compute/etl` rendered as "Etl", which reads as a misspelling rather than a name — the estate
- *  calls that plane ETL, and a crumb that renames the thing it points at is worse than an ugly one.
- *  Same for `api-docs`, which sentence-cased to "Api docs".
+ *  `/admin/dlq` sentence-cased to "Dlq", which reads as a misspelling rather than a name — the nav
+ *  calls that page DLQ, and a crumb that renames the thing it points at is worse than an ugly one.
  *
- *  Deliberately a CLOSED list, not a heuristic (a "≤4 letters ⇒ acronym" rule would shout at `jobs`,
- *  `logs`, `home`). Every entry is a name this estate actually routes on; adding one is a decision,
- *  which is the point. Matched per WORD after the dash-split, so `api-docs` and a future `htr-runs`
- *  both work without listing the whole segment. */
-const INITIALISMS = new Set([
-	'etl',
-	'api',
-	'ui',
-	'iiif',
-	'htr',
-	'alto',
-	'ocr',
-	's3',
-	'fga',
-	'gpu',
-	'sql',
-]);
+ *  Deliberately a CLOSED list of the console's own route words, not a heuristic (a "≤4 letters ⇒
+ *  acronym" rule would shout at `events`, `audit`); adding one is a decision, which is the point. */
+const INITIALISMS = new Set(['dlq']);
 
 /** Percent-decode a path segment for display, falling back to the raw text on a malformed
  *  escape (`decodeURIComponent` throws on a lone `%`). Ids like `silver$features` reach the
@@ -68,22 +53,22 @@ function humanise(seg: string): string {
 
 /**
  * Crumbs for a domain-relative pathname, in order. Each segment becomes one crumb
- * keyed by its accumulated path prefix (so repeated segments like `/studio/studio`
+ * keyed by its accumulated path prefix (so repeated segments like `/catalog/catalog`
  * stay unique) and carrying the `href` of that prefix, so the trail is navigable —
  * every crumb but the last links back up its own path. The human label drops dashes
  * and percent-decodes. The domain (first segment) is kept — it is the first crumb,
  * not the project.
  */
-export function pathCrumbs(pathname: string, zoneLabels: Record<string, string> = {}): Crumb[] {
+export function pathCrumbs(pathname: string, pageLabels: Record<string, string> = {}): Crumb[] {
 	const segs = pathname.split('/').filter(Boolean);
 	return segs.map((seg, i) => {
 		const id = segs.slice(0, i + 1).join('/');
 		// The FIRST segment is the app, and its human name is the NAVBAR's, not the directory's.
-		// Reported: the trail read "Annotator > Browse" while the bar above it said "Annotate" — the
-		// same page under two names on one screen. `humanise` can only ever produce the directory
+		// A trail that read the directory name while the bar above it said the nav's name would show
+		// the same page under two names on one screen. `humanise` can only ever produce the directory
 		// name, because that is all a URL segment carries; the label lives in `topNav()`. Later
 		// segments keep `humanise`: they are in-app paths and identifiers, which have no nav entry.
-		const label = i === 0 ? (zoneLabels[seg] ?? humanise(seg)) : humanise(seg);
+		const label = i === 0 ? (pageLabels[seg] ?? humanise(seg)) : humanise(seg);
 		return { id, label, href: `/${id}` };
 	});
 }

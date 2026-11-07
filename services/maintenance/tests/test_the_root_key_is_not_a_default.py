@@ -7,8 +7,8 @@ forgets the key silently pairs a scoped secret with the root key id; one that co
 the whole sweep as tenant root.
 
 The secret half already fails closed at boot (`service.py`: "MAINTENANCE_S3_SECRET_ACCESS_KEY is
-required"). The key half did not, and a credential is a PAIR — the Ray plane's measured lesson is that
-half a pair gives `SignatureDoesNotMatch` on every operation, which is the *better* outcome here.
+required"). The key half did not, and a credential is a PAIR — half a pair was measured giving
+`SignatureDoesNotMatch` on every operation, which is the *better* outcome here.
 The worse one is a complete, working, root-privileged pair nobody chose.
 
 Fail-closed lives at BOOT, not in the model, so tests and tools may still build a settings object

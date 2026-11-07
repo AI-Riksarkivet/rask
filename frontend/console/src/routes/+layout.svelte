@@ -8,7 +8,7 @@
 	import { AppShell } from '@rask/ui/shell';
 	import type { Snippet } from 'svelte';
 	import { auth, expired, login } from '#lib/auth.svelte.ts';
-	import { ANONYMOUS, dismiss, markSeen, readInboxFeed } from '#lib/live/inbox.api.ts';
+	import { activity } from '#lib/activity.svelte.ts';
 	import { areaOf, ESTATE_NAV, inLakehouse, lakehouseSidebar } from '#lib/nav.ts';
 	import type { LayoutData } from './$types';
 
@@ -17,7 +17,7 @@
 	// The sidebar follows where you are: the lakehouse's grouped rail on its own pages (admin rows
 	// shown DISABLED to a non-admin, #143), the estate's one-leaf nav — which renders no rail — on the
 	// estate pages, and the project rail on an opened project (`projectRail` below).
-	const zoneNav = $derived(
+	const pageNav = $derived(
 		inLakehouse(page.url.pathname) ? lakehouseSidebar(data.me?.estate_admin ?? false) : ESTATE_NAV,
 	);
 
@@ -25,31 +25,6 @@
 	// lays its grid out in PIXELS, so inside the plain `overflow-y-auto` wrapper it would size to
 	// nothing and hand its scrolling to the page. Panels own their own overflow.
 	const canvasArea = $derived(areaOf(page.url.pathname) === 'workbench');
-
-	// The navbar's notification bell (@rask/ui's NotificationCenter, mounted by AppShell). The shell
-	// owns the surface and never fetches — the app owns the transport, `#lib/live/inbox.api`.
-	//
-	// Whom the bell reads for: the signed-in person, or, on a stack that signs nobody in, its one
-	// anonymous inbox. `null` while sign-in is still completing: the inbox derives whose inbox it is
-	// from the token, so a read sent before one exists is refused and would hold the bell empty.
-	const reader = $derived(auth.enabled ? (auth.session?.sub ?? null) : ANONYMOUS);
-
-	// The query OBJECT, one per person: `.refresh()` re-reads it and `.current` reads the value back,
-	// and the previous value stays readable while the next is in flight, so the badge never flickers.
-	// Reading it never holds a page's paint: the read starts here, and the bell fills when it answers.
-	const inboxQuery = $derived(reader === null ? null : readInboxFeed(reader));
-	const inbox = $derived(inboxQuery?.current ?? null);
-
-	// The read state: what the inbox holds for this person, united with what this tab marked since
-	// (UNION, not replace: a mark made while a read was in flight stays marked). The tab's own marks
-	// are a writable derived of the person, so a different person starts from none of them.
-	const marksOf = (_person: string | null): string[] => [];
-	const union = (here: string[], held: string[] | undefined): string[] =>
-		held ? [...new Set([...here, ...held])] : here;
-	let seenHere = $derived(marksOf(reader));
-	let dismissedHere = $derived(marksOf(reader));
-	const seen = $derived(union(seenHere, inbox?.held.seen));
-	const dismissed = $derived(union(dismissedHere, inbox?.held.dismissed));
 
 	// The session ends when its token does: there is no refresh token in memory, so the browser goes
 	// back to the issuer and returns here: an issuer that keeps a session answers at once, and the dev
@@ -64,28 +39,14 @@
 		return () => clearTimeout(timer);
 	});
 
-	// The two writes are optimistic and best-effort: the local set moves first so the badge never waits
-	// on a round trip, and a refused write leaves this tab consistent with itself.
-	const notifications = $derived({
-		// `undefined`, never `[]`, when the inbox did not answer: an EMPTY inbox is a fact worth
-		// rendering ("nothing addressed to you"), while an ABSENT one means this stack has no inbox.
-		inbox: inbox?.panel.rows,
-		inboxUnread: inbox?.panel.unread,
-		seen,
-		dismissed,
-		onseen: (next: string[]) => {
-			seenHere = next;
-			void markSeen(next)
-				// The badge is the server's count, so a write that changed something has to move it.
-				.then(() => inboxQuery?.refresh())
-				.catch(() => {});
-		},
-		ondismiss: (notificationId: string, next: string[]) => {
-			dismissedHere = next;
-			void dismiss(notificationId)
-				.then(() => inboxQuery?.refresh())
-				.catch(() => {});
-		},
+	// The navbar's bell (@rask/ui's ActivityCenter, mounted by AppShell): the outcome of every write
+	// this console sent for the reader, kept in their browser (`#lib/activity.svelte.ts`). The shell
+	// renders it and calls back when the panel opens and when the reader clears the log.
+	const activityFeed = $derived({
+		entries: activity.entries,
+		unread: activity.unread,
+		onopen: () => activity.markRead(),
+		onclear: () => activity.clear(),
 	});
 
 	// Animate soft navs via the View Transitions API.
@@ -121,11 +82,11 @@
 	user={data.user}
 	authEnabled={data.authEnabled}
 	project={data.activeProject ? { name: data.activeProject } : undefined}
-	{zoneNav}
+	{pageNav}
 	me={data.me}
 	meLoading={false}
 	sidebarContent={/^\/projects\/./.test(page.url.pathname) ? projectRail : undefined}
-	{notifications}
+	activity={activityFeed}
 >
 	{#if canvasArea}
 		<div class="canvas-scroll">

@@ -1,6 +1,6 @@
 """Mounting a Dapr cron tick on the catalog: the route a ``bindings.cron`` Component delivers to.
 
-Dapr delivers an input binding to ``POST /<component name>`` at the pod ROOT, never under ``RASK_API_PREFIX``, so the
+Dapr delivers an input binding to ``POST /<component name>`` at the pod ROOT, never under an API prefix, so the
 Component's name, the setting that names it to the catalog and the served path are one string. A tick is mounted only
 when the chart names its binding: an unnamed binding means a deployment with no Component behind the route.
 """

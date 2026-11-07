@@ -13,7 +13,7 @@ on startup and reconciles them every provisioning interval. Queries target the d
 ONE project ("rask"), five dashboards — the merged estate is one platform under one
 release, so lance-ns's dashboards moved from the `lance-ns` project onto this one rather
 than provisioning a second, near-empty project beside it:
-  fleet-red    — rask's fleet RED view (OTLP http.server metrics from service_kit.setup_otel)
+  fleet-red    — rask's fleet RED view (OTLP http.server metrics from `opentelemetry-instrument`)
   lineage      — lance-ns ingest domain signal + HTTP RED
   service-flow — per-service activity of the event-driven services
   maintenance  — the 120s maintenance sweep: coverage, refusals, and what it RECLAIMED

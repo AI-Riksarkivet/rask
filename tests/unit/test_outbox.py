@@ -160,10 +160,9 @@ def test_list_events_is_bounded_and_oldest_first(tmp_path: Any) -> None:
 # or a FAIL, and they share it. `stage_event` keyed on the run id ALONE, so the second event for a run
 # truncated the first, and the one that survived was whichever raced last.
 #
-# `transform.py:508-516` documents that happening to the event the outbox exists to preserve: "a
-# COMPLETE whose PUBLISH failed left `completed = False`, the handler below staged a FAIL, and that
-# truncating write destroyed the staged COMPLETE — the exact object the outbox exists to preserve, on a
-# run whose Lance write had already committed." The workaround was to set a flag BEFORE the emit.
+# That destroys the event the outbox exists to preserve: a COMPLETE whose PUBLISH failed is followed by
+# a staged FAIL for the same run, and that truncating write destroys the staged COMPLETE, on a run whose
+# Lance write had already committed.
 #
 # Widening the key is backward-compatible by construction: `list_events` derives the drop key from the
 # FILENAME, so an object staged under the old shape still lists and still drops.
@@ -200,7 +199,7 @@ def test_each_staged_event_drops_independently(tmp_path: Any) -> None:
 def test_the_drain_RE_PUBLISHES_so_every_subscriber_hears_a_recovered_event(tmp_path: Any, monkeypatch: Any) -> None:
     """Recording alone repairs the FEED and leaves every subscriber unaware.
 
-    The catalog's write announcement is what the bus's subscribers act on (notifications among them), so
+    The catalog's write announcement is what the bus's subscribers act on (a notifier among them), so
     a lost event does not merely under-report provenance -- nobody downstream hears of the write. The
     relay recovering it into the feed fixes the record and leaves every subscriber uninformed.
     Re-publishing is what makes the outbox a recovery mechanism rather than an audit repair.

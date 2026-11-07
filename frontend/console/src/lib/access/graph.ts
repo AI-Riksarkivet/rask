@@ -1,4 +1,4 @@
-// The explorer's pure layer: turn tuples and derivation trees into a laid-out graph, and decide what
+// The FGA access graph's pure layer: turn tuples and derivation trees into a laid-out graph, and decide what
 // the current query highlights. No Svelte, no fetch — so every rule here is unit-testable, which matters
 // because "which nodes are lit" IS the answer the view exists to give.
 //

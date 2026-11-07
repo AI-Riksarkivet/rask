@@ -1,6 +1,6 @@
 # 0190. The notifications inbox is a client of the lakehouse's events (2026-11-02)
 
-**Status:** accepted, amended by [ADR 0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) (`auth.externalDeciders` is gone: a client's roles are grants made at the catalog's access doors). Source: XC-188 (#755), admitted by the owner on 2026-11-01 through the multi-question tool ("Inbox
+**Status:** accepted, amended by [ADR 0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) (`auth.externalDeciders` is gone: a client's roles are grants made at the catalog's access doors) and superseded in part by [ADR 0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md) (the inbox is retired and deleted, and the console joins the product; the contract below stays). Source: XC-188 (#755), admitted by the owner on 2026-11-01 through the multi-question tool ("Inbox
 leaves, events stay"), narrowed on 2026-11-02 ("Lakehouse half only": the inbox's own release is client work) and
 widened the same day ("Go": the lakehouse's own gates hold with every client tree deleted, checked on each push). Amends
 [ADR 0189](0189-the-product-chart-carries-no-engine-seam.md), whose extension point `auth.externalDeciders` granted
@@ -61,27 +61,27 @@ contract the lakehouse's events carry is rask's own.
 
 ## Consequences
 
-- The Dapr state store leaves the product chart with its only scope, so the AGE Postgres serves OpenFGA's database
-  alone. A live estate keeps the `daprstate` database and its rows, since an init script drops nothing, and the dev
-  store keeps `secret/dapr-state` until its in-memory server restarts; nothing reads either.
-- The NATS stream Job deletes the inbox's two durables on the upgrade that removes them, as it deletes every `-durable`
-  on a stream it walks that no component in the release renders. The same prune would delete a durable a client created
-  on those streams, so how a client consumes the bus is decided with the inbox's release; the topics are internal today.
-- No store role the product chart renders names a client (`lance.storeReads`), so the inbox's release provisions its
-  own: the reads of each signer's public key (`signing-public-<key name>`) its verifying doors need, beside its NATS
-  user, its state store and its own durables.
-- `make k3s-up` installs no SMTP relay; the mailpit fixture is the inbox client's.
+Read against the estate ADR 0193 leaves, where the inbox is retired and deleted and the console ships in the product
+chart:
+
+- The product chart renders no notifications object and no state store, so the AGE Postgres serves OpenFGA's database
+  alone. A live estate keeps the `daprstate` database and its rows, since an init script drops nothing; nothing reads
+  them.
+- The lakehouse keeps emitting lineage's feed and the control lane, and their targeting fields stay its published
+  contract (`docs/COMMIT-EVENTS.md` § Telling people), with `can_be_notified` asked through the decision door and the
+  whole run feed at `GET /events/projection` for an `event_reader`. No notifier runs on the estate: one is a client a
+  client's repository builds on this contract.
+- A notifier's roles are grants to its own identity made at the catalog's access doors (ADR 0192), never a value.
+- The NATS stream Job deletes every `-durable` on a stream it walks that no component in the release renders, so a
+  durable a client creates on `lineage.events.v1` or `catalog.control.v1` does not outlive the next upgrade; the topics
+  are internal, and a notifier that must miss no run walks the feed over HTTP.
+- No store role the product chart renders names a client (`lance.storeReads`). A client's release provisions its own
+  secret-store reads through the `openbao.externalReaders` seam, and its bus user through `nats.auth.users`, both empty
+  in the product's values.
 - Criterion 4 claims what the lakehouse emits (each grant names the person it concerns, each run names its tables by
   uuid), not who was told.
-- The chart reads only the services it runs, so a release whose values still hold `services.notifications` renders
-  nothing from it; the upgrade that removes the inbox passes `--set-json 'services.notifications=null'` so the release's
-  values hold only what git declares. A release holding the list form of `auth.externalDeciders` fails the schema until
-  that upgrade passes the map once. An install from git carries neither.
-- The inbox's NATS user leaves `nats.auth.users`. The dev store's seed issues bus users with no expiry and revokes none,
-  so with the NATS fixture in operator mode (its `auth.server`, off on the dev estate) a credential it issued stays
-  valid at the broker until the trust root is minted again; on a platform's NATS, the operator that provisions the users
-  revokes the one the chart stops declaring. The dev store keeps `secret/nats-user-notifications` and
-  `secret/notifications-smtp` until its in-memory server restarts, as it keeps `secret/dapr-state`, and nothing reads
-  them.
-- service-kit carries the fleet app factory and the actor helpers, which no lakehouse service runs: they are platform its
-  clients build on, as XC-186 named the app factory.
+- A bus user the chart stops declaring is revoked: the dev store's seed revokes it in the APP account by its key and
+  deletes its secret, and revokes a replaced credential at its issue time (ADR 0193). On a platform's NATS, the operator
+  that provisions the users revokes one the chart stops declaring.
+- service-kit carries the contract a client reads the events by; a client imports nothing from `lakehouse_kit`, and the
+  lakehouse's gates hold with every client tree deleted.

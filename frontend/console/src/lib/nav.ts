@@ -11,7 +11,7 @@ import {
 	ShieldCheck,
 	Warehouse,
 } from '@lucide/svelte';
-import { exact, seg, under, type ZoneNav } from '@rask/ui/shell';
+import { exact, seg, under, type PageNav } from '@rask/ui/shell';
 
 /**
  * The lakehouse's WHOLE surface, in one grouped sidebar: the catalog (what sits below a project —
@@ -23,14 +23,14 @@ import { exact, seg, under, type ZoneNav } from '@rask/ui/shell';
  */
 /** The ROOT row — first leaf in the rail, above every group: the active project's overview. `exact`
  *  so it does not light up from inside every catalog page. */
-const LAKEHOUSE_ROOT: ZoneNav['root'] = {
+const LAKEHOUSE_ROOT: PageNav['root'] = {
 	title: 'Overview',
 	href: '/catalog',
 	match: exact('/catalog'),
 	icon: Gauge,
 };
 
-const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
+const LAKEHOUSE_GROUPS: PageNav['groups'] = [
 	{
 		label: 'Catalog',
 		items: [
@@ -61,8 +61,8 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 			},
 			{
 				// A held promotion is a CATALOG concern, not a lineage one: the rung a decision is gated
-				// on is `can_promote` on `namespace:<project>-<to_namespace>` (medallion promotions.py),
-				// which is the catalog's own hierarchy.
+				// on is `can_promote` on the held table (`catalog/api/fga_deps.py`), which is the catalog's
+				// own hierarchy.
 				title: 'Promotions',
 				href: '/catalog/promotions',
 				match: seg('/catalog/promotions'),
@@ -98,7 +98,7 @@ const LAKEHOUSE_GROUPS: ZoneNav['groups'] = [
 
 /** PINNED to the rail's bottom, outside `groups`. It composes the lineage event feed and the catalog's
  *  own table registry, so it belongs below the areas rather than among them. */
-const LAKEHOUSE_FOOTER: ZoneNav['footer'] = {
+const LAKEHOUSE_FOOTER: PageNav['footer'] = {
 	label: 'Workspace',
 	items: [
 		{
@@ -127,7 +127,7 @@ export const inLakehouse = under('/catalog', '/admin', '/workbench');
  * disabled one names the relation to ask for. The door itself is the route's own layout load, which
  * refuses regardless of what the rail shows.
  */
-export function lakehouseSidebar(estateAdmin: boolean): ZoneNav {
+export function lakehouseSidebar(estateAdmin: boolean): PageNav {
 	// The FGA denial's own wording, so the rail, the ForbiddenPage and the API's 403 all name the same
 	// relation on the same object. A reason that paraphrases sends users looking for a setting.
 	const denial = 'estate-admin only (needs can_observe_events on the FGA root)';
@@ -160,7 +160,7 @@ export function lakehouseSidebar(estateAdmin: boolean): ZoneNav {
 // One leaf is why the estate pages render NO rail: the shell suppresses the sidebar below two leaves,
 // because a rail whose only row links to the page you are already on costs width and implies areas
 // that do not exist.
-export const ESTATE_NAV: ZoneNav = {
+export const ESTATE_NAV: PageNav = {
 	title: 'Home',
 	groups: [
 		{

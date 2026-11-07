@@ -51,30 +51,26 @@ describe('namespaceOfTable', () => {
 
 describe('stageOfTable', () => {
 	it('still resolves the flat case it always handled', () => {
-		expect(stageOfTable('bronze$pages')).toEqual({ stage: 'bronze', project: null, media: false });
+		expect(stageOfTable('bronze$pages')).toEqual({ stage: 'bronze', project: null });
 	});
 
 	it('is null when the namespace encodes no stage — a derived hint, never a catalog fact', () => {
 		expect(stageOfTable('media$documents')).toBeNull();
 	});
 
-	it('a NESTED medallion zone resolves its stage from the LEAF segment', () => {
+	it('a NESTED tier namespace resolves its stage from the LEAF segment', () => {
 		// Was pinned as a known gap and ruled 2026-08-16. `STAGE_RE` is anchored with `$` outside its
 		// character class, so a nested id matched nothing and the badge silently vanished — while the
-		// same namespace one rung up showed `silver`. The stage belongs to the app the data sits IN;
+		// same namespace one rung up showed `silver`. The stage belongs to the namespace the data sits IN;
 		// the ancestors above it are tenancy, not tier.
-		expect(stageOf('acme-silver')).toEqual({ stage: 'silver', project: 'acme', media: false });
-		expect(stageOf('acme$acme-silver')).toEqual({ stage: 'silver', project: 'acme', media: false });
-		expect(stageOfTable('acme$acme-silver$features')).toEqual({
-			stage: 'silver',
-			project: 'acme',
-			media: false,
-		});
+		expect(stageOf('acme-silver')).toEqual({ stage: 'silver', project: 'acme' });
+		expect(stageOf('acme$acme-silver')).toEqual({ stage: 'silver', project: 'acme' });
+		expect(stageOfTable('acme$acme-silver$features')).toEqual({ stage: 'silver', project: 'acme' });
 	});
 
 	it('still returns null when the LEAF encodes no stage — the ancestors must not supply one', () => {
 		// The other direction, and the reason this is leaf-only rather than "any segment": a table in
-		// `acme-silver$scratch` is in `scratch`, which is not a medallion zone. Reading the stage off an
+		// `acme-silver$scratch` is in `scratch`, which encodes no tier. Reading the stage off an
 		// ancestor would badge it `silver` and claim a tier the data does not have.
 		expect(stageOf('acme-silver$scratch')).toBeNull();
 		expect(stageOfTable('acme$transcripts$rows')).toBeNull();

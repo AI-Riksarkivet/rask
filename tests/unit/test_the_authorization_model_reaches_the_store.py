@@ -65,7 +65,7 @@ def test_bootstrap_admin_runs_AFTER_the_jobs_it_waits_on(phase: str) -> None:
     every resource passes `--wait`, so a post-install scoped-users left the catalog unable to pass it and a fresh
     `helm install --wait` deadlocked ([[XC-152]]). On an UPGRADE it stays a hook weighted before bootstrap-admin, so a
     new identity's user exists before pods that use it roll ([[XC-133]], CI run 38217921913)."""
-    jobs = _jobs(_render("--set", "fga.enabled=true", *(["--is-upgrade"] if phase == "upgrade" else [])))
+    jobs = _jobs(_render(*(["--is-upgrade"] if phase == "upgrade" else [])))
     bootstrap = next((j for name, j in jobs.items() if "bootstrap-admin" in name), None)
     if bootstrap is None:
         pytest.skip("bootstrap-admin does not render here; the ordering it must beat is not present")

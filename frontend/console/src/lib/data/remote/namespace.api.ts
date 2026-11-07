@@ -67,6 +67,7 @@ export const fetchNamespacePolicy = query(
  *  namespace's prefix unless a table policy overrides it. Owner-gated (can_delete); on success the
  *  active describe refreshes in the same flight. */
 export const setNamespacePolicy = command(
+	({ namespace }) => `Set the maintenance policy of namespace ${namespace}`,
 	v.object({ namespace: v.string(), policy: PolicyDraftSchema }),
 	async ({ namespace, policy }): Promise<ApiResult<NamespacePolicy>> => {
 		const result = parsed(
@@ -83,6 +84,7 @@ export const setNamespacePolicy = command(
 
 /** Remove the namespace's maintenance policy (idempotent) — owner-gated, same single-flight refresh. */
 export const deleteNamespacePolicy = command(
+	({ namespace }) => `Remove the maintenance policy of namespace ${namespace}`,
 	v.object({ namespace: v.string() }),
 	async ({ namespace }): Promise<ApiResult<NamespacePolicyDelete>> => {
 		const result = parsed(
@@ -100,6 +102,8 @@ export const deleteNamespacePolicy = command(
  *  the default `"Restrict"` errors on a non-empty namespace) — not a query param. Owner-gated by the
  *  catalog (can_delete on namespace:<id>). */
 export const dropNamespace = command(
+	({ namespace, cascade }) =>
+		cascade ? `Drop namespace ${namespace} and its tables` : `Drop namespace ${namespace}`,
 	v.object({ namespace: v.string(), cascade: v.boolean() }),
 	async ({ namespace, cascade }): Promise<ApiResult<DropNamespace>> => {
 		const result = parsed(

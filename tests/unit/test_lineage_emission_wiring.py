@@ -77,12 +77,8 @@ def _env_values(rendered: str, name: str) -> list[str]:
 
 
 def test_every_lineage_publisher_renders_the_subscribers_topic() -> None:
-    """Publisher topics == subscriber topic, in the rendered chart.
-
-    Compaction is rendered explicitly because it is off by default — a publisher that only appears
-    under a toggle is exactly the one that drifts unnoticed.
-    """
-    rendered = _render("compaction.enabled=true")
+    """Publisher topics == subscriber topic, in the rendered chart."""
+    rendered = _render()
 
     subscribed = _env_values(rendered, _SUBSCRIBER_TOPIC)
     assert subscribed, f"{_SUBSCRIBER_TOPIC} is not rendered — services/lineage subscribes to its in-code default while the chart moves the publishers"

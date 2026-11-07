@@ -1,6 +1,6 @@
 """Guard against frontend↔backend schema drift (#24).
 
-The frontend zones generate their TypeScript catalog/lineage types from the committed
+The console's `@rask/api` generates its TypeScript catalog/lineage types from the committed
 ``docs/{catalog,lineage}-openapi.json`` specs (``bun run gen:types:catalog``), which ``make openapi`` dumps
 from these FastAPI apps. If a route or response model is added/changed but the committed spec isn't
 regenerated, the generated frontend types silently lie. This test fails when a committed spec no longer
@@ -9,9 +9,7 @@ covers its live app.
 To fix a failure: run ``make openapi`` and commit the updated ``docs/*-openapi.json`` (then re-run the
 frontend's ``bun run gen:types:catalog`` if the catalog spec changed).
 
-(Pre-P5 this read ``frontend/apps/web/openapi.json``; that path was retired with apps/web, and the zones now
-consume ``docs/*-openapi.json`` directly — so the guard moved here, alongside the ``make openapi-check`` CI
-gate that catches the same drift from the other direction.)
+The ``make openapi-check`` CI gate catches the same drift from the other direction.
 """
 
 from __future__ import annotations

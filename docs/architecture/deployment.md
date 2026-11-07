@@ -185,21 +185,45 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
 
 ```bash
 make k3s-install      # one-time: k3s + helm (sudo)
-make k3s-build        # build the lakehouse image, the inbox and the console as :dev, through Dagger
+make k3s-build        # build the lakehouse image and the console as :dev, through Dagger
 make k3s-import       # side-load the :dev images into k3s containerd
-make k3s-up           # the fixtures (FIXTURES), each its own release, then helm upgrade --install rask ./chart --wait
-make k3s-clients      # the console's release (web + inbox), after the lakehouse; waits (up to 600 s) for its pods
+make k3s-up K3S_REGISTRY=   # the fixtures (FIXTURES), each its own release, then rask's release from git's values
 make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 ```
 
+**The release's values are composed from git ([[XC-194]]).** `make k3s-up` upgrades with `--reset-values`, so the
+release holds the chart's defaults and exactly what it supplies: `deploy/values-local.yaml`, where the images come from
+(`image.repository=$(K3S_REGISTRY)`, the dev registry `localhost:5000` by default; `K3S_REGISTRY=` empty sets
+`image.localImages` for side-loaded images), the image tags in `deploy/values-live-pins.yaml` when it exists, and three
+values it derives: `auth.oidc.issuer` (`DEV_ISSUER`), `vending.endpoint` (the store fixture's node port on the node's
+address) and `auth.bootstrapAdmin` (the Dex fixture's alice, from `scripts/dex_principal.py`, as the live lanes derive
+it). Nothing is read back from the live release, so a value that exists only there is dropped by the next upgrade, and
+`make k3s-values` prints the composition (a server dry run) that `helm get values rask -o json` equals afterwards. The
+values schema refuses a top-level key `values.yaml` does not declare, so a key the chart stopped reading fails the
+render.
+
+**A new build reaches the release by tag through the pins file.** Push each image under its tag, name the tags, then
+upgrade:
+
+```bash
+dagger call image --name=rest-catalog publish --address=172.17.0.1:5000/lance-rest-catalog:<tag>
+dagger call image --name=frontend publish --address=172.17.0.1:5000/web-console:<tag>
+make k3s-pins TAGS="lance-rest-catalog=<tag> web-console=<tag>"   # sets those tags in the pins file; reads no cluster
+make k3s-up
+```
+
+With `K3S_REGISTRY` set, `make k3s-up` refuses a pins file that names no tag for `lance-rest-catalog` or
+`web-console`, which would otherwise pull `:dev` and wait out `--wait`, and the values schema admits `image.tags` and
+`image.digests` only for those two. `make k3s-pins` with no `TAGS` captures the tags the cluster runs instead, and `make k3s-converge STEM=<stem> TAG=<tag>`
+sets one stem's tag and upgrades past the split-stem check.
+
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
-`lance-rest-catalog` (the lakehouse image that serves catalog, lineage and maintenance), `notifications` (the inbox)
-and `web-console` (the console's static-file image, from `frontend.dockerfile`). `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
+`lance-rest-catalog` (the lakehouse image that serves catalog, lineage and maintenance) and `web-console` (the console's
+static-file image, from `frontend.dockerfile`). `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
 `sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
-`default`, the fixtures' namespace), and `values-live-pins.yaml` files are per-host state from `make k3s-pins`, never
-committed ([[XC-152]]); `scripts/k3s-pins.sh` also writes `deploy/fixtures/console/values-live-pins.yaml` (the web and
-inbox images the console release runs), which `scripts/fixtures.sh` layers last onto `make k3s-clients`. The dev-registry path (`make dev-registry`, then `dagger call image --name=<stem> publish
---address=172.17.0.1:5000/<stem>:<tag>`) remains for the in-cluster loop `CLAUDE.md` describes.
+`default`, the fixtures' namespace), and `deploy/values-live-pins.yaml` is per-host state from `make k3s-pins`, never
+committed ([[XC-152]]). The dev-registry path (`make dev-registry`, then `dagger call image --name=<stem> publish
+--address=172.17.0.1:5000/<stem>:<tag>`) is `make k3s-up`'s default, the one the in-cluster loop `CLAUDE.md` describes.
 
 The kind lane (`make e2e-ci`, `scripts/e2e_stack.sh`) builds the same set the same way: every image the lane's render
 side-loads (`scripts/side_loaded_images.py`) becomes an OCI tarball through `scripts/dagger-image.sh --tag … --out`, and
@@ -214,8 +238,7 @@ locally and in CI.
 | Image | Dockerfile | Notes |
 |---|---|---|
 | `lance-rest-catalog` | `rest-catalog.dockerfile` | The lakehouse image, one image for several deployments: `catalog`, `lineage` and `maintenance`, plus the chart's Jobs and hooks. It installs no client, so deleting a client changes nothing it builds. |
-| `notifications` | `notifications.dockerfile` | The inbox, `uv sync --frozen --package notifications` against the root `uv.lock`; the console's release deploys it (`deploy/fixtures/console`). |
-| `web-console` | `frontend.dockerfile` | The console: the single-page app built to static files, served by its own small Bun server (`frontend/console/serve.ts`) with the runtime `config.json` the console's chart mounts. No server-side rendering, no backend of its own; tini as PID 1, non-root `USER 1000`. |
+| `web-console` | `frontend.dockerfile` | The console: the single-page app built to static files, served by its own small Bun server (`frontend/console/serve.ts`) with the runtime `config.json` the product chart mounts (`chart/templates/console.yaml`). No server-side rendering, no backend of its own; tini as PID 1, non-root `USER 10001`. |
 
 The console's topology (one route tree, the shared `@rask/ui` shell, browser sign-in with PKCE) is documented in the
 `rask-frontend` project skill (`.claude/skills/rask-frontend`).
@@ -233,17 +256,26 @@ address, token, scrape job, alert or network peer (ADR 0189).
 
 ## Helm chart (`chart/`)
 
-`make k3s-up` runs `helm upgrade --install rask ./chart --wait`. The chart deploys:
+`make k3s-up` runs `helm upgrade --install rask ./chart --wait --reset-values` with the values git declares. The chart deploys:
 
-- **the lakehouse** — catalog, lineage and maintenance. No client is rendered here: the console and the
-  notifications inbox have their own release (`deploy/fixtures/console`).
+- **the lakehouse** — catalog, lineage and maintenance. No client is rendered here.
+- **the console** (`templates/console.yaml`, `console.enabled`), the lakehouse's own UI
+  ([ADR 0193](../adr/0193-the-inbox-is-retired-and-the-console-joins-the-product.md)): the Deployment and Service
+  `rask-console` serving the `web-console` image on `console.port`, its ServiceAccount `rask-sa-console` with no token
+  mounted (it calls no door), the ConfigMap `rask-console-config` holding the `/config.json` the browser boots from
+  (the issuer `auth.oidc.issuer`, the client `console.oidc.clientId`, and `console.oidc.scopes` with the two scopes every
+  governed door requires, `federated:id` and the audience scope, added by the chart; `{"signIn": false}` with auth off),
+  and the HTTPRoute `rask-console` sending `/` to it. Under `networkPolicy.enabled` its pod admits its port from
+  anywhere and dials nothing.
 - **The cluster route** (`templates/route.yaml`) — Gateway API HTTPRoutes on the platform's Gateway
   (`route.parentRefs`): `<release>-api` sends each public `/api/*` prefix to its service, with a `URLRewrite`
   `ReplacePrefixMatch` where the service mounts another path (the table is `rask.apiRoutes` in `_helpers.tpl`), and
-  `<release>-dex`, rendered only with `auth.enabled` and `dex.enabled`, sends `/dex` to the development Dex. A real deployment names the hosts the
+  `<release>-dex`, rendered only with `auth.enabled` and `dex.enabled`, sends `/dex` to the development Dex. Both
+  are longer prefixes than the console's `/`, so they keep winning. A real deployment names the hosts the
   routes answer (`route.hostnames`), and the render refuses one that names none, since a host-less route claims every
   host its listener accepts ([[XC-146]]). No rask process sits at the edge: an
-  unmatched `/api/*` is the Gateway's own 404, and every service authenticates each request itself. Only Core matches
+  unmatched `/api/*` reaches the console's `/` route, whose `serve.ts` answers it 404 (the Gateway's own 404 with
+  `console.enabled: false`), and every service authenticates each request itself. Only Core matches
   and `URLRewrite` are used, so any conformant implementation serves them (kgateway, the intended production edge;
   Envoy Gateway, Istio, Cilium); in development it is k3s's Traefik with its Gateway provider switched on by
   `deploy/k3s/traefik-gateway.yaml`, which `scripts/k3s-install.sh` installs (GatewayClass `traefik`, Gateway
@@ -257,36 +289,29 @@ address, token, scrape job, alert or network peer (ADR 0189).
 
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
 `deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, Dapr, NATS, the CloudNativePG operator,
-Dex, RustFS, OpenBao, the telemetry chain and the lineage graph backend (the SMTP relay only with
-`FIXTURES=mailpit`). It installs no client: `make k3s-clients` adds the console's release after it (the web image, the
-inbox and their HTTPRoute), reaching the lakehouse by reference, and waits up to 600 s for its pods. A platform brings
-its own.
+Dex, RustFS, OpenBao, the telemetry chain and the lineage graph backend. It installs no client; a client's own
+repository supplies its values to a lakehouse install with `-f`. A platform brings its own.
 
-The console's release (`deploy/fixtures/console/chart`) carries what the console and the inbox need, and the lakehouse
-names none of it:
-
-- **Its sign-in client.** `deploy/fixtures/console/dex-values.yaml` declares the public client `rask-console` (PKCE,
-  redirecting to `/auth/callback` on `:8080` and the Vite dev server's `:5173`, the dev server's origin allowed for
-  CORS), which `make k3s-fixtures` layers onto Dex by glob. The Dex fixture enforces S256 PKCE on every authorization
-  code and serves no device grant; its own client `rask-web` is confidential, for the live lanes' password grant.
-- **Its admissions.** `deploy/fixtures/console/lakehouse-values.yaml` grants the inbox's sidecar its secret-store reads
-  through `openbao.externalReaders`, an allowlist: a reader may hold only `nats-user-<app>`, `<app>-<name>` and
-  `signing-public-<name>`, and the render refuses a lakehouse app id or any name another identity holds. The inbox's
-  roles on the catalog's decision door are grants to its ServiceAccount made at the catalog's access doors
-  ([[LH-563]]), which no values file holds.
-- **The inbox's state.** A CloudNativePG `Cluster` the release renders by default, or a platform's Postgres named by
-  `state.external.connectionSecret` (with `caSecret` for `verify-full` and `egress` for the NetworkPolicy), in which
-  case no Cluster is rendered.
-- **Its one retry layer on lineage's feed.** The Resiliency `<rask release>-notifications-invocation-resiliency`
-  retries the inbox's invocations of app `lineage` (constant 2 s, 3 retries, `408,429,500-599`, never a 4xx); a sidecar
-  reads it on restart.
+- **The console's sign-in client.** The Dex fixture declares the lakehouse's public client `rask-console` under its
+  own `console` value (`deploy/fixtures/dex/chart/values.yaml`): PKCE, no secret, redirecting to `/auth/callback` on
+  `:8080` and the Vite dev server's `:5173`, the dev server's origin allowed for CORS, and a trusted peer of the
+  audience client. It is its own key, so a client's `clients` or `allowedOrigins` values cannot drop it by replacing a
+  list. The fixture enforces S256 PKCE on every authorization code and serves no device grant; its own client
+  `rask-web` is confidential, for the live lanes' password grant. A platform's issuer registers the same public client
+  and names it in `console.oidc.clientId`.
+- **A client's admissions** go through the seams the chart ships empty: `openbao.externalReaders` (an allowlist: a
+  reader may hold only `nats-user-<app>`, `<app>-<name>` and `signing-public-<name>`, and the render refuses a lakehouse
+  app id or any name another identity holds), `networkPolicy.objectStoreExtraFrom` and `nats.auth.users`. A client's
+  roles on the catalog are grants to its ServiceAccount made at the catalog's access doors ([[LH-563]]), which no
+  values file holds.
 
 ### The first estate admin
 
 `auth.bootstrapAdmin` names the first estate admin by principal, `<idp-id>~<user id>` (the idp id `auth.oidc.connectors`
 gives their Dex connector; `dex~<userID>` for a development Dex user, LH-063), and the render refuses a bare name: a
 post-install/upgrade hook Job grants that principal `owner` on the default warehouse and `admin` on the estate root,
-the grants the estate-wide surfaces gate on. Empty seeds no human grant.
+the grants the estate-wide surfaces gate on. Empty seeds no human grant. `make k3s-up` names the Dex fixture's alice
+(`DEV_ADMIN_EMAIL`), derived by `scripts/dex_principal.py` as the live lanes derive it.
 
 ### StorageClasses: omit, don't guess
 
@@ -320,12 +345,11 @@ evaluator. The store must meet the audit store's contract in `chart/values.yaml`
 | **vmalert** | v1.106.1 | `observability-vmalert:8880` | Evaluates `deploy/alerting/rules.yml` (passed with `--set-file`) |
 | **Alertmanager** | v0.28.0 | `observability-alertmanager:9093` | Groups and holds firing alerts (no receiver: pages nowhere) |
 
-**App instrumentation:** `service_kit.setup_otel` instruments the FastAPI fleet —
-the services built on `make_service_app` call it automatically, so each service roots or
-continues the trace of every request the cluster route hands it. It wires both **traces** and **RED
+**App instrumentation:** the chart launches each lakehouse service under `opentelemetry-instrument`
+when telemetry is on, so each service roots or continues the trace of every request the cluster route hands it. It wires both **traces** and **RED
 metrics**: the FastAPI/HTTPX instrumentation emits `http.server.*`/`http.client.*` request count,
 duration, and active-request metrics automatically. Every plane exports plain OTLP/HTTP to the
-Collector (`OTEL_EXPORTER_OTLP_ENDPOINT`, `RASK_OTEL_ENABLED` when `observability.enabled=true`) and names
+Collector (`OTEL_EXPORTER_OTLP_ENDPOINT` when `observability.enabled=true`) and names
 no store; the Collector adds the backend's headers. When the toggle is off the env vars are absent and
 instrumentation is a no-op. Standard OTLP throughout; OTel-Arrow is not used (the Python SDK lacks OTAP support).
 

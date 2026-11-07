@@ -1,0 +1,129 @@
+{{- if .Values.console.enabled }}
+{{- $name := printf "%s-console" (include "lance.fullname" .) -}}
+{{- $config := dict "signIn" false -}}
+{{- if .Values.auth.enabled -}}
+{{- $scopes := concat .Values.console.oidc.scopes (list "federated:id" (include "lance.oidcAudienceScope" .)) | uniq -}}
+{{- $config = dict "issuer" (include "lance.oidcIssuer" .) "clientId" (required "console.oidc.clientId names the IdP's public client the console signs in with" .Values.console.oidc.clientId) "scopes" $scopes -}}
+{{- end -}}
+{{- $selector := dict "app.kubernetes.io/component" "console" "app.kubernetes.io/instance" .Release.Name -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lance.saName" (list . "console") }}
+  labels:
+    {{- include "rask.componentLabels" (list . "console") | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-config
+  labels:
+    {{- include "rask.componentLabels" (list . "console") | nindent 4 }}
+data:
+  config.json: {{ toJson $config | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rask.componentLabels" (list . "console") | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: {{ .Values.console.port }}
+      targetPort: http
+  selector:
+    {{- toYaml $selector | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rask.componentLabels" (list . "console") | nindent 4 }}
+spec:
+  replicas: {{ .Values.console.replicas }}
+  selector:
+    matchLabels:
+      {{- toYaml $selector | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ toJson $config | sha256sum }}
+      labels:
+        {{- include "rask.componentLabels" (list . "console") | nindent 8 }}
+    spec:
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
+      serviceAccountName: {{ include "lance.saName" (list . "console") }}
+      automountServiceAccountToken: false
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.console.runAsUser }}
+        runAsGroup: {{ .Values.console.runAsUser }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: console
+          image: "{{ include "rask.image" (list . .Values.image.console.repository) }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.rootlessSecurityContext" .Values.console.runAsUser | nindent 10 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: ["bun", "-e", "await Bun.sleep({{ mul .Values.lifecycle.preStopSeconds 1000 }})"]
+          env:
+            - { name: CONSOLE_CONFIG_FILE, value: /etc/console/config.json }
+            - { name: PORT, value: {{ .Values.console.port | quote }} }
+          ports:
+            - name: http
+              containerPort: {{ .Values.console.port }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: config, mountPath: /etc/console, readOnly: true }
+          readinessProbe:
+            httpGet: { path: /, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet: { path: /, port: http }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+          resources:
+            {{- toYaml .Values.console.resources | nindent 12 }}
+      volumes:
+        - { name: tmp, emptyDir: { sizeLimit: 64Mi } }
+        - name: config
+          configMap:
+            name: {{ $name }}-config
+            items: [{ key: config.json, path: config.json }]
+{{- if .Values.route.enabled }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "rask.componentLabels" (list . "console") | nindent 4 }}
+spec:
+  parentRefs:
+    {{- toYaml .Values.route.parentRefs | nindent 4 }}
+  {{- with .Values.route.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - matches:
+        - path: { type: PathPrefix, value: / }
+      backendRefs:
+        - name: {{ $name }}
+          port: {{ .Values.console.port }}
+{{- end }}
+{{- end }}

@@ -515,7 +515,7 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
 
 
 def test_the_dlq_replay_re_publishes_the_staged_bytes_to_the_lineage_topic(tmp_path: Path, catalog: Any) -> None:
-    """The relay's manual twin tells the SUBSCRIBERS too: a replayed create reaches the notifications bus lane only this way."""
+    """The relay's manual twin tells the SUBSCRIBERS too: a replayed create reaches the bus's subscribers only this way."""
     settings = _settings(tmp_path, fga_enabled=False)
     key, staged_json = _stage_a_create(settings, catalog)
     publisher = _Publisher()

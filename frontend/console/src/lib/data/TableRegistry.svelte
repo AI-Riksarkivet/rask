@@ -157,7 +157,7 @@
 			// Browser-side Arrow-IPC encode (apache-arrow), exactly as the detail page's insert does —
 			// the inferred schema BECOMES the table's schema on a create.
 			const arrow = tableToIPC(tableFromJSON(rows), 'stream');
-			const res = await createTableWithRows(`${ns}$${name}`, arrow);
+			const res = await createTableWithRows({ table: `${ns}$${name}`, arrow });
 			if (res.ok) {
 				declMsg = {
 					ok: true,
@@ -379,7 +379,6 @@
 				placeholder="any stage"
 				options={[
 					{ value: '', label: 'any stage' },
-					{ value: 'raw', label: 'raw' },
 					{ value: 'bronze', label: 'bronze' },
 					{ value: 'silver', label: 'silver' },
 					{ value: 'gold', label: 'gold' },
@@ -389,7 +388,7 @@
 		<DataTable
 			{table}
 			loading={tables === null}
-			emptyMessage="No tables registered — a create (or the medallion cascade's gold sink) makes the first."
+			emptyMessage="No tables registered — a create makes the first."
 			onrowclick={openDrawer}
 		/>
 	{/if}
@@ -416,7 +415,7 @@
 			<dt>medallion stage</dt>
 			<dd>
 				{#if drawerRow.stage}<StageBadge info={drawerRow.stage} />{:else}<span class="mut"
-						>— (not a medallion zone)</span
+						>— (not a tier namespace)</span
 					>{/if}
 			</dd>
 		</dl>

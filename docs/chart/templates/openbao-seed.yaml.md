@@ -78,7 +78,54 @@ ONE PAIR PER SIGNING IDENTITY, chosen from the kept copy, the store behind the S
 ## `nsc() { "$NATS_TOOLS/nsc" -H "$B/nsc" "$@"; }`
 
 THE BUS CREDENTIALS (values.yaml `nats.auth`): the trust root and the route credential carried from the store behind the
-Service or minted, then every user of the table issued afresh under that root, the whole bundle kept before the first write.
+Service or minted, then every user of the table kept or issued under that root (`nats_user`, below), the whole bundle
+kept before the first write.
+
+## `revoke_undeclared() {`
+
+A BUS USER RASK STOPS DECLARING IS REVOKED, not just left unwritten. A user JWT the seed issues carries no expiry, and
+the APP account that signed it stays trusted, so a credential the release no longer declares would keep admitting
+whoever holds it; not re-issuing it changes nothing at the broker. Before it issues the table, the seed lists every
+`nats-user-*` secret in this pod's store and in the store behind the Service (`store_list`), takes each name the
+release's table (`lance.natsTable`) does not hold, reads the user's public key out of the JWT that secret stores
+(`jwt_key`: the `sub` of the payload), and adds it to the APP account's revocations (`nsc revocations add-user`). The
+account JWT carrying the revocation is what `resolver_preload` holds, so it reaches the bus with the trust root. A
+secret that holds no JWT naming a key fails the seed, since the seed cannot revoke what it cannot name; a store that
+is unreachable or lists nothing counts as empty, and any other listing error fails the seed rather than seed without
+knowing what rask no longer declares.
+
+After the bundle is written, each revoked user's secret is deleted from this pod's store (`bao kv metadata delete`),
+so no reader is left a credential the bus refuses.
+
+A REVOCATION REACHES THE RUNNING BUS AT ITS CONFIG RELOAD. Measured 2026-11-07 on nats-server 2.14.2 with nsc 2.15.0:
+with the MEMORY resolver, a key revoked in a root that holds no users is refused once the account reaches
+`resolver_preload` and the server reloads (SIGHUP, which the bus fixture's reloader sends when its auth Secret changes);
+a client connected as that user is dropped at the reload, the other users keep connecting, and a restart keeps the
+revocation.
+
+## `nats_user() {`
+
+A DECLARED USER KEEPS ITS KEY PAIR AND ITS JWT while its grants match. The seed reads the user's stored JWT and seed
+from this pod's store, else from the store behind the Service; when the JWT was issued by the APP account and its
+publish and subscribe grants equal the table's, both are kept as they are, so a reseed changes no credential a running
+sidecar holds. A changed grant is reissued under the SAME key, and the JWT it replaces is revoked `--at` that JWT's issue
+time (`nsc revocations add-user -u <key> --at <iat>`), which refuses the old credential and admits the new one, issued at
+least a second later. A user with no stored JWT gets a fresh pair from `nk`.
+
+A stored JWT that names a key but whose seed is unreadable is HEALED, not refused: the user is issued a fresh pair and
+the old key revoked `--at` the stored JWT's `iat` (at now when it names none), logged `NATS user <u>: replaced`, so the
+store turns Ready again with no hand-run delete and the key nobody can prove possession of admits no one. The seed stops
+only when the stored JWT names no key at all, since it could not revoke what it cannot name.
+
+## `revoke_older() {`
+
+THE ACCOUNT'S `*` REVOCATION SITS ONE SECOND BEFORE THE OLDEST JWT A DECLARED USER HOLDS. Revoking `*` at a time refuses
+every user JWT the APP account issued up to it, so this takes back every credential earlier reseeds left behind (a key
+that left the table with no stored secret left to name it) while every credential
+the table holds now is newer and keeps admitting. Written only when the bound moves.
+
+Measured 2026-11-07 on nats-server 2.14.2, nsc 2.15.0 and nats.go 1.39.1: a client holding a revoked JWT is closed after
+two refused reconnects, which is the closed connection `service_kit.bus_watchdog` restarts a sidecar from.
 
 ## `G=$DEV_CREDENTIALS`
 
@@ -161,6 +208,15 @@ a platform store's operator creates the same roles and policies from them.
 EVERY STEP IS IDEMPOTENT: `auth enable` on an existing mount is the only one that errors, and it is the expected
 outcome on re-run; a policy or a role written again replaces the one the store holds, so a changed document reaches
 the store on the next seed (the loop below re-runs the seed when any rendered file changes).
+
+## `roles_kept=" "; policies_kept=" default root "`
+
+A ROLE OR POLICY RASK STOPS RENDERING IS DELETED. Writing the rendered documents replaces what they name and touches
+nothing else, so an identity the release no longer has (a component removed, a client's `openbao.externalReaders`
+entry dropped) would keep logging in and reading. After the writes the seed lists the store's Kubernetes-auth roles and
+its policies and deletes every one no rendered `role-*.json` or `policy-*.json` names, keeping the store's built-in
+`default` and `root` policies. The store is the development one, whose only writer of roles and policies is this seed,
+so everything it holds outside the documents is what git stopped declaring.
 
 ## `bao kv put secret/openbao-seeded pod="$HOSTNAME" >/dev/null`
 

@@ -1,7 +1,6 @@
 """The ONE operational-probe router: ``/livez`` (dependency-free) + ``/readyz`` (state-gated).
 
-Separate from the frontend-facing ``/api/health`` badge (whose body is a service-specific
-contract). These two are for a process supervisor / load balancer: livez proves the event
+These two are for a process supervisor / load balancer: livez proves the event
 loop is responsive, readyz reports lifecycle gating off ``app.state`` plus — optionally —
 one service-specific hard-dependency check.
 
@@ -11,9 +10,8 @@ three ways: the gate order (shutdown-first vs startup-first), the body shape (a 
 handler, which puts liveness on the blocking threadpool where it queues behind heavy Arrow/Lance
 work and fails exactly when the pod is busiest. One home, one shape, ``async def``.
 
-Mount the module-level :data:`router` when readiness is pure lifecycle gating; call
-:func:`make_probes_router` with a ``ready_check`` when the service has a hard dependency
-(lineage's feed, read through the catalog) or a fact worth reporting (the catalog's resolved namespace id).
+:func:`make_probes_router` takes the service's ``ready_check``: its hard dependency (lineage's feed, read through the
+catalog) or a fact worth reporting (the catalog's resolved namespace id), asked once the lifecycle gates pass.
 """
 
 from __future__ import annotations
@@ -38,8 +36,8 @@ def _serve(body: Readiness) -> JSONResponse:
     return JSONResponse(status_code=status, content=body.model_dump(mode="json"))
 
 
-def make_probes_router(ready_check: ReadyCheck | None = None) -> APIRouter:
-    """Build the probe router, optionally with a service-specific readiness check."""
+def make_probes_router(ready_check: ReadyCheck) -> APIRouter:
+    """Build the probe router around the service's readiness check."""
     probes = APIRouter(tags=["health"])
 
     @probes.get("/livez")
@@ -61,12 +59,6 @@ def make_probes_router(ready_check: ReadyCheck | None = None) -> APIRouter:
             return _serve(Readiness(status=ReadinessStatus.shutting_down))
         if not is_started(state):
             return _serve(Readiness(status=ReadinessStatus.starting))
-        if ready_check is None:
-            return _serve(Readiness(status=ReadinessStatus.ready))
         return _serve(await ready_check(request))
 
     return probes
-
-
-#: The lifecycle-only probe router — mount this unless the service has a hard dependency to check.
-router = make_probes_router()

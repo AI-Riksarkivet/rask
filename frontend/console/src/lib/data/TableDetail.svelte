@@ -4,8 +4,7 @@
 	// #50 maintenance policy (owner-gated set/delete), and the #51 access review. Data comes from the
 	// `fetchTableDetail` query, which fans out the six catalog reads from the browser and answers them as
 	// one aggregate; every write is a command carrying the signed-in user's bearer. A dataset the
-	// catalog does not register (e.g. a storage-managed medallion zone) renders the honest
-	// not-in-catalog state instead of a broken page.
+	// catalog does not register renders the honest not-in-catalog state instead of a broken page.
 	//
 	// #98 SPLIT: each admin workflow lives in `./table-detail/` as its own component owning its own
 	// state (SchemaSection, InsertRowsSection, RowOpsSection, BlobPreviewSection, IndexesSection,

@@ -6,7 +6,7 @@ MEASURED, not guessed. `external-secrets` 0.20.x serves `external-secrets.io/v1`
     no matches for kind "ExternalSecret" in version "external-secrets.io/v1beta1"
 
 That is the estate's SANCTIONED secret-distribution path — the one thing that gets a credential to a
-pod with no Dapr sidecar (the Ray head/workers, the web zones, every runner). While ESO was an
+pod with no Dapr sidecar. While ESO was an
 opt-in nothing exercised, the break stayed invisible until an operator turned it on in production — the
 worst possible moment to discover that secrets have no transport. It is a prerequisite now ([[XC-004]]).
 

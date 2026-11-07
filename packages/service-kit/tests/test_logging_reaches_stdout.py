@@ -2,7 +2,7 @@
 
 `_setup_logging` attached its stdout handler to two logger names, `"core"` and `"backends"`, and its
 docstring says why: it "mirrors core.main". That monolith is gone. Every module in every service now
-uses `logging.getLogger(__name__)` — `lineage.services.consumer`, `medallion.services.transform`,
+uses `logging.getLogger(__name__)` — `lineage.services.consumer`, `maintenance.services.discovery`,
 `catalog.api.v1.endpoints.tables` — and not one of those names sits under `core.*` or `backends.*`.
 So the handler was attached to two trees nobody logs to, every record propagated to a root logger
 with no handlers, and was discarded.
@@ -11,8 +11,7 @@ Nothing was red, because the code that logs is never the code that fails. Measur
 2026-08-17 and verified three times: a malformed event POSTed to the running ingest returned
 `{"status":"DROP"}` — returned on the single line immediately after
 `log.error("lineage_event_invalid")`, so the branch demonstrably ran — and produced no log line
-at all. After the fix the identical request logs it. The medallion stage runner's workflow-dispatch
-logs were invisible the same way, which is why a running cascade read as an idle one.
+at all. After the fix the identical request logs it.
 
 The class this closes is the SWALLOWED DIAGNOSTIC: any handler that catches a failure by design and
 reports it with a WARNING that had nowhere to go — so the one signal distinguishing a healthy path
@@ -31,7 +30,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from service_kit import setup_logging
+from service_kit.app import setup_logging
 
 
 #: A real service module's logger name. Named explicitly rather than generated, because the defect
@@ -89,8 +88,8 @@ def test_a_service_module_logger_REACHES_a_handler(name: str, monkeypatch: pytes
 
 
 def test_the_root_logger_is_configured_at_or_below_INFO() -> None:
-    """`log.info` is load-bearing here — `ray_stage_job_submitted` and `transform_spec_set` are INFO,
-    and they are how an operator sees that work started at all."""
+    """`log.info` is load-bearing here — `warehouse_created` and `maintenance_policy_set` are INFO,
+    and they are how an operator sees that a change happened at all."""
     setup_logging()
     root = logging.getLogger()
 
@@ -99,7 +98,7 @@ def test_the_root_logger_is_configured_at_or_below_INFO() -> None:
 
 
 def test_setup_is_IDEMPOTENT_so_repeated_app_builds_do_not_duplicate_lines() -> None:
-    """`make_service_app` runs it per app, and a test process may build several."""
+    """The app factory runs it per app, and a test process may build several."""
     setup_logging()
     first = len(logging.getLogger().handlers)
     setup_logging()

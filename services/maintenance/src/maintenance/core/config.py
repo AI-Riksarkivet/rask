@@ -33,8 +33,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     """Config for the maintenance service + its S3 access to the lakehouse buckets."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
-    # every alias below silently gained an un-namespaced twin (MedallionSettings.ray_address
-    # answered to Ray's own $RAY_ADDRESS). `env_prefix` redirects that fallback onto the
+    # every alias below silently gained an un-namespaced twin (a field named `address` would
+    # answer to whatever $ADDRESS another program in the pod exports). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
     # deliberately-bare ones (DAPR_HTTP_PORT) still land.
     # See tests/unit/test_settings_env_namespace.py.

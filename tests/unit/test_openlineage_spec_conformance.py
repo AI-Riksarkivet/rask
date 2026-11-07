@@ -170,7 +170,7 @@ def test_typed_slots_survive_the_feed_round_trip() -> None:
         "producer": "https://example.com/p",
         "schemaURL": ol.RUN_EVENT_SCHEMA_URL,
         "run": {"runId": _RUN_ID, "facets": {}},
-        "job": {"namespace": "ray-jobs", "name": "embed"},
+        "job": {"namespace": "pipelines", "name": "embed"},
         "inputs": [{"namespace": "bronze", "name": "events", "facets": {}}],
         "outputs": [
             {

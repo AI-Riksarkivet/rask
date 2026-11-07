@@ -3,7 +3,9 @@
 rask's annotator (XC-167, ADR 0171), its media plane, viewer and search (XC-180), and flows (XC-179) are clients of the
 lakehouse, as Label Studio or a user's own service would be, and so are the web zones (XC-181), the bring-your-own
 engine and its companions (ADR 0189): the Ray engine, compute, Kueue, the compaction job and the model-download token
-a runner uses. So nothing the product chart renders names one: no workload, ServiceAccount, route, state-store scope,
+a runner uses, and the notifications inbox, retired with the SMTP relay its email channel sent to ([[XC-195]]). The
+console is no client: it is the lakehouse's own UI, which the product chart renders. So nothing the product chart
+renders names a client: no workload, ServiceAccount, route, state-store scope,
 bus user, store user, OpenFGA subject, secret-store role, Dapr component, session or sign-in secret, scrape job, alert
 or network policy admitting one by label.
 
@@ -52,14 +54,14 @@ _CLIENTS: dict[str, re.Pattern[str]] = {
     "annotator": re.compile(r"annotator|-assist"),
     "media": re.compile(r"viewer|rask-search|sa-search|media-s3|media-corpus|/api/explorer|corpus", re.IGNORECASE),
     "flows": re.compile(r"\bflows\b"),
-    "zones": re.compile(r"\bweb-[a-z]+\b|rask-web\b|sa-web\b|frontend-session|oidc-client|RASK_EDGE_URL|SESSION_SECRET"),
+    "zones": re.compile(r"\bweb-(?!console\b)[a-z]+\b|rask-web\b|sa-web\b|frontend-session|oidc-client|RASK_EDGE_URL|SESSION_SECRET"),
     "compute": re.compile(r"^compute$|[-_]compute\b|\bcompute[-_]|\bcompute (?:fixture|service|release)|/api/(?:ray|serve)\b", re.IGNORECASE),
     "ray": re.compile(r"(?<![a-z])ray(?![a-z])|kuberay|ray(?:auth|dashboard|cluster|service|job)", re.IGNORECASE),
     "kueue": re.compile(r"kueue", re.IGNORECASE),
     "table-maintenance": re.compile(r"table-maintenance", re.IGNORECASE),
     "hf": re.compile(r"hf[-_]?token|hugging\s*face", re.IGNORECASE),
     # NATS's reply subjects are `_INBOX.>`, which every bus user subscribes to; the inbox client is any other `inbox`.
-    "notifications": re.compile(r"notification|(?<![_a-z])inbox", re.IGNORECASE),
+    "notifications": re.compile(r"notification|(?<![_a-z])inbox|mailpit", re.IGNORECASE),
 }
 
 

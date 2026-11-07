@@ -236,7 +236,8 @@ func (m *Rask) Lakehouse(
 		return nil, fmt.Errorf("starting the cluster: %w", err)
 	}
 	cluster := installer(tool, k3s, kubeconfig, run)
-	install := cluster.WithEnvVariable("CHART", chart).WithEnvVariable("CHART_VERSION", version)
+	// A release's image index holds the catalog image alone, and a client's e2e drives the doors, not the console.
+	install := cluster.WithEnvVariable("CHART", chart).WithEnvVariable("CHART_VERSION", version).WithEnvVariable("CONSOLE_ENABLED", "false")
 	if values != nil {
 		install = install.WithMountedFile("/client/values.yaml", values).WithEnvVariable("VALUES", "/client/values.yaml")
 	}

@@ -11,7 +11,7 @@ import { MOCK_CATALOG } from './ports';
 // The registry list and the detail aggregate are data functions in `*.api.ts`, so they are seeded on
 // the mock catalog; the Arrow query is intercepted per spec.
 
-const TABLE = 'raw%24events';
+const TABLE = 'bronze%24events';
 const ABSENT = { status: 404, body: { detail: 'none' } };
 
 const DETAIL_ROUTES: Record<string, unknown> = {
@@ -52,17 +52,17 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 			body: arrowFixture(),
 		}),
 	);
-	await seed(page, { ...DETAIL_ROUTES, 'GET /v1/table': { tables: ['raw$events'] } });
+	await seed(page, { ...DETAIL_ROUTES, 'GET /v1/table': { tables: ['bronze$events'] } });
 });
 
 test('the drawer Preview action lands on the detail preview tab with rows', async ({ page }) => {
 	await page.goto('/catalog/tables');
 	// open the row drawer via the stage cell (the id/namespace cells are links of their own)
-	await page.locator('tbody tr', { hasText: 'raw$events' }).locator('.stage').click();
+	await page.locator('tbody tr', { hasText: 'bronze$events' }).locator('.stage').click();
 	const drawer = page.getByRole('dialog');
 	await expect(drawer.getByRole('link', { name: 'Preview' })).toHaveAttribute(
 		'href',
-		'/catalog/tables/raw%24events?tab=preview',
+		'/catalog/tables/bronze%24events?tab=preview',
 	);
 	await drawer.getByRole('link', { name: 'Preview' }).click();
 	// the deep link selects the preview tab, and the existing query machinery renders the rows

@@ -20,10 +20,10 @@ flowchart LR
     pipe["A user's pipeline<br/><sub>on its own compute</sub>"] -->|"namespace doors"| cat["Catalog<br/><sub>tier governance · FGA</sub>"]
     cat --> store[("Lance tables<br/>S3")]
     cat -->|"commit announcement"| lin["Lineage<br/><sub>GET /events · edge list</sub>"]
-    lin --> notif["A notifier<br/><sub>a client, e.g. the inbox</sub>"]
+    lin --> notif["A notifier<br/><sub>a client, bring your own</sub>"]
     lin -->|"OpenLineage"| graph["Graph backend<br/><sub>bring your own</sub>"]
     maint["Maintenance<br/><sub>expiry · purge · reconcile</sub>"] --> store
-    ui["The console<br/><sub>a single-page app, a client</sub>"] --> cat
+    ui["The console<br/><sub>the lakehouse's own UI</sub>"] --> cat
     ui --> lin
 ```
 
@@ -31,12 +31,13 @@ flowchart LR
    the catalog authorizes it on **OpenFGA** and governs the bronze → silver → gold tiers in its own write path.
 2. The catalog announces every committed write as an **OpenLineage** event; lineage records it, serves the
    durable `GET /events` feed a pipeline polls and forwards it to a graph backend of the operator's choice; a
-   notifier, a client such as the notifications inbox, tells the right person from the fields each event names
+   notifier, a client the lakehouse does not run, tells the right person from the fields each event names
    ([the contract](COMMIT-EVENTS.md#telling-people-the-notifier-contract)).
 3. **Maintenance** expires versions, purges trash, scans for orphans and reconciles stores.
-4. The **console**, a single-page app with no backend of its own, signs a person in with PKCE and reads the catalog,
-   lineage and the notifications inbox with that person's bearer, through the cluster route: the platform's Gateway
-   serves the chart's HTTPRoutes, one per public `/api/*` prefix, and the console release's own.
+4. The **console**, the lakehouse's own UI shipped by the product chart, is a single-page app with no backend of its
+   own. It signs a person in with PKCE and reads the catalog and lineage with that person's bearer, through the cluster
+   route: the platform's Gateway serves the chart's HTTPRoutes, one per public `/api/*` prefix, and `rask-console` at
+   `/`. Its bell lists the person's own writes in that tab.
 
 ## Where to go next
 

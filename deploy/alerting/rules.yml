@@ -659,7 +659,7 @@ groups:
   # THE HTTP PLANE — fourteen apps emitted RED metrics and not one rule read them.
   #
   # `grep 'http_server\|ingest_\|flows_\|gateway\|compute_\|controlplane' rules.yml` returned ZERO at
-  # HEAD on 2026-08-26. Every app emits `http.server.*` automatically (service_kit.setup_otel wires the
+  # HEAD on 2026-08-26. Every app emits `http.server.*` automatically (`opentelemetry-instrument` wires the
   # FastAPI instrumentor), the chart provisions a Perses "Fleet — RED" dashboard from those very
   # series, and nothing turned any of it into a page. Eight of fourteen apps had no group at all —
   # including the gateway and every app a browser talks to.
@@ -759,5 +759,5 @@ groups:
           description: >-
             `http_server_duration_milliseconds_count` does not exist, so HttpServerErrorRatioHigh and
             HttpServerLatencyHigh are both dead and their silence means nothing. Either
-            `service_kit.setup_otel` stopped wiring the FastAPI instrumentor, or the OTLP path to
+            `opentelemetry-instrument` stopped wiring the FastAPI instrumentor, or the OTLP path to
             GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#no-app-reports-http-metrics

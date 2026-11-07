@@ -9,14 +9,12 @@ its own 5 s default while the app container is still inside its 5 s preStop slee
 the grace period allows. The kubelet SIGTERMs every container in the pod SIMULTANEOUSLY, so the
 sidecar is gone before the app's drain window has properly opened.
 
-THE CONCRETE FAILURE, and it is silent. A stage runner or the producer that is mid-handler when a rollout
-starts finishes its Lance write and then calls `publish_event` to fire the next stage against a
-sidecar that has already stopped: the write landed, the cascade trigger did not, and nothing
-distinguishes that from a stage that simply had no successor. The estate has already paid for this
-class of mismatch once — `lakehouse_kit.dapr_publish` exists because "the bare publish_event is
-unbounded, so a wedged sidecar hangs this activity forever", which bounds the hang without making the
-publish succeed. It also undermines the drain gate on `/bronze-arrival`, whose RETRY verdict has to
-travel back through the sidecar to reach the broker.
+THE CONCRETE FAILURE, and it is silent. A catalog door that is mid-handler when a rollout
+starts finishes its Lance write and then calls `publish_event` to announce it against a sidecar
+that has already stopped: the write landed, the announcement did not, and nothing distinguishes that
+from a write nobody subscribed to. `lakehouse_kit.dapr_publish` bounds a wedged sidecar's hang without making the publish succeed. It
+also undermines the drain gate on a delivered route, whose RETRY verdict has to travel back through
+the sidecar to reach the broker.
 
 TWO NUMBERS, ONE FORMULA. `kubernetes.md` gives the grace budget as
 `preStop + max in-flight + lifespan cleanup + buffer`, and `microservices.md` adds the sidecar term
@@ -60,7 +58,7 @@ def test_every_sidecar_is_told_to_outlive_the_apps_drain() -> None:
     unbounded = sorted(name for name, ann in pods.items() if BLOCK not in ann)
     assert not unbounded, (
         f"these pods run a Dapr sidecar with no {BLOCK}: {unbounded} — daprd takes its 5s default and "
-        f"stops while the app is still draining, so a stage runner's post-write publish_event fires at a "
+        f"stops while the app is still draining, so a door's post-write publish_event fires at a "
         f"sidecar that is already gone"
     )
 

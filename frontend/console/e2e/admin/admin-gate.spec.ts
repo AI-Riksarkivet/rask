@@ -10,7 +10,7 @@ import { ME_ADMIN, ME_MEMBER, mockMe, signIn, TOKEN } from './session';
  * while the panel is closed, so a retry can never toggle an already-open panel back shut. */
 const openPanel = async (page: Page, name: string) => {
 	const trigger = page
-		.getByRole('navigation', { name: 'Zones' })
+		.getByRole('navigation', { name: 'Pages' })
 		.getByRole('button', { name, exact: true });
 	const panel = page.locator('[data-slot="navigation-menu-viewport"]');
 	await expect(async () => {
@@ -45,7 +45,7 @@ test('a non-estate-admin sees ForbiddenPage on every admin route + no admin nav 
 		await expect(page.getByRole('heading', { name: 'Streams' })).toHaveCount(0);
 	}
 	// The navbar hides the admin surfaces from a non-admin (fail-closed IA, not just the door).
-	const nav = page.getByRole('navigation', { name: 'Zones' });
+	const nav = page.getByRole('navigation', { name: 'Pages' });
 	// The bar itself is identity-independent — one trigger per page, no Admin entry in any shape…
 	await expect(nav.getByRole('button', { name: 'Lakehouse', exact: true })).toBeVisible();
 	// ONE trigger: the in-project bar is the Lakehouse entry alone.
@@ -75,7 +75,7 @@ test("an estate admin passes the door and gets Lakehouse's governance columns", 
 	await mockMe(page, ME_ADMIN);
 	await page.goto('/admin/dlq');
 	await expect(page.getByRole('heading', { name: 'Lineage DLQ' })).toBeVisible();
-	const nav = page.getByRole('navigation', { name: 'Zones' });
+	const nav = page.getByRole('navigation', { name: 'Pages' });
 	// ONE, the same as the non-admin above: the in-project bar is identity-independent. Privilege shows
 	// up one level in, as the Lakehouse panel's Operations column — never as a new destination.
 	await expect(nav.getByRole('button')).toHaveCount(1);

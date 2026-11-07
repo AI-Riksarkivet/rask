@@ -434,9 +434,9 @@ def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() 
     """`oldest_seq` — the oldest row the feed still holds.
 
     Lineage prunes its feed on the relay tick, dropping the rows it received longest ago. That
-    prune cannot consult any consumer's cursor: the notifications reconciler's mark lives in ITS Dapr
-    state store, which lineage is not scoped to and must never be — reaching across would couple the
-    producer of the feed to one of its readers.
+    prune cannot consult any consumer's cursor: a reader's mark lives in ITS own store, which lineage
+    is not scoped to and must never be — reaching across would couple the producer of the feed to one
+    of its readers.
 
     So lineage reports its FLOOR and the consumer draws its own conclusion. Without it a reader whose
     mark fell below the floor walks to the end of the feed, sees `next_cursor: None`, and concludes it

@@ -12,8 +12,8 @@ listed on `GET /management/v1/promotions`, and a `can_promote` holder answers it
 `RestoreTable`). Every move of `published` is announced as a `publish_table` lineage run, which a notifier
 delivers to the project's watchers.
 
-It is an endpoint, not a library call, because every writer must publish identically — the ingest
-plane, a Ray job, a backfill script, a person with credentials. A contract each writer implements
+It is an endpoint, not a library call, because every writer must publish identically — a user's
+pipeline on any engine, a backfill script, a person with credentials. A contract each writer implements
 for itself is a contract that drifts per writer, which is the failure § D was written about.
 
 **Gated at `can_update_tag`**, the same rung as `tags/update`, because that is exactly what this
@@ -160,8 +160,8 @@ async def publication_extra(
 
     The tenant is here because the catalog is the only component that can answer it — the binding
     (namespace → warehouse → project) is a registry read, and `CONTROL_ID_PATTERN` permits `-` inside a
-    project id, so no string rule can recover `acme` from `acme-bronze`. The medallion's publication
-    head took segment 0 and got the namespace instead. Resolved through the emitter so this names the
+    project id, so no string rule can recover `acme` from `acme-bronze`: a consumer that took segment 0
+    would get the namespace instead. Resolved through the emitter so this names the
     same tenant the lineage facet does, off the same request-scoped cache.
 
     `project` is OMITTED rather than empty when unresolved: a single-tenant estate has no tenant, and
@@ -179,9 +179,8 @@ async def publication_extra(
     if cascade_id:
         extra["cascade_id"] = cascade_id
     # THE PERSON, resolved by `publication_originator` before it gets here. Omitted when empty on the
-    # same rule as `cascade_id` and `project`: the publication head reads this field and puts it on the
-    # next tier's trigger, so a `""` would be threaded down to a failing stage and addressed to an
-    # inbox actor named "". A consumer must be able to tell "nobody" from somebody named nothing.
+    # same rule as `cascade_id` and `project`: a consumer that carries this field onto the next tier's
+    # work would thread a `""` down to a failing stage, addressed to a recipient named "". A consumer must be able to tell "nobody" from somebody named nothing.
     if originator:
         extra["originator"] = originator
     project = await lineage.project_for(segments[0]) if segments else None
@@ -189,9 +188,9 @@ async def publication_extra(
     # `project_for_namespace` walks binding -> warehouse -> project and does no prefix check, by
     # design — it is a registry read. So a TENANT-LESS lane namespace like `silver`, bound to a
     # warehouse that belongs to a project, resolves to that project. Stamping it there is not a
-    # cosmetic error: the medallion's publication head reads this field verbatim and composes the next
-    # tier as `<project>-<dataset>`, so the hop targets `<project>-gold$catalog` — a
-    # table the runner never wrote — and silver->gold refuses every tabular-lane publication.
+    # cosmetic error: a consumer that reads this field verbatim and composes the next tier as
+    # `<project>-<dataset>` targets `<project>-gold$catalog`, a table nobody wrote, so every promotion
+    # out of a tenant-less namespace fails.
     #
     # A CHECK, NOT A PARSE, which is why this is sound where a string rule is not. This module's
     # docstring records that `acme-bronze` cannot be DECOMPOSED into a project, because

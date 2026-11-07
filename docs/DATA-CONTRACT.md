@@ -171,8 +171,8 @@ version) becomes the contract carrier.
 
 ### 7.6 Becoming a notification producer
 
-A notifier turns events into things addressed to a PERSON. It is a client of the fabric above, not a parallel one
-(the notifications inbox, `services/notifications`, is one) — so a service that wants its work to reach someone stamps
+A notifier turns events into things addressed to a PERSON. It is a client of the fabric above, not a parallel one, and
+the lakehouse runs none ([ADR 0193](adr/0193-the-inbox-is-retired-and-the-console-joins-the-product.md)) — so a service that wants its work to reach someone stamps
 the fields a notifier targets by, never a special case inside a notifier.
 
 **The targeting contract is deliberately NOT restated here.** It lives in exactly one place,
@@ -187,8 +187,8 @@ two homes has none — and the stale half is worse than no half, because a publi
 settledness whatever it says. Read the contract, then the skill.
 
 What belongs here is the FABRIC-level rule, which this document does own: **a producer never writes
-into an inbox.** It publishes; a notifier derives the audience, re-checks visibility per recipient, and
-stores a claim-check POINTER — never a payload copy. That is what keeps this document's own rule
+into a notifier.** It publishes; a notifier derives the audience, re-checks visibility per recipient, and
+keeps a claim-check POINTER — never a payload copy. That is what keeps this document's own rule
 intact one layer up: an event is a refresh hint, and the governed read is still the only path to the
 data.
 

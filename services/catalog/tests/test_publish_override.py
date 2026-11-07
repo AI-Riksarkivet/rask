@@ -1,6 +1,6 @@
 """A validator may accept a promotion the gate refused — and may never accept a corrupt one.
 
-The medallion's quality gate had two answers and grew a third: a held promotion becomes a QUESTION a
+The quality gate had two answers and grew a third: a held promotion becomes a QUESTION a
 person can answer. Under a tag-driven cascade the resume must move the `published` tag, and no door
 did that past a failed gate — `publish` re-ran the assertions and refused, `tags/update` moved the tag
 and emitted nothing. So "a validator accepted data the gate refused" was unexpressible.
@@ -10,9 +10,9 @@ This is that door, and its whole safety rests on two properties:
   * the caller names EXACTLY which assertions it accepted, so an override is a statement about known
     findings rather than a blanket `force=true` that also waves through whatever appears later;
   * STRUCTURAL failures can never be accepted, by anyone. A null key or an unresolvable blob pointer
-    means the data is wrong, not unusual, and no approval makes it right. The medallion's review
-    already refuses to ASK about those — this refuses to ACT on them, so a caller that bypasses the
-    workflow cannot publish corrupt data either.
+    means the data is wrong, not unusual, and no approval makes it right. A review never
+    ASKS about those, and this door refuses to ACT on them, so a caller that bypasses the review cannot
+    publish corrupt data either.
 """
 
 from __future__ import annotations
@@ -110,8 +110,8 @@ class TestAnAcceptedFindingPublishes:
 
 class TestStructuralFindingsAreNeverAcceptable:
     def test_a_NULL_KEY_is_refused_even_when_named(self, ns, table: DoorTable) -> None:  # noqa: ANN001
-        """The load-bearing refusal. The medallion's review will not ask about this; the door will not
-        act on it either, so bypassing the workflow buys nothing."""
+        """The load-bearing refusal. A review will not ask about this and the door will not act on it,
+        so bypassing the review buys nothing."""
         version = _write(ns, [1, None, 3])
 
         result = publish(table, StorageOptions(), version=version, key_column="id", accept_assertions=["not_null"])

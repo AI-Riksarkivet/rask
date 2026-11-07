@@ -9,8 +9,8 @@
 	import { IsMobile, SHELL_COLLAPSE_BREAKPOINT } from '../hooks/is-mobile.svelte.js';
 	import { ChevronRight, MoreHorizontal } from '@lucide/svelte';
 	import { gsap } from 'gsap';
-	import { zoneNavLeaves } from './nav-config.js';
-	import type { Me, NotificationFeed, Project, NavUser, ZoneNav } from './nav-config.js';
+	import { pageNavLeaves } from './nav-config.js';
+	import type { ActivityFeed, Me, Project, NavUser, PageNav } from './nav-config.js';
 	import { collapseCrumbs, pathCrumbs, projectFromHost, type Crumb } from './breadcrumb.js';
 	import { isMainMenu } from './nav-config.js';
 
@@ -36,7 +36,7 @@
 		return () => tween.kill();
 	}
 
-	// The shared application shell: a app-scoped sidebar (the CURRENT page's routes, from `zoneNav`)
+	// The shared application shell: a app-scoped sidebar (the CURRENT page's routes, from `pageNav`)
 	// + a content inset headed by TWO rows — the estate navbar (sidebar trigger, project switcher,
 	// full-page page links, identity/theme) and, under it, a slim breadcrumb bar. They used to share
 	// one row, where the breadcrumb and the app links fought for the same horizontal space and
@@ -55,14 +55,11 @@
 		// states for both auth modes.
 		user = null,
 		authEnabled = false,
-		zoneNav = null,
+		pageNav = null,
 		me = null,
 		meLoading = false,
-		notifications = null,
-		sidebarFooter,
+		activity = null,
 		sidebarContent,
-		canvas = false,
-		crumbs: extraCrumbs = [],
 		children,
 	}: {
 		pathname?: string;
@@ -72,35 +69,14 @@
 		user?: NavUser | null;
 		authEnabled?: boolean;
 		/** The CURRENT page's own sidebar routes; null renders an empty sidebar (pre-wiring). */
-		zoneNav?: ZoneNav | null;
+		pageNav?: PageNav | null;
 		/** The frozen /management/v1/me identity for the navbar (null = signed out / unresolved). */
 		me?: Me | null;
 		/** True while the console's fetchMe() is in flight — the navbar renders skeletons. */
 		meLoading?: boolean;
-		/** Crumbs the PATH cannot express, appended after the path-derived trail.
-		 *
-		 *  The shell derives its trail from `pathname`, which is right for a page whose state is its
-		 *  URL path. It is not enough for one whose state is a QUERY — the annotate canvas lives at
-		 *  `/annotator/?keys=…`, so a path-derived trail says "Annotator" and cannot say WHICH page of
-		 *  which task you are on. That is why the canvas had no breadcrumb at all; the answer is to let
-		 *  the app contribute the part it alone knows, not to hide the bar. */
-		crumbs?: Crumb[];
-		/** The console's run feed for the navbar's notification bell (see `NotificationFeed`). The shell
-		 *  never fetches it; `null` renders no bell at all. */
-		notifications?: NotificationFeed | null;
-		/** A page whose CONTENT owns the whole viewport — an annotation canvas, not a page of panels.
-		 *  Drops the sidebar and the breadcrumb row and gives `children` the full height, while keeping the
-		 *  one thing every page must share: this header, with the project switcher and the identity cluster
-		 *  in the same place at the same size.
-		 *
-		 *  It exists because the annotator hand-rolled its own `<header>` around a bare TopNavbar instead —
-		 *  two implementations of the estate header, free to drift, and they did: that page's account avatar
-		 *  sat on the LEFT (it omitted the `min-w-0 flex-1` this file passes), and it had no project
-		 *  switcher and no breadcrumb while the other three did. A missing variant is why a page forks the
-		 *  shell; adding the variant is the fix. */
-		canvas?: boolean;
-		/** Optional app-owned sidebar footer (e.g. media's live service-status popover). */
-		sidebarFooter?: Snippet;
+		/** The reader's activity for the navbar's bell (see `ActivityFeed`). The shell never stores it;
+		 *  `null` renders no bell at all. */
+		activity?: ActivityFeed | null;
 		/** Optional app-owned rail CONTENT under the app nav (e.g. the workbench's saved views).
 		 *  Forces the rail visible even for a single-leaf page — such a page's rail content IS its
 		 *  navigation, and hiding the rail also hid the project switcher and collapse trigger,
@@ -114,7 +90,7 @@
 	// exist, so pages like the catch-all render no rail and no collapse trigger at all.
 	// Counted across every group AND nested child, so a page that splits one list into two groups
 	// does not accidentally fall under the threshold.
-	const hasNav = $derived(zoneNavLeaves(zoneNav).length > 1 || sidebarContent !== undefined);
+	const hasNav = $derived(pageNavLeaves(pageNav).length > 1 || sidebarContent !== undefined);
 
 	// Project-first breadcrumb via HOST: the project IS the request host, so the path
 	// carries only the domain + in-project trail. The project is the breadcrumb ROOT
@@ -141,7 +117,7 @@
 			? [{ id: '__project', label: projectName, href: `/projects/${projectName}` }]
 			: [],
 	);
-	const crumbs = $derived([...projectCrumb, ...pathCrumbs(pathname), ...extraCrumbs]);
+	const crumbs = $derived([...projectCrumb, ...pathCrumbs(pathname)]);
 	// A deep path (project → domain → collection → a long resource id) does not fit a narrow row, so
 	// the MIDDLE of the trail folds behind an ellipsis menu rather than squeezing every crumb into
 	// illegibility — and the current page, the one crumb worth keeping, is never the thing that
@@ -152,37 +128,22 @@
 	// renders as text and carries aria-current instead.
 	const lastCrumbId = $derived(trail.tail.at(-1)?.id);
 
-	// A canvas page starts with the rail icon-collapsed so the canvas keeps its width; every other
-	// page starts expanded. Initial state only — bound, so the trigger and cmd/ctrl+b still work
-	// everywhere. Deliberately NOT $derived: that would fight the user, snapping the rail back to
-	// the prop's value every time anything rerendered. `canvas` is fixed per page (it is passed as a
-	// literal by the one page that sets it), so capturing it once is the correct reading.
-	// svelte-ignore state_referenced_locally
-	let sidebarOpen = $state(!canvas);
+	// Bound, so the trigger and cmd/ctrl+b open and close the rail.
+	let sidebarOpen = $state(true);
 </script>
 
 <Sidebar.Provider bind:open={sidebarOpen} class="h-svh overflow-hidden">
-	<!-- The rail renders in EVERY page that has somewhere to go, canvas included. `canvas` used to
-	     suppress it outright, which is why the annotator was the one page with no sidebar at all — a
-	     user landing there lost the navigation every other page gave them, with no way to get it
-	     back. Canvas means "the content owns the viewport height", not "the console opts out of
-	     navigation"; it now starts icon-collapsed instead (see sidebarOpen), so the canvas keeps its
-	     width and the rail is one click away. -->
+	<!-- The rail renders in EVERY page that has somewhere to go: a page without it loses the
+	     navigation every other page gives, with no way to get it back. -->
 	{#if hasNav}
-		<AppSidebar
-			{pathname}
-			{zoneNav}
-			project={shellProject}
-			footer={sidebarFooter}
-			content={sidebarContent}
-		/>
+		<AppSidebar {pathname} {pageNav} project={shellProject} content={sidebarContent} />
 	{/if}
 	<Sidebar.Inset class="flex min-w-0 flex-col overflow-hidden">
 		<!-- STATIC on purpose. Making this `relative` (a z-30 stacking context) looked like the fix
 		     for the workbench's dock painting over the navbar dropdowns — and instead made the header
 		     the containing block for the NavigationMenu's absolutely-positioned viewport, which then
-		     rendered nothing at all (open, height 452, opacity 1, invisible — proven by comparing the
-		     compute page, which still worked, against the workbench, which did not). The dock is
+		     rendered nothing at all (open, height 452, opacity 1, invisible — proven by comparing a
+		     page without a dock, which still worked, against the workbench, which did not). The dock is
 		     isolated on ITS side instead (a page whose content paints over chrome must lower itself,
 		     never raise the shared shell). -->
 		<header class="flex min-w-0 shrink-0 flex-col">
@@ -191,19 +152,11 @@
 			     identity/theme) takes the rest. The project switcher moved to the SIDEBAR HEADER: it is
 			     project context, and the rail's top slot was spending itself on the app name, which the
 			     navbar highlight and the breadcrumb already say. -->
-			<!-- `border-b` only in canvas mode: normally the breadcrumb row below carries `border-y` and
-			     supplies the separation, so adding one here would double it. Canvas mode drops that row —
-			     and took the divider with it, leaving the header floating against the content, which is
-			     visible the moment you look at the two pages side by side. -->
+			<!-- No border: the breadcrumb row below carries `border-y` and supplies the separation. -->
 			<div
-				class="flex h-14 min-w-0 shrink-0 items-center gap-2 px-4 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12 {canvas
-					? 'border-border/60 border-b'
-					: ''}"
+				class="flex h-14 min-w-0 shrink-0 items-center gap-2 px-4 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12"
 			>
-				<!-- Nothing to toggle when there is no sidebar; the switcher and identity stay either way.
-				     Gated on hasNav ALONE, not on canvas: a canvas page now renders a rail (collapsed),
-				     so suppressing its trigger would leave the annotator with a sidebar nobody could
-				     expand. -->
+				<!-- Nothing to toggle when there is no sidebar; the switcher and identity stay either way. -->
 				{#if hasNav}
 					<Sidebar.Trigger class="text-muted-foreground hover:text-foreground -ml-1 shrink-0" />
 					<Separator orientation="vertical" class="data-[orientation=vertical]:h-4" />
@@ -214,93 +167,85 @@
 					{meLoading}
 					{user}
 					{authEnabled}
-					{notifications}
+					{activity}
 					class="min-w-0 flex-1"
 				/>
 			</div>
 			<!-- Row 2 — the breadcrumb bar. Its own slim row, so it can never be squeezed by (or
 			     overlap) the app links; within the row, a trail too long to fit folds its MIDDLE
-			     behind the ellipsis menu (`collapseCrumbs`) instead of shrinking the current page.
-
-			     It renders in CANVAS mode too. It used to be suppressed there, which left the annotate
-			     view with no way back and nothing saying where you were — and the app rail that might
-			     have covered for that is gone. A canvas page contributes its own `crumbs` (its state is
-			     a query, not a path), so the trail says which task and which page rather than just
-			     naming the app. One slim row is a cheap price for not being lost. -->
-			{#if !canvas || crumbs.length > 0}
-				<nav
-					aria-label="Breadcrumb"
-					class="border-border/60 bg-muted/20 flex h-9 min-w-0 shrink-0 items-center overflow-hidden border-y px-4 text-sm"
-				>
-					<ol class="flex min-w-0 items-center gap-1.5">
-						<li class="text-muted-foreground shrink-0 capitalize">{projectName}</li>
-						{#each trail.lead as crumb (crumb.id)}
-							<li class="flex min-w-0 shrink-0 items-center gap-1.5">
-								<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
+			     behind the ellipsis menu (`collapseCrumbs`) instead of shrinking the current page. -->
+			<nav
+				aria-label="Breadcrumb"
+				class="border-border/60 bg-muted/20 flex h-9 min-w-0 shrink-0 items-center overflow-hidden border-y px-4 text-sm"
+			>
+				<ol class="flex min-w-0 items-center gap-1.5">
+					<li class="text-muted-foreground shrink-0 capitalize">{projectName}</li>
+					{#each trail.lead as crumb (crumb.id)}
+						<li class="flex min-w-0 shrink-0 items-center gap-1.5">
+							<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
+							<a
+								href={crumb.href}
+								class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
+								>{crumb.label}</a
+							>
+						</li>
+					{/each}
+					{#if trail.hidden.length > 0}
+						<!-- The folded middle: an affordance, not a deletion — every skipped ancestor is one
+					     click away, so the trail stays navigable at any width. -->
+						<li class="flex shrink-0 items-center gap-1.5">
+							<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
+							<DropdownMenu.Root>
+								<DropdownMenu.Trigger>
+									{#snippet child({ props })}
+										<button
+											{...props}
+											type="button"
+											data-slot="breadcrumb-ellipsis"
+											aria-label="Show hidden breadcrumbs"
+											class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex size-5 items-center justify-center rounded-sm transition-colors outline-none focus-visible:ring-3"
+										>
+											<MoreHorizontal class="size-3.5" />
+										</button>
+									{/snippet}
+								</DropdownMenu.Trigger>
+								<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">
+									{#each trail.hidden as crumb (crumb.id)}
+										<DropdownMenu.Item class="p-0">
+											<a href={crumb.href} class="w-full truncate px-2 py-1.5 capitalize"
+												>{crumb.label}</a
+											>
+										</DropdownMenu.Item>
+									{/each}
+								</DropdownMenu.Content>
+							</DropdownMenu.Root>
+						</li>
+					{/if}
+					{#each trail.tail as crumb (crumb.id)}
+						<li class="flex min-w-0 items-center gap-1.5">
+							<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
+							{#if crumb.id === lastCrumbId}
+								<span
+									aria-current="page"
+									class="text-foreground truncate font-medium capitalize"
+									data-slot="breadcrumb-page">{crumb.label}</span
+								>
+							{:else}
+								<!-- The SAME conditional the lead and dropdown branches carry, and the one this
+								     branch was missing (#92): `collapseCrumbs` puts EVERYTHING in tail whenever
+								     the trail fits (breadcrumb.ts:102) — the common case — so the `__project`
+								     crumb rendered HERE as a soft link into the console from six pages that
+								     do not own `/projects/…`. Pinned all-or-nothing by the app-contract gate. -->
 								<a
 									href={crumb.href}
 									class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
 									>{crumb.label}</a
 								>
-							</li>
-						{/each}
-						{#if trail.hidden.length > 0}
-							<!-- The folded middle: an affordance, not a deletion — every skipped ancestor is one
-						     click away, so the trail stays navigable at any width. -->
-							<li class="flex shrink-0 items-center gap-1.5">
-								<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
-								<DropdownMenu.Root>
-									<DropdownMenu.Trigger>
-										{#snippet child({ props })}
-											<button
-												{...props}
-												type="button"
-												data-slot="breadcrumb-ellipsis"
-												aria-label="Show hidden breadcrumbs"
-												class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex size-5 items-center justify-center rounded-sm transition-colors outline-none focus-visible:ring-3"
-											>
-												<MoreHorizontal class="size-3.5" />
-											</button>
-										{/snippet}
-									</DropdownMenu.Trigger>
-									<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">
-										{#each trail.hidden as crumb (crumb.id)}
-											<DropdownMenu.Item class="p-0">
-												<a href={crumb.href} class="w-full truncate px-2 py-1.5 capitalize"
-													>{crumb.label}</a
-												>
-											</DropdownMenu.Item>
-										{/each}
-									</DropdownMenu.Content>
-								</DropdownMenu.Root>
-							</li>
-						{/if}
-						{#each trail.tail as crumb (crumb.id)}
-							<li class="flex min-w-0 items-center gap-1.5">
-								<ChevronRight class="text-muted-foreground/40 size-3.5 shrink-0" />
-								{#if crumb.id === lastCrumbId}
-									<span
-										aria-current="page"
-										class="text-foreground truncate font-medium capitalize"
-										data-slot="breadcrumb-page">{crumb.label}</span
-									>
-								{:else}
-									<!-- The SAME conditional the lead and dropdown branches carry, and the one this
-									     branch was missing (#92): `collapseCrumbs` puts EVERYTHING in tail whenever
-									     the trail fits (breadcrumb.ts:102) — the common case — so the `__project`
-									     crumb rendered HERE as a soft link into the console from six pages that
-									     do not own `/projects/…`. Pinned all-or-nothing by the app-contract gate. -->
-									<a
-										href={crumb.href}
-										class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 truncate rounded-sm capitalize transition-colors outline-none focus-visible:ring-3"
-										>{crumb.label}</a
-									>
-								{/if}
-							</li>
-						{/each}
-					</ol>
-				</nav>
-			{/if}
+							{/if}
+						</li>
+					{/each}
+				</ol>
+			</nav>
 		</header>
 		<div
 			class="content-enter flex min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden"

@@ -217,32 +217,31 @@ that genuinely wants open self-serve says so, and says it deliberately.
 ONE CALLER, ONE REPLICA — because the control-event cursor is per-replica. Each catalog replica
 subscribes to `catalog.control.v1` with NO queueGroupName (broadcast), so every replica keeps its
 own ring buffer and its own monotonic counter (`core/control_buffer.py`). Round-robined across the
-two replicas `values-prod.yaml` runs, the console hands replica A's cursor to replica B, which
+two replicas `values-prod.yaml` runs, a polling caller hands replica A's cursor to replica B, which
 reads it against a counter that never issued it.
 
 MEASURED 2026-09-18 on two live replicas, and the symptom is worse than a reset. Thirty polls from
 one pod with affinity OFF returned cursors `0, 0, 0, 0, 18, 18, 18, 0` and `reset=0` — a cursor
 AHEAD of a replica's counter is not off-the-end, so that replica answers an EMPTY PAGE rather than
-a reset. The console is not told to re-read; it is told there is nothing new, and the events that
+a reset. The caller is not told to re-read; it is told there is nothing new, and the events that
 replica holds are silently skipped. With affinity on, the same thirty polls held cursor 18
 throughout.
 
 AFFINITY RATHER THAN A SHARED BUFFER: the events are hints and the audit trail is the durable
-record, so the console can always re-read authoritative state. Paying for a shared buffer to fix a
+record, so a caller can always re-read authoritative state. Paying for a shared buffer to fix a
 polling artefact is the wrong trade.
 
-`ClientIP` works here because every caller it governs is a POD with a stable address reaching the
-Service through kube-proxy — the console's poll runs server-side in the home zone and reaches this
-Service directly (`CATALOG_API`), not through the cluster route. Maintenance runs its own pods and
-keeps spreading.
-Public traffic through the Gateway is not pinned by this: a Gateway API data plane balances across the
+`ClientIP` governs only a POD with a stable address reaching the Service through kube-proxy.
+Public traffic through the Gateway, the console's included, is not pinned by this: a Gateway API data plane balances across the
 Service's endpoints itself rather than through its ClusterIP, so the data plane's single source
 address never meets kube-proxy's affinity. An implementation that forwarded to the ClusterIP instead
-would send every edge request to one replica.
+would send every edge request to one replica. The console carries no cursor: it reads the buffer
+from `since=0` on each read (`frontend/console/src/lib/remote/warehouses.api.ts`), and every replica
+holds the same broadcast events.
 
 ## `timeoutSeconds: 10800`
 
-Longer than any console session, so the cursor is not reset by the affinity expiring between
+Longer than any polling session, so the cursor is not reset by the affinity expiring between
 polls — which would be this same defect on a timer. kube-proxy's own default is 10800s; stated
 here so the window is a decision rather than an inherited one.
 
@@ -351,7 +350,7 @@ issues a new id, so the id cannot be configuration.
 ## `- { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "secret_key" }`
 
 THE OTHER HALF OF THE PAIR, named beside the key id because a scoped key signed with any other
-secret fails `SignatureDoesNotMatch` on every operation (measured on the Ray and maintenance pairs).
+secret fails `SignatureDoesNotMatch` on every operation (measured on two scoped pairs).
 `dapr_secret_s3_field` defaults to the same field, so a service run without the chart reads its own pair too.
 
 ## `{{- include "lance.governedOidcEnv" . | nindent 12 }}`

@@ -3,7 +3,7 @@
 	import * as DropdownMenu from '../components/dropdown-menu/index.js';
 	import { Button } from '../components/button/index.js';
 	import { toggleMode } from 'mode-watcher';
-	import { Sun, Moon, Settings, LogIn, LogOut } from '@lucide/svelte';
+	import { Sun, Moon, LogIn, LogOut } from '@lucide/svelte';
 	import type { NavUser } from './nav-config.js';
 
 	// The shell identity + theme control, relocated from the sidebar footer to the navbar's right side:
@@ -66,17 +66,6 @@
 			<Sun class="size-4 dark:hidden" />
 			<Moon class="hidden size-4 dark:block" />
 			Toggle theme
-		</DropdownMenu.Item>
-		<!-- The account menu is where PER-SUBJECT configuration belongs, which is why this row stopped
-		     being `disabled` and started going somewhere. It was "Settings (soon)" — a dead control, the
-		     shape this estate refuses everywhere else — while the notification preferences it should
-		     have pointed at sat behind `/settings`'s estate-admin door, reachable by almost nobody.
-		     -->
-		<DropdownMenu.Item>
-			<a href="/preferences" class="flex w-full items-center gap-2">
-				<Settings class="size-4" />
-				Preferences
-			</a>
 		</DropdownMenu.Item>
 		{#if authEnabled}
 			<DropdownMenu.Separator />

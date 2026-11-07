@@ -18,7 +18,7 @@ data:
       type: memory
     web:
       http: 0.0.0.0:{{ .Values.port }}
-      {{- with .Values.allowedOrigins }}
+      {{- with concat .Values.console.allowedOrigins .Values.allowedOrigins | uniq }}
       allowedOrigins: {{ toJson . }}
       {{- end }}
     oauth2:
@@ -57,13 +57,17 @@ data:
       - id: {{ required "audience names the lakehouse's audience client" .Values.audience }}
         name: Lakehouse
         secret: {{ required "audienceSecret is the audience client's secret, which no client is given" .Values.audienceSecret }}
-        trustedPeers: [{{ .Values.clientId | quote }}{{ range concat .Values.machineClients .Values.clients }}, {{ .id | quote }}{{ end }}]
+        trustedPeers: [{{ .Values.clientId | quote }}, {{ .Values.console.clientId | quote }}{{ range concat .Values.machineClients .Values.clients }}, {{ .id | quote }}{{ end }}]
       {{- range .Values.machineClients }}
       - id: {{ .id }}
         name: {{ .id }}
         secret: {{ .secret }}
       {{- end }}
-      {{- $ids := list .Values.clientId .Values.audience }}
+      - id: {{ required "console.clientId names the console's public sign-in client" .Values.console.clientId | quote }}
+        name: Console
+        public: true
+        redirectURIs: {{ required "console.redirectURIs names the console's callbacks: Dex accepts any loopback, out-of-band or device redirect for a public client with none" .Values.console.redirectURIs | toJson }}
+      {{- $ids := list .Values.clientId .Values.audience .Values.console.clientId }}
       {{- range concat .Values.machineClients .Values.clients }}
       {{- if has .id $ids }}{{ fail (printf "Dex client id %q is declared twice" .id) }}{{ end }}
       {{- $ids = append $ids .id }}

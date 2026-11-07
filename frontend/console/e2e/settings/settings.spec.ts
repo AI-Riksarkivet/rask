@@ -16,7 +16,7 @@ let token: string;
 const seed = (page: Page, routes: Record<string, unknown>): Promise<void> =>
 	seedFor(page, token, routes);
 
-const nav = (page: Page) => page.getByRole('navigation', { name: 'Zones' });
+const nav = (page: Page) => page.getByRole('navigation', { name: 'Pages' });
 
 /** The page's OWN rows — scoped to its sections, never the whole document. The navbar also carries a
  *  "Projects" link (it is a main-menu entry AND a settings row now), so an unscoped `getByRole('link')`

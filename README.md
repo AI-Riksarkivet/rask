@@ -24,7 +24,8 @@ events) names one. The test for any shared seam is *would this still be right fo
 This repository holds the lakehouse and its console, nothing else. Every other client (flows, compute and the Ray
 engine fixtures, the annotator, the viewer and search with the explorer, table-maintenance, the sealed runners) left
 it and is recovered from git history at `64ef118a9`, the last commit that holds every client, when it moves to its
-own repository.
+own repository. The notifications inbox is retired, not moved: the lakehouse emits signed events and publishes their
+targeting contract for any notifier a client builds (ADR 0193).
 
 Polyglot monorepo: Python via [uv], JS/TS via [Bun] (oxlint + oxfmt), docs via [Zensical], hermetic builds via
 [Dagger] (`.dagger/` — **every image**, local and CI).
@@ -43,27 +44,23 @@ Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
     (the OpenLineage intake, the commit feed and edge list as Lance tables, and the durable `GET /events` log; the
     lineage graph is bring-your-own, ADR 0158), `maintenance` (version expiry, trash purge, the orphan scan,
     cross-store reconcile, and the list of tables due for a bring-your-own compaction or index optimize; ADR 0162)
-  - **beside the console**: `notifications`, the per-subject inbox behind the console's bell, a client of the
-    lakehouse's events (ADR 0190)
   - **the edge** is the platform's Gateway (Kubernetes Gateway API), not a rask process: the chart's HTTPRoutes
     (`chart/templates/route.yaml`) send each public `/api/*` prefix to its service, and every service authenticates
     each request itself (ADR 0165)
 - `frontend/` — the JS/TS plane; its own Bun workspace root:
-  - `console/` — the console: ONE SvelteKit 3 + Svelte 5 single-page app with no backend of its own. The browser
-    signs in to Dex with PKCE on its own public client `rask-console`, keeps its tokens in memory under a strict Content
-    Security Policy, and calls the catalog, lineage and inbox APIs with its bearer. A small Bun server (`serve.ts`)
-    serves the built files and the runtime `config.json`
+  - `console/` — the console, the lakehouse's own UI: ONE SvelteKit 3 + Svelte 5 single-page app with no backend of
+    its own, shipped by the product chart (ADR 0193). The browser signs in to Dex with PKCE on the lakehouse's public
+    client `rask-console`, keeps its tokens in memory under a strict Content Security Policy, and calls the catalog and
+    lineage APIs with its bearer. Its bell lists the reader's own writes, kept in the tab. A small Bun server
+    (`serve.ts`) serves the built files and the runtime `config.json`
   - `packages/` — `@rask/ui` (Svelte 5 + Bits UI + Tailwind 4 design system, Storybook), `@rask/api` (the typed
     client generated from the OpenAPI specs), `@rask/dockview` (the workbench), `@rask/flow` (the governance graphs)
 - `scripts/` — all dev/ops scripts (the e2e stack drivers, the estate seed, the chart and store tooling)
-- `tests/` — cross-service suites: `unit`, `integration`, `e2e-py` (**live**, `-m e2e`, needs a
-  deployed stack), `e2e` (the inbox's two browser verify scripts and their `console.mjs` helper, run with `bun`, its own
-  lockfile; read-only unless `--write`)
-- `chart/` — the product chart: the lakehouse's services and their configuration, with OpenFGA as its only
+- `tests/` — cross-service suites: `unit`, `integration` and `e2e-py` (**live**, `-m e2e`, needs a
+  deployed stack)
+- `chart/` — the product chart: the lakehouse's services, its console and their configuration, with OpenFGA as its only
   (optional) subchart. Dapr, NATS JetStream, the CloudNativePG operator, External Secrets, Dex, the object store
   and observability are prerequisites, installed in development from `deploy/fixtures/` (ADR 0153)
-- `deploy/fixtures/console` — the console's own release: the web image, the notifications inbox and an HTTPRoute on
-  the platform's Gateway, beside the product chart and installed after it
 - `.docker/` — one dockerfile per deployable; `.dagger/` — the build + CI module; `docs/` — Zensical
   source (the depth lives here)
 
@@ -89,7 +86,6 @@ make check       # fmt + lint + lint-imports + typecheck + knip + fga-test + go-
 ```bash
 make dev         # the console with Vite HMR, /config.json from frontend/console/dev/config.json, /api → RASK_EDGE_URL (default :8080)
 make dev-k3s     # the same against the in-cluster Gateway and Dex, k3s Traefik on :8080 (reused when it already serves /dex)
-make dev-micro   # the notifications inbox on the host (no edge)
 ```
 
 The lakehouse services (catalog, lineage, maintenance) need Dapr, NATS, OpenFGA and an object store, so they run on
@@ -103,8 +99,9 @@ The chart in `chart/` is the single deploy artifact for both.
 
   ```bash
   make k3s-install                       # one-time host bootstrap (sudo)
-  make k3s-build k3s-import k3s-up       # build, side-load, helm install + wait
-  make k3s-clients                       # the console's release (web + inbox) after the lakehouse
+  make k3s-build k3s-import              # build every image and side-load it into k3s
+  make k3s-up K3S_REGISTRY=              # the fixtures, then rask's release (the lakehouse and its console) from git's values
+                                         # (by default k3s-up pulls from K3S_REGISTRY, localhost:5000, at the pinned tags)
   make seed-dev                          # projects, warehouses, namespaces and grants through the catalog
   make k9s                               # inspect it
   make k3s-down / k3s-purge
@@ -131,7 +128,7 @@ dockerfile stays the source of truth, so a build cannot behave one way locally a
 make audit          # osv-scanner over every lockfile + .dagger/go.mod
 make scan-config    # trivy misconfig + secret detection over dockerfiles + chart
 make scan-secrets   # trufflehog over git history (gates on VERIFIED credentials only)
-make scan-image NAME=notifications
+make scan-image NAME=rest-catalog
 ```
 
 ## CI
@@ -148,10 +145,8 @@ Playwright suite. Everything hermetic runs identically on your machine: `dagger 
 | `make test` / `make test-slow`          | pytest offline (`-m "not slow and not e2e"`) / + slow                |
 | `make check` / `make ci`                | fmt, lint, lint-imports, typecheck, knip, fga-test, go-fmt, chart-docs-check / + tests |
 | `make dev` / `make dev-k3s`             | The console with Vite HMR / against the in-cluster Gateway           |
-| `make dev-micro`                        | The notifications inbox on the host                                  |
 | `make console-image`                    | The console's image through Dagger                                   |
-| `make k3s-build k3s-import k3s-up`      | The long-lived k3s deploy                                            |
-| `make k3s-clients`                      | The console's release, after the lakehouse                           |
+| `make k3s-up`                           | The long-lived k3s deploy, from the dev registry at the pinned tags (`K3S_REGISTRY=` after `k3s-build k3s-import` for side-loaded images) |
 | `make kind-up` / `make kind-down`       | Throwaway kind cluster lifecycle                                     |
 | `make e2e-ci`                           | The guarded live proofs (kind)                                       |
 | `make storybook`                        | `@rask/ui` Storybook on `:6006`                                      |

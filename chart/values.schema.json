@@ -360,6 +360,71 @@
                 }
             }
         },
+        "console": {
+            "type": "object",
+            "properties": {
+                "enabled": {
+                    "description": "Render the console: its Deployment, Service, `/config.json` ConfigMap, ServiceAccount and, with `route.enabled`, its `/` HTTPRoute.",
+                    "type": "boolean"
+                },
+                "oidc": {
+                    "type": "object",
+                    "properties": {
+                        "clientId": {
+                            "description": "The IdP's public client the console signs in with (PKCE, no secret); the development Dex declares `rask-console` (deploy/fixtures/dex `console`).",
+                            "type": "string"
+                        },
+                        "scopes": {
+                            "description": "Scopes the console asks for; `federated:id` and the lakehouse's audience scope are always added.",
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                },
+                "port": {
+                    "description": "Port of the console's static server and its Service.",
+                    "type": "integer"
+                },
+                "replicas": {
+                    "description": "Replicas of the console's static server.",
+                    "type": "integer"
+                },
+                "resources": {
+                    "description": "CPU/memory requests and limits for the console's static server.",
+                    "type": "object",
+                    "properties": {
+                        "limits": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        },
+                        "requests": {
+                            "type": "object",
+                            "properties": {
+                                "cpu": {
+                                    "type": "string"
+                                },
+                                "memory": {
+                                    "type": "string"
+                                }
+                            }
+                        }
+                    }
+                },
+                "runAsUser": {
+                    "description": "The image's non-root uid and gid (`USER 10001` in .docker/frontend.dockerfile), named by number so `runAsNonRoot` can verify it.",
+                    "type": "integer"
+                }
+            }
+        },
         "dapr": {
             "type": "object",
             "properties": {
@@ -495,11 +560,28 @@
             "description": "Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-\u003ccomponent\u003e`.",
             "type": "string"
         },
+        "global": {
+            "description": "Global values shared between all subcharts",
+            "$comment": "Added automatically by 'helm schema' to allow this chart to be used as a Helm dependency, as this schema would otherwise not allow Helm's special 'global' values key.",
+            "type": [
+                "object",
+                "null"
+            ]
+        },
         "image": {
             "type": "object",
             "properties": {
                 "catalog": {
                     "description": "Lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one.",
+                    "type": "object",
+                    "properties": {
+                        "repository": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "console": {
+                    "description": "Console image: `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one.",
                     "type": "object",
                     "properties": {
                         "repository": {
@@ -514,9 +596,12 @@
                 "digests": {
                     "description": "Per-component digest map keyed by component name; beats `tags` and the global tag.",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
+                    "patternProperties": {
+                        "^(lance-rest-catalog|web-console)$": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false
                 },
                 "localImages": {
                     "description": "Renders bare `\u003ccomponent\u003e:\u003ctag\u003e` references for images side-loaded into the node (k3s-import). Never for a remote cluster.",
@@ -535,11 +620,14 @@
                     "type": "string"
                 },
                 "tags": {
-                    "description": "Per-component tag map keyed by component name (lance-rest-catalog, ...); beats the global tag.",
+                    "description": "Per-component tag map keyed by component name (lance-rest-catalog, web-console); beats the global tag.",
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
+                    "patternProperties": {
+                        "^(lance-rest-catalog|web-console)$": {
+                            "type": "string"
+                        }
+                    },
+                    "additionalProperties": false
                 }
             }
         },
@@ -1677,5 +1765,6 @@
                 }
             }
         }
-    }
+    },
+    "additionalProperties": false
 }

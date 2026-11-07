@@ -101,5 +101,5 @@ test('drills warehouse → namespace with tier badges along the way', async ({ p
 //
 // The BEHAVIOUR still matters and is currently UNTESTED: home's e2e suite runs auth-off with no
 // catalog stand-in, so there is nowhere in it to seed a 403 today. Covering it needs home to gain the
-// mock-upstream pattern the lakehouse and media suites use. Named here so the deletion reads as a
+// mock-upstream pattern the lakehouse suite uses. Named here so the deletion reads as a
 // move with a debt, not as coverage that silently evaporated.

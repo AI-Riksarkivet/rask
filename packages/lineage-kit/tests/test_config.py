@@ -71,7 +71,7 @@ def _event() -> RunEvent:
         eventType=RunState.START,
         eventTime="2026-10-02T00:00:00Z",
         run=Run(runId="6f2b1a5e-1f3d-5a0e-9c4b-2f9f0a7d1c33"),
-        job=Job(namespace="ray-jobs", name="train.demo"),
+        job=Job(namespace="pipeline", name="train.demo"),
     )
 
 
@@ -81,8 +81,7 @@ def test_each_emit_presents_the_identity_token_the_file_holds_at_that_moment(
     """The kubelet rewrites the projected token at about 515 s of its 600 s life, so an emitter built once
     (the process-wide default) must present whatever the file holds when each event is sent.
 
-    The endpoint is named by ``RASK_LINEAGE_ENDPOINT``, as the Ray head renders it for the training job, the
-    long-lived emitter this matters for.
+    The endpoint is named by ``RASK_LINEAGE_ENDPOINT``, as a long-lived emitter's pod declares it.
     """
     url, received = lineage_door
     token_file = tmp_path / "token"

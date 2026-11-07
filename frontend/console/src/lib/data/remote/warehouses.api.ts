@@ -88,6 +88,7 @@ export const fetchWarehouseNamespaces = query(
  *  gated by the catalog (can_create_warehouse); on success both registry reads refresh in the same
  *  flight, so the gallery that issued the create never renders the estate it just changed. */
 export const createWarehouse = command(
+	({ id, project }) => `Create warehouse ${id} in project ${project}`,
 	v.object({
 		id: v.string(),
 		project: v.string(),
@@ -126,6 +127,7 @@ export const createWarehouse = command(
 
 /** The activate/deactivate lifecycle — one command instead of the route's action allowlist. */
 export const setWarehouseActive = command(
+	({ id, active }) => `${active ? 'Activate' : 'Deactivate'} warehouse ${id}`,
 	v.object({ id: v.string(), active: v.boolean() }),
 	async ({ id, active }): Promise<ApiResult<WarehouseRecord>> => {
 		const result = parsed(
@@ -163,6 +165,8 @@ export const setWarehouseActive = command(
  *  On success both registry reads refresh in the SAME flight, like every other write in this module —
  *  the gallery that issued the delete never renders an estate it just changed. */
 export const deleteWarehouse = command(
+	({ id, cascade, purgeBucket, force }) =>
+		`${force ? 'Force-delete' : 'Delete'} warehouse ${id}${cascade ? ' with its namespaces' : ''}${purgeBucket ? ', purging its bucket' : ''}`,
 	v.object({
 		id: v.string(),
 		cascade: v.optional(v.boolean()),
@@ -200,6 +204,7 @@ export const deleteWarehouse = command(
  *  rather than nothing at all: an explicit single-flight refresh keeps SvelteKit from falling back to
  *  invalidating every query on the page. */
 export const bindWarehouseNamespace = command(
+	({ id, namespace }) => `Bind namespace ${namespace} to warehouse ${id}`,
 	v.object({ id: v.string(), namespace: v.string() }),
 	async ({ id, namespace }): Promise<ApiResult<unknown>> => {
 		const result = await catalogJSON(`/management/v1/warehouses/${enc(id)}/namespaces`, {

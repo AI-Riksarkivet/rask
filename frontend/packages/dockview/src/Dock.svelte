@@ -5,7 +5,7 @@
 	 * calls `api.addPanel(...)`, `api.toJSON()`, `api.onDidActivePanelChange(...)` exactly as the
 	 * dockview docs describe them, so there is one API to learn rather than two.
 	 *
-	 * Zone-agnostic by construction: everything page-shaped — which panels exist, where a layout is
+	 * Page-agnostic by construction: everything page-shaped — which panels exist, where a layout is
 	 * stored, what context the panels need — arrives as a prop.
 	 */
 	import { getAllContexts, onMount, untrack } from 'svelte';

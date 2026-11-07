@@ -17,7 +17,7 @@ let token: string;
 const seed = (page: Page, routes: Record<string, unknown>): Promise<void> =>
 	seedFor(page, token, routes);
 
-const nav = (page: Page) => page.getByRole('navigation', { name: 'Zones' });
+const nav = (page: Page) => page.getByRole('navigation', { name: 'Pages' });
 
 const NON_ADMIN = { ...ME_ADMIN, estate_admin: false, projects: [] };
 const SHOTS = 'e2e/__shots__';

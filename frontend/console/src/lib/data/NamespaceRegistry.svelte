@@ -364,7 +364,7 @@
 			<dt>medallion stage</dt>
 			<dd>
 				{#if drawerRow.stage}<StageBadge info={drawerRow.stage} />{:else}<span class="mut"
-						>— (not a medallion zone)</span
+						>— (not a tier namespace)</span
 					>{/if}
 			</dd>
 			<dt>tables</dt>

@@ -6,12 +6,12 @@ rask's **own project skills** live in `.claude/skills/` — they describe rask's
 
 | Skill | Covers |
 | --- | --- |
-| `rask-architecture` | Workspace planes, globbed membership, the `make_service_app` seam, deployables |
+| `rask-architecture` | Workspace planes, globbed membership, the `lance_app` factory, deployables |
 | `rask-services-fleet` | Gateway routing, ports, `RASK_*_URL`, the 404/502/403 contracts |
 | `rask-frontend` | The console SPA: route tree, browser PKCE sign-in, data layer, gates |
 | `rask-styling` | `@rask/ui` — OKLCH tokens, Tailwind 4 `@source`, component authoring |
 | `rask-lance-catalog` | The Lance Namespace spec, the catalog's hierarchy, guards, registries, protection/trash, maintenance |
-| `rask-notifications` | The targeting contract the lakehouse's events publish, and how the notifications inbox consumes it |
+| `rask-notifications` | The producer's side of the targeting contract the lakehouse's events publish for any notifier |
 | `rask-dapr` | Which Dapr building blocks the estate uses or refused, and the component-vs-DIY rubric |
 | `rask-rustfs` | RustFS as the dev/CI object store: its zero-trust model, S3 behaviour, provisioning, traps |
 | `rask-testing` | rask's pytest wiring, its real-collaborator fixtures, the row rule for adding tests |

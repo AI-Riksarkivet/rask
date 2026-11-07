@@ -34,20 +34,20 @@ release, before rask's:
 make k3s-install      # one-time: k3s + helm (sudo)
 make k3s-build        # build every image as :dev, through Dagger
 make k3s-import       # side-load the :dev images into k3s
-make k3s-up           # the fixtures, then helm upgrade --install rask ./chart --wait
-make k3s-clients      # the console's release (web + the notifications inbox), after the lakehouse
+make k3s-up K3S_REGISTRY=   # the fixtures, then rask's release (the lakehouse and its console) from git's values
 make seed-dev         # projects, warehouses, namespaces and grants through the catalog's doors
 make k9s              # inspect it
 ```
 
-See [Deployment](../architecture/deployment.md) for the prerequisites, the images and the in-cluster loop.
+`K3S_REGISTRY=` runs the side-loaded images; by default `make k3s-up` pulls from the dev registry at the tags
+`make k3s-pins` wrote. See [Deployment](../architecture/deployment.md) for the prerequisites, the images, how a new
+build reaches the release and the in-cluster loop.
 
 ## Run the console locally
 
 ```bash
 make dev-k3s          # the console with Vite HMR against the in-cluster Gateway and Dex (k3s Traefik on :8080)
 make dev              # the same, with /api pointed at RASK_EDGE_URL (default :8080) and /config.json from frontend/console/dev/config.json
-make dev-micro        # the notifications inbox on the host (:8850, scripts/dev-micro.sh); no edge
 ```
 
 The console is a single-page app with no backend of its own: the browser signs in to the estate's Dex and calls the
@@ -59,7 +59,8 @@ Its Playwright suite runs against mocked upstreams instead: `bun --cwd=frontend 
     The Vite dev server binds loopback-only by default. Start it with `--host`
     (e.g. `bun --cwd=frontend/console run dev -- --host`) to reach it over IPv4 `localhost` or the LAN. Signing in
     from another origin needs that origin's `/auth/callback` among `rask-console`'s redirect URIs and the origin in
-    Dex's `allowedOrigins`, both in `deploy/fixtures/console/dex-values.yaml`; only `http://localhost:5173` is there.
+    Dex's `allowedOrigins`, both under the Dex fixture's `console` value (`deploy/fixtures/dex/chart/values.yaml`);
+    only `http://localhost:5173` is there.
 
 ## Common commands
 

@@ -22,7 +22,7 @@ from tests.unit.chart_yaml import FAST_LOADER
 #: The two cluster-less renders an operator makes: the chart's dev defaults and the local estate's overlay, each with
 #: the dev store's credentials generated, which is where a render-time mint would sit.
 _RENDERS = {
-    "dev": (*DEFAULT_ARGS, "--set", "singleTenant.enabled=true"),
+    "dev": DEFAULT_ARGS,
     "local": ("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml")),
 }
 

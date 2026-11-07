@@ -4,7 +4,7 @@
 	// the deadline is real.
 	//
 	// THE PROBE IS ITS OWN STATE, not an absent record (#147). This card used to render the plain
-	// "not a catalog-registered table" copy in every non-record case — including WHILE the lookup was
+	// not-registered copy in every non-record case — including WHILE the lookup was
 	// in flight and FOREVER after it failed — so a reader with a perfectly recoverable table was told
 	// their data was gone, and a catalog outage said the same thing. The catalog answers 200 with an
 	// EMPTY LIST when there is genuinely no trash record (`tables.py`), so `!res.ok` is never the
@@ -104,10 +104,7 @@
 	</div>
 {:else}
 	<div class="empty">
-		<p>
-			Not a catalog-registered table — storage-managed datasets (medallion zones) have no catalog
-			detail.
-		</p>
+		<p>The catalog registers no table by this name, so there is no detail to show.</p>
 	</div>
 {/if}
 

@@ -4,7 +4,8 @@ A pipeline that reacts to writes (trigger the next tier, refresh a cache, run a 
 durable feed. This page is the contract it polls; rask code is not needed to read it (LH-472, ADR 0156). It is also the
 contract the lakehouse's events publish for any notifier, a client that tells a person what the lakehouse did
 ([§ Telling people](#telling-people-the-notifier-contract),
-[ADR 0190](adr/0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md)).
+[ADR 0190](adr/0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md),
+[ADR 0193](adr/0193-the-inbox-is-retired-and-the-console-joins-the-product.md)).
 
 ## The call
 
@@ -41,7 +42,7 @@ Authorization: Bearer <token>
 - **A cursor beyond the feed's head came from another feed.** A `since` larger than the newest seq the feed
   holds is answered with no events and `next_cursor` equal to that newest seq, lower than the `since` you
   sent. The feed was rebuilt or restored; re-read it from `oldest_seq - 1`, and expect to see events again
-  that you have already handled. A notifier walking the feed does exactly this (the notifications inbox's reconciler).
+  that you have already handled. A notifier walking the feed does exactly this.
 
 ## What you can see
 
@@ -182,8 +183,9 @@ an outside source, and so is a dataset under another catalog's `lance-namespace:
 A notifier tells a person what the lakehouse did: a run wrote a table they may read, a grant changed what they may do.
 The lakehouse runs no notifier. It publishes its events, the fields in them that name whom each is about, and the
 authorization verbs a notifier asks before it tells anyone; a notifier is a client of all three, deployed in its own
-release ([ADR 0190](adr/0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md)). The notifications inbox
-(`services/notifications`, the per-person backend behind the console's bell) is one such client.
+release ([ADR 0190](adr/0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md)). This repository hosts
+none: the console's bell lists only the reader's own writes, kept in the browser
+([ADR 0193](adr/0193-the-inbox-is-retired-and-the-console-joins-the-product.md)).
 
 An event that names nobody is undeliverable, whoever subscribes to it: coverage is decided by the producer that stamps
 these fields, never by the notifier.
@@ -248,8 +250,9 @@ above holds unchanged. Who is told stays gated per person by `can_be_notified`, 
 observes and never what a person receives.
 
 The bus carries the run events too, on `lineage.events.v1`, but only the feed holds the ones producers post over HTTP,
-so a notifier that must not miss a run walks the feed. The topics are internal today: how a client consumes the bus is
-decided with the inbox's release (ADR 0190).
+so a notifier that must not miss a run walks the feed. The topics are internal: the NATS stream Job deletes every
+`-durable` on a stream it walks that no component in the release renders (`chart/templates/nats-stream-job.yaml`), so a
+durable a client creates there does not outlive the next upgrade.
 
 ### The names a Python client imports
 

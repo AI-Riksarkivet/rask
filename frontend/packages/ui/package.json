@@ -176,5 +176,5 @@
 	"peerDependencies": {
 		"svelte": "^5.0.0"
 	},
-	"//": "@rask/flow + @xyflow/svelte back exactly ONE subpath, ./hierarchy — the project›warehouse›namespace›table view two zones render (home's /projects/<id> and the lakehouse Overview) and neither may import from the other. The vendor CANVAS binding still lives in @rask/flow, not here; what @rask/ui owns is the domain view drawn on it, transport-agnostic on the GrantsPanel precedent. A zone importing @rask/ui/hierarchy must declare both packages itself and import their two stylesheets layer(base) in its app.css — no other subpath pulls them."
+	"//": "@rask/flow + @xyflow/svelte back exactly ONE subpath, ./hierarchy — the project›warehouse›namespace›table view the console renders on /projects/<id> and the catalog overview. The vendor CANVAS binding still lives in @rask/flow, not here; what @rask/ui owns is the domain view drawn on it, transport-agnostic on the GrantsPanel precedent. An app importing @rask/ui/hierarchy must declare both packages itself and import their two stylesheets layer(base) in its app.css — no other subpath pulls them."
 }

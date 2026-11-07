@@ -166,16 +166,17 @@ image:
   # overwrites every image with a tag that is not on the node — observed twice on 2026-08-06, once taking the
   # whole release to ImagePullBackOff.
   #
-  # Keys are the COMPONENT name the template passes to `rask.image` (`lance-rest-catalog`, …) — the same string
-  # that appears in the rendered reference. `digests` beats `tags`, exactly as the global `digest` beats the
-  # global `tag`.
+  # Keys are the COMPONENT name the template passes to `rask.image` (`lance-rest-catalog`, `web-console`) — the same
+  # string that appears in the rendered reference, and the only two the schema admits, so a pin for an image the chart
+  # does not render fails the render instead of riding along unread ([[XC-194]]). `digests` beats `tags`, exactly as
+  # the global `digest` beats the global `tag`.
   #
   #   tags:    { lance-rest-catalog: be-256ca0da }
   #   digests: { lance-rest-catalog: "sha256:834d2e23…" }
-  # -- Per-component tag map keyed by component name (lance-rest-catalog, ...); beats the global tag.
-  tags: {} # @schema additionalProperties: {"type": "string"}
+  # -- Per-component tag map keyed by component name (lance-rest-catalog, web-console); beats the global tag.
+  tags: {} # @schema additionalProperties: false; patternProperties: {"^(lance-rest-catalog|web-console)$": {"type": "string"}}
   # -- Per-component digest map keyed by component name; beats `tags` and the global tag.
-  digests: {} # @schema additionalProperties: {"type": "string"}
+  digests: {} # @schema additionalProperties: false; patternProperties: {"^(lance-rest-catalog|web-console)$": {"type": "string"}}
   # Opt-in for side-loaded images (`make k3s-build` + `k3s-import`, `kind load`): renders a bare
   # `<component>:<tag>` that the node must ALREADY hold. Never set this for a remote cluster.
   # -- Renders bare `<component>:<tag>` references for images side-loaded into the node (k3s-import). Never for a remote cluster.
@@ -186,6 +187,9 @@ image:
   # image, different entrypoint.
   # -- Lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one.
   catalog: { repository: lance-rest-catalog }
+  # The console's image, `.docker/frontend.dockerfile`: the single-page app's static build and its static server.
+  # -- Console image: `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one.
+  console: { repository: web-console }
 
 resources:
   # AGE is a DATABASE and was sized as a stateless app container, which is a different thing. It asks
@@ -1131,7 +1135,7 @@ autoscaling:
   # their time BLOCKED, which CPU cannot see.
   #
   # The reference's preferred shape is a Pods-type p95 target, and it was costed rather than waved
-  # at: `service_kit.setup_otel` already exports `http.server.*`, and KEDA's prometheus scaler would
+  # at: `opentelemetry-instrument`'s FastAPI instrumentor already exports `http.server.*`, and KEDA's prometheus scaler would
   # query the telemetry store's PromQL endpoint (`/v1/prometheus`) — the
   # endpoint the platform's alert evaluator uses, so the query path is proven, not speculative. Declined 2026-08-28 (owner): it is a twelfth
   # subchart, its CRDs, and a new silent failure mode (scaler cannot reach GreptimeDB → no scaling,
@@ -1284,6 +1288,36 @@ route:
   parentRefs: []
   # -- Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts.
   hostnames: []
+
+# === The console: the lakehouse's own UI ===========================================================================
+# One single-page app with no backend of its own, served by its image's static server (`serve.ts`), which also answers
+# `/config.json` and sends the strict CSP. The browser signs in to `auth.oidc.issuer` with PKCE as a public client, keeps
+# its tokens in memory, and calls `/api/*` same-origin through the Gateway with its bearer; every door authenticates that
+# bearer itself. The pod calls no door, holds no grant and mounts no token, and under `networkPolicy.enabled` it admits
+# its port from anywhere and dials nothing. Its route is `/` on `route.parentRefs`: the `/api/*` and `/dex` prefixes are
+# longer and keep winning.
+console:
+  # -- Render the console: its Deployment, Service, `/config.json` ConfigMap, ServiceAccount and, with `route.enabled`, its `/` HTTPRoute.
+  enabled: true
+  # -- Replicas of the console's static server.
+  replicas: 1
+  # -- Port of the console's static server and its Service.
+  port: 3000
+  # -- The image's non-root uid and gid (`USER 10001` in .docker/frontend.dockerfile), named by number so `runAsNonRoot` can verify it.
+  runAsUser: 10001
+  # The browser's sign-in, served as `/config.json` with `issuer` set to `auth.oidc.issuer`. The chart adds `federated:id`
+  # and `auth.oidc.audienceScope` (or Dex's cross-client scope for `auth.oidc.audience`) to the scopes, since every governed
+  # door refuses a token without either, so no value can drop them. With `auth.enabled` off the console is told
+  # `{"signIn": false}` and sends no bearer. Nothing here is a secret: a public client holds none.
+  oidc:
+    # -- The IdP's public client the console signs in with (PKCE, no secret); the development Dex declares `rask-console` (deploy/fixtures/dex `console`).
+    clientId: rask-console
+    # -- Scopes the console asks for; `federated:id` and the lakehouse's audience scope are always added.
+    scopes: [openid, profile, email, groups]
+  # -- CPU/memory requests and limits for the console's static server.
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 500m, memory: 128Mi }
 
 # ==== cluster infra foundation (subchart dependencies, Chart.yaml) ==========
 # One `helm install` brings these up alongside the app. Turn off for a prod
@@ -1638,8 +1672,8 @@ openfga:
       value: *serviceAccountIssuer
     - name: OPENFGA_AUTHN_OIDC_SUBJECTS
       valueFrom: { configMapKeyRef: { name: rask-openfga-authn, key: subjects } }
-  # AUTHENTICATED ([[XC-077]]). With no authn the API answered any pod with no credential, so Ray workload
-  # code could write `estate#admin` for itself or replace the model with no rask audit record. Lakekeeper
+  # AUTHENTICATED ([[XC-077]]). With no authn the API answers any pod that presents no credential, so code in any pod
+  # could write `estate#admin` for itself or replace the model with no rask audit record. Lakekeeper
   # authenticates to its OpenFGA as a client of an OIDC provider (crates/authz-openfga/src/config.rs, client
   # credentials or an API key, refusing a half-configured pair); rask's provider is the cluster
   # ServiceAccount issuer (D1), so a client presents its pod's projected token and holds no secret at all.
@@ -1648,8 +1682,8 @@ openfga:
   # Each FGA client projects a 600 s token for the audience `rask-openfga` (`lance.fgaToken`, the
   # `lance.openfgaAudience` this must equal; templates/openfga-authn.yaml refuses a render where they
   # differ) and re-reads it on every request (`service_kit.governed.fga.client_configuration`). OpenFGA
-  # admits a token only with that audience AND a subject on the allow-list above, so a Ray worker, a pod in
-  # another namespace, or an in-namespace pod running as a non-client account is refused. The exclusive
+  # admits a token only with that audience AND a subject on the allow-list above, so a pod in another
+  # namespace, or an in-namespace pod running as a non-client account, is refused. The exclusive
   # NetworkPolicy ingress for OpenFGA, the row's other half, waits on XC-009 and is not rendered here.
   #
   # `issuer` is rendered by the subchart's tpl, so the release name follows the install.

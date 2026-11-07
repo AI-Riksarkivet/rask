@@ -28,8 +28,8 @@ which shows every row. Refusing a publish from a client the bus does not admit i
 proven by `test_nats_admits_each_client_only_to_its_own_subjects.py`), and both targets run the bus with it off
 (XC-159, #650, parked), so (5) rests on the signature alone. The dead-letter counter repeats what the DLQ stream holds
 one hop later, in a telemetry store the kind lane does not run, so (6) reads the stream. Whether a person is told is a
-notifier's claim: the inbox is a client the lakehouse does not run (XC-188), so (3) holds the events to what a notifier
-targets by and reads no inbox.
+notifier's claim, and a notifier is a client the lakehouse does not run (XC-188), so (3) holds the events to what a
+notifier targets by and reads no notifier.
 
 The module talks to the bus as an outside client (`bus`): it reads by sequence and publishes as a forger would. A
 publish on the lineage lane waits until lineage, the durable consumer that records it, has acknowledged it, so an

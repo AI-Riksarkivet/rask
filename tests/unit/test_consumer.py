@@ -19,7 +19,7 @@ _VALID = {
     "eventType": "COMPLETE",
     "eventTime": "2026-06-20T09:00:00Z",
     "run": {"runId": "r1", "facets": {"rask_author": {"name": "alice"}}},
-    "job": {"namespace": "ray-jobs", "name": "ingest"},
+    "job": {"namespace": "pipelines", "name": "ingest"},
     "inputs": [{"namespace": "source", "name": "raw"}],
     "outputs": [{"namespace": "bronze", "name": "bronze$x"}],
 }

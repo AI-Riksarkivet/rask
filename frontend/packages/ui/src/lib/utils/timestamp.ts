@@ -14,7 +14,7 @@ export type TimestampInput = string | number | Date | null | undefined;
 
 /** A formatted moment: the exact stamp, the human distance, and the string to hang in a tooltip. */
 export type FormattedTimestamp = {
-	/** `YYYY-MM-DD HH:mm:ss` in the viewer's local zone. */
+	/** `YYYY-MM-DD HH:mm:ss` in the reader's local zone. */
 	absolute: string;
 	/** Compact distance from `now` — `5m ago`, `in 2h`, `just now`. */
 	relative: string;
@@ -73,7 +73,7 @@ export function toDate(value: TimestampInput): Date | null {
 
 const pad = (n: number, width = 2) => String(n).padStart(width, '0');
 
-/** `YYYY-MM-DD HH:mm:ss` in the viewer's LOCAL page (so it reads as the operator's wall clock), or
+/** `YYYY-MM-DD HH:mm:ss` in the reader's local time zone (so it reads as their wall clock), or
  *  `—` when there is nothing to format. Local time means SSR and the browser can disagree: format
  *  where the value is rendered, not where it is fetched. */
 export function formatAbsolute(value: TimestampInput): string {

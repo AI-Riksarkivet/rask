@@ -50,6 +50,13 @@ Every egress rule a deployer states (`networkPolicy.apiServerEgress`, `networkPo
 where one is required, a rule with no `to` peers, and a peer `ipBlock` whose CIDR is `/0`: each is a rule that admits
 every destination on its ports.
 
+## `- { key: app.kubernetes.io/component, operator: NotIn, values: [console] }`
+
+Every egress allow the namespace shares (DNS, the intra-namespace allow, the Dapr control plane, `networkPolicy.extraEgress`)
+selects every pod but the console's. Its static server dials nothing: it reads its config from a mounted file, has no
+sidecar and calls no door, the browser making every API call itself. So the console's pod keeps default-deny's empty
+egress, and a compromised static server reaches nothing, not even DNS.
+
 ## `name: {{ include "lance.fullname" . }}-allow-openfga-egress`
 
 With `openfga.enabled` off, OpenFGA is the platform's (`auth.fgaApiUrl`, usually HTTPS outside the namespace) and the
@@ -79,3 +86,10 @@ data plane lives in the platform's namespace, so the source is unrestricted; the
 the PORT: only the app port is admitted, and daprd's ports on the same pod stay intra-namespace. That is
 safe because every one of these services authenticates each request itself, and a request through the
 Gateway reaches the app port directly, never carrying a sidecar's app token.
+
+## `name: {{ include "lance.fullname" . }}-edge-console`
+
+The console's static server is admitted the same way, on its one port (`console.port`), from anywhere: the Gateway's
+data plane lives in the platform's namespace, and nothing on the pod authenticates or holds anything a caller could
+reach, since it serves the public build and `/config.json`, which holds no secret. Rendered only with
+`console.enabled`, like the console itself (`console.yaml`).

@@ -42,7 +42,7 @@ describe('createTableWithRows', () => {
 		const { seen } = captureFetch();
 		const arrow = new Uint8Array([1, 2, 3]);
 
-		const res = await createTableWithRows('acme-bronze$docs', arrow);
+		const res = await createTableWithRows({ table: 'acme-bronze$docs', arrow });
 
 		expect(res.ok).toBe(true);
 		// Asserted, not optional-chained: if no request left at all, THAT is the failure to report.
@@ -67,7 +67,10 @@ describe('createTableWithRows', () => {
 				}),
 			)) as unknown as typeof fetch;
 
-		const res = await createTableWithRows('acme-bronze$docs', new Uint8Array([1]));
+		const res = await createTableWithRows({
+			table: 'acme-bronze$docs',
+			arrow: new Uint8Array([1]),
+		});
 
 		expect(res).toEqual({ ok: false, status: 403, detail: 'no' });
 	});

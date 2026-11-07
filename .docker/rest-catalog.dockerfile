@@ -5,9 +5,9 @@
 # (see chart/templates/{services,maintenance}.yaml → include "lance.catalogImage"):
 #   catalog.main:app (:2333) · lineage.main:app (:8000) · maintenance.service:app (:8000)
 # — optionally wrapped in `opentelemetry-instrument` (shipped via lineage's opentelemetry-distro).
-# It installs and import-gates the lakehouse's services and nothing else: every client builds its own image
-# (the console: .docker/frontend.dockerfile; the notifications inbox: .docker/notifications.dockerfile), so deleting a
-# client changes nothing this image builds or installs ([[XC-177]]).
+# It installs and import-gates the lakehouse's services and nothing else: the console is its own image
+# (.docker/frontend.dockerfile), and a client builds its own in its own repository, so no client changes what this image
+# builds or installs ([[XC-177]]).
 # Build context = repo root:  scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 
 # ── builder: two-step uv sync against the ROOT uv.lock ───────────────────────
@@ -114,10 +114,9 @@ COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 # Import every module this image serves, against the venv the runtime stage ships. A missing
 # DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
 # only be seen here, where the deployable's own closure is the only one present. See the script.
-# `--absent`: the notifications inbox (a client) and lancedb (a client's dataset reader) never ship in the lakehouse
-# image ([[XC-178]]).
+# `--absent`: lancedb (a client's dataset reader) never ships in the lakehouse image ([[XC-178]]).
 COPY .docker/import-gate.py /tmp/import-gate.py
-RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance --absent notifications lancedb && rm /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance --absent lancedb && rm /tmp/import-gate.py
 
 # ── the pool gate ────────────────────────────────────────────────────────────
 # Measure the pools OMP_NUM_THREADS bounds, under the environment this stage ships: a pool wider than it fails the build.

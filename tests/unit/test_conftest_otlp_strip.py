@@ -49,7 +49,7 @@ HARNESS_VARS = (
     "OTEL_EXPORTER_OTLP_PROTOCOL",
 )
 
-#: A module that records the variable AT IMPORT — the moment a module-scope `setup_otel` would read
+#: A module that records the variable AT IMPORT — the moment a module-scope OTLP exporter would read
 #: it — and asserts on that recording from the test body. Reading it in the body instead would pass
 #: even with the strip back in the too-late fixture, which is precisely the bug.
 _PROBE = """
@@ -60,7 +60,7 @@ SEEN_AT_IMPORT = os.environ.get({var!r})
 def test_the_variable_was_already_gone_when_this_module_was_imported():
     assert SEEN_AT_IMPORT is None, (
         "{var} was still set at COLLECTION time: the root conftest strips it too late, so a "
-        "module-scope setup_otel has already wired a live exporter. See conftest.py."
+        "module-scope exporter has already been wired live. See conftest.py."
     )
 """
 

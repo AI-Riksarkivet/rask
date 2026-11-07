@@ -22,8 +22,8 @@ Blast radius is narrow and the finding is careful about it: the OTLP copy of eve
 trace/span context, so only the raw `kubectl logs` tier was blind.
 
 THE FORMATTER MUST NOT DEPEND ON OTEL BEING ON. A formatter naming `%(otelTraceID)s` raises on any
-record that lacks the attribute — which is every record in dev, in tests, and in any service where
-`setup_otel` returned False. That would turn a correlation aid into a crash, so the attribute is
+record that lacks the attribute — which is every record in dev, in tests, and in any process that runs
+without `opentelemetry-instrument`. That would turn a correlation aid into a crash, so the attribute is
 guaranteed by the same filter that already guarantees `request_id`.
 """
 
@@ -32,11 +32,10 @@ from __future__ import annotations
 import io
 import logging
 from collections.abc import Iterator
-from typing import Any
 
 import pytest
 
-from service_kit import setup_logging
+from service_kit.app import setup_logging
 
 
 @pytest.fixture
@@ -70,7 +69,7 @@ def stdout_lines() -> Iterator[io.StringIO]:
 
 @pytest.fixture
 def instrumented() -> Iterator[None]:
-    """`LoggingInstrumentor` active, as `setup_otel` leaves it in a live service."""
+    """`LoggingInstrumentor` active, as `opentelemetry-instrument` leaves it in a live service."""
     from opentelemetry.instrumentation.logging import LoggingInstrumentor
 
     instrumentor = LoggingInstrumentor()
@@ -111,10 +110,10 @@ def test_the_formatter_SURVIVES_otel_never_having_run(stdout_lines: io.StringIO)
     """No `instrumented` fixture — no `otelTraceID` on the record at all.
 
     This is the failure mode a naive `%(otelTraceID)s` introduces: `logging` raises on a missing
-    attribute and the handler prints a traceback instead of the line. Dev, tests, and every service
-    where `setup_otel` returned False are all in this state.
+    attribute and the handler prints a traceback instead of the line. Dev, tests, and every process
+    run without `opentelemetry-instrument` are all in this state.
     """
-    logging.getLogger("medallion.services.transform").info("otel is off")
+    logging.getLogger("lineage.services.consumer").info("otel is off")
 
     line = stdout_lines.getvalue()
     assert "otel is off" in line, f"the record was lost when otel was disabled: {line!r}"
@@ -160,46 +159,22 @@ def test_a_record_carrying_NOTHING_extra_gains_no_trailing_noise(stdout_lines: i
 
 
 def test_a_LIBRARYS_ambient_record_field_is_not_a_diagnostic(stdout_lines: io.StringIO) -> None:
-    """Two libraries in this estate stamp their own fields on records, and neither is a diagnostic.
+    """uvicorn stamps its own field on records, and it is not a diagnostic.
 
-    `_ray_timestamp_ns` is not hypothetical: importing Ray installs a log record factory that puts it
-    on EVERY record in the process (`ray/_private/log.py:71-88`), which covers any process
-    that imports Ray. It was caught here by this test failing in the full suite while passing alone —
-    the first version of the formatter appended a nanosecond integer to every line.
-
-    uvicorn's `color_message` is the second: an ANSI-escaped copy of the same message, for uvicorn's own
-    formatter to substitute (`uvicorn/logging.py:61`). Rendering it prints every startup line in the
-    fleet twice, the second time full of escape codes.
+    `color_message` is an ANSI-escaped copy of the same message, for uvicorn's own formatter to substitute
+    (`uvicorn/logging.py:61`). Rendering it prints every startup line in the fleet twice, the second time
+    full of escape codes.
 
     Logged to a logger this test owns rather than to `uvicorn.error`: uvicorn's shipped config gives the
     `uvicorn` tree `propagate: False` (`uvicorn/config.py:108`), so any test in the run that applies it
     detaches that name from the root handler and this assertion stops measuring the formatter at all.
     """
-    # RAY'S OWN MECHANISM, not `extra=`. Ray installs a log record FACTORY that stamps the field on
-    # every record (`ray/_private/log.py:71-88`), and passing the same key through `extra=` is both
-    # unfaithful and order-dependent: once anything in the run has actually imported Ray, the factory
-    # has already set the attribute and `logging` refuses the overwrite with
-    # `KeyError: Attempt to overwrite '_ray_timestamp_ns' in LogRecord`. Measured — this test passed
-    # alone and failed in the full suite for exactly that reason. Installing the factory reproduces
-    # production and is immune to whether Ray is imported.
-    previous_factory = logging.getLogRecordFactory()
-
-    def _ray_shaped_factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
-        record = previous_factory(*args, **kwargs)
-        record.__dict__["_ray_timestamp_ns"] = 1789033301968524218
-        return record
-
-    logging.setLogRecordFactory(_ray_shaped_factory)
-    try:
-        logging.getLogger(f"{__name__}.ambient").info(
-            "Started server process [%d]",
-            4242,
-            extra={"color_message": "Started server process [\x1b[36m%d\x1b[0m]"},
-        )
-    finally:
-        logging.setLogRecordFactory(previous_factory)
+    logging.getLogger(f"{__name__}.ambient").info(
+        "Started server process [%d]",
+        4242,
+        extra={"color_message": "Started server process [\x1b[36m%d\x1b[0m]"},
+    )
 
     line = stdout_lines.getvalue()
     assert "Started server process [4242]" in line, f"the record never reached stdout: {line!r}"
     assert "\x1b[36m" not in line, f"uvicorn's colour duplicate was rendered as a diagnostic: {line!r}"
-    assert "1789033301968524218" not in line, f"Ray's ambient timestamp was rendered as a diagnostic: {line!r}"

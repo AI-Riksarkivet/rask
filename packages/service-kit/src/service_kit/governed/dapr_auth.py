@@ -25,15 +25,13 @@ from __future__ import annotations
 import functools
 import logging
 import secrets
-from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Annotated, Final, Self
+from typing import Annotated, Self
 
-from fastapi import FastAPI, Header, Request
+from fastapi import Header
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from starlette.responses import Response
 
 from service_kit.governed import secret_cache
 from service_kit.governed.secret_cache import StoreRead
@@ -71,7 +69,7 @@ class DaprDoorSettings(BaseSettings):
 
     #: Permit an UNCONFIGURED door — never a wrong token. Owner decision 2026-09-15.
     #:
-    #: THE LOCAL LOOP IS WHY AN OPEN DOOR EXISTS AT ALL: `make dev-micro` runs these apps with no
+    #: THE LOCAL LOOP IS WHY AN OPEN DOOR EXISTS AT ALL: a service run on the host runs with no
     #: sidecar and no secret store, so every Dapr-guarded route would be unreachable without it. What
     #: the flag buys over an implicit skip is that the decision is made by a person and is greppable —
     #: an estate-wide search finds every deployment running open, which an absent variable cannot be.
@@ -252,19 +250,16 @@ def require_dapr_token(
     # other error in these services. The bare form was mapped by NO app, so this one 403 arrived as
     # FastAPI's default `{"detail": ...}` body while its neighbours carried `type`/`title`/`code`.
     #
-    # `PermissionDeniedError` rather than `service_kit.exceptions.ForbiddenError`, and that is verified
-    # rather than preferred: this module is shared by both planes and they install different handlers.
-    # The four lance apps install `install_problem_handlers` ONLY, so a fleet `DomainError` would fall
-    # to the catch-all and answer 500 there. A `LanceNamespaceError` is mapped by both — the lance apps
-    # directly, the fleet apps since `make_service_app` began installing the same translator.
+    # `PermissionDeniedError` rather than `service_kit.exceptions.ForbiddenError`: the refusal is a
+    # `LanceNamespaceError`, which `install_problem_handlers` maps to the spec's code, so it carries the
+    # same body as every other refusal the lakehouse's doors answer.
     try:
         expected = expected_app_tokens()
     except SecretStoreUnreadable as outage:
         # 503, NOT 403. A store that will not answer is an outage, and answering 403 would tell the
         # sidecar its credential was rejected — so it would stop retrying a delivery that is going to
-        # start working again. `ServiceUnavailableError` is `lance_namespace`'s, which both planes'
-        # problem handlers map; the fleet's own `ServiceUnavailableError` is a different class and is
-        # mapped by only one of them.
+        # start working again. `ServiceUnavailableError` is `lance_namespace`'s, which
+        # `install_problem_handlers` maps.
         raise ServiceUnavailableError(f"cannot authenticate this Dapr delivery: {outage}") from outage
     # FAIL CLOSED WHEN UNCONFIGURED. A guard with no expected value cannot distinguish a
     # legitimate delivery from a forged one, so admitting is not leniency — it is the control being
@@ -325,62 +320,3 @@ class SecretStoreUnreadable(RuntimeError):
     Callers map this to their 503 problem type. Conflating it with "no credential provisioned"
     would turn a secret-store outage into the same 401 as a misconfigured subject — the
     absent-vs-unreadable rule the estate already enforces in the state plane."""
-
-
-#: What `dapr.ext.fastapi.DaprActor` mounts at the ROOT of an app — outside `settings.api_prefix`, and
-#: therefore outside every dependency the domain routers declare.
-ACTOR_PATH_PREFIXES: Final = ("/actors", "/dapr/config")
-
-
-def guard_actor_routes(app: FastAPI) -> None:
-    """Require the sidecar's own token on `DaprActor`'s callback surface.
-
-    **The hole this closes.** `DaprActor(app)` root-mounts
-    `PUT /actors/{actor_type}/{actor_id}/method/{method}`, and an actor is typically the service's
-    PRIVATE store — keyed by an id that is rarely a secret. The domain routers' doors (OIDC, FGA,
-    plane-readiness) hang on the ROUTER under `settings.api_prefix`; these routes are mounted at the
-    root and inherit none of them. So anything able to reach the pod reads any actor's state BY NAME:
-
-        curl -XPUT :8850/actors/InboxActor/YWxpY2U/method/Page -d '{"state":"all","limit":100}'
-
-    `YWxpY2U` is `base64url("alice")`. Where the id derives from a subject, it is readable off lineage
-    author facets or a project listing — it was never meant to carry access control.
-
-    `require_dapr_token` is the right door rather than a stand-in: these paths are BY CONSTRUCTION
-    sidecar-delivered — daprd calls them back presenting `dapr-api-token`. It proves "arrived via
-    Dapr", never "trusted caller".
-
-    A middleware rather than a router dependency because the SDK adds these routes to the app itself:
-    there is no `include_router` call to hang `dependencies=` on, and rewriting a mounted route's
-    dependant after the fact is far more fragile than matching a path prefix.
-
-    Call it immediately after constructing `DaprActor(app)`. It is a no-op for every other path, so a
-    service that mounts no actors can call it harmlessly — but there is no reason to.
-    """
-    from fastapi.responses import JSONResponse  # imported here, not at module scope: keeps this module import-light
-    from starlette.concurrency import run_in_threadpool
-    from starlette.middleware.base import BaseHTTPMiddleware
-
-    from service_kit.ns_errors import problem_detail
-
-    async def _guard(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        if request.url.path.startswith(ACTOR_PATH_PREFIXES):
-            try:
-                # IN THE THREADPOOL, as FastAPI runs the sync dependency elsewhere: a token whose TTL passed is
-                # read from the sidecar, and that read must not stall the event loop every other request shares.
-                await run_in_threadpool(
-                    require_dapr_token,
-                    dapr_api_token=request.headers.get("dapr-api-token"),
-                    dapr_caller_app_id=request.headers.get("dapr-caller-app-id"),
-                )
-            except PermissionDeniedError as refusal:
-                # RENDERED HERE, because middleware cannot reach the app's exception handlers: a
-                # `BaseHTTPMiddleware` raise happens outside `ExceptionMiddleware`, so an unrendered
-                # domain error would answer 500 instead of 403. `problem_detail` is the SAME translator
-                # the handler uses, so the refusal a caller sees is byte-identical whether it came from
-                # the dependency or from here — which is the point of moving off `HTTPException` at all.
-                status, body = problem_detail(refusal)
-                return JSONResponse(body, status_code=status, media_type="application/problem+json")
-        return await call_next(request)
-
-    app.add_middleware(BaseHTTPMiddleware, dispatch=_guard)

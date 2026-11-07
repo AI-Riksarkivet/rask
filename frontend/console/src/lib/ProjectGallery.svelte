@@ -3,7 +3,6 @@
 	// The estate's PROJECT GALLERY, mounted by `/projects`. There is one project concept and it is the
 	// TOP of the hierarchy (project › warehouse › namespace › table), so the estate's list of projects
 	// lives in the main menu, never inside a project-scoped page's catalog.
-	import { untrack } from 'svelte';
 	import { gsap } from 'gsap';
 	import { LayoutGrid, List, Plus } from '@lucide/svelte';
 	import { Badge } from '@rask/ui/badge';
@@ -14,7 +13,6 @@
 	import { refreshAll } from '$app/navigation';
 	import ProjectCreateDialog from '#lib/ProjectCreateDialog.svelte';
 	import type { GalleryData } from '#lib/gallery.ts';
-	import { writeProjectsView, type ProjectsView } from '#lib/remote/view-prefs.api.ts';
 
 	let {
 		heading,
@@ -24,39 +22,26 @@
 		estateAdmin,
 		meSubject,
 		projects,
-		initialView = 'gallery',
 	}: GalleryData & {
 		/** The h1 for the surface this is mounted on. */
 		heading: string;
 		/** Whether the stack has OIDC configured at all (from the shared layout load) — an ungoverned
 		 *  stack must not offer a dead sign-in link. */
 		authEnabled: boolean;
-		/** The caller's SAVED view, resolved in the page load so the first paint is already the right one.
-		 *  Defaults to gallery: cards read well at the handful of projects most people can see, and the
-		 *  table earns its place past that. A null preference (never chosen) arrives as this default. */
-		initialView?: ProjectsView;
 	} = $props();
 
 	let creating = $state(false);
 
-	// The view, SEEDED from the loaded preference so a reload never flashes the other one, then owned
-	// by this component. `untrack` says that deliberately: the prop is the initial value, not a live
-	// binding, and without it Svelte warns (`state_referenced_locally`) — correctly, because the
-	// difference matters. A later load (the create flow calls `refreshAll`) must NOT yank the view
-	// back from under someone who just toggled it.
-	//
-	// Optimistic: the UI switches immediately and the write follows, because a view toggle that waits
-	// on a round trip feels broken, and a failed write costs nothing but the next reload.
-	let view = $state<ProjectsView>(untrack(() => initialView));
+	/** The two views the projects list offers. */
+	type ProjectsView = 'gallery' | 'table';
+
+	// The view holds for this page only: no door keeps a per-person preference, so the toggle sends
+	// nothing and a reload paints the default. Gallery by default: cards read well at the handful of
+	// projects most people can see, and the table earns its place past that.
+	let view = $state<ProjectsView>('gallery');
 
 	function choose(next: ProjectsView): void {
-		if (next === view) return;
 		view = next;
-		// Deliberately not awaited and deliberately not surfaced: this is a preference, not data. A
-		// refused write means the next reload shows the old view — an annoyance, not a lost edit, and
-		// nowhere near worth a toast on top of a working page. `.catch` because an unhandled rejection
-		// from a remote command is what kills every later call in the same client.
-		void writeProjectsView(next).catch(() => {});
 	}
 
 	// Come back to the gallery after the OIDC round-trip (the shell's ?redirect= contract,
@@ -267,7 +252,7 @@
 </div>
 
 <!-- Estate-admin only; `oncreated` invalidates the page load so the new project is on the very next
-     frame of THIS gallery (the list is a load, not a query — see createWarehouse's note). -->
+     frame of THIS gallery (the list is a page load, not a query, so no write's refresh reaches it). -->
 <ProjectCreateDialog
 	bind:open={creating}
 	defaultAdmin={meSubject}

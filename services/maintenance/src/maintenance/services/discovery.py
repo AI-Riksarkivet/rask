@@ -125,9 +125,9 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
     control-plane registries (``_warehouses``, ``_policies``, ``_protection``, ``_trash``) — no dataset ever
     lives under them, and probing them is wasted S3 round-trips on the hot discovery path.
 
-    The catalog lays top-level tables out as ``<uuid>_<table_id>/``, but the medallion cascade nests
-    its datasets one level down (``medallion/bronze``, ``medallion/silver-media`` …) — without the
-    marker probe the sweep would report the ``medallion/`` prefix as a failed dataset AND never
+    The catalog lays top-level tables out as ``<uuid>_<table_id>/``, but a registered table's dataset
+    may sit below a prefix of the writer's choosing (``pipeline/bronze``, ``pipeline/silver`` …) — without
+    the marker probe the sweep would report the ``pipeline/`` prefix as a failed dataset AND never
     maintain the real ones under it.
 
     Returns a :class:`Discovery`, not a bare list, so the depth cut-off cannot be dropped on the floor.

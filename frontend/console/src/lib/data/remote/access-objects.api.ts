@@ -151,6 +151,7 @@ export const fetchAccessGraph = query(
  *  active review + graph refresh in the SAME flight, so a surface that issued a grant never renders
  *  an ACL it just changed. */
 export const grantAccess = command(
+	({ kind, id, user, relation }) => `Grant ${relation} on ${kind} ${id} to ${user}`,
 	SubjectSchema,
 	async ({ kind, id, user, relation }): Promise<ApiResult<AccessGrant>> => {
 		const result = parsed(
@@ -171,6 +172,7 @@ export const grantAccess = command(
 /** #72 revoke a base rung from a subject on the object — the write counterpart of the grant, same
  *  gate, same single-flight refresh. */
 export const revokeAccess = command(
+	({ kind, id, user, relation }) => `Revoke ${relation} on ${kind} ${id} from ${user}`,
 	SubjectSchema,
 	async ({ kind, id, user, relation }): Promise<ApiResult<AccessGrant>> => {
 		const result = parsed(

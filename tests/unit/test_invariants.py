@@ -167,7 +167,6 @@ def test_the_hook_creates_every_platform_bucket_and_every_zone() -> None:
     the same bucket. So the root, the platform bucket and the zone here are each named by one value only.
     """
     rendered = _helm_template(
-        "singleTenant.enabled=true",
         "objectStore.bucket=root-x",
         "objectStore.buckets={extra-platform}",
         "medallion.buckets.gold=acme-gold",
@@ -187,7 +186,7 @@ def test_a_renamed_bucket_leaves_nothing_behind_under_its_old_name() -> None:
     """
     values = yaml.safe_load((CHART / "values.yaml").read_text())
     spellings = {"root-x", values["objectStore"]["bucket"]}
-    rendered = _helm_template("singleTenant.enabled=true", "objectStore.bucket=root-x", "objectStore.buckets=null")
+    rendered = _helm_template("objectStore.bucket=root-x", "objectStore.buckets=null")
 
     buckets = _hook_buckets(rendered)
 
@@ -208,7 +207,7 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
     """
     import yaml
 
-    rendered = _helm_template("singleTenant.enabled=true")
+    rendered = _helm_template()
     docs = [d for d in yaml.load_all(rendered, Loader=FAST_LOADER) if d]
 
     annotated = 0
@@ -262,7 +261,7 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     """
     pinned = _helm_template(*_REAL_REGISTRY, "image.tags.lance-rest-catalog=PINNED")
     assert 'image: "reg.example/lance-rest-catalog:PINNED"' in pinned, "a per-component tag did not reach the render"
-    elsewhere = _helm_template(*_REAL_REGISTRY, "image.tags.some-other-component=PINNED")
+    elsewhere = _helm_template(*_REAL_REGISTRY, "image.tags.web-console=PINNED")
     assert 'image: "reg.example/lance-rest-catalog:dev"' in elsewhere, "a pin leaked onto a component that did not ask for it"
 
     # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
@@ -282,6 +281,29 @@ def test_an_image_reference_that_helm_parsed_as_a_number_is_refused_at_render(ke
     with pytest.raises(subprocess.CalledProcessError) as refused:
         _helm_template(*_REAL_REGISTRY, f"{key}=93951597")
     assert key.rsplit(".", 1)[-1] in refused.value.stderr and "string" in refused.value.stderr, refused.value.stderr
+
+
+@pytest.mark.parametrize(
+    ("values", "where"),
+    [
+        pytest.param("undeclared:\n  enabled: true\n", "at ''", id="top-level-key"),
+        pytest.param("image:\n  tags:\n    undeclared: x\n", "at '/image/tags'", id="image-the-chart-renders-none-of"),
+    ],
+)
+def test_a_values_file_naming_what_the_chart_does_not_declare_fails_the_render(tmp_path: Path, values: str, where: str) -> None:
+    """[[XC-194]]: a key the chart stopped reading, kept by a release or an overlay, is refused rather than carried unread.
+
+    Measured 2026-11-06 at rask helm revision 12: the live release held top-level keys of departed clients and image tags
+    of departed images that no template read, and nothing refused them. The values schema's root admits only the keys
+    `values.yaml` declares, and Helm's `global`; `image.tags` and `image.digests` only the images `rask.image` renders.
+    """
+    overlay = tmp_path / "values.yaml"
+    overlay.write_text(values)
+
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        chart_render.render_text(*chart_render.DEFAULT_ARGS, "-f", str(overlay))
+
+    assert f"{where}: additional properties 'undeclared' not allowed" in refused.value.stderr, refused.value.stderr
 
 
 def test_no_env_var_is_rendered_twice_on_any_workload() -> None:

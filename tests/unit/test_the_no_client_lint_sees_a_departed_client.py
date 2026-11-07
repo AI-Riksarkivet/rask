@@ -4,9 +4,11 @@ The lint learns a hosted client's name from that client's tree, and a client tha
 the lint carries the departed names as a list of its own. Measured 2026-11-06 at `0faa294c3`: with only the names read
 off the tree, `make lint` and CI's lint leg passed while lakehouse files named departed clients' accounts and images.
 
-Driven on a tree of the test's own, which holds no client: a lakehouse test names departed clients in each position a
-name takes (an account, an image, an object, a module, a path inside a client's tree, a departed tree's path, a former
-zone of the console, a plain name), and uses the same words in ordinary English, which the lint must let through.
+Driven on a tree of the test's own, which holds the console and no client: a lakehouse test names departed clients in
+each position a name takes (an account, an image, an object, a module, a path inside a client's tree, a departed tree's
+path, a former zone of the console, a plain name), the retired notifications inbox and its SMTP relay ([[XC-195]]), and
+the console, which is the lakehouse's own UI and no client, and uses the same words in ordinary English, which the lint
+must let through. The console's tree is the lakehouse's, so a departed client named there is refused too.
 """
 
 from __future__ import annotations
@@ -32,18 +34,24 @@ OBJECT = "rask-ray-compute"
 # The job door lives in compute.py, and viewer/api/security.py publishes its deps.
 # runners/dummy and frontend/microfrontends/home/src/lib/x.ts are gone, and so is the annotator.
 # Data flows through the catalog, and a job's own compute writes it.
+INBOX = "rask-sa-notifications"
+RELAY = "rask-mailpit"
+# The console signs in as `console`'s client rask-console, and a notification rule names no client.
 """
 
 
 def test_the_lint_reports_each_place_a_lakehouse_file_names_a_departed_client(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    for tree in ("services", "packages", "frontend", "deploy/fixtures"):
+    for tree in ("services", "packages", "frontend/console", "deploy/fixtures"):
         (tmp_path / tree).mkdir(parents=True)
+    (tmp_path / "frontend/console/package.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "frontend/console/inbox.ts").write_text('const BASE = "services/notifications/api";\n', encoding="utf-8")
     suite = tmp_path / "tests/integration/test_names.py"
     suite.parent.mkdir(parents=True)
     suite.write_text(_SUITE, encoding="utf-8")
 
     assert gate.main(["--root", str(tmp_path)]) == 1
     assert capsys.readouterr().out.splitlines() == [
+        "frontend/console/inbox.ts:1: 'services/notifications'",
         "tests/integration/test_names.py:1: 'rask-sa-flows'",
         "tests/integration/test_names.py:2: 'flows:dev'",
         "tests/integration/test_names.py:3: 'rask-ray-compute'",
@@ -52,4 +60,6 @@ def test_the_lint_reports_each_place_a_lakehouse_file_names_a_departed_client(tm
         "tests/integration/test_names.py:5: 'runners/dummy'",
         "tests/integration/test_names.py:5: 'microfrontends/home'",
         "tests/integration/test_names.py:5: 'annotator'",
+        "tests/integration/test_names.py:7: 'rask-sa-notifications'",
+        "tests/integration/test_names.py:8: 'mailpit'",
     ]

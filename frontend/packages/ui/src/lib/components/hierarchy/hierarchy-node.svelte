@@ -21,8 +21,8 @@
 </script>
 
 <script lang="ts">
-	// One rung of the project hierarchy (#104) — the SAME visual language as the FGA access
-	// explorer's nodes (AccessGraphNode): a lucide icon per object type, a tier caption so the
+	// One rung of the project hierarchy (#104) — the SAME visual language as the FGA access graph's
+	// nodes (AccessGraphNode): a lucide icon per object type, a tier caption so the
 	// graph says WHAT each box is, token-utility chrome only (themes in both modes).
 	import { Handle, Position } from '@xyflow/svelte';
 	import { Boxes, Database, Folder, Warehouse } from '@lucide/svelte';

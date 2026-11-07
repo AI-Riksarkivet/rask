@@ -3,7 +3,7 @@
 # chart/values.schema.json from values.yaml's types and the same comments (helm-values-schema-json), or, with --check,
 # fail when either committed file differs from what would be generated or when a row of the values table carries no
 # description. Helm validates every install's and upgrade's merged values against the schema, so a mistyped value fails
-# the render, not a pod.
+# the render, not a pod, and so does a top-level key values.yaml does not declare.
 set -euo pipefail
 
 CHART="${CHART:-chart}"
@@ -21,7 +21,9 @@ fi
 generated="$(mktemp)"
 schema="$(mktemp)"
 trap 'rm -f "$generated" "$schema"' EXIT
-"$HELM_SCHEMA" --use-helm-docs --values "$CHART/values.yaml" --output "$schema" >/dev/null
+# The root refuses a key values.yaml does not declare, so a value the chart stopped reading, or a misspelt one, fails
+# the render instead of riding along in the release unread ([[XC-194]]). The generator adds Helm's own `global` key.
+"$HELM_SCHEMA" --use-helm-docs --schema-root.additional-properties=false --values "$CHART/values.yaml" --output "$schema" >/dev/null
 # --dry-run prints the README on stdout and logs on stderr. -c/-g name the one chart, so the vendored
 # subcharts under chart/charts are not documented in its place.
 "$HELM_DOCS" --chart-search-root "$CHART" --chart-to-generate "$CHART" --dry-run --log-level error > "$generated"

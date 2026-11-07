@@ -121,12 +121,7 @@ describe('topNav', () => {
 			'/settings/audit',
 		]);
 		// It lights on its own subtree and nothing else.
-		for (const p of [
-			'/settings',
-			'/settings/notifications',
-			'/settings/access',
-			'/settings/audit',
-		]) {
+		for (const p of ['/settings', '/settings/access', '/settings/audit']) {
 			expect(settings.match(p)).toBe(true);
 		}
 		// …and never steals the highlight. `/projects` is a ROW of this panel but its own
@@ -138,7 +133,7 @@ describe('topNav', () => {
 	it('isMainMenu splits the two levels — /projects is the list, /projects/<id> is inside one', () => {
 		// The predicate the shell swaps bars on: opening a project is what puts you inside one, so its
 		// page gets the in-project bar while the list above it does not.
-		for (const p of ['/', '/projects', '/settings', '/settings/notifications']) {
+		for (const p of ['/', '/projects', '/settings', '/settings/access']) {
 			expect(isMainMenu(p)).toBe(true);
 		}
 		for (const p of ['/projects/acme', '/catalog', '/admin/events', '/workbench']) {
@@ -159,7 +154,7 @@ describe('topNav', () => {
 		]) {
 			expect(lakehouse.match(p)).toBe(true);
 		}
-		for (const p of ['/settings/audit', '/', '/projects', '/projects/acme', '/notifications']) {
+		for (const p of ['/settings/audit', '/', '/projects', '/projects/acme']) {
 			expect(lakehouse.match(p)).toBe(false);
 		}
 	});
@@ -221,7 +216,7 @@ describe('topNav', () => {
 	});
 });
 
-describe('ZoneNav matchers', () => {
+describe('PageNav matchers', () => {
 	it('seg: matches the exact route and anything nested under it', () => {
 		const m = seg('/catalog/tables');
 		expect(m('/catalog/tables')).toBe(true);

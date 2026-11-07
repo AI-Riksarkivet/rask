@@ -96,8 +96,8 @@ _TARGETING_FACETS: Final = (AUTHOR_FACET, LANCE_FACET)
 #: A run's targeting facets, and the standard `parent` naming the writer's own run, which a notifier links a
 #: notification to ([[LH-554]], ADR 0191).
 _RUN_FACETS: Final = (*_TARGETING_FACETS, "parent")
-#: The facet an output keeps: rask's own, carrying the uuids the catalog keys the table by (ADR 0173 §10), which an
-#: inbox row names the table by beside its name.
+#: The facet an output keeps: rask's own, carrying the uuids the catalog keys the table by (ADR 0173 §10), which a
+#: notification names the table by beside its name.
 _OUTPUT_FACETS: Final = (LANCE_FACET,)
 #: What names a dataset. Its facets (schema, column lineage, statistics) describe its contents.
 _DATASET_FIELDS: Final = ("namespace", "name")

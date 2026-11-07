@@ -17,8 +17,8 @@ was wrong.
 
 WHY IT MATTERED MORE THAN A STRANDED OBJECT. `reconcile_cron` ingests, re-publishes, THEN drops. The
 first two succeeded, so every staged event was re-delivered to `lineage.events.v1` on every tick —
-forever, since the drop is the only thing that ends the loop. Subscribers include the medallion's
-`/bronze-arrival`, which starts the cascade. The relay's own comment argues a duplicate is safe under
+forever, since the drop is the only thing that ends the loop, and a subscriber that starts work on
+each event starts it again on every tick. The relay's own comment argues a duplicate is safe under
 at-least-once, which is true of ONE redelivery and false of an unbounded one.
 """
 

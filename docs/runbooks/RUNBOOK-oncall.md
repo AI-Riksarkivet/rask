@@ -12,7 +12,7 @@ fixture's) or a user report — not a page.
 - **Services** (FastAPI): `catalog` (REST catalog and tier governance), `lineage`
   (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `provenance` namespace;
   the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (the sweep, the write-event lane, the reconciler),
-  and, in the console's own release, the console and the notifications inbox; public `/api/*` reaches the lakehouse through the platform's Gateway on the chart's HTTPRoutes, and the console and the inbox on the console release's own HTTPRoute (`deploy/fixtures/console/chart/templates/route.yaml`). The lakehouse runs no stage and no pipeline: moving data
+  and the console's static-file server `rask-console`; public `/api/*` reaches the lakehouse through the platform's Gateway on the chart's HTTPRoutes (`chart/templates/route.yaml`), and `/` reaches the console on the chart's HTTPRoute `rask-console` (`chart/templates/console.yaml`). The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
 - **Stores**: `age-postgres` (OpenFGA's datastore),
   the object store (RustFS in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), the secret store (the openbao

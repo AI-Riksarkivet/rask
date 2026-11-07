@@ -4,10 +4,10 @@
 that is why ten hand-rolled copies survived it: the copies are not stylistic variants, they encode
 decisions the single-posture helper cannot express.
 
-  * **Provisioning.** `ingest` and `maintenance` must NEVER author an authorization model. A data
-    writer that mints a store becomes the source of truth for everyone else's permissions. They
-    resolve read-only (`fga.resolve`) and fail closed when the estate is not bootstrapped.
-  * **Fatality.** `catalog`, `lineage` and both medallion apps build with no `try` at all, so a failed
+  * **Provisioning.** `maintenance` must NEVER author an authorization model. A data
+    writer that mints a store becomes the source of truth for everyone else's permissions. It
+    resolves read-only (`fga.resolve`) and fail closed when the estate is not bootstrapped.
+  * **Fatality.** `catalog` and `lineage` build with no `try` at all, so a failed
     build CRASHES the pod. That is deliberate and visible. Collapsing them onto a swallowing helper
     would silently convert CrashLoopBackOff into a fleet of pods serving 503 — the same estate, minus
     the only signal anybody watches.

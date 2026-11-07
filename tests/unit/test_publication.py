@@ -285,7 +285,7 @@ async def test_a_PUBLICATION_announces_the_range_and_a_REJECTION_announces_nothi
 
     class _Tenant(NoopEmitter):
         """The project source. `acme-bronze` is a bound namespace here, so the event names its tenant —
-        the medallion's publication head reads this field rather than splitting the id for it."""
+        a consumer reads this field rather than splitting the id for it."""
 
         async def project_for(self, top_ns: str) -> str | None:
             return "acme" if top_ns == "acme-bronze" else None
@@ -366,11 +366,9 @@ def test_a_REPUBLISH_at_the_same_version_announces_nothing(ns, table: DoorTable)
     right — but nothing changed. The endpoint gated its `table_published` emit on `result.published`,
     so the replay announced a second readiness with `from_version == to_version`: an empty delta.
 
-    Nothing downstream treats that as empty. `StageTrigger` is `extra="ignore"` and declares neither
-    version field, and the publication head mints a fresh token from the event id, so the deterministic
-    instance-id dedupe never engages. One replayed publish therefore buys a full bronze->silver->gold
-    re-run. The shape occurs on the live path: ingest publishes inside a `finalize` activity that Dapr
-    retries up to four times.
+    A consumer that wakes on the event and reads neither version field cannot treat that as empty, and
+    one that dedupes on a token minted from the event id never engages that dedupe, so one replayed
+    publish buys it a full bronze->silver->gold re-run. A writer that retries its publish replays it.
 
     Deliberate re-announcement is a different act and gets its own door (`POST /promote`), rather than
     being an undocumented side effect of publishing twice.

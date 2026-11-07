@@ -4,9 +4,9 @@ import { calls, seed as seedFor } from '../mock-client';
 
 // THE PROJECTS VIEW TOGGLE — gallery or table.
 //
-// No door on this stack keeps per-person state (`view-prefs.api.ts`), so the toggle switches the view
-// for the page it is on and remembers nothing: no request goes anywhere for it, and a reload paints the
-// default again. Pinned so a console that starts calling a door the catalog does not serve fails here,
+// No door on this stack keeps per-person state, so the toggle switches the view for the page it is on
+// and remembers nothing: no request goes anywhere for it, nothing lands in the reader's activity log,
+// and a reload paints the default again. Pinned so a console that starts calling a door the catalog does not serve fails here,
 // rather than as a 404 on the estate that a mock would hide.
 
 let token: string;
@@ -68,6 +68,9 @@ test('the toggle switches views, sends nothing, and a reload paints the default'
 		'href',
 		'/projects/acme',
 	);
+
+	// A view change is not a write: the bell has nothing to count.
+	await expect(page.getByRole('button', { name: /^Activity/ })).toHaveAccessibleName('Activity');
 
 	await page.reload();
 	await expect(gallery(page)).toHaveAttribute('aria-checked', 'true');

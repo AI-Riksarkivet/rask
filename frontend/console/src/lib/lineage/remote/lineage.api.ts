@@ -29,6 +29,7 @@ export const fetchDlq = query(
  *  service (`can_write_data` on the parked event's outputs) against a REAL user. Auth-on + no
  *  session → 401 without the request leaving the browser. */
 export const replayDlq = command(
+	(runId) => `Replay lineage event ${runId}`,
 	v.string(),
 	async (runId): Promise<ApiResult<DlqReplayResponse>> => {
 		if (auth.enabled && !auth.session) {

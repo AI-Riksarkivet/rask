@@ -125,8 +125,8 @@ LIFECYCLE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/Lifecycle
 #: this shipped a facet that never appeared on a real write.
 #:
 #: A DATA operation is deliberately absent rather than forced into a value. The enum has no member
-#: meaning "wrote rows", so `insert`, `delete`, `merge_insert`, `update`, `compaction`, `transform`,
-#: `training` and the medallion's lane verbs get nothing — mapping them to `OVERWRITE` would tell a
+#: meaning "wrote rows", so `insert`, `delete`, `merge_insert`, `update`, `compaction`, `transform`
+#: and `training` get nothing — mapping them to `OVERWRITE` would tell a
 #: reader the table was replaced. Their row-level story is the output statistics and version facets
 #: that already ride the same event. `overwrite_table` is the one write that DID replace the table's
 #: contents (a create or an insert in Overwrite mode over an existing table, [[LH-242]]), so it says so.

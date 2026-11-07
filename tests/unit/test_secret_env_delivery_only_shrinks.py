@@ -13,9 +13,8 @@ migrate, so the number can only fall.
 THE RATCHET ALONE SITS STILL AND STAYS GREEN. A budget nobody is obliged to spend down is a budget; what
 moves the number is a RULE for the subset with nothing left to build, and this file does not state one.
 
-WHY IT DID NOT EXIST AND WHY THAT MATTERS. Several tests already pin SPECIFIC `secretKeyRef` entries as
-CORRECT — the Ray pod's `S3_SECRET`, the app token — each guarding its own plane. Nothing counted them
-estate-wide, and that is precisely the regime that let 39 accumulate while every local test stayed
+WHY IT DID NOT EXIST AND WHY THAT MATTERS. Tests pinned SPECIFIC `secretKeyRef` entries as CORRECT, each
+guarding its own plane, and nothing counted them estate-wide, and that is precisely the regime that let 39 accumulate while every local test stayed
 green: the same split this estate already paid for once, when two planes each pinned their own half of
 the Jobs-API secret defect and it was fixed twice.
 

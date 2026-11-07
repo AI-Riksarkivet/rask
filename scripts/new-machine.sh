@@ -277,12 +277,18 @@ else
 fi
 
 stage "Build the images and install rask from empty"
-say "Every image the pins files name is built by Dagger from this checkout and pushed under that tag,"
-say "so the committed pins stay valid; then make k3s-up installs the fixtures and rask."
+say "Every image the pins file names is built by Dagger from this checkout and pushed under that tag,"
+say "so the pins stay valid; then make k3s-up installs the fixtures and rask from the values git declares."
 if confirm "Build every pinned image and install? (a long run, once)"; then
   export _EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://dagger-engine-rask KUBECONFIG=/etc/rancher/k3s/k3s.yaml
   push() { bash scripts/dagger-image.sh "$@" || { warn "build failed: $*"; SKIPPED+=("build $*"); }; }
   pins() { sed -n 's/^ *\([a-z0-9-]*\): *"\([^"]*\)".*/\1 \2/p' "$1"; }
+  # make k3s-up reads the release's image tags from the pins file alone, so a stem it does not name is pinned to this
+  # checkout's commit and built under that tag below.
+  head=$(git rev-parse --short=9 HEAD)
+  for stem in lance-rest-catalog web-console; do
+    grep -q "^ *$stem:" deploy/values-live-pins.yaml 2>/dev/null || make k3s-pins TAGS="$stem=$head"
+  done
   while read -r name tag; do
     case "$name" in
       lance-rest-catalog) push --name rest-catalog --push "172.17.0.1:5000/$name:$tag" ;;
@@ -290,18 +296,6 @@ if confirm "Build every pinned image and install? (a long run, once)"; then
       *) if [[ -f ".docker/$name.dockerfile" ]]; then push --name "$name" --push "172.17.0.1:5000/$name:$tag"; else note "$name: public image, pulled as-is"; fi ;;
     esac
   done < <(pins deploy/values-live-pins.yaml)
-  # The console's release pins its web image and its inbox, one `repository` and `tag` pair each; the web image
-  # `web-console` is built from the `frontend` stem.
-  f=deploy/fixtures/console/values-live-pins.yaml
-  if [[ -f "$f" ]]; then
-    while read -r repo tag; do
-      image=${repo##*/}
-      case "$image" in
-        web-console) push --name frontend --push "172.17.0.1:5000/$image:$tag" ;;
-        *) push --name "$image" --push "172.17.0.1:5000/$image:$tag" ;;
-      esac
-    done < <(paste -d' ' <(sed -n 's/^ *repository: *"\(.*\)"/\1/p' "$f") <(sed -n 's/^ *tag: *"\(.*\)"/\1/p' "$f"))
-  fi
   make k3s-up
   step "rask is installed; checking it"
   make test

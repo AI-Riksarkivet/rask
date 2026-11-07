@@ -1,13 +1,7 @@
 """Request body-size limit — a pure-ASGI middleware that rejects oversized bodies with 413.
 
-MOVED HERE FROM `catalog/api/body_limit.py` (2026-08-26, owner ruling). It was written for the
-catalog and applied to the catalog alone, while the apps built by `make_service_app` got CORS +
-RequestID + Timing and no ceiling at all. `register_middleware` now installs it for every
-service, so one cannot be added without a cap and a new route cannot arrive uncapped.
-
-The shared default is a DoS CEILING, not a business rule: it exists to stop a multi-GB body reaching a
-buffer, not to say what a payload should be. A service needing more sets its own — the catalog keeps
-256 MiB explicitly, because Arrow-IPC writes are exactly the case this was built for.
+The cap is a DoS CEILING, not a business rule: it exists to stop a multi-GB body reaching a buffer, not to say what
+a payload should be. The catalog sets 256 MiB, because Arrow-IPC writes are exactly the case this was built for.
 
 The Arrow-IPC write endpoints (``/v1/table/{id}/create|insert|merge_insert``) read the whole request body
 into memory before the handler runs, so a single unbounded POST — e.g. a multi-GB media blob pushed through
@@ -30,9 +24,9 @@ from service_kit.problem import problem_body
 
 #: `ErrorCode.INVALID_INPUT`, as the integer it already is on the wire (`ErrorCode` is an IntEnum).
 #:
-#: SPELLED AS A LITERAL because this middleware is registered for EVERY app `make_service_app` builds,
-#: including storeless ones — importing the enum here would make `import service_kit` require the
-#: `[governed]` extra, and an image built without it fails `.docker/import-gate.py`.
+#: SPELLED AS A LITERAL because this module is in service-kit's base, which carries no `[governed]` extra:
+#: importing the enum here would make importing it require that extra, and an image built without it fails
+#: `.docker/import-gate.py`.
 #: Deferring the import into the reject path would be worse, not better: it would turn a build-time
 #: failure into a request-time one, on the exact request that is already going wrong.
 #:

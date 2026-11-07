@@ -8,6 +8,9 @@ Services (ClusterIP):
 {{- range $name := list "catalog" "lineage" }}
   - {{ $name }}: {{ include "rask.fullname" $root }}-{{ $name }}:{{ (index $root.Values.services $name).port }}
 {{- end }}
+{{- if .Values.console.enabled }}
+  - console:   {{ include "lance.fullname" $root }}-console:{{ .Values.console.port }} (the lakehouse's UI, routed at `/`)
+{{- end }}
   - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Postgres — OpenFGA's database{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})
 {{- if .Values.objectStore.enabled }}
   - store:     {{ include "lance.objectStoreHost" $root }}:{{ .Values.objectStore.port }} (the rustfs fixture's development store)

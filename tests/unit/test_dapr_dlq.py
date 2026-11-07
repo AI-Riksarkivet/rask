@@ -140,7 +140,7 @@ def test_the_verified_author_is_read_off_a_payload_even_when_it_will_not_parse()
     BECAUSE the event failed validation, so the strict model is unavailable exactly where the answer
     is needed.
 
-    `sub` and nothing else, deliberately — the same rule `notifications.author_subject` applies. This
+    `sub` and nothing else, deliberately — the same rule a notifier targets by. This
     model's `author` property prefers `name` and falls back to the standard `ownership` facet, which
     is right for ATTRIBUTION on a board and wrong here: those are producer-supplied and unverified, so
     a loss log built on them could name someone who is not the author of the run that was lost.

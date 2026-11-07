@@ -8,7 +8,7 @@ contains ZERO 422s: on a spec operation it is a status no generated client has a
 
 NARROWED TO SPEC ROUTES RATHER THAN FLIPPED ESTATE-WIDE. A rask-only door — the `/credentials` vending
 extension, the registries — has no lance-ns contract to honour, and its callers are this estate's own
-zones and tests, which expect FastAPI's 422. Both directions are asserted here because a narrowing
+console and tests, which expect FastAPI's 422. Both directions are asserted here because a narrowing
 that answered 400 everywhere would pass any test written only for the first.
 
 DRIVEN THROUGH A REAL APP rather than by calling the branch: the handler reads

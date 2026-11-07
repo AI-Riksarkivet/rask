@@ -12,7 +12,7 @@ but never sees the route. Everything between the sidecar and that function was u
   ``Depends(require_dapr_token)``, which a direct call to ``handle_cloud_event`` cannot exercise —
   drop the dependency and every direct-call test still passes while the feed becomes forgeable.
 * the **DLQ parking route** for lineage. Its subscription *declaration* was pinned; its behaviour
-  (ERROR-log + ACK + the terminal-loss counter + the 403) was only pinned for medallion's twin.
+  (ERROR-log + ACK + the terminal-loss counter + the 403) was not.
 
 Live shape this file mirrors (kind cluster ``lance``, 2026-07-26)::
 
@@ -43,7 +43,7 @@ _VALID = {
     "eventType": "COMPLETE",
     "eventTime": "2026-06-20T09:00:00Z",
     "run": {"runId": "r1", "facets": {"rask_author": {"name": "alice"}}},
-    "job": {"namespace": "ray-jobs", "name": "ingest"},
+    "job": {"namespace": "pipelines", "name": "ingest"},
     "inputs": [{"namespace": "source", "name": "raw"}],
     "outputs": [
         {

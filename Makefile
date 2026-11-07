@@ -1,10 +1,9 @@
-.PHONY: k3s-clients fga-store-check fga-estate-migrate sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image seed-dev e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: fga-store-check fga-estate-migrate sbom registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth go-fmt scan-config scan-secrets scan-image seed-dev e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
 	@echo "  install build test lint fmt clean storybook"
 	@echo "  typecheck knip check ci   frontend-check frontend-build"
-	@echo "  dev-micro                              — the notifications inbox on the host"
 	@echo "  dev                                    — the console (Vite HMR, /api → RASK_EDGE_URL)"
 	@echo "  dev-k3s                                — the console against the IN-CLUSTER edge (Traefik, port-forwarded)"
 	@echo "  console-image                          — the console's static-file image (web + serve.ts)"
@@ -13,7 +12,7 @@ help:
 
 # --all-packages, not a bare `uv sync`: a bare sync installs the ROOT project only and
 # omits every workspace member, so a fresh clone gets a venv where `import service_kit`
-# fails. Same flag as .dagger and `make dev-micro` — one behaviour everywhere.
+# fails. Same flag as .dagger — one behaviour everywhere.
 install:
 	bun --cwd=frontend install
 	uv sync --all-packages
@@ -84,9 +83,9 @@ lint:
 	uv run python scripts/lakehouse_names_no_client.py
 	bun --cwd=frontend run lint
 
-# The import-layer contracts in `.importlinter` (the lakehouse's, which name no client module), then each client's
-# own: every workspace member whose pyproject declares `[tool.importlinter]`. A client's contract travels with its tree,
-# so this target names no client and holds with every client tree deleted (XC-188). `uv run --with` layers the pinned
+# The import-layer contracts in `.importlinter` (the lakehouse's, which name no client module), then each member's
+# own: every workspace member whose pyproject declares `[tool.importlinter]`, none today. A member's contract travels
+# with its tree, so this target names no member and holds with any member's tree deleted (XC-188). `uv run --with` layers the pinned
 # import-linter over the workspace venv, so the graph it walks is the workspace's own editable installs.
 lint-imports:
 	uv run --with import-linter==2.15 lint-imports
@@ -283,7 +282,7 @@ ci: check test
 # second description of it. Deliberately NOT folded into `check` — check is offline and fast, these
 # reach osv.dev and ghcr for advisory data, and a laptop on a train should not fail `make check`.
 #
-# audit       osv-scanner over all SIX lockfiles + .dagger/go.mod. No build, seconds.
+# audit       osv-scanner over every lockfile + .dagger/go.mod. No build, seconds.
 # scan-config trivy misconfig over .docker/ + chart/, and secret detection repo-wide. No build.
 # scan-image  trivy over an image DAGGER BUILT — needs the build first, so it is minutes, not seconds.
 #             NAME is the .docker/<stem>.dockerfile stem (`frontend` is the console).
@@ -341,17 +340,9 @@ claude-bootstrap:
 	@echo "==> Done — re-run anytime (idempotent). Skills come from the ra-skills marketplace; see .claude/README.md."
 	@echo "    Authenticate any MCP servers if prompted on first use."
 
-# ---- the inbox on the host --------------------------------------------------
-# The notifications inbox, the per-person service the console reads beside the lakehouse, as a host process via
-# scripts/dev-micro.sh. There is no edge on the host, so the console reaches the lakehouse through `make dev-k3s` or a
-# cluster.
-dev-micro:
-	uv sync --all-packages
-	./scripts/dev-micro.sh
-
 # ---- the console (one SvelteKit single-page app) --------------------------
 # `frontend/console` builds to static files: no server of its own, the browser signs in to Dex with PKCE and calls the
-# lakehouse's /api/* and the inbox with its bearer. In development Vite serves `frontend/console/dev/config.json` as
+# lakehouse's /api/* with its bearer. In development Vite serves `frontend/console/dev/config.json` as
 # /config.json: the issuer `http://localhost:8080/dex` (the value DEV_ISSUER defaults to, so the token's `iss` is the one
 # `make k3s-up` gives the estate) and the client `rask-console`. It proxies /api/* to RASK_EDGE_URL (default :8080): one
 # origin on the host that serves both the issuer and the API, as k3s Traefik's Service does. The design system builds
@@ -439,13 +430,10 @@ nats-auth: ## NATS auth e2e — each bus client admitted only to its own subject
 	$(DAGGER) call nats-auth
 
 # ---- local k3s ------------------------------------------------------------
-# A service that is in neither this list nor $(K3S_IMAGES) is never built by `make k3s-build` and never
+# An image that is not in $(K3S_IMAGES) is never built by `make k3s-build` and never
 # side-loaded by `make k3s-import`, so a hand-built image lands outside CONTAINERD and k3s answers
 # ErrImagePull. Measured 2026-08-06: a Dagger build succeeded (exit 0), `kubectl set image` ->
 # ErrImagePull, rolled back.
-# `notifications` is the inbox and `web-console` the console's static-file image (from .docker/frontend.dockerfile): the
-# console's own release runs both (deploy/fixtures/console).
-COMPOSE_IMAGES = notifications
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 # Routed through scripts/helm.sh, which sets HELM_DRIVER=sql. NOT bare `helm`: the release lives in
 # Postgres, and against the default Secret backend helm reports it ABSENT and `upgrade --install`
@@ -458,9 +446,10 @@ HELM ?= KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/h
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl --namespace $(RELEASE_NAMESPACE)
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + maintenance — chart `image.catalog`);
 # the default render runs its containers from it, so the
-# build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
+# build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod. web-console is the
+# console's static-file image (chart `image.console`, from .docker/frontend.dockerfile), which the release waits on too.
 # The object store fixture runs the upstream RustFS image by digest, which the node pulls; nothing here builds it.
-K3S_IMAGES = $(COMPOSE_IMAGES) web-console lance-rest-catalog
+K3S_IMAGES = web-console lance-rest-catalog
 # Where k3s-build leaves each image as an OCI tarball and k3s-import reads it: no docker daemon on either side.
 K3S_IMAGE_DIR ?= build/k3s-images
 
@@ -480,13 +469,10 @@ k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/, 
 	helm dependency build ./chart
 	./scripts/fixtures.sh --vendor
 
-k3s-build: ## Build the lakehouse, inbox and console images as OCI tarballs in K3S_IMAGE_DIR (via Dagger, no docker)
-	@for s in $(COMPOSE_IMAGES); do \
-	  bash scripts/dagger-image.sh --name $$s --out $(K3S_IMAGE_DIR)/$$s.tar || exit 1; \
-	done
+k3s-build: ## Build the lakehouse and console images as OCI tarballs in K3S_IMAGE_DIR (via Dagger, no docker)
+	@# Each dockerfile stem differs from its image name (frontend -> web-console, rest-catalog ->
+	@# lance-rest-catalog), so each is one line. Same builds scripts/e2e_stack.sh does.
 	bash scripts/dagger-image.sh --name frontend --out $(K3S_IMAGE_DIR)/web-console.tar
-	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
-	# ride the COMPOSE_IMAGES loop. Same build scripts/e2e_stack.sh does.
 	bash scripts/dagger-image.sh --name rest-catalog --out $(K3S_IMAGE_DIR)/lance-rest-catalog.tar
 
 k3s-import: ## Side-load the k3s-build tarballs into k3s containerd as <image>:dev (sudo, no docker)
@@ -497,22 +483,14 @@ k3s-import: ## Side-load the k3s-build tarballs into k3s containerd as <image>:d
 
 # The LOCAL dev identity values. auth.enabled is ON in the chart's own defaults (a security default must
 # fail closed), and the chart REFUSES to render it without an issuer, so the local loop supplies the dev
-# Dex's here. It is not a secret. Override it from the environment for a differently-addressed dev cluster; each
-# client's sign-in callback lives in its own `deploy/fixtures/<client>/dex-values.yaml`.
+# Dex's here. It is not a secret. Override it from the environment for a differently-addressed dev cluster; the
+# console's sign-in callbacks are the dex fixture's `console` value.
 DEV_ISSUER          ?= http://localhost:8080/dex
 # The store address the catalog vends (LH-489): the rustfs fixture's node port on the node's own address, which a pod
 # and this host both reach, where `rask-rustfs:9000` resolves only in the cluster.
 DEV_NODE_IP         ?= $(shell $(KUBECTL) get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null)
 DEV_STORE_NODE_PORT := $(shell sed -n 's/^nodePort: *//p' deploy/fixtures/rustfs/chart/values.yaml)
 DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
-
-# THE CREDENTIAL KEYS A RELEASE MAY STILL CARRY from before [[XC-004]], dropped from every upgrade that
-# re-feeds the live values (`-f $$LIVE`). templates/prod-credentials.yaml refuses each of them as a value,
-# and `null` is how Helm removes a key a values file supplies. The two lists name the same keys.
-DROP_CREDENTIAL_VALUES := --set dapr.appToken=null \
-  --set age.password=null --set objectStore.secretKey=null \
-  --set objectStore.maintenanceSecretKey=null \
-  --set objectStore.catalogSecretKey=null --set objectStore.lineageSecretKey=null
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
 # (NOT FOR PRODUCTION; deploy/fixtures/README.md). Dapr's control plane comes first after ESO, so its injector is
@@ -523,65 +501,56 @@ DROP_CREDENTIAL_VALUES := --set dapr.appToken=null \
 # the store, dashboards and alerting rask's Collector exports to; marquez is the graph lineage forwards to.
 FIXTURES ?= external-secrets dapr nats cloudnative-pg dex rustfs openbao observability marquez
 
-# THE CLIENTS, each its own release and none a prerequisite: `k3s-up` installs the lakehouse alone, and `k3s-clients`
-# adds them after it (XC-183), each reaching the lakehouse by reference. The console is the one client this repository
-# deploys: its web image and the notifications inbox, given the issuer the lakehouse is given.
-CLIENTS ?= console
-
 k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex,$(FIXTURES)))
-	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) $(foreach f,$(sort $(wildcard deploy/fixtures/*/dex-values.yaml)),-f $(f)))
-
-k3s-clients: ## Install the lakehouse's clients (CLIENTS) as their own releases, after `k3s-up`: each reaches it by reference
-	$(if $(filter-out console,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out console,$(CLIENTS)))
-	$(if $(filter console,$(CLIENTS)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh console -- --set-string auth.oidc.issuer=$(DEV_ISSUER))
+	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER))
 
 k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
 	kubectl apply --server-side -f chart/crds-bootstrap/
 
-# `-o yaml` on the `helm get values` below is LOAD-BEARING, not a style choice. Bare `helm get values`
-# prints a HUMAN header line ("USER-SUPPLIED VALUES:") above the YAML; feeding that straight back
-# through `-f` parses the header as a KEY, so every upgrade re-stored a junk `USER-SUPPLIED VALUES:
-# null` entry in the release and carried it forward forever (observed live 2026-08-16 on rev 6).
+# THE RELEASE'S VALUES ARE COMPOSED FROM GIT, NEVER READ BACK FROM THE RELEASE ([[XC-194]]). Each upgrade resets to the
+# chart's defaults and supplies exactly these: the estate's overlay, where its images come from, the image tags the pins
+# file names, and three values derived here. A value that exists only in the live release is dropped by the next
+# `make k3s-up`, so the estate is what git declares, and `make k3s-values` prints the composition that
+# `helm get values rask -o json` must equal after it.
 #
-# This note lives ABOVE the target rather than beside the line it describes, and that is deliberate:
-# the recipe is ONE shell command joined by trailing backslashes, so a `@#` line placed inside the
-# continuation is not a comment at all — make hands it to sh as a command. It did, from 2026-08-16
-# (7c2171f0) until 2026-08-23, and the whole target failed with `/bin/sh: @#: not found` plus a
-# `helm get values requires 1 argument` from the orphaned `-o yaml`. A comment that breaks the recipe
-# it documents is worse than no comment; keep prose out of the continuation.
-k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check ## Apply CRDs, install fixtures, vendor deps, then install/upgrade the release and wait for the catalog
+# K3S_REGISTRY is the registry k3s pulls first-party images from: the dev registry `make dev-registry` points k3s at.
+# Set it empty for side-loaded images (`make k3s-build k3s-import`, the `dev` tag, `image.localImages`).
+K3S_REGISTRY ?= localhost:5000
+# The image tags the release runs: written by `make k3s-pins` (captured from the cluster, or set for a new build with
+# TAGS=), gitignored, and read only from here. Pulling from a registry needs it, and K3S_PINS_CHECK refuses a file that
+# pins no tag for an image the release renders, which would otherwise fall back to the chart's `dev` and wait out
+# `--wait` in ImagePullBackOff; side-loaded images run at `dev` when it is absent.
+K3S_PINS = deploy/values-live-pins.yaml
+K3S_PINS_ARG = $(if $(K3S_REGISTRY),-f $(K3S_PINS),$(if $(wildcard $(K3S_PINS)),-f $(K3S_PINS)))
+K3S_PINS_CHECK = $(if $(K3S_REGISTRY),for s in $(K3S_IMAGES); do grep -q "^    $$s: " $(K3S_PINS) 2>/dev/null || { echo "!! $(K3S_PINS) pins no tag for $$s: the release would pull $(K3S_REGISTRY)/$$s:dev. Name the build with make k3s-pins TAGS=\"$$s=<tag>\" (or K3S_REGISTRY= for side-loaded images)" >&2; exit 1; }; done,:)
+# The estate admin is the Dex fixture's alice, whose principal is derived from the fixture's own values as the live
+# lanes derive theirs (scripts/stack_values.sh). The bootstrap-admin hook grants it `admin` on estate:rask; without it
+# nobody can mint a project. Expanded once, and only by a target that composes the values.
+DEV_ADMIN_EMAIL ?= alice@example.com
+DEV_ADMIN = $(eval DEV_ADMIN := $(shell uv run --no-project --with pyyaml python scripts/dex_principal.py $(DEV_ADMIN_EMAIL)))$(DEV_ADMIN)
+K3S_VALUES = --reset-values \
+  -f deploy/values-local.yaml \
+  $(if $(K3S_REGISTRY),--set-string image.repository=$(K3S_REGISTRY),--set image.localImages=true) \
+  $(K3S_PINS_ARG) \
+  --set-string auth.oidc.issuer=$(DEV_ISSUER) \
+  --set-string vending.endpoint=$(DEV_VENDED_ENDPOINT) \
+  --set-string auth.bootstrapAdmin=$(DEV_ADMIN)
+
+k3s-values-check: ## Refuse to compose the release's values when a derived one came out empty
 	@case '$(DEV_VENDED_ENDPOINT)' in http://:*|*:) echo "DEV_VENDED_ENDPOINT '$(DEV_VENDED_ENDPOINT)' names no node address or port: is kubectl pointed at the cluster?" >&2; exit 1;; esac
-	@set -a; [ -f .env ] && . ./.env; set +a; \
-	: # THE PINS FILE CARRIES TAGS AND NOTHING ELSE, so it LAYERS over the registry rather than replacing
-	: # it. `k3s-pins.sh` strips the registry on purpose ("the chart supplies it from image.repository"),
-	: # so selecting the pins file INSTEAD of the live values left `image.repository` unset and the chart
-	: # refused the render outright — "must be set to a registry ... or set image.localImages=true".
-	: # Measured 2026-09-09: every `make k3s-up` failed for as long as a non-empty pins file existed,
-	: # which is the state a pin is FOR. Base first (the live release's image settings, else side-loaded),
-	: # pins second, so the tags win and the registry survives.
-	IMGARGS="--set image.localImages=true"; \
-	LIVE=$$(mktemp); \
-	if $(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
-	  IMGARGS="-f $$LIVE"; \
-	  echo ">> reusing the LIVE release's image settings ($$(grep -c . "$$LIVE") values) — not imposing localImages"; \
-	fi; \
-	if [ -s deploy/values-live-pins.yaml ]; then \
-	  IMGARGS="$$IMGARGS -f deploy/values-live-pins.yaml"; \
-	  echo ">> image TAGS pinned from deploy/values-live-pins.yaml (make k3s-pins to refresh)"; \
-	fi; \
-	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
-	  --take-ownership \
-	  $$IMGARGS \
-	  -f deploy/values-local.yaml \
-	  $(foreach f,$(sort $(wildcard deploy/fixtures/*/lakehouse-values.yaml)),-f $(f)) \
-	  --set-string auth.oidc.issuer=$(DEV_ISSUER) \
-	  --set-string vending.endpoint=$(DEV_VENDED_ENDPOINT) \
-	  $(DROP_CREDENTIAL_VALUES) \
-	  $${AWS_ACCESS_KEY_ID:+--set-string objectStore.accessKey=$$AWS_ACCESS_KEY_ID}
+	@case '$(DEV_ADMIN)' in dex~?*) ;; *) echo "the estate admin '$(DEV_ADMIN)' is no Dex principal: scripts/dex_principal.py $(DEV_ADMIN_EMAIL) failed" >&2; exit 1;; esac
+
+k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check k3s-values-check ## Apply CRDs, install fixtures, vendor deps, then install/upgrade the release from git's values and wait for the catalog
+	@$(K3S_PINS_CHECK)
+	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership $(K3S_VALUES)
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s
 	@echo "API → http://<node-ip>/api/catalog/livez   (host-less routes on Traefik's Gateway; over VS Code/ssh -L forward port 80 → http://localhost:<port>/)"
+
+k3s-values: k3s-values-check ## Print the values `make k3s-up` supplies, as `helm get values rask -o json` reads them (a server dry run: writes nothing)
+	@$(K3S_PINS_CHECK)
+	@$(HELM) upgrade --install rask ./chart --dry-run=server -o json $(K3S_VALUES) | jq -S .config
 
 k3s-stem-check: ## Refuse an upgrade while any image stem runs more than one tag ([[LH-169]])
 	@# A PREREQUISITE OF k3s-up, not a courtesy target. The chart carries ONE tag per image stem and ten
@@ -595,7 +564,7 @@ k3s-stem-check: ## Refuse an upgrade while any image stem runs more than one tag
 	@# operation instead of beside it.
 	@KUBECONFIG=$(KUBECONFIG) RELEASE_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/k3s-pins.sh --check-only
 
-k3s-pins: ## Capture what the cluster is RUNNING into deploy/values-live-pins.yaml (#135)
+k3s-pins: ## Capture what the cluster is RUNNING into deploy/values-live-pins.yaml (#135), or set TAGS="<stem>=<tag> ..." in it
 	@# KUBECTL is deliberately NOT passed through. `KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl` is a
 	@# multi-word string carrying its own env assignment, so `KUBECTL=$(KUBECTL) ./script` made the shell
 	@# read `KUBECTL=KUBECONFIG=...` as an assignment and then run `kubectl ./scripts/k3s-pins.sh` —
@@ -603,11 +572,14 @@ k3s-pins: ## Capture what the cluster is RUNNING into deploy/values-live-pins.ya
 	@# so passing it correctly would fail too: it would exec a binary literally named
 	@# `KUBECONFIG=... kubectl`. KUBECONFIG is already in the environment; the script's own `kubectl`
 	@# default is the right one.
-	@KUBECONFIG=$(KUBECONFIG) RELEASE_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/k3s-pins.sh deploy/values-live-pins.yaml
-	@echo ">> now: make k3s-up   (or ./scripts/helm.sh upgrade rask ./chart -f deploy/values-live-pins.yaml)"
-	@echo ">> NOT bare 'helm upgrade' — every helm call goes through scripts/helm.sh"
+	@# TAGS="<stem>=<tag> ..." sets those stems' tags in the file and reads no cluster: how a new build reaches the release.
+	@KUBECONFIG=$(KUBECONFIG) RELEASE_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/k3s-pins.sh $(foreach t,$(TAGS),--tag $(t)) $(K3S_PINS)
+	@echo ">> now: make k3s-up"
 
-k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution k3s-stem-check names). STEM=lance-rest-catalog TAG=main-<sha>
+# Make expands a recipe's lines before running the first, so `$(wildcard)` would look for the pins file before this
+# recipe writes it: the converge names it unconditionally.
+k3s-converge: K3S_PINS_ARG = -f $(K3S_PINS)
+k3s-converge: k3s-values-check ## Roll a WHOLE image stem to one tag and upgrade (the resolution k3s-stem-check names). STEM=lance-rest-catalog TAG=main-<sha>
 	@# THE DOCUMENTED FIX FOR A SPLIT STEM, made runnable. `k3s-stem-check` refuses `k3s-up` while one
 	@# stem runs several tags and tells the operator to "rebuild one image from a commit carrying every
 	@# change, roll the whole stem, re-run" — but the rolling half had no command, so it was done by
@@ -617,18 +589,12 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@#
 	@# One helm upgrade instead, which converges every workload on the stem in a single transaction and
 	@# leaves the release agreeing with the cluster. It deliberately does NOT depend on k3s-stem-check:
-	@# this target is what RESOLVES the split the check refuses to proceed through.
-	@#
-	@# Image settings come from the LIVE release, exactly as k3s-up derives them, so a stem this call
-	@# does not name keeps the tag it is running rather than falling back to the chart default.
-	@# THE UPGRADE'S STATUS, NOT THE CLEANUP'S. A shell reports its LAST command's exit code, so
-	@# `helm upgrade ...; rm -f "$$LIVE"` hands make the `rm`'s status and a FAILED upgrade reports
-	@# success. Measured here: a post-upgrade hook timed out, helm printed `UPGRADE FAILED`, and the
-	@# target still exited 0 and printed ">> every stem converged" — a half-applied deploy reading as
-	@# clean, which is the worst direction for this failure to go. So the recipe keeps the upgrade's
-	@# status in rc and exits with it after the cleanup.
+	@# this target is what RESOLVES the split the check refuses to proceed through. The tag is written into the pins
+	@# file first and the values are k3s-up's, so the next `make k3s-up` deploys the same tag.
 	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
-	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f deploy/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set-string auth.oidc.issuer=$(DEV_ISSUER) 	  $(DROP_CREDENTIAL_VALUES); 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
+	@./scripts/k3s-pins.sh --tag $(or $(STEM),lance-rest-catalog)=$(TAG) $(K3S_PINS)
+	@$(K3S_PINS_CHECK)
+	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership $(K3S_VALUES)
 	@# SINGLE QUOTES around the suggested command, never backticks: a backtick inside an echo is
 	@# COMMAND SUBSTITUTION, so `>> ... `make k3s-up` ...` RAN a full k3s-up as a side effect of
 	@# printing advice. Observed 2026-09-22 in this target's own output — "every stem converged —

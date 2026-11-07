@@ -2,8 +2,8 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { defineConfig } from 'vitest/config';
 
 /**
- * `environment: 'node'` — matching every other vitest config in the estate (media, annotator,
- * page-contract). That is a deliberate ceiling, not an oversight: there is NO DOM environment
+ * `environment: 'node'` — matching every other vitest config in this workspace. That is a deliberate
+ * ceiling, not an oversight: there is NO DOM environment
  * anywhere in this repo (no jsdom, no happy-dom, no testing-library, no vitest-browser-svelte), so
  * these tests cover PURE LOGIC only.
  *

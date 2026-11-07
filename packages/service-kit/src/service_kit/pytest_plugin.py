@@ -7,7 +7,7 @@ its `dapr` dependency keeps across a process; this repository's suites get the s
 
 - every test gets its own cache of secret-store reads (`service_kit.governed.secret_cache.STORE_READS`);
 - every test gets the token files a pod's kubelet projects, one per lakehouse door;
-- Dapr's sidecar handshake is bounded and its process-global actor-proxy factory starts empty;
+- Dapr's sidecar handshake is bounded;
 - respx's bare `@respx.mock` is strict, and `respx_allows_unused_routes` opts a test out.
 """
 
@@ -18,7 +18,6 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
-from dapr.actor.client.proxy import ActorProxy
 from dapr.conf import settings as dapr_settings
 
 from service_kit.governed import secret_cache
@@ -30,8 +29,9 @@ except ImportError:  # a client whose suite mocks no HTTP does not install respx
     respx = None
 
 #: How long any test may let Dapr's sidecar handshake run. The SDK's own default is 60 s, and where there is no sidecar
-#: nothing is cached, so every unstubbed `ActorProxy.create` pays it again: CI run 35726435185 spent 8m17s in
-#: `wait_for_sidecar` before `--timeout=300` took the offline suite and four e2e lanes with it.
+#: nothing is cached, so every unstubbed Dapr client construction (`DaprClient`, its HTTP client) pays it again: CI run
+#: 35726435185 spent 8m17s in `wait_for_sidecar` before `--timeout=300` took the offline suite and four e2e lanes with
+#: it.
 DAPR_HANDSHAKE_BUDGET_SECONDS: Final = 1.0
 
 #: The doors whose callers read a projected token file, `RASK_<DOOR>_IDENTITY_TOKEN_FILE`.
@@ -104,15 +104,3 @@ def _bounded_dapr_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
     that needs another duration sets its own inside a `MonkeyPatch.context`.
     """
     monkeypatch.setattr(dapr_settings, "DAPR_HEALTH_TIMEOUT", DAPR_HANDSHAKE_BUDGET_SECONDS, raising=False)
-
-
-@pytest.fixture(autouse=True)
-def _no_dapr_proxy_factory_carryover() -> None:
-    """Start each test with Dapr's process-global actor-proxy factory empty, so one test cannot decide another's outcome.
-
-    `ActorProxy` caches its default factory on the class, assigned only after the constructor returns. A test that
-    builds one leaves it built, so a later test expecting construction to raise (no sidecar) fails `DID NOT RAISE`
-    whenever something warmed it first; and where construction raises nothing is cached, so each later call pays the
-    whole handshake again. Clearing the one attribute leaves the mechanism as production runs it.
-    """
-    ActorProxy._default_proxy_factory = None

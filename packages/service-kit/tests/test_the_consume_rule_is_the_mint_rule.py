@@ -4,10 +4,9 @@
 ``[a-z0-9][a-z0-9-]{1,61}[a-z0-9]`` (lowercase, DNS-safe, 3-63, no trailing hyphen), while
 ``warehouse_registry.PROJECT_PATTERN`` admitted ``^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`` — any case,
 underscores, one character, a trailing hyphen. The gap was not theoretical: ``is_safe_project`` is
-what the catalog's lineage emit, the medallion's ingest trigger and transform, and ingest's name
-composition all ask before putting a project into an S3 key prefix, a Lance dataset URI and a lineage
-namespace qualifier. Anything the loose rule admitted and the strict one refuses is an id those planes
-would accept and the control plane could never have issued — an id with no project behind it.
+what the catalog's lineage emit asks before putting a project into a lineage namespace qualifier, and
+what any plane composing an S3 key prefix or a Lance dataset URI from a project asks. Anything the loose
+rule admitted and the strict one refuses is an id those planes would accept and the control plane could never have issued — an id with no project behind it.
 
 MEASURED BEFORE TIGHTENING, because a shape rule is only safe to narrow against the ids that exist:
 all 93 projects registered on the deployed estate (2026-09-19, ``GET /management/v1/projects``) already satisfy

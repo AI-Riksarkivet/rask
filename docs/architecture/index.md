@@ -11,16 +11,18 @@ authorized on **OpenFGA**, and is governed in the catalog's write path, which is
 tiers live ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)). The catalog announces each
 committed write as an OpenLineage event over Dapr pub/sub on **NATS JetStream**; **lineage** records it in a durable
 commit feed (`GET /events`) and a table-level edge list, Lance tables in the catalog's provenance namespace, and
-forwards it to a bring-your-own graph backend ([ADR 0158](../adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md)), and
-a notifier, a client such as the **notifications** inbox, turns the events into a per-person inbox
-([the contract](../COMMIT-EVENTS.md#telling-people-the-notifier-contract)).
+forwards it to a bring-your-own graph backend ([ADR 0158](../adr/0158-provenance-is-a-service-the-lineage-graph-is-bring-your-own.md)).
+The lakehouse runs no notifier: a client that tells people about the events targets them from the fields the events
+name ([the contract](../COMMIT-EVENTS.md#telling-people-the-notifier-contract)).
 **Maintenance** expires versions, purges trash, scans for orphans and reconciles stores. Moving data between tiers,
 ingest and training are the user's pipeline, on the user's own compute and orchestrator
 ([ADR 0154](../adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)). The HTTP backend sits behind the
 **platform's Gateway** (Kubernetes Gateway API), whose HTTPRoutes the chart renders, one per public `/api/*` prefix
-([ADR 0165](../adr/0165-the-edge-is-the-platforms-gateway-api.md)). The **console**, a SvelteKit 3 + Svelte 5
-single-page app with no backend of its own, is a client of those doors: the browser signs in with PKCE and calls them
-with its bearer, and its release adds its own HTTPRoute on the same Gateway.
+([ADR 0165](../adr/0165-the-edge-is-the-platforms-gateway-api.md)). The **console**, the lakehouse's own UI, is a
+SvelteKit 3 + Svelte 5 single-page app with no backend of its own, shipped by the product chart: the browser signs in
+with PKCE and calls the same public doors any client uses with its bearer, and the chart's HTTPRoute `rask-console`
+serves its static files at `/` on the same Gateway
+([ADR 0193](../adr/0193-the-inbox-is-retired-and-the-console-joins-the-product.md)).
 
 ## Component map
 
@@ -30,11 +32,10 @@ flowchart TB
     client["A user's pipeline<br/><sub>its own compute</sub>"] -->|"namespace doors"| cat
     gw --> cat["catalog<br/><sub>tier governance</sub>"]
     gw --> lin["lineage<br/><sub>GET /events · provenance tables</sub>"]
-    gw --> notif["notifications<br/><sub>a client of the events, the console's release</sub>"]
+    gw --> web["rask-console<br/><sub>the console's static files, at /</sub>"]
     cat --> fga[("OpenFGA")]
     cat --> s3[("S3 · Lance tables")]
     cat -->|"lineage.events.v1"| lin
-    lin --> notif
     maint["maintenance"] --> s3
 ```
 

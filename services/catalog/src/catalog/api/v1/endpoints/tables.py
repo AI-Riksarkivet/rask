@@ -1117,8 +1117,8 @@ async def register_table(
         # A table registered whose seed never ran carries NO tuples at all, and every `table` relation
         # resolves through a direct tuple or `X from parent` — so it denies every principal, including
         # the identity that registered it, and no door can repair it because re-registering is exactly
-        # what lands here. Measured 2026-09-15: five of the estate's own tiers in that state, and the
-        # medallion's `register_written_dataset` re-enters this door on every run, converging on a
+        # what lands here. Measured 2026-09-15: five of the estate's own tiers in that state, and a
+        # writer that registers its output on every run re-enters this door each time, converging on a
         # location check that never asked whether the object was governed.
         #
         # ONLY WHEN THE LOCATION MATCHES. A 409 at a different location is a genuine id conflict —

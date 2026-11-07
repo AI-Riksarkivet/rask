@@ -16,7 +16,7 @@ the External Secrets Operator and a secret store are prerequisites rask never in
 | Every setting, with a one-line description | `values.yaml` (`# --` comments), tabulated below |
 | The rationale for a template | `docs/chart/templates/<template>.md`, one section per template line it explains |
 | Environment overlays | `deploy/values-local.yaml` (local k3s), `deploy/values-prod.yaml` (production shape), `deploy/values-live-pins.yaml` (`make k3s-pins`) |
-| The local deploy | `make k3s-up`: the live release's image settings, then the pins, then `deploy/values-local.yaml` |
+| The local deploy | `make k3s-up`: `--reset-values` with `deploy/values-local.yaml`, the registry, the pins and the derived issuer, endpoint and bootstrap admin, never the live release's values |
 
 The overlays live outside `chart/` because Helm stores the chart's files in every release revision, and that
 revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept out of `templates/` for the same reason.
@@ -96,6 +96,13 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.promotion.schedule | string | `"@every 60s"` | Dapr cron schedule on which promotion holds past their review deadline expire; lateness only costs time. |
 | catalog.trashGraceDays | float | `7` | Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
 | catalog.warehouses.enabled | bool | `true` | Per-warehouse physical multi-tenancy: POST /management/v1/warehouses provisions a bucket per warehouse and binds top-level namespaces to it. Unbound namespaces use `objectStore.bucket`. |
+| console.enabled | bool | `true` | Render the console: its Deployment, Service, `/config.json` ConfigMap, ServiceAccount and, with `route.enabled`, its `/` HTTPRoute. |
+| console.oidc.clientId | string | `"rask-console"` | The IdP's public client the console signs in with (PKCE, no secret); the development Dex declares `rask-console` (deploy/fixtures/dex `console`). |
+| console.oidc.scopes | list | `["openid","profile","email","groups"]` | Scopes the console asks for; `federated:id` and the lakehouse's audience scope are always added. |
+| console.port | int | `3000` | Port of the console's static server and its Service. |
+| console.replicas | int | `1` | Replicas of the console's static server. |
+| console.resources | object | `{"limits":{"cpu":"500m","memory":"128Mi"},"requests":{"cpu":"10m","memory":"32Mi"}}` | CPU/memory requests and limits for the console's static server. |
+| console.runAsUser | int | `10001` | The image's non-root uid and gid (`USER 10001` in .docker/frontend.dockerfile), named by number so `runAsNonRoot` can verify it. |
 | dapr.apiTimeoutSeconds | int | `30` | Deadline in seconds for every DaprClient gRPC call (DAPR_API_TIMEOUT_SECONDS), so a wedged sidecar fails a publish instead of hanging it. |
 | dapr.controlPlaneNamespace | string | `"dapr-system"` | Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it. |
 | dapr.dashboard.enabled | bool | `true` | Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. |
@@ -122,13 +129,14 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | forwardedAllowIps | string | `"127.0.0.1"` | Peers whose x-forwarded-* headers uvicorn trusts in every pod the route reaches (--forwarded-allow-ips). Set to the Gateway data plane's pod CIDR; `*` is refused. |
 | fullnameOverride | string | `"rask"` | Base name for every rendered object; pinned to `rask` so in-cluster Services resolve as `rask-<component>`. |
 | image.catalog | object | `{"repository":"lance-rest-catalog"}` | Lakehouse image (catalog, lineage, maintenance, and the chart's Jobs and hooks): `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one. |
+| image.console | object | `{"repository":"web-console"}` | Console image: `repository` is its name under image.repository; its tag or digest is `tags`/`digests` keyed by that name, else the global one. |
 | image.digest | string | `""` | Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags. |
 | image.digests | object | `{}` | Per-component digest map keyed by component name; beats `tags` and the global tag. |
 | image.localImages | bool | `false` | Renders bare `<component>:<tag>` references for images side-loaded into the node (k3s-import). Never for a remote cluster. |
 | image.pullPolicy | string | `"IfNotPresent"` | imagePullPolicy for first-party containers. |
 | image.repository | string | `""` | Registry prefix for every first-party image (e.g. ghcr.io/<org>/<repo>). Required unless localImages is true. |
 | image.tag | string | `"dev"` | Default tag for every first-party image when no per-component tag or digest is set. |
-| image.tags | object | `{}` | Per-component tag map keyed by component name (lance-rest-catalog, ...); beats the global tag. |
+| image.tags | object | `{}` | Per-component tag map keyed by component name (lance-rest-catalog, web-console); beats the global tag. |
 | imagePullSecrets | list | `[]` | List of pull Secrets ({name: ...}) added to every first-party pod and hook Job. Empty pulls anonymously. |
 | lifecycle.maintenanceTerminationGracePeriodSeconds | int | `120` | Grace period in seconds for maintenance pods, long enough that an in-flight sweep or Lance write is not SIGKILLed. |
 | lifecycle.preStopSeconds | int | `5` | Seconds every pod sleeps in preStop before SIGTERM, so endpoint removal propagates first. |

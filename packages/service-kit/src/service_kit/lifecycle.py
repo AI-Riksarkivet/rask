@@ -1,18 +1,10 @@
 """The lifecycle contract ``/readyz`` reads — one typed home for two booleans.
 
 ``service_kit.probes`` answers readiness off ``app.state.startup_complete`` and
-``app.state.shutting_down``, and until this module those two names were pure convention:
-untyped ``getattr(state, ..., False)`` on one side, a hand-rolled assignment in every service's
-own lifespan on the other. Eleven copies of the convention meant eleven chances to miss it, and
-five of them did — every app built by :func:`service_kit.make_service_app` set neither flag,
-so ``/readyz`` reported ``starting`` for the whole life of the pod and the drain never began. One
-lifespan logged the string ``"startup_complete"`` without ever setting the attribute, which is exactly how
-a convention fails: it looks done.
-
-So the FACTORY now owns the invariant (see ``make_service_app``'s lifespan wrapper) and this
-module is the only place the two names are spelled. A service that builds its own ``FastAPI``
-keeps setting them itself — through these functions rather than by assignment, so the contract
-has one definition rather than a naming agreement.
+``app.state.shutting_down``. This module is where the two names are spelled and read, so a probe and the
+lifespan that sets them share one definition rather than a naming agreement: a lifespan that logs the
+string ``"startup_complete"`` without setting the attribute leaves ``/readyz`` answering ``starting`` for the
+whole life of the pod, and the drain never begins.
 
 Absence reads as "not started, not draining". That asymmetry is deliberate and matches
 :mod:`service_kit.draining`: defaulting an unset drain flag to True would take an app that never

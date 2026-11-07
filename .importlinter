@@ -4,8 +4,8 @@
 # SUBPACKAGE (`dapr.ext.workflow`) otherwise, and include_external_packages lets the other third-party
 # names (ray, durabletask, fastapi, starlette, dotenv) be forbidden directly. Every first-party package the
 # lakehouse imports is a root package too: an external package's own imports are not in the graph, so a client imported
-# through one would pass every contract. No client is a root package: the notifications inbox, the one Python client
-# left in this repository, is forbidden below as an external name and keeps its own layer rules in its own config.
+# through one would pass every contract. No client is a root package: a client lives in a repository of its own, and
+# the names a client's code goes by are forbidden below as external names.
 
 [importlinter]
 root_packages =
@@ -29,8 +29,8 @@ allow_indirect_imports = True
 
 # The lakehouse knows no client (XC-175): a client and a compute engine (ADR 0155) reach the lakehouse only through its
 # public doors, so deleting every client changes nothing in the lakehouse. A client may import the platform package;
-# no lakehouse service and no kit it runs imports the notifications inbox (XC-188), Ray, lance-ray or lancedb, by any
-# chain. Each is forbidden as an external name, not a root package, so this file holds with the inbox deleted. lancedb
+# no lakehouse service and no kit it runs imports Ray, lance-ray or lancedb, by any chain. Each is forbidden as an
+# external name, not a root package, so this file holds with no client installed. lancedb
 # matches the lakehouse image's import gate (`.docker/rest-catalog.dockerfile`, `--absent`): the lakehouse reads and
 # writes through pylance and lance-namespace, and lancedb is a client's library.
 [importlinter:contract:the-lakehouse-knows-no-client]
@@ -44,7 +44,6 @@ source_modules =
     lakehouse_kit
     lineage_kit
 forbidden_modules =
-    notifications
     ray
     lance_ray
     lancedb
@@ -64,20 +63,8 @@ forbidden_modules =
     durabletask
 allow_indirect_imports = True
 
-[importlinter:contract:settings-import-no-web-stack]
-name = importing service_kit.config builds no app-factory graph
-type = forbidden
-source_modules =
-    service_kit.config
-forbidden_modules =
-    fastapi
-    starlette
-    service_kit.app
-    service_kit.middleware
-    service_kit.probes
-
 [importlinter:contract:the-error-types-import-no-app-factory]
-name = importing service_kit.exceptions loads neither the app factory nor its dotenv read
+name = importing service_kit.exceptions loads neither the logging setup nor dotenv
 type = forbidden
 source_modules =
     service_kit.exceptions

@@ -46,8 +46,8 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/management/v1/me", tags=["me"])
 
 # ONE wall-clock budget for all the display-only FGA lookups (estate check + the two project lists,
-# sequential). Same rationale as /management/v1/projects' _ADMINS_TIMEOUT_SECONDS: the BFF gives the whole request
-# ~8s, and the wrapper's default bounded-retry ladder alone can exceed it — so each call runs a single
+# sequential). Same rationale as /management/v1/projects' _ADMINS_TIMEOUT_SECONDS: a caller gives the whole request
+# a few seconds, and the wrapper's default bounded-retry ladder alone can exceed it — so each call runs a single
 # attempt (retry_attempts=1) under the shared deadline and degrades on expiry.
 _LOOKUP_BUDGET_SECONDS = 2.0
 

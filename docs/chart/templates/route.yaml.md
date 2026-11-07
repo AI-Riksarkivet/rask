@@ -50,10 +50,12 @@ rule order.
 | `/api/catalog` | `<fullname>-catalog` | `/…` |
 | `/api/lineage` | `<fullname>-lineage` | `/…` |
 
-A client has no row here: the console and the notifications inbox are published by the console's own release, which
-renders its own HTTPRoute on the same Gateway (`deploy/fixtures/console`).
+A client has no row here, and none is rendered: a client publishes its own prefixes from its own release. The console,
+the lakehouse's own UI, is routed at `/` by `console.yaml` on the same parentRefs and hostnames, and every `/api/*` row
+is a longer prefix, so it keeps winning.
 
-An unmatched `/api/*` path is the Gateway's own 404: no rule, no backend. A 401 or 403 always comes from
+An unmatched `/api/*` path falls to the console's `/` rule, whose server answers it 404 rather than the page; with
+`console.enabled: false` it is the Gateway's own 404: no rule, no backend. A 401 or 403 always comes from
 the service the prefix names.
 
 The offline gate is `tests/unit/test_the_cluster_route_names_one_backend_per_api_prefix.py` (the render);

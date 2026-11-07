@@ -37,7 +37,7 @@ reverted, and the commit message carries the delta.
 
 | The claim needs                                   | Directory                                                                                       |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| One member's code, through its app or public API  | `packages/<m>/tests`, `services/<m>/tests`; the notifications inbox's always its own, so deleting it deletes its tests and `make test` stays green (XC-183) |
+| One member's code, through its app or public API  | `packages/<m>/tests`, `services/<m>/tests`, so deleting a member deletes its tests and `make test` stays green (XC-183) |
 | Several members in one flow, or a fixture from `tests/integration/conftest.py` (`real_ns_client`) | `tests/integration`: a conftest's fixtures reach only the tests beneath it |
 | The rendered chart, or a fixture's render         | `tests/unit`, through `tests/unit/chart_render.py` (`render_fixture` for `deploy/fixtures/<name>`) |
 | A deployed stack                                  | `tests/e2e-py`, run by the e2e-stack lane unless it carries a marker the lane leaves out: § Wiring |
@@ -109,8 +109,8 @@ consequences it does not spell out.
   `[tool.ruff.lint.flake8-tidy-imports.banned-api]`. A sanctioned use takes a line-level
   `# noqa: TID251`, and only a module that IS the seam takes a per-file ignore. A layer rule is a
   contract in `.importlinter` (the lakehouse's, in which no client is a root package: each is forbidden as an external
-  name) or, for a client, in its own
-  `pyproject.toml` `[tool.importlinter]` (`services/notifications`); `make lint-imports`
+  name) or, for a member, in its own
+  `pyproject.toml` `[tool.importlinter]`; `make lint-imports`
   (part of `make check`) runs `.importlinter`, then every member pyproject that declares `[tool.importlinter]`, found by
   grep, so it names no client and holds with every client tree deleted.
 
@@ -154,7 +154,7 @@ The platform's test seam is not the root conftest's: `service-kit` ships it as a
 package is installed, so a client's suite in its own repository gets the same seam with the version it pins. It
 makes bare `@respx.mock` strict (`assert_all_called`; a test whose unused routes are the point takes the
 `respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it bounds the Dapr sidecar
-handshake to 1 s, clears Dapr's process-global actor-proxy factory, gives the test a fresh cache of secret-store reads
+handshake to 1 s, gives the test a fresh cache of secret-store reads
 (`service_kit.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its own clock),
 and writes the projected service-account token files the catalog's and lineage's doors read. A fixture guarding state
 `service-kit` or its `dapr` dependency keeps across a process belongs in the plugin, never in the root conftest.

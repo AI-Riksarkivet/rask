@@ -2,24 +2,13 @@ import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import type { ApiResult } from '@rask/api/client';
 import { catalogJSON, parsed } from '#lib/doors.ts';
-import type { CreateWarehouseBody, ProjectSummary, WarehouseRecord } from '../catalog';
+import type { ProjectSummary } from '../catalog';
 
 // The project + warehouse registry for the estate-level pages (`/projects`, one project's overview).
 // Every call carries only the signed-in person's bearer, so the catalog's own project-admin gate is
 // enforced against a REAL user rather than a service credential. Transport: `#lib/doors`.
 
 const enc = encodeURIComponent;
-
-/** `WarehouseResponse` + the additive `serving` class (see `WarehouseRecord` in ../catalog). */
-const WarehouseSchema = v.object({
-	id: v.string(),
-	project: v.string(),
-	bucket: v.string(),
-	root_uri: v.string(),
-	created_at: v.optional(v.nullable(v.string())),
-	serving: v.optional(v.nullable(v.string())),
-	status: v.optional(v.nullable(v.string())),
-});
 
 /** `DeleteProjectResponse` — what the retirement REALLY removed. `tuples_revoked` is reported rather
  *  than assumed (a `0` on an FGA-off stack is a fact, not a silent success), which is why the success
@@ -97,53 +86,10 @@ export const projectEvents = query(
  *  > table) — create it first"). A warehouse create no longer mints its project as a side effect, so
  *  anything provisioning a NEW project calls this first. */
 export const createProject = command(
+	({ id }) => `Create project ${id}`,
 	v.object({ id: v.string(), name: v.optional(v.nullable(v.string())) }),
 	async (body): Promise<ApiResult<unknown>> =>
 		catalogJSON('/management/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
-);
-
-/** Provision a warehouse under an EXISTING project. Project-admin gated by the catalog
- *  (can_create_warehouse); a brand-new project has no tuples, so the estate-admin door opens once and
- *  the catalog seeds the caller as the new project's admin.
- *
- *  No `.refresh()` here, unlike the lakehouse original: the gallery this create sits on is a page
- *  LOAD (`#lib/gallery`), not a `query()`, so there is nothing to single-flight — the dialog's
- *  `oncreated` calls `refreshAll()` at the call site instead. Inventing a `query()` mirror of the
- *  load purely to have something to refresh would be the second implementation of the list this
- *  whole move exists to delete. */
-export const createWarehouse = command(
-	v.object({
-		id: v.string(),
-		project: v.string(),
-		bucket: v.optional(v.nullable(v.string())),
-		serving: v.optional(v.literal('gold')),
-		// #73 made `protected` REQUIRED on `CreateWarehouseBody`. Defaulted, not surfaced: a warehouse
-		// is born unprotected and armed deliberately afterwards through the protection door.
-		//
-		// SECOND COPY of this schema — `lakehouse/.../warehouses.api.ts` carries the same one, and
-		// both broke identically. `query.live`/`command` must be declared inside an app to get its own
-		// endpoint, so the SHIM is legitimately per-page; the SCHEMA is not. Hoisting both into
-		// `@rask/api` beside the generated types they mirror is the right shape and is NOT what this
-		// does: `transport-contract.test.ts` compares INLINE field sets, and its anti-vacuity canary
-		// names `createWarehouse` specifically, so hoisting removes the pair the gate watches. That
-		// gate has to grow an import-side check first, which is its own change.
-		protected: v.optional(v.boolean(), false),
-		// `primary` is the operator's answer to an ambiguous project warehouse set. Defaulted for the
-		// same reason `protected` is — a warehouse is born non-primary and is designated deliberately
-		// afterwards, so asking at create time offers a choice that belongs to a project already
-		// holding several. It has to be PRESENT even so: without it the console's create cannot express
-		// a field the wire accepts, so the same dialog designates a primary from the lakehouse and
-		// silently cannot from here.
-		primary: v.optional(v.boolean(), false),
-	}),
-	async (body: CreateWarehouseBody): Promise<ApiResult<WarehouseRecord>> =>
-		parsed(
-			await catalogJSON('/management/v1/warehouses', {
-				method: 'POST',
-				body: JSON.stringify(body),
-			}),
-			WarehouseSchema,
-		),
 );
 
 /** Retire a tenant — `DELETE /management/v1/projects/{id}`. Gated at the catalog on the project's OWN
@@ -164,6 +110,7 @@ export const createWarehouse = command(
  *  project that no longer exists purely to watch it 404. The caller navigates back to `/projects`
  *  instead, and that load re-reads the estate. */
 export const deleteProject = command(
+	({ project, force }) => `${force ? 'Force-delete' : 'Delete'} project ${project}`,
 	v.object({
 		project: v.string(),
 		/** Overrides the registry record's deletion-PROTECTION flag ONLY — the FGA gate ran first and runs

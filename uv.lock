@@ -17,7 +17,6 @@ members = [
     "lineage",
     "lineage-kit",
     "maintenance",
-    "notifications",
     "rask-workspace",
     "service-kit",
 ]
@@ -1212,6 +1211,15 @@ dependencies = [
     { name = "boto3" },
     { name = "dapr" },
     { name = "fastapi" },
+    { name = "opentelemetry-exporter-otlp-proto-http" },
+    { name = "opentelemetry-instrumentation-aiohttp-client" },
+    { name = "opentelemetry-instrumentation-botocore" },
+    { name = "opentelemetry-instrumentation-fastapi" },
+    { name = "opentelemetry-instrumentation-grpc" },
+    { name = "opentelemetry-instrumentation-httpx" },
+    { name = "opentelemetry-instrumentation-logging" },
+    { name = "opentelemetry-instrumentation-requests" },
+    { name = "opentelemetry-instrumentation-urllib3" },
     { name = "opentelemetry-sdk" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -1240,6 +1248,15 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "lance-namespace", marker = "extra == 'data'", specifier = ">=0.11.0,<0.12" },
     { name = "lance-namespace-urllib3-client", marker = "extra == 'data'", specifier = ">=0.11.0,<0.12" },
+    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.44.0" },
+    { name = "opentelemetry-instrumentation-aiohttp-client", specifier = ">=0.65b0" },
+    { name = "opentelemetry-instrumentation-botocore", specifier = ">=0.65b0" },
+    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.65b0" },
+    { name = "opentelemetry-instrumentation-grpc", specifier = ">=0.65b0" },
+    { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.65b0" },
+    { name = "opentelemetry-instrumentation-logging", specifier = ">=0.65b0" },
+    { name = "opentelemetry-instrumentation-requests", specifier = ">=0.65b0" },
+    { name = "opentelemetry-instrumentation-urllib3", specifier = ">=0.65b0" },
     { name = "opentelemetry-sdk", specifier = ">=1.44.0" },
     { name = "pyarrow", marker = "extra == 'data'" },
     { name = "pydantic", specifier = ">=2.7" },
@@ -1728,31 +1745,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
-]
-
-[[package]]
-name = "notifications"
-version = "0.1.0"
-source = { editable = "services/notifications" }
-dependencies = [
-    { name = "aiohttp" },
-    { name = "dapr-ext-fastapi" },
-    { name = "fastapi" },
-    { name = "lineage-kit" },
-    { name = "pydantic" },
-    { name = "service-kit", extra = ["governed"] },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiohttp", specifier = ">=3.14.4" },
-    { name = "dapr-ext-fastapi", specifier = ">=1.18.1" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "lineage-kit", editable = "packages/lineage-kit" },
-    { name = "pydantic", specifier = ">=2.7" },
-    { name = "service-kit", extras = ["governed"], editable = "packages/service-kit" },
-    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]
@@ -3033,63 +3025,47 @@ name = "service-kit"
 version = "0.1.0"
 source = { editable = "packages/service-kit" }
 dependencies = [
-    { name = "certifi" },
     { name = "dapr" },
     { name = "fastapi" },
-    { name = "opentelemetry-exporter-otlp-proto-http" },
-    { name = "opentelemetry-instrumentation-aiohttp-client" },
-    { name = "opentelemetry-instrumentation-botocore" },
-    { name = "opentelemetry-instrumentation-fastapi" },
-    { name = "opentelemetry-instrumentation-grpc" },
-    { name = "opentelemetry-instrumentation-httpx" },
-    { name = "opentelemetry-instrumentation-logging" },
-    { name = "opentelemetry-instrumentation-requests" },
-    { name = "opentelemetry-instrumentation-urllib3" },
-    { name = "opentelemetry-sdk" },
+    { name = "opentelemetry-api" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
-    { name = "urllib3" },
 ]
 
 [package.optional-dependencies]
 arrow = [
     { name = "aiohttp" },
+    { name = "certifi" },
     { name = "httpx" },
     { name = "lance-namespace" },
     { name = "openfga-sdk" },
     { name = "pyarrow" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "tenacity" },
+    { name = "urllib3" },
 ]
 governed = [
     { name = "aiohttp" },
+    { name = "certifi" },
     { name = "httpx" },
     { name = "lance-namespace" },
     { name = "openfga-sdk" },
     { name = "pyjwt", extra = ["crypto"] },
     { name = "tenacity" },
+    { name = "urllib3" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", marker = "extra == 'governed'", specifier = ">=3.14.4" },
-    { name = "certifi", specifier = ">=2026.10.23" },
+    { name = "certifi", marker = "extra == 'governed'", specifier = ">=2026.10.23" },
     { name = "dapr", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'governed'", specifier = ">=0.27" },
     { name = "lance-namespace", marker = "extra == 'governed'", specifier = ">=0.11.0,<0.12" },
     { name = "openfga-sdk", marker = "extra == 'governed'", specifier = ">=0.10.4" },
-    { name = "opentelemetry-exporter-otlp-proto-http", specifier = ">=1.44.0" },
-    { name = "opentelemetry-instrumentation-aiohttp-client", specifier = ">=0.65b0" },
-    { name = "opentelemetry-instrumentation-botocore", specifier = ">=0.65b0" },
-    { name = "opentelemetry-instrumentation-fastapi", specifier = ">=0.65b0" },
-    { name = "opentelemetry-instrumentation-grpc", specifier = ">=0.65b0" },
-    { name = "opentelemetry-instrumentation-httpx", specifier = ">=0.65b0" },
-    { name = "opentelemetry-instrumentation-logging", specifier = ">=0.65b0" },
-    { name = "opentelemetry-instrumentation-requests", specifier = ">=0.65b0" },
-    { name = "opentelemetry-instrumentation-urllib3", specifier = ">=0.65b0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.44.0" },
+    { name = "opentelemetry-api", specifier = ">=1.44.0" },
     { name = "pyarrow", marker = "extra == 'arrow'" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.5" },
@@ -3097,7 +3073,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "service-kit", extras = ["governed"], marker = "extra == 'arrow'" },
     { name = "tenacity", marker = "extra == 'governed'", specifier = ">=9.1.4" },
-    { name = "urllib3", specifier = ">=2.8.0" },
+    { name = "urllib3", marker = "extra == 'governed'", specifier = ">=2.8.0" },
 ]
 provides-extras = ["governed", "arrow"]
 

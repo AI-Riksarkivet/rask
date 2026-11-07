@@ -260,7 +260,7 @@ def _governed_app() -> FastAPI:
     """An app wired the way every consumer of `make_auth_deps` actually wires one: BOTH installers.
 
     Verified rather than assumed — `lakehouse_kit.lance_app` calls `register_handlers` then
-    `install_problem_handlers`, and `make_service_app` installs the same pair. Building this with only
+    `install_problem_handlers`. Building this with only
     one of them would prove a defect in a configuration nothing ships.
     """
     app = FastAPI()
@@ -394,8 +394,7 @@ def test_exhausted_secret_fetch_logs_at_error(monkeypatch: pytest.MonkeyPatch, c
 def test_the_secret_fetch_uses_the_injected_sidecar_port(monkeypatch: pytest.MonkeyPatch) -> None:
     """SKG-10: 3500 was hard-coded, so a pod whose sidecar is elsewhere fetched from a closed port.
 
-    daprd injects `DAPR_HTTP_PORT`; `governed/actor_state_store.py` has always read it, and this puts
-    the secret fetch on the same source instead of on a literal.
+    daprd injects `DAPR_HTTP_PORT`, and this puts the secret fetch on it instead of on a literal.
     """
     seen: list[str] = []
 

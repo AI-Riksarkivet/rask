@@ -21,7 +21,7 @@ on nothing.
 
 WHAT IS NOT CLAIMED, and why. Only the drive's two tables are read: criterion 5's drill tables commit enough versions for
 maintenance to expire old ones, and criterion 2's objects are its own. Nobody's inbox is read: whether a person is told
-is a notifier's claim, and the inbox is a client the lakehouse does not run (XC-188).
+is a notifier's claim, and a notifier is a client the lakehouse does not run (XC-188).
 
 The estate runs `LANCE_E2E_SOAK_SECONDS` from the moment the drive was kept, a day unless the run says otherwise. The
 e2e-stack lane soaks for no time at all, so keeping and resuming a drive runs on every push; the deployed estate soaks for

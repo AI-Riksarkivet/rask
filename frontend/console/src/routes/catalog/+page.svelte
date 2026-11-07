@@ -26,8 +26,8 @@
 		return resolve('/catalog/tables/[table]', { table: encodeURIComponent(rung.id) });
 	};
 
-	// `zoneLayoutLoad` defaults the cookie to '' — an empty string is "no project is open", which is a
-	// real state of the estate and not a loading one.
+	// `readActiveProject` answers '' when no project cookie is set — an empty string is "no project is
+	// open", which is a real state of the estate and not a loading one.
 	const project = $derived(data.activeProject);
 
 	// The registry read is estate-wide (`GET /management/v1/warehouses` shows the caller what they may see) and

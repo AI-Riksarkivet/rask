@@ -77,9 +77,9 @@ WORKDIR /app
 COPY --from=builder --chown=0:0 /src/console/build ./build
 COPY --from=builder --chown=0:0 /src/console/serve.ts ./serve.ts
 
-# uid 10001, as the lakehouse's and the inbox's images run, and the console release's `runAsUser`
-# (deploy/fixtures/console/chart/values.yaml): a non-root uid of 10000 or more. Numeric, so the kubelet can verify
-# `runAsNonRoot`; the uid needs no passwd entry, and HOME points at the release's /tmp mount.
+# uid 10001, as the lakehouse's image runs, and the product chart's `console.runAsUser` (chart/values.yaml): a non-root
+# uid of 10000 or more. Numeric, so the kubelet can verify `runAsNonRoot`; the uid needs no passwd entry, and HOME points
+# at the chart's /tmp mount.
 USER 10001
 # BUN_RUNTIME_TRANSPILER_CACHE_PATH=0 keeps bun from writing a transpiler cache, which a read-only root refuses.
 ENV PORT=3000 \

@@ -34,8 +34,7 @@ def _sidecar_http_port() -> int:
 
     3500 was hard-coded as this module's only answer, which is wrong for any pod whose sidecar is not
     on the default port: the fetch then retries a closed port for the whole boot budget and reports an
-    unreadable store. daprd injects `DAPR_HTTP_PORT` into every annotated pod, and
-    `governed/actor_state_store.py` already reads it — this puts the two on the same source.
+    unreadable store. daprd injects `DAPR_HTTP_PORT` into every annotated pod, so the fetch reads it.
     """
     raw = os.environ.get("DAPR_HTTP_PORT")
     if not raw:

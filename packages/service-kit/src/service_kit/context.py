@@ -49,8 +49,8 @@ class CorrelationFilter(logging.Filter):
     Never raises and never drops a record: a correlation aid that could swallow a log line would be a
     far worse bug than the missing id it fixes. That is also why `trace_id` is DERIVED here rather
     than named directly in the formatter — `logging` raises on a format field the record lacks, and a
-    record with no `otelTraceID` is the normal case in dev, in tests, and in any service where
-    `setup_otel` returned False. Guaranteeing the attribute is what lets the formatter reference it.
+    record with no `otelTraceID` is the normal case in dev, in tests, and in any process run without
+    `opentelemetry-instrument`. Guaranteeing the attribute is what lets the formatter reference it.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -69,13 +69,6 @@ class CorrelationFilter(logging.Filter):
 # derived from one, and the format string prints it), the filter's own two have their own slots, and
 # uvicorn's `color_message` is an ANSI copy of the message meant for uvicorn's formatter to substitute
 # (`uvicorn/logging.py:61`) — rendering it prints every startup line in the fleet twice.
-#
-# PRIVATE NAMES GO WITH THEM, and a library's behaviour is why rather than a principle: an engine SDK can
-# install a log record factory that stamps a private nanosecond integer on EVERY record in the process
-# (measured: `_ray_timestamp_ns`, `ray/_private/log.py:71-88`), so every process that imports it would have
-# grown that field on every line. Naming it would fix this release and miss the next field it adds;
-# leading-underscore is the convention a library reaches for when it means "mine, not the caller's", and
-# no diagnostic in `services/` or `packages/` is named that way.
 _AMBIENT_RECORD_FIELDS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
     "asctime",
     "message",
@@ -120,5 +113,5 @@ class DiagnosticFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         line = super().format(record)
-        diagnostics = " ".join(f"{name}={value!r}" for name, value in vars(record).items() if not name.startswith("_") and name not in _AMBIENT_RECORD_FIELDS)
+        diagnostics = " ".join(f"{name}={value!r}" for name, value in vars(record).items() if name not in _AMBIENT_RECORD_FIELDS)
         return f"{line} {diagnostics}" if diagnostics else line

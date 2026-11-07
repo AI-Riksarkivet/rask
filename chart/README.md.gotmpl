@@ -16,7 +16,7 @@ the External Secrets Operator and a secret store are prerequisites rask never in
 | Every setting, with a one-line description | `values.yaml` (`# --` comments), tabulated below |
 | The rationale for a template | `docs/chart/templates/<template>.md`, one section per template line it explains |
 | Environment overlays | `deploy/values-local.yaml` (local k3s), `deploy/values-prod.yaml` (production shape), `deploy/values-live-pins.yaml` (`make k3s-pins`) |
-| The local deploy | `make k3s-up`: the live release's image settings, then the pins, then `deploy/values-local.yaml` |
+| The local deploy | `make k3s-up`: `--reset-values` with `deploy/values-local.yaml`, the registry, the pins and the derived issuer, endpoint and bootstrap admin, never the live release's values |
 
 The overlays live outside `chart/` because Helm stores the chart's files in every release revision, and that
 revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept out of `templates/` for the same reason.

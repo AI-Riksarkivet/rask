@@ -12,8 +12,8 @@ ERROR-logged parking) instead of silently ceasing to redeliver after the broker'
 
 This object governs pub/sub delivery alone, and the chart renders no service-invocation policy: no service in this
 release calls another through Dapr's service invocation. Dapr applies an invocation policy on the CALLING sidecar, so a
-client that reads a lakehouse door through its own sidecar (the notifications inbox reads lineage's feed through
-`/v1.0/invoke/lineage/method`) scopes its policy to its own app-id, in its own release. Public traffic reaches each
+client that reads a lakehouse door through its own sidecar (`/v1.0/invoke/lineage/method`, say) scopes its policy to
+its own app-id, in its own release. Public traffic reaches each
 service through the cluster route (route.yaml), which involves no sidecar, so no policy can or needs to see it.
 
 THE POLICY IS `constant` BECAUSE IT IS THE ONLY ONE THAT CAN HOLD A WINDOW. dapr/kit's NewBackOff
@@ -29,7 +29,7 @@ exponential carries a 0.5 default that swings the total ±50%.
 The arithmetic, so the next edit can check itself: 4 retries × 120s = 480s = 8 min, no jitter, over
 5 total attempts. The margin under the components' 720s crash-recovery ackWait is not slack — while
 the sidecar retries, the broker still holds the original un-acked, so a schedule outlasting ackWait
-has JetStream redeliver the same trigger underneath a retry still in flight and the stage runs
+has JetStream redeliver the same event underneath a retry still in flight and the handler runs
 twice. THE HANDLER'S OWN TIME COUNTS AGAINST THAT MARGIN, which is why the window is spent on FEW
 LONG steps rather than many short ones: 480s of backoff plus 5 attempts leaves 48s apiece, where the
 same 480s split into 30s steps would need 16 attempts and overrun ackWait on any handler slower than

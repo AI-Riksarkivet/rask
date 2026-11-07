@@ -718,7 +718,7 @@ test('an unreadable trash record is NAMED, never rendered as "your data is gone"
 	page,
 }) => {
 	// The branch that had no coverage at all, and the reason this card was wrong: a FAILED read used
-	// to render the same "not a catalog-registered table" copy as a genuine absence. The catalog
+	// to render the same not-registered copy as a genuine absence. The catalog
 	// answers 200 with an empty list when there really is no record, so a non-2xx here is strictly an
 	// anomaly — and an anomaly must not be reported to the owner of a recoverable table as a verdict.
 	await seed(page, {
@@ -737,7 +737,7 @@ test('an unreadable trash record is NAMED, never rendered as "your data is gone"
 	// most likely failure of all (an unreachable catalog).
 	await expect(panel).toContainText('trash store unreachable');
 	// …and it must NOT claim the drop was destructive.
-	await expect(panel).not.toContainText('Not a catalog-registered table');
+	await expect(panel).not.toContainText('The catalog registers no table by this name');
 });
 
 test('undrop posts to the catalog and re-registers the table (#75)', async ({ page }) => {
@@ -783,7 +783,7 @@ test('a table dropped DESTRUCTIVELY offers no recovery it cannot deliver (#75)',
 	await page.goto(`/catalog/tables/${GONE}`);
 
 	await expect(page.locator('.recover')).toHaveCount(0);
-	await expect(page.getByText('Not a catalog-registered table')).toBeVisible();
+	await expect(page.getByText('The catalog registers no table by this name')).toBeVisible();
 });
 
 // NOT TESTED HERE, deliberately: "a live table never probes /tasks". The recovery probe is gated

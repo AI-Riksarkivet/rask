@@ -22,7 +22,7 @@ def test_a_run_with_no_author_facet_is_attributed_to_its_jobs_owner() -> None:
             "eventType": "COMPLETE",
             "eventTime": "t",
             "run": {"runId": "r"},
-            "job": {"namespace": "ray-jobs", "name": "j", "facets": {"ownership": {"owners": [{"name": "carol", "type": "user"}]}}},
+            "job": {"namespace": "pipelines", "name": "j", "facets": {"ownership": {"owners": [{"name": "carol", "type": "user"}]}}},
         }
     )
 

@@ -3,17 +3,11 @@
 open_fastapi-audit — "The probe-path-is-actually-served gate covers exactly one of the fifteen apps,
 and controlplane bypasses the mechanism the gate reads".
 
-THE FINDING CORRECTS ITS OWN HEADLINE and this file follows the correction. "One of fifteen"
-overstates it: the drift class needs a probe path DERIVED at runtime while the chart writes a
-LITERAL, and only the `make_service_app` fleet layout does that. The eight lance apps root-mount
-`/livez` and `/readyz` as literals and `lance.appProbes` writes those same literals, so no mismatch is
-possible there. The honest claim is one of five — plus controlplane, which is rendered by its own
-template and is therefore invisible to any test keyed on `services.*`, which is exactly why it kept
-missing fixes.
-
-But the gate is written for ALL of them anyway, because scoping it to the five that can drift today
-would encode today's layout into the test. A future `healthPath` edit, a prefix change, or a probe
-moved under `RASK_API_PREFIX` is caught wherever it happens.
+The drift class needs a probe path DERIVED at runtime while the chart writes a LITERAL. The lakehouse's apps
+root-mount `/livez` and `/readyz` as literals and `lance.appProbes` writes those same literals, so no mismatch is
+possible today. The gate is written for every app the chart runs anyway, because scoping it to the apps that can
+drift today would encode today's layout into the test. A future `healthPath` edit, a prefix change, or a probe
+moved under an API prefix is caught wherever it happens.
 
 Two things make this a real check rather than a restatement of the chart:
 

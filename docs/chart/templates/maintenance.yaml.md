@@ -178,7 +178,7 @@ THE SCOPED PAIR, BOTH HALVES, and `required`. Maintenance compacts â€” a write â
 also reach `_projects/`, `_protection/` and `_policies/`, the records that govern maintenance itself;
 it presents the scoped user `object-store-scoped-users` provisions instead, and a blank access key fails the
 render: no service presents the store's root, whose secret signs every STS session token on RustFS (ADR 0168), so
-there is no pair to fall back to. Naming BOTH halves is the Ray pair's measured lesson: setting one gives
+there is no pair to fall back to. Naming BOTH halves is a measured lesson: setting one gives
 `SignatureDoesNotMatch` on every operation.
 
 The ACCESS KEY alone scopes the plane; the secret is derived in-cluster
@@ -202,7 +202,7 @@ id cannot be configuration.
 ## `- { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "secret_key" }`
 
 THE OTHER HALF OF THE PAIR, named beside the key id because a scoped key signed with any other
-secret fails `SignatureDoesNotMatch` on every operation (the Ray pair's measured lesson).
+secret fails `SignatureDoesNotMatch` on every operation (measured).
 `dapr_secret_s3_field` defaults to the same field, so a service run without the chart reads its own pair too.
 
 ## `{{- $extra := list }}`

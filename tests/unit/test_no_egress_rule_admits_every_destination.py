@@ -11,6 +11,10 @@ server, the Gateway, the telemetry backend, an external OpenFGA, an external sto
 platform states them as rules, and the render refuses a stated rule that names no peers: that refusal is what makes the
 first claim hold for any values, so the first test drives it.
 
+The console's pod (the lakehouse's UI, a static server) is the one first-party pod that dials nothing: every egress allow
+leaves it out, so the default-deny holds for it, and its one port is admitted from anywhere, as the Gateway's data plane
+is the platform's ([[XC-195]]).
+
 MUTATION-CHECKED 2026-10-16. With the API-server rule's `to` removed from the template, the first test fails in both
 overlays on `rask-allow-apiserver-egress`, and with the OpenFGA rule's in prod on `rask-allow-openfga-egress`; with
 the peer guard removed from `lance.egressRules`, it fails on each stated list. With the API-server rule's pod selector widened back to `{}`, the second fails on every tokenless pod, and with
@@ -140,3 +144,15 @@ def test_only_a_pod_that_calls_the_api_server_may_reach_it(overlay: str) -> None
     assert {"Deployment/rask-catalog", "Deployment/rask-otel-collector"} <= callers, f"{overlay}: callers read as {sorted(callers)}"
     assert sorted(admitted - callers) == [], f"{overlay}: pods admitted to the API server that hold no credential for it"
     assert sorted(callers - admitted) == [], f"{overlay}: pods that call the API server and are not admitted to it"
+
+
+@pytest.mark.parametrize("overlay", sorted(_OVERLAYS))
+def test_the_console_pod_dials_nothing_and_is_admitted_on_its_port_from_anywhere(overlay: str) -> None:
+    """Every NetworkPolicy selecting the console's pod admits it no egress, and one admits its port from any peer."""
+    docs = chart_render.render(*_OVERLAYS[overlay])
+    [labels] = [doc["spec"]["template"]["metadata"]["labels"] for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == "rask-console"]
+    selecting = [doc for doc in docs if doc.get("kind") == "NetworkPolicy" and chart_render.selects(doc["spec"]["podSelector"], labels)]
+
+    egress = {doc["metadata"]["name"]: doc["spec"]["egress"] for doc in selecting if doc["spec"].get("egress")}
+    open_ports = [rule["ports"] for doc in selecting for rule in doc["spec"].get("ingress") or [] if "from" not in rule]
+    assert (egress, open_ports) == ({}, [[{"protocol": "TCP", "port": 3000}]])

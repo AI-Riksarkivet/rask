@@ -3,7 +3,7 @@
 A 5xx detail is redacted to "Internal Server Error", so without an id the caller has nothing to give an operator. The
 spec's ``ErrorResponse.instance`` is that id (`lance_docs/ns_catalog/spec.yaml`), and the request's own trace is where the
 redacted error's log line sits. Driven through `install_problem_handlers` on an app the FastAPI instrumentor wraps, as
-`service_kit.otel.setup_otel` wraps every service, with the caller's ``traceparent`` naming the trace.
+`opentelemetry-instrument` wraps every lakehouse service, with the caller's ``traceparent`` naming the trace.
 """
 
 from __future__ import annotations

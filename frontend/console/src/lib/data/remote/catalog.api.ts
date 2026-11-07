@@ -99,17 +99,21 @@ export const fetchTableTasks = query(v.string(), async (table): Promise<ApiResul
 /** Recover a dropped table from the trash (#75). Owner-gated at the catalog; a 404 means the grace
  *  period expired or the drop purged its bytes — genuinely unrecoverable, and the UI says so rather
  *  than pretending. Single-flights the table list so the recovered table reappears. */
-export const undropTable = command(v.string(), async (table): Promise<ApiResult<unknown>> => {
-	const res = await catalogJSON(`/management/v1/table/${enc(table)}/undrop`, { method: 'POST' });
-	if (res.ok) {
-		// BOTH reads, and the detail one is load-bearing: the page offering Undrop is showing a CACHED
-		// 404 for this very table, so refreshing only the list left the recovered table still rendering
-		// "not a catalog-registered table" until a hard reload — seen in the browser, not reasoned about.
-		void fetchTables().refresh();
-		void fetchTableDetail({ table }).refresh();
-	}
-	return res;
-});
+export const undropTable = command(
+	(table) => `Undrop table ${table}`,
+	v.string(),
+	async (table): Promise<ApiResult<unknown>> => {
+		const res = await catalogJSON(`/management/v1/table/${enc(table)}/undrop`, { method: 'POST' });
+		if (res.ok) {
+			// BOTH reads, and the detail one is load-bearing: the page offering Undrop is showing a CACHED
+			// 404 for this very table, so refreshing only the list left the recovered table still rendering
+			// as not registered until a hard reload — seen in the browser, not reasoned about.
+			void fetchTables().refresh();
+			void fetchTableDetail({ table }).refresh();
+		}
+		return res;
+	},
+);
 
 /** The detail aggregate for the table page (schema/stats/versions/tags/branches/indexes/policy): six
  *  POST-shaped catalog reads fanned out from one call.
@@ -192,6 +196,7 @@ export const previewMaintenance = query(
 
 /** Maintenance-policy set (#50 UI) — idempotent replace, owner-gated by the catalog (can_drop). */
 export const setTablePolicy = command(
+	({ table }) => `Set the maintenance policy of table ${table}`,
 	v.object({ table: v.string(), policy: PolicySchema }),
 	async ({ table, policy }): Promise<ApiResult<Policy>> =>
 		typedAs<Policy>(await post(`/management/v1/table/${enc(table)}/policy/set`, policy)),
@@ -199,6 +204,7 @@ export const setTablePolicy = command(
 
 /** Maintenance-policy delete — idempotent removal, same owner gate. */
 export const deleteTablePolicy = command(
+	({ table }) => `Remove the maintenance policy of table ${table}`,
 	TableArg,
 	async ({ table }): Promise<ApiResult<{ status: string }>> =>
 		typedAs<{ status: string }>(
@@ -208,6 +214,7 @@ export const deleteTablePolicy = command(
 
 /** #75 reclaim old versions on demand (destructive; tag-pinned versions exempt). Owner-gated. */
 export const runMaintenance = command(
+	({ table }) => `Reclaim old versions of table ${table}`,
 	v.object({ table: v.string(), bounds: GcBoundsSchema }),
 	async ({ table, bounds }: { table: string; bounds: GcBounds }): Promise<ApiResult<GcRunResult>> =>
 		typedAs<GcRunResult>(await post(`/management/v1/table/${enc(table)}/maintenance/run`, bounds)),
@@ -217,6 +224,7 @@ export const runMaintenance = command(
 
 /** #64 name (tag) a Lance version. Writer-gated (can_create_tag). */
 export const createTableTag = command(
+	({ table, tag, version }) => `Tag version ${version} of table ${table} as ${tag}`,
 	v.object({ table: v.string(), tag: v.string(), version: v.number() }),
 	async ({ table, tag, version }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/tags/create`, { tag, version }),
@@ -224,6 +232,7 @@ export const createTableTag = command(
 
 /** #74 delete a tag (writer-gated). */
 export const deleteTableTag = command(
+	({ table, tag }) => `Delete tag ${tag} of table ${table}`,
 	v.object({ table: v.string(), tag: v.string() }),
 	async ({ table, tag }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/tags/delete`, { tag }),
@@ -231,6 +240,7 @@ export const deleteTableTag = command(
 
 /** #74 move a tag to another version (owner-gated can_update_tag). */
 export const moveTableTag = command(
+	({ table, tag, version }) => `Move tag ${tag} of table ${table} to version ${version}`,
 	v.object({ table: v.string(), tag: v.string(), version: v.number() }),
 	async ({ table, tag, version }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/tags/update`, { tag, version }),
@@ -238,6 +248,7 @@ export const moveTableTag = command(
 
 /** #74 create a branch from a version (owner-gated can_create_branch). */
 export const createTableBranch = command(
+	({ table, name }) => `Create branch ${name} of table ${table}`,
 	v.object({
 		table: v.string(),
 		name: v.string(),
@@ -249,6 +260,7 @@ export const createTableBranch = command(
 
 /** #74 delete a branch (writer-gated). */
 export const deleteTableBranch = command(
+	({ table, name }) => `Delete branch ${name} of table ${table}`,
 	v.object({ table: v.string(), name: v.string() }),
 	async ({ table, name }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/branches/delete`, { name }),
@@ -257,6 +269,7 @@ export const deleteTableBranch = command(
 /** #64 restore the table to a prior version. Restore mints a FRESH version pointing at the restored
  *  data (history is never rewritten); owner-gated (can_restore). */
 export const restoreTableVersion = command(
+	({ table, version }) => `Restore table ${table} to version ${version}`,
 	v.object({ table: v.string(), version: v.number() }),
 	async ({ table, version }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/restore`, { version }),
@@ -266,6 +279,7 @@ export const restoreTableVersion = command(
 
 /** #74 add a SQL-expression column. Writer-gated (can_write_data). */
 export const addColumn = command(
+	({ table, name }) => `Add column ${name} to table ${table}`,
 	v.object({ table: v.string(), name: v.string(), expression: v.string() }),
 	async ({ table, name, expression }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/add_columns`, { new_columns: [{ name, expression }] }),
@@ -273,6 +287,7 @@ export const addColumn = command(
 
 /** #74 rename an existing column (alter_columns path→rename). Writer-gated. */
 export const renameColumn = command(
+	({ table, path, rename }) => `Rename column ${path} of table ${table} to ${rename}`,
 	v.object({ table: v.string(), path: v.string(), rename: v.string() }),
 	async ({ table, path, rename }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/alter_columns`, { alterations: [{ path, rename }] }),
@@ -280,6 +295,7 @@ export const renameColumn = command(
 
 /** #74 drop a column. Writer-gated. */
 export const dropColumn = command(
+	({ table, name }) => `Drop column ${name} of table ${table}`,
 	v.object({ table: v.string(), name: v.string() }),
 	async ({ table, name }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/drop_columns`, { columns: [name] }),
@@ -288,6 +304,7 @@ export const dropColumn = command(
 /** #74 tail — re-type an existing column (alter_columns path→data_type). A cast Lance can't perform
  *  (e.g. string→int on non-numeric text) 400s at the catalog, surfaced. Writer-gated. */
 export const retypeColumn = command(
+	({ table, path, type }) => `Change column ${path} of table ${table} to ${type}`,
 	v.object({ table: v.string(), path: v.string(), type: v.string() }),
 	async ({ table, path, type }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/alter_columns`, {
@@ -298,6 +315,7 @@ export const retypeColumn = command(
 /** #74 tail — merge or replace one field's metadata (update_field_metadata). A `null` value deletes
  *  that key. Writer-gated (can_write_data). */
 export const setFieldMetadata = command(
+	({ table, path }) => `Set the metadata of column ${path} in table ${table}`,
 	v.object({
 		table: v.string(),
 		path: v.string(),
@@ -315,6 +333,7 @@ export const setFieldMetadata = command(
  *  value is what DELETES one — the table-level twin of `setFieldMetadata`'s dialect. Send only the
  *  keys you mean to change: every call bumps a Lance version. Writer-gated (can_write_data). */
 export const setTableProperties = command(
+	({ table }) => `Set the properties of table ${table}`,
 	v.object({ table: v.string(), metadata: v.record(v.string(), v.nullable(v.string())) }),
 	async ({ table, metadata }): Promise<ApiResult<unknown>> =>
 		post(`/v1/table/${enc(table)}/schema_metadata/update`, { metadata }),
@@ -330,6 +349,7 @@ export const setTableProperties = command(
 
 /** #73 drop a named index — writer-gated (can_write_data). */
 export const dropTableIndex = command(
+	({ table, name }) => `Drop index ${name} of table ${table}`,
 	v.object({ table: v.string(), name: v.string() }),
 	async ({ table, name }): Promise<ApiResult<unknown>> =>
 		catalogJSON(`/v1/table/${enc(table)}/index/${enc(name)}/drop`, { method: 'POST' }),
@@ -340,6 +360,7 @@ export const dropTableIndex = command(
 /** #85 drop the table (deletes data + revokes its grants). Owner-gated by the catalog (can_drop).
  *  The registry list is refreshed in the SAME flight — the id it listed no longer names a table. */
 export const dropTable = command(
+	({ table }) => `Drop table ${table}`,
 	TableArg,
 	async ({ table }): Promise<ApiResult<TableLifecycleResult>> => {
 		const result = parsed(
@@ -354,6 +375,7 @@ export const dropTable = command(
 /** #85 deregister the table (detach from the catalog, data stays on storage). Owner-gated
  *  (can_deregister). */
 export const deregisterTable = command(
+	({ table }) => `Deregister table ${table}`,
 	TableArg,
 	async ({ table }): Promise<ApiResult<TableLifecycleResult>> => {
 		const result = parsed(
@@ -369,6 +391,7 @@ export const deregisterTable = command(
  *  rename relocates the data + migrates FGA ownership). Gated can_drop on the source AND
  *  can_create_table on the destination parent. */
 export const renameTable = command(
+	({ table, newName }) => `Rename table ${table} to ${newName}`,
 	v.object({ table: v.string(), newName: v.string() }),
 	async ({ table, newName }): Promise<ApiResult<TableLifecycleResult>> => {
 		const result = parsed(
@@ -384,6 +407,7 @@ export const renameTable = command(
  *  the catalog reserves the id, seeds the caller's ownership, and emits the DECLARE_TABLE marker.
  *  `location` optional (empty → the catalog picks). Gated can_create_table on the parent namespace. */
 export const declareTable = command(
+	({ namespace, name }) => `Declare table ${namespace}$${name}`,
 	v.object({ namespace: v.string(), name: v.string(), location: v.optional(v.string()) }),
 	async ({ namespace, name, location }): Promise<ApiResult<DeclareTableResult>> => {
 		const result = parsed(
@@ -399,6 +423,7 @@ export const declareTable = command(
  *  list (required); `predicate` optional (absent → all rows). Writer-gated (can_write_data).
  *  Returns the affected-row count + new version. */
 export const updateRows = command(
+	({ table }) => `Update rows of table ${table}`,
 	v.object({
 		table: v.string(),
 		predicate: v.nullable(v.string()),
@@ -415,6 +440,7 @@ export const updateRows = command(
  *  default). Writer-gated (can_write_data). The response carries only the new version — the wire has
  *  no deleted-row count. */
 export const deleteRows = command(
+	({ table }) => `Delete rows of table ${table}`,
 	v.object({ table: v.string(), predicate: v.string() }),
 	async ({ table, predicate }): Promise<ApiResult<DeleteRowsResult>> =>
 		parsed(await post(`/v1/table/${enc(table)}/delete`, { predicate }), DeleteRowsResponseSchema),
@@ -450,6 +476,8 @@ export const readUserStateDoc = query(
 
 /** Save the caller's own document. A refused write is reported as such — never flattened to ok. */
 export const writeUserStateDoc = command(
+	({ document }) =>
+		document === 'dock-layout' ? 'Save the workbench layout' : 'Save the workbench views',
 	v.object({ ...UserStateArg.entries, value: v.unknown() }),
 	async (): Promise<ApiResult<unknown>> => NO_USER_STATE,
 );

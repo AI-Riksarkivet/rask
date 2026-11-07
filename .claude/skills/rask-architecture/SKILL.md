@@ -1,6 +1,6 @@
 ---
 name: rask-architecture
-description: "Where new code belongs in the rask workspace: the language-pure planes (Python `packages/` + `services/`, the `frontend/` bun root holding the console and its packages) and the entrypoint contract (the two app factories, `make_service_app` and `build_lance_service_app`, with an injectable lifespan). Use when adding, moving or deleting a workspace member, service, frontend package or deployable; editing a `pyproject.toml`, the root `uv.lock`, or a uv/bun workspace glob; wiring a service entrypoint; or when newly added code won't resolve — ModuleNotFoundError, a `uv sync` workspace error, or a package `bun install` silently skipped."
+description: "Where new code belongs in the rask workspace: the language-pure planes (Python `packages/` + `services/`, the `frontend/` bun root holding the console and its packages) and the entrypoint contract (the one app factory, `build_lance_service_app`, with an injectable lifespan). Use when adding, moving or deleting a workspace member, service, frontend package or deployable; editing a `pyproject.toml`, the root `uv.lock`, or a uv/bun workspace glob; wiring a service entrypoint; or when newly added code won't resolve — ModuleNotFoundError, a `uv sync` workspace error, or a package `bun install` silently skipped."
 ---
 
 # rask architecture (workspace planes + composition)
@@ -34,57 +34,56 @@ the globs safe (see the invariants).
 | Plane | Path | Rule | Has entrypoints? |
 | --- | --- | --- | --- |
 | **Python packages** | `packages/<name>` | reusable Python libraries | **No** |
-| **Python services** | `services/<name>` | runnable Python: the lakehouse's HTTP services and the notifications inbox | Yes |
+| **Python services** | `services/<name>` | runnable Python: the lakehouse's HTTP services | Yes |
 | **JS/TS frontend** | `frontend/` | its own **bun workspace root** (own `package.json`, `bun.lock`, `knip.json`, `.oxlintrc.json`, `.oxfmtrc.json`, `patches/`, `assets/`); no Turborepo, plain bun scripts | — |
-| ↳ the app | `frontend/console` | the console, one SvelteKit single-page app (`rask-frontend`) | Yes |
+| ↳ the app | `frontend/console` | the console, the lakehouse's own UI: one SvelteKit single-page app (`rask-frontend`) | Yes |
 | ↳ JS libraries | `frontend/packages/<name>` | reusable TS/Svelte libraries | **No** |
 | **scripts** | `scripts/` | ALL dev/ops scripts, shell **and** python, flat | one-shot, **not** a workspace member |
 
 **Python packages** (3):
 
-- `service-kit` — the platform package a client pins by lakehouse tag (XC-186): the app factory, config, exceptions,
-  middleware, health and probes, telemetry, the auth plane (`governed`), the naming a client needs, the input and
+- `service-kit` — the platform package a client pins by lakehouse tag (XC-186), and the pieces of it the lakehouse runs:
+  exceptions, the request-id middleware, logging, the probes and the drain, the body cap, the auth plane (`governed`), the naming a client needs, the input and
   credential guards, the contract the lakehouse's events publish, and its pytest plugin (XC-190).
 - `lakehouse-kit` — the lakehouse's kernel, which only its own services import: the lance-plane app factory
   (`lance_app`), the records, registries and governance guards, the namespace clients, the outbox and control lane, and
   the S3 client, STS and URI seam (`lakehouse_kit.storage`).
 - `lineage-kit` — the OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used
-  by the three lakehouse services and by the inbox to verify what it reads.
+  by the three lakehouse services and by a client to verify what it reads.
 
-**Python services** (4): `catalog` (`:2333`), `lineage` (`:8000`), `maintenance` (`:8000`) — the lakehouse, one image
-(`.docker/rest-catalog.dockerfile`) run with three commands — and `notifications` (`:8850`), the inbox behind the
-console's bell: a client of the lakehouse's events, its own image (`.docker/notifications.dockerfile`), deployed by the
-console's release (`deploy/fixtures/console`), and forbidden `lakehouse_kit` by its own import contract.
+**Python services** (3): `catalog` (`:2333`), `lineage` (`:8000`), `maintenance` (`:8000`) — the lakehouse, one image
+(`.docker/rest-catalog.dockerfile`) run with three commands. This repository hosts no client: the notifications inbox
+is retired (ADR 0193), and every other client left with XC-192.
 
 **JS packages** (4): `@rask/ui` (the design system, `rask-styling`), `@rask/api` (the typed `/api/*` client with its
 bearer provider, the generated OpenAPI types, the lineage client, the live-cursor reader and the dock stores),
 `@rask/dockview` (the dockview binding) and `@rask/flow` (the Svelte Flow binding). See `rask-frontend`.
 
 **Deployables** (each = a member + a `.docker/<name>.dockerfile`): `rest-catalog` (image `lance-rest-catalog`, the
-three lakehouse services, deployed by the product chart), `notifications` and `frontend` (image `web-console`, the
-console's static-file server), both deployed by the console's release; plus `cnpg-age-ext` and `marquez` for the
+three lakehouse services) and `frontend` (image `web-console`, the console's static-file server), both deployed by the
+product chart; plus `cnpg-age-ext` and `marquez` for the
 development stand-ins. The lakehouse runs no ingest service (ADR 0154) and no stage, training or engine (ADR 0155): data
 enters through the catalog's namespace doors, and moving data between tiers is the user's pipeline on their own compute.
 
-**The product chart deploys the lakehouse and nothing it does not own** (ADR 0153). The prerequisites (the External
+**The product chart deploys the lakehouse, its console, and nothing it does not own** (ADR 0153, ADR 0193). The prerequisites (the External
 Secrets Operator, the Dapr control plane, NATS JetStream, the CloudNativePG operator, the telemetry store) and the
 development stand-ins (Dex, RustFS, OpenBao, Marquez) are each their own release, installed in development from
-`deploy/fixtures/<name>` by `make k3s-fixtures` (its `FIXTURES` list). Mailpit, the SMTP relay the inbox's optional email
-channel sends to, is a fixture no default list installs: `make k3s-fixtures FIXTURES=mailpit`. The console's release is installed after the lakehouse by
-`make k3s-clients`. A new lakehouse deployable is a chart Deployment; a new piece of infrastructure is a fixture, never a
-subchart (`rask-helm` §2); a client is a release of its own whose admissions live in its own `lakehouse-values.yaml`.
+`deploy/fixtures/<name>` by `make k3s-fixtures` (its `FIXTURES` list). A new lakehouse deployable is a chart
+Deployment; a new piece of infrastructure is a fixture, never a subchart (`rask-helm` §2); a client is a release of its
+own, in its own repository, whose admissions it supplies to a lakehouse install with `-f`.
 
-## The composition seam: two app factories
+## The composition seam: one app factory
 
-| Plane | Factory | Services | Routers mount |
-| --- | --- | --- | --- |
-| client | `service_kit.make_service_app` | `notifications` | under `settings.api_prefix` (`RASK_API_PREFIX`); `proxy_router` at the root |
-| lance | `lakehouse_kit.lance_app.build_lance_service_app` | `catalog`, `lineage`, `maintenance` | at the root; each service's own `core/config.py::get_settings()` |
-
-`make_service_app(*, title, routers, proxy_router=None, lifespan=None, ready_check=None, settings=None)` builds the FastAPI app with shared
-config/handlers/middleware. The **lifespan is injectable**: a stateless service gets the minimal `default_lifespan`
-(settings only); a stateful one passes a `LifespanFactory`. The lance services keep the `fastapi` skill's
-`api/v1/endpoints/` + `core/` + `services/` layout; the factory owns the boot, not the layout. A `main.py` that opens
+`lakehouse_kit.lance_app.build_lance_service_app(*, title, docs_enabled, audit_enabled, lifespan, log, ready_check,
+routers=(), inner_middleware=())` builds `catalog`, `lineage` and `maintenance`: routers mount at the root, config
+is each service's own `core/config.py::get_settings()`, and the factory owns the logging, the docs gate, the audit
+trail, the problem handlers, the request-id layer and `/livez` + `/readyz`. The **lifespan is injectable** and
+required: each service passes its own, which builds its resources and sets the lifecycle flags `/readyz` reads. So is
+`ready_check`: each service's `/readyz` also answers for its own dependency or fact (the catalog's namespace and
+signing key, lineage's feed, maintenance's signing key).
+service-kit ships no app factory (owner, 2026-11-07): a client is an outside tool on the public API and builds its own
+app. The lance services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout; the factory owns
+the boot, not the layout. A `main.py` that opens
 its own `app = FastAPI(...)` is the exception to justify, not the norm: copied boots drift, and one once lost its
 request-id layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12).
 
@@ -101,18 +100,23 @@ request-id layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
 - **One lock.** The root `uv.lock` is the only Python lockfile — dev, tests, and every docker image resolve from it
   (`uv sync --frozen --package <name>`).
 - **`service-kit` is the platform package, and it keeps a light base.** Base deps are `fastapi`, `pydantic`,
-  `pydantic-settings`, `python-dotenv`, `dapr`, and the OpenTelemetry SDK, OTLP/HTTP exporter and instrumentors (whatever
-  `setup_otel` names is ALL the instrumentation a service gets, since it runs bare `uvicorn`). The auth plane's deps live
+  `pydantic-settings`, `python-dotenv`, `dapr` and `opentelemetry-api`. The OTel SDK, the OTLP/HTTP exporter and the
+  instrumentors are the lakehouse's runtime, declared in `lakehouse-kit` (the chart launches every lakehouse service
+  under `opentelemetry-instrument` when telemetry is on, and it instruments what is installed, so that list is the
+  instrumentation a service gets). The auth plane's deps live
   behind `[governed]` and the Arrow guards' behind `[arrow]` — keep them there. **It imports nothing from
-  `lakehouse_kit`** (`.importlinter`, `the-platform-knows-no-kernel`), and the lakehouse image refuses `notifications`
-  and `lancedb` at its import gate (`.docker/rest-catalog.dockerfile`, `--absent`). Never add `lancedb`, `ray` or
+  `lakehouse_kit`** (`.importlinter`, `the-platform-knows-no-kernel`), and the lakehouse image refuses `lancedb` at its
+  import gate (`.docker/rest-catalog.dockerfile`, `--absent`). Never add `lancedb`, `ray` or
   `sqlmodel` to either kit.
 - **The lakehouse knows no client.** `.importlinter`'s `the-lakehouse-knows-no-client` forbids every lakehouse module
-  from importing `notifications`, `ray`, `lance_ray` or `lancedb` by any chain, and `scripts/lakehouse_names_no_client.py` (in `make lint`)
-  refuses a client's name in any file the lakehouse owns; it reads the clients off the tree (every member outside the
-  lakehouse, every frontend app, every non-platform fixture), so it needs no edit when one is added.
+  from importing a client's package (`ray`, `lance_ray`, `lancedb`, …) by any chain, and
+  `scripts/lakehouse_names_no_client.py` (in `make lint`) refuses a client's name in any file the lakehouse owns, the
+  console's tree (`frontend/`, `.docker/frontend.dockerfile`) included, since the console is the lakehouse's own. It
+  reads hosted clients off the tree (every member outside the lakehouse, every non-platform fixture; none today), so
+  it needs no edit when one is added, and a client that leaves the tree joins `DEPARTED` in
+  the commit that deletes it, as `notifications` and `mailpit` did (ADR 0193).
 - **`known-first-party` is COMPLETE — keep it that way.** It lists every first-party import name (`catalog`,
-  `lakehouse_kit`, `lineage`, `lineage_kit`, `maintenance`, `notifications`, `service_kit`); a name missing from it sorts
+  `lakehouse_kit`, `lineage`, `lineage_kit`, `maintenance`, `service_kit`); a name missing from it sorts
   into the THIRD-PARTY block, and a backlog of ten missing names once cost one repo-wide re-sort of 391 files. Step 4 of
   `references/adding-a-package.md` keeps it complete: add or remove the name in the change that adds or deletes the
   member.

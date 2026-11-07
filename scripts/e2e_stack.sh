@@ -120,7 +120,7 @@ helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 # EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
 # `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this
 # script does not build cannot be pulled from anywhere: containerd asks Docker Hub for
-# `docker.io/library/notifications:dev`, is told `pull access denied, repository does not exist`, and
+# `docker.io/library/web-console:dev`, is told `pull access denied, repository does not exist`, and
 # the pod sits in ImagePullBackOff forever. Measured 2026-09-24 on `e2e-stack`: the overlay schedules
 # seven rask images and this script built one. A hand-kept list is exactly what drifted, so the list
 # is the render's and a new service joins it by existing. `$HELM_SET` is the SAME array the upgrade
@@ -277,7 +277,7 @@ JOB_LOGS="$(mktemp)"
 # Recreate the app pods. Pod DELETE, not `rollout restart`: on a re-run against an existing cluster a rebuilt
 # same-tag image only lands on a freshly-scheduled pod, and delete forces that reschedule to pull the just-loaded
 # digest from the node cache (IfNotPresent) — the kind same-tag staleness fix (memory: kind-same-tag-image-gotcha).
-for d in catalog lineage maintenance; do
+for d in catalog lineage maintenance console; do
   kubectl delete pods -l "app.kubernetes.io/instance=$RELEASE,app.kubernetes.io/component=$d" \
     --ignore-not-found >/dev/null 2>&1 || true
 done

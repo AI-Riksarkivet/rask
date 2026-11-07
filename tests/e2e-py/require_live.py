@@ -11,7 +11,7 @@ it is driving something live, so it is the target that asks.
 
 BROADER THAN GUARDING THE VARIABLES, which is why the Makefile does both. A guard names the missing
 variable early and cannot see a skip that is not about one — a token that is not a project admin, an
-estate with no Ray head — and those are the skips that survive a fully-forwarded invocation.
+estate that cannot provision a warehouse — and those are the skips that survive a fully-forwarded invocation.
 
 ITS OWN MODULE rather than more lines in `conftest.py`, so the mechanism can be exercised for real.
 That conftest also carries a session-scoped cleanup fixture that reaches for a live estate, so a test

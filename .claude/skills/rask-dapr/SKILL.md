@@ -1,6 +1,6 @@
 ---
 name: rask-dapr
-description: "Dapr in rask: which of the 12 building blocks this estate uses (6) and why, which it deliberately does not (6) with the recorded rulings, and the component-vs-DIY rubric — when a Dapr component is the answer and when hand-rolling is justified. Use when adding a capability that smells like queuing/scheduling/locking/config/secrets/middleware, when tempted to hand-roll one of those, when a Dapr API seems to fit a new feature, or when touching sidecar annotations, Components, or the dapr-resiliency map."
+description: "Dapr in rask: which of the 12 building blocks this estate uses (3) and why, which it does not (9) with the recorded rulings, and the component-vs-DIY rubric — when a Dapr component is the answer and when hand-rolling is justified. Use when adding a capability that smells like queuing/scheduling/locking/config/secrets/middleware, when tempted to hand-roll one of those, when a Dapr API seems to fit a new feature, or when touching sidecar annotations, Components, or the dapr-resiliency map."
 ---
 
 # rask × Dapr — what we use, what we refused, and how to decide
@@ -10,15 +10,15 @@ AUTHORING (its own README title; its prereqs even assume Docker, which rask forb
 docs list the 12 building blocks without tradeoffs. This skill is the estate-grounded layer: every
 claim below was verified against the render or the code (2026-08-28), not inherited from docs.
 
-## The inventory — 6 of 12 blocks in use
+## The inventory — 3 of 12 blocks in use
 
 | Block | Used | Where (verified) |
 | --- | --- | --- |
-| Service invocation | ✅ | No lakehouse service calls another through it, and the product chart renders no invocation Resiliency. The notifications inbox, a client, reads lineage's feed through `/v1.0/invoke/lineage/method` (`feed_base_url`; direct URL when Dapr is off); Dapr applies an invocation policy on the CALLING sidecar, so its retry is the console release's: `<rask.release>-notifications-invocation-resiliency` (`deploy/fixtures/console/chart/templates/inbox-dapr.yaml`), `invokeRetry`, constant 2 s ×3 on `408,429,500-599` and never a 4xx, targeting app `lineage` and scoped to the inbox's app id, the inbox's one retry layer for those reads. No policy targets the catalog: no service invokes it through Dapr. Public traffic never rides invocation: the cluster route reaches each app port directly |
-| State | ✅ | None in the product chart: no lakehouse service keeps Dapr state. Each client that hosts actors brings its own store in its own release (scopes are load-bearing — see traps): the notifications inbox's, scoped to app-id `notifications` alone on a CloudNativePG Postgres of its own, rendered by the console's release (`deploy/fixtures/console`, ADR 0190) |
+| Service invocation | ❌ | No service in the estate calls another through it, and the product chart renders no invocation Resiliency. Public traffic never rides invocation: the cluster route reaches each app port directly. A client that invokes a lakehouse app through its own sidecar renders its own policy, since Dapr applies an invocation policy on the CALLING sidecar |
+| State | ❌ | No service in the estate keeps Dapr state, and the product chart renders no state store. Its one user, the notifications inbox, is retired (ADR 0193); a client that hosts actors brings its own store in its own release, scoped to its app-id (see traps) |
 | Pub/sub | ✅ | `pubsub.jetstream`, one Component per app-id that publishes or subscribes, each scoped to ONE app-id and naming that app's NATS user from the store (`jwt`/`seedKey` secretKeyRef to `nats-user-<app>`, `auth.secretStore: lance-secrets`; the permission table is `nats.auth.users` in values.yaml, [[XC-078]]); `DaprApp.subscribe` incl. a DLQ route; `queueGroupName` makes replicas competing consumers. Unset, the component hands its app ONE message at a time (`concurrencyMode` defaults to single, components-contrib v1.19.0 `pubsub/jetstream/metadata.go:63-65`; measured live 2026-10-23, 61 of 61 lineage deliveries back to back): lineage's subscriber alone says `parallel`, bounded by its durable's `maxAckPending` (`services.lineage.deliveriesInFlight`), so JetStream hands out no more and nothing waits in the sidecar past its `ackWait`. A sidecar cannot rebind a durable whose config changed, so the NATS stream Job recreates `lineage-durable` at a new bound and checks again until a sidecar has recreated it at that value, since the outgoing pod's may recreate it as it was ([[LH-533]]) |
-| Bindings | ✅ | `bindings.cron` ×8 in the product chart: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline), `catalog-commit-reconcile-cron` ([[LH-497]], announcing each committed version lineage's feed lacks), `catalog-manifest-reclaim-cron` ([[LH-251]], ADR 0185, removing each root's `__manifest` versions past their retention); a client's release renders its own (the console's renders the inbox's reconcile cron) — read the cluster for what runs, not the templates. Each cron is an input binding delivered to `POST /<component-name>` at the pod ROOT. The product chart renders no output binding: the notifications inbox's email channel (`bindings.smtp`, its only channel: a push reaches the address its person supplied, never a shared channel, [[CTL-34]]) and its reconcile cron are the console release's |
-| Actors | ✅ | the notifications inbox's inbox and watch-index actors, on its own store in the console's release; no lakehouse service hosts an actor |
+| Bindings | ✅ | `bindings.cron` ×8 in the product chart: `maintenance-cron` (the sweep), `maintenance-reconcile-cron`, `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline), `catalog-commit-reconcile-cron` ([[LH-497]], announcing each committed version lineage's feed lacks), `catalog-manifest-reclaim-cron` ([[LH-251]], ADR 0185, removing each root's `__manifest` versions past their retention); a client's release renders its own — read the cluster for what runs, not the templates. Each cron is an input binding delivered to `POST /<component-name>` at the pod ROOT. The product chart renders no output binding |
+| Actors | ❌ | No service in the estate hosts an actor, so placement and the Scheduler hold nothing of the lakehouse's. The one host, the notifications inbox, is retired (ADR 0193) |
 | Secrets | ✅ | `secretstores.hashicorp.vault` → the platform's Vault or OpenBao (the dev OpenBao fixture in development; the chart renders none, [[XC-149]]). ONE component, `lance-secrets`, logs each sidecar in with Kubernetes auth as the role `<release>-{appID}` (Dapr 1.19+): the pod's own ServiceAccount, a token projected into daprd alone, a policy reading exactly that app's secrets; each app's Configuration is deny-by-default with `allowedSecrets` (`lance.storeReads`, ADR 0169). THE estate rule: sole source, fail-closed, never env fallback. Every read is held at most a jittered 300-600 s and read again (`service_kit.governed.secret_cache`, ADR 0166), so a rotation in the store reaches running pods; lineage's and maintenance's S3 key pair (both halves) is kept confirmed in the background (`store_credential`); the catalog holds none, its store identity being its ServiceAccount token (ADR 0170), and the app-token door accepts the current or previous token |
 | Workflow | ❌ | Nothing in this repository runs a workflow. The lakehouse runs none: the import contract `the-lakehouse-is-not-built-on-a-workflow-engine` forbids it (ADR 0154). The promotion gate is a tag, not a saga: readers read `@published`, approval moves the tag, rejection restores main, a cron sweep expires stale holds (ADR 0156 C1, ADR 0161, [[LH-466]]) |
 | Configuration | ❌ | Ruled out — see refusals |
@@ -41,12 +41,13 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 
 **DIY is justified when ANY of these hold (and the justification is written at the site):**
 - **No sidecar on that hop.** The two standing examples: the PUBLIC edge (the platform's Gateway →
-  each service's app port is direct, so no Dapr middleware/ratelimit can ever see a client request — rate limiting and
-  body caps therefore live in `service_kit.middleware` / slowapi, by owner ruling 2026-08-26), and
+  each service's app port is direct, so no Dapr middleware/ratelimit can ever see a client request — the body cap
+  therefore lives in the app, `service_kit.body_limit`, by owner ruling 2026-08-26, and no rask service rate-limits
+  (no limiter is in the tree, measured 2026-11-07)), and
   **a bring-your-own job's pods** (no daprd; a job cannot call `/v1.0/secrets/*`).
-- **Per-request semantics the block cannot express.** notifications' reconcile guard must SKIP an
-  overlapping tick, not queue it — an actor (turn-based) queues, so the inbox keeps a process-local
-  `asyncio.Lock` and needs a single replica until a cross-pod guard that skips exists.
+- **Per-request semantics the block cannot express.** A reconcile guard that must SKIP an overlapping tick, not
+  queue it, cannot be an actor (turn-based, so it queues); it is a process-local lock on a single replica until a
+  cross-pod guard that skips exists (below).
 - **The render is the gate.** rask's invariant tests read config out of `helm template`; state moved
   behind a runtime API (the Configuration block) is state those gates can no longer see.
 - **The block is Alpha and the need is load-bearing.** Alpha components (lock, most middleware) may
@@ -91,7 +92,7 @@ actor placement/turn semantics.
   on the same lock" does not hold: `routes.on_cron` holds `_sweep_lock` for the whole-estate sweep, and the per-table
   lane, the write-event subscription (`maintenance/api/arrival.py`), takes no lock; and "creates a
   second stateful store" names the wrong thing — the Scheduler etcd is already deployed and
-  load-bearing for actor reminders (the notifications inbox's), so what per-policy Jobs would create is a second
+  part of the Dapr control plane, so what per-policy Jobs would create is a second
   authoritative HOME for policy cadence that every create/update/delete/drop/undrop path must mirror,
   invisible to the render gates and to the drift report's three store categories.
 
@@ -109,9 +110,8 @@ actor placement/turn semantics.
   * *TTL grants* → already live as an FGA CEL condition (`non_expired_grant`, `packages/service-kit/src/service_kit/governed/auth/model.fga:707`) —
     check-time evaluation, strictly better than revoke-at-T (no window a crashed revoker leaves open).
   * *per-subject digest one-shots* → actor reminders, correctly (the state lives in the actor's turn;
-    reminders ride the same Scheduler Jobs would). The audit's ONE finding here was a repairability
-    defect, not a mechanism error — fixed 2026-08-28 (`_digest_orphaned` read-path repair; Jobs has
-    the identical two-store split and would not have helped).
+    reminders ride the same Scheduler Jobs would). The notifications inbox that held them is retired
+    (ADR 0193), so no digest runs on the estate.
   **The real revisit trigger:** a one-shot that is scoped to NOTHING that already holds state — no
   actor to remind, no workflow to time, no record a scan can evaluate. Example: an estate-wide digest
   at a fixed local time per timezone cohort. None exists. Calendar semantics in a per-entity policy
@@ -134,12 +134,10 @@ hand-built workflow without history, replay or per-step retry — should be Work
 
 ## The one open candidate
 
-**Distributed lock** for the notifications reconciler. The exit condition is a cross-pod guard that
-SKIPS. A lock component IS try-acquire-or-fail (skip on failure — the right shape, where an actor
-queues), but the API is Alpha. Adopting it is an owner decision; until then the inbox runs one replica,
-which its own release must hold, and nothing enforces that: the reconcile tick's overlap guard is a
-process-local `asyncio.Lock`, so a second replica would re-walk the same rows (twice the FGA and actor
-load, not a wrong answer).
+**Distributed lock**, for a cron reconciler that must SKIP a tick another replica is running. A lock component IS
+try-acquire-or-fail (skip on failure — the right shape, where an actor queues), but the API is Alpha, and no service in
+the estate needs it today: maintenance is pinned to one replica, and lineage's and the catalog's crons are idempotent
+or ETag-guarded (traps below). Adopting it is an owner decision.
 
 ## Sidecar map — who can call Dapr APIs at all
 
@@ -176,14 +174,14 @@ sidecar.
   authenticates on `dapr-api-token` alone (`require_dapr_token`), which a request through the cluster
   route never carries because it reaches the app port without a sidecar, and a caller's identity is its
   verified bearer (ADR 0156 C5).
-- A cron/input binding is delivered to `POST /<component-name>` at the pod ROOT — never under
-  `RASK_API_PREFIX`. Component name, env var and served path are one string, pinned by invariants.
+- A cron/input binding is delivered to `POST /<component-name>` at the pod ROOT — never under an API
+  prefix. Component name, env var and served path are one string, pinned by invariants.
 - **`bindings.cron` FIRES ON EVERY REPLICA.** The component is stateless and uncoordinated — Diagrid,
   verbatim: *"No coordination – each replica runs the schedule independently, causing duplicate
   triggers"* and *"when the target app is scaled to multiple replicas, the schedule will fire on every
   instance"*. There is no lease anywhere in the path, so every multi-replica service must buy the
   guarantee itself, and the estate answers it FOUR different ways: lineage's relay tick makes every step idempotent (an
-  insert-only merge on each feed row, a forwarder cursor that only moves forward); maintenance is pinned to `replicas: 1`, as the notifications inbox must be; catalog's
+  insert-only merge on each feed row, a forwarder cursor that only moves forward); maintenance is pinned to `replicas: 1`; catalog's
   control relay accepts duplicates because a duplicate publish dedupes on `event_id`; catalog's erasure
   release and promotion expiry move each record by an ETag-guarded write, so one replica wins it. A new cron on a service that can scale needs its answer chosen and written down, or its
   absence reads as an oversight rather than a decision.

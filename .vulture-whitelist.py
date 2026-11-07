@@ -1,11 +1,12 @@
 """Vulture whitelist — symbols vulture reports as dead that are NOT dead.
 
-Regenerate:  make deadcode-whitelist
+Run:  uvx --from vulture vulture packages/*/src services/*/src .vulture-whitelist.py --min-confidence 60
+(`--make-whitelist` prints entries in this file's format)
 
 WHY THIS FILE EXISTS. Vulture is a static reachability checker; it cannot see call sites that live in a
 framework's registry rather than in our source. Without it the sweep reported ~70 "dead" symbols in
 services/, every single one a false positive — and a sweep that cries wolf 70 times is WORSE than no sweep
-at all, because a genuinely dead symbol is then invisible in the noise. With it, `make deadcode` prints ~0
+at all, because a genuinely dead symbol is then invisible in the noise. With it, that run prints ~0
 and a NEW dead symbol stands out immediately. That is the whole point: keep the signal-to-noise at 1.
 
 The categories held here, all verified by reading the call site:
@@ -116,12 +117,16 @@ versions_removed  # unused variable (services/catalog/src/catalog/services/manif
 versions_kept  # unused variable (services/catalog/src/catalog/services/manifest_reclaim.py, a response field)
 signer  # unused variable (packages/lakehouse-kit/src/lakehouse_kit/commit_turns.py, a field of the frozen _SharedRead key, read by its hash)
 _._assert_all_called  # unused attribute (packages/service-kit/src/service_kit/pytest_plugin.py:50)
-respx_allows_unused_routes  # unused function (packages/service-kit/src/service_kit/pytest_plugin.py:53)
+respx_allows_unused_routes  # unused function (packages/service-kit/src/service_kit/pytest_plugin.py:54)
 _._assert_all_called  # unused attribute (packages/service-kit/src/service_kit/pytest_plugin.py:65)
 _._assert_all_called  # unused attribute (packages/service-kit/src/service_kit/pytest_plugin.py:69)
-_a_fresh_secret_cache  # unused function (packages/service-kit/src/service_kit/pytest_plugin.py:72)
-_projected_identity_tokens  # unused function (packages/service-kit/src/service_kit/pytest_plugin.py:83)
-_bounded_dapr_handshake  # unused function (packages/service-kit/src/service_kit/pytest_plugin.py:98)
-_no_dapr_proxy_factory_carryover  # unused function (packages/service-kit/src/service_kit/pytest_plugin.py:109)
-_._default_proxy_factory  # unused attribute (packages/service-kit/src/service_kit/pytest_plugin.py:118)
-_echo  # unused function (packages/service-kit/tests/test_shared_body_cap.py:32)
+_a_fresh_secret_cache  # unused function (packages/service-kit/src/service_kit/pytest_plugin.py:73)
+_projected_identity_tokens  # unused function (packages/service-kit/src/service_kit/pytest_plugin.py:84)
+_bounded_dapr_handshake  # unused function (packages/service-kit/src/service_kit/pytest_plugin.py:99)
+_inner  # unused function (packages/service-kit/tests/test_shared_body_cap.py:31)
+_echo  # unused function (packages/service-kit/tests/test_shared_body_cap.py:36)
+occurred_at  # unused variable (packages/service-kit/src/service_kit/control_events.py:159)
+erase_subject  # unused function (services/catalog/src/catalog/api/v1/endpoints/erasure.py:92)
+overdue  # unused variable (services/catalog/src/catalog/services/erasure_obligations.py:78)
+oldest_seq  # unused variable (services/lineage/src/lineage/schemas.py:45)
+forgotten  # unused variable (services/maintenance/src/maintenance/services/committed_files.py:47)

@@ -130,7 +130,7 @@ def test_every_catalog_cron_is_named_as_the_route_the_catalog_serves() -> None:
     served = json.loads(probe.stdout)
     assert [cron for cron in crons if f"/{cron}" not in served] == [], "the catalog serves no route at these crons' names — each ticks into a 404"
     assert [path for path in served if any(path.endswith(f"/{cron}") and path != f"/{cron}" for cron in crons)] == [], (
-        "a cron route is mounted under a prefix — a Dapr input binding is delivered at the POD ROOT, never under RASK_API_PREFIX"
+        "a cron route is mounted under a prefix — a Dapr input binding is delivered at the POD ROOT, never under an API prefix"
     )
 
 

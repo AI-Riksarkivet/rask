@@ -1,36 +1,14 @@
-"""Shared factory for rask backend services.
+"""The process's log handler: every record to stdout, stamped with its request and trace ids.
 
-`make_service_app` builds a FastAPI app with shared config, exception handlers, middleware, probes
-and logging. Both the lifespan and the settings are injectable: stateless services get the minimal
-`default_lifespan` (settings only); services needing resources (Lance, S3) pass their own
-factory.
-
-THIS IS A SUBMODULE, not the package `__init__`: as the `__init__`, importing ANYTHING under
-`service_kit` — `service_kit.config` for a `Settings`, `service_kit.exceptions` for an error type —
-would first execute this module and so import FastAPI, python-dotenv, the OTel wiring, the middleware
-stack and the probe router, and every consumer would pay for the app factory whether it wanted an app
-or not. `service_kit/__init__.py` re-exports these names lazily, so `from service_kit import
-make_service_app` resolves here.
+`lakehouse_kit.lance_app.build_lance_service_app` runs `setup_logging` before it builds an app, so every lakehouse
+service logs through one handler and one format.
 """
 
 import logging
 import os
 import sys
-from collections.abc import AsyncGenerator, Callable, Sequence
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
-from dotenv import load_dotenv
-from fastapi import APIRouter, FastAPI
-
-from service_kit.config import Settings
 from service_kit.context import CorrelationFilter, DiagnosticFormatter
-from service_kit.exceptions import register_handlers
-from service_kit.governed.audit import configure_audit
-from service_kit.lifecycle import mark_draining, mark_started
-from service_kit.middleware import register_middleware
-from service_kit.otel import setup_otel
-from service_kit.probes import ReadyCheck, make_probes_router
-from service_kit.slash import SlashToleranceMiddleware
 
 
 def setup_logging() -> None:
@@ -65,8 +43,8 @@ def setup_logging() -> None:
     level = os.environ.get("RASK_LOG_LEVEL", "INFO").upper()
     root = logging.getLogger()
     root.setLevel(level)
-    # Idempotent by handler NAME, not by count: `make_service_app` runs this per app, and a duplicate
-    # handler emits every line twice.
+    # Idempotent by handler NAME, not by count: the app factory runs this per app, and a process may build
+    # several; a duplicate handler emits every line twice.
     if not any(h.get_name() == "rask-stdout" for h in root.handlers):
         handler = logging.StreamHandler(sys.stdout)
         handler.set_name("rask-stdout")
@@ -92,180 +70,3 @@ def setup_logging() -> None:
         # second half — it names fixed fields, and the diagnostics differ at every call site.
         handler.setFormatter(DiagnosticFormatter("%(asctime)s %(levelname)-7s %(name)s [%(request_id)s] [%(trace_id)s] — %(message)s"))
         root.addHandler(handler)
-
-
-def build_settings() -> Settings:
-    load_dotenv()
-    return Settings.model_validate({})
-
-
-# NO DAPR CLIENT IS BUILT HERE. Every service that publishes constructs its own client in its own
-# lifespan (catalog, lineage, maintenance), and the `make_service_app`
-# services never touch `app.state.dapr`. A client wired into the app factory would be a shared seam no
-# caller wants, and one that looks available is the one the next service reaches for.
-
-
-def default_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-    """Minimal lifespan for stateless services: expose `settings` on `app.state`.
-
-    Services that need resources (Lance, S3) inject their own factory.
-    """
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        app.state.settings = settings
-        yield
-
-    return lifespan
-
-
-type LifespanFactory = Callable[[Settings], Callable[[FastAPI], AbstractAsyncContextManager[None]]]
-
-
-def _install_ns_problem_handlers(app: FastAPI) -> None:
-    """Install the Lance-Namespace problem-detail translators, IF this deployable has them.
-
-    THE IMPORT IS DEFERRED, and that is a packaging constraint rather than a performance one.
-    `lance_namespace` lives behind service-kit's `[governed]` extra and MUST stay
-    there: this library is shared by every service including the storeless ones, so a Lance dependency
-    in its base is a Lance dependency in every one of them. Importing it at module scope makes
-    `import service_kit` itself require the extra, and an image built without it fails at import —
-    `ModuleNotFoundError: No module named 'lance_namespace'`, caught by `.docker/import-gate.py`
-    while every test stays green (the workspace venv resolves the extra through a sibling member).
-
-    SKIPPING IS SOUND, NOT A SILENT DEGRADATION, and this is the load-bearing argument. These handlers
-    translate `lance_namespace` EXCEPTION TYPES. If the package is not importable then those classes do
-    not exist in this process, so no code in it can raise one — and the governed kernel that raises them
-    (`service_kit.governed.fga`) sits behind the very same extra, so it is absent too. There is nothing
-    left for the handler to catch. A deployable that DOES serve that surface declares the extra and gets
-    the handlers exactly as before.
-
-    A missing `lance_namespace` is tolerated; anything else is re-raised. A broken import INSIDE
-    `ns_errors` must not be swallowed as "the extra is absent" — that would turn a real defect into a
-    quietly unhandled error class.
-    """
-    try:
-        from service_kit.ns_errors import install_problem_handlers
-    except ModuleNotFoundError as exc:
-        if exc.name != "lance_namespace":
-            raise
-        logging.getLogger(__name__).debug(
-            "lance_namespace absent — Lance-Namespace problem handlers not installed; nothing in this deployable can raise those types"
-        )
-        return
-    install_problem_handlers(app, logging.getLogger(__name__))
-
-
-def make_service_app(
-    *,
-    title: str,
-    routers: Sequence[APIRouter],
-    proxy_router: APIRouter | None = None,
-    lifespan: LifespanFactory | None = None,
-    ready_check: ReadyCheck | None = None,
-    settings: Settings | None = None,
-) -> FastAPI:
-    """Build a backend FastAPI app with shared config/handlers/middleware.
-
-    `routers` are mounted under `settings.api_prefix`; `proxy_router` is
-    mounted at the root, outside the prefix. The lifespan defaults to the minimal
-    `default_lifespan` unless `lifespan=` is passed.
-
-    `settings` IS INJECTABLE, and omitting it builds one from the environment. Every caller builds its
-    app at MODULE level, so without this parameter `build_settings()` —
-    `load_dotenv()` plus a whole `Settings` validation off the process environment — would run as an
-    unavoidable side effect of importing the service. Nothing could state
-    the configuration it wanted: a caller could only mutate the environment and hope it got there before the import did. Passing an object closes that,
-    and it is the same object the router prefix, the docs URLs, the middleware, `app.state.settings`
-    and the lifespan factory all see — one instance, not a re-read per consumer.
-    """
-    setup_logging()
-    # `build_settings()` is still the DEFAULT, not a fallback for a bad argument: `setup_logging()`
-    # must run first either way, so a Settings validation failure is loggable rather than silent.
-    settings = build_settings() if settings is None else settings
-    # THE COMPLIANCE TRAIL IS ARMED HERE, for every app this factory builds — see
-    # `Settings.audit_enabled`. Left to each service, seven of ten inherited it from `RASK_LOG_LEVEL`
-    # instead of deciding it. Immediately after `setup_logging`, which sets the root level this must
-    # override in both directions.
-    configure_audit(enabled=settings.audit_enabled)
-    base_factory: LifespanFactory = lifespan if lifespan is not None else default_lifespan
-
-    def lifespan_factory(s: Settings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-        base = base_factory(s)
-
-        @asynccontextmanager
-        async def wrapped(app: FastAPI) -> AsyncGenerator[None]:
-            # THE LIFECYCLE FLAGS `/readyz` READS ARE SET HERE, for every app this factory builds.
-            #
-            # `service_kit.probes` gates readiness on `startup_complete` / `shutting_down`, and those
-            # two names were a CONVENTION between the probe and each service's own lifespan. Left to
-            # the lifespans, five of the apps built here never held up their end, so `/readyz`
-            # answered `starting` for the whole life of every one of those pods and the drain never
-            # began; one lifespan logged the string "startup_complete" while setting no attribute,
-            # which is how the miss read as done.
-            #
-            # AFTER the base lifespan has entered, never before: the base builds the resources the
-            # service needs, so announcing readiness ahead of it would be a lie about a half-built
-            # app. And in a `finally`, so a base lifespan that raises on the way out still leaves the
-            # process reporting unready rather than ready-and-dying.
-            async with base(app):
-                mark_started(app)
-                try:
-                    yield
-                finally:
-                    mark_draining(app)
-
-        return wrapped
-
-    app = FastAPI(
-        title=title,
-        version="0.1.0",
-        lifespan=lifespan_factory(settings),
-        # Opt-IN, and it used to be hard-coded on with no way for a service to say no. See
-        # `Settings.docs_enabled` for why the default is closed rather than open.
-        docs_url=f"{settings.api_prefix}/docs" if settings.docs_enabled else None,
-        redoc_url=f"{settings.api_prefix}/redoc" if settings.docs_enabled else None,
-        openapi_url=f"{settings.api_prefix}/openapi.json" if settings.docs_enabled else None,
-    )
-    register_handlers(app)
-    # AND the lance_namespace translator, because the governed kernel these apps call raises those
-    # types: `governed/fga.py` raises `ServiceUnavailableError` on an FGA outage under a docstring
-    # promising "outage → ServiceUnavailableError → 503". Without this the fleet apps could not map
-    # one, so that outage answered a text/plain 500 — monitoring cannot tell a dependency being down
-    # from this service being broken.
-    #
-    # Installed HERE rather than per app, so every service answers a denial as a 403 rather than a 500 and every
-    # error body has one shape: the divergence docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
-    # "The Python estate audit" X11 files, one service's 422 body differing from its siblings'.
-    _install_ns_problem_handlers(app)
-    register_middleware(app, settings)
-
-    # THE OPERATIONAL PROBES, root-mounted, for every app this factory builds.
-    #
-    # `service_kit.probes` exists so the estate has ONE drain-aware `/livez` + `/readyz` pair — its own
-    # docstring records that the same twenty lines had already drifted three ways across six hand-rolled
-    # copies. Left to each app, four of the five apps this factory built served neither probe at all
-    # and one root-mounted it by hand; mounting it here makes the pair unconditional.
-    #
-    # ROOT, not under `api_prefix`: a kubelet does not know a service's prefix. Unconditional because
-    # the router is dependency-free — `ready_check` is the optional half, for a service with a hard
-    # dependency worth reporting (an actor plane, say).
-    #
-    # `/api/health` is untouched: it is the frontend-facing badge the estate documents it to be. The
-    # point is that it is not a READINESS answer — it is a constant, so probing it reports "ready"
-    # while the pod drains.
-    app.include_router(make_probes_router(ready_check))
-
-    for router in routers:
-        app.include_router(router, prefix=settings.api_prefix)
-    if proxy_router is not None:
-        app.include_router(proxy_router)
-
-    # Dapr drops trailing slashes; resolve the variant in-process instead of a
-    # 307 redirect that would leak the service's in-pod address (see slash.py).
-    app.router.redirect_slashes = False
-    app.add_middleware(SlashToleranceMiddleware, routes_provider=lambda: app.router.routes)
-
-    setup_otel(app, service_name=title, settings=settings)
-
-    return app

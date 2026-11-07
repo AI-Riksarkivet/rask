@@ -84,6 +84,15 @@ data:
       echo "cannot read secret/$1 behind the Service, refusing to write over it: $got" >&2
       exit 1
     }
+    store_list() {
+      a=$1; shift
+      if listed=$(BAO_ADDR=$a BAO_CLIENT_TIMEOUT=5s bao "$@" 2>&1); then listed=$(printf '%s\n' "$listed" | tr -d ' ",[]'); return 0; fi
+      case "$listed" in
+        "{}"|*"connect: connection refused") listed=; return 0 ;;
+      esac
+      echo "cannot list $* at $a, refusing to seed without knowing what rask no longer declares: $listed" >&2
+      exit 1
+    }
     {{- if or $signers $nats }}
 
     {{- include "lance.signingShapes" . | nindent 4 }}
@@ -122,17 +131,111 @@ data:
     {{- end }}
     {{- if $nats }}
     nsc() { "$NATS_TOOLS/nsc" -H "$B/nsc" "$@"; }
+    jwt_claim() {
+      q=${1#*.}; q=${q%%.*}
+      while [ $((${#q} % 4)) -ne 0 ]; do q="$q="; done
+      printf '%s' "$q" | tr '_-' '/+' | base64 -d 2>/dev/null | sed -n "$2"
+    }
+    jwt_key() { key=$(jwt_claim "$1" 's/.*"sub":"\([A-Z2-7]*\)".*/\1/p'); }
+    grants_of() {
+      jwt_claim "$1" "s/.*\"$2\":{\"allow\":\[\([^]]*\)\].*/\1/p" | sed 's/\\u003e/>/g; s/\\u003c/</g; s/\\u0026/\&/g' | tr -d '"' | tr ',' '\n' | sort | paste -sd, -
+    }
+    grants() { printf '%s' "$1" | tr ',' '\n' | sort | paste -sd, -; }
+    # A declared user keeps its key pair, and its JWT while the table grants it what the JWT does, so a reseed leaves no
+    # second credential that admits it. A changed grant is issued under the same key, and every credential the key was
+    # issued up to the stored JWT's issue time is revoked, so the old grant stops admitting. Measured 2026-11-07 on
+    # nats-server 2.14.2, nsc 2.15.0 and nats.go 1.39.1: an older JWT for a reissued key keeps its grant until such a
+    # revocation, which refuses it and admits the newer one; nsc writes the grants sorted, `>` as `>`; and a client
+    # holding the revoked JWT is closed after two refused reconnects, which service_kit.bus_watchdog restarts its sidecar
+    # from, onto the JWT the store then holds.
     nats_user() {
-      out=$("$NATS_TOOLS/nk" -gen user -pubout 2>/dev/null) || { echo "nk failed for NATS user $1" >&2; exit 1; }
-      s=; p=
-      for w in $out; do
-        if seed_shaped "$w"; then s=$w; elif pub_shaped "$w"; then p=$w; fi
-      done
-      [ -n "$s" ] && [ -n "$p" ] || { echo "nk made no key pair for NATS user $1" >&2; exit 1; }
+      j=; s=
+      if j=$(bao kv get -field=jwt "secret/nats-user-$1" 2>/dev/null); then
+        s=$(bao kv get -field=seed "secret/nats-user-$1" 2>/dev/null) || s=
+      elif svc_get "nats-user-$1" jwt; then
+        j=$got; if svc_get "nats-user-$1" seed; then s=$got; fi
+      fi
+      made=minted
+      if [ -n "$j" ]; then
+        jwt_key "$j"
+        pub_shaped "$key" || { echo "secret/nats-user-$1 holds no JWT naming its key, so the seed cannot revoke it and refuses to issue it another" >&2; exit 1; }
+        was=$(jwt_claim "$j" 's/.*"iat":\([0-9]*\).*/\1/p')
+        if seed_shaped "$s"; then
+          p=$key
+          if [ "$(jwt_claim "$j" 's/.*"iss":"\([A-Z2-7]*\)".*/\1/p')" = "$account" ] \
+            && [ "$(grants_of "$j" pub)" = "$(grants "$2")" ] && [ "$(grants_of "$j" sub)" = "$(grants "$3")" ]; then
+            printf '%s' "$j" > "$B/users/$1.jwt"
+            (umask 077; printf '%s' "$s" > "$B/users/$1.seed")
+            echo "NATS user $1: kept"
+            return 0
+          fi
+          [ -n "$was" ] || { echo "secret/nats-user-$1 names no issue time, so the seed cannot revoke what it replaces" >&2; exit 1; }
+          [ "$(date +%s)" -gt "$was" ] || sleep 1
+          made=reissued
+        else
+          # A key whose seed the store no longer holds is revoked and the user given a new pair, so the store turns
+          # Ready again without a hand-run delete.
+          old=$key; made=replaced
+        fi
+      fi
+      if [ "$made" != reissued ]; then
+        out=$("$NATS_TOOLS/nk" -gen user -pubout 2>/dev/null) || { echo "nk failed for NATS user $1" >&2; exit 1; }
+        s=; p=
+        for w in $out; do
+          if seed_shaped "$w"; then s=$w; elif pub_shaped "$w"; then p=$w; fi
+        done
+        [ -n "$s" ] && [ -n "$p" ] || { echo "nk made no key pair for NATS user $1" >&2; exit 1; }
+      fi
       err=$(nsc add user -a APP -n "$1" -k "$p" --allow-pub "$2" --allow-sub "$3" 2>&1) || { echo "nsc could not issue NATS user $1: $err" >&2; exit 1; }
       jwt=$(nsc describe user -a APP -n "$1" --raw)
+      if [ "$made" = reissued ]; then
+        [ "$(jwt_claim "$jwt" 's/.*"iat":\([0-9]*\).*/\1/p')" -gt "$was" ] || { echo "the credential reissued to NATS user $1 is no newer than the one it replaces" >&2; exit 1; }
+        err=$(nsc revocations add-user -a APP -u "$p" --at "$was" 2>&1) || { echo "nsc could not revoke the credential NATS user $1 held: $err" >&2; exit 1; }
+      elif [ "$made" = replaced ]; then
+        err=$(nsc revocations add-user -a APP -u "$old" ${was:+--at "$was"} 2>&1) || { echo "nsc could not revoke the key NATS user $1 held: $err" >&2; exit 1; }
+        echo "the stored seed of NATS user $1 is unreadable: its key $old is revoked and it is issued a new pair"
+      fi
       printf '%s' "$jwt" > "$B/users/$1.jwt"
       (umask 077; printf '%s' "$s" > "$B/users/$1.seed")
+      echo "NATS user $1: $made"
+    }
+    # A user rask stops declaring is revoked in the APP account, so the credential it was issued stops admitting it:
+    # nothing else would, since a user JWT carries no expiry and the account that signed it stays trusted. Measured on
+    # nats-server 2.14.2 with nsc 2.15.0, 2026-11-07: a key revoked in a root that holds no users is refused once the
+    # account reaches the MEMORY resolver's resolver_preload and the server reloads its config (SIGHUP, which the bus
+    # fixture's reloader sends when its auth Secret changes), a client connected as it is dropped at that reload, and the
+    # other users keep connecting; a restart keeps it.
+    revoke_undeclared() {
+      : > "$B/revoked"
+      store_list "$BAO_ADDR" kv list -format=json secret/; here=$listed
+      store_list "http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}" kv list -format=json secret/; there=$listed
+      for name in $(printf '%s\n%s\n' "$here" "$there" | grep '^nats-user-' | sort -u); do
+        u=${name#nats-user-}
+        case " {{ join " " $natsUsers }} " in *" $u "*) continue ;; esac
+        if j=$(bao kv get -field=jwt "secret/$name" 2>/dev/null); then :; elif svc_get "$name" jwt; then j=$got; else j=; fi
+        jwt_key "$j"
+        pub_shaped "$key" || { echo "secret/$name holds no user JWT naming its key, so the seed cannot revoke it" >&2; exit 1; }
+        err=$(nsc revocations add-user -a APP -u "$key" 2>&1) || { echo "nsc could not revoke NATS user $u: $err" >&2; exit 1; }
+        printf '%s\n' "$u" >> "$B/revoked"
+        echo "revoked NATS user $u ($key), which rask no longer declares"
+      done
+    }
+    # Every user credential issued before the oldest one a declared user holds is revoked, whatever its key: the ones an
+    # earlier seed issued and replaced, which no store still names. Measured 2026-11-07 on nats-server 2.14.2 with nsc
+    # 2.15.0: the account's `*` revocation at a time refuses every user JWT issued up to it and admits the later ones.
+    # Written only when that time moves, so a seed that changes nothing leaves the account as it was.
+    revoke_older() {
+      oldest=
+      for u in {{ join " " $natsUsers }}; do
+        t=$(jwt_claim "$(cat "$B/users/$u.jwt")" 's/.*"iat":\([0-9]*\).*/\1/p')
+        [ -n "$t" ] || { echo "the credential issued to NATS user $u names no issue time" >&2; exit 1; }
+        if [ -z "$oldest" ] || [ "$t" -lt "$oldest" ]; then oldest=$t; fi
+      done
+      [ -n "$oldest" ] || return 0
+      before=$((oldest - 1))
+      [ "$(jwt_claim "$(nsc describe account -n APP --raw)" 's/.*"revocations":{[^}]*"\*":\([0-9]*\).*/\1/p')" != "$before" ] || return 0
+      err=$(nsc revocations add-user -a APP -u '*' --at "$before" 2>&1) || { echo "nsc could not revoke the NATS credentials issued before $before: $err" >&2; exit 1; }
+      echo "revoked every NATS user credential issued up to $before, before the oldest one a declared user holds"
     }
     nats_bundle() {
       K="$HOME/seed/nats"; B="$K.new"; how=kept
@@ -150,10 +253,13 @@ data:
         fi
         if svc_get nats-route password; then printf '%s' "$got" > "$B/route.password"; else head -c 18 /dev/urandom | base64 | tr '+/' '-_' | tr -d '\n' > "$B/route.password"; fi
         printf route > "$B/route.user"
+        account=$(nsc describe account -n APP --field sub | tr -d '"')
+        revoke_undeclared
         {{- range $natsUsers }}
         {{- $p := index $natsTable . }}
         nats_user {{ . }} '{{ join "," $p.publish }}' '{{ join "," $p.subscribe }}'
         {{- end }}
+        revoke_older
         jwt=$(nsc describe operator --raw); printf '%s' "$jwt" > "$B/operator"
         sys=$(nsc describe account -n SYS --field sub | tr -d '"'); app=$(nsc describe account -n APP --field sub | tr -d '"')
         [ -n "$sys" ] && [ -n "$app" ] || { echo "the NATS trust root names no SYS or APP account" >&2; exit 1; }
@@ -166,6 +272,11 @@ data:
       bao kv put secret/nats-root nsc=@"$K/root" >/dev/null
       bao kv put secret/nats-server operator=@"$K/operator" system_account=@"$K/system_account" resolver_preload=@"$K/resolver_preload" >/dev/null
       bao kv put secret/nats-route user=@"$K/route.user" password=@"$K/route.password" >/dev/null
+      [ ! -f "$K/revoked" ] || while read -r u; do
+        if bao kv get -field=jwt "secret/nats-user-$u" >/dev/null 2>&1; then
+          bao kv metadata delete "secret/nats-user-$u" >/dev/null; echo "deleted secret/nats-user-$u, which rask no longer declares"
+        fi
+      done < "$K/revoked"
       for u in {{ join " " $natsUsers }}; do bao kv put "secret/nats-user-$u" jwt=@"$K/users/$u.jwt" seed=@"$K/users/$u.seed" >/dev/null; done
       echo "NATS trust root $how, {{ len $natsUsers }} users"
     }
@@ -238,6 +349,19 @@ data:
     done
     for doc in "$STORE_IDENTITIES"/role-*.json; do
       name=${doc##*/role-}; bao write "auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/${name%.json}" @"$doc" >/dev/null
+    done
+    roles_kept=" "; policies_kept=" default root "
+    for doc in "$STORE_IDENTITIES"/role-*.json; do name=${doc##*/role-}; roles_kept="$roles_kept${name%.json} "; done
+    for doc in "$STORE_IDENTITIES"/policy-*.json; do name=${doc##*/policy-}; policies_kept="$policies_kept${name%.json} "; done
+    store_list "$BAO_ADDR" list -format=json auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role; roles=$listed
+    for r in $roles; do
+      case "$roles_kept" in *" $r "*) continue ;; esac
+      bao delete "auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/$r" >/dev/null; echo "deleted the store role $r, which rask no longer renders"
+    done
+    store_list "$BAO_ADDR" policy list -format=json; policies=$listed
+    for r in $policies; do
+      case "$policies_kept" in *" $r "*) continue ;; esac
+      bao policy delete "$r" >/dev/null; echo "deleted the store policy $r, which rask no longer renders"
     done
     echo "provisioned the store's kubernetes auth: a role and a policy for each identity that reads it"
     bao kv put secret/openbao-seeded pod="$HOSTNAME" >/dev/null

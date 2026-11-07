@@ -3,7 +3,7 @@
 	import { navigationMenuTriggerStyle } from '../components/navigation-menu/index.js';
 	import { Skeleton } from '../components/skeleton/index.js';
 	import NavbarUser from './navbar-user.svelte';
-	import NotificationCenter from './notification-center.svelte';
+	import ActivityCenter from './activity-center.svelte';
 	import { cn } from '../utils/cn.js';
 	import { IsMobile, SHELL_COLLAPSE_BREAKPOINT } from '../hooks/is-mobile.svelte.js';
 	import { ChevronDown, Menu } from '@lucide/svelte';
@@ -15,7 +15,7 @@
 		under,
 		type Me,
 		type NavUser,
-		type NotificationFeed,
+		type ActivityFeed,
 		type TopNavEntry,
 		type TopNavItem,
 	} from './nav-config.js';
@@ -37,7 +37,7 @@
 		meLoading = false,
 		authEnabled = false,
 		user = null,
-		notifications = null,
+		activity = null,
 		class: className,
 	}: {
 		pathname?: string;
@@ -47,9 +47,9 @@
 		meLoading?: boolean;
 		authEnabled?: boolean;
 		user?: NavUser | null;
-		/** The app's feed for the notification bell. `null` (the default) renders NO bell, so an app
+		/** The reader's activity for the bell. `null` (the default) renders NO bell, so an app
 		 *  that has not wired the feed shows nothing rather than a permanently empty surface. */
-		notifications?: NotificationFeed | null;
+		activity?: ActivityFeed | null;
 		class?: string;
 	} = $props();
 
@@ -119,7 +119,7 @@
 		if (items.some((item) => item.href === entry.href)) return items;
 		return [
 			{
-				// A paneled page's prepended root row says "<Zone> home" to set it off from the rows
+				// A paneled page's prepended root row says "<Page> home" to set it off from the rows
 				// under it; a plain-link page's ONLY row IS the app, so it just carries the console's
 				// name (the Home page would otherwise read "Home home").
 				title: items.length ? `${entry.title} home` : entry.title,
@@ -144,7 +144,7 @@
 	     Centred, it is `flex-none` instead: the base `flex-1` would have it share the row's free space
 	     with the two flanks, and an entry group that grows with the window is not a centred one. -->
 	<NavigationMenu.Root
-		aria-label="Zones"
+		aria-label="Pages"
 		class={cn('min-w-0', collapsed && 'max-w-none flex-1', centred && 'flex-none')}
 	>
 		<NavigationMenu.List class="justify-start gap-0.5">
@@ -214,9 +214,8 @@
 				</NavigationMenu.Item>
 			{:else}
 				{#each entries as entry, i (entry.title)}
-					<!-- THE TIER GAP — A ZONE-BAR DEVICE, and only that. `tier: 'primary'` already told the
-					     bar which entries lead — the lakehouse you govern and the compute that fills it —
-					     but nothing rendered that weighting, so eight equal chips told a newcomer nothing
+					<!-- THE TIER GAP — A PAGE-BAR DEVICE, and only that. `tier: 'primary'` already told the
+					     bar which entries lead, but nothing rendered that weighting, so eight equal chips told a newcomer nothing
 					     about where to start. One spacer at the boundary, drawn from the data rather than
 					     from a hardcoded index, so re-tiering an entry moves the gap with it.
 					     `role="none"` ALONE, not `aria-hidden` beside it: the two are not combinable
@@ -242,7 +241,7 @@
 
 						     A <span>, never a styled <a>: an anchor keeps its href reachable by keyboard and
 						     by paste however it is painted. `aria-disabled` + the reason as the tooltip carry
-						     it to a screen reader, which opacity alone would not. Mirrors `zone-nav`'s leaf. -->
+						     it to a screen reader, which opacity alone would not. Mirrors `page-nav`'s leaf. -->
 						{#if entry.unavailable}
 							<span
 								aria-disabled="true"
@@ -255,9 +254,8 @@
 								{entry.title}
 							</span>
 						{:else if entry.groups}
-							<!-- A trigger spanning SEVERAL concerns (Lakehouse: the catalog, the model
-							     registry and — for an estate admin — governance/operations over the same
-							     estate) renders labelled columns, so the panel explains the shape instead
+							<!-- A trigger spanning SEVERAL concerns (Lakehouse: the workspace, the
+							     catalog and — for an estate admin — operations over the same estate) renders labelled columns, so the panel explains the shape instead
 							     of listing a dozen undifferentiated rows. Column count follows the groups
 							     the viewer actually gets, so a non-admin sees a tighter two-column panel. -->
 							<NavigationMenu.Trigger data-active={entry.match(pathname) ? '' : undefined}>
@@ -364,15 +362,13 @@
 			     shift the account control on every load in every page that has not wired a feed. -->
 			<Skeleton class="size-8 rounded-full" />
 		{:else}
-			{#if notifications}
-				<!-- The subject's inbox, beside the account cluster and in the same box size. -->
-				<NotificationCenter
-					inbox={notifications.inbox}
-					inboxUnread={notifications.inboxUnread}
-					seen={notifications.seen}
-					dismissed={notifications.dismissed}
-					onseen={notifications.onseen}
-					ondismiss={notifications.ondismiss}
+			{#if activity}
+				<!-- The reader's own activity, beside the account cluster and in the same box size. -->
+				<ActivityCenter
+					entries={activity.entries}
+					unread={activity.unread}
+					onopen={activity.onopen}
+					onclear={activity.onclear}
 				/>
 			{/if}
 			<NavbarUser {user} {authEnabled} {pathname} />

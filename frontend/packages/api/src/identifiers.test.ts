@@ -1,11 +1,9 @@
 /**
  * The catalog's identifier grammar.
  *
- * These live in the shared package rather than in a page because the bug they pin was a CROSS-ZONE
- * one: the lakehouse fixed `parentNamespace` in its own `$lib`, and the `home` page — which cannot
- * import another page's `$lib` — kept a copy that split on the first delimiter. A test parked in the
- * lakehouse would have gone on passing while the console stayed wrong, which is exactly what
- * happened.
+ * These live in the shared package rather than beside one page because the grammar is shared: a second
+ * copy that split on the first delimiter would answer differently from this one, and a test parked beside
+ * either copy would go on passing while the other stayed wrong.
  */
 
 import { describe, expect, it } from 'vitest';

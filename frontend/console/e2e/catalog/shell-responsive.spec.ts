@@ -200,7 +200,7 @@ test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows 
 	//   - the row linked /catalog, a redirect-to-tables page, so it said nothing a real row
 	//     (Tables, Namespaces, Warehouses, …) does not already say;
 	//   - it rendered for THIS page alone — every flat-`items` page carries a real, function-titled root
-	//     row (Search at /explorer/, Overview at /compute/), so their equivalent is skipped as a duplicate;
+	//     row, so their equivalent is skipped as a duplicate;
 	//   - the app root is NOT unreachable: the narrow overflow menu still prepends every page's root
 	//     uniformly, which the "below the breakpoint …" test above pins by asserting /catalog.
 	await page.setViewportSize({ width: 1440, height: 900 });
@@ -212,7 +212,7 @@ test('the wide Lakehouse panel carries NO filler self-row — its sub-area rows 
 	// into a link (which would navigate instead of opening the panel and hide every column behind a
 	// page load).
 	await expect(page.getByRole('button', { name: 'Lakehouse' })).toBeVisible();
-	const nav = page.getByRole('navigation', { name: 'Zones' });
+	const nav = page.getByRole('navigation', { name: 'Pages' });
 	await expect(nav.getByRole('link', { name: 'Lakehouse', exact: true })).toHaveCount(0);
 	// What a user clicks instead: the real rows, one per area, each resolving to a page that exists.
 	for (const href of ['/catalog/tables', '/catalog/namespaces', '/catalog/warehouses']) {

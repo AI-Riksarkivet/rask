@@ -78,7 +78,7 @@ export interface DockChromeOptions {
 	/**
 	 * A blank document for popout windows to load, e.g. `${base}/popout.html`.
 	 *
-	 * Zone-shaped, so it cannot be defaulted here: each page is served under its own base path. The
+	 * App-shaped, so it cannot be defaulted here: the app that mounts the dock serves the file. The
 	 * parent document's stylesheets ARE copied into the popout, so rask's OKLCH tokens and Tailwind
 	 * utilities resolve there with no extra work — the file itself only needs an empty body.
 	 */

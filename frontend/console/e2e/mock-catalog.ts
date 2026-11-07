@@ -127,7 +127,7 @@ Bun.serve({
 		if (url.pathname === '/__mock/calls' && req.method === 'GET') {
 			return json({ calls: callsOf(bearer) });
 		}
-		// No `__mock/reset` (the lakehouse and annotator mocks have one): a bearer is minted per TEST, so
+		// No `__mock/reset`: a bearer is minted per TEST, so
 		// every bucket here is already single-use and a reset would have no state to clear. An endpoint
 		// no spec drives is test infrastructure nothing verifies.
 

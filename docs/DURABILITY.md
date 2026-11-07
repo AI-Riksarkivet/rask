@@ -11,7 +11,7 @@ observability store are prerequisites (ADR 0153), installed in development from 
 The FastAPI services and the event plumbing hold no durable state; they can be killed, scaled, or
 re-imaged at any time with no data loss.
 
-- `catalog`, `lineage`, `maintenance`, and the console's release (the console's web image and the notifications inbox)
+- `catalog`, `lineage`, `maintenance` and the console's static-file server
 - the Dapr control plane and Dex (prerequisites)
 
 These read their config from env / OpenBao and their data from the durable tier below. Rolling them is a

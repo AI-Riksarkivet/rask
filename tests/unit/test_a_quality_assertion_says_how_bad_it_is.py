@@ -6,8 +6,8 @@ a list of `success: false` with no way to tell a broken join from an unusual-but
 the two outcomes this estate treats most differently.
 
 THE VALUE IS NOT INVENTED FOR THE WIRE. `STRUCTURAL_ASSERTIONS` already draws exactly that line —
-"findings NO approval can wave through" — and is already enforced twice, at the medallion's review and
-the catalog's publish door. Deriving `severity` from it is what stops the wire and the gate
+"findings NO approval can wave through" — and is already enforced at the catalog's publish door, which a
+review cannot override. Deriving `severity` from it is what stops the wire and the gate
 disagreeing about which failures are blocking.
 """
 

@@ -36,7 +36,8 @@ export interface MockIdentity {
 const COOKIE = 'mock_oidc_identity';
 /** Set by a spec: discovery then advertises no end-session endpoint. */
 const NO_END_SESSION_COOKIE = 'mock_oidc_no_end_session';
-/** The console's own public client, as `deploy/fixtures/console/dex-values.yaml` declares it. */
+/** The console's own public client, as the dev Dex declares it (`deploy/fixtures/dex/chart/values.yaml`,
+ *  `console.clientId`). */
 const CLIENT_ID = 'rask-console';
 
 /** What one authorization code stands for, carried inside the code itself. */

@@ -1,16 +1,10 @@
 # The services: ports, entrypoints, and which package each composes
 
-Four Python services live in `services/`: the lakehouse's three — `catalog` `:2333`, `lineage` `:8000`, `maintenance`
-`:8000`, all run from ONE image (`.docker/rest-catalog.dockerfile`) with different commands — and the notifications
-inbox `:8850`, a client of the lakehouse's events with its own image (`.docker/notifications.dockerfile`), deployed by
-the console's release (`deploy/fixtures/console`). `make dev-micro` (`scripts/dev-micro.sh`) runs the inbox alone on
-the host. No process routes: the public route table is the two releases' HTTPRoutes, served by the platform's
-Gateway (`rask-services-fleet`).
+Three Python services live in `services/`, the lakehouse's — `catalog` `:2333`, `lineage` `:8000`, `maintenance`
+`:8000`, all run from ONE image (`.docker/rest-catalog.dockerfile`) with different commands. No process routes: the
+public route table is the product chart's HTTPRoutes, served by the platform's Gateway (`rask-services-fleet`).
 
-## Every entrypoint is a thin shell over one of two factories
-
-`notifications` imports its routers and its lifespan (`notifications.lifespan`) from its own modules and calls
-`service_kit.make_service_app` — no business logic in the entrypoint (`services/notifications/src/notifications/__init__.py`).
+## Every entrypoint is a thin shell over one factory
 
 `catalog` (`catalog.main`), `lineage` (`lineage.main`) and `maintenance` (`maintenance.service`) build through
 `lakehouse_kit.lance_app.build_lance_service_app`, because copied boots drift: each once repeated the same five-step
@@ -23,7 +17,6 @@ keep the `api/v1/endpoints/` layout — the factory owns the boot, not the layou
 | `catalog` | 2333 | `lakehouse-kit[data]`, `lineage-kit`, `service-kit[governed,arrow]` | `build_lance_service_app` | no | the Lance Namespace doors and the management doors; public `/api/catalog` |
 | `lineage` | 8000 | `lakehouse-kit[data]`, `lineage-kit`, `service-kit[governed,arrow]` | `build_lance_service_app` | no | intake, commit feed, forwarder (ADR 0158); public `/api/lineage` |
 | `maintenance` | 8000 | `lakehouse-kit[data]`, `lineage-kit`, `service-kit[governed,arrow]` | `build_lance_service_app` | no | sweep, reconciler, due list; no public row |
-| `notifications` | 8850 | `service-kit[governed]`, `lineage-kit` | `make_service_app` | its own actor-state Postgres (console release) | the inbox; public `/api/notifications` from the console's HTTPRoute; its import contract forbids `lakehouse_kit` |
 
 ## The lakehouse runs no ingest, no stage and no engine
 
@@ -42,12 +35,12 @@ catalog's provenance namespace and answers no graph query; the graph is bring-yo
 
 `service-kit`'s base stays dependency-light (no `ray`, `lancedb` or `sqlmodel`; the auth plane behind `[governed]`, the
 Arrow guards behind `[arrow]`): it is what a client pins by lakehouse tag (XC-186), and pulling a heavy dependency into
-its base forces it onto every client and every test that imports the factory. The lakehouse's Lance dependencies live
+its base forces it onto every client and every test that imports it. The lakehouse's Lance dependencies live
 in `lakehouse-kit[data]`, which no client installs.
 
 ## Lifespan injection recap
 
-`make_service_app(lifespan=...)` takes a `LifespanFactory =
-Callable[[Settings], Callable[[FastAPI], AbstractAsyncContextManager[None]]]`. Omit it → `default_lifespan` (puts
-`settings` on `app.state`, nothing else). A stateful service passes a factory that opens its clients on enter and tears
-them down on exit; the inbox's registers its Dapr actors there, never at import.
+`build_lance_service_app(lifespan=...)` takes the service's own `Callable[[FastAPI], AbstractAsyncContextManager[None]]`,
+and it is required. The lifespan opens the service's clients on enter and tears them down on exit, sets
+`app.state.startup_complete` once they are open and `app.state.shutting_down` on the way out (the flags `/readyz` reads,
+`service_kit.lifecycle`), and registers anything it hosts there, never at import.

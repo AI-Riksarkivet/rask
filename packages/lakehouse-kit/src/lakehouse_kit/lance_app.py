@@ -1,13 +1,8 @@
-"""THE lance-plane app factory — one assembly for catalog, lineage and maintenance.
+"""THE lakehouse's app factory — one assembly for catalog, lineage and maintenance.
 
-Two factories, two planes, and the split is deliberate rather than accidental:
-
-* ``service_kit.make_service_app`` — the FLEET plane, the services of the lakehouse's clients. Routers mount under
-  ``RASK_API_PREFIX``; config is ``service_kit.config.Settings``.
-* this — the LANCE plane. Routers mount at the root under each service's own paths (``/v1/...``,
-  ``/events``, a cron binding's ``/<name>``), config is each service's own ``*Settings``, and the middleware order
-  is per-service because the catalog's Arrow-IPC data plane carries load-shedding and a body cap that
-  the others do not.
+Routers mount at the root under each service's own paths (``/v1/...``, ``/events``, a cron binding's ``/<name>``),
+config is each service's own ``*Settings``, and the middleware order is per-service because the catalog's Arrow-IPC
+data plane carries load-shedding and a body cap that the others do not.
 
 docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12 counted eight module-level ``app = FastAPI(...)`` entrypoints
 hand-assembling
@@ -23,9 +18,8 @@ what it owns is the part that is identical in all of them:
 3. ``register_handlers`` THEN ``install_problem_handlers``. ``service_kit.exceptions.DomainError``
    subclasses ``HTTPException``, so without the first, starlette's built-in handler renders it —
    status and headers intact, ``{"detail": ...}`` body — which is how the draining 503 came to declare
-   problem+json over a body that was not one. Registered FIRST so the lance translator still wins for
-   ``RequestValidationError``, exactly the order ``make_service_app`` uses. Getting this pair the
-   wrong way round is silent: both orders answer, and only one answers correctly.
+   problem+json over a body that was not one. ``install_problem_handlers`` owns request validation and the
+   catch-all, so the two sets map disjoint classes.
 4. ``RequestIDMiddleware``. One id per request, minted or echoed, published to the context var
    ``setup_logging``'s filter reads — so a caller can quote an id from a failed request and an
    operator can grep for it. PURE ASGI, so it passes streaming bodies through untouched, which is what
@@ -64,14 +58,18 @@ def build_lance_service_app(
     audit_enabled: bool,
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
     log: logging.Logger,
+    ready_check: ReadyCheck,
     routers: Sequence[APIRouter] = (),
-    ready_check: ReadyCheck | None = None,
     inner_middleware: Sequence[Callable[[Any, Any], Any]] = (),
 ) -> FastAPI:
     """Assemble one lance-plane service's FastAPI app. See the module docstring for what and why.
 
     ``log`` is the SERVICE's logger, not this module's: the problem handlers log an unhandled error
     with a traceback, and that record must carry the name of the service it happened in.
+
+    ``ready_check`` is the service's own readiness answer, run once the lifecycle flags say started and not draining.
+    REQUIRED, as ``docs_enabled`` is: every lakehouse service has a dependency or a fact `/readyz` reports (the
+    catalog's namespace and signing key, lineage's feed, maintenance's signing key), so a new one answers it too.
 
     ``inner_middleware`` are ``http`` middleware functions that must run INSIDE the request-id layer
     (see the module docstring). Everything else the caller adds after this returns, which keeps it

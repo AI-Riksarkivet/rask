@@ -26,7 +26,7 @@ test('the MAIN MENU stays on, and Settings is the entry that lights', async ({ p
 	// `/settings/audit` is the ESTATE level: the bar is Home · Projects · Settings, and Settings lights
 	// on the child route, not only on `/settings`.
 	await page.goto('/settings/audit');
-	const nav = page.getByRole('navigation', { name: 'Zones' });
+	const nav = page.getByRole('navigation', { name: 'Pages' });
 	await expect(nav.getByRole('link', { name: 'Home', exact: true })).toBeVisible();
 	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toBeVisible();
 	await expect(nav.getByRole('button', { name: 'Settings' })).toHaveAttribute('data-active', '');

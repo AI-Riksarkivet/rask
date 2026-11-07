@@ -46,28 +46,27 @@ test of one of those needs `importlib.reload`.
 The sibling fixture `::client` has the same order over a `MagicMock(spec=LanceNamespace)`. It serves
 only claims about routing, identifier parsing and error mapping.
 
-**Settings read once at import** (`make_service_app`'s `build_settings()` in notifications):
+**Settings read once at import** (a route mounted from the environment, a module-level `_settings`):
 
-- Set the env the whole directory needs around each test, in its `conftest.py`, through a function-scoped
-  `monkeypatch`. Copy `services/notifications/tests/conftest.py::_notifications_env`. Env left set leaks into every other testpath,
+- Set the env a test needs through a function-scoped `monkeypatch`, as
+  `services/maintenance/tests/conftest.py::catalog` does. Env left set leaks into every other testpath,
   because pytest collects all of them before it runs any test, and nothing checks for the leak: the
   suite stays green while a later module builds its app from the wrong values.
-- A test that needs another value sets it with `monkeypatch.setenv` and calls
-  `importlib.reload(<module>)` (`services/notifications/tests/test_reconcile_cron.py`).
-- Code in `service_kit` itself builds a synthetic app with `make_service_app(..., settings=...)`
-  (`packages/service-kit/tests/test_settings_are_injectable.py`).
-- notifications also keeps `lru_cache`d service getters (`get_notifications_settings`,
-  `get_ingress_settings`). A test that changes one of their values clears that getter before and after,
-  as `services/notifications/tests/conftest.py::_notifications_env` does.
+- A test that needs another value sets it with `monkeypatch.setenv`, clears the `lru_cache`d getter and calls
+  `importlib.reload(<module>)`, clearing the getter again at teardown
+  (`tests/integration/test_a_commit_expires_its_table_once_enough_versions_are_reclaimable.py::maintenance`).
+- Code in `service_kit` itself builds a bare `FastAPI()` carrying the piece under test
+  (`packages/service-kit/tests/test_shared_body_cap.py`).
 
 **Authorization.** `service_kit.governed.deps.make_auth_deps` builds each service's `current_subject`
 and `get_checker`. Override those callables: `security._deps.current_subject` and
 `security._deps.get_checker` on the service's security module
-(`services/notifications/tests/test_adversarial_inbox.py`).
+(`tests/unit/test_auth_deps_resolve.py` resolves them).
 
-**Real OTLP exporters.** `packages/service-kit/tests/conftest.py` pins required env from the ambient
-value (so a developer's own setting still wins) and caps `OTEL_EXPORTER_OTLP_TIMEOUT` (measured on that
-suite: 10.19 s, and 3.08 s with the cap). A new suite that builds real exporters needs the same cap.
+**Real OTLP exporters.** No suite builds one. A suite that does caps `OTEL_EXPORTER_OTLP_TIMEOUT` with a
+function-scoped `monkeypatch` from the ambient value (so a developer's own setting still wins): an exporter aimed at an
+endpoint nothing serves waits out the SDK's 10 s default at process exit (measured on service-kit's suite: 10.19 s,
+and 3.08 s with a 1 s cap).
 
 ## The catalog with authorization on
 

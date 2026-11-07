@@ -46,6 +46,8 @@ export const getPromotion = query(
 
 /** Approve (`published` moves to `version`) or reject (`main` is restored to what `published` names). */
 export const decidePromotion = command(
+	({ table, version, approve }) =>
+		`${approve ? 'Approve' : 'Reject'} the promotion of table ${table} to version ${version}`,
 	v.object({ table: v.string(), version: v.number(), approve: v.boolean() }),
 	async ({ table, version, approve }): Promise<ApiResult<PromotionDecision>> => {
 		const verb = approve ? 'approve' : 'reject';

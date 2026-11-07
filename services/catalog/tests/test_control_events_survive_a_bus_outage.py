@@ -5,11 +5,10 @@
 the publication endpoint asserted "a consumer that MISSES this event loses nothing: the `published`
 tag still answers 'what is ready?'".
 
-Both claims hold for the catalog's console ring buffer and for any POLLING consumer. Both are false
-for the cascade, which is the consumer that matters: the stage runner does not fire its own topic, so the
-next hop happens ONLY when `/publication-arrival` receives this event -- and the medallion plane runs
-no cron and no reconcile binding, so it never re-reads the tag. A 5s publish timeout during a NATS
-blip therefore ends the cascade outright: the tag advanced, the data IS consumable, the route returned
+Both claims hold for any POLLING consumer. Both are false
+for a pipeline whose next hop happens ONLY when it receives this event and that runs no cron and no
+reconcile, so it never re-reads the tag. A 5s publish timeout during a NATS blip therefore ends that
+cascade outright: the tag advanced, the data IS consumable, the route returned
 200, every pod is green, and the only signal is a counter that says nothing was lost.
 
 Owner ruling 2026-08-25: extend the EXISTING outbox rather than build a second one. The swallow stays

@@ -167,7 +167,6 @@ extend-select = ["TID251", "FAST001"]
 "packages/service-kit/src/service_kit/draining.py" = ["TID251"]  # signal: the drain seam
 "packages/service-kit/src/service_kit/arrow_ipc.py" = ["TID251"]  # arrow ipc: the validating decoder
 "packages/lakehouse-kit/src/lakehouse_kit/lancekit/reader.py" = ["TID251", "A002"]  # decode_arrow_response: the /query reader; `filter=` is the request's own field
-"services/notifications/src/notifications/proxies.py" = ["TID251"]  # ActorProxy + encode_subject: the proxies module
 
 # The code-shape bans. Each message names the seam a caller goes through instead; the sanctioned sites
 # are the per-file ignores above and the line-level `# noqa: TID251` at each call site.
@@ -195,8 +194,6 @@ extend-select = ["TID251", "FAST001"]
 "pyarrow.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
 "pyarrow.feather".msg = "Decode an Arrow IPC body only through service_kit.arrow_ipc: it bounds and validates what a caller sends."
 "service_kit.arrow_ipc.decode_arrow_response".msg = "Only the catalog /query reader may skip the size bound."
-"dapr.actor.ActorProxy".msg = "Build an actor proxy through the service's proxies module: it translates the wire method names."
-"notifications.subjects.encode_subject".msg = "An inbox actor id is derived only in notifications.proxies."
 "service_kit.governed.fga.write_tuples".msg = "Tuple grants happen only at the registered granting sites."
 "service_kit.governed.fga.grant_on_create".msg = "Tuple grants happen only at the registered granting sites."
 "service_kit.governed.fga.seed_ownership".msg = "Tuple grants happen only at the registered granting sites."
@@ -238,7 +235,6 @@ known-first-party = [
     "lineage",
     "lineage_kit",
     "maintenance",
-    "notifications",
     "service_kit",
 ]
 
@@ -282,7 +278,7 @@ exclude = [
 # adding the directory is a separate act from adding the file, and a suite outside the list is green by
 # absence (measured 2026-08-09: three landed regression suites in services/catalog and services/lineage
 # had never run). pytest expands a glob in `testpaths` (measured, pytest 9.1.1).
-testpaths = ["packages/*/tests", "services/*/tests", "deploy/fixtures/*/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+testpaths = ["packages/*/tests", "services/*/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 # NO `--cov` HERE. It ran on EVERY pytest invocation in the estate and nothing read the result: no
 # `fail_under`, no xml report, no artifact upload, no threshold in `ci.yml` or `.dagger/` — so the
 # measurement was pure cost on the merge path and on every local run. `make coverage` computes it when

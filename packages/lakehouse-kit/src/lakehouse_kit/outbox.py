@@ -281,7 +281,7 @@ async def publish_with_outbox(
 
     Lane-agnostic on purpose. The lineage lane was the first user and `publish_lineage_with_outbox`
     still names it, but the control lane needs the identical guarantee — a dropped `table_published`
-    under `cascadeViaPublish` cancels the whole downstream cascade — and a SECOND implementation is
+    cancels the next hop of a pipeline that waits on it — and a SECOND implementation is
     how two mechanisms doing one job drift apart (owner ruling 2026-08-25).
 
     ``key`` is the caller's identity for the event: a lineage `run_id`, a control `event_id`. It is

@@ -18,7 +18,7 @@ Lance's change-data-feed diffs two versions, so a pre-commit gate has nothing to
 ready?" durably, so a consumer that was down for a week can simply ask. An event is a wake-up to
 avoid polling, and one missed while a consumer was offline costs nothing.
 
-**This lives in the CATALOG, not in any writer.** A user's pipeline, a Ray job, a backfill script and
+**This lives in the CATALOG, not in any writer.** A user's pipeline on any engine, a backfill script and
 a person with catalog credentials must all publish the same way, or each reimplements the contract
 and they drift. It is also the one home for the race: a tag file carries no format-level CAS, and
 `UpdateTableTag` declares no conflict (`lance_docs/ns_catalog/spec.yaml` lists no 409 for it, though
@@ -202,8 +202,7 @@ class EffectiveGate(BaseModel):
     Composition follows from that, and the two fields compose differently ON PURPOSE:
 
     * `key_column` — only one column can carry the identity check, so the two authorities CONFLICT and
-      policy wins whole. This is the medallion's own "a declared gate is not a merge" rule
-      (`medallion/services/gate.py`), applied to the same record from the other side.
+      policy wins whole: a declared gate is not a merge.
     * `required_columns` — these do not conflict. A declared column is a dependency the project
       mandates; a requested one is a dependency the caller's own consumer declares; both are real, and
       a gate satisfying both is what the union means. It is also the only composition that cannot
@@ -358,9 +357,9 @@ class PublicationResult(BaseModel):
 
         `published` answers "is this version published", which is true again on a replay: re-publishing
         an already-published version succeeds and changes nothing. Emitting on that announced a second
-        readiness with an empty range, and nothing downstream treats it as empty — `StageTrigger`
-        declares neither version field, and the publication head mints a fresh token, so the
-        instance-id dedupe never engages and a replay buys a full cascade.
+        readiness with an empty range, and a consumer that wakes on it cannot treat it as empty
+        without reading both version fields, and one that dedupes on a token it mints per event never
+        engages that dedupe, so a replay buys it a full downstream run.
         """
         return self.published and self.to_version != self.from_version
 
@@ -483,8 +482,8 @@ def gate(
     A QUESTION, not a write. `published` is False on this path whatever the assertions say, and
     nothing about the dataset changes — which is what makes it safe to ask speculatively.
 
-    It exists because the medallion cascade otherwise cannot have two properties it needs at once.
-    Under `cascadeViaPublish` the publish IS the promotion (the tag move wakes the next stage), so
+    It exists because a pipeline that promotes by publishing otherwise cannot have two properties it
+    needs at once. There the publish IS the promotion (the tag move wakes the next stage), so
     deciding the promotion review BEFORE publishing lets the band hold but leaves the review unable to
     name the assertions it is reviewing, while publishing first preserves those names but has already
     promoted. Separating the verdict from the act dissolves that: a caller asks "would this pass, and

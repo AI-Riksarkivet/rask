@@ -10,8 +10,8 @@ exporter aimed at Dagger's collector, which rejects application metrics (`unknow
 pb`, in the engine's own log), and the SDK then retried with exponential backoff. Every app any test
 built paid for it.
 
-`service_kit.setup_otel` decides from `Settings` alone, so no rask app opts in through the endpoint.
-The strip stays because the variable is still the HARNESS's, not the suite's: any library that
+No rask app builds an exporter itself (the deployed services run under `opentelemetry-instrument`).
+The strip stays because the variable is the HARNESS's, not the suite's: any library that
 configures an exporter from `OTEL_EXPORTER_OTLP_*` at import would aim it at Dagger's collector, and
 the environment is wrong for the whole session.
 
@@ -23,15 +23,14 @@ test sets and no test should inherit.
 **"BEFORE ANYTHING IMPORTS" IS THE LOAD-BEARING WORD, AND THE FIRST VERSION DID NOT ACHIEVE IT.** The
 strip lived only in the session-scoped autouse fixture below, and a session fixture runs on the FIRST
 TEST — long after collection has imported every test module, and therefore long after any module-scope
-`setup_otel` has already built its exporter. The variable was removed from an environment nothing was
+exporter has already been built. The variable was removed from an environment nothing was
 going to read again. That is why the strip now also happens at this module's own import (see
 `_strip_harness_otlp()` below the constant), which pytest performs before collection begins, and why
 `tests/unit/test_conftest_otlp_strip.py` drives a real subprocess to prove the ordering rather than
 asserting it from a comment.
 
 WHAT THIS DELIBERATELY DOES NOT DO: it does not stop a test setting the variable itself.
-`monkeypatch.setenv` still works and is still honoured — `test_setup_otel_wires_when_enabled` and
-`test_NO_settings_still_opts_in_through_the_endpoint` both depend on that. Removing the ambient value
+`monkeypatch.setenv` still works and is still honoured. Removing the ambient value
 at session start and letting a test opt back in per-case is exactly the distinction between "the
 harness leaked into the run" and "this test is exercising the enabled path".
 """
@@ -44,7 +43,7 @@ import pytest
 
 
 #: The OTLP variables a CI harness may inject. `OTEL_EXPORTER_OTLP_ENDPOINT` is the one Dagger sets
-#: and the one `setup_otel` keys its fallback on; the signal-specific overrides and the headers are
+#: and the one the OTLP exporters fall back on; the signal-specific overrides and the headers are
 #: removed with it so a partially-stripped environment cannot produce a half-configured exporter,
 #: which is harder to diagnose than either extreme.
 _HARNESS_OTLP_VARS = (

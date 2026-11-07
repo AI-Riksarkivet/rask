@@ -97,34 +97,24 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   cloudnative-pg dex rustfs openbao observability marquez`: Dapr's control plane in dapr-system ([[XC-128]]), the NATS
   JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the CloudNativePG operator in
   cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex`, object store `rask-rustfs` ([[XC-163]], ADR 0168) and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the telemetry chain the Collector exports to ([[XC-127]]), and the OpenLineage graph backend
-  `rask-marquez` lineage's forwarder sends to (ADR 0158); the SMTP relay `mailpit` is the notifications inbox's, a
-  client's, so it is in no default list). **The Dex fixture** (`deploy/fixtures/dex/chart`) enforces PKCE for every
+  `rask-marquez` lineage's forwarder sends to (ADR 0158)). **The Dex fixture** (`deploy/fixtures/dex/chart`) enforces PKCE for every
   authorization code (`oauth2.pkce.enforce: true`, `codeChallengeMethodsSupported: [S256]`; the password,
   client-credentials and token-exchange grants never pass `/auth`), serves no device grant (its `/auth` leg carries no
   challenge, so under enforced PKCE it could not complete), and answers CORS only for the origins its `allowedOrigins`
   value lists (empty by default, rendering no `web.allowedOrigins`). Its own sign-in client `rask-web` is confidential:
-  no `public`, no redirect URI, its secret `required`, signed in as only by the live lanes' password grant. A browser
-  client is a client's own entry in `clients`, supplied from its tree with its redirect URIs and any dev-server origin
-  (the console's `rask-console`, public, and `allowedOrigins: [http://localhost:5173]` for the Vite dev server, in
-  `deploy/fixtures/console/dex-values.yaml`, layered on by `make k3s-fixtures`).
-  **The clients are no prerequisite** (XC-183): `make k3s-up` installs the lakehouse alone, and `make k3s-clients` adds
-  `CLIENTS` after it, each its own release reaching rask by reference. The one client this repository deploys is the
-  console (`deploy/fixtures/console`, release `console` in rask's namespace; `make k3s-clients` waits up to 600 s for its
-  pods): the console's static-file web pod and the notifications inbox, its own Dapr state store (on a CloudNativePG
-  `Cluster` it renders, or, with `state.external.connectionSecret`, on the platform's Postgres, which skips the Cluster,
-  its NetworkPolicy and the `-ca` mount; the sidecar connects `PGSSLMODE=verify-full` either way, against
-  `state.external.caSecret` or, without one, its system roots, and `state.external.egress`,
-  required under `networkPolicy.enabled`, admits the server), its own app token and HTTPRoute, its own invocation Resiliency
-  (`<release>-notifications-invocation-resiliency`: constant 2 s × 3 on `408,429,500-599`, target app `lineage`,
-  scoped to the inbox, the one retry layer of its reads of lineage's feed), and rask's catalog, lineage, Dex and NATS by
-  reference. Its pods carry `app.kubernetes.io/instance: console`, the release that renders them, in their immutable
-  selector, so its two Deployments are named by that release (`console-web`, `console-notifications`): a selector change
-  comes with a new name, which one upgrade (or any reconciler that prunes) replaces with no hand-run delete.
-  `scripts/k3s-pins.sh` also captures the console's running images into the gitignored
-  `deploy/fixtures/console/values-live-pins.yaml`, which `scripts/fixtures.sh` layers on. What the lakehouse must admit for it (the
-  inbox's bus user in `nats.auth.users`; its store reads in `openbao.externalReaders`) is in the console's own
-  `lakehouse-values.yaml`, which `make k3s-up` layers on by glob; the product chart names none of it. A client's roles
-  on the catalog are no value at all: they are grants to its own identity made at the catalog's access doors ([[LH-563]]). The other clients live outside this repository
+  no `public`, no redirect URI, its secret `required`, signed in as only by the live lanes' password grant. **The
+  console's sign-in client is the fixture's own `console` value** (ADR 0193): `rask-console`, public (PKCE S256, no
+  secret), redirecting to `/auth/callback` on `:8080` and the Vite dev server's `:5173`, a trusted peer of the audience
+  client, its `allowedOrigins` answered for CORS. It is a key of its own so that a client's `clients` or
+  `allowedOrigins` values cannot drop it by replacing a list; `clients` stays the empty seam a client's own repository
+  fills with `-f`.
+  **The console is the product's, not a client** (ADR 0193): the product chart renders it (`templates/console.yaml`,
+  `console.enabled`: Deployment, Service and HTTPRoute `rask-console`, ServiceAccount `rask-sa-console` with no token
+  mounted, ConfigMap `rask-console-config`), and `make k3s-up` installs it with the lakehouse. **No client is a
+  prerequisite** (XC-183), and this repository deploys none: a client's release reaches rask by reference, and what
+  the lakehouse must admit for it (a bus user in `nats.auth.users`, store reads in `openbao.externalReaders`, a store
+  peer in `networkPolicy.objectStoreExtraFrom`) comes from the client's own repository with `-f`. A client's roles
+  on the catalog are no value at all: they are grants to its own identity made at the catalog's access doors ([[LH-563]]). Every client lives outside this repository
   (XC-192) and are recovered from git history (`64ef118a9`) as each moves to its own repository. A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a
@@ -161,8 +151,14 @@ added after that release arrives nil, and `{{ .Values.x | quote }}` renders nil 
 `LANCE_ERASURE_RELEASE_GRACE_DAYS` would reach its pod as `''` and pydantic refuse it at boot (CrashLoopBackOff,
 measured 2026-09-25 on a maintenance setting, contained only because the rolling update kept the old pods serving).
 
-- Use `--reset-then-reuse-values` (helm ≥ 3.14; this estate runs 3.20): chart defaults, then the
-  release's values, then any `--set`.
+- **`make k3s-up` and `make k3s-converge` use `--reset-values`** ([[XC-194]]): the release's values are composed from
+  git each time (`deploy/values-local.yaml`, `image.repository` from `K3S_REGISTRY` or `image.localImages`, the tags in
+  `deploy/values-live-pins.yaml`, and the derived `auth.oidc.issuer`, `vending.endpoint` and `auth.bootstrapAdmin`),
+  so a value that exists only in the live release does not outlive the next run. `make k3s-values` prints the
+  composition `helm get values rask -o json` equals afterwards. A new build reaches it by tag:
+  `make k3s-pins TAGS="<stem>=<tag> ..."` writes the tags into the pins file without reading the cluster.
+- A hand-run upgrade that must keep the release's values uses `--reset-then-reuse-values` (helm ≥ 3.14; this estate
+  runs 3.20): chart defaults, then the release's values, then any `--set`.
 - A fixture's install takes `--reset-values` (`scripts/fixtures.sh`): its values are its chart's defaults, its files in
   git and the caller's arguments, which every caller passes on each run, so a value set once by hand, or a client's
   `dex-values.yaml` deleted from the tree, does not outlive the next run.
@@ -203,9 +199,10 @@ provisioned by its operator and attested by `signing.provisioned`).
   on the SA object; a first-party pod mounts a token only where a binding gives its SA work: the pods
   whose templates carry their own RBAC (§8).
 - **`values.schema.json`** — validates the MERGED values at install and upgrade, so a value of the wrong type fails
-  before any pod starts. A misspelled or missing key does not: the generated schema carries no `required` and no
-  `additionalProperties: false` (measured 2026-10-31 on the dev overlay: `--set age.enabled=notabool` is refused, while
-  `--set catalogg.replicas=1` renders byte-identical; XC-086 #289). rask's is generated from `values.yaml`'s types and `# --` comments by helm-values-schema-json
+  before any pod starts. Its root admits only the top-level keys `values.yaml` declares and Helm's `global`
+  (`--schema-root.additional-properties=false` in `scripts/chart_docs.sh`, [[XC-194]]), so `--set catalogg.replicas=1`
+  or a dead overlay key fails the render. A misspelled or missing key below the root does not: the schema carries no
+  `required` and no nested `additionalProperties: false` (XC-086 #289). rask's is generated from `values.yaml`'s types and `# --` comments by helm-values-schema-json
   (`make chart-docs`, beside the README; `make chart-docs-check` fails on a stale one). It refuses a number passed as a
   string (measured 2026-10-12: a `--set-string` float re-imposed every `make k3s-up` by `-f <live values>`); `--set`
   keeps a float a string, so set one with `--set-json`. It costs ~49 KB of the release.
@@ -300,9 +297,23 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   `signing:` holds the tiers, the rotation and the store-loss cases, and the platform's store is
   refused at render until `signing.provisioned` attests that an operator created them.
 - **The dev OpenBao also mints the NATS trust root** ([[XC-078]]): the seed carries `nats-root` and `nats-route` over a
-  surge and re-issues every `nats-user-<user>` of the issued table (`lance.natsTable`: values.yaml `nats.auth.users` plus
-  each `nats.auth.flagged` grant whose flag is on) before its readiness key; a non-dev store waits for
-  `nats.auth.provisioned`. The NATS fixture's ExternalSecrets read `nats-server`, `nats-route` and `nats-user-monitor` through
+  surge and keeps or issues every `nats-user-<user>` of the issued table (`lance.natsTable`: values.yaml `nats.auth.users`
+  plus each `nats.auth.flagged` grant whose flag is on) before its readiness key. A declared user keeps its key pair and
+  JWT across reseeds while its grants match; a changed grant is reissued under the same key and the old JWT revoked
+  `--at` its issue time; a stored user whose seed is unreadable gets a fresh pair and its old key revoked `--at` the
+  stored JWT's `iat` (`NATS user <u>: replaced`), the seed stopping only on a stored JWT that names no key; and the APP
+  account's `*` revocation sits one second before the oldest JWT a declared user
+  holds, taking back whatever earlier reseeds left (measured 2026-11-07, nats-server 2.14.2, nsc 2.15.0, nats.go 1.39.1:
+  a client holding a revoked JWT is closed after two refused reconnects, the state `service_kit.bus_watchdog` restarts a
+  sidecar from); a non-dev store waits for
+  `nats.auth.provisioned`. **The seed revokes every APP bus user the release stops declaring**: it lists the
+  `nats-user-*` secrets in its own store and the one behind the Service, reads each undeclared user's key out of its
+  stored JWT, adds it to the APP account's revocations (carried to the bus in `resolver_preload`), and deletes its
+  secret from this pod's store, since a user JWT carries no expiry and the account that signed it stays trusted. A
+  revocation reaches the running bus at its config reload: measured 2026-11-07 on nats-server 2.14.2 with nsc 2.15.0, a
+  SIGHUP (the bus fixture's reloader sends one when its auth Secret changes) applies it and drops a connected revoked
+  client, and a restart keeps it. **The seed also deletes every store role and policy the release no longer renders**
+  (all but `default` and `root`), so an identity git stopped declaring logs in to nothing. The NATS fixture's ExternalSecrets read `nats-server`, `nats-route` and `nats-user-monitor` through
   rask's SecretStore, so the dev store's ESO policy grants them (`lance.natsFiles`). With the fixture's `nats.auth.server` on, a
   non-surge OpenBao replacement mints a new root that the operator-mode server refuses until the NATS pods restart, which
   empties JetStream: docs/OPERATORS.md § 7 has the switch-over and recovery.
@@ -330,7 +341,7 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   mode as `role-*.json`/`policy-*.json` in `<release>-secret-store-identities`, which the dev seed applies and a platform
   store's operator creates. A new secret a service reads is a row there, or its read is refused at both layers.
   A client's sidecar reads through the same table from `openbao.externalReaders` (`<app>: {serviceAccount, secrets}`,
-  supplied from the client's tree, empty by default), and it is an allowlist: an external reader `<app>` may hold only
+  supplied from the client's own repository, empty by default), and it is an allowlist: an external reader `<app>` may hold only
   `nats-user-<app>`, names of its own (`<app>-<name>`) and `signing-public-<name>`. The render refuses an app id that is
   no Dapr id, a lakehouse app (catalog, lineage, maintenance, even disabled), one whose own names would cover a family
   the store issues per identity (`nats-user-<name>` for every user of the issued table, a client's own included,

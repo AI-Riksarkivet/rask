@@ -668,8 +668,9 @@ one list, so the accounts the chart renders and the accounts an external store r
 
 ## `{{- define "lance.serviceAccounts" -}}`
 
-Every ServiceAccount the product chart renders: the `lance.saComponents` accounts and the three a template renders
-beside its own workload (the backup snapshot, the Dapr dashboard, the OTel Collector). `lance.storeReads` refuses an
+Every ServiceAccount the product chart renders: the `lance.saComponents` accounts, the three a template renders
+beside its own workload (the backup snapshot, the Dapr dashboard, the OTel Collector), and, with `console.enabled`, the
+console's `rask-sa-console` (`console.yaml`). `lance.storeReads` refuses an
 external reader whose role would bind one of them, or the namespace's shared `default`: a role bound to the lakehouse's
 own account hands that reader's reads to a lakehouse pod, and one bound to `default` hands them to every pod that names
 no account ([[XC-165]]).
@@ -768,7 +769,8 @@ THE RELEASE'S OWN ACCOUNTS, the subject of every ServiceAccount it renders (`lan
 `lance.serviceAccounts`), which bootstrap-admin reads as `FGA_OWN_ACCOUNTS` and the catalog as `LANCE_OWN_ACCOUNTS`:
 the accounts whose estate roles and provenance `writer` are what git declares ([[LH-563]]). Built from the list the
 release renders rather than from a name prefix, since a client's ServiceAccount may carry the release's prefix and is no
-account of this release.
+account of this release. The console's account is left out: it mounts no token, calls no door and holds no role, so no
+converger has anything of it to grant or keep.
 
 ## `{{- define "lance.governedFgaPins" -}}`
 
@@ -1037,11 +1039,10 @@ An invoked catalog or lineage path carries its table, namespace and project ids,
 series per id, forever, in a store nothing authorizes reads against.
 
 NOT A SUBJECT LEAK, and do not describe it as one. daprd 1.18.1 ALREADY templates actor ids
-(`/v1.0/actors/InboxActor/{id}/method`) and drops state keys (`/v1.0/state/lance-statestore`) at
-the default — verified by scraping a live sidecar, by an active probe with a subject-shaped key,
-and by a real non-templated actor id present in app logs but absent from the metrics body. The
-OIDC subject never reached a metric label. The rule in notifications/api/metrics.py is correct;
-this is not an instance of it.
+(`/v1.0/actors/<type>/{id}/method`) and drops state keys (`/v1.0/state/<store>`) at the default — verified by
+scraping a live sidecar of the actor host the estate then ran, by an active probe with a subject-shaped key, and by a
+real non-templated actor id present in app logs but absent from the metrics body. The OIDC subject never reached a
+metric label. No service in this release hosts an actor or keeps Dapr state.
 
 ## `pathMatching:`
 
@@ -1072,10 +1073,9 @@ lane. Setting a wider ceiling trades a visibly-broken quantile for a silently-wr
 ## `obfuscateURLs: true`
 
 INSEPARABLE from `enabled` above. With obfuscateURLs false daprd logs the raw
-`method + URL.Path`, and the actor URL DOES carry base64url(<oidc sub>) as a path segment
-(notifications/subjects.py::encode_subject, reversed exactly by decode_subject). With it
-true daprd logs the matched endpoint NAME instead. This is the one place in this object where a
-subject could reach telemetry, so the two keys ship together or not at all.
+`method + URL.Path`, and any path segment a caller fills (an actor id keyed by a person, a table id on an invoke)
+lands in the log. With it true daprd logs the matched endpoint NAME instead. This is the one place in this object where
+a subject could reach telemetry, so the two keys ship together or not at all.
 
 ## `omitHealthChecks: true`
 

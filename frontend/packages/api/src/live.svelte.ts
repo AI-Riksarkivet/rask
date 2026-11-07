@@ -3,19 +3,15 @@ import { onMount, untrack } from 'svelte';
 /**
  * THE ESTATE'S LIVENESS READER — read once, then re-read on every advance of a live cursor.
  *
- * This is the replacement for
+ * Use it instead of a polling effect,
  *
  *     $effect(() => { load(); const t = setInterval(load, POLL_MS); return () => clearInterval(t) })
  *
- * which thirteen files in the lakehouse carried, and which — measured 2026-08-05 — still runs
- * THIRTEEN more times across the estate: ten in `compute` (a page that already has a live cursor and
- * uses it for none of them), one in `models`, one in the annotator's labeling queue.
+ * which re-reads on a timer whether or not anything changed, and misses a change until the next tick.
  *
- * WHY IT IS HERE AND NOT IN A ZONE. It was written three times — `home`, `lakehouse`, `models`, 274
- * lines between them — and the three copies had already DIVERGED. Only the lakehouse copy carried the
- * measurement behind rule four; a page adopting either of the others inherited the rule with no
- * evidence for it, which is exactly how a hard-won rule gets "simplified" back out. This file is that
- * copy, reconciled.
+ * WHY IT IS ONE FILE. Copies of it diverge: three measured copies (274 lines between them) had, and
+ * only one carried the measurement behind rule four, so a page adopting another inherited the rule with
+ * no evidence for it, which is exactly how a hard-won rule gets "simplified" back out.
  *
  * Nothing here touches any feed. It takes a cursor as an argument, so it is a MECHANISM — which is the
  * only thing a `frontend/packages/*` entry may be. The cursors themselves (`lineageTick`,

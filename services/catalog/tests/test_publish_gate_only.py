@@ -1,8 +1,8 @@
 """A caller can ask the gate's VERDICT without moving the tag.
 
-The medallion cascade cannot otherwise have both of two properties it needs. Under
-`cascadeViaPublish` the publish IS the promotion — the catalog runs the assertions and its tag move
-wakes the next stage — so:
+A pipeline that promotes by publishing cannot otherwise have both of two properties it needs. There
+the publish IS the promotion — the catalog runs the assertions and its tag move wakes the next stage —
+so:
 
 * deciding the promotion review BEFORE publishing makes the band able to hold, but the catalog's
   verdict never reaches the review, and a hold that cannot name its assertions cannot tell a corrupt

@@ -54,11 +54,10 @@ RETRY: Final[dict[str, str]] = {"status": "RETRY"}
 def draining(request: Request) -> bool:
     """Is THIS process shutting down?
 
-    Defaults to False for an app that never declared it. `make_service_app` now declares both
-    lifecycle flags for every app it builds (SK-09), but a service composing its own `FastAPI` still
-    owns them, and defaulting an undeclared flag to "draining" would take such a service permanently
-    out of service the moment this dependency was applied — a gate that fails closed on absence
-    would be a worse outage than the one it prevents.
+    Defaults to False for an app that never declared it. Each service's lifespan owns the lifecycle flags,
+    and defaulting an undeclared flag to "draining" would take such a service permanently out of service
+    the moment this dependency was applied — a gate that fails closed on absence would be a worse outage
+    than the one it prevents.
     """
     return is_draining(request.app)
 

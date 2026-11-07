@@ -12,7 +12,7 @@ The tree is language-first:
 
 - **Reusable Python library, no entrypoint** → `packages/<name>`. If it grows an
   `app` or a CLI, it's in the wrong layer.
-- **Runnable Python** (an HTTP service, or a Dapr-subscription plane like `notifications`) →
+- **Runnable Python** (an HTTP service, or a Dapr-subscription plane) →
   `services/<name>`. A model runtime or a compute workload does **not** go here: the lakehouse runs no engine
   (ADR 0155), and a workload is a client in its own repository.
 - **A reusable TS/Svelte library** → `frontend/packages/<name>`. There is one app, `frontend/console`; a second app
@@ -96,9 +96,8 @@ Add `.docker/<name>.dockerfile` (see the existing service dockerfiles — the
 pattern is `uv sync --frozen --no-install-workspace --package <name>
 --no-editable` from bind-mounted root `uv.lock`/`pyproject.toml`, then COPY
 sources + `uv sync --locked --package <name> --no-editable`), and wire it into
-the `Makefile`: add it to `COMPOSE_IMAGES` when the dockerfile stem equals the image name (as `notifications` does;
-`k3s-build` loops over it, and `K3S_IMAGES` includes it); otherwise a hand-wired line in `k3s-build` plus an entry in
-`K3S_IMAGES`, as `web-console` (stem `frontend`) and `lance-rest-catalog` (stem `rest-catalog`) are. `k3s-import`
+the `Makefile`: one line in `k3s-build` plus an entry in `K3S_IMAGES`, as `web-console` (stem `frontend`) and
+`lance-rest-catalog` (stem `rest-catalog`) are. `k3s-import`
 side-loads every `K3S_IMAGES` tarball from `build/k3s-images`. The kind lane needs no line: `make e2e-ci`
 (`scripts/e2e_stack.sh`) builds every image its render side-loads (`scripts/side_loaded_images.py`) as a tarball and loads
 it with `kind load image-archive`. Then a chart if it deploys to k3s: the product chart for a lakehouse service, the client's own release for a client. Everything resolves from the

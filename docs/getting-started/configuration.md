@@ -41,11 +41,16 @@ authenticates every request itself. The route table:
 | `/api/catalog` | catalog | `/api/catalog/…` (unrewritten: the catalog strips its public prefix itself, `LANCE_PUBLIC_PATH_PREFIX`) |
 | `/api/lineage` | lineage | `/…` |
 
-Only lineage's rule rewrites, with Gateway API `URLRewrite` `ReplacePrefixMatch`. The console's release
-(`deploy/fixtures/console`) attaches its own HTTPRoute to the same Gateway: `/` to the console's static-file server and
-the inbox's prefix to the inbox, so the page and every API share one origin. An unmatched `/api/*` is then caught by the
-console's `/` rule, and its server (`frontend/console/serve.ts`) answers it 404 rather than the page; with no console
-release it is the Gateway's own 404.
+Only lineage's rule rewrites, with Gateway API `URLRewrite` `ReplacePrefixMatch`. The chart's HTTPRoute
+`rask-console` sends `/` to the console's static-file server on the same Gateway, so the page and every API share one
+origin. An unmatched `/api/*` is then caught by the console's `/` rule, and its server (`frontend/console/serve.ts`)
+answers it 404 rather than the page; with `console.enabled: false` it is the Gateway's own 404.
+
+| Value | Meaning |
+|---|---|
+| `console.enabled` | Render the console's Deployment, Service, ServiceAccount, ConfigMap and HTTPRoute (default `true`). |
+| `console.oidc.clientId` | The issuer's public client the browser signs in on (default `rask-console`). |
+| `console.oidc.scopes` | The scopes it asks for; the chart adds `federated:id` and the audience scope, which every governed door requires. |
 
 | Value / variable | Meaning |
 |---|---|

@@ -1,7 +1,7 @@
 """OpenFGA authenticates every caller by a projected ServiceAccount token, and every FGA client the chart renders presents one ([[XC-077]]).
 
 Measured live on helm rev 283: the deployed OpenFGA ran with no `OPENFGA_AUTHN_*` at all, the playground on and
-CORS `*`, so any pod, Ray workload code included, could write `estate#admin` for itself or replace the model.
+CORS `*`, so any pod, a user's workload included, could write `estate#admin` for itself or replace the model.
 
 The server half: OpenFGA runs OIDC with the audience the clients project and admits only their ServiceAccounts, fetches keys from the issuer mirror
 the chart renders (the k3s issuer refuses an unauthenticated fetch), accepts the cluster issuer as the tokens'

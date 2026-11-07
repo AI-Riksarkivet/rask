@@ -127,7 +127,7 @@ def _group_by_project(records: list[dict[str, str]]) -> dict[str, list[ProjectWa
     return grouped
 
 
-# Per-project budget for the display-only admins lookup. The BFF gives the whole request ~8s; a slow (not
+# Per-project budget for the display-only admins lookup. A caller gives the whole request a few seconds; a slow (not
 # down) OpenFGA must never spend that N-projects-over: one attempt (no retries — the wrapper's default
 # bounded-retry ladder alone can exceed the budget) under a tight deadline, degrading to [] on expiry.
 _ADMINS_TIMEOUT_SECONDS = 2.0
@@ -324,7 +324,7 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
     tenants = await _load_tenants(settings)
     visible = await _visible_projects(client, settings, token, sorted(tenants))
     # The per-project admins lookups run CONCURRENTLY: sequential awaits would stack N × the per-call
-    # budget on a slow OpenFGA (a brownout, not an outage) and blow past the BFF's request deadline;
+    # budget on a slow OpenFGA (a brownout, not an outage) and blow past the caller's request deadline;
     # gathered, the worst case is ONE _ADMINS_TIMEOUT_SECONDS regardless of tenant count (each call
     # still degrades to [] on its own expiry — see _admins_for).
     projects = sorted(p for p in tenants if visible is None or p in visible)

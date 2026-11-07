@@ -7,7 +7,6 @@ import {
 	MOCK_CATALOG_PORT,
 	MOCK_LINEAGE,
 	MOCK_LINEAGE_PORT,
-	MOCK_NOTIFICATIONS_PORT,
 	MOCK_OIDC_PORT,
 } from './e2e/ports';
 import {
@@ -24,7 +23,8 @@ import {
 //
 // THREE origins of the one build, one per family of specs, because each family seeds its own mocks:
 //   · auth-OFF (`e2e/*.spec.ts`, `e2e/catalog/`) — `e2e/console-config.off.json` says sign-in is off.
-//   · auth-ON for the estate pages (`e2e/projects/`, `e2e/settings/`, `e2e/notifications/`).
+//   · auth-ON for the estate pages and the reader's activity (`e2e/projects/`, `e2e/settings/`,
+//     `e2e/activity/`).
 //   · auth-ON for the catalog and operations pages, `e2e/admin/` (the project `admin`).
 // An auth-ON origin serves `e2e/console-config.json`, which names the mock issuer (`e2e/mock-oidc.ts`,
 // same-origin under `/oidc`), so signing in runs the console's real PKCE round trip.
@@ -64,7 +64,6 @@ export default defineConfig({
 				OIDC_MOCK: `http://localhost:${MOCK_OIDC_PORT}`,
 				CATALOG_API: `http://localhost:${MOCK_CATALOG_PORT}`,
 				LINEAGE_API: MOCK_LINEAGE,
-				NOTIFICATIONS_API: `http://localhost:${MOCK_NOTIFICATIONS_PORT}`,
 			},
 		},
 		{
@@ -87,11 +86,6 @@ export default defineConfig({
 			reuseExistingServer: !process.env.CI,
 		},
 		{
-			command: 'bun e2e/mock-notifications.ts',
-			port: MOCK_NOTIFICATIONS_PORT,
-			reuseExistingServer: !process.env.CI,
-		},
-		{
 			command: 'bun e2e/lineage/mock-lineage.ts',
 			port: MOCK_LINEAGE_PORT,
 			reuseExistingServer: !process.env.CI,
@@ -110,7 +104,7 @@ export default defineConfig({
 		},
 		{
 			name: 'estate',
-			testMatch: /\/e2e\/(projects|settings|notifications)\/.*\.spec\.ts$/,
+			testMatch: /\/e2e\/(projects|settings|activity)\/.*\.spec\.ts$/,
 			use: { ...devices['Desktop Chrome'], baseURL: AUTH_ON },
 		},
 		{

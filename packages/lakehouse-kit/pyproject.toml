@@ -16,6 +16,18 @@ dependencies = [
     "pydantic-settings>=2.5",
     "dapr>=1.18.1",
     "opentelemetry-sdk>=1.44.0",
+    # The instrumentation every lakehouse service gets. The chart launches each one under `opentelemetry-instrument`
+    # when telemetry is on, which loads every instrumentor INSTALLED, so this list is that instrumentation: declared
+    # here, in the kernel all three services install, so none of them can ship without it.
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "opentelemetry-instrumentation-httpx>=0.65b0",
+    "opentelemetry-instrumentation-logging>=0.65b0",
+    "opentelemetry-instrumentation-requests>=0.65b0",
+    "opentelemetry-instrumentation-grpc>=0.65b0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.65b0",
+    "opentelemetry-instrumentation-botocore>=0.65b0",
+    "opentelemetry-instrumentation-urllib3>=0.65b0",
 ]
 
 # The data plane carries the heavy deps as one extra. Without it a consumer imports only the event vocabularies and the

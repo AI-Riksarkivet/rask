@@ -502,6 +502,7 @@ securityContext:
 {{- $root := . -}}{{- $fullname := include "lance.fullname" . -}}
 {{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-dapr-dashboard" $fullname) (printf "%s-otel-collector" $fullname) -}}
 {{- range (include "lance.saComponents" . | fromJsonArray) }}{{- $names = append $names (include "lance.saName" (list $root .)) }}{{- end -}}
+{{- if .Values.console.enabled }}{{- $names = append $names (include "lance.saName" (list $root "console")) }}{{- end -}}
 {{- toJson $names -}}
 {{- end -}}
 
@@ -631,7 +632,8 @@ catalog maintenance
 
 {{- define "lance.ownAccounts" -}}
 {{- $root := . -}}{{- $out := list -}}
-{{- range (include "lance.serviceAccounts" . | fromJsonArray) }}{{- $out = append $out (include "lance.subjectOf" (list $root .)) }}{{- end -}}
+{{- $console := include "lance.saName" (list $root "console") -}}
+{{- range (include "lance.serviceAccounts" . | fromJsonArray) }}{{- if ne . $console }}{{- $out = append $out (include "lance.subjectOf" (list $root .)) }}{{- end }}{{- end -}}
 {{- toJson $out -}}
 {{- end -}}
 

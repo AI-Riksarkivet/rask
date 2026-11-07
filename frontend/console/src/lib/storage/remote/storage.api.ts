@@ -32,6 +32,7 @@ export const listStoresByTier = query(
 
 /** Attach a bucket for browsing: refused with the same reason, so the form says why. */
 export const attachStore = command(
+	({ name, bucket }) => `Attach bucket ${bucket} as store ${name}`,
 	v.object({
 		name: v.string(),
 		bucket: v.string(),

@@ -6,7 +6,6 @@
 //   PORT                the origin the browser uses
 //   CATALOG_API         /api/catalog  → its root paths (the prefix stripped)
 //   LINEAGE_API         /api/lineage  → its root paths (the Gateway's own rewrite)
-//   NOTIFICATIONS_API   /api/notifications  (kept: the inbox serves the prefix itself)
 //   OIDC_MOCK           /oidc → the mock issuer, told this origin's host in `x-forwarded-host`
 //   CONSOLE_CONFIG_FILE passed through to serve.ts (absent: /config.json 404s and the console refuses to run)
 //   INNER is PORT + 1000, where serve.ts listens behind this edge.
@@ -15,11 +14,11 @@ const PORT = Number(process.env.PORT);
 const INNER = PORT + 1000;
 
 const env = process.env;
-const routes: { prefix: string; target: string | undefined; strip: boolean }[] = [
-	{ prefix: '/api/catalog', target: env.CATALOG_API, strip: true },
-	{ prefix: '/api/lineage', target: env.LINEAGE_API, strip: true },
-	{ prefix: '/api/notifications', target: env.NOTIFICATIONS_API, strip: false },
-	{ prefix: '/oidc', target: env.OIDC_MOCK, strip: true },
+// Each route strips its prefix: the upstream answers at its root.
+const routes: { prefix: string; target: string | undefined }[] = [
+	{ prefix: '/api/catalog', target: env.CATALOG_API },
+	{ prefix: '/api/lineage', target: env.LINEAGE_API },
+	{ prefix: '/oidc', target: env.OIDC_MOCK },
 ];
 
 Bun.spawn(['bun', 'serve.ts'], {
@@ -48,7 +47,7 @@ Bun.serve({
 		const match = routes.find(
 			(r) => r.target && (url.pathname === r.prefix || url.pathname.startsWith(`${r.prefix}/`)),
 		);
-		const path = match?.strip ? url.pathname.slice(match.prefix.length) || '/' : url.pathname;
+		const path = match ? url.pathname.slice(match.prefix.length) || '/' : url.pathname;
 		const base = match ? match.target! : `http://127.0.0.1:${INNER}`;
 		const headers = new Headers(req.headers);
 		headers.set('x-forwarded-host', url.host);

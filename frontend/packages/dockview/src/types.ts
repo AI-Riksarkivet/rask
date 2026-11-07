@@ -94,7 +94,7 @@ export interface PanelEntry {
 	readonly component: AnyPanelComponent;
 	/** Human-readable name. Shown in the picker, and used as the new panel's title. */
 	readonly label: string;
-	/** Optional section heading in the "+" picker (e.g. the OWNING ZONE of a foreign panel). Choices
+	/** Optional section heading in the "+" picker (e.g. the area a panel belongs to). Choices
 	 *  sharing a group render under one label; ungrouped ones gather under "Panels". */
 	readonly group?: string;
 	/** Optional glyph for the picker row. */
@@ -114,7 +114,7 @@ export interface PanelEntry {
  *
  * This was `Record<string, PanelComponent<never>>`. Widening it is a BREAKING change to the value, and
  * a deliberate one: a union that still accepted a bare component would have to fall back to the
- * registry key for a label — rendering `topics` where "Topic results" belongs — which institutionalises
+ * registry key for a label — rendering a raw key where its human label belongs — which institutionalises
  * the half-migration it exists to avoid, and forces `typeof entry === 'function'` narrowing at every
  * read site forever (Svelte 5 components ARE functions). The package is private with three in-repo
  * consumers, so the migration is atomic and was done atomically.

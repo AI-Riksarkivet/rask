@@ -13,7 +13,10 @@ from pathlib import Path
 #: Answers by BAO_ADDR from two directories of `key=value` files, `$STORES/local` for 127.0.0.1:8200 and `$STORES/served` only
 #: at $SERVICE_ADDR. A store holding `<name>.refused` refuses the connection, `<name>.forbidden` answers 403, and
 #: `local.readonly` fails every write; the messages are OpenBao 2.2.0's, measured on the estate 2026-10-02. A `key=@file` argument
-#: stores the file's content, as the CLI does, and a subcommand the scripts have no business calling fails loudly.
+#: stores the file's content, as the CLI does, and a subcommand the scripts have no business calling fails loudly. A list prints
+#: a JSON array of names, or `{}` with exit 2 when it names none, and a delete of an absent name succeeds (openbao 2.2.0's
+#: `kv list`, `kv metadata delete`, `list auth/<path>/role`, `delete auth/<path>/role/<name>`, `policy list`, `policy delete`,
+#: measured 2026-11-07); the policy list always holds the built-in `default` and `root`.
 #:
 #: The pod's own server starts uninitialized, as `server` with an in-memory store does (measured on openbao 2.2.0 2026-10-18:
 #: `bao status` exits 2 and prints `"initialized": false`): `$STORES/local.state` holds `sealed` or `unsealed` once the seed
@@ -68,6 +71,19 @@ case "$*" in
 esac
 if [ "$1" = kv ] && [ "$name" = local ] && [ ! -e "$store.kv" ]; then printf 'Error making API request.\\n\\nCode: 404. Errors:\\n\\n* no handler for route "secret/data"\\n' >&2; exit 2; fi
 if [ "$1 $2" = "policy write" ]; then mkdir -p "$store.policies"; cp "$4" "$store.policies/$3"; exit 0; fi
+listing() {
+  names=$(cat)
+  [ -n "$names" ] || { printf '{}\\n'; exit 2; }
+  printf '[\\n%s\\n]\\n' "$(printf '%s\\n' "$names" | sed 's/.*/  "&"/; $!s/$/,/')"; exit 0
+}
+case "$*" in
+  "kv list -format=json secret/") { [ -d "$store/secret" ] && find "$store/secret" -mindepth 1 -maxdepth 1 -type f -exec basename {} \\; | sort; } | listing; exit ;;
+  "kv metadata delete secret/"*) [ -e "$store.readonly" ] && { echo "Error deleting $4" >&2; exit 2; }; rm -f "$store/$4"; exit 0 ;;
+  "list -format=json auth/"*"/role") { [ -d "$store.roles" ] && ls "$store.roles"; } | listing; exit ;;
+  "delete auth/"*"/role/"*) rm -f "$store.roles/${2##*/}"; exit 0 ;;
+  "policy list -format=json") { printf 'default\\nroot\\n'; [ -d "$store.policies" ] && ls "$store.policies"; } | sort | listing; exit ;;
+  "policy delete "*) rm -f "$store.policies/$3"; exit 0 ;;
+esac
 if [ "$1" = write ] && [ "${2#auth/*/role/}" != "$2" ] && [ "${3#@}" != "$3" ]; then mkdir -p "$store.roles"; cp "${3#@}" "$store.roles/${2##*/}"; exit 0; fi
 if [ "$1 $2" = "kv put" ]; then
   [ -e "$store.readonly" ] && { echo "Error writing data to $3" >&2; exit 2; }
@@ -107,7 +123,11 @@ sed -n "$((2 * n - 1)),$((2 * n))p" "$NK_PAIRS"
 
 #: nsc 2.15's calls the dev seed makes ([[XC-078]]), measured as uid 65532 in natsio/nats-box:0.19.7 on 2026-10-04, against state
 #: kept under the `-H` directory so a carried root is just that directory again. A JWT is `eyJ.<base64 of a JSON claim>`: an
-#: account's names its key, a user's its issuer, its key and the permissions it was given, which the tests decode. Every call is
+#: account's names its key and the user keys revoked in it (`revocations`, key -> the time credentials issued up to are
+#: refused, now unless `--at` names one, `*` for every key; a later revocation of a key replaces its time) and a `jti` that
+#: every revocation moves, as nsc signs the account again for each, and a user's carries its issue
+#: time, issuer, key and the grants it was given, sorted, with `>` written `\u003e`, as nsc 2.15.0 writes them (measured
+#: 2026-11-07); the tests decode them. Keys are base32, as nkeys are. Every call is
 #: appended to $NSC_CALLS, a non-empty $NSC_FAIL fails them all, and anything else the seed has no business calling fails loudly.
 NSC = """\
 #!/bin/sh
@@ -116,7 +136,8 @@ d=$2; shift 2
 echo "$*" >> "$NSC_CALLS"
 [ -z "$NSC_FAIL" ] || { echo "nsc: boom" >&2; exit 1; }
 jwt() { printf 'eyJ.%s' "$(printf '%s' "$1" | base64 | tr -d '\\n=')"; }
-key() { printf '%s%s' "$1" "$(od -An -N20 -tx1 /dev/urandom | tr -d ' \\n' | tr a-f A-F)"; }
+key() { printf '%s%s' "$1" "$(od -An -N28 -tx1 /dev/urandom | tr -d ' \\n' | tr 0-9a-f A-P | cut -c1-55)"; }
+allow() { printf '%s' "$1" | tr ',' '\\n' | sort | sed 's/>/\\\\u003e/g; s/.*/"&"/' | paste -sd, -; }
 account() { [ -f "$d/$1.pub" ] || { echo "Error: account $1 not found" >&2; exit 1; }; }
 case "$*" in
   "add operator -n rask --sys") jwt "{\\"operator\\":\\"$(key O)\\"}" > "$d/operator"
@@ -131,8 +152,16 @@ case "$*" in
     [ "$#" -eq 12 ] || { echo "nsc stand-in: unexpected add user: $*" >&2; exit 99; }
     account APP; mkdir -p "$d/users"
     [ ! -f "$d/users/$6.jwt" ] || { echo "Error: user $6 already exists" >&2; exit 1; }
-    jwt "{\\"iss\\":\\"$(cat "$d/APP.pub")\\",\\"sub\\":\\"$8\\",\\"pub\\":\\"${10}\\",\\"subscribe\\":\\"${12}\\"}" > "$d/users/$6.jwt" ;;
+    jwt "{\\"iat\\":$(date +%s),\\"iss\\":\\"$(cat "$d/APP.pub")\\",\\"name\\":\\"$6\\",\\"sub\\":\\"$8\\",\\"nats\\":{\\"pub\\":{\\"allow\\":[$(allow "${10}")]},\\"sub\\":{\\"allow\\":[$(allow "${12}")]},\\"type\\":\\"user\\",\\"version\\":2}}" > "$d/users/$6.jwt" ;;
   "describe user -a APP -n "*" --raw") cat "$d/users/$6.jwt" ;;
+  "revocations add-user -a APP -u "*)
+    case "$#" in
+      6) at=$(date +%s) ;;
+      8) [ "$7" = --at ] || { echo "nsc stand-in: unexpected revocation: $*" >&2; exit 99; }; at=$8 ;;
+      *) echo "nsc stand-in: unexpected revocation: $*" >&2; exit 99 ;;
+    esac
+    account APP; echo "$6 $at" >> "$d/APP.revoked"
+    jwt "{\\"jti\\":\\"$(wc -l < "$d/APP.revoked" | tr -d ' ')\\",\\"account\\":\\"$(cat "$d/APP.pub")\\",\\"revocations\\":{$(awk '{at[$1] = $2} END {for (k in at) printf "%s\\"%s\\":%s", (n++ ? "," : ""), k, at[k]}' "$d/APP.revoked")}}" > "$d/APP.jwt" ;;
   *) echo "nsc stand-in: unhandled call: $*" >&2; exit 99 ;;
 esac
 """

@@ -32,7 +32,7 @@ test('the MAIN MENU navbar carries Home and Projects for an anonymous visitor â€
 	// The estate level (ruling 2026-08-03): standing here you choose what to work on, so the bar is the
 	// main menu, and the in-project Lakehouse entry is absent.
 	await page.goto('/');
-	const nav = page.getByRole('navigation', { name: 'Zones' });
+	const nav = page.getByRole('navigation', { name: 'Pages' });
 	await expect(nav).toBeVisible();
 	await expect(nav.getByRole('link', { name: 'Home', exact: true })).toHaveAttribute('href', '/');
 	await expect(nav.getByRole('link', { name: 'Projects', exact: true })).toHaveAttribute(

@@ -28,8 +28,8 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 		data: {
 			bearer: token,
 			routes: {
-				'GET /v1/table': { tables: ['db1$t', 'raw$events', 'acme-gold$catalog'] },
-				[describeKey('raw$events')]: DESCRIBE,
+				'GET /v1/table': { tables: ['db1$t', 'bronze$events', 'acme-gold$catalog'] },
+				[describeKey('bronze$events')]: DESCRIBE,
 				[describeKey('db1$t')]: DESCRIBE,
 				[describeKey('acme-gold$catalog')]: DESCRIBE,
 			},
@@ -42,19 +42,19 @@ test('a table row opens the record drawer with stage, namespace and the two jump
 }) => {
 	await page.goto('/catalog/tables');
 	// click the row's STAGE badge (the id/namespace cells are links with their own navigation)
-	await page.locator('tbody tr', { hasText: 'raw$events' }).locator('.stage').click();
+	await page.locator('tbody tr', { hasText: 'bronze$events' }).locator('.stage').click();
 	const drawer = page.getByRole('dialog');
-	await expect(drawer).toContainText('raw$events');
+	await expect(drawer).toContainText('bronze$events');
 	await expect(drawer).toContainText('The registry record for this table.');
 	await expect(drawer).toContainText('medallion stage');
 	// jump links: the detail page, and the detail page's Access tab (?tab= deep link)
 	await expect(drawer.getByRole('link', { name: 'Open detail' })).toHaveAttribute(
 		'href',
-		'/catalog/tables/raw%24events',
+		'/catalog/tables/bronze%24events',
 	);
 	await expect(drawer.getByRole('link', { name: 'Access tab' })).toHaveAttribute(
 		'href',
-		'/catalog/tables/raw%24events?tab=access',
+		'/catalog/tables/bronze%24events?tab=access',
 	);
 });
 
@@ -62,9 +62,9 @@ test('the access jump link lands on the detail page with the Access tab selected
 	page,
 }) => {
 	await page.goto('/catalog/tables');
-	await page.locator('tbody tr', { hasText: 'raw$events' }).locator('.stage').click();
+	await page.locator('tbody tr', { hasText: 'bronze$events' }).locator('.stage').click();
 	await page.getByRole('dialog').getByRole('link', { name: 'Access tab' }).click();
-	await expect(page).toHaveURL(/\/catalog\/tables\/raw%24events\?tab=access$/);
+	await expect(page).toHaveURL(/\/catalog\/tables\/bronze%24events\?tab=access$/);
 	await expect(page.getByRole('tab', { name: 'access' })).toHaveAttribute('aria-selected', 'true');
 });
 

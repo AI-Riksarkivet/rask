@@ -31,20 +31,26 @@ _Avoid_: dev stack, bundled copy, stand-in
 **Client**:
 Anything that reaches the lakehouse only through its public doors: the catalog's namespace and management doors, the
 credentials it vends, lineage's event feed, and the identity provider. A user's pipeline on their engine is a client,
-and so is an annotation tool such as Label Studio, and so are the console and the notifications inbox this repository
-hosts. The lakehouse never calls a client and holds none of its state, vocabulary or authorization.
+and so is an annotation tool such as Label Studio, and so is a notifier that tells people about the lakehouse's
+events. This repository hosts none. The lakehouse never calls a client and holds none of its state, vocabulary or
+authorization.
 _Avoid_: integration, plugin, consumer service
 
 **Console**:
-The single-page app this repository hosts beside the lakehouse: it signs a person in to the platform's issuer and shows
-the catalog, governance, lineage and the inbox through the same public doors any client uses. It has no backend of its
-own and ships in its own release with the notifications inbox.
-_Avoid_: frontend, zone, UI shell
+The lakehouse's own UI, shipped in the product chart: a single-page app that signs a person in to the platform's issuer
+on the lakehouse's own sign-in client and shows the catalog, governance and lineage through the same public doors any
+client uses. It has no backend of its own.
+_Avoid_: frontend, zone, UI shell, client
 
-**Notifications inbox**:
-The per-person service the console reads beside the lakehouse: a client of the lakehouse's events that keeps each
-person's notifications and their read state, so the bell counts that person's work.
-_Avoid_: notification service, bell service
+**Activity log**:
+The console's record of the signed-in person's own writes in the current tab, each a success or a failure with its
+reason, shown behind the bell. It holds nothing of anyone else's work and ends with the tab or the sign-out.
+_Avoid_: inbox, notifications, notification feed
+
+**Notifier**:
+A client that tells people about the lakehouse's events, targeting each from the fields the events name and the
+`can_be_notified` check. The lakehouse runs none.
+_Avoid_: inbox, notification service
 
 **Engine**:
 The user's bring-your-own compute and orchestrator, which runs their pipeline and writes into the lakehouse through
@@ -100,7 +106,7 @@ _Avoid_: commit lock, write lease, schema lock
 Who a verified caller is, `<idp-id>~<subject>`: the identity provider that vouched for them and the subject it names. A
 service is `kubernetes~system:serviceaccount:<ns>:<sa>`, and a pipeline off the cluster signed in as its own Dex client
 is `dex-client~<client id>` (both machines, ADR 0181); a person is the idp id the deployment gives their Dex connector
-and the user id that connector reports, so renaming a connector re-keys no grant. Every grant, inbox and attribution
+and the user id that connector reports, so renaming a connector re-keys no grant. Every grant and attribution
 names a principal, and a bare name, which no token can prove, is refused wherever one is required.
 _Avoid_: sub, subject id, user name, OIDC sub
 

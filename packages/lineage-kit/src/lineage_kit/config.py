@@ -27,9 +27,6 @@ class LineageSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RASK_LINEAGE_", extra="ignore")
 
     #: The OpenLineage HTTP endpoint base URL (e.g. ``http://localhost:5000``). Unset → no-op emitter.
-    #:
-    #: A Ray job reads it from its pod (the head renders ``RASK_LINEAGE_ENDPOINT``), never from its submission: Ray
-    #: merges ``runtime_env`` over the process env, so a submitted endpoint would outvote a repointed pod.
     endpoint: str | None = Field(default=None, validation_alias=AliasChoices("RASK_LINEAGE_ENDPOINT", "OPENLINEAGE_URL"))
     #: A static bearer, the OpenLineage client's own ``api_key`` convention: for a producer OUTSIDE the
     #: cluster that holds a bearer the door's OIDC issuer verifies. When set it is the credential, and

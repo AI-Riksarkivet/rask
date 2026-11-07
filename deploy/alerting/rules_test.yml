@@ -744,7 +744,7 @@ tests:
               service: fleet
             exp_annotations:
               summary: "No app is reporting HTTP metrics at all"
-              description: "`http_server_duration_milliseconds_count` does not exist, so HttpServerErrorRatioHigh and HttpServerLatencyHigh are both dead and their silence means nothing. Either `service_kit.setup_otel` stopped wiring the FastAPI instrumentor, or the OTLP path to GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#no-app-reports-http-metrics"
+              description: "`http_server_duration_milliseconds_count` does not exist, so HttpServerErrorRatioHigh and HttpServerLatencyHigh are both dead and their silence means nothing. Either `opentelemetry-instrument` stopped wiring the FastAPI instrumentor, or the OTLP path to GreptimeDB is broken. Runbook: docs/runbooks/RUNBOOK-oncall.md#no-app-reports-http-metrics"
       # ...and the ratio rule is indeed silent here, which is the whole argument for the pair.
       - eval_time: 17m
         alertname: HttpServerErrorRatioHigh

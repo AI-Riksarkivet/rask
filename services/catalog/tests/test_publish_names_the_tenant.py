@@ -1,11 +1,11 @@
 """`table_published` must name the tenant, because it is the only party that can.
 
-The medallion's `/publication-arrival` head needs a project to route the cascade and to stamp
-`rask_lance.project`, which is WATCH targeting's only key. It had no project on the event, so it derived
-one by taking the first segment of the table id — and for `acme-bronze$pages` that is `acme-bronze`,
-the qualified NAMESPACE, not the project.
+A consumer of the event needs a project to route the next tier's work and to stamp
+`rask_lance.project`, which is WATCH targeting's only key. With no project on the event it must derive
+one, and taking the first segment of the table id gives, for `acme-bronze$pages`, `acme-bronze`: the
+qualified NAMESPACE, not the project.
 
-No fix on that side can be sound. `project_namespace` joins with `-` and `CONTROL_ID_PATTERN` permits `-`
+No fix on the consumer's side can be sound. `project_namespace` joins with `-` and `CONTROL_ID_PATTERN` permits `-`
 inside a project id, so `acme-bronze` is genuinely ambiguous between project `acme` and project
 `acme-bronze` (`warehouses.project_for_namespace` says so, and `lineage_emit`'s `ProjectResolver` note
 says it again). The catalog is the only component holding the registry binding that answers it, and it
@@ -68,10 +68,9 @@ class TestTheStampMustMATCHTheIdItIsStampedOn:
     [[LH-137]], owner ruling 2026-09-21 (fix (i)). `project_for_namespace` walks binding -> warehouse ->
     project and does NO prefix check, by design — it is a registry read. So a TENANT-LESS lane
     namespace such as `silver`, bound to a warehouse that belongs to a project, resolves to that
-    project and the catalog stamps it. The medallion's publication head then reads `project` verbatim
-    and composes the next tier as `project_namespace(project, dataset)`, so a hop that should target
-    `gold$catalog` targets `<project>-gold$catalog` — a table the runner never wrote — and silver->gold
-    refuses every tabular-lane publication.
+    project and the catalog stamps it. A consumer that reads `project` verbatim and composes the next
+    tier as `project_namespace(project, dataset)` then targets `<project>-gold$catalog` where it should
+    target `gold$catalog`: a table nobody wrote, so every promotion out of that namespace fails.
 
     THE GATE IS A VERIFICATION, NOT A DERIVATION, which is why it is sound where a string rule is not.
     This module's own header records that `acme-bronze` cannot be DECOMPOSED into a project, because

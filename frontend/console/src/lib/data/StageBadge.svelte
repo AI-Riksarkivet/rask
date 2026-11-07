@@ -6,13 +6,8 @@
 	let { info }: { info: StageInfo } = $props();
 </script>
 
-<span
-	class="stage mono {info.stage}"
-	title="Medallion stage (derived from the namespace name{info.media
-		? '; -media sibling zone'
-		: ''})"
->
-	{info.stage}{info.media ? '·media' : ''}
+<span class="stage mono {info.stage}" title="Medallion stage (derived from the namespace name)">
+	{info.stage}
 </span>
 
 <style>
@@ -23,9 +18,6 @@
 		padding: 0 6px;
 		color: var(--mut);
 		white-space: nowrap;
-	}
-	.stage.raw {
-		border-color: color-mix(in srgb, var(--faint) 55%, var(--line));
 	}
 	.stage.bronze {
 		color: #b0763c;

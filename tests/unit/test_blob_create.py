@@ -83,8 +83,8 @@ def test_create_table_writes_blob_at_2_2_and_roundtrips(tmp_path: Path) -> None:
     assert resp.location
     dataset = _open(ns, ["db", "clips"])
     assert dataset.data_storage_version == "2.2"
-    # #5a: the catalog's own blob create path stamps durable row identity (create-time-only), matching the
-    # medallion cascade — so field/temporal lineage over catalog-created blob tables has a stable anchor.
+    # #5a: the catalog's own blob create path stamps durable row identity (create-time-only), as every
+    # catalog create does — so field/temporal lineage over catalog-created blob tables has a stable anchor.
     assert dataset.has_stable_row_ids
     assert dataset.count_rows() == 2
     assert dataset.read_blobs("payload", indices=[0])[0][1] == b"img-1"

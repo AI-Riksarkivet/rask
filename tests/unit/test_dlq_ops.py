@@ -73,7 +73,7 @@ def _event_json(
             "eventType": "COMPLETE",
             "eventTime": "2026-07-20T00:00:00Z",
             "run": {"runId": run_id, "facets": {"rask_author": {"name": author, "sub": author}} if author else {}},
-            "job": {"namespace": "ray-jobs", "name": "ingest"},
+            "job": {"namespace": "pipelines", "name": "ingest"},
             "inputs": [_dataset(ns, n) for ns, n in inputs],
             "outputs": [_dataset(ns, n) for ns, n in outputs],
         }

@@ -17,6 +17,10 @@
 # DEX_CLIENT, DEX_CLIENT_SECRET and DEX_REDIRECT_URIS (a JSON list) register the client's own sign-in client with the Dex
 # fixture (its `clients`), which the lakehouse's audience trusts. The client's roles are granted to its own identity at
 # the catalog's access doors once the stack is up ([[LH-563]]), never in values.
+#
+# CONSOLE_ENABLED=false installs the lakehouse without its console (`console.enabled`): `dagger call lakehouse` sets it,
+# because a published release's image index holds the catalog image alone, and a client's e2e drives the lakehouse's
+# doors, not its UI. Every other caller installs the product whole, the console included.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -25,6 +29,7 @@ TAG="${TAG:-dev}"
 CHART="${CHART:-./chart}"
 CHART_VERSION="${CHART_VERSION:-}"
 VALUES="${VALUES:-}"
+CONSOLE_ENABLED="${CONSOLE_ENABLED:-true}"
 DEX_VALUES=()
 if [ -n "${DEX_CLIENT:-}" ]; then
   # JSON is YAML, and json.dumps quotes whatever the secret holds; the file is the install's alone.
@@ -80,7 +85,8 @@ echo "==> rask"
     done
   done ) &
 RECORDER=$!
-scripts/helm.sh upgrade --install "$RELEASE" "$CHART" ${CHART_VERSION:+--version "$CHART_VERSION"} --timeout "$TIMEOUT" "${HELM_SET[@]}" ${VALUES:+-f "$VALUES"}
+scripts/helm.sh upgrade --install "$RELEASE" "$CHART" ${CHART_VERSION:+--version "$CHART_VERSION"} --timeout "$TIMEOUT" "${HELM_SET[@]}" \
+  --set "console.enabled=$CONSOLE_ENABLED" ${VALUES:+-f "$VALUES"}
 
 echo "==> ready"
 kubectl wait --for=condition=Available deploy --all --timeout="$TIMEOUT"

@@ -3,8 +3,8 @@
 open_fastapi-audit — "Every object-store, S3 and Kubernetes leg in the estate is untraced — no
 botocore or urllib3 instrumentor exists, and 8 of the 14 apps open no span of their own".
 
-`setup_otel` instruments fastapi, httpx, logging, requests, grpc (both variants) and aiohttp. It does
-NOT instrument botocore or urllib3, and neither package appears in the lock. boto3 is live in four
+The services' instrumentation covered fastapi, httpx, logging, requests, grpc (both variants) and aiohttp, and
+neither botocore nor urllib3, whose instrumentors were in no lock. boto3 is live in four
 places — `catalog/core/vending.py`, `catalog/services/warehouses.py`, `lakehouse_kit/records.py`
 and `storage/client.py` — and the Kubernetes client rides urllib3. So every S3 call and every k8s call
 in the estate is invisible in a trace.
@@ -18,7 +18,7 @@ audit grades it medium.
 WHAT THIS DOES NOT FIX, deliberately. pyarrow's `S3FileSystem` is C++ and unreachable from Python
 instrumentation at all; no instrumentor can ever cover it. For those legs the answer is a span around
 the BUSINESS OPERATION, which is what `observability.md` reserves manual spans for ("only for domain
-operations the framework can't see") and what `medallion/services/transform.py` already does. That
+operations the framework can't see"). That
 half is a separate, larger change and is tracked in the audit entry; this gate covers the half an
 instrumentor can actually reach.
 """

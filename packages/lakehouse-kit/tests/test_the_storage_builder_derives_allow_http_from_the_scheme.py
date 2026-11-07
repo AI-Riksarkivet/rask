@@ -2,8 +2,8 @@
 
 [[LH-238]]. A parameter here would be a second source for one fact, and a defaulted one is worse: a
 default of `True` that no caller overrides hands `allow_http=true` beside an `https://` endpoint to
-every credential the catalog VENDS and to every service opening Lance through this builder (lineage,
-medallion, maintenance, ingest, the Ray jobs).
+every credential the catalog VENDS and to every service opening Lance through this builder (lineage and
+maintenance).
 
 A permit held against a TLS store is invisible until it matters: `lance_docs/lance/guide/object_store.md:32` defines
 `allow_http` as "Allow non-TLS, i.e. non-HTTPS connections", and object_store consults it only when a

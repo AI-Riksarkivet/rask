@@ -26,7 +26,7 @@
 
 | Subpath | Contents |
 |---|---|
-| `./shell` | `AppShell, AppSidebar, AppError, TopNavbar, NotificationCenter, InboxList, ForbiddenPage` + `inbox` + `nav-config` + `breadcrumb` |
+| `./shell` | `AppShell, AppSidebar, AppError, TopNavbar, ActivityCenter, ForbiddenPage` + `nav-config` + `breadcrumb`. `ActivityCenter` is the bell and its panel over the reader's own activity log, fed through props and callbacks: the console owns the log (`rask-frontend`) |
 | `./utils` | `cn`, `toDate/formatAbsolute/formatRelative/formatTimestamp`, `WithElementRef/WithoutChildren/WithoutChild/WithoutChildrenOrChild` |
 | `./motion` | GSAP `{@attach}` factories |
 | `./styles/tokens.css` | the theme |
@@ -64,7 +64,7 @@ Containment is deliberate: `Card` and the DataTable card both carry `min-w-0 max
 
 **Storybook 10.4.6** with `@storybook/svelte-vite` (not `-sveltekit` — this is a library). Addons: docs, svelte-csf, a11y. `preview.ts` imports `tokens.css`; `tags: ['autodocs']` globally. Run `make storybook` (→ `:6006`).
 
-Coverage is thin: **6 story files for 26 exported components** — `button.stories.svelte` (CSF via `defineMeta` + `{#snippet template(args)}`), `card.stories.ts` (CSF3 `Meta/StoryObj`), `dialog.stories.svelte`, `gated-action.stories.svelte`, `shell/notification-center.stories.svelte`, `Welcome.stories.svelte`. A new component should ship a story.
+Coverage is thin: **6 story files for 26 component subpaths** (the 31 `exports` less `.`, `./shell`, `./utils`, `./motion` and `./styles/tokens.css`, counted 2026-11-07) — `button.stories.svelte` (CSF via `defineMeta` + `{#snippet template(args)}`), `card.stories.ts` (CSF3 `Meta/StoryObj`), `dialog.stories.svelte`, `gated-action.stories.svelte`, `shell/activity-center.stories.svelte`, `Welcome.stories.svelte`. A new component should ship a story.
 
 Vitest suites are pure-function or SSR-string. Seven live in `tests/`; a suite may also sit beside its source (`src/lib/components/identity/subject.test.ts`) — `vite.config.ts:17` includes both homes. No jsdom and no `@testing-library/svelte` (adding either changes the workspace lockfile).
 

@@ -110,30 +110,38 @@ export const fetchStore = query(
  *  grant never renders a store it just changed. The project-creation flow writes through this same
  *  command; there the refresh is a no-op (no store is mounted) and the gallery is invalidated at the
  *  call site instead. */
-export const writeTuple = command(TupleInputSchema, async (tuple): Promise<ApiResult<Tuple>> => {
-	const result = parsed(
-		await catalogJSON('/management/v1/access/tuples', {
-			method: 'POST',
-			body: JSON.stringify(tuple),
-		}),
-		TupleSchema,
-	);
-	if (result.ok) void fetchStore().refresh();
-	return result;
-});
+export const writeTuple = command(
+	({ user, relation, object }) => `Grant ${relation} on ${object} to ${user}`,
+	TupleInputSchema,
+	async (tuple): Promise<ApiResult<Tuple>> => {
+		const result = parsed(
+			await catalogJSON('/management/v1/access/tuples', {
+				method: 'POST',
+				body: JSON.stringify(tuple),
+			}),
+			TupleSchema,
+		);
+		if (result.ok) void fetchStore().refresh();
+		return result;
+	},
+);
 
 /** Revoke: delete one raw tuple (the tuple IS the identity — same body as the write). */
-export const deleteTuple = command(TupleInputSchema, async (tuple): Promise<ApiResult<Tuple>> => {
-	const result = parsed(
-		await catalogJSON('/management/v1/access/tuples', {
-			method: 'DELETE',
-			body: JSON.stringify(tuple),
-		}),
-		TupleSchema,
-	);
-	if (result.ok) void fetchStore().refresh();
-	return result;
-});
+export const deleteTuple = command(
+	({ user, relation, object }) => `Revoke ${relation} on ${object} from ${user}`,
+	TupleInputSchema,
+	async (tuple): Promise<ApiResult<Tuple>> => {
+		const result = parsed(
+			await catalogJSON('/management/v1/access/tuples', {
+				method: 'DELETE',
+				body: JSON.stringify(tuple),
+			}),
+			TupleSchema,
+		);
+		if (result.ok) void fetchStore().refresh();
+		return result;
+	},
+);
 
 /** A live OpenFGA Check. `context` supplies the operands a CONDITION evaluates against
  *  (`current_time`); an EMPTY context is omitted entirely — OpenFGA reads `{}` as "no operands",

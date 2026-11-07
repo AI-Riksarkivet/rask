@@ -7,58 +7,54 @@ import { collapseCrumbs, pathCrumbs, projectFromHost } from '../src/lib/shell/br
 // root and comes from the host, not the path.
 describe('pathCrumbs', () => {
 	it('keeps the domain as the first crumb on a nested path', () => {
-		// /compute/jobs -> Compute > Jobs (the domain must NOT be dropped)
-		expect(pathCrumbs('/compute/jobs')).toEqual([
-			{ id: 'compute', label: 'Compute', href: '/compute' },
-			{ id: 'compute/jobs', label: 'Jobs', href: '/compute/jobs' },
+		// /catalog/tables -> Catalog > Tables (the domain must NOT be dropped)
+		expect(pathCrumbs('/catalog/tables')).toEqual([
+			{ id: 'catalog', label: 'Catalog', href: '/catalog' },
+			{ id: 'catalog/tables', label: 'Tables', href: '/catalog/tables' },
 		]);
 	});
 
 	it('yields a single domain crumb for a bare domain landing', () => {
-		// /overview -> Overview (previously produced an empty trail)
-		expect(pathCrumbs('/overview')).toEqual([
-			{ id: 'overview', label: 'Overview', href: '/overview' },
+		expect(pathCrumbs('/workbench')).toEqual([
+			{ id: 'workbench', label: 'Workbench', href: '/workbench' },
 		]);
 	});
 
-	it('humanises dashed segments and keeps repeated segments unique', () => {
-		expect(pathCrumbs('/compute/api-docs')).toEqual([
-			{ id: 'compute', label: 'Compute', href: '/compute' },
-			// 'API docs', not 'Api docs': sentence-casing an INITIALISM renames the thing the crumb
-			// points at. Title case is still refused — 'API Docs' would be worse than either.
-			{ id: 'compute/api-docs', label: 'API docs', href: '/compute/api-docs' },
+	it('keeps repeated segments unique', () => {
+		// A namespace named `namespaces` repeats its route's segment.
+		expect(pathCrumbs('/catalog/namespaces/namespaces').map((c) => c.id)).toEqual([
+			'catalog',
+			'catalog/namespaces',
+			'catalog/namespaces/namespaces',
 		]);
-		expect(pathCrumbs('/studio/studio').map((c) => c.id)).toEqual(['studio', 'studio/studio']);
 	});
 
 	it('uppercases an initialism segment instead of sentence-casing it', () => {
-		// `/compute/etl` rendered as "Etl", which reads as a misspelling. The estate calls that plane
-		// ETL — a breadcrumb that renames its destination is worse than an ugly one.
-		expect(pathCrumbs('/compute/etl').at(-1)?.label).toBe('ETL');
+		// `/admin/dlq` would read "Dlq", a misspelling. The nav calls that page DLQ — a breadcrumb that
+		// renames its destination is worse than an ugly one.
+		expect(pathCrumbs('/admin/dlq').at(-1)?.label).toBe('DLQ');
 	});
 
 	it('leaves ordinary words alone — the initialism list is CLOSED, not a heuristic', () => {
-		// The tempting rule ("short segment ⇒ acronym") would shout at every one of these. Each entry
-		// in the list is a name the estate actually routes on, so adding one stays a decision.
-		expect(pathCrumbs('/compute/jobs').at(-1)?.label).toBe('Jobs');
-		expect(pathCrumbs('/compute/logviewer').at(-1)?.label).toBe('Logviewer');
-		expect(pathCrumbs('/lakehouse/models').at(-1)?.label).toBe('Models');
+		// The tempting rule ("short segment ⇒ acronym") would shout at every one of these.
+		expect(pathCrumbs('/admin/events').at(-1)?.label).toBe('Events');
+		expect(pathCrumbs('/settings/audit').at(-1)?.label).toBe('Audit');
 	});
 
 	it('percent-decodes a segment for the label but keeps the href encoded', () => {
-		// A table/dataset id reaches the URL encoded (silver$features -> silver%24features);
-		// the crumb must READ as the id, while still linking to the path that resolves.
-		const crumbs = pathCrumbs('/lineage/datasets/silver%24features');
+		// A table id reaches the URL encoded (silver$features -> silver%24features); the crumb must READ
+		// as the id, while still linking to the path that resolves.
+		const crumbs = pathCrumbs('/catalog/tables/silver%24features');
 		expect(crumbs.at(-1)).toEqual({
-			id: 'lineage/datasets/silver%24features',
+			id: 'catalog/tables/silver%24features',
 			label: 'silver$features',
-			href: '/lineage/datasets/silver%24features',
+			href: '/catalog/tables/silver%24features',
 		});
 	});
 
 	it('falls back to the raw segment when the escape is malformed', () => {
 		// decodeURIComponent throws on a lone '%': the trail must still render.
-		expect(pathCrumbs('/data/100%').at(-1)?.label).toBe('100%');
+		expect(pathCrumbs('/catalog/tables/100%').at(-1)?.label).toBe('100%');
 	});
 
 	it('returns no crumbs for the root path', () => {
@@ -86,26 +82,18 @@ describe('projectFromHost', () => {
 // ellipsis menu. The invariant that matters: the current page — the last crumb — is never what
 // disappears, and nothing is lost, only moved off the row.
 describe('collapseCrumbs', () => {
-	const trail = pathCrumbs('/data/warehouses/acme-wh/namespaces/gold/tables/gold$catalog');
+	const trail = pathCrumbs('/catalog/tables/gold%24catalog');
 
 	it('leaves a trail that already fits untouched', () => {
-		const fits = pathCrumbs('/data/tables');
-		expect(collapseCrumbs(fits, 4)).toEqual({ lead: [], hidden: [], tail: fits });
+		expect(collapseCrumbs(trail, 4)).toEqual({ lead: [], hidden: [], tail: trail });
 	});
 
 	it('folds the middle, keeping the first crumb and the current page', () => {
-		const { lead, hidden, tail } = collapseCrumbs(trail, 4);
-		expect(lead.map((c) => c.label)).toEqual(['Data']);
-		expect(tail.map((c) => c.label)).toEqual(['Gold', 'Tables', 'gold$catalog']);
-		expect(hidden.map((c) => c.label)).toEqual(['Warehouses', 'Acme wh', 'Namespaces']);
-		// Nothing is dropped — every crumb is still somewhere, so every ancestor stays reachable.
-		expect([...lead, ...hidden, ...tail]).toEqual(trail);
-	});
-
-	it('keeps the current page at the narrowest setting', () => {
 		const { lead, hidden, tail } = collapseCrumbs(trail, 2);
-		expect(lead.map((c) => c.label)).toEqual(['Data']);
+		expect(lead.map((c) => c.label)).toEqual(['Catalog']);
+		expect(hidden.map((c) => c.label)).toEqual(['Tables']);
 		expect(tail.map((c) => c.label)).toEqual(['gold$catalog']);
+		// Nothing is dropped — every crumb is still somewhere, so every ancestor stays reachable.
 		expect([...lead, ...hidden, ...tail]).toEqual(trail);
 	});
 

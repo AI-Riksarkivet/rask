@@ -1,18 +1,17 @@
 """Every fleet setting is reachable ONLY through its declared, namespaced env var.
 
-`SettingsConfigDict(populate_by_name=True)` is set on six settings classes, and it is wanted: it is
-what lets a test write ``MedallionSettings.model_validate({"ray_enabled": True})`` instead of
-spelling out ``MEDALLION_RAY_ENABLED``. What is NOT wanted, and what it also does, is teach
-pydantic-settings' env source a SECOND lookup name for every field -- the bare field name. So a field
-declared ``ray_address: str = Field(alias="MEDALLION_RAY_ADDRESS")`` silently answers to
-``RAY_ADDRESS`` as well, and ``RAY_ADDRESS`` is Ray's OWN standard environment variable.
+`SettingsConfigDict(populate_by_name=True)` is set on the fleet's settings classes, and it is wanted:
+it is what lets a test write ``Settings.model_validate({"root": "s3://x"})`` instead of spelling out
+``LANCE_REST_ROOT``. What is NOT wanted, and what it also does, is teach pydantic-settings' env source a
+SECOND lookup name for every field -- the bare field name. So a field declared
+``root: str = Field(alias="LANCE_REST_ROOT")`` silently answers to ``ROOT`` as well, a name any other
+program in the pod may export.
 
-That is not hypothetical. It was found because a session-scoped fixture in `packages/ratch/tests`
-sets ``RAY_ADDRESS=local`` for its own Ray connection and never restores it, and five tests in two
-other suites began failing with ``unknown url type: 'local/api/jobs/'`` -- the medallion's Ray
-dashboard client, pointed at the string ``local``, because a bare env var it never declared had
-overridden the one it did. The suite made it visible; a Ray sidecar, an operator, or a shell export
-does the same thing to a running pod, where nothing is watching.
+That is not hypothetical. It was found when a session-scoped fixture in another suite set an engine's
+own bare variable for its connection and never restored it, and five tests in two other suites began
+failing: a client pointed at the fixture's value, because a bare env var it never declared had
+overridden the one it did. The suite made it visible; a sidecar, an operator, or a shell export does
+the same thing to a running pod, where nothing is watching.
 
 The rule this pins: **a settings field answers to no env var it does not declare.**
 
@@ -42,7 +41,6 @@ _ROOT = Path(__file__).resolve().parents[2]
 #: settings class that will not import without its service's deps would turn a discovery walk into a
 #: skip, and a skipping gate measures nothing.
 _SETTINGS: list[tuple[str, str, str]] = [
-    ("packages/service-kit", "service_kit.config", "Settings"),
     ("packages/lineage-kit", "lineage_kit.config", "LineageSettings"),
     ("services/lineage", "lineage.core.config", "LineageSettings"),
     ("services/catalog", "catalog.core.config", "Settings"),
@@ -71,8 +69,8 @@ def _declared(cls: type[BaseSettings], field_name: str, field: Any) -> set[str]:
     """The env names this field is DECLARED to answer to, upper-cased.
 
     Two declaration styles are in use and both are legitimate. An explicit `alias=` names the variable
-    outright (the fleet's `LANCE_*`/`MEDALLION_*` classes). Otherwise `env_prefix` + the field name IS
-    the declaration (`ratch`'s `RATCH_*`, `lineage_kit`'s `RASK_LINEAGE_*`). Reading only the first
+    outright (the fleet's `LANCE_*`/`MAINTENANCE_*` classes). Otherwise `env_prefix` + the field name IS
+    the declaration (`lineage_kit`'s `RASK_LINEAGE_*`). Reading only the first
     style left the prefix-style classes with an empty declared set, which made the alias half of this
     gate silently exercise nothing on them.
     """

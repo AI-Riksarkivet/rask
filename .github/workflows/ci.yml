@@ -89,7 +89,7 @@ jobs:
       # postgres:16, then the core suite with DATABASE_URL") — but P7a deleted that whole plane (no app
       # DB, no Alembic, no fleet DATABASE_URL; see CLAUDE.md) and the dagger module has no TestPg
       # function to call. It could only ever fail, and it did. The surviving relational store (OpenFGA's
-      # and Dapr state's Postgres) is proved by the e2e-stack job below.
+      # Postgres) is proved by the e2e-stack job below.
 
   # The remaining hermetic gates, one runner each. `fail-fast: false` is the whole point of the matrix
   # here: the default (true) cancels the siblings the moment one leg fails, which would rebuild
@@ -159,7 +159,7 @@ jobs:
 
   # ── SUPPLY CHAIN ──────────────────────────────────────────────────────────────────────────────
   # The gates above judge code WE wrote. These judge what we pull in — the ~1100 third-party packages
-  # across six lockfiles, and the base layers the images sit on. Both legs are `dagger call` against
+  # across the lockfiles, and the base layers the images sit on. Both legs are `dagger call` against
   # .dagger/scan.go, so `make audit` locally and this job are the same code (the ms-gates contract).
   #
   # NEITHER NEEDS A SECRET. osv-scanner and trivy read public advisory data over HTTPS; there is no API
@@ -272,7 +272,7 @@ jobs:
   # because the language dependencies inside the image are the same ones the lockfiles pinned. What it
   # DOES add is the layer no lockfile describes: Debian CVEs in the trixie/bun base images.
   #
-  # The three deployables: the lakehouse (rest-catalog), the inbox and the console. The development fixtures'
+  # The two deployables: the lakehouse (rest-catalog) and the console (frontend). The development fixtures'
   # images, cnpg-age-ext and marquez, are NOT scanned by this job. Widening it is a matter of adding matrix rows and
   # paying the build minutes.
   supply-chain-images:
@@ -283,7 +283,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [rest-catalog, notifications, frontend]
+        image: [rest-catalog, frontend]
     steps:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
@@ -406,7 +406,7 @@ jobs:
   # hermetically in a bun container — and as sequential steps a svelte-check failure skipped the e2e
   # entirely, which is the same failure-hiding shape the ms-* split exists to remove.
   #
-  # Hermetic: the console's Playwright suite serves the BUILT app with its upstreams (the catalog, lineage, the inbox
+  # Hermetic: the console's Playwright suite serves the BUILT app with its upstreams (the catalog, lineage
   # and a mock OIDC issuer) mocked, so the real sign-in, routing and data paths run with no backend.
   web-e2e:
     runs-on: ubuntu-latest
@@ -502,7 +502,7 @@ jobs:
 
       # NO DISK RECLAIM. Deleting the runner's preinstalled toolchains took 1.5 min of this lane's budget, and the room it
       # bought is not needed: measured 2026-10-16, the runner's root is 145G with 100G free after that delete, while the
-      # kind node and the four side-loaded images fit in a few GB. The headroom is printed so a smaller runner is visible.
+      # kind node and the two side-loaded images fit in a few GB. The headroom is printed so a smaller runner is visible.
       - name: Runner disk headroom
         run: df -h / | tail -1
 

@@ -1,8 +1,9 @@
 /**
  * The console's data layer: three browser-side builders for the console's data functions —
  * `query` (a cached, refreshable read), `query.live` (a cursor that advances) and `command` (a
- * write). Each `*.api.ts` module declares its reads and writes with them, and every one reaches its
- * service's door same-origin with the signed-in person's bearer. A component holds a read as
+ * write, recorded in the reader's activity log, `activity.svelte.ts`). Each `*.api.ts` module
+ * declares its reads and writes with them, and every one reaches its service's door same-origin with
+ * the signed-in person's bearer. A component holds a read as
  * `await read()`, `read().current`, `read().refresh()`.
  *
  * Semantics a caller relies on:
@@ -15,8 +16,10 @@
  *    `read()` must not re-run because that read started or settled (its `loading`), or a refresh from
  *    anywhere would re-run every effect that once asked for it.
  */
-import { error } from '@sveltejs/kit';
+import { error, isHttpError } from '@sveltejs/kit';
+import type { ApiResult } from '@rask/api/client';
 import { untrack } from 'svelte';
+import { activity, type ActivityOutcome } from './activity.svelte.ts';
 import { auth, type Session } from './auth.svelte';
 
 /** A read settled this recently is reused by the next call instead of read again. */
@@ -246,22 +249,59 @@ query.live = function live<A extends unknown[], T>(
 		});
 };
 
-/** Declare a write. With a schema first, the argument is validated before the write runs. */
-export function command<T>(run: () => Promise<T>): () => Promise<T>;
-export function command<In, Out, T>(
+/** What a write is called in the reader's activity log: a short phrase naming the action and its
+ *  object ("Drop table bronze$events"), or a function of the caller's input that writes one. It takes
+ *  the input as the caller passed it, before validation, so a write the schema refuses is named too. */
+type Label<In> = string | ((input: In) => string);
+
+/** What a thrown error says, for the log: a SvelteKit HTTP error (a schema refusal is `error(400, …)`)
+ *  keeps its status. */
+function thrownFailure(err: unknown): ActivityOutcome {
+	if (isHttpError(err)) return { ok: false, status: err.status, detail: err.body.message };
+	return { ok: false, status: null, detail: err instanceof Error ? err.message : String(err) };
+}
+
+/** Every write answers the shared `ApiResult` union (`@rask/api/client`), whose failure carries the
+ *  door's status and detail. */
+type WriteResult = ApiResult<unknown>;
+
+/** Declare a write, named for the reader's activity log. With a schema, the argument is validated
+ *  before the write runs. Every call records its outcome: a success, an `ApiResult` failure with its
+ *  status and detail, or a thrown error, which is recorded and re-thrown. */
+export function command<T extends WriteResult>(
+	label: string,
+	run: () => Promise<T>,
+): () => Promise<T>;
+export function command<In, Out, T extends WriteResult>(
+	label: Label<In>,
 	schema: StandardSchema<In, Out>,
 	run: (input: Out) => Promise<T>,
 ): (input: In) => Promise<T>;
-export function command<I, T>(
+export function command<I, T extends WriteResult>(
+	label: Label<I>,
 	schema: 'unchecked',
 	run: (input: I) => Promise<T>,
 ): (input: I) => Promise<T>;
 export function command(
+	label: Label<unknown>,
 	...declared:
-		| [() => Promise<unknown>]
-		| [StandardSchema<unknown, unknown> | 'unchecked', (input: unknown) => Promise<unknown>]
-): (input?: unknown) => Promise<unknown> {
-	if (declared.length === 1) return declared[0];
-	const [schema, run] = declared;
-	return async (input?: unknown) => run(await validated(schema, input));
+		| [() => Promise<WriteResult>]
+		| [StandardSchema<unknown, unknown> | 'unchecked', (input: unknown) => Promise<WriteResult>]
+): (input?: unknown) => Promise<WriteResult> {
+	const [schema, run] = declared.length === 1 ? (['unchecked', declared[0]] as const) : declared;
+	return async (input?: unknown) => {
+		const name = typeof label === 'string' ? label : label(input);
+		let value: WriteResult;
+		try {
+			value = await run(await validated(schema, input));
+		} catch (err) {
+			activity.record(name, thrownFailure(err));
+			throw err;
+		}
+		activity.record(
+			name,
+			value.ok ? { ok: true } : { ok: false, status: value.status, detail: value.detail },
+		);
+		return value;
+	};
 }

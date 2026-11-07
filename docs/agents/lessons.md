@@ -20,7 +20,7 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 
 - **A secret has two readers.** moving its delivery path breaks the outbound credential; the inbound door passing proves only half.
 - **pkill matches its own command.** pkill/pgrep -f kill the shell; use the [b]racket trick.
-- **One row, one commit, one deploy.** measured: 33 of 61 docs commits were register bookkeeping; tests/unit is 82% of suite cost; one image serves 10 deployments.
+- **Coherent rows ship as one change, one deploy** (`docs/agents/issue-tracker.md`). measured: 33 of 61 docs commits were register bookkeeping; tests/unit is 82% of suite cost; one image serves 10 deployments.
 - **A gate is not a gate until it has failed.** mutation-check every new gate; twice in one day one could not fail.
 - **Cite spec.yaml, not the prose.** `lance_docs/ns_catalog/namespace/supported-catalogs/lance-rest.md` gives REST paths the OpenAPI beside it contradicts (`.../index/create`, `.../count`, `.../merge-insert`).
 - **A pipe eats the exit code.** a shell reports its LAST command's status; a pipe's filter or a trailing cleanup silently replaces it.

@@ -67,11 +67,9 @@ for name in "$@"; do
     fi
   fi
   "$VENDOR_ONLY" && continue
-  # values.yaml is the fixture's settings; values-live-pins.yaml, when present, is what the cluster runs (an image tag
-  # from a dev registry), written by scripts/k3s-pins.sh and layered last so a rerun never reverts a running image.
+  # values.yaml is the fixture's settings.
   VALUES=()
   [ -f "$dir/values.yaml" ] && VALUES+=(-f "$dir/values.yaml")
-  [ -f "$dir/values-live-pins.yaml" ] && VALUES+=(-f "$dir/values-live-pins.yaml")
   # SET_FILES names repo files a value is read from (`<key>=<path from the repo root>`, space-separated): an artefact
   # that lives outside the fixture's chart, as the alerting rules do.
   for pair in $SET_FILES; do
@@ -198,8 +196,8 @@ for item in items(sys.stdin.read()):
   # which ESO writes from rask's dev store): on an empty cluster it starts once rask is installed.
   # --reset-values: a fixture's values are its chart's defaults, the files above and the caller's arguments, and nothing
   # an earlier install was given. Every caller passes what a fixture needs on each run (the Makefile, e2e_stack.sh,
-  # install_from_empty.sh), so git and the command line are the whole of it: a client's dex-values.yaml deleted from the
-  # tree takes its Dex clients and origins with it on the next run, and a value set once by hand does not outlive it.
+  # install_from_empty.sh), so git and the command line are the whole of it: a client's Dex values no longer passed take
+  # its Dex clients and origins with them on the next run, and a value set once by hand does not outlive it.
   READY=(--wait --timeout 600s)
   [ "$WAIT" = "false" ] && READY=()
   installed=0

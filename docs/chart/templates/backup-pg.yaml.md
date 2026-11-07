@@ -28,9 +28,8 @@ from `secret/backup-s3` and this pod mounts read-only at 0400, read through `RAS
 
 ## `- { name: AWS_REGION, value: "us-east-1" }`
 
-THE LITERAL, as `services.yaml`, both maintenance templates and
-`_ray-cluster-config.tpl` already spell it. A `objectStore.region` value would be a
-fifth spelling of one constant nothing in this estate varies.
+THE LITERAL, as `services.yaml` and `maintenance.yaml` already spell it. A
+`objectStore.region` value would be a fourth spelling of one constant nothing in this estate varies.
 
 ## `- --keep`
 

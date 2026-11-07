@@ -79,7 +79,7 @@ def test_setup_logging_installs_the_filter() -> None:
     and never added, and fails for one that is added under a different name — it broke on exactly
     that rename. What matters is that the handler `setup_logging` installs stamps the field.
     """
-    from service_kit import setup_logging
+    from service_kit.app import setup_logging
 
     root = logging.getLogger()
     previous = list(root.handlers)

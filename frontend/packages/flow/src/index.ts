@@ -5,7 +5,7 @@
  *   signature-based auto-refit). Five components across three pages used to mount this chrome by hand
  *   and drifted; the visible cost was `FlowAutoFit` existing twice with different bodies.
  * - `StaticFlow` — the SSR renderer: explicit dims and handle positions so it renders with no browser
- *   layout engine at all (media's `/diagram` static-HTML endpoint). Deliberately NOT the viewer with
+ *   layout engine at all (the project hierarchy draws with it). Deliberately NOT the viewer with
  *   props off — the two have incompatible contracts (client hooks vs server render).
  * - `layout` — the SYNCHRONOUS layered barycentre placer. Generic coordinates math that was misfiled
  *   under `panels/lineage` while the FGA access graph imported it cross-domain. It implements the

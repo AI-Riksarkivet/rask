@@ -7,9 +7,9 @@
 # the deployment's intent: anyone who upgrades another way gets the chart defaults, which are chosen for an ARBITRARY
 # cluster and are wrong for this one. A values file is the intent, and `-f` carries it whoever runs helm.
 
-# A value the estate depends on lives in a FILE: a `--set` does not survive into `helm get values`, so
-# an upgrade reusing the live values drops it — measured 2026-08-25, when two upgrades reverted a setting
-# the estate depended on.
+# A value the estate depends on lives in a FILE in git: `make k3s-up` composes the release's values from this file, the
+# pins file and the flags it derives, with `--reset-values`, so a value set only on the live release is dropped by the
+# next upgrade ([[XC-194]]).
 maintenance:
   # RECLAMATION ON, for THIS estate only — the chart default stays false and should, because
   # `trashPurge` is the permission to make an expired drop permanently unrecoverable and no shared

@@ -369,11 +369,9 @@ def build_write_event(
     # `run.facets.rask_lance.project` and its fan-out skips the
     # watcher loop ENTIRELY when it is absent — so while this facet carried only operation/version,
     # every catalog-authored event in the estate reached zero watchers. Not a broken watch: a
-    # producer that never named the tenant the watch is keyed on. `ingest/lineage.py` was the
-    # working precedent the whole time.
+    # producer that never named the tenant the watch is keyed on.
     #
-    # GUARDED, and OMITTED rather than sanitized when it fails. `is_safe_project` is the same check
-    # ingest's `tenant()` and the medallion's `_cascade_project` apply, for the reason stated there:
+    # GUARDED, and OMITTED rather than sanitized when it fails. `is_safe_project` is the check, because
     # a value outside the path-safe shape must never become a lineage-name qualifier. Omitting is the
     # safe direction — a project-less run reaches its author and no watchers, whereas a coerced one
     # could reach the WRONG tenant's watchers, which is a disclosure rather than a miss.
@@ -385,8 +383,9 @@ def build_write_event(
         lance_fields["originator"] = originator
     run_facets: dict[str, Any] = {LANCE_FACET: lance_facet(_PRODUCER, **lance_fields)}
     # WHICH ENGINE WROTE THIS, in the field a non-rask consumer reads. The catalog commits through
-    # pylance in-process while the medallion's stage lanes write through Ray, so "what produced this
-    # table" has two answers and, without this facet, no way for a forwarded graph backend to tell them apart. Stamped
+    # pylance in-process while a user's pipeline writes through whatever engine it runs, so "what produced
+    # this table" has more than one answer and, without this facet, no way for a forwarded graph backend
+    # to tell them apart. Stamped
     # beside `lance` rather than inside it: `rask_lance.operation` is rask's own vocabulary and opaque to
     # anyone else, and the engine is exactly the part that is not rask-specific.
     run_facets["processing_engine"] = processing_engine_facet(_PRODUCER, name="lance", version=lance.__version__)

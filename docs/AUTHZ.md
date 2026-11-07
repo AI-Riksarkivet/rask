@@ -23,7 +23,7 @@ decides authorization — it decides **disclosure**.
    contract all land in the same branch as "not an admin". The console has no server of its own, so this guard runs
    in the browser and is **disclosure, not authorization**: a person who edits the page can render the admin views,
    and every call those views make is still refused by the catalog.
-3. **The backend** — every read and write is a browser call to the catalog, lineage or the inbox with the signed-in
+3. **The backend** — every read and write is a browser call to the catalog or lineage with the signed-in
    person's bearer, and each runs the real FGA check against that bearer. **This is the only layer that cannot be
    bypassed**, and it is the one that actually authorizes.
 
@@ -32,8 +32,8 @@ decides authorization — it decides **disclosure**.
 The console is a single-page app with no backend of its own, as Lakekeeper's console is:
 
 - **One credential, the person's own.** The browser signs in to the platform's issuer (Dex in development) with
-  OIDC and PKCE on its own public client (`rask-console` in development, declared in `deploy/fixtures/console/dex-values.yaml`)
-  and attaches that person's access token to every call. The development Dex binds every authorization code to an S256
+  OIDC and PKCE on the lakehouse's own public client (`console.oidc.clientId`, `rask-console` by default; the
+  development Dex declares it under its `console` value, `deploy/fixtures/dex/chart/values.yaml`) and attaches that person's access token to every call. The development Dex binds every authorization code to an S256
   challenge (`oauth2.pkce.enforce`), and its own sign-in client `rask-web` is confidential, with no redirect, so no
   browser signs in through it. There is no service credential anywhere in the console, so no anonymous or signed-out
   read reaches a door with anyone's authority.
@@ -48,8 +48,12 @@ The console is a single-page app with no backend of its own, as Lakekeeper's con
   the sign-in redirect. A reload signs in again through the issuer: at once from an issuer that keeps a session,
   through the login form of the dev Dex, which keeps none. A strict Content Security Policy,
   set by the console's own server, limits where the page may load code from and connect to.
-- **Same origin, no CORS.** The console's release attaches an HTTPRoute to the platform's Gateway beside the
-  lakehouse's, so the page and the APIs share one origin.
+- **Same origin, no CORS.** The product chart's HTTPRoute `rask-console` sends `/` to the console's server on the
+  platform's Gateway, beside the lakehouse's `/api/*` routes, so the page and the APIs share one origin.
+- **The bell holds only the person's own writes.** Each write the console sends records its success or failure in an
+  activity log kept in the tab's `sessionStorage` under the signed-in principal, at most 100 entries and none older than
+  24 h, and cleared at sign-out. It is not `localStorage`, where the next person on the same browser profile would find
+  it. Nothing in it comes from a server, so it discloses nothing the person's own calls did not answer (ADR 0193).
 - **Signed-out page loads start the sign-in**, and a call answered `401` does the same, so an expired session never
   renders a half-loaded page as if it were empty.
 
@@ -60,7 +64,6 @@ The console is a single-page app with no backend of its own, as Lakekeeper's con
 | `/`, `/projects`      | Sent to sign in.         | Landing + the project gallery, one card per `projects[]` row.    | Same, plus every project.        |
 | `/catalog/…`          | Sent to sign in.         | Catalog, lineage and governance views. Every read and write is FGA-checked per object by the catalog — the danger-zone controls RENDER, and the backend refuses the ones this identity cannot do. | Same; FGA still decides per object. |
 | `/admin/…`            | Sent to sign in.         | **403 page from the route guard.** No admin nav entries; every admin call is refused by the catalog. | Full access.                     |
-| `/notifications`      | Sent to sign in.         | The person's own inbox, from the notifications inbox.            | Same.                            |
 
 ## Known and deliberate
 

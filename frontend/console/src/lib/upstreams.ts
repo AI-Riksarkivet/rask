@@ -8,5 +8,3 @@
 export const CATALOG_API = '/api/catalog';
 /** Lineage, published under `/api/lineage` and rewritten to its root. */
 export const LINEAGE_API = '/api/lineage';
-/** The notifications inbox, which mounts its own routes under `/api/notifications`. */
-export const NOTIFICATIONS_API = '/api/notifications';

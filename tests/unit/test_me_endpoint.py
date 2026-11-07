@@ -149,7 +149,7 @@ def test_one_relation_outage_degrades_only_that_list(monkeypatch: pytest.MonkeyP
 
 def test_slow_fga_degrades_on_the_shared_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     # A BROWNOUT (slow, not down): the lookups share ONE wall-clock budget, so a stalled call degrades
-    # on expiry instead of stacking timeouts toward the BFF's request deadline.
+    # on expiry instead of stacking timeouts toward the caller's request deadline.
     monkeypatch.setattr(ep, "_LOOKUP_BUDGET_SECONDS", 0.05)
 
     async def _slow_check(*_a: Any, **_k: Any) -> bool:
