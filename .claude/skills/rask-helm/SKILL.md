@@ -287,7 +287,9 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   `bao` in the seed container is that administrator (`$HOME/.vault-token`); run an operator's `bao` there.
   The pod is the openbao fixture's ([[XC-131]]); its `mint` and `seed` run the scripts rask renders into
   `<release>-openbao-seed`, and a change rask makes to them reaches the running seed in place (it mints a pair for any
-  new identity, issues the bus users again under the same root, and seeds again), so a rask upgrade replaces no store.
+  new identity, issues the bus users again under the same root, and seeds again), so a rask upgrade replaces no store. A change to the fixture's own pod spec does replace it, and the replacement
+  logs every Dapr sidecar out (every read refused until the pod restarts, a surge included; measured 2026-11-07): apply
+  such a fixture change before the rask upgrade that rolls the Dapr pods, or restart them after it (docs/OPERATORS.md § 6).
   The `seed` container in that pod writes only to its own server and gates the pod's readiness on a
   key it writes last, and a rollout surges first so the seed can carry each signing identity's Ed25519
   pair (`signing-public-<key name>`, then `signing-key-<key name>`) over from the outgoing pod

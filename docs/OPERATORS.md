@@ -141,8 +141,15 @@ Rotation on the platform's store belongs to the parked production runbook. The s
 
 **Loss.** A dev OpenBao replacement with no outgoing pod to carry from (a deleted pod, a drained node) mints every
 identity afresh and the old public keys go with the old store. Events signed before the loss are refused once
-enforcement is on (acked and counted); every signer re-resolves within 5 minutes. Restart every signer and lineage
-after any non-surge OpenBao replacement rather than waiting for that interval.
+enforcement is on (acked and counted); every signer re-resolves within 5 minutes once its sidecar can read again.
+
+**Every replacement logs every sidecar out, a surge one included.** The store's tokens live in memory with it, so the
+token each daprd got at boot through Kubernetes auth names nothing in the replacement, and daprd does not log in again:
+every read through `lance-secrets` answers 500 (`ERR_SECRET_GET`, the store's `403 permission denied`) until the pod
+restarts. Measured 2026-11-07 on openbao/openbao:2.2.0 and daprd 1.19.0-rc.4: the fixture re-applied with a changed pod
+spec carried every signing pair and bus user over a surge, and the catalog's, lineage's and maintenance's reads failed
+until `kubectl rollout restart deploy/rask-catalog deploy/rask-lineage deploy/rask-maintenance`. So apply a fixture
+change before the rask upgrade that rolls the Dapr pods, and restart every Dapr app after any other OpenBao replacement.
 
 **Reading it back.** From an app's own sidecar, `GET /v1.0/secrets/lance-secrets/signing-key-<its key>` answers
 200 with a `seed` field, every other identity's key is refused, and `signing-public-<key>` answers 200 to that signer and

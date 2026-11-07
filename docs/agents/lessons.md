@@ -111,3 +111,6 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **Helm evaluates both arms of `ternary`, and `and` returns an operand, not a bool.** An arm that reads a key a values
   map lacks fails the render even when its condition is false, and `and $missing true` hands `ternary` a nil it refuses
   ("expected bool"); compute the arm inside an `if`, and default a flag (`| default false`) before testing it (XC-165).
+- **Re-applying the dev OpenBao logs every sidecar out.** A fixture change to its pod spec replaces the in-memory store,
+  each daprd keeps the token the old store issued, and every secret read is refused until the pod restarts, over a
+  surge too (XC-164, 2026-11-07): apply the fixture before the rask upgrade, or restart the Dapr apps after it.
