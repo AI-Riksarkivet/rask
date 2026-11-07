@@ -90,7 +90,8 @@ def recorded(control_root: str, storage_options: StorageOptions, table_uuid: str
 
 
 def forget(control_root: str, storage_options: StorageOptions, table_uuid: str, transaction_uuid: str) -> None:
-    """Delete one commit's record, once no retained version names its files and the store holds none of them."""
+    """Delete one commit's record: once no retained version names its files and the store holds none of them, or once the
+    commit is proven never to land, when no version names them whatever the store still holds ([[LH-564]])."""
     delete_record(control_root, storage_options, _key(table_uuid, transaction_uuid))
 
 

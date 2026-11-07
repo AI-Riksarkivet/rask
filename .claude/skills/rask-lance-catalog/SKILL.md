@@ -293,7 +293,9 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
   `rask.author` (the verified caller) and `rask.operation` (the lineage operation it announces) on its commit, on main
   and on every branch, through `dataplane.commit_stamped`: the door's transaction is planned on the ref's latest version,
   committed detached with the stamp and finalized as exactly the next version by the backend's put-if-not-exists, and a
-  writer that lost that version plans again. **A commit that lost its race takes its ref's commit turn** for its
+  writer that lost that version plans again. An attempt that cannot land (its finalize lost, or a judge refused it) first
+  deletes its own transaction file, the files it wrote and their committed-files record, for an operation that writes its
+  own (a `Restore` keeps the files it names), so nothing waits for Lance's 7-day rule ([[LH-564]]). **A commit that lost its race takes its ref's commit turn** for its
   remaining attempts ([[LH-259]], ADR 0186, `lakehouse_kit.commit_turns`, `_commit_turns/` per table uuid), and a
   stock writer that lost its race, its staged version found taken by `version/create` (409 code 14) or its finalize lost,
   is handed the ref's next turn under its verified caller and its transaction's uuid, which pylance keeps when it stages

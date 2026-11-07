@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Iterator
+from typing import Final
 
 import lance
 import pyarrow.fs as pafs
@@ -60,8 +61,8 @@ def added(
     Raises:
         OSError: The store refused, or could not be reached for, a read.
     """
-    root = base_refs.key_uri(base_refs.store_of(table_location), base_refs.decoded_path(table_location))
-    ref = "" if branch is None else f"{BRANCH_CONTAINER}/{branch}/"
+    root = table_root(table_location)
+    ref = _ref_prefix(branch)
     data = list(_data_files(before, after))
     listed = [f"{ref}data/{name.removesuffix('.lance')}" for name in data] if client_fragments.blob_columns(after) else []
     listed += [f"{ref}_indices/{uuid}" for uuid in _indices(before, after)]
@@ -69,9 +70,46 @@ def added(
         *(f"{ref}data/{name}" for name in data),
         *(f"{ref}{path}" for path in _deletion_files(before, after)),
         *_listed(root, so, listed),
-        f"{ref}_transactions/{read_version}-{transaction_uuid}.txn",
+        transaction_file(branch, read_version, transaction_uuid),
     ]
     return file_identities.as_stored(root, so, transaction_uuid, paths)
+
+
+def table_root(table_location: str) -> str:
+    """The root of the table at ``table_location`` as its store lists it: the key the location decodes to, under the
+    store's scheme. Every path here is relative to it."""
+    return base_refs.key_uri(base_refs.store_of(table_location), base_refs.decoded_path(table_location))
+
+
+def transaction_file(branch: str | None, read_version: int, transaction_uuid: str) -> str:
+    """The transaction file a commit of ``branch`` (``None`` for main) planned on ``read_version`` writes
+    (``lance_docs/lance/format/table/layout.md`` § Transaction Files)."""
+    return f"{_ref_prefix(branch)}_transactions/{read_version}-{transaction_uuid}.txn"
+
+
+#: The Lance operations a commit writes its own new files for (pylance 13.0.0: ``add_columns`` plans a ``Merge``). A
+#: ``Restore`` names an older version's files as new to the version it follows, and that version still holds them.
+_WRITES_ITS_OWN_FILES: Final = (
+    lance.LanceOperation.Append,
+    lance.LanceOperation.DataReplacement,
+    lance.LanceOperation.Delete,
+    lance.LanceOperation.Merge,
+    lance.LanceOperation.Overwrite,
+    lance.LanceOperation.Update,
+)
+
+
+def written_by(transaction: Transaction, committed: file_identities.CommittedFiles | None, *, branch: str | None) -> list[str]:
+    """The files a commit of ``transaction`` that never landed wrote itself ([[LH-564]]): its transaction file, and every
+    file ``committed`` names when its operation writes its own new files."""
+    own = [transaction_file(branch, transaction.read_version, transaction.uuid)]
+    if committed is not None and isinstance(transaction.operation, _WRITES_ITS_OWN_FILES):
+        own += [file.path for file in committed.files if file.path not in own]
+    return own
+
+
+def _ref_prefix(branch: str | None) -> str:
+    return "" if branch is None else f"{BRANCH_CONTAINER}/{branch}/"
 
 
 def record_landed(

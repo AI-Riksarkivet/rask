@@ -386,6 +386,15 @@ class DoorTable:
         """
         file_identities.record(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), committed)
 
+    def forget_committed_files(self, transaction_uuid: str) -> None:
+        """Delete the record of what the commit of ``transaction_uuid`` added, a commit that did not land ([[LH-564]]).
+
+        Raises:
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+            OSError: The store refused the delete.
+        """
+        file_identities.forget(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), transaction_uuid)
+
     def announces(self, operation: str) -> bool:
         """Whether the emitter announces a write of ``operation`` on this table: every one but a row write in the provenance
         namespace (`catalog.services.provenance_namespace`), which the feed holds no row for by design and so keeps no

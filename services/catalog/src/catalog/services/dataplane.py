@@ -118,6 +118,7 @@ from catalog.core.run_context import AUTHOR_PROPERTY, OPERATION_PROPERTY
 from catalog.core.vending import classified_columns, labelled_fields
 from catalog.services import changes, commit_authors, committed_files, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
+from catalog.services.object_uuids import UnidentifiedObjectError
 from lakehouse_kit import (
     auto_cleanup,
     base_registry,
@@ -1290,7 +1291,8 @@ def commit_stamped[T](
     ``max_retries=0`` as well. So the transaction is committed detached and finalized as exactly the version after the
     one it was planned on, through the backend's put-if-not-exists (the ``version/create`` finalize, which takes the
     branch it names, [[LH-490]]); a lost race plans again on the new latest version, which a planned operation then
-    sees.
+    sees. An attempt that cannot land, its finalize lost or a judge refusing it, deletes what it wrote first
+    (:func:`_discard_unlanded_attempt`, [[LH-564]]); one whose outcome is unknown keeps everything.
 
     A COMMIT THAT LOST ITS RACE TAKES ITS REF'S TURN for its remaining attempts ([[LH-259]],
     :mod:`lakehouse_kit.commit_turns`), whether Lance refused the plan for a version committed since or the finalize
@@ -1333,16 +1335,18 @@ def commit_stamped[T](
             location = detached.uri
             version = dataset.version + 1
             finalize_id = manifest_bytes.detached_id()
+            wrote: file_identities.CommittedFiles | None = None
+            recorded = finalizing = False
             try:
                 if keeps_labels:
                     _refuse_a_lost_label(dataset, detached)
                 encoding.require_no_new_invalid_encoding(dataset, detached)
                 primary_keys.refuse_repeats_in_version(detached, dataset, door=properties[OPERATION_PROPERTY])
-                table.record_committed_files(
-                    committed_files.added(
-                        dataset, detached, table_location=table.location, branch=ref, so=so, transaction_uuid=stamped.uuid, read_version=stamped.read_version
-                    )
+                wrote = committed_files.added(
+                    dataset, detached, table_location=table.location, branch=ref, so=so, transaction_uuid=stamped.uuid, read_version=stamped.read_version
                 )
+                table.record_committed_files(wrote)
+                recorded = True
                 fs, base = dataset_fs(location, so)
                 versions = f"{base.rstrip('/')}/_versions"
                 with fs.open_input_stream(f"{versions}/d{detached.version}.manifest") as source:
@@ -1363,6 +1367,7 @@ def commit_stamped[T](
                     # incarnation as this attempt reads it.
                     ref_key = commit_ref_key(table.location, so, table_id, ref)
                     table.record_author(stamped.uuid, version=version, ref=ref_key, author=author, manifest=judged)
+                finalizing = True
                 try:
                     table.finalize_version(request, turn=turn)
                 except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError):
@@ -1371,16 +1376,23 @@ def commit_stamped[T](
                     raise
                 except ConcurrentModificationError:
                     discard_detached_manifest(location, so, finalize_id)
-                    if _landed_as_judged(table, so, location=location, version=version, judged=judged):
+                    landed = _landed_digest(table, so, location=location, version=version)
+                    if landed == judged:
                         # The store answered a conditional put that landed as a conflict: the version is this commit, and
                         # planning it again would apply the change twice.
                         return version, measured
                     if author is not None:
                         _forget_unlanded_author(table, so, stamped.uuid, location=location, version=version, judged=judged)
+                    if landed != _AMBIGUOUS_VERSION:
+                        _discard_unlanded_attempt(table, so, stamped, wrote, branch=ref, recorded=recorded)
                     turn = _turn_for_the_next_attempt(table, ref, held, turn, attempt)
                     continue
             except BaseException:
                 discard_detached_manifest(location, so, finalize_id)
+                if not finalizing:
+                    if wrote is None:
+                        wrote = _read_attempt_files(table, so, dataset, detached, stamped, branch=ref)
+                    _discard_unlanded_attempt(table, so, stamped, wrote, branch=ref, recorded=recorded)
                 raise
             finally:
                 discard_detached_manifest(location, so, detached.version)
@@ -1388,15 +1400,67 @@ def commit_stamped[T](
         raise ConcurrentModificationError(f"the commit lost the race for the next version {_STAMPED_COMMIT_ATTEMPTS} times; retry it")
 
 
-def _landed_as_judged(table: table_claims.DoorTable, so: StorageOptions, *, location: str, version: int, judged: str) -> bool:
-    """Whether ``version`` of the ref whose own location is ``location`` holds the very manifest ``judged`` names.
+def _discard_unlanded_attempt(
+    table: table_claims.DoorTable,
+    so: StorageOptions,
+    transaction: Transaction,
+    wrote: file_identities.CommittedFiles | None,
+    *,
+    branch: str | None,
+    recorded: bool,
+) -> None:
+    """Delete what a commit attempt that never landed wrote ([[LH-564]]): its transaction file, and every file it added when
+    its operation writes its own (:func:`committed_files.written_by`), then their committed-files record when ``recorded``.
+
+    Called only once the attempt cannot land, its finalize lost to another commit's manifest or the attempt refused before
+    its finalize, so no version names these files, and the next attempt plans afresh and writes its own. Lance would keep
+    them 7 days, since a store cannot tell a dead commit's file from one still being written
+    (``lance_docs/lance/guide/read_and_write.md:564-571``); the catalog knows them for its own. It raises nothing, since it
+    runs while another error is on its way: a delete the store refuses is logged and leaves its file to Lance's rule.
+    """
+    own = committed_files.written_by(transaction, wrote, branch=branch)
+    root = committed_files.table_root(table.location)
+    for path in own:
+        delete_table_object(root, so, path)
+    log.info("commit_attempt_discarded", extra={"table": table.segments, "transaction": transaction.uuid, "files": len(own)})
+    if not recorded:
+        return
+    try:
+        table.forget_committed_files(transaction.uuid)
+    except (OSError, UnidentifiedObjectError) as exc:
+        log.warning("committed_files_unforgotten", extra={"table": table.segments, "transaction": transaction.uuid, "error": str(exc)[:300]})
+
+
+def _read_attempt_files(
+    table: table_claims.DoorTable, so: StorageOptions, before: lance.LanceDataset, after: lance.LanceDataset, transaction: Transaction, *, branch: str | None
+) -> file_identities.CommittedFiles | None:
+    """What a refused attempt added, read on its way out; ``None`` when the store does not answer, which leaves the files it
+    wrote but its transaction file to Lance's rule rather than replace the refusal."""
+    try:
+        return committed_files.added(
+            before, after, table_location=table.location, branch=branch, so=so, transaction_uuid=transaction.uuid, read_version=transaction.read_version
+        )
+    except OSError as exc:
+        log.warning("commit_attempt_files_unread", extra={"table": table.segments, "transaction": transaction.uuid, "error": str(exc)[:300]})
+        return None
+
+
+#: What :func:`committed_manifest_digest` answers for a version found under both naming schemes: it proves no commit's
+#: manifest there, so an attempt that lost to it keeps what it wrote.
+_AMBIGUOUS_VERSION: Final = ""
+
+
+def _landed_digest(table: table_claims.DoorTable, so: StorageOptions, *, location: str, version: int) -> str | None:
+    """The digest of the manifest ``version`` of the ref whose own location is ``location`` holds
+    (:func:`committed_manifest_digest`): an attempt's own judged digest when its commit landed there, ``None`` for no
+    manifest, ``""`` for an ambiguous version.
 
     Raises:
         ServiceUnavailableError: The store did not answer the read, so whether the commit landed is unknown: planning it
             again could apply it twice, and its author record is kept.
     """
     try:
-        return committed_manifest_digest(location, so, version) == judged
+        return committed_manifest_digest(location, so, version)
     except OSError as exc:
         log.warning("commit_landing_unread", extra={"table": table.segments, "version": version, "error": str(exc)[:300]})
         raise ServiceUnavailableError(f"the object store did not answer whether version {version} landed; describe the table before retrying") from exc

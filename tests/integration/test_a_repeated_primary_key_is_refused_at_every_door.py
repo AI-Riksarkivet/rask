@@ -21,6 +21,7 @@ from __future__ import annotations
 import io
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import httpx
 import lance
@@ -64,6 +65,17 @@ def _merge(client: TestClient, *ids: int, on: tuple[str, ...] = ("id",), v: str 
 
 def _update(client: TestClient, predicate: str, column: str, value: str) -> httpx.Response:
     return client.post(f"/v1/table/{TABLE}/update", json={"predicate": predicate, "updates": [[column, value]]})
+
+
+def _files_no_version_names(location: str) -> tuple[list[str], list[str]]:
+    """The transaction files and data files under the table at ``location`` that no version of it names."""
+    root = Path(location.removeprefix("file://"))
+    dataset = lance.dataset(location)
+    versions = [v["version"] for v in dataset.versions()]
+    uuids = {t.uuid for t in (dataset.read_transaction(v) for v in versions) if t is not None}
+    named = {f.path for v in versions for fragment in dataset.checkout_version(v).get_fragments() for f in fragment.data_files()}
+    transactions = sorted(p.name for p in (root / "_transactions").iterdir() if p.name.split("-", 1)[1].removesuffix(".txn") not in uuids)
+    return transactions, sorted(p.name for p in (root / "data").iterdir() if p.name not in named)
 
 
 def _two_inserts_of_one_new_key(client: TestClient, _location: str, context: dict[str, str] | None = None) -> list[httpx.Response]:
@@ -130,6 +142,8 @@ def test_a_write_repeating_the_primary_key_is_refused_and_the_table_keeps_each_k
         assert sorted(lance.dataset(location).to_table()["id"].to_pylist()) == ids
     if before is not None and all(a.status_code >= 400 for a in answers):
         assert lance.dataset(location).version == before, "a refused write still minted a version"
+    if seeded and ids is not None:
+        assert _files_no_version_names(location) == ([], []), "a refused write left files no version of the table names ([[LH-564]])"
 
 
 def test_a_merge_inserting_a_held_key_nested_in_a_struct_is_refused(real_ns_client: TestClient) -> None:

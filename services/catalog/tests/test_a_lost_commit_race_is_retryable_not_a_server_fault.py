@@ -28,6 +28,7 @@ from lance_namespace import (
     CreateTableVersionRequest,
     DeleteFromTableRequest,
     InsertIntoTableRequest,
+    RestoreTableRequest,
     ServiceUnavailableError,
     UpdateTableRequest,
     connect,
@@ -41,10 +42,11 @@ from catalog.services.dataplane import (
     delete_from_table,
     drop_columns,
     insert_into_table,
+    restore,
     update_table,
 )
 from catalog.services.table_claims import DoorTable
-from lakehouse_kit import base_registry, commit_records
+from lakehouse_kit import base_registry, commit_records, file_identities
 from lakehouse_kit.location_claims import ClaimStore
 from service_kit.storage_options import StorageOptions
 
@@ -88,9 +90,10 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
 
 
-def test_concurrent_add_columns_each_land_in_a_version_of_its_own(table: DoorTable, tmp_path: Path) -> None:
+def test_concurrent_add_columns_each_land_once_and_a_lost_attempt_leaves_nothing(table: DoorTable, tmp_path: Path) -> None:
     """Each landed version keeps the author record its commit made before its finalize, and an attempt that lost its race
-    deletes its own (ADR 0187)."""
+    deletes its own (ADR 0187), with every file it wrote and their committed-files record ([[LH-564]]): the table holds
+    only the transaction and data files its versions name."""
 
     def add(i: int) -> int | BaseException:
         request = AlterTableAddColumnsRequest(id=TABLE_ID, new_columns=[AddColumnsEntry(name=f"c{i}", expression="id + 1")])
@@ -113,6 +116,67 @@ def test_concurrent_add_columns_each_land_in_a_version_of_its_own(table: DoorTab
     signed = [_signed(table, str(tmp_path / "control"), table_uuid, version) for version in landed]
     kept = list((tmp_path / "control" / commit_records.AUTHORS_PREFIX / table_uuid).rglob("*.json"))
     assert (signed, len(kept)) == ([("alice", True)] * WRITERS, WRITERS)
+    latest = table.open(StorageOptions())
+    root = Path(table.location.removeprefix("file://"))
+    committed = {t.uuid for t in (latest.read_transaction(v["version"]) for v in latest.versions()) if t is not None}
+    transactions = {path.name.split("-", 1)[1].removesuffix(".txn") for path in (root / "_transactions").iterdir()}
+    named = {data_file.path for fragment in latest.get_fragments() for data_file in fragment.data_files()}
+    data = {path.name for path in (root / "data").iterdir()}
+    records = {r.transaction_uuid for r in file_identities.recorded(str(tmp_path / "control"), StorageOptions(), table_uuid)}
+    staged = [path.name for path in (root / "_versions").iterdir() if ".manifest-" in path.name]
+    assert (transactions, data, records - committed, staged) == (committed, named, set(), [])
+
+
+def test_a_restore_whose_attempt_loses_deletes_only_its_transaction_file(table: DoorTable, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lost attempt deletes what it wrote ([[LH-564]]), and a Restore writes no data: the files it names as new over the
+    version it follows are the restored version's, which that version still holds. So its lost attempt deletes only its
+    own transaction file, and the attempt after it restores the rows."""
+    update_table(table, StorageOptions(), UpdateTableRequest(id=TABLE_ID, predicate="id >= 0", updates=[["id", "id + 10"]]), transaction_properties=STAMP)
+    finalize = table_claims.DoorTable.finalize_version
+    lost: list[str] = []
+
+    def loses_once(door: DoorTable, request: CreateTableVersionRequest, *, turn: str | None = None) -> object:
+        if not lost:
+            lost.append(request.manifest_path)
+            raise ConcurrentModificationError("another commit took the version first")
+        return finalize(door, request, turn=turn)
+
+    monkeypatch.setattr(table_claims.DoorTable, "finalize_version", loses_once)
+
+    _answer, version = restore(table, StorageOptions(), RestoreTableRequest(id=TABLE_ID, version=1), transaction_properties=STAMP)
+
+    restored = table.open(StorageOptions())
+    root = Path(table.location.removeprefix("file://"))
+    uuids = {t.uuid for t in (restored.read_transaction(v["version"]) for v in restored.versions()) if t is not None}
+    left = sorted(p.name for p in (root / "_transactions").iterdir() if p.name.split("-", 1)[1].removesuffix(".txn") not in uuids)
+    assert (len(lost), version, sorted(restored.to_table(columns=["id"]).column("id").to_pylist()), left) == (1, 3, [1, 2, 3], [])
+
+
+def test_a_lost_finalize_whose_version_is_ambiguous_keeps_what_it_wrote(table: DoorTable, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A version found under both naming schemes proves no commit's manifest there ([[LH-564]]): the attempt that lost to it
+    cannot tell it never landed, so it keeps its files for Lance's own rule rather than delete what a version may name."""
+    finalize = table_claims.DoorTable.finalize_version
+    lost: list[int] = []
+
+    def loses_once(door: DoorTable, request: CreateTableVersionRequest, *, turn: str | None = None) -> object:
+        if not lost:
+            lost.append(request.version)
+            raise ConcurrentModificationError("another commit took the version first")
+        return finalize(door, request, turn=turn)
+
+    def ambiguous(location: str, so: StorageOptions, version: int) -> str | None:
+        return "" if version in lost else committed_manifest_digest(location, so, version)
+
+    monkeypatch.setattr(table_claims.DoorTable, "finalize_version", loses_once)
+    monkeypatch.setattr("catalog.services.dataplane.committed_manifest_digest", ambiguous)
+
+    update_table(table, StorageOptions(), UpdateTableRequest(id=TABLE_ID, predicate="id >= 0", updates=[["id", "id + 10"]]), transaction_properties=STAMP)
+
+    latest = table.open(StorageOptions())
+    root = Path(table.location.removeprefix("file://"))
+    uuids = {t.uuid for t in (latest.read_transaction(v["version"]) for v in latest.versions()) if t is not None}
+    left = [p.name for p in (root / "_transactions").iterdir() if p.name.split("-", 1)[1].removesuffix(".txn") not in uuids]
+    assert (len(lost), len(left)) == (1, 1), left
 
 
 @pytest.mark.parametrize(
