@@ -1,15 +1,18 @@
 """The decision door (``/management/v1/decisions``): the authorization questions a check-only service asks ([[LH-442]]).
 
 OpenFGA authenticates its callers and authorizes none of them, so a service holding an OpenFGA token can write any
-tuple. The services that only CHECK (lineage, and each client the estate grants a decision rung by name) therefore
-hold no OpenFGA credential and ask here, as Lakekeeper is OpenFGA's only client and its OPA bridge asks Lakekeeper's
-``/management/v1/action/batch-check`` (authz/opa-bridge/policies/lakekeeper/check.rego). The wire contract is
-:mod:`service_kit.governed.decider`, which the client and this door share.
+tuple. The services that only CHECK therefore hold no OpenFGA credential and ask here, as Lakekeeper is OpenFGA's only
+client and its OPA bridge asks Lakekeeper's ``/management/v1/action/batch-check``
+(authz/opa-bridge/policies/lakekeeper/check.rego). The wire contract is :mod:`service_kit.governed.decider`, which the
+client and this door share.
 
-Each route opens on its own estate rung, checked on the root object, so a service holds only the routes it calls:
-``can_decide_access`` (check), ``can_expand_members`` (list-users), ``can_probe_governance`` (governed). A caller
-without it is refused 403 for the whole call, as Lakekeeper refuses a check for another identity the actor may not
-inspect (``CannotInspectPermissions``, crates/authz-openfga/src/authorizer.rs:1495-1504).
+A check is answered inside the caller's scope ([[LH-563]]): every object, for a caller holding ``can_decide_access`` on
+the estate root (lineage, which serves every tenant); otherwise each object on which it holds that relation, which a
+``decider`` grant on a project or a warehouse confers on everything beneath. An object outside the scope is answered
+refused without being asked, exactly as an object that does not exist is, so a service scoped to one tenant learns
+nothing about another and a table dropped since an event named it never fails the service's whole question. The other
+routes open on their own estate rung, checked on the root object: ``can_expand_members`` (list-users),
+``can_probe_governance`` (governed, locate), and a caller without it is refused 403 for the whole call.
 
 What may be asked is closed: a check names a ``can_*`` permission or the ``member`` a gate checks, never a role such
 as ``owner`` or ``writer`` and never a decision rung; list-users expands only a membership userset; governed
@@ -66,9 +69,12 @@ from service_kit.governed.decider import (
 log = logging.getLogger(__name__)
 
 
-#: The permissions that open the door's routes, which no route may be asked about: a check-only service has no
-#: business learning which services may decide.
-_DECISION_PERMISSIONS: Final = frozenset({"can_decide_access", "can_expand_members", "can_probe_governance"})
+#: The relation a check's scope is: the caller holds it on the estate root, or on each object it asks about ([[LH-563]]).
+_SCOPE: Final = "can_decide_access"
+
+#: The permissions that open the door's routes and grant its scope, which no route may be asked about: a check-only
+#: service has no business learning which services may decide, or who may make one.
+_DECISION_PERMISSIONS: Final = frozenset({_SCOPE, "can_grant_decider", "can_expand_members", "can_probe_governance"})
 
 #: The relation a check may name besides the `can_*` permissions: the `project#member` a notifier re-checks at
 #: delivery. Every other role (`owner`, `writer`, `reader`, `admin`, `operator`, the decision roles) is refused, so a
@@ -91,17 +97,24 @@ def _is_decidable(relation: str) -> bool:
 management_router = APIRouter(prefix=DECISIONS_PREFIX, tags=["decisions"])
 
 
-async def _require(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, permission: str) -> None:
-    """Refuse a caller that does not hold ``permission`` on the estate root: 401, 403, 406 or 503."""
-    wired = fga_deps.require_fga(settings, client, feature="authorization decisions")
+async def require_a_caller(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> Caller:
+    """The signed-in caller, with authorization wired: 406 with it off, 503 unwired, 401 with no caller.
+
+    The check route's whole gate: what the caller is answered is then its scope's ([[LH-563]]).
+    """
+    fga_deps.require_fga(settings, client, feature="authorization decisions")
     if token is None:
         raise UnauthenticatedError("authentication required")
-    await fga_deps.require_relation(wired, settings, token, relation=permission, obj=settings.fga_root_object)
+    return token
 
 
-async def require_can_decide_access(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
-    """The check route's gate: the caller is a `decider`."""
-    await _require(client, settings, token, permission="can_decide_access")
+SignedInCaller = Annotated[Caller, Depends(require_a_caller)]
+
+
+async def _require(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, permission: str) -> None:
+    """Refuse a caller that does not hold ``permission`` on the estate root: 401, 403, 406 or 503."""
+    caller = await require_a_caller(client, settings, token)
+    await fga_deps.require_relation(client, settings, caller, relation=permission, obj=settings.fga_root_object)
 
 
 async def require_can_expand_members(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
@@ -160,32 +173,68 @@ def _refused(caller: str, route: str, reason: str, **asked: str) -> InvalidInput
     return InvalidInputError(reason)
 
 
-@management_router.post("/check", dependencies=[Depends(require_can_decide_access)])
-async def decide_check(client: WiredFgaClient, token: CurrentToken, resolver: ResolverDep, body: DecisionCheck) -> DecisionCheckResult:
-    """Whether ``user`` holds ``relation`` on each object, and on the table each name names now, in one round trip.
+async def _in_scope(client: OpenFgaClient, settings: Settings, *, caller: Caller, objects: list[str]) -> frozenset[str]:
+    """The objects of ``objects`` the caller may be answered about ([[LH-563]]).
 
-    An object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it. A
-    table asked about by name is decided on the uuid the name resolves to now, and answered with that uuid and its
-    namespace's when allowed; a name naming no table a grant is held on is answered refused.
+    Every one, for a caller holding the scope on the estate root, asked first as one check on the estate root. Otherwise
+    each object it holds the scope on, of a type the model gives the scope: a project's or warehouse's ``decider``
+    reaches what they hold, and no object of another type is in any but the estate's scope.
     """
-    caller = token.subject if token else "anonymous"
+    if not objects:
+        return frozenset()
+    if await fga.check(client, user=caller.subject, relation=_SCOPE, obj=settings.fga_root_object):
+        return frozenset(objects)
+    scoped = [o for o in objects if fga.is_object_id(o) and _SCOPE in _relations_of(o)]
+    held = await fga.batch_check(client, user=caller.subject, relation=_SCOPE, objects=scoped) if scoped else {}
+    return frozenset(o for o in scoped if held.get(o))
+
+
+@management_router.post("/check")
+async def decide_check(
+    caller: SignedInCaller, client: WiredFgaClient, settings: SettingsDep, resolver: ResolverDep, body: DecisionCheck
+) -> DecisionCheckResult:
+    """Whether ``user`` holds ``relation`` on each object, and on the table each name names now, inside the caller's scope.
+
+    An object outside the caller's scope is answered False unasked, as is one that is no object id, which no tuple can
+    name. A table asked about by name is decided on the uuid the name resolves to now, and answered with that uuid and
+    its namespace's when allowed; a name naming no table a grant is held on, or one outside the scope, is answered
+    refused. The scope is asked, then the question, each as one round trip.
+    \f
+
+    Args:
+        caller: The signed-in service asking, resolved first: the door's whole gate.
+        client: The OpenFGA client.
+        settings: The catalog's settings.
+        resolver: The request's name resolver.
+        body: The question.
+
+    Returns:
+        One verdict per object and one decision per table, keyed as asked.
+
+    Raises:
+        InvalidInputError: The question names a relation the door does not answer, or one the model does not define.
+        ServiceUnavailableError: OpenFGA did not answer.
+    """
     asked = {"grantee": body.user, "relation": body.relation, "objects": ",".join(body.objects), "tables": ",".join(body.tables)}
+    subject = caller.subject
     if not _is_decidable(body.relation):
-        raise _refused(caller, "check", f"{body.relation!r} is not a relation a decision may ask about", **asked)
+        raise _refused(subject, "check", f"{body.relation!r} is not a relation a decision may ask about", **asked)
     if undefined := sorted(o for o in body.objects if fga.is_object_id(o) and body.relation not in _relations_of(o)):
-        raise _refused(caller, "check", f"the model defines no {body.relation!r} on {', '.join(undefined[:5])}", **asked)
+        raise _refused(subject, "check", f"the model defines no {body.relation!r} on {', '.join(undefined[:5])}", **asked)
     if body.tables and body.relation not in _relations_of("table:"):
-        raise _refused(caller, "check", f"the model defines no {body.relation!r} on a table", **asked)
+        raise _refused(subject, "check", f"the model defines no {body.relation!r} on a table", **asked)
     try:
         resolved = {name: uuids for name in body.tables if (uuids := await _named_table(resolver, name)) is not None}
     except Exception:
-        audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="check", reason="resolution_failed", **asked)
+        audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=subject, route="check", reason="resolution_failed", **asked)
         raise
     objects = list(dict.fromkeys([*body.objects, *(fga.table_object(table) for table, _ in resolved.values())]))
     try:
-        allowed = await fga.batch_check(client, user=body.user, relation=body.relation, objects=objects) if objects else {}
+        in_scope = await _in_scope(client, settings, caller=caller, objects=objects)
+        decided_on = [o for o in objects if o in in_scope]
+        allowed = await fga.batch_check(client, user=body.user, relation=body.relation, objects=decided_on) if decided_on else {}
     except ServiceUnavailableError:
-        audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="check", reason="authz_unavailable", **asked)
+        audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=subject, route="check", reason="authz_unavailable", **asked)
         raise
     decided = {name: TableDecision(allowed=False) for name in body.tables}
     decided |= {
@@ -194,7 +243,8 @@ async def decide_check(client: WiredFgaClient, token: CurrentToken, resolver: Re
         if allowed.get(fga.table_object(table))
     }
     granted = [*(o for o in body.objects if allowed.get(o)), *(name for name, decision in decided.items() if decision.allowed)]
-    audit(AuditAction.AUTHZ_DECISION, AuditOutcome.SUCCESS, subject=caller, route="check", allowed=",".join(granted), **asked)
+    outside = ",".join(o for o in objects if o not in in_scope)
+    audit(AuditAction.AUTHZ_DECISION, AuditOutcome.SUCCESS, subject=subject, route="check", allowed=",".join(granted), outside_scope=outside, **asked)
     return DecisionCheckResult(allowed={o: allowed.get(o, False) for o in body.objects}, tables=decided)
 
 

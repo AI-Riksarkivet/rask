@@ -189,6 +189,47 @@ def model_types() -> frozenset[str]:
     return frozenset(str(definition["type"]) for definition in load_model()["type_definitions"])
 
 
+@functools.cache
+def _type_restrictions(fga_type: str) -> dict[str, frozenset[str]]:
+    """Each relation the bundled model defines on ``fga_type`` and the subjects a tuple of it may name, as the model's DSL
+    writes them (``user``, ``user:*``, ``role#assignee``, ``user with non_expired_grant``); a computed relation names none."""
+    definition = next((d for d in load_model()["type_definitions"] if d["type"] == fga_type), {})
+    relations = (definition.get("metadata") or {}).get("relations") or {}
+    return {relation: frozenset(map(_restriction, meta.get("directly_related_user_types") or ())) for relation, meta in relations.items()}
+
+
+def _restriction(entry: dict[str, Any]) -> str:
+    """One type restriction of the model's JSON, written as its DSL writes it."""
+    if entry.get("relation"):
+        form = f"{entry['type']}#{entry['relation']}"
+    elif "wildcard" in entry:
+        form = f"{entry['type']}:*"
+    else:
+        form = str(entry["type"])
+    return f"{form} with {entry['condition']}" if entry.get("condition") else form
+
+
+def type_restrictions(fga_type: str, relation: str) -> frozenset[str]:
+    """The subjects a tuple of ``relation`` on ``fga_type`` may name, as the model's DSL writes them; none for a relation
+    the model does not define there."""
+    return _type_restrictions(fga_type).get(relation, frozenset())
+
+
+def admits(fga_type: str, relation: str, user: str) -> bool:
+    """Whether a tuple of ``relation`` on ``fga_type`` carrying no condition may name ``user``, as the store judges it:
+    ``user:<id>`` meets ``user``, ``user:*`` meets ``user:*`` and ``role:<id>#assignee`` meets ``role#assignee``."""
+    head, _, userset = user.partition("#")
+    user_type, _, user_id = head.partition(":")
+    met = f"{user_type}#{userset}" if userset else f"{user_type}:*" if user_id == "*" else user_type
+    return met in type_restrictions(fga_type, relation)
+
+
+def machine_relations(fga_type: str) -> frozenset[str]:
+    """The relations on ``fga_type`` only a user holds directly (``[user]``), the model's machine roles: no role
+    assignment, userset, wildcard or condition confers one, so each grant of one names one account ([[LH-563]])."""
+    return frozenset(relation for relation, restrictions in _type_restrictions(fga_type).items() if restrictions == {"user"})
+
+
 #: The model's typed wildcard: `managed_access` is typed `[user:*, role:*]`, and a grant API may name it as written.
 USER_WILDCARD: Final = "user:*"
 

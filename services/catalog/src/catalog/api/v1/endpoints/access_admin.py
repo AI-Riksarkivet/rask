@@ -609,13 +609,17 @@ PrincipalPath = Annotated[str, Path(description="the principal, '<idp-id>~<subje
 def _refuse_what_git_declares(key: str, naming: list[fga.ClientTuple], settings: Settings) -> None:
     """Refuse (400, code 13) a principal the next upgrade or boot would grant again, naming where it is declared.
 
-    Only the chart's bootstrap hook writes a tuple on the estate root, and only it and the catalog's own seed write a
-    warehouse ``maintenance`` tuple; the catalog grants the accounts its settings name at boot. Judging the tuples rather
-    than a list the chart renders keeps the catalog naming no client the hook grants a decision role.
+    The chart's bootstrap hook grants a person's rung on the estate root, and lineage's machine roles there (the root's
+    relations only a user holds directly, `fga.machine_relations`); only it and the catalog's own seed write a warehouse
+    ``maintenance`` tuple; the catalog grants the accounts its settings name at boot. A machine role on the estate root
+    naming anyone else was made at a door ([[LH-563]]), so it is revoked like any grant. Judging the tuples rather than a
+    list the chart renders keeps the catalog naming no client.
     """
-    if key in {*settings.fga_maintainers, *settings.provenance_writers, *settings.provenance_maintainers}:
+    if key in {*settings.fga_maintainers, *settings.provenance_writers}:
         raise InvalidInputError(f"{key} is an account the catalog grants from its settings at boot: remove it from the values that name it")
-    if authorities := sorted(f"{t.relation} on {t.object}" for t in naming if t.object == settings.fga_root_object or t.relation == _MAINTENANCE):
+    machine = fga.machine_relations(settings.fga_root_object.partition(":")[0])
+    declared = (t for t in naming if (t.object == settings.fga_root_object and t.relation not in machine) or t.relation == _MAINTENANCE)
+    if authorities := sorted(f"{t.relation} on {t.object}" for t in declared):
         raise InvalidInputError(
             f"{key} holds an estate authority the chart's bootstrap hook grants ({', '.join(authorities)}): remove it from the "
             "values that declare it (auth.bootstrapAdmin, the services the hook grants), or revoke those tuples first"

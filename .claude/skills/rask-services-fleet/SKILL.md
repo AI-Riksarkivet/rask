@@ -80,8 +80,9 @@ from the same mark. That cron route is **root-mounted**, not under the api prefi
 the pod root, so the Component name, `RASK_NOTIFICATIONS_BINDING_NAME` and the served path are one string.
 
 What the lakehouse admits for it lives in the console's `deploy/fixtures/console/lakehouse-values.yaml`, layered onto
-the lakehouse release by `make k3s-up`: its ServiceAccount in `auth.externalDeciders` (`decider`, `member_expander`,
-`event_reader`), its bus user in `nats.auth.users`, and its store reads in `openbao.externalReaders`. The reconciler
+the lakehouse release by `make k3s-up`: its bus user in `nats.auth.users` and its store reads in
+`openbao.externalReaders`. Its roles on the catalog (`decider`, `member_expander`, `event_reader`) are grants to its
+ServiceAccount made at the estate admin's tuple door ([[LH-563]]), which no values file holds. The reconciler
 presents its pod's projected `rask-lineage` token ([[LH-220]]); the projection is gated on `can_read_event_feed` at the
 estate root ([[CTL-021]]), so an account without `event_reader` 403s every tick. Without an actor state store scoped to
 its app-id (the console release renders one on a CloudNativePG Cluster by default, or names the platform's Postgres
@@ -131,7 +132,8 @@ service directly. See `rask-frontend`.
    carries a Dapr sidecar token, so `require_dapr_token` alone refuses it on a sidecar-only door; any verified
    service-account token authenticates at any door (ADR 0156 C5), through the edge included. The FGA denials read
    `<subject> lacks <relation> on <object>`. A client asks a lakehouse verb through the catalog's decision door, which
-   answers only `can_*` verbs and `member`, and only for a ServiceAccount `auth.externalDeciders` names.
+   answers only `can_*` verbs and `member`, and only about objects inside the scope its own identity was granted at the
+   access doors (`decider` on the estate root, a project or a warehouse, [[LH-563]]): anything else is answered refused.
 6. **Forwarded headers are trusted from the Gateway's data plane only.** Every routed pod runs uvicorn with
    `--proxy-headers --forwarded-allow-ips=<forwardedAllowIps>` (the Gateway data plane's pod CIDR; `*` is refused), so
    the client address behind the edge is the real one and anonymous rate-limit keys stay per client.

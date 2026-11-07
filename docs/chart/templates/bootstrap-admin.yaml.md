@@ -76,26 +76,27 @@ still gets the bootstrap grant in the right place.
 
 ## `estate_roles = json.loads(os.environ["FGA_ESTATE_ROLES"])`
 
-THE ESTATE ROLES, one JSON object from each account's subject to the machine roles it holds on the estate root
-(`lance.fgaEstateRoles`): lineage's `decider` and `governance_prober`, and each `auth.externalDeciders` account's own
-list. EVENT READERS hold `can_read_event_feed` ([[CTL-021]]): lineage's run feed with no per-dataset filter
-(`GET /events/projection`), which a notifier walks to find whom to tell about runs in EVERY warehouse. The governed
-`/events` shows a service only the tables its grants reach, so a tenant warehouse's runs would never arrive.
-`event_reader` and nothing wider: no tier, no tenant data, no rung that mints a project or edits a tuple
-(`model.fga.yaml` pins both halves). Who is told stays gated per person. Each subject is the one the door verifies the
-account's token as (`lance.saSubject` for lineage, `kubernetes~system:serviceaccount:<namespace>:<name>` for an external
-account), so the two cannot drift. Every grant names the user its subject is (`service_kit.governed.fga.user_object`,
-`:` written `%3A`).
+THE ESTATE ROLES THE RELEASE DECLARES, one JSON object from each account's subject to the machine roles it holds on the
+estate root (`lance.fgaEstateRoles`): lineage's `decider` and `governance_prober`, on the subject the door verifies its
+token as (`lance.saSubject`), so the two cannot drift. Every grant names the user its subject is
+(`service_kit.governed.fga.user_object`, `:` written `%3A`). A client's roles are not here ([[LH-563]]): a client is
+granted them at the catalog's access doors as its own identity, `decider` scoped to the projects or warehouses it serves,
+or on the estate root at the estate admin's tuple door for one serving every tenant, such as a notifier's
+`event_reader` (`can_read_event_feed`, [[CTL-021]]: lineage's run feed with no per-dataset filter,
+`GET /events/projection`). The release's own accounts (`lance.ownAccounts`) arrive beside it as `FGA_OWN_ACCOUNTS`.
 
-## `for relation in ("decider", "member_expander", "governance_prober", "event_reader"):`
+## `for relation in sorted(machine_relations("estate")):`
 
-THE MACHINE ROLES CONVERGE TO WHAT THE RELEASE DECLARES. The grant loop above only adds, so on its own an account taken
-out of `auth.externalDeciders`, or a role taken out of its list, would keep that role for as long as the store lives: a
-standing grant no file in git declares, which an install from git would not reproduce (GitOps) and which outlives the
-decision that made it (zero trust). The hook reads every tuple of the four machine relations on the estate root,
-following OpenFGA's `continuation_token` page by page, and deletes each one `estate_roles` does not name, so the next
-upgrade after a removal leaves the account nothing. Only these four are read, and that is what makes the delete safe:
-each is `[user]` alone in `model.fga` and names a machine, and nothing else in the repo grants one by name
-(`make fga-estate-migrate` carries `owner` only), so a holder the release does not declare is revoked whoever wrote it,
-the estate admin's raw tuple door included. `admin` and every person's rung are never read. A failed read or delete
-exits non-zero and fails the hook, so a convergence that did not happen is never reported as done.
+THE RELEASE'S OWN ACCOUNTS CONVERGE TO WHAT IT DECLARES, AND NO OTHER PRINCIPAL IS TOUCHED. The grant loop above only
+adds, so on its own a role taken from lineage's list would keep standing for as long as the store lives: a grant no file
+in git declares, which an install from git would not reproduce (GitOps). The machine relations are the estate root's
+relations only a user holds directly (`[user]`: `decider`, `event_reader`, `governance_prober`, `member_expander`),
+read off the model this image carries (`service_kit.governed.fga.machine_relations`), the rule the catalog's offboarding
+door asks too. The hook reads every tuple of each on the estate root, following OpenFGA's `continuation_token` page by
+page, and deletes each one naming one of
+the release's own ServiceAccounts that `estate_roles` does not declare. A tuple naming any other principal was made at a
+door, the estate admin's tuple door or a project's or warehouse's access door, and stays: the door and the hook never
+write the same grant, so an upgrade never undoes a grant a door made (ADR 0192). The own accounts come from the list of ServiceAccounts the release renders, never from a name prefix,
+since a client's ServiceAccount may carry the release's prefix.
+`admin` and every person's rung are never read. A failed read or delete exits non-zero and fails the hook, so a
+convergence that did not happen is never reported as done.

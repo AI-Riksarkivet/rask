@@ -12,10 +12,11 @@
 # CHART_VERSION naming its version ([[XC-187]]).
 #
 # A client's e2e against a pinned lakehouse ([[XC-189]]) passes the integration its own release sets: VALUES names a
-# values file (`auth.externalDeciders`, `networkPolicy.objectStoreExtraFrom`; a key HELM_SET sets stays the stack's, as Helm
-# applies `--set` over every values file), and
+# values file (`networkPolicy.objectStoreExtraFrom`; a key HELM_SET sets stays the stack's, as Helm applies `--set` over
+# every values file), and
 # DEX_CLIENT, DEX_CLIENT_SECRET and DEX_REDIRECT_URIS (a JSON list) register the client's own sign-in client with the Dex
-# fixture (its `clients`), which the lakehouse's audience trusts.
+# fixture (its `clients`), which the lakehouse's audience trusts. The client's roles are granted to its own identity at
+# the catalog's access doors once the stack is up ([[LH-563]]), never in values.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -78,7 +78,7 @@ project_router = APIRouter(prefix="/management/v1/projects", tags=["access"])
 classification_router = APIRouter(prefix="/management/v1/classification", tags=["access"])
 
 
-# The base rungs an admin may directly assign. The model defines each as ``[user, role#assignee] or …``
+# The base rungs an admin may directly assign. The model defines each as directly assignable
 # (service_kit/governed/auth/model.fga) — a real user/userset grant, unlike the derived ``can_*`` actions or the
 # structural ``parent``/``child`` edges, none of which may be hand-granted. Intersected with the model below so a
 # renamed rung drops out (and test_fga_model_contract would catch the drift).
@@ -88,16 +88,28 @@ classification_router = APIRouter(prefix="/management/v1/classification", tags=[
 # no way to confer it. They are not more dangerous than ``owner`` — both are reachable only through
 # ``can_grant_manage_grants`` / ``can_grant_pass_grants``, which are ``manage_grants``-only, so a
 # grant-option delegate can neither mint further delegates nor promote themselves.
-#: The rungs this surface may hand out. NOT every relation the model defines: `maintainer` and
-#: `publisher` are SERVICE rungs the chart's bootstrap hook seeds, and a person's grant door is the
-#: wrong place to mint a service identity.
+#: The rungs this surface may hand out: every one the model gives a `can_grant_<rung>`, other than the tenancy rungs
+#: the members door serves. A service's own identity is granted here like a person's ([[LH-563]]): `maintainer` for a
+#: bring-your-own compaction job, `decider` on a project or a warehouse for a service asking the decision door there.
+#: `publisher` and the warehouse's `maintenance` have no grant action in the model, so this surface hands out neither.
 #:
 #: IT MUST COVER EVERY `can_grant_<rung>` THE MODEL DECLARES, and did not — `classifier` shipped with
 #: its grant action and the argument for it written into `model.fga`, while this hand-kept tuple
 #: refused the rung 400 at the only door that could delegate it. `_grant_actions` (fga_deps) reads the
 #: model and this does not, so the two drifted in silence.
 #: `tests/unit/test_a_grantable_rung_has_a_door.py` compares them now.
-_GRANTABLE_BASE: tuple[str, ...] = ("owner", "writer", "reader", "validator", "maintainer", "manage_grants", "pass_grants", "classifier", "apply")
+_GRANTABLE_BASE: tuple[str, ...] = (
+    "owner",
+    "writer",
+    "reader",
+    "validator",
+    "maintainer",
+    "manage_grants",
+    "pass_grants",
+    "classifier",
+    "apply",
+    "decider",
+)
 
 
 async def _target(resolver: Resolver, fga_type: str, segments: list[str]) -> tuple[str, str | None]:
@@ -207,10 +219,50 @@ async def require_warehouse_revoke(id: str, request: Request, client: FgaClientD
     await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=True)
 
 
+async def require_project_review(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
+    """Gate a project's access listing on ``can_read_assignments``, which its security admin holds ([[LH-563]]). A route
+    dependency, since the router leaves every project route to its handler."""
+    await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=f"project:{id}")
+
+
+async def require_project_grant(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
+    """Gate a project grant as a warehouse's is gated: ``can_grant_<rung>`` read from the body, and no grant that raises
+    the caller's own access ([[LH-563]])."""
+    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=False)
+
+
+async def require_project_revoke(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
+    """Gate a project revoke on ``can_revoke_grant``, its security admin's ([[LH-563]])."""
+    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=True)
+
+
 @warehouse_router.post("/{id}/access/list", dependencies=[Depends(require_warehouse_review)])
 async def list_warehouse_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
     """Effective access on the warehouse, per ``can_*`` action, to who may manage its grants ([[LH-555]])."""
     return await _access_list(client, settings, token, resolver, "warehouse", id)
+
+
+@project_router.post("/{id}/access/list", dependencies=[Depends(require_project_review)])
+async def list_project_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
+    """Effective access on the project, per ``can_*`` action, to who may see its grants: its security admins ([[LH-563]]).
+
+    Lists who may ask the decision door about the project's objects (``can_decide_access``) beside its other actions.
+    \f
+
+    Args:
+        id: The project.
+        client: The OpenFGA client.
+        settings: The catalog's settings.
+        resolver: The request's name resolver.
+        token: The verified caller.
+
+    Returns:
+        Each ``can_*`` action the model defines on a project, with the subjects holding it.
+
+    Raises:
+        ServiceUnavailableError: OpenFGA did not answer.
+    """
+    return await _access_list(client, settings, token, resolver, "project", id)
 
 
 async def _access_check(
@@ -382,7 +434,7 @@ async def _access_mutate(
     *,
     grant: bool,
 ) -> AccessGrantResponse:
-    """Grant or revoke one grantable rung to a subject on a table, a namespace, a warehouse or a classification label.
+    """Grant or revoke one grantable rung to a subject on a table, a namespace, a warehouse, a project or a classification label.
 
     The MUTATE half of the #68 governance surface — the write counterpart of ``access/list``.
 
@@ -412,6 +464,11 @@ async def _access_mutate(
     # Resolve the grantee to a FULL subject (qualify=False semantics, mirroring access/check): a subject is the
     # user it is; a qualified userset (``role:…#assignee``) is passed through verbatim.
     grantee = fga.grantee_object(body.user)
+    # The store refuses a tuple its model cannot hold, and that refusal reaches here as an outage, so the model is asked
+    # first: a decision rung (`[user]`) names one account, never a role's assignees ([[LH-563]]).
+    if not fga.admits(fga_type, body.relation, grantee):
+        admitted = ", ".join(sorted(fga.type_restrictions(fga_type, body.relation)))
+        raise InvalidInputError(f"{body.relation!r} on {fga_type} cannot name {grantee}: the model lets it name {admitted}")
     if grant:
         await fga_deps.refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=settings)
     tup = fga.ClientTuple(user=grantee, relation=body.relation, object=obj)
@@ -494,6 +551,73 @@ async def revoke_warehouse_access(
 ) -> AccessGrantResponse:
     """Revoke a base rung on the warehouse from a subject, gated by :func:`require_warehouse_revoke` ([[LH-555]])."""
     return await _access_mutate(client, control, settings, token, resolver, "warehouse", id, body, grant=False)
+
+
+@project_router.post("/{id}/access/grant", dependencies=[Depends(require_project_grant)])
+async def grant_project_access(
+    id: str,
+    client: FgaClientDep,
+    control: ControlEmitterDep,
+    settings: SettingsDep,
+    resolver: ResolverDep,
+    token: CurrentToken,
+    body: AccessGrantRequest,
+) -> AccessGrantResponse:
+    """Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]).
+
+    The rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and
+    nothing beyond them. Who belongs to the project is the members door's.
+    \f
+
+    Args:
+        id: The project.
+        client: The OpenFGA client.
+        control: Where the grant is announced.
+        settings: The catalog's settings.
+        resolver: The request's name resolver.
+        token: The verified caller.
+        body: The subject and the rung.
+
+    Returns:
+        The tuple granted.
+
+    Raises:
+        InvalidInputError: The rung is no rung this door grants on a project.
+        ServiceUnavailableError: OpenFGA did not answer.
+    """
+    return await _access_mutate(client, control, settings, token, resolver, "project", id, body, grant=True)
+
+
+@project_router.post("/{id}/access/revoke", dependencies=[Depends(require_project_revoke)])
+async def revoke_project_access(
+    id: str,
+    client: FgaClientDep,
+    control: ControlEmitterDep,
+    settings: SettingsDep,
+    resolver: ResolverDep,
+    token: CurrentToken,
+    body: AccessGrantRequest,
+) -> AccessGrantResponse:
+    """Revoke a rung on the project from a subject, gated by :func:`require_project_revoke` ([[LH-563]]).
+    \f
+
+    Args:
+        id: The project.
+        client: The OpenFGA client.
+        control: Where the revoke is announced.
+        settings: The catalog's settings.
+        resolver: The request's name resolver.
+        token: The verified caller.
+        body: The subject and the rung.
+
+    Returns:
+        The tuple revoked.
+
+    Raises:
+        InvalidInputError: The rung is no rung this door grants on a project.
+        ServiceUnavailableError: OpenFGA did not answer.
+    """
+    return await _access_mutate(client, control, settings, token, resolver, "project", id, body, grant=False)
 
 
 @namespace_router.post("/{id}/access/revoke")

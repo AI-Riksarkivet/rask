@@ -179,6 +179,13 @@ Measured 2026-09-15: without this the catalog's list was empty in every deployme
 so `cascade_tuples` (the warehouse-create grants, `catalog/api/fga_deps.py`) wrote no maintainer grant, and the 93 warehouses that had one
 had it written by hand into the live store.
 
+## `- { name: LANCE_OWN_ACCOUNTS, value: {{ include "lance.ownAccounts" $root | quote }} }`
+
+The release's own accounts, the list bootstrap-admin converges (`lance.ownAccounts`): the catalog's boot takes back a
+`writer` on the provenance namespace that `LANCE_PROVENANCE_WRITERS` no longer names only from one of these, so a
+`writer` granted at the namespace's access door to an account outside the release stands ([[LH-563]]). Rendered empty,
+the boot takes back nothing, and a writer the release stopped naming keeps writing lineage's tables.
+
 ## `- { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | qu...`
 
 #41 compliance audit trail (who/what/outcome for authn/authz/vending) — configurable.

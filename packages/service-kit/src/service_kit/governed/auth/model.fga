@@ -62,15 +62,20 @@ type project
     define admin_revision: [revision]
     define admin: [user, role#assignee]
     define member: [user, role#assignee] or admin
-    # ---- the admin SPLIT. Additive: `admin` implies all three, so nobody loses a rung by their
-    # arrival, and each exists to be granted WITHOUT the other two.
-    # Security work (grants, ownership) without the power to read or change the data it governs.
+    # ---- the admin SPLIT. Additive: `admin` implies both, so nobody loses a rung by their
+    # arrival, and each exists to be granted WITHOUT the other.
+    # Security work (grants, roles, who may decide) without the power to read or change the data it governs.
     define security_admin: [user, role#assignee] or admin
-    # Warehouse/data work without the power to hand out access to it.
-    define data_admin: [user, role#assignee] or admin
     # Minting a role is not the same authority as deciding who is IN one, so this sits under
     # security_admin rather than beside it.
     define role_creator: [user, role#assignee] or security_admin
+    # ---- the decision scope ([[LH-563]]) ----
+    # Asking the catalog's decision door (`/management/v1/decisions/check`) what another subject may do on this
+    # project's objects; every warehouse, namespace, table and view the project holds inherits it. `decider` is a
+    # service's own identity, granted at the project's access door, and `[user]` alone, so whoever fills a role
+    # cannot hand the asking to a persona. A security admin asks it too: who may do what here is security work.
+    define decider: [user]
+    define can_decide_access: decider or security_admin
     # ---- actions ----
     define can_administer: admin
     define can_create_warehouse: admin
@@ -93,9 +98,13 @@ type project
     # LAST admin, so a tenant can self-govern without being able to strand itself.
     define can_grant_admin: admin
     define can_grant_member: admin
+    # The asking is granted and taken back as security work, at the project's access door.
+    define can_grant_decider: security_admin
+    define can_revoke_grant: security_admin
     # Seeing who holds what follows from being able to change it — the same derivation as the data
-    # rungs' `can_read_assignments`, so a rung added here cannot leave the read behind.
-    define can_read_assignments: admin
+    # rungs' `can_read_assignments`, so a rung added here cannot leave the read behind. A security
+    # admin grants the asking, so it reads the grants too.
+    define can_read_assignments: security_admin
 
 # A warehouse = exactly one S3 bucket, owned by one project. The catalog root object is a `warehouse:`.
 # Concentric rungs inherit from the project (admins own; members read).
@@ -160,9 +169,9 @@ type estate
         # The consumer list is kept by hand: a new check of this relation belongs in it.
         define can_observe_events: owner
         # Reading lineage's run feed WITHOUT the per-dataset filter (`GET /events/projection`, [[CTL-021]]),
-        # checked ONLY on the root object. The holder is a notifier walking the feed (a client the estate grants it
-        # by name, `auth.externalDeciders`), which must see every warehouse's runs to work out whom to tell: on the
-        # governed `/events` a service sees only
+        # checked ONLY on the root object. The holder is a notifier walking the feed (a client's own identity,
+        # granted it at the estate admin's tuple door), which must see every warehouse's runs to work out whom to
+        # tell: on the governed `/events` a service sees only
         # the tables its grants reach, so a run in any tenant warehouse it holds nothing on would never
         # reach it. Disclosure stays gated per person at delivery (`can_be_notified`) and at render
         # (`can_get_metadata`), so this widens what the SERVICE observes and never what a person receives.
@@ -176,12 +185,16 @@ type estate
         # `rask_lance` facets, and the output names (`lineage/api/v1/endpoints/events.py::targeting_view`).
         define can_read_event_feed: owner or event_reader
         # Asking the catalog's decision door (`/management/v1/decisions`, [[LH-442]]) what another subject may
-        # do, checked ONLY on the root object. The holders are the check-only services (lineage, and each client
-        # the estate grants it by name): they hold no credential to the authorization store, so a compromised one
-        # cannot write a tuple, read the tuple store or enumerate a subject's reach, and asks the catalog every
-        # question its gates need. The catalog is the store's client, as Lakekeeper is
+        # do. The holders are the check-only services: they hold no credential to the authorization store, so a
+        # compromised one cannot write a tuple, read the tuple store or enumerate a subject's reach, and asks the
+        # catalog every question its gates need. The catalog is the store's client, as Lakekeeper is
         # OpenFGA's only client and its OPA bridge asks Lakekeeper's batch-check
         # (authz/opa-bridge/policies/lakekeeper/check.rego).
+        #
+        # ESTATE-WIDE HERE, and only for a service that serves every tenant: lineage, whose roles the chart's
+        # bootstrap hook writes, and a client the estate admin grants at the tuple door. A service serving some
+        # tenants holds `decider` on their projects or warehouses instead ([[LH-563]]), and the door asks the
+        # scope on each object a question names, this rung or that object's own `can_decide_access`.
         #
         # `[user]` alone and NOT reached from `owner` or `admin`: the holder is one machine identity granted
         # by name, and a person probing another subject's access has the estate-admin `/management/v1/access`
@@ -191,9 +204,7 @@ type estate
         # check-only service), `member_expander` opens `list-users` over a membership userset (a service resolving
         # a project's members to people), `governance_prober` opens `governed` (lineage, deciding whether a refused
         # output can ever be granted). A compromised decider then cannot enumerate members, and a compromised
-        # lineage cannot either. Lakekeeper gates its own on-behalf-of checks per object on
-        # `can_read_assignments` (crates/authz-openfga/src/authorizer.rs:456-464), which for a caller serving
-        # every tenant means `project_admin` or the server `operator`; these roles grant the asking and nothing else.
+        # lineage cannot either. These roles grant the asking and nothing else.
         define decider: [user]
         define member_expander: [user]
         define governance_prober: [user]
@@ -248,6 +259,9 @@ type warehouse
     # Granted at the WAREHOUSE for the same reason the maintainer is: one tuple per tenant reaches
     # every tier and every table beneath it, so the cascade's reach stays enumerable.
     define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
+    # The decision scope ([[LH-563]], see `project`), granted on this warehouse alone by whoever manages its grants.
+    define decider: [user]
+    define can_decide_access: decider or can_decide_access from project
     # THE ESTATE PRIVILEGES ARE NOT HERE, and their absence is the governance.
     #
     # `can_observe_events` and `can_read_event_feed` live on
@@ -371,6 +385,8 @@ type warehouse
     # they were delegated.
     define can_grant_manage_grants: manage_grants
     define can_grant_pass_grants: manage_grants
+    # The asking is no rung a delegate holds, so it has no grant option: only a grant manager hands it out.
+    define can_grant_decider: manage_grants
     # REVOKING is `manage_grants` alone, and is NOT the mirror of `can_grant_<rung>`.
     # It was, and the symmetry was wrong. `can_grant_reader` is `manage_grants or (reader and
     # pass_grants)`, so routing revoke at it let a DELEGATE strip grants they never issued: kevin,
@@ -451,6 +467,8 @@ type namespace
     # reaches up from a grant nested arbitrarily deep. A notification asserts a stake in the OBJECT
     # ITSELF, so this is bare `reader`.
     define can_be_notified: reader
+    # The decision scope of the warehouse or namespace above ([[LH-563]]).
+    define can_decide_access: can_decide_access from parent
     define can_create_namespace: writer
     define can_create_table: writer
     # Creating a materialized view is a create-on-parent op gated on the enclosing namespace (writer rung),
@@ -525,6 +543,8 @@ type table
     # above cost nothing today, so S1's delivery path was already correct and stays correct. Named
     # separately so the day a leaf's metadata rung moves, delivery does not silently move with it.
     define can_be_notified: reader
+    # The decision scope of the namespace above ([[LH-563]]).
+    define can_decide_access: can_decide_access from parent
     define can_read_data: reader
     define can_write_data: writer
     # MAINTENANCE is not a write, and the model has to say so or the sweep needs `writer` on everything.
@@ -681,6 +701,8 @@ type materialized_view
     # nothing on a leaf. Named separately so the day a leaf's metadata rung moves, delivery does not
     # silently move with it.
     define can_be_notified: reader
+    # The decision scope of the namespace above ([[LH-563]]).
+    define can_decide_access: can_decide_access from parent
     define can_read: reader
     define can_refresh: refresher
 

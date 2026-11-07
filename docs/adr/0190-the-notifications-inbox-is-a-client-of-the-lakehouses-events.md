@@ -1,6 +1,6 @@
 # 0190. The notifications inbox is a client of the lakehouse's events (2026-11-02)
 
-**Status:** accepted. Source: XC-188 (#755), admitted by the owner on 2026-11-01 through the multi-question tool ("Inbox
+**Status:** accepted, amended by [ADR 0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) (`auth.externalDeciders` is gone: a client's roles are grants made at the catalog's access doors). Source: XC-188 (#755), admitted by the owner on 2026-11-01 through the multi-question tool ("Inbox
 leaves, events stay"), narrowed on 2026-11-02 ("Lakehouse half only": the inbox's own release is client work) and
 widened the same day ("Go": the lakehouse's own gates hold with every client tree deleted, checked on each push). Amends
 [ADR 0189](0189-the-product-chart-carries-no-engine-seam.md), whose extension point `auth.externalDeciders` granted

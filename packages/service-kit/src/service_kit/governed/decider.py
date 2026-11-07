@@ -10,9 +10,11 @@ catalog's decision door instead, as Lakekeeper is OpenFGA's only client and its 
 This module is the wire contract (the schemas both sides read) and the two clients; what the door accepts is the
 catalog's own rule (`catalog.api.v1.endpoints.decisions`). `AccessDecider` is the five questions those services ask,
 and nothing that changes the store. `OpenFgaDecider` answers them from the store, for the services that hold a client;
-`CatalogDecider` asks the catalog, which answers each route only to a caller holding that route's decision role on
-the estate root. Which table a storage location holds is the catalog's alone to say (its location claims), so only
-`CatalogDecider` answers `locate` ([[LH-553]]).
+`CatalogDecider` asks the catalog. The catalog answers a check to any signed-in caller inside its scope ([[LH-563]]):
+every object for a caller holding `can_decide_access` on the estate root, otherwise what the `decider` it holds on a
+project or a warehouse reaches, an object outside the scope answered refused unasked, as an absent one is. Each other
+route it answers only to a caller holding that route's decision role on the estate root. Which table a storage location
+holds is the catalog's alone to say (its location claims), so only `CatalogDecider` answers `locate` ([[LH-553]]).
 
 A check names its objects by id, or names tables by name ([[LH-531]]). Every grant is held by a table's uuid (ADR 0173
 §8), and a producer's event names its tables only; the catalog is the one resolver of a name, so it resolves each, decides

@@ -8,8 +8,8 @@ bus user, store user, OpenFGA subject, secret-store role, Dapr component, sessio
 or network policy admitting one by label.
 
 Read from the render in the three overlays that ship: the default values, the deployed estate (`values-local.yaml`)
-and production, each with no client admitted at an extension point; a client's own release supplies its admission
-(XC-191), and the second test holds an admission to the objects it feeds.
+and production. A client is granted its roles at the catalog's access doors as its own identity ([[LH-563]]), so no
+value of the chart admits one to the authorization store.
 Every string a rendered object holds, its keys included, is searched, so a client's name in a ConfigMap's
 script or a policy document fails as surely as one in a Deployment. What the gate cannot read is stated: an object a
 template renders only behind a switch none of these overlays turns on, and NOTES.txt, which an install prints and
@@ -18,9 +18,8 @@ template renders only behind a switch none of these overlays turns on, and NOTES
 
 from __future__ import annotations
 
-import json
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
@@ -63,19 +62,6 @@ _CLIENTS: dict[str, re.Pattern[str]] = {
     "notifications": re.compile(r"notification|(?<![_a-z])inbox", re.IGNORECASE),
 }
 
-#: The values a deployment sets to admit a client of its own release by its ServiceAccount (owner, 2026-10-25, XC-183),
-#: each with the value that admits nobody and the lakehouse objects it feeds: bootstrap-admin writes a client's estate
-#: roles, and the catalog reads the provenance maintainers from its environment. They are the only values that may name
-#: a client, and admitting one may change these objects and nothing else.
-_EXTENSION_POINTS: dict[str, tuple[str, set[tuple[str, str]]]] = {
-    "auth.externalDeciders": ("{}", {("Job", "rask-bootstrap-admin")}),
-    "services.lineage.provenanceMaintainers": ("[]", {("Deployment", "rask-catalog")}),
-}
-
-
-def _without_clients() -> tuple[str, ...]:
-    return tuple(arg for path, (nobody, _) in _EXTENSION_POINTS.items() for arg in ("--set-json", f"{path}={nobody}"))
-
 
 def _strings(value: Any, path: str) -> Iterator[tuple[str, str]]:
     """Every string in a rendered object, keys included, with the path it sits at."""
@@ -93,7 +79,7 @@ def _strings(value: Any, path: str) -> Iterator[tuple[str, str]]:
 @pytest.mark.parametrize("client", list(_CLIENTS))
 @pytest.mark.parametrize("overlay", list(_OVERLAYS))
 def test_nothing_the_product_chart_renders_names_a_client(overlay: str, client: str) -> None:
-    docs = render(*_OVERLAYS[overlay], *_without_clients())
+    docs = render(*_OVERLAYS[overlay])
     named = sorted(
         f"{doc.get('kind')}/{doc.get('metadata', {}).get('name')} {path}: {value[:120]!r}"
         for doc in docs
@@ -101,29 +87,3 @@ def test_nothing_the_product_chart_renders_names_a_client(overlay: str, client: 
         if _CLIENTS[client].search(value)
     )
     assert not named, f"the product chart renders {client}'s object, scope, identity or secret:\n" + "\n".join(named)
-
-
-#: What a client's own release supplies at each extension point to be admitted (XC-191: the lakehouse's overlays name no
-#: client, so the admission is the client's, and a generic one stands in for it here).
-_ADMITTED: dict[str, Any] = {
-    "auth.externalDeciders": {"default:a-client": ["decider"]},
-    "services.lineage.provenanceMaintainers": ["default:a-client"],
-}
-
-
-@pytest.mark.parametrize("point", list(_EXTENSION_POINTS))
-def test_admitting_a_client_changes_only_the_objects_its_extension_point_feeds(point: str) -> None:
-    """The removal test (XC-175): a client release coming or going changes no lakehouse object but the one it is granted by.
-
-    Rendered as the deployed estate runs, once with every client unnamed and once admitting the one a client's release
-    supplies at this point.
-    """
-    absent = render(*_OVERLAYS["deployed"], *_without_clients())
-    present = render(*_OVERLAYS["deployed"], *_without_clients(), "--set-json", f"{point}={json.dumps(_ADMITTED[point])}")
-
-    def by_name(docs: Iterable[dict[str, Any]]) -> dict[tuple[str, str], str]:
-        return {(doc.get("kind", ""), doc.get("metadata", {}).get("name", "")): json.dumps(doc, sort_keys=True) for doc in docs}
-
-    before, after = by_name(absent), by_name(present)
-    changed = {key for key in before.keys() | after.keys() if before.get(key) != after.get(key)}
-    assert changed == _EXTENSION_POINTS[point][1]

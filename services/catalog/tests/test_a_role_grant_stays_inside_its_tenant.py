@@ -14,8 +14,12 @@ would have broken every existing grant on the day the edge landed — which is h
 reverted rather than adopted — so the guard refuses only where the model carries the fact to refuse
 on. Both halves are asserted here, because the fail-open half is the one that would rot silently.
 
+A ROLE IS NEVER GRANTED A RUNG THE MODEL HOLDS FOR USERS ALONE ([[LH-563]]). A decision rung (`decider`, `[user]`) names
+one account, so a grant of it to a role's assignees is a malformed request, refused 400 before the store is asked, as the
+store itself refuses the tuple; asked, the store's refusal would reach the caller as an outage.
+
 Each case is judged by its OUTCOME on the real model, on a store of this test's own ([[LH-235]]): alice creates
-`beta_bronze` through the door and grants the role `reader` on it, and dave, the role's one assignee, then describes it.
+`beta_bronze` through the door and grants the role a rung on it, and dave, the role's one assignee, then describes it.
 A refused grant leaves dave refused; an admitted one lets him read.
 """
 
@@ -38,15 +42,25 @@ DOORS = {
 
 
 @pytest.mark.parametrize(
-    ("target", "role_project", "tenant", "granted", "dave_reads"),
+    ("target", "role_project", "tenant", "relation", "granted", "dave_reads", "named"),
     [
-        pytest.param("namespace", "acme", "beta", 400, 403, id="a-role-owned-by-another-project-is-refused"),
-        pytest.param("namespace", "beta", "beta", 200, 200, id="a-role-owned-by-the-same-project-is-granted"),
-        pytest.param("namespace", None, "beta", 200, 200, id="an-estate-wide-role-carrying-no-project-is-granted"),
-        pytest.param("namespace", "acme", None, 200, 200, id="a-namespace-whose-tenant-cannot-be-established-is-granted"),
+        pytest.param("namespace", "acme", "beta", "reader", 400, 403, ("acme", "beta"), id="a-role-owned-by-another-project-is-refused"),
+        pytest.param("namespace", "beta", "beta", "reader", 200, 200, (), id="a-role-owned-by-the-same-project-is-granted"),
+        pytest.param("namespace", None, "beta", "reader", 200, 200, (), id="an-estate-wide-role-carrying-no-project-is-granted"),
+        pytest.param("namespace", "acme", None, "reader", 200, 200, (), id="a-namespace-whose-tenant-cannot-be-established-is-granted"),
         # A warehouse's own record names its tenant ([[LH-555]]).
-        pytest.param("warehouse", "acme", "beta", 400, 403, id="a-role-owned-by-another-project-is-refused-on-a-warehouse"),
-        pytest.param("warehouse", "beta", "beta", 200, 200, id="a-role-owned-by-the-warehouses-project-is-granted"),
+        pytest.param("warehouse", "acme", "beta", "reader", 400, 403, ("acme", "beta"), id="a-role-owned-by-another-project-is-refused-on-a-warehouse"),
+        pytest.param("warehouse", "beta", "beta", "reader", 200, 200, (), id="a-role-owned-by-the-warehouses-project-is-granted"),
+        pytest.param(
+            "warehouse",
+            "beta",
+            "beta",
+            "decider",
+            400,
+            403,
+            ("decider", "role:analyst#assignee"),
+            id="a-rung-the-model-holds-for-users-alone-is-refused-to-a-role",
+        ),
     ],
 )
 def test_a_role_is_granted_only_inside_its_own_tenant(
@@ -55,8 +69,10 @@ def test_a_role_is_granted_only_inside_its_own_tenant(
     target: str,
     role_project: str | None,
     tenant: str | None,
+    relation: str,
     granted: int,
     dave_reads: int,
+    named: tuple[str, ...],
 ) -> None:
     catalog, alice = governed_catalog, governed_catalog.bearer("alice")
     if tenant is not None:
@@ -73,10 +89,11 @@ def test_a_role_is_granted_only_inside_its_own_tenant(
     )
     grant_door, read_door = DOORS[target]
 
-    grant = catalog.client.post(grant_door, json={"user": "role:analyst#assignee", "relation": "reader"}, headers=alice)
+    grant = catalog.client.post(grant_door, json={"user": "role:analyst#assignee", "relation": relation}, headers=alice)
 
     assert grant.status_code == granted, grant.text
     if granted == 400:
-        assert "acme" in grant.json()["error"] and "beta" in grant.json()["error"], f"the refusal does not name both tenants: {grant.text}"
+        assert (grant.headers["content-type"], grant.json()["code"]) == ("application/problem+json", 13), grant.text
+        assert all(word in grant.json()["error"] for word in named), f"the refusal does not name {named}: {grant.text}"
     read = catalog.client.post(read_door, json={}, headers=catalog.bearer("dave"))
     assert read.status_code == dave_reads, read.text

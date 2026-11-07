@@ -104,6 +104,14 @@ and the user id that connector reports, so renaming a connector re-keys no grant
 names a principal, and a bare name, which no token can prove, is refused wherever one is required.
 _Avoid_: sub, subject id, user name, OIDC sub
 
+**Decision scope**:
+The objects a check-only service may ask the catalog's decision door about on another principal's behalf: every object
+for a service holding `decider` on the estate root (lineage, which serves every tenant), otherwise everything held by the
+projects and warehouses its own identity holds `decider` on. A project's security admin holds the scope on the project.
+`decider` is granted at the estate admin's tuple door or a project's or warehouse's access door, never in values, and no
+upgrade revokes it. An object outside the scope is answered refused, as one that does not exist is (ADR 0192).
+_Avoid_: external decider, decider role (for a client's estate-wide grant)
+
 **Tier**:
 One of the governed stages of a table's data: bronze, silver or gold. Raw is the external world, never a tier. A
 table's tier is the one its nearest enclosing namespace declares, and a namespace declares it once, when it is created,

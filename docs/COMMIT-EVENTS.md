@@ -223,9 +223,12 @@ service's claim or a person's own token.
 
 ### What a notifier asks
 
-A notifier holds no OpenFGA credential. It asks the catalog's decision door as its own ServiceAccount, on the estate
-roles a deployment grants that account in `auth.externalDeciders` (`{"<namespace>:<serviceaccount>": [roles]}`):
-bootstrap-admin grants each account exactly its roles and revokes a role the map stops naming.
+A notifier holds no OpenFGA credential. It asks the catalog's decision door as its own identity, on roles granted to
+that identity at the catalog's access doors ([[LH-563]]); no values file grants one and no upgrade revokes one. A
+notifier serving every tenant holds them on the estate root, granted at the estate admin's tuple door
+(`POST /management/v1/access/tuples`). One serving some tenants holds `decider` on their projects or warehouses
+(`POST /management/v1/projects/{id}/access/grant`, `POST /management/v1/warehouse/{id}/access/grant`), and is answered
+about their objects alone: every other object is answered refused, as one that does not exist is.
 
 | role | route | what it asks |
 | --- | --- | --- |

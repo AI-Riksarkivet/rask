@@ -1,6 +1,6 @@
 # 0174. The provenance namespace is maintained as every table is: a declared retention, a bring-your-own compaction job, and expiry after each compaction (2026-10-23)
 
-**Status:** accepted. Source: owner, 2026-10-23, through the multi-question tool while taking LH-529 (#709). Amends ADR
+**Status:** accepted, amended by [ADR 0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) (a compaction job's rungs are granted at the namespace's access door, and no boot revokes them). Source: owner, 2026-10-23, through the multi-question tool while taking LH-529 (#709). Amends ADR
 0158 (a compaction's commits under the provenance namespace are announced) and ADR 0162 (a compaction needs `maintainer`
 and `reader`, not `writer`).
 

@@ -121,10 +121,10 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   selector, so its two Deployments are named by that release (`console-web`, `console-notifications`): a selector change
   comes with a new name, which one upgrade (or any reconciler that prunes) replaces with no hand-run delete.
   `scripts/k3s-pins.sh` also captures the console's running images into the gitignored
-  `deploy/fixtures/console/values-live-pins.yaml`, which `scripts/fixtures.sh` layers on. What the lakehouse must admit for it (the inbox
-  in `auth.externalDeciders`, a map from each `<namespace>:<serviceaccount>` to the estate roles it holds; its bus user in
-  `nats.auth.users`; its store reads in `openbao.externalReaders`) is in the console's own `lakehouse-values.yaml`, which
-  `make k3s-up` layers on by glob; the product chart names none of it. The other clients live outside this repository
+  `deploy/fixtures/console/values-live-pins.yaml`, which `scripts/fixtures.sh` layers on. What the lakehouse must admit for it (the
+  inbox's bus user in `nats.auth.users`; its store reads in `openbao.externalReaders`) is in the console's own
+  `lakehouse-values.yaml`, which `make k3s-up` layers on by glob; the product chart names none of it. A client's roles
+  on the catalog are no value at all: they are grants to its own identity made at the catalog's access doors ([[LH-563]]). The other clients live outside this repository
   (XC-192) and are recovered from git history (`64ef118a9`) as each moves to its own repository. A fixture's `SET_FILES` passes an
   artefact from outside its chart with `--set-file` (the alert rules), and a local fixture chart with upstream
   `dependencies:` is vendored from its own `Chart.lock` (`scripts/fixtures.sh --vendor`, run by `make k3s-deps`, so a

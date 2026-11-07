@@ -58,19 +58,23 @@ def test_every_tuple_request_names_the_model_the_image_carries(stores: list[dict
     assert any(obj == "estate:rask" for _, _, obj in recorded.written), "no estate grant reached the store"
 
 
-def test_a_machine_role_the_release_no_longer_declares_is_revoked(openfga_store: Any, tmp_path: Path) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
-    """An account the release stops naming in `auth.externalDeciders` keeps no estate role after the next upgrade (XC-188).
+def test_an_upgrade_revokes_only_what_the_releases_own_accounts_no_longer_declare(openfga_store: Any, tmp_path: Path) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """An upgrade converges the estate roles of the release's own accounts and keeps every grant a door made ([[LH-563]]).
 
-    Run against the pinned OpenFGA: before the hook, the store holds a departed client's three machine roles and a person's
-    `admin`; after it, exactly the roles the render declares and the person's rung, which the hook never reads.
+    Run against the pinned OpenFGA: before the hook, the store holds a machine role the release's own maintenance account
+    was never declared, a client's three machine roles granted at the estate admin's tuple door (its ServiceAccount named
+    with the release's prefix, which a client's own release may give it), and a person's `admin`. After it, the release's
+    own account holds only what the render declares, and the client's grants and the person's rung stand.
     """
     job = next(c for workload, _, c in containers(render(*DEFAULT_ARGS)) if workload.endswith("-bootstrap-admin"))
     token = tmp_path / env_of(job)["RASK_FGA_TOKEN_FILE"].lstrip("/")
     token.parent.mkdir(parents=True)
     token.write_text("projected-sa-jobs-token\n")
-    departed = user_object("kubernetes~system:serviceaccount:default:rask-sa-a-notifier")
+    own = user_object("kubernetes~system:serviceaccount:default:rask-sa-maintenance")
+    client = user_object("kubernetes~system:serviceaccount:default:rask-sa-a-tenant-service")
+    door_made = {(client, role) for role in ("decider", "member_expander", "event_reader")}
     person = user_object("dex~alice")
-    openfga_store.write(*((departed, role, "estate:rask") for role in ("decider", "member_expander", "event_reader")), (person, "admin", "estate:rask"))
+    openfga_store.write((own, "decider", "estate:rask"), *((user, role, "estate:rask") for user, role in door_made), (person, "admin", "estate:rask"))
 
     done = _run(
         job,
@@ -85,4 +89,4 @@ def test_a_machine_role_the_release_no_longer_declares_is_revoked(openfga_store:
 
     declared = {(user_object(account), role) for account, roles in json.loads(env_of(job)["FGA_ESTATE_ROLES"]).items() for role in roles}
     assert done.returncode == 0, f"the hook exited {done.returncode}:\n{done.stdout}{done.stderr}"
-    assert {(user, relation) for user, relation, obj in openfga_store.tuples() if obj == "estate:rask"} == declared | {(person, "admin")}
+    assert {(user, relation) for user, relation, obj in openfga_store.tuples() if obj == "estate:rask"} == declared | door_made | {(person, "admin")}

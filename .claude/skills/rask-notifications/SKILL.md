@@ -318,10 +318,9 @@ so it must read as a reason a person would accept; and `notification-center.stor
 ## The FGA prerequisite
 
 The reconciler reads lineage's `GET /events/projection` as its own service principal ([[CTL-021]]): the
-whole run feed with no per-dataset filter, gated on the estate rung `can_read_event_feed`, which a deployment grants
-the inbox's ServiceAccount by mapping it to `event_reader` in the product chart's `auth.externalDeciders`
-(`{"<namespace>:<serviceaccount>": ["decider", "member_expander", "event_reader"]}`; bootstrap-admin writes each tuple
-on `estate:rask` and revokes it once the map stops naming the role). Not the governed `/events`: that
+whole run feed with no per-dataset filter, gated on the estate rung `can_read_event_feed`, which the estate admin grants
+the inbox's ServiceAccount as `event_reader` on `estate:rask` at the tuple door, beside `decider` and `member_expander`
+([[LH-563]]; no values file grants a client a role, and no upgrade revokes one a door made). Not the governed `/events`: that
 shows a service only the tables its grants reach, so every tenant warehouse's runs would be invisible to
 the lane and the tick would still log success. Each row carries only the targeting view (run id, state,
 time, the `rask_author`, `rask_lance` and `parent` facets, and each output's name with its own `rask_lance` facet, which carries the table's

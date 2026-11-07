@@ -4,7 +4,7 @@ A client that tells people about the lakehouse's runs reads lineage's durable fe
 never carries (an external OpenLineage producer's) reaches it only there. On the per-dataset-governed `/events` that
 subject sees exactly the tables its grants reach, so a run whose output lives in a tenant warehouse it holds nothing on
 is filtered out. `/events/projection` serves the feed unfiltered to a holder of the estate rung `can_read_event_feed`,
-which `event_reader` derives and the chart grants only to an account `auth.externalDeciders` names with that role, and
+which `event_reader` derives and the estate admin grants a client's own identity at the tuple door ([[LH-563]]), and
 sends each row only the fields targeting reads. A caller holding nothing on the estate root is refused.
 
 Driven through lineage's real router behind its real authentication-then-FGA gate. What stands in, and why each may:
@@ -48,12 +48,12 @@ from service_kit.ns_errors import install_problem_handlers
 from tests.integration.lineage_app import live_catalog, live_lineage
 
 
-#: A client's service account holding `event_reader`, whose subject (`kubernetes~system:serviceaccount:rask:rask-sa-a-notifier`)
-#: is the one the bootstrap hook grants for an `auth.externalDeciders` entry naming that role.
+#: A client's service account holding `event_reader`, granted to its subject
+#: (`kubernetes~system:serviceaccount:rask:rask-sa-a-notifier`) at the estate admin's tuple door.
 READER = ServicePrincipal.for_account("system:serviceaccount:rask:rask-sa-a-notifier")
 
-#: Every relation OpenFGA answers true for, as `(user, relation, object)`: what the bootstrap hook's
-#: `event_reader` tuple on the estate root derives for the reader, and nothing else.
+#: Every relation OpenFGA answers true for, as `(user, relation, object)`: what the `event_reader` tuple on the estate
+#: root derives for the reader, and nothing else.
 GRANTED = frozenset({("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-a-notifier", "can_read_event_feed", "estate:rask")})
 
 #: The uuids the catalog minted for the two runs' outputs, which every governed dataset's `rask_lance` facet carries (ADR 0173

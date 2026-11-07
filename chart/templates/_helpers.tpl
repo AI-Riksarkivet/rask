@@ -475,8 +475,21 @@ securityContext:
 {{- end }}
 {{- end -}}
 
+{{- define "lance.accountOf" -}}
+{{- $root := index . 0 -}}
+{{- printf "system:serviceaccount:%s:%s" $root.Release.Namespace (index . 1) -}}
+{{- end -}}
+
+{{- define "lance.subjectOf" -}}
+{{- printf "kubernetes~%s" (include "lance.accountOf" .) -}}
+{{- end -}}
+
+{{- define "lance.saName" -}}
+{{- printf "%s-sa-%s" (include "lance.fullname" (index . 0)) (index . 1) -}}
+{{- end -}}
+
 {{- define "lance.saSubject" -}}
-{{- printf "kubernetes~%s" (include "lance.saAccount" .) -}}
+{{- include "lance.subjectOf" (list (index . 0) (include "lance.saName" .)) -}}
 {{- end -}}
 
 {{- define "lance.saComponents" -}}
@@ -486,15 +499,14 @@ securityContext:
 {{- end -}}
 
 {{- define "lance.serviceAccounts" -}}
-{{- $fullname := include "lance.fullname" . -}}
+{{- $root := . -}}{{- $fullname := include "lance.fullname" . -}}
 {{- $names := list (printf "%s-snapshot" $fullname) (printf "%s-dapr-dashboard" $fullname) (printf "%s-otel-collector" $fullname) -}}
-{{- range (include "lance.saComponents" . | fromJsonArray) }}{{- $names = append $names (printf "%s-sa-%s" $fullname .) }}{{- end -}}
+{{- range (include "lance.saComponents" . | fromJsonArray) }}{{- $names = append $names (include "lance.saName" (list $root .)) }}{{- end -}}
 {{- toJson $names -}}
 {{- end -}}
 
 {{- define "lance.saAccount" -}}
-{{- $root := index . 0 -}}
-{{- printf "system:serviceaccount:%s:%s-sa-%s" $root.Release.Namespace (include "lance.fullname" $root) (index . 1) -}}
+{{- include "lance.accountOf" (list (index . 0) (include "lance.saName" .)) -}}
 {{- end -}}
 
 {{- define "lance.saVerifier" -}}
@@ -610,18 +622,16 @@ catalog maintenance
 {{- end -}}
 
 {{- define "lance.fgaEstateRoles" -}}
-{{- $v := .Values -}}{{- $root := . -}}
 {{- $out := dict -}}
-{{- if $v.auth.enabled -}}
-{{- $_ := set $out (include "lance.saSubject" (list $root "lineage")) (list "decider" "governance_prober") -}}
-{{- $grantable := list "decider" "member_expander" "event_reader" -}}
-{{- range $account, $roles := ($v.auth.externalDeciders | default dict) }}
-{{- if not (regexMatch "^[a-z0-9-]+:[a-z0-9.-]+$" $account) }}{{- fail (printf "auth.externalDeciders key %q is not <namespace>:<serviceaccount>" $account) }}{{- end }}
-{{- if not $roles }}{{- fail (printf "auth.externalDeciders %q grants no role" $account) }}{{- end }}
-{{- range $roles }}{{- if not (has . $grantable) }}{{- fail (printf "auth.externalDeciders %q names %q, which is not one of %s" $account . (join ", " $grantable)) }}{{- end }}{{- end }}
-{{- $_ := set $out (printf "kubernetes~system:serviceaccount:%s" $account) ($roles | uniq | sortAlpha) }}
-{{- end }}
+{{- if .Values.auth.enabled -}}
+{{- $_ := set $out (include "lance.saSubject" (list . "lineage")) (list "decider" "governance_prober") -}}
 {{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+
+{{- define "lance.ownAccounts" -}}
+{{- $root := . -}}{{- $out := list -}}
+{{- range (include "lance.serviceAccounts" . | fromJsonArray) }}{{- $out = append $out (include "lance.subjectOf" (list $root .)) }}{{- end -}}
 {{- toJson $out -}}
 {{- end -}}
 

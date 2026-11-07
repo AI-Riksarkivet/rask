@@ -159,8 +159,9 @@ func registryHost(registry string) string {
 // published bytes as the local estate it is (image.localImages); nothing is built.
 //
 // A client integrates as its production release does ([[XC-189]]): `values` is the chart values that release sets
-// (`auth.externalDeciders` naming its ServiceAccount, `networkPolicy.objectStoreExtraFrom`), and `dexClient` registers
-// the client's own sign-in client with Dex, trusted by the lakehouse's audience. A key the stack sets with `--set`
+// (`networkPolicy.objectStoreExtraFrom`), `dexClient` registers the client's own sign-in client with Dex, trusted by
+// the lakehouse's audience, and the client's roles are granted to its own identity at the catalog's access doors
+// ([[LH-563]]), as the estate admin. A key the stack sets with `--set`
 // (scripts/stack_values.sh) is the stack's, because Helm applies `--set` over every values file: `route.enabled` among
 // them, since the session's cluster runs no Gateway. A client outside the cluster asks the result for its
 // ServiceAccount's token (ServiceAccountToken).
@@ -292,12 +293,11 @@ type Lakehouse struct {
 	Cluster *dagger.Container
 }
 
-// ServiceAccountToken is a token for the ServiceAccount `account` (`<namespace>:<name>`, the key its
-// `auth.externalDeciders` entry names) with the audience of one lakehouse door, `rask-catalog` (the decision door
-// included) or `rask-lineage` (the OpenLineage intake): what the account's pod would project, for a client running
-// outside the cluster. The account is created as the client's own release would render it, labelled as a client's, and
-// holds only what the release's values grant it; an account the release or a fixture renders is refused, so a client
-// cannot act as a lakehouse service. The token lives `duration` (10m at the least, the API server's floor).
+// ServiceAccountToken is a token for the ServiceAccount `account` (`<namespace>:<name>`) with the audience of one
+// lakehouse door, `rask-catalog` (the decision door included) or `rask-lineage` (the OpenLineage intake): what the
+// account's pod would project, for a client running outside the cluster. The account is created as the client's own
+// release would render it, labelled as a client's, and holds only what the catalog's doors grant it ([[LH-563]]); an
+// account the release or a fixture renders is refused, so a client cannot act as a lakehouse service. The token lives `duration` (10m at the least, the API server's floor).
 //
 // +cache="session"
 func (l *Lakehouse) ServiceAccountToken(

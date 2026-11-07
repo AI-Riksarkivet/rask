@@ -8,8 +8,9 @@ a client holding something for the person can erase it (CTL-022); ``GET`` on the
 never strands a project: a principal holding the only direct ``admin`` of any project is refused (409, code 14) and
 nothing is revoked, not even an admin it holds on another project beside a second admin, and
 an estate admin cannot delete themselves, since the rung the door asks would go with them. A principal whose grants git
-declares is refused too, since the next upgrade or boot would grant it again: one holding a rung on the estate, which
-only the chart's bootstrap hook grants, and an account the catalog's settings name.
+declares is refused too, since the next upgrade or boot would grant it again: one holding a person's rung on the estate,
+which only the chart's bootstrap hook grants, and an account the catalog's settings name. A machine role on the estate is
+a door's grant ([[LH-563]]), and goes with the rest.
 
 Every decision is the real model's, on a store of this test's own. The estate admin's ``owner`` tuple on the estate is
 seeded as the chart's bootstrap hook seeds it; everything else goes through the doors.
@@ -60,7 +61,7 @@ def estate(governed_catalog: Any) -> tuple[Any, _Recorder]:  # noqa: ANN401 — 
     _ok(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")))
     for user, relation in (("dex~alice", "admin"), ("dex~bob", "admin"), ("dex~gina", "member")):
         _ok(catalog.client.put("/management/v1/projects/acme/members", json={"user": user, "relation": relation}, headers=catalog.bearer("root")))
-    for relation, obj in (("assignee", "role:stewards"), ("curator", "classification:pii")):
+    for relation, obj in (("assignee", "role:stewards"), ("curator", "classification:pii"), ("event_reader", "estate:rask")):
         tuple_body = {"user": fga.user_object(ALICE), "relation": relation, "object": obj}
         _ok(catalog.client.post("/management/v1/access/tuples", json=tuple_body, headers=catalog.bearer("root")))
     return catalog, recorder
@@ -77,6 +78,7 @@ def test_the_door_revokes_every_grant_naming_the_principal_and_records_it_delete
         (fga.user_object(ALICE), "admin", "project:acme"),
         (fga.user_object(ALICE), "assignee", "role:stewards"),
         (fga.user_object(ALICE), "curator", "classification:pii"),
+        (fga.user_object(ALICE), "event_reader", "estate:rask"),
     }
 
     deleted = _ok(catalog.client.delete(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))).json()
@@ -85,7 +87,7 @@ def test_the_door_revokes_every_grant_naming_the_principal_and_records_it_delete
     assert {t for t in before if t[0] != fga.user_object(ALICE) and t[1] != fga.ADMIN_REVISION} <= catalog.store.tuples()
     record = _ok(catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))).json()
     assert (record["principal"], record["kind"], record["deleted_by"], record["deleted_at"] is not None) == (ALICE, "person", "dex~root", True)
-    assert deleted["revoked"] == 3
+    assert deleted["revoked"] == 4
     assert [(e.action, e.object_type, e.object_id, e.extra["subject"]) for e in recorder.events if e.action == "principal_deleted"] == [
         ("principal_deleted", "principal", fga.user_object(ALICE), fga.user_object(ALICE))
     ]
@@ -114,8 +116,8 @@ def test_a_deletion_that_would_strand_an_administration_or_undo_git_is_refused_w
         # carol holds the estate rung only through a role, so no tuple of hers is on the estate itself.
         catalog.store.write(("role:ops#assignee", "owner", "estate:rask"), (catalog.person("carol"), "assignee", "role:ops"))
     if arrange == "an-estate-authority":
-        # As the chart's bootstrap hook grants a service an estate rung (`event_reader`, a decision role).
-        catalog.store.write((catalog.person("alice"), "event_reader", "estate:rask"))
+        # As the chart's bootstrap hook grants the estate admin its values name.
+        catalog.store.write((catalog.person("alice"), "admin", "estate:rask"))
     if arrange == "named-in-the-catalogs-settings":
         # As the chart names a provenance writer, which the catalog grants at boot.
         monkeypatch.setenv("LANCE_PROVENANCE_WRITERS", json.dumps([ALICE]))

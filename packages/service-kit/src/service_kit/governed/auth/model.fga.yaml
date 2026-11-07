@@ -195,22 +195,30 @@ tuples:
 tests:
   - name: the project admin split is additive, and a split rung does not imply the others
     # Two claims, and the second is the one worth a test: `admin` reaching every rung is what makes
-    # this safe to add, and a security_admin NOT reaching data_admin is what makes it worth adding.
+    # this safe to add, and a security_admin NOT reaching `admin` is what makes it worth adding. What a
+    # security admin holds is security work alone: making roles, seeing and granting who may decide on the
+    # project ([[LH-563]]), and reading the project's grants.
     check:
       - user: user:alice # acme admin via role:acme_admins
         object: project:acme
         assertions:
           admin: true
           security_admin: true
-          data_admin: true
           role_creator: true
+          can_decide_access: true
+          can_grant_decider: true
+          can_read_assignments: true
       - user: user:grace # security_admin ONLY
         object: project:acme
         assertions:
           security_admin: true
           role_creator: true
-          data_admin: false
+          can_decide_access: true
+          can_grant_decider: true
+          can_read_assignments: true
           admin: false
+          can_administer: false
+          can_create_warehouse: false
   - name: a role is filled and deleted by its project's security admins, and read by its members
     # [[LH-557]]. Lakekeeper's `can_grant_assignee` (role.fga) without its per-role ownership: role_creator mints a
     # role and does not decide who is in it. Each negative holds the rung just below the one asked.
@@ -1489,12 +1497,13 @@ tests:
       - user: user:provisioner
         relation: operator
         object: estate:rask
-      # The tuple the chart's bootstrap hook writes for a notifier's feed walker it is told of by name ([[CTL-021]]).
+      # A notifier's feed walker, granted the whole feed at the estate admin's tuple door ([[CTL-021]], [[LH-563]]).
       - user: user:a-notifier
         relation: event_reader
         object: estate:rask
-      # The tuples the chart's bootstrap hook writes for the check-only services ([[LH-442]]): every one is a
-      # `decider`, the notifier alone a `member_expander`, lineage alone a `governance_prober`.
+      # The estate-wide check-only services ([[LH-442]]): lineage's roles, which the chart's bootstrap hook writes, and
+      # two clients the estate admin grants at the tuple door. Every one is a `decider`, the notifier alone a
+      # `member_expander`, lineage alone a `governance_prober`.
       - user: user:lineage
         relation: decider
         object: estate:rask
@@ -1605,6 +1614,71 @@ tests:
         assertions:
           can_create_project: false
           can_observe_events: false
+
+  # ------------------------------------------------------------------------------------------------
+  # [[LH-563]] — a service decides only inside the project or warehouse it is granted the asking on
+  # ------------------------------------------------------------------------------------------------
+  - name: a decider decides on the project or warehouse it is granted and the objects beneath, and nowhere else
+    # A service's `decider` is granted at a project's or a warehouse's access door, and the decision door asks
+    # `can_decide_access` on each object a question names. The scope reaches down the data hierarchy and never across
+    # a tenant or up to the estate, and it is no rung on the data: deciding about a table is not reading it.
+    tuples:
+      - { user: user:svc-acme, relation: decider, object: project:acme }
+      - { user: user:svc-research-bucket, relation: decider, object: warehouse:research_bucket }
+      - { user: warehouse:research_bucket, relation: parent, object: namespace:research_raw }
+      - { user: namespace:research_raw, relation: parent, object: table:research_raw_scans }
+      - { user: user:lineage, relation: decider, object: estate:rask }
+    check:
+      - user: user:svc-acme
+        object: project:acme
+        assertions: { can_decide_access: true, can_grant_decider: false, can_administer: false }
+      - user: user:svc-acme
+        object: warehouse:acme_bucket
+        assertions: { can_decide_access: true, can_grant_decider: false }
+      - user: user:svc-acme
+        object: namespace:acme_silver
+        assertions: { can_decide_access: true, can_get_metadata: false }
+      - user: user:svc-acme
+        object: table:acme_silver_features
+        assertions: { can_decide_access: true, can_get_metadata: false, can_read_data: false }
+      - user: user:svc-acme
+        object: materialized_view:acme_silver$daily_agg
+        assertions: { can_decide_access: true, can_read: false }
+      # Another tenant's objects, and the estate root, stay out of reach.
+      - user: user:svc-acme
+        object: table:research_raw_scans
+        assertions: { can_decide_access: false }
+      - user: user:svc-acme
+        object: estate:rask
+        assertions: { can_decide_access: false }
+      # A warehouse's decider decides there and below, and not on its project or on another warehouse.
+      - user: user:svc-research-bucket
+        object: table:research_raw_scans
+        assertions: { can_decide_access: true }
+      - user: user:svc-research-bucket
+        object: project:research
+        assertions: { can_decide_access: false }
+      - user: user:svc-research-bucket
+        object: table:acme_silver_features
+        assertions: { can_decide_access: false }
+      # A project's security admin decides on its objects; another project's admin does not.
+      - user: user:grace
+        object: table:acme_silver_features
+        assertions: { can_decide_access: true }
+      - user: user:frank
+        object: table:acme_silver_features
+        assertions: { can_decide_access: false }
+      # The estate rung does not reach into a project: the door answers an estate decider by the root alone.
+      - user: user:lineage
+        object: table:acme_silver_features
+        assertions: { can_decide_access: false }
+      # Granting the asking on a warehouse is its grant manager's: its writer may not, its project's admin may.
+      - user: user:dave
+        object: warehouse:acme_bucket
+        assertions: { can_grant_decider: false }
+      - user: user:alice
+        object: warehouse:acme_bucket
+        assertions: { can_grant_decider: true }
 
   # ------------------------------------------------------------------------------------------------
   # [[LH-055]] — the classification VOCABULARY is a tag type with per-tag `apply`

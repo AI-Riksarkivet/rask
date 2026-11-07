@@ -358,11 +358,12 @@ export interface paths {
         put?: never;
         /**
          * Decide Check
-         * @description Whether ``user`` holds ``relation`` on each object, and on the table each name names now, in one round trip.
+         * @description Whether ``user`` holds ``relation`` on each object, and on the table each name names now, inside the caller's scope.
          *
-         *     An object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it. A
-         *     table asked about by name is decided on the uuid the name resolves to now, and answered with that uuid and its
-         *     namespace's when allowed; a name naming no table a grant is held on is answered refused.
+         *     An object outside the caller's scope is answered False unasked, as is one that is no object id, which no tuple can
+         *     name. A table asked about by name is decided on the uuid the name resolves to now, and answered with that uuid and
+         *     its namespace's when allowed; a name naming no table a grant is held on, or one outside the scope, is answered
+         *     refused. The scope is asked, then the question, each as one round trip.
          */
         post: operations["decide_check_management_v1_decisions_check_post"];
         delete?: never;
@@ -1027,6 +1028,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/projects/{id}/access/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant Project Access
+         * @description Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]).
+         *
+         *     The rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and
+         *     nothing beyond them. Who belongs to the project is the members door's.
+         */
+        post: operations["grant_project_access_management_v1_projects__id__access_grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{id}/access/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Project Access
+         * @description Effective access on the project, per ``can_*`` action, to who may see its grants: its security admins ([[LH-563]]).
+         *
+         *     Lists who may ask the decision door about the project's objects (``can_decide_access``) beside its other actions.
+         */
+        post: operations["list_project_access_management_v1_projects__id__access_list_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/projects/{id}/access/my-permissions": {
         parameters: {
             query?: never;
@@ -1060,6 +1106,26 @@ export interface paths {
          *     and a migration story behind it, which is not something a UI-gating endpoint should drag in.
          */
         post: operations["my_project_permissions_management_v1_projects__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{id}/access/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Project Access
+         * @description Revoke a rung on the project from a subject, gated by :func:`require_project_revoke` ([[LH-563]]).
+         */
+        post: operations["revoke_project_access_management_v1_projects__id__access_revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11016,6 +11082,78 @@ export interface operations {
             };
         };
     };
+    grant_project_access_management_v1_projects__id__access_grant_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_project_access_management_v1_projects__id__access_list_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     my_project_permissions_management_v1_projects__id__access_my_permissions_post: {
         parameters: {
             query?: {
@@ -11037,6 +11175,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_project_access_management_v1_projects__id__access_revoke_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
                 };
             };
             /** @description Validation Error */

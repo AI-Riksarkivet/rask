@@ -13362,7 +13362,7 @@
     },
     "/management/v1/decisions/check": {
       "post": {
-        "description": "Whether ``user`` holds ``relation`` on each object, and on the table each name names now, in one round trip.\n\nAn object that is no object id is answered False unasked, as `fga.batch_check` answers it: no tuple can name it. A\ntable asked about by name is decided on the uuid the name resolves to now, and answered with that uuid and its\nnamespace's when allowed; a name naming no table a grant is held on is answered refused.",
+        "description": "Whether ``user`` holds ``relation`` on each object, and on the table each name names now, inside the caller's scope.\n\nAn object outside the caller's scope is answered False unasked, as is one that is no object id, which no tuple can\nname. A table asked about by name is decided on the uuid the name resolves to now, and answered with that uuid and\nits namespace's when allowed; a name naming no table a grant is held on, or one outside the scope, is answered\nrefused. The scope is asked, then the question, each as one round trip.",
         "operationId": "decide_check_management_v1_decisions_check_post",
         "parameters": [
           {
@@ -15603,6 +15603,148 @@
         ]
       }
     },
+    "/management/v1/projects/{id}/access/grant": {
+      "post": {
+        "description": "Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]).\n\nThe rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and\nnothing beyond them. Who belongs to the project is the members door's.",
+        "operationId": "grant_project_access_management_v1_projects__id__access_grant_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Grant Project Access",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/management/v1/projects/{id}/access/list": {
+      "post": {
+        "description": "Effective access on the project, per ``can_*`` action, to who may see its grants: its security admins ([[LH-563]]).\n\nLists who may ask the decision door about the project's objects (``can_decide_access``) beside its other actions.",
+        "operationId": "list_project_access_management_v1_projects__id__access_list_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Project Access",
+        "tags": [
+          "access"
+        ]
+      }
+    },
     "/management/v1/projects/{id}/access/my-permissions": {
       "post": {
         "description": "What the caller may do on this project \u2014 same self-view, same explicit gate as the warehouse\nrung (``/management/v1/projects/\u2026`` is likewise outside ``_RESOURCES``).\n\nThe project rung is where the estate's most irreversible action lives (`DELETE /management/v1/projects/{id}`\nhas no cascade at all), so this is the one whose absence forced the UI to show a delete button and\ndiscover the answer from a 403.\n\nGATED ON `member`, A BASE RUNG, and that is a deliberate departure worth reading. Every other\nsurface here gates on a `can_*` action, but the `project` type defines NO reader-tier action \u2014 its\nwhole action surface is `can_administer` / `can_create_warehouse` / `can_grant_*` /\n`can_read_assignments`, all admin tier. `can_get_metadata`, the analogy with table and namespace,\ndoes not exist on this type, and OpenFGA rejects an undefined relation with a 400 that fails closed\nto a 503 for every caller, so gating on it would make this endpoint permanently unavailable.\n\n`member` is the reader-equivalent for this type: it is the tier ordinary tenant work sits at, and a\ncaller with no relationship to the project still gets a 403 rather than learning the tenant exists.\nSo a 200 here is how any client learns, on a person's own token, that the person is a member of the\ntenant, and `can_administer` that they administer it (ADR 0171). The alternative \u2014 adding\n`can_get_metadata: member` to the model for symmetry \u2014 is a MODEL change with `.fga.yaml` updates\nand a migration story behind it, which is not something a UI-gating endpoint should drag in.",
@@ -15664,6 +15806,82 @@
           }
         ],
         "summary": "My Project Permissions",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/management/v1/projects/{id}/access/revoke": {
+      "post": {
+        "description": "Revoke a rung on the project from a subject, gated by :func:`require_project_revoke` ([[LH-563]]).",
+        "operationId": "revoke_project_access_management_v1_projects__id__access_revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Project Access",
         "tags": [
           "access"
         ]

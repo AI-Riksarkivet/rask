@@ -14,9 +14,8 @@ nothing reported it; a tenant onboarded that day was silently unmaintainable.
 SO THE GATE READS THE RENDER, not the settings class. A test that constructs `Settings(...)` with a
 list proves the seeding works when told; only the render proves anything ever tells it.
 
-The provenance namespace's lists are filled the same way ([[LH-529]]): its retention, and the ServiceAccounts outside
-this release that compact its tables, named in the estate's own values. That a named account is the one a maintenance
-job runs as is that job's release's to keep.
+The provenance namespace's retention is filled the same way ([[LH-529]]), from the estate's own values, and so is the list
+of the release's own accounts, the only ones whose `writer` the catalog's boot takes back ([[LH-563]]).
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ from typing import Any
 
 import yaml
 
-from tests.unit.chart_render import REPO, env_of, render
+from tests.unit.chart_render import DEFAULT_ARGS, REPO, containers, env_of, render
 from tests.unit.test_invariants import _helm_template
 
 
@@ -60,15 +59,10 @@ def test_the_catalog_seeds_maintenance_no_data_rung() -> None:
     )
 
 
-def test_the_provenance_tables_are_maintained_by_the_accounts_the_estate_names() -> None:
-    """The estate's catalog keeps the provenance tables' declared versions and grants their compaction to exactly the
-    ServiceAccount a compaction job's values name, `<namespace>:<name>` rendered as that account's subject. A list
-    rendered empty grants nobody, and the tables grow unbounded with nothing reporting it. The job's own release supplies
-    the account (XC-191), so the estate's overlay is given one here as that release would give it."""
-    estate = render(
-        "--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"),
-        "--set-json", 'services.lineage.provenanceMaintainers=["default:a-compactor"]',
-    )  # fmt: skip
+def test_the_provenance_tables_keep_the_versions_the_estate_declares() -> None:
+    """The estate's catalog is told the provenance tables' retention, so maintenance keeps their history short. Rendered
+    empty, the sweep's seven days of versions apply, and every open of a feed table lists them all."""
+    estate = render("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
     catalog = next(
         env_of(container)
         for doc in estate
@@ -77,5 +71,17 @@ def test_the_provenance_tables_are_maintained_by_the_accounts_the_estate_names()
         if container["name"] == "catalog"
     )
 
-    assert json.loads(catalog["LANCE_PROVENANCE_MAINTAINERS"]) == ["kubernetes~system:serviceaccount:default:a-compactor"]
     assert catalog["LANCE_PROVENANCE_RETAIN_VERSIONS"] == "20"
+
+
+def test_the_catalog_takes_back_a_writer_only_from_the_accounts_the_bootstrap_hook_converges() -> None:
+    """The catalog's boot and the bootstrap hook converge one list of the release's own accounts, and every provenance
+    writer the catalog is told is on it, so a writer the release stops naming is taken back at the next boot. Rendered
+    empty, the boot takes back nothing and the retired writer keeps writing lineage's tables."""
+    rendered = containers(render(*DEFAULT_ARGS))
+    catalog = next(env_of(container) for workload, name, container in rendered if workload.endswith("-catalog") and name == "catalog")
+    hook = next(env_of(container) for workload, _, container in rendered if workload.endswith("-bootstrap-admin"))
+    own, writers = json.loads(catalog.get("LANCE_OWN_ACCOUNTS", "[]")), json.loads(catalog["LANCE_PROVENANCE_WRITERS"])
+
+    assert own == json.loads(hook["FGA_OWN_ACCOUNTS"])
+    assert writers and set(writers) <= set(own), f"provenance writers {writers} outside the release's own accounts {own}"

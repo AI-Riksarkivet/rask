@@ -1,11 +1,9 @@
 # What the console's release supplies to the lakehouse release it runs beside ([[XC-191]]): the lakehouse names no
 # client, so the admission lives here, and `make k3s-up` layers every fixture's `lakehouse-values.yaml` onto the
 # lakehouse release, so an install from git admits it. Every name below is the inbox's (Dapr app id `notifications`,
-# ServiceAccount `rask-sa-notifications` in `default`), as chart/values.yaml derives them.
-auth:
-  # The catalog's decision door answers the inbox's account: `decider` for its visibility and watch checks,
-  # `member_expander` for a userset's members, `event_reader` for lineage's whole run feed (`GET /events/projection`).
-  externalDeciders: {"default:rask-sa-notifications": ["decider", "member_expander", "event_reader"]}
+# ServiceAccount `rask-sa-notifications` in `default`), as chart/values.yaml derives them. No values file grants the
+# inbox a role on the catalog's decision door: a role is a grant to its ServiceAccount made at the catalog's access
+# doors ([[LH-563]]), and it holds none until one is made.
 nats:
   auth:
     users:

@@ -636,12 +636,29 @@ can never drift into a profile that sets neither.
 A caller's projected identity, one volume per door audience it calls ([[LH-220]], D1); rationale in
 values.yaml `auth.serviceAccountIssuer`. Call: include "lance.identityTokens" (list "volumes"|"mounts" <aud>...).
 
+## `{{- define "lance.accountOf" -}}`
+
+The username the cluster's issuer gives a ServiceAccount of the release's namespace,
+`system:serviceaccount:<release namespace>:<serviceaccount>`: the `sub` of its tokens. The one place the chart spells it.
+Call: include "lance.accountOf" (list $root <serviceaccount name>).
+
+## `{{- define "lance.subjectOf" -}}`
+
+The subject a ServiceAccount of the release's namespace is, `kubernetes~` and its username (`lance.accountOf`, ADR 0156
+C5): the principal every grant, author and signing identity names, and the one place the chart joins the issuer prefix.
+Call: include "lance.subjectOf" (list $root <serviceaccount name>).
+
+## `{{- define "lance.saName" -}}`
+
+The ServiceAccount of one of the release's own services, `<release>-sa-<component>` (security-sa.yaml), the one place
+the chart spells the name. Call: include "lance.saName" (list $root <component>).
+
 ## `{{- define "lance.saSubject" -}}`
 
 The subject one of the release's own services is: `kubernetes~system:serviceaccount:<release namespace>:<release>-sa-<name>`
-(ADR 0156 C5), the subject of the ServiceAccount its pod runs as. Every grant, author and signing identity the chart
-names for a service is this, so none can name a subject the pod does not authenticate as.
-Call: include "lance.saSubject" (list $root <name>).
+(ADR 0156 C5), the subject of the ServiceAccount its pod runs as (`lance.subjectOf` of `lance.saName`). Every grant,
+author and signing identity the chart names for a service is this, so none can name a subject the pod does not
+authenticate as. Call: include "lance.saSubject" (list $root <name>).
 
 ## `{{- define "lance.saComponents" -}}`
 
@@ -659,8 +676,9 @@ no account ([[XC-165]]).
 
 ## `{{- define "lance.saAccount" -}}`
 
-The ServiceAccount username one of the release's services runs as, `system:serviceaccount:<release namespace>:<release>-sa-<name>`:
-the `sub` the cluster's issuer puts in its tokens, and `lance.saSubject` without the issuer prefix. The object store's
+The ServiceAccount username one of the release's services runs as, `system:serviceaccount:<release namespace>:<release>-sa-<name>`
+(`lance.accountOf` of `lance.saName`): the `sub` the cluster's issuer puts in its tokens, and `lance.saSubject` without
+the issuer prefix. The object store's
 identity provider maps a token to the canned policy its `sub` names, so the scoped-users hook writes the catalog's
 policy under this name (ADR 0170).
 Call: include "lance.saAccount" (list $root <name>).
@@ -737,21 +755,20 @@ The ServiceAccounts OpenFGA admits (`authn.oidc.subjects`), comma-joined: exactl
 
 ## `{{- define "lance.fgaEstateRoles" -}}`
 
-THE MACHINE ROLES ON THE ESTATE ROOT, one JSON object from each account's subject to the roles it holds there, which
-bootstrap-admin reads as `FGA_ESTATE_ROLES`, grants, and converges the store to ([[LH-442]], [[CTL-021]];
-bootstrap-admin.yaml.md). Empty with auth off. Lineage's own are `decider` (the catalog decision door's `check`) and
-`governance_prober` (its `governed`), on its in-release subject (`lance.saSubject`). Each `auth.externalDeciders` key is
-a ServiceAccount outside this release, `<namespace>:<name>`, whose subject is
-`kubernetes~system:serviceaccount:<namespace>:<name>`, the one the doors verify that account's projected token as,
-mapped to the roles it holds: `decider`, `member_expander` (the door's `list-users` over a membership userset) and
-`event_reader` (lineage's whole run feed, `GET /events/projection`). So a client of the lakehouse, none of which this
-chart renders, holds exactly the routes it calls: a client that only asks for decisions `decider` alone, a notifier
-all three.
+THE MACHINE ROLES ON THE ESTATE ROOT THE RELEASE DECLARES, one JSON object from each account's subject to the roles it
+holds there, which bootstrap-admin reads as `FGA_ESTATE_ROLES`, grants, and converges the release's own accounts to
+([[LH-442]], [[LH-563]]; bootstrap-admin.yaml.md). Empty with auth off. They are lineage's alone: `decider` (the catalog
+decision door's `check`, estate-wide, since lineage records every tenant's runs) and `governance_prober` (its `governed`
+and `locate`), on its in-release subject (`lance.saSubject`). A client of the lakehouse, none of which this chart
+renders, is granted its roles at the catalog's access doors as its own identity, and this chart declares none.
 
-THE RENDER FAILS rather than grant what nobody declared: a key that is not `<namespace>:<serviceaccount>` (lower-case
-letters, digits and `-`, and `.` in the name), an account mapped to no role, and a role outside those three.
-`governance_prober` is lineage's alone (the door's `governed`, asked when lineage decides whether a refused output can
-ever be granted), so the map cannot grant it. A role named twice is granted once.
+## `{{- define "lance.ownAccounts" -}}`
+
+THE RELEASE'S OWN ACCOUNTS, the subject of every ServiceAccount it renders (`lance.subjectOf` of each of
+`lance.serviceAccounts`), which bootstrap-admin reads as `FGA_OWN_ACCOUNTS` and the catalog as `LANCE_OWN_ACCOUNTS`:
+the accounts whose estate roles and provenance `writer` are what git declares ([[LH-563]]). Built from the list the
+release renders rather than from a name prefix, since a client's ServiceAccount may carry the release's prefix and is no
+account of this release.
 
 ## `{{- define "lance.governedFgaPins" -}}`
 

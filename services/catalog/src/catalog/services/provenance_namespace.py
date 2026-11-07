@@ -14,16 +14,18 @@ namespace. It is protected against deletion.
 
 ITS HISTORY IS BOUNDED AS EVERY TABLE'S IS ([[LH-529]]). Each recorded event is a commit, so each of its tables gains a
 version and a fragment per event, and Lance lists `_versions/` on every open. `LANCE_PROVENANCE_RETAIN_VERSIONS` is the
-namespace's maintenance policy, the last versions maintenance's expiry keeps; each `LANCE_PROVENANCE_MAINTAINERS`
-subject, a bring-your-own compaction job, is granted `reader` and `maintainer`, which is what a compaction through
-`version/create` needs (ADR 0162), and never `writer`, so its commits change how the tables are stored and never what
-they say. The write tier a spec door vends it can still put over a committed data file, as a writer's can: no session
-policy refuses a put over an existing key (`catalog.core.vending.build_session_policy`).
+namespace's maintenance policy, the last versions maintenance's expiry keeps. A bring-your-own compaction job compacts
+its tables on `reader` and `maintainer`, what a compaction through `version/create` needs (ADR 0162), granted to its own
+identity at the namespace's access door ([[LH-563]]) and never `writer`, so its commits change how the tables are stored
+and never what they say. The write tier a spec door vends it can still put over a committed data file, as a writer's
+can: no session policy refuses a put over an existing key (`catalog.core.vending.build_session_policy`).
 
-THE GRANTS ARE WHAT THE SETTINGS DECLARE, both ways. Who may write and who may compact it are configuration alone, so a
-direct `writer` or `maintainer` tuple on the namespace that the settings do not name is revoked at boot, with the
-`reader` granted beside a maintainer; a `reader` granted any other way stands. A replica booting with an older list
-during a rollout grants and revokes by that list until a replica boots again.
+THE WRITERS ARE WHAT THE SETTINGS DECLARE, both ways, for the release's own accounts: recording lineage is the
+lakehouse's own, so a direct `writer` tuple on the namespace naming one of `LANCE_OWN_ACCOUNTS` that `LANCE_PROVENANCE_WRITERS`
+does not name is revoked at boot, as the bootstrap hook converges those accounts' estate roles ([[LH-563]]). Every other
+grant there was made at a door and stands, a compaction job's, a reader's and a writer granted to an account outside the
+release alike. A replica booting with an older list during a rollout grants and revokes by that list until a replica
+boots again.
 
 A ROW WRITE UNDER IT IS NEVER ANNOUNCED (`catalog.core.lineage_emit`). Lineage records every announcement as a row
 of these tables, so announcing that row's own commit would record it again, without end. A compaction is announced: it
@@ -37,7 +39,7 @@ holds, and never fails its own boot on it: until it holds, lineage retries creat
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
@@ -66,11 +68,9 @@ def is_provenance(namespace_id: str, settings: Settings) -> bool:
     return bool(root) and (namespace_id == root or namespace_id.startswith(f"{root}{CATALOG_DELIMITER}"))
 
 
-#: What a provenance maintainer is granted: the rungs a compaction through `version/create` needs, and no write.
-_MAINTAINER_RUNGS = ("reader", "maintainer")
-#: The relations on the namespace that configuration alone grants, so a direct tuple of either that the settings do not
-#: name is revoked at boot.
-_DECLARED_RELATIONS = frozenset({"writer", "maintainer"})
+#: The relation on the namespace that configuration grants the release's own accounts, so a direct tuple of it naming
+#: one of them that the settings do not name is revoked at boot.
+_DECLARED_RELATION = "writer"
 
 
 def is_unannounced(namespace_id: str, operation: str, settings: Settings) -> bool:
@@ -87,37 +87,23 @@ def announcer(segments: Sequence[str], settings: Settings) -> Callable[[str], bo
 
 
 def provenance_tuples(settings: Settings, *, namespace_uuid: str, parent: str | None) -> list[fga.ClientTuple]:
-    """The namespace's parent edge, a `writer` grant per configured writer and the compaction rungs per configured
-    maintainer, on the namespace's uuid ([[LH-524]])."""
+    """The namespace's parent edge and a `writer` grant per configured writer, on the namespace's uuid ([[LH-524]])."""
     obj = fga.namespace_object(namespace_uuid)
     return [
         *([fga.ClientTuple(user=parent, relation="parent", object=obj)] if parent else []),
-        *(fga.ClientTuple(user=fga.user_object(subject), relation="writer", object=obj) for subject in settings.provenance_writers),
-        *(
-            fga.ClientTuple(user=fga.user_object(subject), relation=rung, object=obj)
-            for subject in settings.provenance_maintainers
-            for rung in _MAINTAINER_RUNGS
-        ),
+        *(fga.ClientTuple(user=fga.user_object(subject), relation=_DECLARED_RELATION, object=obj) for subject in settings.provenance_writers),
     ]
 
 
-async def revoke_undeclared(client: OpenFgaClient, declared: list[fga.ClientTuple], *, obj: str) -> list[fga.ClientTuple]:
-    """Revoke each `writer` or `maintainer` tuple on ``obj`` that ``declared`` does not hold, and the `reader` granted beside
-    each such maintainer; answer the tuples removed.
-
-    The `reader` goes first, so a boot that fails between the two finds the `maintainer` still there when it retries.
-    """
+async def revoke_undeclared(client: OpenFgaClient, declared: list[fga.ClientTuple], *, obj: str, own: Collection[str]) -> list[fga.ClientTuple]:
+    """Revoke each `writer` tuple on ``obj`` naming a user in ``own`` that ``declared`` does not hold; answer the tuples
+    removed. ``own`` is the release's own accounts as users (`fga.user_object`)."""
     kept = {(t.user, t.relation) for t in declared}
     stale: list[fga.ClientTuple] = []
     token: str | None = None
     while True:
         page, token = await fga.read_tuples(client, obj=obj, continuation_token=token)
-        for held in page:
-            if held.relation not in _DECLARED_RELATIONS or (held.user, held.relation) in kept:
-                continue
-            if held.relation == "maintainer":
-                stale.append(fga.ClientTuple(user=held.user, relation="reader", object=obj))
-            stale.append(held)
+        stale += [held for held in page if held.relation == _DECLARED_RELATION and held.user in own and (held.user, held.relation) not in kept]
         if not token:
             break
     return await fga.delete_tuples(client, stale, actor=ACTOR, origin="provenance_namespace")  # noqa: TID251
@@ -177,7 +163,8 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
         )
         tuples = provenance_tuples(settings, namespace_uuid=namespace_uuid, parent=parent)
         await fga.write_tuples(client, tuples, actor=ACTOR, origin="provenance_namespace")  # noqa: TID251
-        revoked = await revoke_undeclared(client, tuples, obj=fga.namespace_object(namespace_uuid))
+        own = {fga.user_object(account) for account in settings.own_accounts}
+        revoked = await revoke_undeclared(client, tuples, obj=fga.namespace_object(namespace_uuid), own=own)
     else:
         revoked = []
     log.info(
@@ -186,7 +173,6 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
             "namespace": canonical,
             "newly_created": not kept,
             "writers": len(settings.provenance_writers),
-            "maintainers": len(settings.provenance_maintainers),
             "revoked": len(revoked),
             "retain_versions": settings.provenance_retain_versions,
         },

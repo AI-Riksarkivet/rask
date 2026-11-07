@@ -1,6 +1,6 @@
 # 0189. The product chart carries no engine seam: a bring-your-own engine is a client like any other (2026-11-01)
 
-**Status:** accepted. Source: XC-182 (#694), widened, un-parked and counted by the owner on 2026-11-01 through the
+**Status:** accepted, amended by [ADR 0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) (neither extension point remains: a client's roles are grants made at the catalog's access doors). Source: XC-182 (#694), widened, un-parked and counted by the owner on 2026-11-01 through the
 multi-question tool, after that day's boundary map of what the lakehouse still renders for its clients. Amends
 [ADR 0153](0153-the-app-chart-is-the-product.md), whose decision had the lakehouse name an engine endpoint through its
 settings (`ray.dashboardUrl` and its token reference).

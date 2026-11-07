@@ -330,12 +330,11 @@ class CatalogLineageSettings(BaseSettings):
     #: (`kubernetes~system:serviceaccount:<ns>:<sa>`). Each is granted `writer` on the namespace at boot, which
     #: reaches every table in it and nothing outside it. A bare name is refused when the settings are read.
     provenance_writers: list[PrincipalKey] = Field(default_factory=list, alias="LANCE_PROVENANCE_WRITERS")
-    #: The principals that compact the provenance namespace's tables: a bring-your-own compaction job's
-    #: service-account principal. Each is granted `reader` and `maintainer` on the namespace at boot, what a compaction
-    #: needs (it reads every row and rewrites how they are stored), and never `writer`, so no commit of its changes what
-    #: the provenance says; the write tier it is vended can still put over a committed data file, as a writer's can
-    #: (`vending.build_session_policy`). A principal no longer named loses both at the next boot.
-    provenance_maintainers: list[PrincipalKey] = Field(default_factory=list, alias="LANCE_PROVENANCE_MAINTAINERS")
+    #: The accounts the release that deploys this catalog renders (the chart's `lance.ownAccounts`, the list its bootstrap
+    #: hook converges): the boot takes back a `writer` on the provenance namespace that `provenance_writers` no longer
+    #: names only from one of these, so a `writer` granted at the namespace's access door to any other account stands
+    #: ([[LH-563]]). A bare name is refused when the settings are read. Empty, the code default, takes back none.
+    own_accounts: list[PrincipalKey] = Field(default_factory=list, alias="LANCE_OWN_ACCOUNTS")
     #: The versions maintenance keeps of each provenance table: the namespace's maintenance policy (keep the last N),
     #: which the catalog writes at boot, so the history every open of those tables lists stays short ([[LH-529]]). No
     #: lineage read holds a version longer than one read. Unset, the catalog removes the policy it wrote while it stands as

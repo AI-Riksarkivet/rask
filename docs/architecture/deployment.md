@@ -269,10 +269,11 @@ names none of it:
   redirecting to `/auth/callback` on `:8080` and the Vite dev server's `:5173`, the dev server's origin allowed for
   CORS), which `make k3s-fixtures` layers onto Dex by glob. The Dex fixture enforces S256 PKCE on every authorization
   code and serves no device grant; its own client `rask-web` is confidential, for the live lanes' password grant.
-- **Its admissions.** `deploy/fixtures/console/lakehouse-values.yaml` maps the inbox's ServiceAccount to its estate roles
-  (`auth.externalDeciders`) and grants its sidecar its secret-store reads through `openbao.externalReaders`, an
-  allowlist: a reader may hold only `nats-user-<app>`, `<app>-<name>` and `signing-public-<name>`, and the render
-  refuses a lakehouse app id or any name another identity holds.
+- **Its admissions.** `deploy/fixtures/console/lakehouse-values.yaml` grants the inbox's sidecar its secret-store reads
+  through `openbao.externalReaders`, an allowlist: a reader may hold only `nats-user-<app>`, `<app>-<name>` and
+  `signing-public-<name>`, and the render refuses a lakehouse app id or any name another identity holds. The inbox's
+  roles on the catalog's decision door are grants to its ServiceAccount made at the catalog's access doors
+  ([[LH-563]]), which no values file holds.
 - **The inbox's state.** A CloudNativePG `Cluster` the release renders by default, or a platform's Postgres named by
   `state.external.connectionSecret` (with `caSecret` for `verify-full` and `egress` for the NetworkPolicy), in which
   case no Cluster is rendered.
@@ -372,17 +373,18 @@ returns a `RaskLakehouse` whose `Service` serves the catalog on 2333, lineage on
 
 A client integrates with it as its production release does ([[XC-189]]), with nothing done by hand:
 
-- `values` is a values file with the chart values the client's release sets: the `auth.externalDeciders` entry naming
-  its ServiceAccount and the roles it holds, `networkPolicy.objectStoreExtraFrom`. A key the stack sets with `--set`
-  (`scripts/stack_values.sh`) stays the stack's, because Helm applies `--set` over every values file; `route.enabled` is
-  one, since the session's cluster runs no Gateway.
+- `values` is a values file with the chart values the client's release sets: `networkPolicy.objectStoreExtraFrom`. A
+  key the stack sets with `--set` (`scripts/stack_values.sh`) stays the stack's, because Helm applies `--set` over every
+  values file; `route.enabled` is one, since the session's cluster runs no Gateway.
 - `dexClient`, `dexClientSecret` and `dexRedirectUris` register the client's own sign-in client with the Dex fixture
   (its `clients`), which the lakehouse's audience trusts, so a person signed in through it holds a token the doors take.
 - `ServiceAccountToken(account, audience)` is the token the client's pod would project, for a client running outside
-  the cluster: `account` is the `<namespace>:<name>` its `externalDeciders` entry names, and `audience` one door's,
-  `rask-catalog` (the decision door included) or `rask-lineage` (the intake). The ServiceAccount is created as the
-  client's own release would render it, and holds what the values grant it; an account the release or a fixture
-  renders is refused, so a client cannot act as a lakehouse service.
+  the cluster: `account` is its `<namespace>:<name>`, and `audience` one door's, `rask-catalog` (the decision door
+  included) or `rask-lineage` (the intake). The ServiceAccount is created as the client's own release would render it;
+  an account the release or a fixture renders is refused, so a client cannot act as a lakehouse service.
+- The client's roles are granted to its own identity at the catalog's access doors, signed in as the estate admin
+  (alice@example.com), as its production deploy grants them ([[LH-563]]): `decider` on a project or a warehouse, a
+  compaction job's `reader` and `maintainer` on what it compacts.
 
 ## State stores
 

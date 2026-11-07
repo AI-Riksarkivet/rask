@@ -97,11 +97,10 @@ services:
     # Each recorded event is a commit, so every provenance table gains a version and a fragment per event, and Lance
     # lists a table's `_versions/` on every open ([[LH-529]]). The catalog writes this keep-last-N maintenance policy on
     # the namespace at boot, and maintenance's expiry reclaims down to it; no lineage read holds a version longer than
-    # one read. Fragments are bounded by a bring-your-own compaction job, named below.
+    # one read. Fragments are bounded by a bring-your-own compaction job, granted `reader` and `maintainer` on the
+    # namespace at its access door as its own identity ([[LH-563]]); this chart names no such job.
     # -- Versions maintenance keeps of each provenance table: the namespace's keep-last-N policy, written by the catalog at boot (`LANCE_PROVENANCE_RETAIN_VERSIONS`). Null declares none.
     provenanceRetainVersions: 20
-    # -- ServiceAccounts outside this release that compact the provenance tables, each `<namespace>:<name>` (e.g. `<namespace>:<name>`, which a compaction job's own release supplies); the catalog grants each `reader` and `maintainer` on the namespace at boot (`LANCE_PROVENANCE_MAINTAINERS`). Read only with auth on.
-    provenanceMaintainers: []
     # The relay tick: a Dapr cron binding POSTs to /<bindingName> on `schedule`. Each tick drains the outbox
     # (records and re-publishes every event a producer staged but never saw acknowledged), prunes the feed past
     # eventsRetentionDays, and forwards the feed to the graph backend `forward.url` names. Every step is
@@ -480,17 +479,11 @@ auth:
   fgaEgress: []
   # OpenFGA authorizes none of its callers, so only the services that write tuples hold a `rask-openfga` token
   # ([[LH-442]]); every other governed service asks the catalog's decision door (`/management/v1/decisions`) as its own
-  # ServiceAccount, holding the estate roles that open the routes it calls (`lance.fgaEstateRoles`, seeded by
-  # bootstrap-admin). A client of the lakehouse installed as its own release holds them from an account this chart does
-  # not render, so its name is listed here, from values the client's own release supplies,
-  # `<namespace>:<name>`, mapped to its roles: `decider` (the door's check), `member_expander` (its list-users over a
-  # membership userset) and `event_reader` (lineage's whole run feed, `GET /events/projection`). Each account holds
-  # exactly the roles named for it: bootstrap-admin revokes a machine role on the estate root that this map and lineage's
-  # own no longer declare, so an account removed here keeps nothing. Set it in a values file or with `--set-json`, since a
-  # key holds a `:`. OpenFGA reads its own subject list (the writers) only at start, so a change to it needs an OpenFGA
-  # restart.
-  # -- ServiceAccounts outside this release granted estate roles, each `<namespace>:<name>` mapped to its roles from `decider`, `member_expander` and `event_reader` (e.g. `{"<namespace>:<name>": ["decider"]}`, supplied from the client's own values); bootstrap-admin grants each exactly these and revokes what is no longer named. Read only with auth on.
-  externalDeciders: {}
+  # ServiceAccount. Lineage's estate roles are this release's own (`lance.fgaEstateRoles`, seeded by bootstrap-admin). A
+  # client of the lakehouse is granted its roles at the catalog's access doors as its own identity ([[LH-563]]), and
+  # this chart names none. OpenFGA reads its own subject list (the writers) only at start, so a change to it needs an
+  # OpenFGA restart.
+  #
   # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services, the openfga-model hook and the
   # bootstrap-admin Job) uses that store; empty (default) = the newest store named `lance-catalog`. A
   # MODEL pin makes every service check against that one model whatever its image carries; no deployment

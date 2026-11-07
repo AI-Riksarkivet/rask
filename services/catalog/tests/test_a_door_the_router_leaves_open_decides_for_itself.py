@@ -136,8 +136,7 @@ _DOORS: list[_Door] = [
     _Refusing(method="POST", route="/management/v1/access/list-objects", body={"user": "user:dex~alice", "relation": "admin", "type": "project"}),
     _Refusing(method="GET", route="/management/v1/access/principals/{principal:path}", params={"principal": "dex~alice"}),
     _Refusing(method="DELETE", route="/management/v1/access/principals/{principal:path}", params={"principal": "dex~alice"}),
-    # The decision door, each route behind the role of the service that asks it.
-    _Refusing(method="POST", route="/management/v1/decisions/check", body={"user": "user:dex~alice", "relation": "can_read_data", "tables": [TABLE]}),
+    # The decision door, each route but `check` behind the role of the service that asks it.
     _Refusing(method="POST", route="/management/v1/decisions/list-users", body={"relation": "member", "object": f"project:{PROJECT}"}),
     _Refusing(method="POST", route="/management/v1/decisions/governed", body={"objects": ["table:00000000-0000-4000-8000-000000000000"]}),
     _Refusing(method="POST", route="/management/v1/decisions/locate", body={"locations": ["s3://lakehouse/00000000-0000-4000-8000-000000000000"]}),
@@ -189,6 +188,9 @@ _DOORS: list[_Door] = [
         refused=_NOT_FOUND,
     ),
     _Refusing(method="POST", route="/management/v1/projects/{id}/access/my-permissions", params={"id": PROJECT}),
+    _Refusing(method="POST", route="/management/v1/projects/{id}/access/list", params={"id": PROJECT}, body={}),
+    _Refusing(method="POST", route="/management/v1/projects/{id}/access/grant", params={"id": PROJECT}, body={"user": "dex~erin", "relation": "decider"}),
+    _Refusing(method="POST", route="/management/v1/projects/{id}/access/revoke", params={"id": PROJECT}, body={"user": "dex~erin", "relation": "decider"}),
     _Refusing(method="GET", route="/management/v1/projects/{id}/policies", params={"id": PROJECT}),
     _Refusing(method="POST", route="/management/v1/project/{id}/policy/set", params={"id": PROJECT}, body={"retention_days": 7}),
     _Refusing(method="POST", route="/management/v1/project/{id}/policy/describe", params={"id": PROJECT}),
@@ -234,7 +236,13 @@ _DOORS: list[_Door] = [
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/access/revoke", params={"id": WAREHOUSE}, body={"user": "dex~erin", "relation": "reader"}),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/managed-access/describe", params={"id": WAREHOUSE}),
     _Refusing(method="POST", route="/management/v1/warehouse/{id}/managed-access/set", params={"id": WAREHOUSE}, body={"enabled": True}),
-    # The listings.
+    # The listings, and the decision door's check, which answers only what lies inside its caller's scope ([[LH-563]]).
+    _Listing(
+        method="POST",
+        route="/management/v1/decisions/check",
+        body={"user": "dex~alice", "relation": "can_read_data", "tables": [TABLE]},
+        shown={"allowed": {}, "tables": {TABLE: {"allowed": False, "table_uuid": None, "namespace_uuid": None}}},
+    ),
     _Listing(method="GET", route="/management/v1/projects", shown=[]),
     _Listing(method="GET", route="/management/v1/warehouses", shown=[]),
     _Listing(method="GET", route="/management/v1/warehouses/-/bindings", shown={"bindings": {}}),

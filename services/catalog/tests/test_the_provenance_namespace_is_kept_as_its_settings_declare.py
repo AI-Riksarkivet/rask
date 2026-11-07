@@ -1,12 +1,13 @@
-"""The catalog keeps its provenance namespace as its settings declare it ([[LH-529]], ADR 0158, ADR 0162, ADR 0174).
+"""The catalog keeps its provenance namespace as its settings declare it ([[LH-529]], [[LH-563]], ADR 0158, ADR 0174).
 
 Lineage's tables in the namespace gain a version and a fragment for each event lineage records, and Lance finds a
 table's latest version by listing ``_versions/`` on every open, so their history must be bounded the way every table's
-is. Two settings do it. ``LANCE_PROVENANCE_RETAIN_VERSIONS`` is the namespace's maintenance policy, the last versions
-maintenance's expiry keeps; and each ``LANCE_PROVENANCE_MAINTAINERS`` principal, a bring-your-own compaction job, is
-granted what a compaction needs, ``reader`` and ``maintainer``, and never ``writer``. Each boot holds the namespace to
-what the settings say then: a principal or a policy they no longer name is taken back, and a grant or a hold made at a
-door is not.
+is. ``LANCE_PROVENANCE_RETAIN_VERSIONS`` is the namespace's maintenance policy, the last versions maintenance's expiry
+keeps, and ``LANCE_PROVENANCE_WRITERS`` names who records lineage there. Each boot holds the namespace to what the
+settings say then: a policy they no longer name is taken back, and so is a writer they no longer name that is one of the
+release's own accounts (``LANCE_OWN_ACCOUNTS``). A grant or a hold made at a door is not, so a bring-your-own compaction
+job granted ``reader`` and ``maintainer`` at the namespace's access door keeps them, and an account outside the release
+granted ``writer`` there keeps it.
 
 The boot step is ``ensure_provenance_namespace``, the function the catalog's lifespan runs, driven on a real ``dir``
 namespace and a real OpenFGA store; the policy is read as maintenance reads it, off the control root.
@@ -30,10 +31,12 @@ from service_kit.governed import fga
 
 #: Lineage's service-account principal, the namespace's writer, as the chart names it.
 _LINEAGE = "kubernetes~system:serviceaccount:rask:rask-sa-lineage"
-#: A bring-your-own compaction job's principal, in a release of its own.
+#: A bring-your-own compaction job's principal, in a release of its own, granted at the namespace's access door.
 _COMPACTOR = "kubernetes~system:serviceaccount:rask:compactor"
-#: A writer an earlier release named and this one does not.
+#: One of the release's own accounts that an earlier release named a writer and this one does not.
 _RETIRED = "kubernetes~system:serviceaccount:rask:rask-sa-retired"
+#: An account outside the release, though it carries the release's prefix, granted `writer` at the namespace's access door.
+_RECORDER = "kubernetes~system:serviceaccount:rask:rask-sa-recorder"
 #: A person granted reading the namespace through the access door.
 _ANALYST = "dex~analyst"
 
@@ -45,8 +48,8 @@ def _settings_read_afresh() -> Iterator[None]:
 
 
 def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **declared: str) -> Settings:
-    """The settings one release declares: lineage the namespace's only writer, and no maintainer and no retention unless
-    ``declared`` names them."""
+    """The settings one release declares: lineage the namespace's only writer, lineage and the retired account the
+    release's own, and no retention unless ``declared`` names one."""
     monkeypatch.delenv("LANCE_PROVENANCE_RETAIN_VERSIONS", raising=False)
     for key, value in {
         "LANCE_REST_IMPL": "dir",
@@ -56,7 +59,7 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **declared: str) 
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_PROVENANCE_NAMESPACE": "provenance",
         "LANCE_PROVENANCE_WRITERS": f'["{_LINEAGE}"]',
-        "LANCE_PROVENANCE_MAINTAINERS": "[]",
+        "LANCE_OWN_ACCOUNTS": f'["{_LINEAGE}", "{_RETIRED}"]',
         **declared,
     }.items():
         monkeypatch.setenv(key, value)
@@ -81,35 +84,17 @@ def _booted(settings: Settings, store: Any) -> tuple[LanceNamespace, str]:  # no
     return ns, properties["rask.uuid"]
 
 
-@pytest.mark.parametrize(
-    ("declared_before", "declared_now", "holds"),
-    [
-        pytest.param(
-            {},
-            {"LANCE_PROVENANCE_MAINTAINERS": f'["{_COMPACTOR}"]'},
-            {_LINEAGE: {"writer"}, _ANALYST: {"reader"}, _COMPACTOR: {"reader", "maintainer"}},
-            id="a-declared-compaction-job-is-granted-its-rungs-and-never-writer",
-        ),
-        pytest.param(
-            {"LANCE_PROVENANCE_WRITERS": f'["{_LINEAGE}", "{_RETIRED}"]', "LANCE_PROVENANCE_MAINTAINERS": f'["{_COMPACTOR}"]'},
-            {},
-            {_LINEAGE: {"writer"}, _ANALYST: {"reader"}},
-            id="a-principal-no-longer-declared-loses-what-it-was-granted",
-        ),
-    ],
-)
-def test_the_boot_declares_the_retention_and_grants_exactly_the_principals_it_declares(
+def test_a_boot_takes_back_an_own_accounts_writer_it_no_longer_declares_and_keeps_every_grant_a_door_made(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
-    declared_before: dict[str, str],
-    declared_now: dict[str, str],
-    holds: dict[str, set[str]],
 ) -> None:
-    _ns, namespace_uuid = _booted(_settings(tmp_path, monkeypatch, **declared_before), openfga_store)
+    _ns, namespace_uuid = _booted(_settings(tmp_path, monkeypatch, LANCE_PROVENANCE_WRITERS=f'["{_LINEAGE}", "{_RETIRED}"]'), openfga_store)
     namespace = fga.namespace_object(namespace_uuid)
-    openfga_store.write((fga.user_object(_ANALYST), "reader", namespace))
-    settings = _settings(tmp_path, monkeypatch, LANCE_PROVENANCE_RETAIN_VERSIONS="20", **declared_now)
+    # As the namespace's access door writes them: a person reading, a compaction job's two rungs and a recorder's writer.
+    door_made = ((_ANALYST, "reader"), (_COMPACTOR, "reader"), (_COMPACTOR, "maintainer"), (_RECORDER, "writer"))
+    openfga_store.write(*((fga.user_object(subject), rung, namespace) for subject, rung in door_made))
+    settings = _settings(tmp_path, monkeypatch, LANCE_PROVENANCE_RETAIN_VERSIONS="20")
 
     _booted(settings, openfga_store)
 
@@ -119,7 +104,7 @@ def test_the_boot_declares_the_retention_and_grants_exactly_the_principals_it_de
     for user, relation, obj in openfga_store.tuples():
         if obj == namespace and user.startswith("user:"):
             held.setdefault(fga.subject_of(user.removeprefix("user:")), set()).add(relation)
-    assert held == holds
+    assert held == {_LINEAGE: {"writer"}, _ANALYST: {"reader"}, _COMPACTOR: {"reader", "maintainer"}, _RECORDER: {"writer"}}
 
 
 @pytest.mark.parametrize(

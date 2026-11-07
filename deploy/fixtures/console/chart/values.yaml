@@ -90,7 +90,7 @@ inbox:
 # The lakehouse, by reference.
 lakehouse:
   # The catalog: its decision door answers `can_be_notified`, `can_get_metadata`, a watch's `project#member` check and a
-  # userset's members for this inbox's ServiceAccount, on the estate roles rask's `auth.externalDeciders` maps it to.
+  # userset's members for this inbox's ServiceAccount, on the estate roles it is granted at the catalog's doors.
   # Empty derives `http://<rask>-catalog:2333`.
   catalogUrl: ""
   # The audience the catalog verifies a service token for (rask's `rask-catalog`).

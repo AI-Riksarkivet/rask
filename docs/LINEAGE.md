@@ -87,7 +87,7 @@ An in-place refinement (a run that reads and writes one table) bumps that table'
 |---|---|
 | `POST /api/v1/lineage` | Authenticated OpenLineage intake (the HTTP transport's default path): a `RunEvent`, or a `DatasetEvent` for a change no job performed |
 | `GET /events` | The durable commit feed, governed per dataset: newest first by `after`, or forward from `since` with `next_cursor`; filterable by `table` or `namespace`; reports `oldest_seq` |
-| `GET /events/projection` | The same feed without the per-dataset filter, cut to the fields that decide whom to notify; gated on `can_read_event_feed`, for a notifier holding `event_reader` (granted through `auth.externalDeciders`) |
+| `GET /events/projection` | The same feed without the per-dataset filter, cut to the fields that decide whom to notify; gated on `can_read_event_feed`, for a notifier holding `event_reader` (granted at the estate admin's tuple door) |
 | `GET /tables/{name}/derived?depth=` | Every table derived from `name`, nearest first |
 | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | The dead-letter queue: list parked deliveries, replay one |
 | `POST /lineage-events` | Dapr subscription on `lineage.events.v1` (sidecar only) |
