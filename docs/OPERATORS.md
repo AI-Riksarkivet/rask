@@ -144,11 +144,12 @@ identity afresh and the old public keys go with the old store. Events signed bef
 enforcement is on (acked and counted); every signer re-resolves within 5 minutes once its sidecar can read again.
 
 **Every replacement logs every sidecar out, a surge one included.** The store's tokens live in memory with it, so the
-token each daprd got at boot through Kubernetes auth names nothing in the replacement, and daprd does not log in again:
-every read through `lance-secrets` answers 500 (`ERR_SECRET_GET`, the store's `403 permission denied`) until the pod
-restarts. Measured 2026-11-07 on openbao/openbao:2.2.0 and daprd 1.19.0-rc.4: the fixture re-applied with a changed pod
-spec carried every signing pair and bus user over a surge, and the catalog's, lineage's and maintenance's reads failed
-until `kubectl rollout restart deploy/rask-catalog deploy/rask-lineage deploy/rask-maintenance`. So apply a fixture
+token each daprd got at boot through Kubernetes auth names nothing in the replacement, and every read through
+`lance-secrets` answers 500 (`ERR_SECRET_GET`, the store's `403 permission denied`). Measured 2026-11-07 on
+openbao/openbao:2.2.0 and daprd 1.19.0-rc.4: the fixture re-applied with a changed pod spec carried every signing pair
+and bus user over a surge, and the catalog's, lineage's and maintenance's reads still failed three minutes later, until
+`kubectl rollout restart deploy/rask-catalog deploy/rask-lineage deploy/rask-maintenance`; whether daprd's background
+renewal would have logged in again later is not measured. So apply a fixture
 change before the rask upgrade that rolls the Dapr pods, and restart every Dapr app after any other OpenBao replacement.
 
 **Reading it back.** From an app's own sidecar, `GET /v1.0/secrets/lance-secrets/signing-key-<its key>` answers
@@ -249,7 +250,9 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
 - **Rotating,** one class at a time, so a server learns a value only after the store and every ExternalSecret
   hold it and its consumers restart right after:
   1. Change the key of the credential's Secret, `<release>-dev-credential-<key>` (a real deployment: the field in the store), with a value
-     generated in the cluster; wait for the seed's "the mounted credentials changed; seeding again".
+     generated in the cluster; wait for the seed's "the mounted credentials changed; seeding again". For
+     `dapr-app-token`, delete its Secret instead and reconcile (`make k3s-up`): the chart's Password generator mints the
+     new value in the cluster, so no person sees it.
   2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `object-store-root`, `observability-s3`,
      `backup-s3`, `dapr-app-token`) with the `force-sync`
      annotation, and wait for Ready. Their refresh is otherwise `externalSecrets.refreshInterval`, and a pod
@@ -259,9 +262,13 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
      for `object-store-secret-key`. RustFS signs every STS session token with the root secret, so rotating root
      invalidates every outstanding vended credential at once: clients re-vend, and a long write in flight fails.
   4. Restart the consumers at once: a `secretKeyRef` env and the injector's app token are read at pod creation,
-     so nothing rolls on its own. AGE: the sidecar Deployments, OpenFGA, the OTel Collector. The root: the
-     sidecar Deployments and GreptimeDB. The app token: the sidecar Deployments (an app token rotated as below refuses
-     no delivery in between).
+     so nothing rolls on its own. AGE: OpenFGA (its migrate Job and the backup CronJob read it at their next run).
+     The root: the catalog, whose store sessions the old root signed, and lineage and maintenance, whose scoped pairs
+     it derives. The app token: the sidecar Deployments (an app token rotated as below refuses no delivery in between).
+  5. Read it back by refusal: one `ListBuckets` signed with the old root answers 403 `SignatureDoesNotMatch`, and the
+     AGE role refuses the old password over the pod's own IP (`password authentication failed`). The image trusts
+     loopback, so a login from 127.0.0.1 succeeds with any password and proves nothing. Measured 2026-11-07, rotating
+     the three values XC-164's read-back exposed.
 - **The catalog's store identity needs no rotation (ADR 0170).** It holds no key pair: its pod projects a token for
   `objectStore.identity.audience`, which the kubelet replaces before it expires, and the catalog exchanges it through
   STS `AssumeRoleWithWebIdentity` for an hour's session, again once half of it is used. A catalog whose session cannot
