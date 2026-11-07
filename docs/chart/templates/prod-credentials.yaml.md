@@ -35,3 +35,45 @@ issues (GHSA-m77q-r63m-pj89, ADR 0168), so a real estate on it would hold a trus
 are external in production: a real deployment sets `objectStore.enabled=false` and `objectStore.externalEndpoint` to
 the platform's S3, whose operator provisions rask's identities (`lance.s3Endpoint` fails the render when neither is
 set).
+
+## `{{- $local := ternary ... .Values.openbao.enabled -}}`
+
+The way out for an estate that is local after all follows the signal that made the render real: with the platform's
+store named (`openbao.enabled=false`), only the development store with side-loaded or `localhost:` images renders as
+local; with images from a registry off this node, side-loading them or a `localhost:` registry does.
+
+## `{{- if not .Values.auth.enabled -}}`
+
+3. A REAL DEPLOYMENT IS REFUSED WHAT WOULD EXPOSE IT ONCE INSTALLED ([[XC-184]]), on the same `rask.isRealDeployment`
+answer, and joins the dev credentials above in the one refusal, so an operator reads every offending value from one
+render:
+
+- `auth.enabled=false`. Off, the chart writes `RASK_INSECURE_ALLOW_UNAUTHENTICATED` on the services' behalf
+  (`lance.governedAuthAck`), the acknowledgement `assert_authentication_configured` refuses to boot without. On a real
+  deployment that would open every governed door with nobody having said so; the open profile stays a development
+  render's.
+- `dapr.dashboard.enabled=true`, read as the template renders it (`lance.daprDashboardEnabled`). The Dapr dashboard
+  authenticates nobody, and its ClusterRole reads every pod and its log in the cluster (`dapr-dashboard.yaml`). It is a
+  development tool: off in values.yaml, on in `deploy/values-local.yaml`.
+
+## `{{- $hops := list -}}`
+
+A PLATFORM ADDRESS THE CHART NAMES IS HTTPS ON A REAL DEPLOYMENT. Each hop is listed with what would cross it:
+
+- `auth.fgaApiUrl`, read while `openfga.enabled` is off: the projected `rask-openfga` tokens of the catalog, maintenance
+  and the FGA hooks. OpenFGA authorizes none of its callers, so a token read on the path writes any tuple.
+- `objectStore.externalEndpoint`: the catalog's projected ServiceAccount token, exchanged at that STS for every session
+  it holds and vends (ADR 0170), and each session's secret key in the answer.
+- `vending.endpoint`: every vended session's requests and the tables' bytes. The vend sets `allow_http=true` whenever
+  its endpoint's scheme is http (`lakehouse.endpoint_scheme.allow_http_for`), which turns off Lance's TLS-only default
+  for that client (`lance_docs/lance/guide/object_store.md`: `allow_http`, default `False`).
+- `observability.export.endpoint`, read while `observability.enabled`: the export credential, which the Collector's
+  basic auth sends with every batch (`otel-collector.yaml`).
+- `services.lineage.forward.url`: every event the estate's provenance records, and the backend's API key when
+  `forward.authSecret` names one.
+
+A development estate reaches its fixtures over http (the store's node port, GreptimeDB, Marquez), so the rule follows
+`rask.isRealDeployment` rather than refusing every http address. The platform's secret store (`lance.platformStoreAddr`)
+and IdP (`lance.oidcIssuer`) are refused http by their own helpers on any render that names them. The release's own
+Services (the bundled OpenFGA, the issuer mirror) are in-cluster hops and not judged here; nor are the bus (`nats.url`)
+and the Postgres (`age.externalHost`), which speak their own protocols.

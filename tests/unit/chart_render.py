@@ -84,7 +84,7 @@ PROD_ARGS: tuple[str, ...] = (
     "-f", str(REPO / "deploy/values-prod.yaml"),
     "--set", "signing.provisioned=true",
     "--set", "nats.auth.provisioned=true",
-    "--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp",
+    "--set-string", "observability.export.endpoint=https://otlp.example.com:4318/v1/otlp",
     "--set-string", "auth.fgaApiUrl=https://fga.example.com",
     "--set-json", 'auth.oidc.connectors={"ldap":"corp"}',
     "--set-string", "age.externalHost=pg.example.com",

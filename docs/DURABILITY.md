@@ -108,5 +108,5 @@ So: a long-lived lakehouse with provenance, and a version-expiry lifecycle that 
 
 ## Prod profile
 `deploy/values-prod.yaml` is a starting overlay — it flips the safe-by-default-off prod switches (the
-platform's secret store, governance on, Dapr dashboard off, the cluster route on the platform's Gateway) and turns the in-cluster OpenFGA and Postgres off in favour of
+platform's secret store, governance on, the cluster route on the platform's Gateway) and turns the in-cluster OpenFGA and Postgres off in favour of
 the platform's (`openfga.enabled: false`, `age.enabled: false`). Apply with `helm upgrade … -f chart/values.yaml -f deploy/values-prod.yaml`.

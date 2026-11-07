@@ -277,6 +277,12 @@ telemetry goes after it is `observability.export`, the Collector's business alon
 Whether the apps carry the OTel SDK wiring (instrument + otelEnv + the lance-tracing Dapr config): exactly when
 `observability.enabled` deploys the Collector they export to. Non-empty string = on (helm `if` truthiness).
 
+## `{{- define "lance.daprDashboardEnabled" -}}`
+
+Whether the Dapr dashboard renders: `dapr.enabled` and `dapr.dashboard.enabled` together. Its template, its API-server
+egress (`network-policy.yaml`), its NOTES hint and the real-deployment refusal (`prod-credentials.yaml`) read this one
+answer, so none of them can disagree. Non-empty string = on.
+
 ## `{{- define "lance.platformStoreAddr" -}}`
 
 THE PLATFORM'S STORE IS NAMED, AND OVER TLS ([[XC-149]]). The chart renders no secret store, so with
@@ -630,6 +636,9 @@ pod to refuse.
 
 Emitted in the `else` of every `if .Values.auth.enabled` that includes `governedOidcEnv`, so the two
 can never drift into a profile that sets neither.
+
+A real deployment refuses `auth.enabled: false` (`prod-credentials.yaml`, [[XC-184]]), so the acknowledgement is only
+ever a development render's.
 
 ## `{{- define "lance.identityTokens" -}}`
 

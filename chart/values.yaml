@@ -134,7 +134,7 @@ services:
     # OpenMetadata). At least once and in feed order, from a cursor the catalog keeps. Empty forwards nothing. A
     # backend outside rask's namespace needs a `networkPolicy.extraEgress` entry when network policies enforce.
     forward:
-      # -- Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing.
+      # -- Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. https on a real deployment: the render refuses an http one.
       url: ""
       # -- Path the events are POSTed to under `url` (the transport's `endpoint`).
       endpoint: api/v1/lineage
@@ -435,8 +435,9 @@ auth:
   # This makes a bare `helm install` REFUSE rather than install: the chart fails the render without an
   # `auth.oidc.issuer`. That refusal is the point — an
   # ungoverned estate should require someone to ask for it (`--set auth.enabled=false`), never to
-  # forget something.
-  # -- Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` or it refuses to render.
+  # forget something. Only a development render may ask: off, the chart writes the acknowledgement the services refuse
+  # to boot without (`lance.governedAuthAck`), so a real deployment refuses it (templates/prod-credentials.yaml).
+  # -- Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` or it refuses to render. A real deployment refuses it off.
   enabled: true
   # THE ESTATE'S ONE IdP. Every governed door verifies a person's token against it. With `dex.enabled` it is
   # the development Dex's (the DEV_ISSUER `make k3s-fixtures` gives the dex fixture), reached in-cluster at
@@ -476,7 +477,7 @@ auth:
   # the stream even with auth on.
   # -- Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it.
   audit: true
-  # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.
+  # -- The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then, and http on a real deployment. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.
   fgaApiUrl: ""
   # -- NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false.
   fgaEgress: []
@@ -533,7 +534,7 @@ vending:
   # its own (pylance applies vended options over the client's, measured on pylance 13.0.0). The catalog's
   # own address may resolve only in the cluster (`rask-rustfs:9000`), so a client elsewhere needs the address
   # it reaches the store at. In production the platform names the store's public address here (LH-489).
-  # -- Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint.
+  # -- Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. https on a real deployment: the render refuses an http one.
   endpoint: ""
   # -- The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one.
   assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend"
@@ -1264,7 +1265,7 @@ objectStore:
   buckets: []
   # Externalize: when set, the apps (catalog/lineage/maintenance + vending STS) connect HERE instead of the
   # development store — pair with objectStore.enabled=false to use the platform's S3.
-  # -- S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store.
+  # -- S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store. https on a real deployment: the render refuses an http one.
   externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
   # No persistence value: the development store's durability is its fixture's (a StatefulSet claim that survives pod
   # rolls and `helm uninstall`), and a production store's is the platform's.
@@ -1512,11 +1513,12 @@ dapr:
   resiliency:
     # -- Render the Dapr Resiliency policy (sidecar retries, constant 120s x 4), per-app dead-letter topics, and the long broker backOff; false = broker-only.
     enabled: true
-  # The Dapr dashboard — a web UI for the Dapr stuff (components, subscriptions, configurations,
-  # control plane).
+  # The Dapr dashboard, a web UI over the Dapr resources (components, subscriptions, configurations, the control plane).
+  # A development tool: it authenticates nobody and its ClusterRole reads every pod and its log in the cluster, so a real
+  # deployment refuses it (templates/prod-credentials.yaml) and deploy/values-local.yaml turns it on.
   dashboard:
-    # -- Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`.
-    enabled: true
+    # -- Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. Development only: a real deployment refuses it.
+    enabled: false
     # -- Container image for the Dapr dashboard Deployment.
     image: daprio/dashboard:0.15.0
   # daprd sidecar resources (first-party keys → the lance.daprSidecarResources annotations). The app
@@ -2014,7 +2016,7 @@ observability:
   # table `x-greptime-log-table-name` names (the governance trail is routed apart from telemetry so it can be
   # kept longer).
   export:
-    # -- OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render.
+    # -- OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render, and http on a real deployment.
     endpoint: ""
     # -- Headers sent on every export.
     headers:

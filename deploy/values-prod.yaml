@@ -43,7 +43,7 @@ podDisruptionBudget:
 # OpenFGA and the Postgres behind AGE and OpenFGA are the platform's ([[XC-132]], ADR 0153): production runs neither
 # and names them. The deployer sets `auth.fgaApiUrl` (the platform's OpenFGA HTTP API) with `auth.fgaEgress` (the
 # NetworkPolicy rule reaching its addresses, for the pods that dial it) and `age.externalHost`, and the render refuses
-# any of them empty. No credential is a value: an FGA client presents its projected `rask-openfga`
+# any of them empty and an http `auth.fgaApiUrl`. No credential is a value: an FGA client presents its projected `rask-openfga`
 # ServiceAccount token, which the platform's OpenFGA admits by OIDC against the cluster's ServiceAccount issuer for the
 # subjects `lance.openfgaSubjects` lists, and the Postgres password is the store's `postgres` secret, which ESO
 # delivers. The platform's Postgres carries the `openfga` and `daprstate` databases; lineage keeps no database
@@ -57,7 +57,7 @@ age:
 # The lakehouse's bytes live on the platform's S3: rask names it and provisions nothing on it (no buckets, no users).
 # The platform's operator creates rask's buckets and one scoped identity per plane in the store's secret store, the
 # layout the dev seed writes (docs/chart/templates/openbao-seed.yaml.md). The development store is refused on a real
-# deployment (templates/prod-credentials.yaml), and the render refuses an empty endpoint; the NetworkPolicy reaches it
+# deployment (templates/prod-credentials.yaml), and the render refuses an empty or http endpoint; the NetworkPolicy reaches it
 # through `networkPolicy.extraEgress`.
 objectStore:
   enabled: false
@@ -140,8 +140,6 @@ dapr:
   # Sentry, the mTLS CA in the sidecar cert-renewal path) and its injector must set `sidecarDropALLCapabilities`,
   # or the sidecar keeps NET_RAW while the app container beside it has none. Both are prerequisites
   # (docs/architecture/deployment.md), not values here.
-  dashboard:
-    enabled: false # don't expose the Dapr control-plane UI in prod
   # The sidecar's own hardening: `sidecarRestricted` sets the daprd container's securityContext. A pod is only as
   # restricted as its loosest container, which is why the injector's drop-ALL above is a prerequisite.
   sidecarRestricted: true
@@ -176,7 +174,7 @@ observability:
   # was indistinguishable from dev in GreptimeDB. Measured on this render 2026-09-16:
   # `deployment.environment.name=rask`. An alert that fires on "the estate" cannot say which one.
   environment: prod
-  # `export.endpoint` (the platform's OTLP backend; the render refuses it empty) is the deployer's to name, with the
+  # `export.endpoint` (the platform's OTLP backend; the render refuses it empty or http) is the deployer's to name, with the
   # NetworkPolicy egress that reaches it (`export.egress`: {to, ports} rules naming the backend's addresses). The store must meet the audit store's
   # contract (values.yaml `observability`): refuse unauthenticated writes and deletes, admit
   # `otel-collector-export`.

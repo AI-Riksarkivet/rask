@@ -6,6 +6,10 @@ three ways: a template minting it (`randAlphaNum`), a value carrying it (`dapr.a
 `objectStore.secretKey`, ...), and a template rendering it into a Secret or a Job.
 The credentials live in the store and reach pods through ESO, a prerequisite the chart checks for.
 The dev store's are generated in-cluster; `test_the_dev_openbao_is_seeded_by_its_own_pod.py` runs that half.
+
+The render tests of `templates/prod-credentials.yaml` live here, and that template also refuses a real deployment
+(`rask.isRealDeployment`) whatever would expose it once installed ([[XC-184]]): a published dev credential,
+authentication off, the Dapr dashboard, and a platform address a credential or the estate's data would cross over http.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ import subprocess
 import pytest
 import yaml
 
-from tests.unit.chart_render import DEFAULT_ARGS, OIDC_ARGS, REPO, SECRET_STORE_URL, render_chart_text, render_text
+from tests.unit.chart_render import DEFAULT_ARGS, OIDC_ARGS, PROD_ARGS, REPO, render_chart_text, render_text
 from tests.unit.chart_yaml import FAST_LOADER
 
 
@@ -46,17 +50,53 @@ def test_a_credential_passed_as_a_value_is_refused_naming_it() -> None:
     assert "A CREDENTIAL IS NOT A CHART VALUE: dapr.appToken, objectStore.secretKey." in refused.value.stderr
 
 
-def test_a_real_deployment_refuses_the_bundled_dev_idp() -> None:
-    """The bundled Dex is one of the two exemptions (owner, 2026-10-06), fenced to dev renders: a real one refuses it."""
-    real = (
-        "--set", "image.repository=ghcr.io/example/rask", "--set", "openbao.enabled=false",
-        "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}", "--set", "signing.provisioned=true",
-        "--set", "route.hostnames[0]=lance.example.com",
-    )  # fmt: skip
-    with pytest.raises(subprocess.CalledProcessError) as refused:
-        render_text(*real, "--set", "nats.auth.provisioned=true")
+@pytest.mark.parametrize(
+    ("setting", "reason"),
+    [
+        pytest.param(("--set", "dex.enabled=true"), "dex.enabled=true — the bundled dev IdP", id="the-bundled-dev-idp"),
+        pytest.param(("--set", "auth.enabled=false"), "auth.enabled=false — every governed door answers anyone", id="authentication-off"),
+        pytest.param(("--set", "dapr.dashboard.enabled=true"), "dapr.dashboard.enabled=true — the Dapr dashboard", id="the-dapr-dashboard"),
+        pytest.param(
+            ("--set-string", "auth.fgaApiUrl=http://fga.example.com"),
+            "auth.fgaApiUrl=http://fga.example.com is not https",
+            id="the-platforms-openfga-over-http",
+        ),
+        pytest.param(
+            ("--set-string", "objectStore.externalEndpoint=http://s3.example.com"),
+            "objectStore.externalEndpoint=http://s3.example.com is not https",
+            id="the-platforms-store-over-http",
+        ),
+        pytest.param(
+            ("--set-string", "vending.endpoint=http://s3.example.com"), "vending.endpoint=http://s3.example.com is not https", id="the-vended-store-over-http"
+        ),
+        pytest.param(
+            ("--set-string", "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp"),
+            "observability.export.endpoint=http://otlp.example.com:4318/v1/otlp is not https",
+            id="the-platforms-telemetry-backend-over-http",
+        ),
+        pytest.param(
+            ("--set-string", "services.lineage.forward.url=http://graph.example.com"),
+            "services.lineage.forward.url=http://graph.example.com is not https",
+            id="the-platforms-graph-backend-over-http",
+        ),
+        pytest.param(
+            ("--set-string", "openbao.externalAddr=http://vault.example.com:8200"),
+            'openbao.externalAddr is "http://vault.example.com:8200": every sidecar sends the store\'s token to it',
+            id="the-platforms-secret-store-over-http",
+        ),
+    ],
+)
+def test_a_real_deployment_refuses_what_would_expose_it(setting: tuple[str, ...], reason: str) -> None:
+    """The production overlay with one setting that would expose the estate once installed is refused, naming it.
 
-    assert "dex.enabled=true — the bundled dev IdP" in refused.value.stderr
+    The bundled Dex's static users and client secret are published in this repository, so it is a development render's
+    alone. Authentication off makes the chart write the acknowledgement the services refuse to boot without, so on a real
+    deployment nobody would have said so.
+    """
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        render_text(*PROD_ARGS, *setting)
+
+    assert reason in refused.value.stderr
 
 
 #: The AGE-on-CNPG path, the one part of the render that needs the CloudNativePG API ([[XC-130]]).

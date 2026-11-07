@@ -77,11 +77,11 @@
                     "type": "string"
                 },
                 "enabled": {
-                    "description": "Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` or it refuses to render.",
+                    "description": "Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` or it refuses to render. A real deployment refuses it off.",
                     "type": "boolean"
                 },
                 "fgaApiUrl": {
-                    "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.",
+                    "description": "The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then, and http on a real deployment. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer.",
                     "type": "string"
                 },
                 "fgaEgress": {
@@ -440,7 +440,7 @@
                     "type": "object",
                     "properties": {
                         "enabled": {
-                            "description": "Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`.",
+                            "description": "Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. Development only: a real deployment refuses it.",
                             "type": "boolean"
                         },
                         "image": {
@@ -1052,7 +1052,7 @@
                     "type": "boolean"
                 },
                 "externalEndpoint": {
-                    "description": "S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store.",
+                    "description": "S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store. https on a real deployment: the render refuses an http one.",
                     "type": "string"
                 },
                 "identity": {
@@ -1110,7 +1110,7 @@
                             "type": "array"
                         },
                         "endpoint": {
-                            "description": "OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render.",
+                            "description": "OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render, and http on a real deployment.",
                             "type": "string"
                         },
                         "headers": {
@@ -1660,7 +1660,7 @@
                                     "type": "string"
                                 },
                                 "url": {
-                                    "description": "Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing.",
+                                    "description": "Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. https on a real deployment: the render refuses an http one.",
                                     "type": "string"
                                 }
                             }
@@ -1748,7 +1748,7 @@
                     "type": "object"
                 },
                 "endpoint": {
-                    "description": "Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint.",
+                    "description": "Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. https on a real deployment: the render refuses an http one.",
                     "type": "string"
                 },
                 "externalBlobBases": {

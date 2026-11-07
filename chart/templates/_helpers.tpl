@@ -166,6 +166,10 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if .Values.observability.enabled -}}true{{- end -}}
 {{- end -}}
 
+{{- define "lance.daprDashboardEnabled" -}}
+{{- if and .Values.dapr.enabled .Values.dapr.dashboard.enabled -}}true{{- end -}}
+{{- end -}}
+
 {{- define "lance.vaultAddr" -}}
 {{- if .Values.openbao.enabled -}}http://{{ include "lance.openbaoHost" . }}:{{ .Values.openbao.port }}
 {{- else -}}{{ include "lance.platformStoreAddr" . }}

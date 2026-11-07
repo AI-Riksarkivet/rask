@@ -3,6 +3,12 @@
 Rationale for `chart/templates/dapr-dashboard.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
+## `{{- if include "lance.daprDashboardEnabled" . }}`
+
+A DEVELOPMENT TOOL ([[XC-184]]). The dashboard authenticates nobody, and the ClusterRole below reads every pod and its log
+in the cluster. So it is off in values.yaml, `deploy/values-local.yaml` turns it on for the k3s estate, and a real
+deployment refuses it (`prod-credentials.yaml`).
+
 ## `serviceAccountName: {{ include "lance.fullname" . }}-dapr-dashboard`
 
 Its own RBAC-bound SA, not a tokenless one from security-sa.yaml: the dashboard reads the

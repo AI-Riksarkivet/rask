@@ -1,4 +1,4 @@
-{{- if and .Values.dapr.enabled .Values.dapr.dashboard.enabled }}
+{{- if include "lance.daprDashboardEnabled" . }}
 # Dapr dashboard — the web UI for the Dapr stuff: components (lineage-pubsub, lance-secrets,
 # lance-tracing), subscriptions, configurations, and the control plane. Port-forward 8080 to view.
 apiVersion: v1

@@ -45,8 +45,8 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | allocator.arrowMemoryPool | string | `"system"` | ARROW_DEFAULT_MEMORY_POOL on every lakehouse container; `system` routes Arrow through malloc so `arenaMax` bounds it. |
 | auth.audit | bool | `true` | Emit the structured authn/authz/credential-vending audit stream (LANCE_AUDIT_ENABLED and siblings); takes effect only with auth on. false silences it. |
 | auth.bootstrapAdmin | string | `""` | The person's principal (`<idp-id>~<user id>`, e.g. `dex~<userID>`) the bootstrap-admin hook grants `owner` on the default warehouse and `admin` on estate:rask; a bare name fails the render. Empty = human grants are made out of band. |
-| auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` or it refuses to render. |
-| auth.fgaApiUrl | string | `""` | The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer. |
+| auth.enabled | bool | `true` | Govern the estate: authn on every door plus OpenFGA authz. On by default (fails closed); a bare install then needs `auth.oidc.issuer` or it refuses to render. A real deployment refuses it off. |
+| auth.fgaApiUrl | string | `""` | The platform's OpenFGA HTTP API (e.g. `https://fga.internal:8080`), which the tuple writers (the catalog, maintenance), the openfga-model hook and the bootstrap-admin Job dial when `openfga.enabled` is false; the render refuses it empty then, and http on a real deployment. It must admit rask's projected `rask-openfga` tokens from exactly the subjects `lance.openfgaSubjects` lists: OIDC against the cluster's ServiceAccount issuer. |
 | auth.fgaEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that dial `fgaApiUrl` (the tuple writers, the openfga-model hook, the bootstrap-admin Job) to it, at the port a policy sees. Required under networkPolicy.enabled while `openfga.enabled` is false. |
 | auth.fgaModelId | string | `""` | Pin the OpenFGA authorization model id every service checks against, whatever its image carries. Empty = the store's latest model. |
 | auth.fgaStoreId | string | `""` | Pin the OpenFGA store id used by every service, the openfga-model hook and the bootstrap-admin Job. Empty = the newest store named `lance-catalog`. |
@@ -105,7 +105,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | console.runAsUser | int | `10001` | The image's non-root uid and gid (`USER 10001` in .docker/frontend.dockerfile), named by number so `runAsNonRoot` can verify it. |
 | dapr.apiTimeoutSeconds | int | `30` | Deadline in seconds for every DaprClient gRPC call (DAPR_API_TIMEOUT_SECONDS), so a wedged sidecar fails a publish instead of hanging it. |
 | dapr.controlPlaneNamespace | string | `"dapr-system"` | Namespace the Dapr control plane runs in; the Collector scrapes it and, under NetworkPolicy, every pod may reach it. |
-| dapr.dashboard.enabled | bool | `true` | Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. |
+| dapr.dashboard.enabled | bool | `false` | Deploy the Dapr dashboard web UI (templates/dapr-dashboard.yaml), reached by port-forward; requires `dapr.enabled`. Development only: a real deployment refuses it. |
 | dapr.dashboard.image | string | `"daprio/dashboard:0.15.0"` | Container image for the Dapr dashboard Deployment. |
 | dapr.enabled | bool | `true` | Use Dapr: inject a daprd sidecar into every lakehouse pod and render rask's Components, Configurations and Resiliency. Needs a Dapr control plane (dapr.io/v1alpha1); the render refuses without it. |
 | dapr.logLevel | string | `"info"` | daprd sidecar log level, stamped as the `dapr.io/log-level` annotation (debug, info, warn, error). |
@@ -195,7 +195,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | objectStore.bucket | string | `"lance-catalog"` | The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox). |
 | objectStore.buckets | list | `[]` | Extra platform buckets the scoped-users hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets. |
 | objectStore.enabled | bool | `true` | This estate uses the development object store (deploy/fixtures/rustfs, Service `<release>-rustfs`): rask runs its scoped-users hook against it (the platform buckets and every scoped user), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server. |
-| objectStore.externalEndpoint | string | `""` | S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store. |
+| objectStore.externalEndpoint | string | `""` | S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store. https on a real deployment: the render refuses an http one. |
 | objectStore.identity.audience | string | `"rask-object-store"` | The audience the catalog's ServiceAccount token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required. |
 | objectStore.identity.sessionSeconds | int | `3600` | How long a session for the catalog's own IO lasts (LANCE_S3_SESSION_SECONDS, 900 to 43200 s); it is renewed at half its life. |
 | objectStore.lineageAccessKey | string | `"rask-lineage"` | Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. Required: no service presents the store's root. |
@@ -205,7 +205,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | observability.environment | string | `"rask"` | Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace. |
 | observability.export.auditHeaders | object | `{"x-greptime-log-table-name":"lance_audit"}` | Headers added to the export of `lance.audit` records, which leave on their own exporter. |
 | observability.export.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled. |
-| observability.export.endpoint | string | `""` | OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render. |
+| observability.export.endpoint | string | `""` | OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render, and http on a real deployment. |
 | observability.export.headers | object | `{"x-greptime-db-name":"public"}` | Headers sent on every export. |
 | observability.export.traceHeaders | object | `{"x-greptime-pipeline-name":"greptime_trace_v1"}` | Headers added to the trace export. |
 | observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the OTel Collector (contrib distribution). |
@@ -257,7 +257,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.forward.authSecret.key | string | `"api-key"` | Field of that secret the API key is under. |
 | services.lineage.forward.authSecret.name | string | `""` | Secret in the Dapr secret store holding the backend's API key, sent as `Authorization: Bearer`. Empty sends none. |
 | services.lineage.forward.endpoint | string | `"api/v1/lineage"` | Path the events are POSTed to under `url` (the transport's `endpoint`). |
-| services.lineage.forward.url | string | `""` | Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. |
+| services.lineage.forward.url | string | `""` | Base URL of the graph backend the relay forwards every recorded event to (the OpenLineage HTTP transport's `url`). Empty forwards nothing. https on a real deployment: the render refuses an http one. |
 | services.lineage.module | string | `"lineage.main:app"` | uvicorn import path the lineage Deployment runs (templates/services.yaml). |
 | services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<objectStore.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled. |
 | services.lineage.port | int | `8000` | Container and Service port of the lineage service. |
@@ -273,7 +273,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | vending.allowExternalBlobs | bool | `false` | Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`. |
 | vending.assumeRoleArn | string | `"arn:aws:iam::000000000000:role/lance-vend"` | The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one. |
 | vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default. |
-| vending.endpoint | string | `""` | Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. |
+| vending.endpoint | string | `""` | Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. https on a real deployment: the render refuses an http one. |
 | vending.externalBlobBases | string | `""` | Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty approves no base. |
 | vending.mode | string | `"web_identity"` | How the catalog vends storage credentials for direct object I/O: `web_identity` (default, its own token exchanged for a per-table session) or `mode_b` (none, server-mediated). |
 | vending.ttlSeconds | int | `900` | Lifetime in seconds of a vended STS / web-identity credential (LANCE_VENDING_TTL_SECONDS). |

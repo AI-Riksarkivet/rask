@@ -176,8 +176,7 @@ jobs:
   #   1. baseline whatever genuinely cannot move in `osv-scanner.toml`, each entry with a reason and a
   #      review date, and the two DS-0031 false positives in `.trivyignore`
   #      (HF_HUB_DISABLE_IMPLICIT_TOKEN=1 is a DISABLE flag — trivy matches on the name "TOKEN");
-  #   2. delete the `continue-on-error` line on THIS job (supply-chain-images keeps its own until the
-  #      base-image backlog gets the same treatment). The gate then blocks on the 39th finding, which
+  #   2. delete the `continue-on-error` line on THIS job. The gate then blocks on the 39th finding, which
   #      is the only version of this job worth having.
   supply-chain:
     name: supply-chain-${{ matrix.leg }} (report-only)
@@ -275,11 +274,15 @@ jobs:
   # The two deployables: the lakehouse (rest-catalog) and the console (frontend). The development fixtures'
   # images, cnpg-age-ext and marquez, are NOT scanned by this job. Widening it is a matter of adding matrix rows and
   # paying the build minutes.
+  #
+  # BLOCKING ([[XC-184]]): a fixable HIGH or CRITICAL finding in either image fails the nightly run, so a base image that
+  # falls behind is reported the night its fix ships. Both images scanned clean of them on 2026-11-07 (run 42332264184:
+  # Debian 13.7 and every Python package of rest-catalog, Debian 13.7 of frontend); an unfixed CVE does not gate
+  # (`--ignore-unfixed`, .dagger/scan.go).
   supply-chain-images:
     name: supply-chain-image-${{ matrix.image }}
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:

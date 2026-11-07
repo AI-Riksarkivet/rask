@@ -132,8 +132,8 @@ The chart can run OpenFGA (the `openfga` subchart) and the Postgres behind it (t
 `rask-age` StatefulSet). Development runs both. **Production names the platform's** ([[XC-132]], ADR 0153),
 and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.enabled: false`):
 
-- `auth.fgaApiUrl` is the platform's OpenFGA HTTP API. Every FGA client, the `openfga-model` hook and the
-  bootstrap-admin Job dial it. Each one presents its projected ServiceAccount token: audience `rask-openfga`, issuer
+- `auth.fgaApiUrl` is the platform's OpenFGA HTTP API, https on a real deployment. Every FGA client, the `openfga-model`
+  hook and the bootstrap-admin Job dial it. Each one presents its projected ServiceAccount token: audience `rask-openfga`, issuer
   `auth.serviceAccountIssuer`, subject `system:serviceaccount:<namespace>:<release>-sa-<component>`. The platform's
   OpenFGA takes OIDC against that issuer, fetching its keys from the cluster's ServiceAccount JWKS. rask's issuer
   mirror and subject ConfigMap serve only the in-chart OpenFGA. The subjects to admit are the ones
@@ -150,8 +150,11 @@ backups belong to the platform, so production runs no `pg_dump` CronJob.
 
 A real deployment brings its own identity provider, object store and secret store, and the chart takes them by
 reference (`auth.oidc.issuer`, https, and the lakehouse's own `auth.oidc.audience`, which the IdP
-issues to the clients it trusts; `objectStore.externalEndpoint` and the scoped
-credentials; `openbao.externalAddr`).
+issues to the clients it trusts; `objectStore.externalEndpoint`, https, and the scoped
+credentials; `openbao.externalAddr`, https).
+A real deployment's render also refuses authentication off, the Dapr dashboard, and every other platform address it
+names over http (`vending.endpoint`, `observability.export.endpoint`, `services.lineage.forward.url`), each with what
+would cross it (`chart/templates/prod-credentials.yaml`, [[XC-184]]).
 Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart renders none of them:
 
 - **Dex** (`deploy/fixtures/dex`, release `dex`, Service `rask-dex`): the OIDC issuer with the demo users and rask's
@@ -331,7 +334,7 @@ everything over OTLP/HTTP to **`observability.export.endpoint`**, with the backe
 
 **The store, dashboards and alerting are a prerequisite, not part of the chart** (ADR 0153). A platform names
 its OTLP backend in `observability.export.endpoint` (values-prod leaves it empty and the render refuses
-that), and loads rask's alert rules, **`deploy/alerting/rules.yml`** (Prometheus rule-file format; proven by
+that, and an http one on a real deployment, since the Collector sends it the export credential with every batch), and loads rask's alert rules, **`deploy/alerting/rules.yml`** (Prometheus rule-file format; proven by
 `make alert-rules-check` and replayed against GreptimeDB by `make alert-rules-drill`), into its own
 evaluator. The store must meet the audit store's contract in `chart/values.yaml` `observability`.
 

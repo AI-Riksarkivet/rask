@@ -356,6 +356,12 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   dials `lance.openfgaUrl` and every Postgres client `lance.ageConnectHost` (on the AGE-on-CNPG path, `lance-pg-rw`);
   a template never builds either address itself. The OpenFGA subchart's schema refuses unknown keys, so a rask value
   about OpenFGA lives under `auth`, never under `openfga`.
+- **A real deployment is refused what would expose it** ([[XC-184]]): `templates/prod-credentials.yaml`, on
+  `rask.isRealDeployment`, refuses a published dev credential, `auth.enabled=false` (the chart would write the services'
+  `RASK_INSECURE_ALLOW_UNAUTHENTICATED` itself), the Dapr dashboard (off by default; `deploy/values-local.yaml` turns it
+  on), and every platform HTTP address it names that is not https: `auth.fgaApiUrl`, `objectStore.externalEndpoint`,
+  `vending.endpoint`, `observability.export.endpoint`, `services.lineage.forward.url`. A new platform address joins
+  that list with what would cross it. The secret store's and the IdP's https refusals sit in their own helpers.
 - **OpenFGA admits only a projected `rask-openfga` token from a listed ServiceAccount** ([[XC-077]]): OIDC
   against the cluster SA issuer, keys fetched through the issuer mirror in `templates/issuer-mirror.yaml`
   (OpenFGA fetches discovery with no bearer and k3s answers that 401; the dev object store reads the same mirror), the subject allow-list from

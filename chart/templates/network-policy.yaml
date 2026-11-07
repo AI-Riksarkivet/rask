@@ -76,7 +76,7 @@ spec:
 {{- if .Values.openbao.enabled }}{{ $apiClients = append $apiClients "openbao" }}{{ end }}
 {{- if .Values.observability.enabled }}{{ $apiClients = append $apiClients "otel-collector" }}{{ end }}
 {{- if .Values.backups.volumeSnapshot.enabled }}{{ $apiClients = append $apiClients "object-store-backup" }}{{ end }}
-{{- if and .Values.dapr.enabled .Values.dapr.dashboard.enabled }}{{ $apiClients = append $apiClients "dapr-dashboard" }}{{ end }}
+{{- if include "lance.daprDashboardEnabled" . }}{{ $apiClients = append $apiClients "dapr-dashboard" }}{{ end }}
 {{- if $apiClients }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

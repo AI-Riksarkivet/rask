@@ -41,7 +41,7 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set signing.provisioned=true
         --set nats.auth.provisioned=true
         --set-string nats.url=nats://nats.example.com:4222
-        --set-string observability.export.endpoint=http://otlp.example.com:4318/v1/otlp
+        --set-string observability.export.endpoint=https://otlp.example.com:4318/v1/otlp
         --set-string auth.fgaApiUrl=https://fga.example.com
         --set-string age.externalHost=pg.example.com
         --set-string objectStore.externalEndpoint=https://s3.example.com
@@ -119,7 +119,7 @@ tiers=$(grep -c "memory: 1Gi" "$OUT" || true)
 
 # 7. The Collector exports to the endpoint the deployer names, and rask ships no store or alert engine of its own
 # (ADR 0153): the alert rules are deploy/alerting/rules.yml, for the platform's evaluator.
-grep -q 'endpoint: "http://otlp.example.com:4318/v1/otlp"' "$OUT" || fail "prod's Collector must export to observability.export.endpoint"
+grep -q 'endpoint: "https://otlp.example.com:4318/v1/otlp"' "$OUT" || fail "prod's Collector must export to observability.export.endpoint"
 # Default-deny egress would drop an off-namespace export silently: the Collector's egress must admit the backend the
 # deployer states (observability.export.egress).
 grep -A20 "name: rask-allow-telemetry-export-egress$" "$OUT" | grep -q "cidr: 203.0.113.10/32" \

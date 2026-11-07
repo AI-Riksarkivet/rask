@@ -107,6 +107,12 @@ observability:
 nats:
   url: nats://rask-nats:4222
 
+# The Dapr dashboard, a development tool the chart leaves off and a real deployment refuses: it authenticates nobody and
+# reads every pod's log in the cluster. Reached by `kubectl port-forward svc/rask-dapr-dashboard 8080`.
+dapr:
+  dashboard:
+    enabled: true
+
 services:
   lineage:
     forward:

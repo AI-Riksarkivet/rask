@@ -52,13 +52,9 @@ Observability (rask's OTel Collector; the store, dashboards and alerting are the
   - rules:      deploy/alerting/rules.yml, for the platform's alert evaluator
 {{- end }}
 
-{{- with .Values.dapr }}
-{{- with .dashboard }}
-{{- if .enabled }}
+{{- if include "lance.daprDashboardEnabled" $root }}
 
 Dapr dashboard:  kubectl port-forward svc/{{ include "lance.fullname" $root }}-dapr-dashboard 8080:8080
-{{- end }}
-{{- end }}
 {{- end }}
 
 {{- with .Values.auth }}
