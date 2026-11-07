@@ -35,8 +35,9 @@ renders is deleted. A store holding nothing undeclared revokes and deletes nothi
 [[XC-003]] puts the in-chart Collector's audit-store credential through it: `otel-collector-export` is kept, else carried
 from the store behind the Service, else minted, so a surge keeps the credential the store admits.
 
-[[XC-004]] makes every other credential of the store a generated one: ESO's Password generator fills
-`<release>-dev-credentials` once, the pod mounts it, and the seed writes each field from the file, deriving
+[[XC-004]] makes every other credential of the store a generated one: ESO's Password generator fills one Secret per
+credential once (`<release>-dev-credential-<key>`, [[XC-164]]), the pod mounts them as one directory, and the seed writes
+each field from its file, deriving
 each scoped storage secret from the root there, so no credential is in the render, an argument list or an
 output stream. The `object-store-scoped-users` Job derives the same scoped secrets for the store users it creates, and a
 service reads its field by name: the field each service is told to read must hold the secret the Job gives
@@ -94,7 +95,7 @@ exit 1
 
 _WRITES = ("kv put ", "kv metadata delete ", "auth ", "write ", "delete ", "policy ")
 
-#: What ESO's Password generator writes into `<release>-dev-credentials` (templates/external-secrets.yaml), and the
+#: What ESO's Password generators write, one Secret each (templates/external-secrets.yaml, `lance.devCredentials`), and the
 #: store secret each lands in: the store's root at a path of its own, which no Dapr app may read (ADR 0168).
 _GENERATED = {
     "object-store-secret-key": ("secret/object-store-root", "object-store-secret-key"),
@@ -115,26 +116,33 @@ def _seed(docs: tuple[dict, ...]) -> tuple[str, dict]:
     return found
 
 
-def _as_mounted(pod_spec: dict, container: dict, volume: str, source: Path, into: Path) -> Path:
+def _as_mounted(pod_spec: dict, container: dict, volume: str, source: Path, into: Path, *, carried: dict[str, list[str]] | None = None) -> Path:
     """Deliver the keys in ``source`` as the pod's secret ``volume`` gives them to ``container``'s uid; absent when it cannot read them.
 
-    kubelet writes a secret file owned by root, grouped to the pod's fsGroup when one is set, and ORs group-read into a
-    read-only volume's mode under an fsGroup. Measured 2026-10-10 on k3s with a uid-65532 container: defaultMode 0400 and
-    no fsGroup gave `-r-------- 0:0` and `Permission denied`; the same with fsGroup 65532 gave `-r--r----- 0:65532` and
-    the read succeeded. Leaving the file out, rather than chmodding a copy, keeps the refusal under a root test runner.
+    A projected volume delivers the keys each of its Secrets carries (``carried``: Secret -> keys), so a key no source Secret
+    holds is absent. kubelet writes a secret file owned by root, grouped to the pod's fsGroup when one is set, and ORs
+    group-read into a read-only volume's mode under an fsGroup. Measured 2026-10-10 on k3s with a uid-65532 container:
+    defaultMode 0400 and no fsGroup gave `-r-------- 0:0` and `Permission denied`; the same with fsGroup 65532 gave
+    `-r--r----- 0:65532` and the read succeeded. Leaving the file out, rather than chmodding a copy, keeps the refusal under a
+    root test runner.
     """
     into.mkdir()
-    found = [v["secret"] for v in pod_spec["volumes"] if v["name"] == volume]
+    found = [v for v in pod_spec["volumes"] if v["name"] == volume]
     if not found:
         return into
-    [secret] = found
-    mode = secret.get("defaultMode", 0o644)
+    [mounted] = found
+    if projected := mounted.get("projected"):
+        mode: int = projected.get("defaultMode", 0o644)
+        keys = [key for s in projected["sources"] for key in (carried or {}).get(s["secret"]["name"], [])]
+    else:
+        secret = mounted["secret"]
+        mode = secret.get("defaultMode", 0o644)
+        keys = [item["key"] for item in secret["items"]] if secret.get("items") else [p.name for p in source.iterdir()]
     fs_group = (pod_spec.get("securityContext") or {}).get("fsGroup")
     uid = (container.get("securityContext") or {}).get("runAsUser", 0)
     if fs_group is not None:
         mode |= 0o440
     readable = mode & (0o400 if uid == 0 else 0o040 if fs_group is not None else 0o004)
-    keys = [item["key"] for item in secret["items"]] if secret.get("items") else [p.name for p in source.iterdir()]
     for key in keys:
         if readable and (source / key).exists():
             (into / key).write_bytes((source / key).read_bytes())
@@ -419,7 +427,13 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
     nats_tools = tmp_path / "nats-tools"
     nats_tools.mkdir()
     [server_pod] = [d["spec"]["template"]["spec"] for d in docs if f"{d.get('kind')}/{d.get('metadata', {}).get('name')}" == workload]
-    generated_dir = _as_mounted(server_pod, container, "dev-credentials", generated_dir, tmp_path / "dev-credentials-mounted")
+    generators = {d["metadata"]["name"]: d["spec"]["secretKeys"] for d in docs if d.get("kind") == "Password"}
+    carried = {
+        d["spec"]["target"]["name"]: generators[d["metadata"]["name"]]
+        for d in docs
+        if d.get("kind") == "ExternalSecret" and d["metadata"]["name"] in generators
+    }
+    generated_dir = _as_mounted(server_pod, container, "dev-credentials", generated_dir, tmp_path / "dev-credentials-mounted", carried=carried)
     root_dir = tmp_path / "root-token"
     root_dir.mkdir()
     (root_dir / Path(env["STORE_ROOT_TOKEN"]).name).write_text(_ADMIN_TOKEN)
@@ -543,7 +557,7 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         for p in held.iterdir()
     }
     assert documents and applied == documents, f"the store holds {sorted(applied)}, not the policies and roles rask renders: {sorted(documents)}"
-    [job] = [d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"].startswith("rask-object-store-scoped-users-")]
+    [job] = [d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"].startswith("rask-object-store-scoped-users-r")]
     pod_spec = job["spec"]["template"]["spec"]
     [derive] = pod_spec["initContainers"]
     [provision] = pod_spec["containers"]

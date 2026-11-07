@@ -3,6 +3,8 @@ kind: Job
 metadata:
   name: {{ include "lance.fullname" . }}-nats-stream-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
+  annotations:
+    {{- include "lance.reconciledJob" "Sync" | nindent 4 }}
 spec:
   ttlSecondsAfterFinished: 3600
   {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
@@ -48,63 +50,34 @@ spec:
                 case "$err" in *[Aa]uthoriz*|*[Aa]uthentic*|*[Pp]ermission*) echo "!! NATS refused the stream Job's credential: $err"; exit 1 ;; esac
                 echo wait-nats; sleep 3
               done
-              # LINEAGE carries OpenLineage events. Each stream is created once (idempotent skip).
-              # streamReplicas > 1 (raft-replicated streams) needs a clustered bus of at least that many nodes.
-              add_if_missing() {
+              # EVERY STREAM CONVERGES TO THE CONFIG THE CHART DECLARES, on every run ([[XC-164]]): created from it when
+              # absent, edited to it in place when present, so a changed value reaches a stream that already exists. What
+              # JetStream refuses to change in place (storage, mirror, retention to or from workqueue, lifting deny_delete
+              # or deny_purge) fails the Job with the server's own reason rather than leaving a stream the chart does not
+              # describe. Measured on natscli v0.1.5 against nats-server 2.14.2: an edit to an unchanged config exits 0, a
+              # refused one exits 1 and names the reason (`... can not change retention policy to/from workqueue (10052)`).
+              #
+              # RETENTION IS A FAN-OUT CORRECTNESS INVARIANT, and `limits` on every stream is what the edit restores:
+              #   work      on a stream with MULTIPLE per-app durables: the FIRST ack deletes the message, so the apps
+              #             steal deliveries from each other and every consumer looks healthy while seeing a fraction.
+              #   interest  deletes each message once every attached durable has acked it, so the retained history a
+              #             lineage REBUILD replays (a new `deliverPolicy=all` durable) is gone.
+              # Interest edits back to limits in place; work refuses, and the Job fails naming why.
+              converge_stream() {
                 if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
-                  echo "stream $1 already exists"
+                  out=$(nats --server "$S" stream edit "$1" --config "$HOME/$1.json" -f 2>&1) \
+                    || { echo "!! stream $1 cannot be edited to the declared config in place: $(echo "$out" | grep -i error)"; echo "!! Drain it and run: nats --server $S stream rm $1   then re-run this Job."; exit 1; }
+                  echo "stream $1: converged to the declared config"
                 else
-                  # `--defaults` ANSWERS THE PROMPTS, and without it nothing is created. The nats CLI asks
-                  # for any option a command does not supply, and a Job has no terminal: measured
-                  # 2026-09-22, `nats stream add` answered "invalid input: cannot ask for confirmation
-                  # without a terminal" and a work-queue stream was never created while the Job reported
-                  # Complete. Every other stream predates this, so the creation path was inert and the
-                  # only thing that noticed was a stream listing.
-                  nats --server "$S" stream add "$1" --defaults \
-                    --subjects "$2" --storage file --retention limits \
-                    --max-age=168h --max-bytes=-1 --max-msgs=-1 --max-msgs-per-subject=-1 \
-                    --max-msg-size=-1 --discard old --dupe-window=2m --replicas {{ $replicas }} \
-                    --no-allow-rollup --deny-delete --deny-purge \
+                  nats --server "$S" stream add --config "$HOME/$1.json" >/dev/null \
                     || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
+                  echo "stream $1: created"
                 fi
               }
-              # RETENTION IS A FAN-OUT CORRECTNESS INVARIANT, and nothing asserted it.
-              #
-              # The creation helper is `if exists; then skip`, so a stream created ONCE with the wrong
-              # retention keeps it forever and the chart is right while the cluster is wrong. What each
-              # wrong value costs is not cosmetic:
-              #
-              #   work      on a stream with MULTIPLE per-app durables: the FIRST ack deletes the message,
-              #             so the apps steal deliveries from each other. A subscriber silently under-runs —
-              #             every consumer looks healthy and each sees a fraction of the traffic.
-              #   interest  deletes each message once every attached durable has acked it, so the retained
-              #             history a lineage REBUILD replays (a new `deliverPolicy=all` durable) is gone.
-              #
-              # Neither shows up as an error anywhere: they present as "some events did not arrive". So it
-              # is checked here and FAILS THE JOB, rather than logged — a warning in a Job nobody reads is
-              # how a work queue's retention drift survived to be measured live on 2026-08-06.
-              assert_retention() {
-                local want="$2" got
-                # `sed`, not `jq` — the durable-drift loop below parses the same way, and this Job's
-                # image (natsio/nats-box) is not guaranteed to carry jq. One parsing idiom per file.
-                got=$(nats --server "$S" stream info "$1" --json 2>/dev/null | sed -n 's/.*"retention":[ ]*"\([a-z]*\)".*/\1/p' | head -1)
-                if [ -z "$got" ]; then
-                  echo "stream $1: not present yet — creation below will set retention=$want"
-                elif [ "$got" != "$want" ]; then
-                  echo "!! STREAM $1 HAS retention=$got, THE CHART INTENDS $want."
-                  echo "!! A stream is never re-created once it exists, so this cannot self-heal."
-                  echo "!! work-on-a-shared-stream makes per-app durables steal each other's deliveries;"
-                  echo "!! interest deletes the history a lineage rebuild replays. Both look like"
-                  echo "!! 'some events did not arrive'."
-                  echo "!! Drain it and run: nats --server $S stream rm $1   then re-run this Job."
-                  exit 1
-                else
-                  echo "stream $1: retention=$got (as intended)"
-                fi
+              # `allow_direct: true`, as `nats stream add --defaults` sets it, so a stream created that way edits to no change.
+              declare_stream() {
+                printf '%s' '{"name":"'"$1"'","subjects":["'"$2"'"],"retention":"limits","max_consumers":-1,"max_msgs":-1,"max_bytes":-1,"max_msgs_per_subject":-1,"max_msg_size":-1,"max_age":{{ mul (int (required "nats.streamMaxAgeSeconds is required" .Values.nats.streamMaxAgeSeconds)) 1000000000 }},"storage":"file","discard":"old","num_replicas":{{ $replicas }},"duplicate_window":120000000000,"deny_delete":true,"deny_purge":true,"allow_rollup_hdrs":false,"allow_direct":true}' > "$HOME/$1.json"
               }
-              for stream in LINEAGE DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL CATALOG_CONTROL_BROADCAST{{ end }}; do
-                assert_retention "$stream" limits
-              done
 
               consumer_of() {
                 tries=0
@@ -119,14 +92,17 @@ spec:
                   sleep 3
                 done
               }
-              add_if_missing LINEAGE "lineage.events.>"
+              # LINEAGE carries OpenLineage events.
+              declare_stream LINEAGE "lineage.events.>"
+              converge_stream LINEAGE
               # DLQ parks dead-lettered deliveries (dapr.resiliency — the sidecar publishes to dlq.*
               # after retry exhaustion). Its OWN stream for two load-bearing reasons: Dapr does NOT
               # auto-create streams (a parking publish with no stream FAILS, silently un-parking the
               # message), and NATS scopes consumer names PER STREAM — the dlq.* subscriptions reuse
               # each app's durableName, which only avoids clashing with the app's main consumer
               # because the two live on different streams.
-              add_if_missing DLQ "dlq.>"
+              declare_stream DLQ "dlq.>"
+              converge_stream DLQ
               {{- if .Values.catalog.controlEmit }}
               # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
               # replica's ring buffer (GET /management/v1/events). Its own stream so a parking-free broadcast publish
@@ -134,16 +110,17 @@ spec:
               #
               # The stream stays in the drift loop below, so a durable on it that no component in this release renders
               # is deleted there like one on any other stream.
-              add_if_missing CATALOG_CONTROL "catalog.control.>"
+              declare_stream CATALOG_CONTROL "catalog.control.>"
+              converge_stream CATALOG_CONTROL
               # The mirror holding each catalog replica's durable, its consumer limit reaping a deleted pod's (LH-305).
               BROADCAST_INACTIVE_NS="{{ mul (int (required "catalog.controlConsumerInactiveSeconds is required" .Values.catalog.controlConsumerInactiveSeconds)) 1000000000 }}"
-              printf '%s' '{"name":"CATALOG_CONTROL_BROADCAST","mirror":{"name":"CATALOG_CONTROL"},"storage":"file","retention":"limits","discard":"old","max_age":'"$BROADCAST_INACTIVE_NS"',"max_bytes":-1,"max_msgs":-1,"max_msgs_per_subject":-1,"max_msg_size":-1,"num_replicas":{{ $replicas }},"deny_delete":true,"deny_purge":true,"allow_rollup_hdrs":false,"consumer_limits":{"inactive_threshold":'"$BROADCAST_INACTIVE_NS"',"max_ack_pending":1000}}' > "$HOME/catalog-control-broadcast.json"
+              printf '%s' '{"name":"CATALOG_CONTROL_BROADCAST","mirror":{"name":"CATALOG_CONTROL"},"storage":"file","retention":"limits","max_consumers":-1,"discard":"old","max_age":'"$BROADCAST_INACTIVE_NS"',"max_bytes":-1,"max_msgs":-1,"max_msgs_per_subject":-1,"max_msg_size":-1,"num_replicas":{{ $replicas }},"deny_delete":true,"deny_purge":true,"allow_rollup_hdrs":false,"consumer_limits":{"inactive_threshold":'"$BROADCAST_INACTIVE_NS"',"max_ack_pending":1000}}' > "$HOME/CATALOG_CONTROL_BROADCAST.json"
+              # The stream's consumer limit may not sit below a consumer's own threshold, so a consumer holding a longer one
+              # is lowered first.
               if info=$(nats --server "$S" stream info CATALOG_CONTROL_BROADCAST --json 2>/dev/null); then
                 info=$(echo "$info" | tr -d ' \n')
                 limit=$(echo "$info" | sed -n 's/.*"consumer_limits":{[^}]*"inactive_threshold":\([0-9]*\).*/\1/p')
-                age=$(echo "$info" | sed -n 's/.*"max_age":\([0-9]*\).*/\1/p')
-                if [ "$limit" != "$BROADCAST_INACTIVE_NS" ] || [ "$age" != "$BROADCAST_INACTIVE_NS" ]; then
-                  echo "RECONCILE CATALOG_CONTROL_BROADCAST: inactive_threshold=${limit:-none} max_age=$age != expected $BROADCAST_INACTIVE_NS"
+                if [ "$limit" != "$BROADCAST_INACTIVE_NS" ]; then
                   for c in $(nats --server "$S" consumer ls CATALOG_CONTROL_BROADCAST --names 2>/dev/null); do
                     held=$(consumer_of CATALOG_CONTROL_BROADCAST "$c") || exit 1
                     held=$(echo "$held" | sed -n 's/.*"inactive_threshold":\([0-9]*\).*/\1/p')
@@ -152,15 +129,9 @@ spec:
                         || { echo "!! FAILED to lower $c's inactive threshold"; exit 1; }
                     fi
                   done
-                  nats --server "$S" stream edit CATALOG_CONTROL_BROADCAST --config "$HOME/catalog-control-broadcast.json" -f >/dev/null \
-                    || { echo "!! FAILED to reconcile stream CATALOG_CONTROL_BROADCAST"; exit 1; }
-                else
-                  echo "stream CATALOG_CONTROL_BROADCAST: consumer inactive threshold and age $BROADCAST_INACTIVE_NS ns (as intended)"
                 fi
-              else
-                nats --server "$S" stream add --config "$HOME/catalog-control-broadcast.json" >/dev/null \
-                  || { echo "!! FAILED to create stream CATALOG_CONTROL_BROADCAST — no catalog replica would hear a control event"; exit 1; }
               fi
+              converge_stream CATALOG_CONTROL_BROADCAST
               {{- end }}
               # Reconcile app-durable config drift (the UPGRADE path): a Dapr jetstream subscription
               # can only BIND an existing durable whose config matches its request — after a values

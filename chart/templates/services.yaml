@@ -2,8 +2,8 @@
 {{- if and .Values.catalog.controlEmit (not .Values.dapr.enabled) }}
 {{- fail "catalog.controlEmit=true requires dapr.enabled=true: the /control-events broadcast ingest publishes + receives via the Dapr sidecar and is authenticated by the sidecar-injected APP_API_TOKEN — without it the catalog fails closed at boot. Enable dapr.enabled, or set catalog.controlEmit=false." }}
 {{- end }}
-{{- if and (gt (int ((hasKey .Values.services.catalog "replicas") | ternary .Values.services.catalog.replicas 1)) 1) (not .Values.catalog.controlEmit) }}
-{{- fail "services.catalog.replicas > 1 requires catalog.controlEmit=true: the warehouse-binding cache is invalidated across replicas by the broadcast control-event subscription (#46) — without it a second replica keeps routing dropped namespaces at deleted warehouses' buckets. Enable catalog.controlEmit, or run one replica." }}
+{{- if and (gt (int (include "lance.replicaBounds" (list . .Values.services.catalog) | fromJson).max) 1) (not .Values.catalog.controlEmit) }}
+{{- fail "a catalog that may run more than one replica (services.catalog.replicas > 1, or autoscaling.enabled with autoscaling.maxReplicas > 1) requires catalog.controlEmit=true: the warehouse-binding cache is invalidated across replicas by the broadcast control-event subscription (#46) — without it a second replica keeps routing dropped namespaces at deleted warehouses' buckets. Enable catalog.controlEmit, or run one replica." }}
 {{- end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -11,7 +11,9 @@ metadata:
   name: {{ include "lance.fullname" . }}-catalog
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
-  replicas: {{ (hasKey .Values.services.catalog "replicas") | ternary .Values.services.catalog.replicas 1 }}
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ (include "lance.replicaBounds" (list . .Values.services.catalog) | fromJson).min | int }}
+  {{- end }}
   selector:
     matchLabels: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
@@ -159,11 +161,7 @@ spec:
             {{- include "lance.governedFgaEnv" (list . "catalog") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "env" "catalog") | nindent 12 }}
 
-            {{- $maintainers := list }}
-            {{- if and $root.Values.maintenance.enabled $root.Values.maintenance.vendWriteCredentials }}
-              {{- $maintainers = append $maintainers (include "lance.saSubject" (list $root "maintenance")) }}
-            {{- end }}
-            - { name: LANCE_FGA_MAINTAINERS, value: {{ toJson (compact $maintainers) | quote }} }
+            - { name: LANCE_FGA_MAINTAINERS, value: {{ include "lance.fgaMaintainers" $root | quote }} }
             - { name: LANCE_PROVENANCE_WRITERS, value: {{ toJson (list (include "lance.saSubject" (list $root "lineage"))) | quote }} }
             - { name: LANCE_OWN_ACCOUNTS, value: {{ include "lance.ownAccounts" $root | quote }} }
             - { name: LANCE_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
@@ -196,30 +194,15 @@ spec:
   ports: [{ name: http, port: {{ .Values.services.catalog.port }}, targetPort: http }]
   selector: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
 ---
-{{- if and .Values.dapr.enabled .Values.services.lineage.relay.enabled }}
-{{- $bn := .Values.services.lineage.relay.bindingName }}
-{{- if not (regexMatch "^[a-zA-Z0-9._-]+$" $bn) }}{{ fail (printf "services.lineage.relay.bindingName %q must match ^[A-Za-z0-9._-]+$: it names a Dapr Component and the route daprd delivers to" $bn) }}{{ end }}
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.services.lineage.relay.bindingName }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: bindings.cron
-  version: v1
-  metadata:
-    - { name: schedule, value: {{ .Values.services.lineage.relay.schedule | quote }} }
-scopes:
-  - {{ .Values.services.lineage.daprAppId }}
----
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "lance.fullname" . }}-lineage
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
-  replicas: {{ (hasKey .Values.services.lineage "replicas") | ternary .Values.services.lineage.replicas 1 }}
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ (include "lance.replicaBounds" (list . .Values.services.lineage) | fromJson).min | int }}
+  {{- end }}
   selector:
     matchLabels: { app.kubernetes.io/component: lineage, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:

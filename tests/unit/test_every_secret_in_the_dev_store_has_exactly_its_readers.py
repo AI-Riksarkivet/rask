@@ -19,7 +19,7 @@ root token in may reach no other pod, and no store token is published: none ride
 or a probe header.
 
 The store's root access key is named only where it is created: by the scoped-users hook that provisions the store's users
-with it, and by the dev store's seed, which writes it (ADR 0168).
+with it and prunes those git no longer declares, and by the dev store's seed, which writes it (ADR 0168).
 """
 
 from __future__ import annotations
@@ -74,7 +74,10 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "nats-server": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},
     "nats-route": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},
     "postgres": {"store": frozenset({"eso"}), "pods": _POSTGRES_CLIENTS},
-    "object-store-root": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-rustfs", "Job/rask-object-store-scoped-users-r1"})},
+    "object-store-root": {
+        "store": frozenset({"eso"}),
+        "pods": frozenset({"StatefulSet/rask-rustfs", "Job/rask-object-store-scoped-users-r1", "Job/rask-object-store-scoped-users-prune-r1"}),
+    },
     "backup-s3": {"store": frozenset({"eso"}), "pods": frozenset({"CronJob/rask-control-root-backup", "CronJob/rask-pg-backup"})},
     "otel-collector-export": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-otel-collector"})},
 }
@@ -331,7 +334,11 @@ def test_every_secret_in_the_dev_store_has_exactly_its_readers_and_no_published_
         "a generated credential reaches a container beside the seed"
     )
     assert not (published := _published_tokens(estate)), f"a store token is a literal of the render: {published}"
-    assert presenters == {f"{STORE_POD}/seed", "Job/rask-object-store-scoped-users-r1/provision"}, sorted(presenters)
+    assert presenters == {
+        f"{STORE_POD}/seed",
+        "Job/rask-object-store-scoped-users-r1/provision",
+        "Job/rask-object-store-scoped-users-prune-r1/provision",
+    }, sorted(presenters)
 
 
 #: A client's store reader as a client's own values supply it (`openbao.externalReaders`): its bus user, a name of its

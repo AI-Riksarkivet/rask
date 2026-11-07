@@ -124,7 +124,9 @@ jobs:
       matrix:
         # install-from-empty: rask installed onto an empty k3s inside Dagger, fixtures then the product chart, until
         # every workload is Ready ([[XC-133]]); the command a developer runs locally.
-        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth, install-from-empty]
+        # gitops-from-empty: the same empty k3s, rask installed by a pinned Argo CD from an in-cluster Helm repository
+        # serving this tree's chart, then one changed input converging on the next automated sync ([[XC-164]]).
+        gate: [lint, typecheck, openapi, charts, alert-rules-drill, go-fmt, nats-auth, install-from-empty, gitops-from-empty]
     steps:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)

@@ -24,7 +24,7 @@ imagePullSecrets: []
 
 # NO CREDENTIAL IS A CHART VALUE ([[XC-004]]). Every secret the estate uses lives in the secret store and
 # reaches a pod from it: the Dapr secret store for a sidecar, an ExternalSecret for a pod without one.
-# The dev OpenBao's are generated in-cluster (templates/external-secrets.yaml, `<release>-dev-credentials`);
+# The dev OpenBao's are generated in-cluster, one Secret each (templates/external-secrets.yaml, `<release>-dev-credential-<key>`);
 # a real deployment's are provisioned in the platform's store by its operator, and the render refuses a
 # credential passed as a value (templates/prod-credentials.yaml).
 
@@ -64,7 +64,7 @@ services:
     port: 2333
     # -- Dapr app-id of the catalog; also names its pubsub components and durable consumers.
     daprAppId: catalog
-    # -- Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails.
+    # -- Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails. Not rendered while autoscaling.enabled: the HPA owns the count.
     replicas: 1 # stateless — scale freely in prod (the prod overlay bumps these); HA via podDisruptionBudget
   lineage:
     # -- uvicorn import path the lineage Deployment runs (templates/services.yaml).
@@ -157,7 +157,7 @@ image:
   # -- Default tag for every first-party image when no per-component tag or digest is set.
   tag: "dev"
   # Set to pin the deployed artifact by content rather than by a mutable tag. WINS over `tag`.
-  # This is what an image-automation controller (Argo Image Updater, Flux) writes back into git.
+  # This is what an image-automation controller (Argo CD Image Updater) writes back into git.
   # -- Global digest pin (sha256:...) for every first-party image; wins over `tag`. Empty uses tags.
   digest: ""
   # PER-COMPONENT pins (#135) — the reason a `helm upgrade` stopped being destructive.
@@ -1140,7 +1140,7 @@ autoscaling:
   # endpoint the platform's alert evaluator uses, so the query path is proven, not speculative. Declined 2026-08-28 (owner): it is a twelfth
   # subchart, its CRDs, and a new silent failure mode (scaler cannot reach GreptimeDB → no scaling,
   # no error) for an object no profile enables. Revisit when something actually turns this on.
-  # -- Renders CPU-based HPAs for catalog and lineage. Needs metrics-server; off by default.
+  # -- Renders CPU-based HPAs for catalog and lineage, whose Deployments then render no `replicas` (the HPA owns the count). Needs metrics-server; off by default.
   enabled: false # opt-in; needs metrics-server. Targets catalog + lineage.
   # -- HPA minimum replicas for catalog and lineage.
   minReplicas: 2
@@ -1338,6 +1338,10 @@ nats:
   # fail outright rather than degrade.
   # -- Raft replica count for every stream the stream Job provisions; must not exceed the bus's node count.
   streamReplicas: 3
+  # The stream Job edits every declared stream to this in place on each run, so a change reaches a stream that already
+  # exists (XC-164). A stream drops a message older than this, which bounds how far back a rebuild replays.
+  # -- Seconds a message is kept on the LINEAGE, DLQ and CATALOG_CONTROL streams before the stream drops it (max_age).
+  streamMaxAgeSeconds: 604800 # @schema type: integer; minimum: 1
   # === Bus authentication ([[XC-078]] slice 2): every client connects as its own NATS user =========================
   # OPERATOR MODE IS THE ONLY SHAPE DAPR CAN USE. Dapr 1.18.1's pubsub.jetstream authenticates with a user JWT plus the NKEY
   # seed that signs the server's nonce, a TLS client pair, or one shared token that names nobody, and with jwt or seedKey empty
@@ -1424,7 +1428,7 @@ nats:
     # -- The bus user table, one user per Dapr app-id plus admin and monitor, each with publish and subscribe subject lists (never empty).
     users:
       admin:
-        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.STREAM.UPDATE.CATALOG_CONTROL_BROADCAST, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
+        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.STREAM.UPDATE.LINEAGE, $JS.API.STREAM.UPDATE.DLQ, $JS.API.STREAM.UPDATE.CATALOG_CONTROL, $JS.API.STREAM.UPDATE.CATALOG_CONTROL_BROADCAST, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
         subscribe: [_INBOX.>]
       catalog:
         publish:

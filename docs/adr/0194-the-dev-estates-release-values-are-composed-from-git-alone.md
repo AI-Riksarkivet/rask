@@ -23,7 +23,7 @@ only), by the parity audit against Lakekeeper `9124ea8`:
   `gateway` and `media`. Nothing refused them: `chart/values.schema.json` set no top-level `additionalProperties`.
 
 GitOps is the first of the four facts every design is judged by: the estate is what git declares, and a reconciler
-(Argo CD, Flux, the planned rask operator) re-applying the repository converges it. A release that remembers values no
+(Argo CD, the planned rask operator) re-applying the repository converges it. A release that remembers values no
 file holds cannot converge that way, and a schema that admits any key cannot tell a typo or a removed seam from a
 setting.
 

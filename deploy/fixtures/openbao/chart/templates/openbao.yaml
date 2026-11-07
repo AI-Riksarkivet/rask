@@ -172,7 +172,13 @@ spec:
         - { name: store-keys, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
         - { name: seed-scripts, configMap: { name: {{ .Values.seedScripts }}, defaultMode: 0444 } }
         - { name: store-identities, configMap: { name: {{ .Values.storeIdentities }}, defaultMode: 0444 } }
-        - { name: dev-credentials, secret: { secretName: {{ .Values.devCredentials }}, defaultMode: 0444 } }
+        - name: dev-credentials
+          projected:
+            defaultMode: 0444
+            sources:
+              {{- range .Values.devCredentials }}
+              - secret: { name: {{ . }} }
+              {{- end }}
         # Signing seeds never reach node disk.
         - { name: signing, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
         - { name: nats-tools, emptyDir: { sizeLimit: 64Mi } }

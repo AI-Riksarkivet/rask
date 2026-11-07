@@ -95,6 +95,9 @@ PROD_ARGS: tuple[str, ...] = (
     # `--set-json`, so a gate's later `--set-json route.hostnames=[]` replaces it: helm applies every `--set` after every `--set-json`.
     "--set-json", 'route.hostnames=["lance.example.com"]',
     "--set", "image.repository=ghcr.io/example/rask",
+    # A real deployment names every first-party build it runs ([[XC-164]]); the release pins them.
+    "--set-string", "image.tags.lance-rest-catalog=1.2.3",
+    "--set-string", "image.tags.web-console=1.2.3",
 )  # fmt: skip
 
 
@@ -121,6 +124,19 @@ def render_text(*extra: str) -> str:
     pass with three un-converted templates restored.
     """
     return render_chart_text(REPO / "chart", *extra)
+
+
+@functools.cache
+def by_source(*extra: str) -> tuple[tuple[str, dict], ...]:
+    """`(template, document)` for every manifest the chart's own templates render, the template as Helm's `# Source:`
+    header names it (`templates/<file>`); a subchart's documents are left out."""
+    found: list[tuple[str, dict]] = []
+    for chunk in render_text(*extra).split("\n---\n"):
+        source = re.search(r"^# Source: rask/(templates/\S+)", chunk, re.MULTILINE)
+        doc = yaml.load(chunk, Loader=FAST_LOADER)  # noqa: S506 — FAST_LOADER is yaml's safe loader (chart_yaml)
+        if source and isinstance(doc, dict):
+            found.append((source.group(1), doc))
+    return tuple(found)
 
 
 @functools.cache
@@ -203,8 +219,8 @@ def selects(selector: dict, labels: dict[str, str]) -> bool:
 
 #: One NATS user as the dev OpenBao's seed issues it: `nats_user <name> '<publish,...>' '<subscribe,...>'`.
 _NATS_USER = re.compile(r"^\s*nats_user ([a-z0-9][a-z0-9-]*) '([^']*)' '([^']*)'$", re.MULTILINE)
-#: A stream the NATS stream Job creates, through either of its two helpers, never a commented-out one.
-_STREAM = re.compile(r'^[^\S\n]*add(?:_workqueue)?_if_missing ([A-Z_]+) "([^"]+)"', re.MULTILINE)
+#: A stream the NATS stream Job declares and converges, never a commented-out one.
+_STREAM = re.compile(r'^[^\S\n]*declare_stream ([A-Z_]+) "([^"]+)"', re.MULTILINE)
 
 
 def seed_scripts(docs: tuple[dict, ...]) -> dict[str, str]:

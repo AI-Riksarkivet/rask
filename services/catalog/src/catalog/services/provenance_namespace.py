@@ -39,7 +39,7 @@ holds, and never fails its own boot on it: until it holds, lineage retries creat
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 from fastapi.concurrency import run_in_threadpool
@@ -93,20 +93,6 @@ def provenance_tuples(settings: Settings, *, namespace_uuid: str, parent: str | 
         *([fga.ClientTuple(user=parent, relation="parent", object=obj)] if parent else []),
         *(fga.ClientTuple(user=fga.user_object(subject), relation=_DECLARED_RELATION, object=obj) for subject in settings.provenance_writers),
     ]
-
-
-async def revoke_undeclared(client: OpenFgaClient, declared: list[fga.ClientTuple], *, obj: str, own: Collection[str]) -> list[fga.ClientTuple]:
-    """Revoke each `writer` tuple on ``obj`` naming a user in ``own`` that ``declared`` does not hold; answer the tuples
-    removed. ``own`` is the release's own accounts as users (`fga.user_object`)."""
-    kept = {(t.user, t.relation) for t in declared}
-    stale: list[fga.ClientTuple] = []
-    token: str | None = None
-    while True:
-        page, token = await fga.read_tuples(client, obj=obj, continuation_token=token)
-        stale += [held for held in page if held.relation == _DECLARED_RELATION and held.user in own and (held.user, held.relation) not in kept]
-        if not token:
-            break
-    return await fga.delete_tuples(client, stale, actor=ACTOR, origin="provenance_namespace")  # noqa: TID251
 
 
 def _declared_policy(retain_versions: int, *, canonical: str, namespace_uuid: str) -> dict[str, Any]:
@@ -164,7 +150,9 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
         tuples = provenance_tuples(settings, namespace_uuid=namespace_uuid, parent=parent)
         await fga.write_tuples(client, tuples, actor=ACTOR, origin="provenance_namespace")  # noqa: TID251
         own = {fga.user_object(account) for account in settings.own_accounts}
-        revoked = await revoke_undeclared(client, tuples, obj=fga.namespace_object(namespace_uuid), own=own)
+        revoked = await fga.revoke_undeclared(  # noqa: TID251 — the provenance writers' revoking site
+            client, tuples, obj=fga.namespace_object(namespace_uuid), relation=_DECLARED_RELATION, own=own, actor=ACTOR, origin="provenance_namespace"
+        )
     else:
         revoked = []
     log.info(

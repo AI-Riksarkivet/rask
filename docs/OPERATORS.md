@@ -217,10 +217,11 @@ No credential is a chart value (`templates/prod-credentials.yaml` refuses one by
 configuration (XC-025); the dev OpenBao's administrator token is generated in-cluster and mounted into its seed alone
 (XC-165). A real-deployment render refuses both the bundled Dex and the dev OpenBao.
 
-- **Dev (the openbao fixture).** `<release>-dev-credentials` holds `object-store-secret-key`,
-  `postgres-password` and `dapr-app-token`. On a fresh install ESO's
-  Password generator creates it once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`). The OpenBao
-  pod mounts it, and its seed writes the root to `secret/object-store-root` and each other generated field to its own
+- **Dev (the openbao fixture).** Each generated credential is a Secret of its own, `<release>-dev-credential-<key>`
+  for `object-store-secret-key`, `postgres-password` and `dapr-app-token` (`lance.devCredentials`). On a fresh install ESO's
+  Password generator creates each once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`), so a credential
+  the chart adds later is generated on the next reconcile and the others never again. The OpenBao
+  pod mounts them as one directory, and its seed writes the root to `secret/object-store-root` and each other generated field to its own
   secret (`postgres`, `dapr-app-token`) as `@file`, deriving the scoped storage
   secrets from the root (`lance.scopedSecretFn`, which
   `object-store-scoped-users` runs too). The Secret outlives an
@@ -229,9 +230,10 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   so a rotation never needs the OpenBao pod replaced. The lakehouse uses no third-party credential; one a client
   uses (a model-download token, say) is that client's release's to provide (ADR 0189).
 - **An estate whose stores already exist keeps its credentials.** If the AGE or object-store StatefulSet exists
-  and `<release>-dev-credentials` does not, the render refuses (`lookup`, so only against a cluster): generating
-  beside live data would lock every consumer out of it. Create the Secret from the credentials the estate holds
-  first; a Secret that exists without an owner is operator-held and the chart generates nothing beside it.
+  and the credential it holds (`postgres-password`, `object-store-secret-key`) has no Secret, the render refuses
+  (`lookup`, so only against a cluster): generating beside live data would lock every consumer out of it. Create that
+  credential's Secret, `<release>-dev-credential-<key>` with the one key `<key>`, from the value the estate holds first;
+  a Secret that exists without an owner is operator-held and the chart generates nothing beside it.
 - **Real deployment.** The platform's store holds every field docs/architecture/deployment.md lists, provisioned
   by its operator; the chart generates nothing.
 - **Never delete the OpenBao pod to make it re-seed.** A replacement with no outgoing pod re-mints every signing
@@ -239,7 +241,7 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   (`kubectl rollout restart deploy/rask-openbao`, a surge) is the only safe replacement.
 - **Rotating,** one class at a time, so a server learns a value only after the store and every ExternalSecret
   hold it and its consumers restart right after:
-  1. Change the key of `<release>-dev-credentials` (a real deployment: the field in the store) with a value
+  1. Change the key of the credential's Secret, `<release>-dev-credential-<key>` (a real deployment: the field in the store), with a value
      generated in the cluster; wait for the seed's "the mounted credentials changed; seeding again".
   2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `object-store-root`, `observability-s3`,
      `backup-s3`, `dapr-app-token`) with the `force-sync`

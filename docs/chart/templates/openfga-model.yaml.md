@@ -18,6 +18,10 @@ CrashLooped on `Invalid tuple '…#maintainer@user:service-maintenance'` and wed
 
 PRE-UPGRADE ([[LH-201]]): each service resolves its image's model at boot, so it must exist before new
 pods start; `post-install` covers a first install. Either way it precedes `bootstrap-admin` (weight 5).
+Under Argo CD it is a `Sync` hook (`lance.reconciledJob`): Argo maps `pre-upgrade` to PreSync, which runs before the
+sync applies anything, so on a first sync this Job would wait in PreSync for its ServiceAccount and for OpenFGA, both
+applied only in Sync, and the sync would never get there ([[XC-164]]). In Sync it runs beside them, and the services
+wait for the model it writes.
 
 READ FROM THE IMAGE, never a ConfigMap. `lakehouse/governed/auth/` ships `model.fga`,
 `model.fga.yaml` and `model.json` inside the catalog image, so the hook reads the same bytes the

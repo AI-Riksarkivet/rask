@@ -33,7 +33,7 @@ import functools
 import json
 import logging
 import unicodedata
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Collection, Iterable
 from contextlib import suppress
 from datetime import UTC, datetime
 from http import HTTPStatus
@@ -1903,6 +1903,7 @@ async def read_tuples(
     client: OpenFgaClient,
     *,
     user: str | None = None,
+    relation: str | None = None,
     obj: str | None = None,
     page_size: int | None = None,
     continuation_token: str | None = None,
@@ -1918,11 +1919,12 @@ async def read_tuples(
     all reads the whole store. OpenFGA refuses every other filter, a ``user`` with no object type and a bare
     type with no ``user`` ("the object type field is required and both the object id and user cannot be
     empty", v1.18.3), and this wrapper reports that refusal as an outage like any other, so callers enforce
-    the precondition up front (the admin API maps each to a 400).
+    the precondition up front (the admin API maps each to a 400). ``relation`` narrows a full object's tuples to that
+    one relation, on the server.
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as :func:`check`
     (outage → ``ServiceUnavailableError`` → 503, never an empty page that reads as "no grants").
     """
-    tuple_key = ReadRequestTupleKey(user=user, object=obj)  # the SDK omits it when every field is None
+    tuple_key = ReadRequestTupleKey(user=user, relation=relation, object=obj)  # the SDK omits it when every field is None
 
     async def _do_read_page() -> tuple[list[ClientTuple], str | None]:
         # Built INSIDE the retry closure: the SDK pops page_size/continuation_token out of the options
@@ -1977,7 +1979,8 @@ TupleOrigin = Literal[
     "create",
     "project_create",
     "warehouse_create",
-    # Re-asserting the cascade's grants over warehouses that already exist. Distinct from
+    # Converging the cascade's grants over warehouses that already exist: re-asserting those the release declares and
+    # taking back the maintenance rung from its own accounts it no longer declares. Distinct from
     # "warehouse_create" deliberately: an audit row that claims a tuple was written at CREATE time,
     # when it was actually written by a backfill months later, destroys the one property the origin
     # field exists for.
@@ -2232,6 +2235,44 @@ async def delete_tuples(
         _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, removed, actor, origin)
         _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, absent, actor, origin, reason="tuple_absent")
     return removed
+
+
+async def revoke_undeclared(
+    client: OpenFgaClient,
+    declared: Collection[ClientTuple],
+    *,
+    obj: str,
+    relation: str,
+    own: Collection[str],
+    actor: str,
+    origin: TupleOrigin,
+) -> list[ClientTuple]:
+    """Revoke each ``relation`` tuple on ``obj`` naming one of ``own`` that ``declared`` does not hold.
+
+    The release's own accounts hold on ``obj`` exactly the ``relation`` grants the release declares, so one it stopped
+    declaring is taken back; a tuple naming any other principal was granted at a door and stays ([[LH-563]]).
+
+    Args:
+        client: The OpenFGA client of the store the grants live in.
+        declared: The tuples the release declares on ``obj``.
+        obj: The object whose grants converge.
+        relation: The one relation that converges; every other relation on ``obj`` is left as it is.
+        own: The release's own accounts, as users (:func:`user_object`).
+        actor: Who the audit records as revoking.
+        origin: The revoking site the audit records.
+
+    Returns:
+        The tuples the server removed.
+    """
+    kept = {(t.user, t.relation) for t in declared}
+    stale: list[ClientTuple] = []
+    token: str | None = None
+    while True:
+        page, token = await read_tuples(client, obj=obj, relation=relation, continuation_token=token)
+        stale += [held for held in page if held.user in own and (held.user, held.relation) not in kept]
+        if not token:
+            break
+    return await delete_tuples(client, stale, actor=actor, origin=origin)
 
 
 #: Relations that hold bookkeeping rather than a grant: no permission reads them, and a scan counting an object's grants

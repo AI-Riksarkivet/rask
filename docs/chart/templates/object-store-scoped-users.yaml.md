@@ -44,11 +44,15 @@ every policy here does.
 
 ## `"helm.sh/hook": {{ $phase }}`
 
-ONE JOB PER PHASE, AND EACH ANSWERS A DIFFERENT FAILURE; on a fresh install the Job is a plain release object that
-provisions and prunes, since no pod of an earlier release can be presenting a retired identity. On an upgrade the
-`pre-upgrade` Job provisions and prunes nothing, and the `post-upgrade` one (`…-prune-<rev>`) provisions again and
-prunes: a user this release retires is still what the previous release's pods present until the upgrade has replaced
-them, so removing it before then cuts them off mid-flight.
+ONE JOB PER PHASE, AND EACH ANSWERS A DIFFERENT FAILURE. The provisioning Job prunes nothing, and a second one
+(`…-prune-<rev>`) provisions again and prunes: a user this release retires is still what the previous release's pods
+present until the upgrade has replaced them, so removing it before then cuts them off mid-flight. On a fresh install the
+provisioning Job is a plain release object (a `pre-install` hook would wait for a root credential the release itself
+creates) and the prune is `post-install`; on an upgrade they are `pre-upgrade` and `post-upgrade`. Under Argo CD, which
+renders every sync as an install, the provisioning Job is a `Sync` hook and the prune a `PostSync` one
+(`lance.reconciledJob`), so the prune still waits for the sync's resources to be Healthy ([[XC-164]]). A plain
+`helm install` without `--wait-for-jobs` can start the prune while the provisioning Job still runs; both write the same
+declared set, so the overlap removes nothing either needs (`make k3s-up` waits for Jobs).
 `pre-upgrade` is what lets the identities be NAMED by default. With only `post-upgrade` the
 store's user is created after the Deployments have been updated, so pods restart holding a
 credential the object store has never heard of and 403 until the hook catches up — and that

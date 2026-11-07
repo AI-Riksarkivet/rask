@@ -129,3 +129,123 @@ scopes:
   - {{ . }}
 {{- end }}
 {{- end }}
+---
+{{- if .Values.dapr.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.catalog.commitReconcile.bindingName }}
+  labels: {{- include "rask.componentLabels" (list . "catalog") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.catalog.commitReconcile.schedule | quote }} }
+scopes:
+  - {{ .Values.services.catalog.daprAppId }}
+{{- end }}
+---
+{{- if and .Values.dapr.enabled .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.catalog.controlOutbox.bindingName }}
+  labels: {{- include "rask.componentLabels" (list . "catalog") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.catalog.controlOutbox.schedule | quote }} }
+scopes:
+  - {{ .Values.services.catalog.daprAppId }}
+{{- end }}
+---
+{{- if .Values.dapr.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.catalog.erasure.bindingName }}
+  labels: {{- include "rask.componentLabels" (list . "catalog") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.catalog.erasure.schedule | quote }} }
+scopes:
+  - {{ .Values.services.catalog.daprAppId }}
+{{- end }}
+---
+{{- if .Values.dapr.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ required "catalog.manifestReclaim.bindingName is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.bindingName }}
+  labels: {{- include "rask.componentLabels" (list . "catalog") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ required "catalog.manifestReclaim.schedule is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.schedule | quote }} }
+scopes:
+  - {{ .Values.services.catalog.daprAppId }}
+{{- end }}
+---
+{{- if .Values.dapr.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.catalog.promotion.bindingName }}
+  labels: {{- include "rask.componentLabels" (list . "catalog") | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.catalog.promotion.schedule | quote }} }
+scopes:
+  - {{ .Values.services.catalog.daprAppId }}
+{{- end }}
+---
+{{- if and .Values.dapr.enabled .Values.services.lineage.relay.enabled }}
+{{- $bn := .Values.services.lineage.relay.bindingName }}
+{{- if not (regexMatch "^[a-zA-Z0-9._-]+$" $bn) }}{{ fail (printf "services.lineage.relay.bindingName %q must match ^[A-Za-z0-9._-]+$: it names a Dapr Component and the route daprd delivers to" $bn) }}{{ end }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.services.lineage.relay.bindingName }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.services.lineage.relay.schedule | quote }} }
+scopes:
+  - {{ .Values.services.lineage.daprAppId }}
+{{- end }}
+---
+{{- if and .Values.maintenance.enabled .Values.dapr.enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.maintenance.bindingName }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.maintenance.schedule | quote }} }
+scopes:
+  - {{ .Values.maintenance.daprAppId }}
+---
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .Values.maintenance.reconcileBindingName }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  type: bindings.cron
+  version: v1
+  metadata:
+    - { name: schedule, value: {{ .Values.maintenance.reconcileSchedule | quote }} }
+scopes:
+  - {{ .Values.maintenance.daprAppId }}
+{{- end }}

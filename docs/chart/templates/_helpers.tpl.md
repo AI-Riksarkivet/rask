@@ -92,13 +92,16 @@ Hardcoded, deliberately NOT a values knob: the Collector's filelog json_parser i
 daprd container and is only correct while this is true. A knob would let someone turn the sidecar
 plane back into unparsed logfmt with no gate firing.
 
-## `checksum/dapr-pubsub: {{ include "lance.daprPubsubDigest" (list $root $appId) | quote }}`
+## `checksum/dapr: {{ include "lance.daprDigest" (list $root $appId) | quote }}`
 
-daprd loads its Components once, at boot (HotReload is off), and only a changed pod spec starts a rollout, so a Component
-edit would otherwise reach a sidecar only when something else restarted its pod, which no reconcile does ([[LH-305]]).
-Each Dapr pod carries a digest of the pub/sub Components scoped to its app, so an edit rolls exactly the pods whose app
-loads it, as a Configuration's hash-named object does. `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py`
-holds both directions.
+daprd loads its Components and its Resiliency once, at boot (HotReload is off), and only a changed pod spec starts a
+rollout, so an edit to one would otherwise reach a sidecar only when something else restarted its pod, which no reconcile
+does ([[LH-305]], [[XC-164]]). Each Dapr pod carries a digest of every Component and Resiliency its sidecar loads (those
+scoped to its app, and any with no scopes), read from `dapr-component.yaml` (every Component) and `dapr-resiliency.yaml`,
+so an edit rolls exactly the pods whose sidecar loads it, as a Configuration's hash-named object does. Those two templates
+render nothing else: the digest includes each whole, so a Deployment in one would include itself. `tests/unit/test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py`
+holds both directions for a pub/sub Component, a binding and the Resiliency, and refuses a Dapr object any other template
+renders.
 
 ## `dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sidecarBlockShutdownSeconds) |...`
 
@@ -216,6 +219,43 @@ new name (new Job, re-runs — the same semantics `before-hook-creation` gave th
 deletes the previous revision's Job because it left the manifest, and a re-render of the same
 revision is byte-identical (no patch, no immutability error).
 ---------------------------------------------------------------------------------------------
+
+## `{{- define "lance.reconciledJob" -}}`
+
+A BOOTSTRAP JOB CONVERGES UNDER A GITOPS RECONCILER TOO ([[XC-164]]). Argo CD renders the chart with `helm template`, so
+every sync is revision 1 and an install: a revision-named Job is always `…-r1`, its TTL reaps it, an auto-sync re-creates
+it as drift, and a changed input meets the Job's immutable pod template. Each bootstrap Job therefore names the Argo CD
+phase it runs in (`argocd.argoproj.io/hook`): as a hook it is not part of the desired state Argo CD diffs, so a reaped Job
+is no drift, and `BeforeHookCreation` replaces it on every sync, which re-runs its idempotent work on each one. Argo CD
+reads its own hook annotation in place of Helm's on the same object (gitops-engine `pkg/sync/hook/hook.go` `Types`, read
+at Argo CD v3.5.7), so Helm still runs these Jobs as before. No sync wave orders them
+after the ExternalSecrets they mount: a wave is a health gate (gitops-engine `sync_context.go`: the next wave waits for
+this one to be Healthy), and those secrets come from a store the same release seeds, so a gate before them would hold the
+first sync forever; each Job's own wait (an init container, a retrying script) orders it, as under Helm. Re-running a Job
+only when its inputs change is [[XC-160]]'s.
+
+## `{{- define "lance.fgaMaintainers" -}}`
+
+The identities the release declares as maintainers, the one condition both writers of the rung read: the bootstrap hook
+grants it on the default warehouse and the catalog (`LANCE_FGA_MAINTAINERS`) on every warehouse it mints and, at boot, on
+every one it holds, and each takes back the rung from an own account it no longer names. One source keeps the two from
+disagreeing, which would make one grant what the other revokes on every reconcile ([[XC-164]]).
+
+## `{{- define "lance.devCredentials" -}}`
+
+ONE GENERATED SECRET PER DEV CREDENTIAL (owner, 2026-11-07, [[XC-164]]): `<release>-dev-credential-<key>`, each created
+once by ESO's Password generator and kept. ESO generates a Secret's whole key set at once and refreshing it would replace
+every password the stores were initialised with, so a key added to one shared Secret would never reach it. As its own
+Secret a new credential is a new object, generated on the next reconcile, and the ones the stores hold are never
+generated again. The dev OpenBao fixture mounts them as one directory (its `devCredentials`), and the seed reads the
+keys this lists.
+
+## `{{- define "lance.replicaBounds" -}}`
+
+The fewest and most replicas a request-serving service runs: an autoscaler's `minReplicas` and `maxReplicas` while
+`autoscaling.enabled`, else its own `replicas` for both. The PodDisruptionBudget reads the fewest, the catalog's
+multi-replica guard the most, so an autoscaled catalog that may scale past one needs `catalog.controlEmit` like a
+fixed one does.
 
 ## `{{- define "rask.isRealDeployment" -}}`
 

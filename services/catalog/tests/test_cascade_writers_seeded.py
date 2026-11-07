@@ -10,7 +10,8 @@ creator's grant.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+import asyncio
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -63,28 +64,35 @@ async def _captured_tuples(fn, monkeypatch) -> list[fga.ClientTuple]:
     return seen
 
 
-@pytest.mark.asyncio
-async def test_the_backfill_writes_the_SAME_grants_minus_the_caller(monkeypatch) -> None:
-    """Repair must not require becoming an owner of what you repair.
+def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """A repair writes the warehouse's project edge and the declared maintainer's rung, takes the rung back from each of the
+    release's own accounts it no longer declares, leaving that account's other grants and a client's door-made rung as they
+    are ([[XC-164]], [[LH-563]]).
 
-    Re-POSTing /management/v1/warehouses would land these tuples too — and grant whoever ran the repair `owner`
-    on every tenant they touched. That is why the backfill exists as its own door rather than as
-    "just run the create again".
+    It grants the caller nothing: re-POSTing /management/v1/warehouses would land these tuples too, and make whoever ran
+    the repair `owner` of every tenant it touched, which is why the backfill is its own door.
     """
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
-
-    seen = await _captured_tuples(
-        lambda: fga_deps.backfill_cascade_grants(
-            cast("OpenFgaClient", object()), settings, warehouse_id="wh1", project="acme", actor="system:cascade-backfill"
-        ),
-        monkeypatch,
+    declared = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-maintenance")
+    dropped = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-lineage")
+    client = fga.user_object("kubernetes~system:serviceaccount:rask:rask-sa-a-tenant-service")
+    openfga_store.write((dropped, "maintenance", "warehouse:wh1"), (dropped, "reader", "warehouse:wh1"), (client, "maintenance", "warehouse:wh1"))
+    settings = _fga_settings(
+        LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"],
+        LANCE_OWN_ACCOUNTS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance", "kubernetes~system:serviceaccount:rask:rask-sa-lineage"],
     )
 
-    assert fga.ClientTuple(user="user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-maintenance", relation="maintenance", object="warehouse:wh1") in seen
-    assert fga.ClientTuple(user="project:acme", relation="project", object="warehouse:wh1") in seen
-    assert not [t for t in seen if t.user.startswith("user:") and not t.user.startswith("user:kubernetes~")], (
-        f"the backfill granted a non-service subject: {seen}"
-    )
+    async def _repair() -> None:
+        async with fga.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
+            await fga_deps.converge_cascade_grants(store, settings, warehouse_id="wh1", project="acme", actor="system:cascade-backfill")
+
+    asyncio.run(_repair())
+
+    assert openfga_store.tuples() == {
+        ("project:acme", "project", "warehouse:wh1"),
+        (declared, "maintenance", "warehouse:wh1"),
+        (dropped, "reader", "warehouse:wh1"),
+        (client, "maintenance", "warehouse:wh1"),
+    }
 
 
 @pytest.mark.asyncio
@@ -94,7 +102,7 @@ async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
     [[LH-165]]. `warehouse.maintenance` has no `from parent`, so the sweep reaches a tenant's tables
     through exactly one tuple, `warehouse:<id>#maintenance@<maintenance identity>`, and the create door is
     where it has to be written: there is then no window in which a tenant exists and its data cannot be
-    maintained. It rides in `cascade_tuples`, which the create door and `backfill_cascade_grants` share,
+    maintained. It rides in `cascade_tuples`, which the create door and `converge_cascade_grants` share,
     so the two populations of warehouse cannot differ. Measured 2026-09-15 on the live estate: the 4 of
     97 warehouses without the tuple were the 4 newest, every one created after the hand-written grants.
     """

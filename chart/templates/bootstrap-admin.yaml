@@ -138,11 +138,7 @@ spec:
               # Gated on the flag that turns the feature on, so an estate not vending grants nothing —
               # a standing grant to a service that is not using it is exactly the kind of tuple nobody
               # remembers to revoke.
-              {{- $maintainers := list }}
-              {{- if and .Values.maintenance.enabled .Values.maintenance.vendWriteCredentials }}
-              {{- $maintainers = append $maintainers (include "lance.saSubject" (list . "maintenance")) }}
-              {{- end }}
-              maintainers = {{ $maintainers | toJson }}
+              maintainers = {{ include "lance.fgaMaintainers" . }}
 
               # The admin grant is the one that really is conditional on the subject: with no
               # `auth.bootstrapAdmin` there is no human to make an owner, and the service rungs below
@@ -169,7 +165,8 @@ spec:
                   + [(user_object(d), role) for d, roles in sorted(estate_roles.items()) for role in roles]
               )
 
-              for target, pairs in ((obj, grants), (estate_obj, estate_grants)):
+              targets = ((obj, grants), (estate_obj, estate_grants))
+              for target, pairs in targets:
                 for subject_id, relation in pairs:
                   tuple_key = {"user": subject_id, "relation": relation, "object": target}
                   r = httpx.post(f"{api}/stores/{store_id}/check", headers=fga_headers(token_file), json={"tuple_key": tuple_key, "authorization_model_id": model_id}, timeout=10)
@@ -191,23 +188,25 @@ spec:
                   else:
                       sys.exit(f"tuple write failed: HTTP {r.status_code} {r.text}")
 
-              # THE RELEASE'S OWN ACCOUNTS CONVERGE TO WHAT IT DECLARES ([[LH-563]]): one of its ServiceAccounts
-              # holding a machine role on the estate root (a relation only a user holds directly, read off the model
-              # this image carries) that `estate_roles` does not name loses it. A grant naming any other principal
-              # was made at a door, and this hook never revokes it.
-              declared = {(user_object(d), role) for d, roles in estate_roles.items() for role in roles}
+              # THE RELEASE'S OWN ACCOUNTS CONVERGE TO WHAT IT DECLARES ([[LH-563]], [[XC-164]]): on each object this hook
+              # grants on, one of its ServiceAccounts holding a machine role there (a relation only a user holds directly,
+              # read off the model this image carries) that the release does not declare there loses it, so a grant git
+              # stopped declaring (a maintainer once `maintenance.vendWriteCredentials` is off) is taken back. A grant
+              # naming any other principal, a person's included, was made at a door, and this hook never revokes it.
+              declared = {target: set(pairs) for target, pairs in targets}
               stale = []
-              for relation in sorted(machine_relations("estate")):
+              for target, kept in declared.items():
+                for relation in sorted(machine_relations(target.split(":", 1)[0])):
                   page = ""
                   while True:
-                      body = {"tuple_key": {"object": estate_obj, "relation": relation}, "page_size": 100}
+                      body = {"tuple_key": {"object": target, "relation": relation}, "page_size": 100}
                       if page:
                           body["continuation_token"] = page
                       r = httpx.post(f"{api}/stores/{store_id}/read", headers=fga_headers(token_file), json=body, timeout=10)
                       if r.status_code != 200:
                           sys.exit(f"tuple read failed: HTTP {r.status_code} {r.text}")
                       held = [t["key"] for t in r.json().get("tuples", [])]
-                      stale += [k for k in held if k["user"] in own_accounts and (k["user"], relation) not in declared]
+                      stale += [k for k in held if k["user"] in own_accounts and (k["user"], relation) not in kept]
                       page = r.json().get("continuation_token") or ""
                       if not page:
                           break

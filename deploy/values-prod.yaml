@@ -6,13 +6,12 @@
 # Switches set here are wired today; the EXTERNALIZE stanzas at the bottom are commented because they
 # also need the matching external-endpoint chart hooks (tracked as follow-up) before they do anything.
 
-# --- App images: set a real release tag before applying (never :dev/:latest in prod). The chart's image
-# helper FAILS the render on an empty tag, so DON'T ship tag:"" here — uncomment and fill these. Each
-# first-party image takes its entry in `tags` (or `digests`), keyed by its name, else `tag`. -------
+# --- App images: a released chart (`oci://<registry>/charts/rask:<version>`, .github/workflows/release.yml) pins the
+# lakehouse image by the digest it was released with, so the environment's GitOps object names the chart version and
+# this overlay names no tag (XC-164). Set `tags`/`digests` here only to run an image the chart was not released with,
+# never :dev or :latest. -------
 image:
   pullPolicy: IfNotPresent
-  # tag: v1.2.3                                          # every first-party image without an entry below
-  # tags: { lance-rest-catalog: v1.2.3 }                # the lakehouse image
 
 # --- Governance ON — Dex OIDC + OpenFGA. auth.enabled governs the catalog + lineage. -----------------
 auth:

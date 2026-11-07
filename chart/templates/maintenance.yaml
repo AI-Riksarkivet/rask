@@ -1,34 +1,6 @@
 {{- if .Values.maintenance.enabled }}
 {{- $root := . }}
 {{- $port := .Values.maintenance.port }}
-{{- if .Values.dapr.enabled }}
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.maintenance.bindingName }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: bindings.cron
-  version: v1
-  metadata:
-    - { name: schedule, value: {{ .Values.maintenance.schedule | quote }} }
-scopes:
-  - {{ .Values.maintenance.daprAppId }}
----
-apiVersion: dapr.io/v1alpha1
-kind: Component
-metadata:
-  name: {{ .Values.maintenance.reconcileBindingName }}
-  labels: {{- include "lance.labels" . | nindent 4 }}
-spec:
-  type: bindings.cron
-  version: v1
-  metadata:
-    - { name: schedule, value: {{ .Values.maintenance.reconcileSchedule | quote }} }
-scopes:
-  - {{ .Values.maintenance.daprAppId }}
----
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

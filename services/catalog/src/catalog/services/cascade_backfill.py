@@ -1,14 +1,15 @@
-"""Re-assert the warehouse grants over every warehouse that already exists.
+"""Converge the warehouse grants over every warehouse that already exists.
 
 WHY THIS EXISTS. `seed_warehouse` writes the project edge and the maintainer tuples exactly once, when a
 warehouse is created, from `LANCE_FGA_MAINTAINERS` — a value that CHANGES — so every warehouse created
-before a change is missing the new subject, and the sweep cannot maintain it.
+before a change is missing the new subject, and the sweep cannot maintain it; and one of the release's own accounts the
+change dropped keeps its rung until the backfill takes it back ([[XC-164]]).
 
-WHY A JOB AND NOT A STARTUP HOOK. The catalog's lifespan writes no tuples today, and making boot
-depend on an OpenFGA write has no good failure branch: crash-loop the catalog because a grant could
-not be re-asserted, or swallow it and boot with the drift still there. It would also run on every
-replica and every rollout, racing itself. A post-upgrade hook runs once, at exactly the moment the
-writer list can change, and fails visibly.
+WHY AT BOOT, IN THE BACKGROUND. The catalog runs it beside its lifespan (`main.py::_backfill_cascade_grants`), not
+awaited and not fatal: a slow OpenFGA must not delay readiness, and a grant that could not be converged leaves the
+estate as it was. A hook Job cannot do it, because the registry read needs the store's secret from the secret store,
+which needs a Dapr sidecar, and a sidecar keeps a Job from completing. Every replica runs it; each write and each revoke
+is idempotent (a revoke a sibling made first is recorded absent), so replicas racing converge on the same tuples.
 
 WHY NOT RE-POST /management/v1/warehouses. A same-id create converges the record and calls `seed_warehouse`
 unconditionally, so it *would* land the tuples — while granting the CALLER `owner` on every tenant it
@@ -49,9 +50,10 @@ ACTOR = "system:cascade-backfill"
 
 
 async def backfill(settings: Settings) -> tuple[int, int, list[str]]:
-    """Re-assert the cascade grants for every registered warehouse.
+    """Converge the cascade grants of every registered warehouse.
 
-    Returns ``(warehouses_seen, tuples_submitted, failures)``. A warehouse whose record is missing a
+    Returns ``(warehouses_seen, tuples_converged, failures)``, the tuples counted as written plus revoked. A warehouse
+    whose record is missing a
     `project` is SKIPPED and reported rather than guessed at: the project edge is what makes the whole
     concentric cascade resolve, and writing it wrong would grant a tenant's warehouse to the wrong
     tenant — strictly worse than leaving it unreachable.
@@ -59,10 +61,10 @@ async def backfill(settings: Settings) -> tuple[int, int, list[str]]:
     if not settings.fga_enabled:
         log.info("cascade_backfill_skipped", extra={"reason": "fga_disabled"})
         return (0, 0, [])
-    if not settings.fga_maintainers:
-        # Not an error: an estate with no maintenance identity configured has nothing to grant. Logged
-        # because a silent zero is the same shape as a broken run.
-        log.info("cascade_backfill_skipped", extra={"reason": "no_maintainers"})
+    if not (settings.fga_maintainers or settings.own_accounts):
+        # Not an error: an estate that declares no maintenance identity and names no account of its own has nothing to
+        # grant and nothing to take back. Logged because a silent zero is the same shape as a broken run.
+        log.info("cascade_backfill_skipped", extra={"reason": "nothing_declared"})
         return (0, 0, [])
 
     # THE SAME BOOTSTRAP THE LIFESPAN USES, not a private copy of it — this is a hook Job that must
@@ -95,7 +97,7 @@ async def _reconcile(client: OpenFgaClient, settings: Settings) -> tuple[int, in
             log.warning("cascade_backfill_no_project", extra={"warehouse": warehouse_id})
             continue
         try:
-            written += await fga_deps.backfill_cascade_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=ACTOR)
+            written += await fga_deps.converge_cascade_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=ACTOR)
         except Exception as exc:
             # One unreachable warehouse must not abandon the rest — but it MUST be reported, and the
             # exit code must reflect it. A backfill that half-ran and said nothing is how an estate
@@ -109,7 +111,7 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
     seen, written, failures = asyncio.run(backfill(get_settings()))
     log.info("cascade_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
-    print(f"cascade-backfill: {seen} warehouses, {written} tuples submitted, {len(failures)} failed")
+    print(f"cascade-backfill: {seen} warehouses, {written} tuples written or revoked, {len(failures)} failed")
     for line in failures:
         print(f"  FAILED {line}", file=sys.stderr)
     return 1 if failures else 0

@@ -126,7 +126,9 @@ def test_the_catalog_presents_the_store_identity_the_chart_provisions_for_its_ac
         for source in volume["projected"]["sources"]
         if "serviceAccountToken" in source
     ]
-    [hook] = [container for workload, name, container in containers(chart) if workload.startswith("Job/rask-object-store-scoped-users") and name == "provision"]
+    [hook] = [
+        container for workload, name, container in containers(chart) if workload.startswith("Job/rask-object-store-scoped-users-r") and name == "provision"
+    ]
     [mirror] = [doc for doc in chart if doc.get("kind") == "Service" and doc["metadata"]["name"] == "rask-issuer-mirror"]
     origin = f"http://{mirror['metadata']['name']}:{mirror['spec']['ports'][0]['port']}"
 

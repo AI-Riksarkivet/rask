@@ -2,7 +2,9 @@
 
 **Status:** accepted. Supersedes [ADR 0063](0063-the-object-store-is-minio-and-the-reason-is-who-may-call.md).
 Decision 2 is amended by [ADR 0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md): the development store
-trusts the cluster's ServiceAccount issuer, and the catalog's store identity is its token.
+trusts the cluster's ServiceAccount issuer, and the catalog's store identity is its token. Its consequence on the
+store's hook is superseded by [ADR 0196](0196-an-install-from-git-converges-under-argo-cd.md): the hook converges
+under Argo CD.
 Source: owner, 2026-10-18, ruling on XC-163 (#657): "migrate completely to RustFS and remove all MinIO stuff
 everywhere", and "Bump to newest" (1.0.3). Evidence: `docs/audits/2026-10-18/rustfs-zero-trust.md` (requirements
 R1-R20 and a live measurement on RustFS 1.0.1 and 1.0.3).

@@ -85,18 +85,21 @@ or on the estate root at the estate admin's tuple door for one serving every ten
 `event_reader` (`can_read_event_feed`, [[CTL-021]]: lineage's run feed with no per-dataset filter,
 `GET /events/projection`). The release's own accounts (`lance.ownAccounts`) arrive beside it as `FGA_OWN_ACCOUNTS`.
 
-## `for relation in sorted(machine_relations("estate")):`
+## `for relation in sorted(machine_relations(target.split(":", 1)[0])):`
 
 THE RELEASE'S OWN ACCOUNTS CONVERGE TO WHAT IT DECLARES, AND NO OTHER PRINCIPAL IS TOUCHED. The grant loop above only
-adds, so on its own a role taken from lineage's list would keep standing for as long as the store lives: a grant no file
-in git declares, which an install from git would not reproduce (GitOps). The machine relations are the estate root's
-relations only a user holds directly (`[user]`: `decider`, `event_reader`, `governance_prober`, `member_expander`),
-read off the model this image carries (`lakehouse.governed.fga.machine_relations`), the rule the catalog's offboarding
-door asks too. The hook reads every tuple of each on the estate root, following OpenFGA's `continuation_token` page by
-page, and deletes each one naming one of
-the release's own ServiceAccounts that `estate_roles` does not declare. A tuple naming any other principal was made at a
-door, the estate admin's tuple door or a project's or warehouse's access door, and stays: the door and the hook never
-write the same grant, so an upgrade never undoes a grant a door made (ADR 0192). The own accounts come from the list of ServiceAccounts the release renders, never from a name prefix,
-since a client's ServiceAccount may carry the release's prefix.
-`admin` and every person's rung are never read. A failed read or delete exits non-zero and fails the hook, so a
-convergence that did not happen is never reported as done.
+adds, so on its own a role taken from lineage's list, or the maintenance rung once `maintenance.vendWriteCredentials` or
+`maintenance.enabled` is off, would keep standing for as long as the store lives: a grant no file in git declares, which
+an install from git would not reproduce (GitOps, [[XC-164]]). On each object the hook grants on (the estate root and the
+default warehouse), the machine relations are that type's relations only a user holds directly (`[user]`: the estate's
+`decider`, `event_reader`, `governance_prober`, `member_expander`; the warehouse's `decider` and `maintenance`), read off
+the model this image carries (`lakehouse.governed.fga.machine_relations`), the rule the catalog's offboarding door asks
+too. The hook reads every tuple of each on that object, following OpenFGA's `continuation_token` page by page, and
+deletes each one naming one of the release's own ServiceAccounts that the release does not declare there. A tuple
+naming any other principal was made at a door, the estate admin's tuple door or a project's or warehouse's access door,
+and stays: the door and the hook never write the same grant, so an upgrade never undoes a grant a door made (ADR 0192).
+The own accounts come from the list of ServiceAccounts the release renders, never from a name prefix, since a client's
+ServiceAccount may carry the release's prefix. `admin`, `owner` and every person's rung are never read. A failed read
+or delete exits non-zero and fails the hook, so a convergence that did not happen is never reported as done. The
+warehouses a tenant mints at runtime carry the same maintenance rung, written by the catalog, which converges it the
+same way at boot (`catalog.services.cascade_backfill`).

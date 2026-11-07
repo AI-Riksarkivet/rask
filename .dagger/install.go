@@ -58,18 +58,30 @@ func (m *Rask) InstallFromEmpty(
 	registry := sessionRegistry(run)
 
 	tool := withRenderableChart(m.base(src))
+	if err := m.pushSourceImages(ctx, src, tool, registry); err != nil {
+		return "", err
+	}
+
+	kubeconfig := dag.CacheVolume("rask-install-from-empty-kubeconfig-" + run)
+	return runInstall(ctx, installer(tool, emptyCluster(registry, kubeconfig, run), kubeconfig, run), "rask from empty")
+}
+
+// pushSourceImages builds every image the governed stack's render names (scripts/stack_values.sh) from `src` and pushes
+// each to `registry` under library/<image>, where a cluster from emptyCluster pulls it with the render unchanged. `tool`
+// is a container that can render the chart (withRenderableChart).
+func (m *Rask) pushSourceImages(ctx context.Context, src *dagger.Directory, tool *dagger.Container, registry *dagger.Service) error {
 	images, err := tool.WithExec([]string{"bash", "-c", "RELEASE=rask . scripts/stack_values.sh && helm template rask ./chart \"${HELM_SET[@]}\"" +
 		" --api-versions external-secrets.io/v1/ExternalSecret --api-versions generators.external-secrets.io/v1alpha1/Password --api-versions dapr.io/v1alpha1" +
 		" | uv run python scripts/side_loaded_images.py --tag dev"}).Stdout(ctx)
 	if err != nil {
-		return "", fmt.Errorf("listing the images the render names: %w", err)
+		return fmt.Errorf("listing the images the render names: %w", err)
 	}
 	// crane's image runs as a non-root user, and a mounted archive is root's.
 	pusher := dag.Container().From(craneImage).WithUser("0").WithServiceBinding("rask-registry", registry)
 	for _, line := range strings.Split(strings.TrimSpace(images), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 {
-			return "", fmt.Errorf("side_loaded_images.py printed %q, not `<image> <stem>`", line)
+			return fmt.Errorf("side_loaded_images.py printed %q, not `<image> <stem>`", line)
 		}
 		ref, stem := fields[0], fields[1]
 		archive := "/images/" + stem + ".tar"
@@ -78,11 +90,9 @@ func (m *Rask) InstallFromEmpty(
 			WithExec([]string{"push", "--insecure", archive, "rask-registry:5000/library/" + ref}, dagger.ContainerWithExecOpts{UseEntrypoint: true})
 	}
 	if _, err := pusher.Sync(ctx); err != nil {
-		return "", fmt.Errorf("pushing the images to the session registry: %w", err)
+		return fmt.Errorf("pushing the images to the session registry: %w", err)
 	}
-
-	kubeconfig := dag.CacheVolume("rask-install-from-empty-kubeconfig-" + run)
-	return runInstall(ctx, installer(tool, emptyCluster(registry, kubeconfig, run), kubeconfig, run), "rask from empty")
+	return nil
 }
 
 // sessionRegistry is the registry a run's cluster mirrors, keyed by `run`. Its storage lives only as long as the
@@ -140,17 +150,23 @@ const clusterReady = "set -euo pipefail\nexec 2>&1\nset -x\n" +
 // runInstall runs scripts/install_from_empty.sh in `cluster` (installer's container), returning its output; a cluster
 // that never readies or an install that fails returns that output in the error, naming `what`.
 func runInstall(ctx context.Context, cluster *dagger.Container, what string) (string, error) {
-	install := cluster.WithExec([]string{"bash", "-c", clusterReady + "scripts/install_from_empty.sh"}, dagger.ContainerWithExecOpts{Expect: dagger.ReturnTypeAny})
-	out, err := install.Stdout(ctx)
+	return runScript(ctx, cluster, "scripts/install_from_empty.sh", what)
+}
+
+// runScript runs the command line `script` in `cluster` (installer's container) once clusterReady holds, returning its
+// output; a cluster that never readies or a script that exits non-zero returns that output in the error, naming `what`.
+func runScript(ctx context.Context, cluster *dagger.Container, script string, what string) (string, error) {
+	run := cluster.WithExec([]string{"bash", "-c", clusterReady + script}, dagger.ContainerWithExecOpts{Expect: dagger.ReturnTypeAny})
+	out, err := run.Stdout(ctx)
 	if err != nil {
 		return "", err
 	}
-	code, err := install.ExitCode(ctx)
+	code, err := run.ExitCode(ctx)
 	if err != nil {
-		return "", fmt.Errorf("reading %s's install exit code: %w", what, err)
+		return "", fmt.Errorf("reading %s's exit code: %w", what, err)
 	}
 	if code != 0 {
-		return "", fmt.Errorf("%s did not install (exit %d):\n%s", what, code, out)
+		return "", fmt.Errorf("%s did not complete (exit %d):\n%s", what, code, out)
 	}
 	return out, nil
 }

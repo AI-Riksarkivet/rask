@@ -38,7 +38,9 @@ def test_a_cluster_less_render_mints_no_credential(overlay: str) -> None:
     second = render_chart_text(REPO / "chart", *_RENDERS[overlay])
 
     generators = {doc["metadata"]["name"] for doc in yaml.load_all(first, Loader=FAST_LOADER) if isinstance(doc, dict) and doc.get("kind") == "Password"}
-    assert "rask-dev-credentials" in generators, f"{overlay}: the dev credentials are not generated, so this would pass vacuously"
+    assert generators == {"rask-dev-credential-dapr-app-token", "rask-dev-credential-object-store-secret-key", "rask-dev-credential-postgres-password"}, (
+        f"{overlay}: the dev credentials are not generated, so this would pass vacuously"
+    )
     assert first == second, f"{overlay}: two renders differ, so the render minted something the release then stores"
 
 
@@ -56,6 +58,11 @@ def test_a_credential_passed_as_a_value_is_refused_naming_it() -> None:
         pytest.param(("--set", "dex.enabled=true"), "dex.enabled=true — the bundled dev IdP", id="the-bundled-dev-idp"),
         pytest.param(("--set", "auth.enabled=false"), "auth.enabled=false — every governed door answers anyone", id="authentication-off"),
         pytest.param(("--set", "dapr.dashboard.enabled=true"), "dapr.dashboard.enabled=true — the Dapr dashboard", id="the-dapr-dashboard"),
+        pytest.param(
+            ("--set-string", "image.tags.web-console=dev"),
+            "ghcr.io/example/rask/web-console:dev — a first-party image at the development tag",
+            id="an-image-at-the-development-tag",
+        ),
         pytest.param(
             ("--set-string", "auth.fgaApiUrl=http://fga.example.com"),
             "auth.fgaApiUrl=http://fga.example.com is not https",

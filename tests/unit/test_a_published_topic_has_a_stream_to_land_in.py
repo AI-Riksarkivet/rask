@@ -24,67 +24,23 @@ uncovered and the gate would be abandoned on its first run.
 
 from __future__ import annotations
 
-import pathlib
 import re
-import shutil
-import subprocess
 
-import pytest
-
-from tests.unit.chart_render import PREREQ_ARGS
+from tests.unit import chart_render
+from tests.unit.chart_render import PREREQ_ARGS, captures
 
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
-CHART = REPO / "chart"
-
-#: `add_if_missing` OR `add_workqueue_if_missing <STREAM> "<subject>"` — the chart declares streams
-#: through BOTH helpers, and matching only the first made this gate blind to every work-queue stream it
-#: creates. Measured 2026-09-22: with `maintenance.workTopic` set, the gate reported
-#: `maintenance.work.v1` as landing nowhere while `add_workqueue_if_missing MAINTENANCE_WORK
-#: "maintenance.work.>"` sat in the job three lines from an `assert_retention` for it — and every other work
-#: queue was invisible the same way. A gate that cannot see half the declarations reports a hole where there is
-#: none and, worse, would miss a real one in the half it cannot read.
-#:
-#: Anchored past leading whitespace and REFUSING a `#`, because a commented-out declaration creates no
-#: stream. Caught by mutation-checking this gate: without the anchor, commenting the REFUSED line out
-#: still read as declared and the gate stayed green over exactly the hole it exists to find.
-_STREAM = re.compile(r'^[^\S\n]*add(?:_workqueue)?_if_missing ([A-Z_]+) "([^"]+)"', re.MULTILINE)
 #: Any rendered env var naming a topic. Deliberately broad: a new `*_TOPIC` is covered by existing.
 _TOPIC_ENV = re.compile(r'name: ([A-Z_]*TOPIC[A-Z_]*), value: "([^"]*)"')
 
 
-def _render() -> str:
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not pathlib.Path(helm).exists():
-        pytest.skip("helm not available")
-    argv = [
-        helm,
-        "template",
-        str(CHART),
-        "--set",
-        "image.localImages=true",
-        *PREREQ_ARGS,
-        "--set-string",
-        "auth.oidc.issuer=http://localhost:8080/dex",
-    ]
-    return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-
-
-def _captures(subject: str, declared: str) -> bool:
-    """NATS subject matching, for the two forms this chart declares: a `>` tail or a literal."""
-    return subject.startswith(declared[:-1]) if declared.endswith(".>") else subject == declared
-
-
-@pytest.fixture(scope="module")
-def rendered() -> str:
-    return _render()
-
-
-def test_every_published_topic_is_captured_by_a_stream_the_chart_creates(rendered: str) -> None:
-    streams = dict(_STREAM.findall(rendered))
+def test_every_published_topic_is_captured_by_a_stream_the_chart_creates() -> None:
+    args = ("--set", "image.localImages=true", *PREREQ_ARGS, "--set-string", "auth.oidc.issuer=http://localhost:8080/dex")
+    rendered = chart_render.render_text(*args)
+    streams = chart_render.jetstream_streams(chart_render.render(*args))
     topics = {(name, value) for name, value in _TOPIC_ENV.findall(rendered) if value}
 
-    uncaptured = sorted(f"{name}={value!r}" for name, value in topics if not any(_captures(value, declared) for declared in streams.values()))
+    uncaptured = sorted(f"{name}={value!r}" for name, value in topics if not any(captures(value, declared) for declared in streams.values()))
 
     assert not uncaptured, (
         "these workloads are told to publish to a subject NO stream captures, so the publish has "

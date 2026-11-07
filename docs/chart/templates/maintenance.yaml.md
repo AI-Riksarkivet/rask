@@ -3,18 +3,6 @@
 Rationale for `chart/templates/maintenance.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `apiVersion: dapr.io/v1alpha1`
-
-Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule`. The schedule lives here
-as component config, not in app code (no scheduler thread in the service). Scoped to the maintenance app.
-Gated on dapr.enabled: without the Dapr control plane the Component CRD doesn't exist and the release
-would fail to apply (the service still renders below; its cron route just never fires).
-
-The RECONCILE cron — its own binding on its own schedule. Separate from the sweep above because the
-two differ by an order of magnitude in cost: the sweep rewrites data files, this only reads three
-stores and reports where they disagree. Sharing one binding would force the cheap drift report onto
-the expensive rewrite's cadence, which is how a drift report becomes too stale to act on.
-
 ## `apiVersion: apps/v1`
 
 Table maintenance service — runs uvicorn maintenance.service:app (shares the catalog image).

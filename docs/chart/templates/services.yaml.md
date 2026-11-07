@@ -166,7 +166,15 @@ stamps, so without one there is nothing to verify and the Secret is not rendered
 Bound the DaprClient gRPC deadline (the SDK env) — the lineage publish is awaited INLINE in
 every write handler, so a wedged sidecar/NATS would otherwise hang every catalog write.
 
-## `{{- $maintainers := list }}`
+## `{{- if not .Values.autoscaling.enabled }}`
+
+While an HPA scales a service, its Deployment renders no `replicas`: a rendered count is desired state, and Argo CD's
+self-heal would set it back each time the HPA moved it, so the two would flap ([[XC-164]]). Without the field the
+Deployment keeps the count the HPA last set. Turning autoscaling on in an existing release removes the field, which sets
+the Deployment to one replica until the HPA scales it back to `autoscaling.minReplicas`, within its first sync period.
+`tests/unit/test_an_autoscaled_service_leaves_its_replica_count_to_the_autoscaler.py` holds it.
+
+## `- { name: LANCE_FGA_MAINTAINERS, value: {{ include "lance.fgaMaintainers" $root | quote }} }`
 
 THE SWEEP'S OWN RUNG: maintenance rewrites HOW a dataset is stored and must hold
 `maintainer` and nothing else. `can_maintain` neither implies nor is implied by
@@ -244,14 +252,6 @@ holds the same broadcast events.
 Longer than any polling session, so the cursor is not reset by the affinity expiring between
 polls — which would be this same defect on a timer. kube-proxy's own default is 10800s; stated
 here so the window is a decision rather than an inherited one.
-
-## `apiVersion: dapr.io/v1alpha1`
-
-Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule` to run lineage's relay tick:
-drain the lineage outbox, prune the feed, forward the feed to the configured graph backend. Config lives
-here, not in app code (no scheduler thread). Scoped to the lineage app; the route mounts only when
-LINEAGE_RELAY_BINDING_NAME matches this name. Gated on dapr.enabled too: without the Dapr control
-plane the Component CRD doesn't exist and the release would fail to apply.
 
 ## `apiVersion: apps/v1`
 

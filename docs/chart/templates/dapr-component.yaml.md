@@ -188,3 +188,89 @@ ONE derivation, in `lance.secretScopes`, because this list has other readers:
 through the environment, and it decides by membership HERE. Restating the computation would
 let the two agree at review and diverge later — a pod pointed at a store its app-id cannot
 reach gets ERR_SECRET_STORES_NOT_CONFIGURED and fails closed at boot.
+
+## `{{- if .Values.dapr.enabled }}`
+
+The catalog commit reconcile cron binding (from its own rationale below).
+
+### `{{- if .Values.dapr.enabled }}`
+
+LH-497: the commit is the outbox. A write is announced after its commit, and a crash between the commit and the staging of its event loses the announcement; this cron has the catalog read each table's version log after its mark and announce every committed version lineage's feed lacks, under the run id derived from the commit and signed for the commit's author. Delivered to POST /<name> at the catalog's pod root; name, env and route are one string. Every catalog replica ticks, and an announcement two replicas make at once lands one feed row, since both carry the commit's run id.
+
+## `{{- if and .Values.dapr.enabled .Values.catalog.controlEmit .Values.catalog.controlOutbox.enabled }}`
+
+The catalog control relay cron binding (from its own rationale below).
+
+### `{{- if and .Values.dapr.enabled .Values.catalog.controlEmit .Values.catalog.controlOu...`
+
+THE CONTROL LANE'S RELAY (the other half of the #4 outbox, for `catalog.control.v1`).
+The catalog STAGES every control event to `LANCE_CONTROL_OUTBOX_URI` before publishing and drops
+it only on ack, so a NATS blip leaves the event durable. Until this Component existed nothing read
+that prefix: the estate's only outbox drain is lineage's reconcile cron, which parses each staged
+object as an OpenLineage RunEvent and DELETES what it cannot — so a control event handed to it is
+destroyed as poison rather than relayed. (The catalog now refuses to boot with the two prefixes
+equal, for exactly that reason.)
+
+What that cost: a subscriber that acts on `table_published` learns of a publication only from this
+lane, so one lost publish was a publication nobody downstream heard of, with the tag advanced, the
+route 200 and every pod green.
+
+Delivered to `POST /<component name>` at the catalog's pod ROOT (never under a prefix), guarded by
+require_dapr_token so only the sidecar's cron may drive the replay. The Component's name, the app's
+LANCE_CONTROL_RELAY_BINDING_NAME and the served path are ONE string.
+
+Mirrors the maintenance crons: schedule as Component config so the
+cadence is a values edit rather than an app redeploy, scoped to the one consuming app-id, gated on
+dapr.enabled (no control plane, no Component CRD, and the release would fail to apply).
+
+## `{{- if .Values.dapr.enabled }}`
+
+The catalog erasure release cron binding (from its own rationale below).
+
+### `{{- if .Values.dapr.enabled }}`
+
+ADR 0138: releases an erasure's pinning tags and branches when due. Delivered to POST /<name> at the catalog's pod root; name, env and route are one string.
+
+## `{{- if .Values.dapr.enabled }}`
+
+The catalog manifest reclaim cron binding (from its own rationale below).
+
+### `{{- if .Values.dapr.enabled }}`
+
+ADR 0185 (LH-251): removes each root's `__manifest` versions older than `catalog.manifestReclaim.retainSeconds`, which no `dir` commit reclaims. Delivered to POST /<name> at the catalog's pod root; name, env and route are one string. Every catalog replica ticks, and two reclaims of one root remove the same versions.
+
+## `{{- if .Values.dapr.enabled }}`
+
+The catalog promotion expiry cron binding (from its own rationale below).
+
+### `{{- if .Values.dapr.enabled }}`
+
+ADR 0156 C1 (LH-466): expires a promotion hold nobody answered before its project's `review_hours` passed, leaving `published` where it was. Delivered to POST /<name> at the catalog's pod root; name, env and route are one string. Every catalog replica ticks, and each hold expires once by an ETag-guarded write.
+
+## `{{- if and .Values.dapr.enabled .Values.services.lineage.relay.enabled }}`
+
+The lineage relay cron binding (from its own rationale below).
+
+### `apiVersion: dapr.io/v1alpha1`
+
+Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule` to run lineage's relay tick:
+drain the lineage outbox, prune the feed, forward the feed to the configured graph backend. Config lives
+here, not in app code (no scheduler thread). Scoped to the lineage app; the route mounts only when
+LINEAGE_RELAY_BINDING_NAME matches this name. Gated on dapr.enabled too: without the Dapr control
+plane the Component CRD doesn't exist and the release would fail to apply.
+
+## `{{- if and .Values.maintenance.enabled .Values.dapr.enabled }}`
+
+The maintenance cron binding (from its own rationale below).
+
+### `apiVersion: dapr.io/v1alpha1`
+
+Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule`. The schedule lives here
+as component config, not in app code (no scheduler thread in the service). Scoped to the maintenance app.
+Gated on dapr.enabled: without the Dapr control plane the Component CRD doesn't exist and the release
+would fail to apply (the service still renders in `maintenance.yaml`; its cron route just never fires).
+
+The RECONCILE cron — its own binding on its own schedule. Separate from the sweep above because the
+two differ by an order of magnitude in cost: the sweep rewrites data files, this only reads three
+stores and reports where they disagree. Sharing one binding would force the cheap drift report onto
+the expensive rewrite's cadence, which is how a drift report becomes too stale to act on.

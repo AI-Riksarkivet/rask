@@ -135,7 +135,7 @@
             "type": "object",
             "properties": {
                 "enabled": {
-                    "description": "Renders CPU-based HPAs for catalog and lineage. Needs metrics-server; off by default.",
+                    "description": "Renders CPU-based HPAs for catalog and lineage, whose Deployments then render no `replicas` (the HPA owns the count). Needs metrics-server; off by default.",
                     "type": "boolean"
                 },
                 "maxReplicas": {
@@ -993,6 +993,11 @@
                         }
                     }
                 },
+                "streamMaxAgeSeconds": {
+                    "description": "Seconds a message is kept on the LINEAGE, DLQ and CATALOG_CONTROL streams before the stream drops it (max_age).",
+                    "type": "integer",
+                    "minimum": 1
+                },
                 "streamReplicas": {
                     "description": "Raft replica count for every stream the stream Job provisions; must not exceed the bus's node count.",
                     "type": "integer"
@@ -1619,7 +1624,7 @@
                             "type": "integer"
                         },
                         "replicas": {
-                            "description": "Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails.",
+                            "description": "Replica count of the catalog; above 1 requires catalog.controlEmit=true or the render fails. Not rendered while autoscaling.enabled: the HPA owns the count.",
                             "type": "integer"
                         }
                     }

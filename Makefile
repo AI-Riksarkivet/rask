@@ -519,10 +519,11 @@ k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), be
 # K3S_REGISTRY is the registry k3s pulls first-party images from: the dev registry `make dev-registry` points k3s at.
 # Set it empty for side-loaded images (`make k3s-build k3s-import`, the `dev` tag, `image.localImages`).
 K3S_REGISTRY ?= localhost:5000
-# The image tags the release runs: written by `make k3s-pins` (captured from the cluster, or set for a new build with
-# TAGS=), gitignored, and read only from here. Pulling from a registry needs it, and K3S_PINS_CHECK refuses a file that
-# pins no tag for an image the release renders, which would otherwise fall back to the chart's `dev` and wait out
-# `--wait` in ImagePullBackOff; side-loaded images run at `dev` when it is absent.
+# The image tags the development estate runs: set for each build by `make k3s-pins TAGS=`, committed, and read only
+# from here, so the estate's images are what git declares ([[XC-164]]). The
+# tags name builds in K3S_REGISTRY, so an estate on another host pins its own builds there. Pulling from a registry needs
+# it, and K3S_PINS_CHECK refuses a file that pins no tag for an image the release renders, which would otherwise fall
+# back to the chart's `dev` and wait out `--wait` in ImagePullBackOff; side-loaded images run at `dev` when it is absent.
 K3S_PINS = deploy/values-live-pins.yaml
 K3S_PINS_ARG = $(if $(K3S_REGISTRY),-f $(K3S_PINS),$(if $(wildcard $(K3S_PINS)),-f $(K3S_PINS)))
 K3S_PINS_CHECK = $(if $(K3S_REGISTRY),for s in $(K3S_IMAGES); do grep -q "^    $$s: " $(K3S_PINS) 2>/dev/null || { echo "!! $(K3S_PINS) pins no tag for $$s: the release would pull $(K3S_REGISTRY)/$$s:dev. Name the build with make k3s-pins TAGS=\"$$s=<tag>\" (or K3S_REGISTRY= for side-loaded images)" >&2; exit 1; }; done,:)
@@ -565,7 +566,7 @@ k3s-stem-check: ## Refuse an upgrade while any image stem runs more than one tag
 	@# operation instead of beside it.
 	@KUBECONFIG=$(KUBECONFIG) RELEASE_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/k3s-pins.sh --check-only
 
-k3s-pins: ## Capture what the cluster is RUNNING into deploy/values-live-pins.yaml (#135), or set TAGS="<stem>=<tag> ..." in it
+k3s-pins: ## Set TAGS="<stem>=<tag> ..." in the committed deploy/values-live-pins.yaml (#135), the images the estate runs
 	@# KUBECTL is deliberately NOT passed through. `KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl` is a
 	@# multi-word string carrying its own env assignment, so `KUBECTL=$(KUBECTL) ./script` made the shell
 	@# read `KUBECTL=KUBECONFIG=...` as an assignment and then run `kubectl ./scripts/k3s-pins.sh` —

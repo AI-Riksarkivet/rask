@@ -263,12 +263,14 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   bucket, and a pre-upgrade hook may run only as an SA in its `_ESTABLISHED` set, so naming a new one is a
   deliberate edit there, which is the reminder to pre-create it.
 - **A hook that removes what git no longer declares runs post-upgrade** ([[XC-083]], ADR 0170).
-  `object-store-scoped-users.yaml` renders one Job per phase, `range $phase := ternary (list "install") (list
-  "pre-upgrade" "post-upgrade") .Release.IsInstall`: the pre-upgrade run provisions what the new revision's pods need
-  before they roll and prunes nothing, because the previous release's pods still present what a prune would remove;
-  the post-upgrade run (`<release>-object-store-scoped-users-prune-<rev>`) runs once the manifest has replaced them and
-  removes every store user and rask-owned policy the chart does not declare; an install has no old pods and prunes in
-  its one run. Helm's `ternary` evaluates both arms, so neither may fail on the other's input.
+  `object-store-scoped-users.yaml` renders one Job per phase, `range $phase := ternary (list "install" "post-install")
+  (list "pre-upgrade" "post-upgrade") .Release.IsInstall`: the provisioning run (a plain object on an install, a
+  `pre-upgrade` hook on an upgrade) provisions what the new revision's pods need before they roll and prunes nothing,
+  because the previous release's pods still present what a prune would remove; the prune run
+  (`<release>-object-store-scoped-users-prune-<rev>`, `post-install`/`post-upgrade`) runs once the manifest has replaced
+  them and removes every store user and rask-owned policy the chart does not declare. Under Argo CD, which renders every
+  sync as an install, they are a `Sync` and a `PostSync` hook ([[XC-164]], `lance.reconciledJob`). Helm's `ternary`
+  evaluates both arms, so neither may fail on the other's input.
 - **The catalog's store identity is a projected token, named by one value** ([[XC-083]], ADR 0170):
   `objectStore.identity.audience` (`lance.objectStoreAudience`, `required`) is both the token the catalog mounts
   through `lance.identityTokens` and the client id the dev store's provider trusts (`deploy/fixtures/rustfs`

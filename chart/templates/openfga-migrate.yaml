@@ -13,6 +13,8 @@ kind: Job
 metadata:
   name: {{ include "lance.fullname" . }}-openfga-migrate-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
+  annotations:
+    {{- include "lance.reconciledJob" "Sync" | nindent 4 }}
 spec:
   # Reap the finished pod. Each revision's job carries a -r<revision> name, so Helm's
   # before-hook-creation delete policy never matches the previous one — without a TTL every

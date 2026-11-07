@@ -3,7 +3,8 @@
 {{/**/}}
 {{- range $name := list "catalog" "lineage" }}
 {{- $svc := index $.Values.services $name }}
-{{- if gt (int ((hasKey $svc "replicas") | ternary $svc.replicas 1)) 1 }}
+{{- $bounds := include "lance.replicaBounds" (list $ $svc) | fromJson }}
+{{- if gt (int $bounds.min) 1 }}
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -40,7 +41,7 @@ spec:
 {{- range $c := list "catalog" "lineage" }}
 ---
 # HPA on CPU for the request-serving services. Needs metrics-server. The PDB minAvailable bounds disruption
-# during scale-down; the Deployment's replicas: becomes the HPA floor, so keep replicas <= minReplicas.
+# during scale-down; the Deployment renders no replicas while this exists, so the HPA alone owns the count.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

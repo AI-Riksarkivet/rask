@@ -2689,7 +2689,7 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
     ]
 
 
-async def backfill_cascade_grants(
+async def converge_cascade_grants(
     client: OpenFgaClient | None,
     settings: Settings,
     *,
@@ -2697,11 +2697,12 @@ async def backfill_cascade_grants(
     project: str,
     actor: str,
 ) -> int:
-    """Repair one EXISTING warehouse's grants: assert :func:`cascade_tuples`. Returns the number of tuples written.
+    """Converge one EXISTING warehouse's grants: assert :func:`cascade_tuples`, and take back the maintenance rung from
+    each of the release's own accounts it no longer declares. Returns the number of tuples written plus those revoked.
 
     Why this is needed at all, given creates already seed: the grants are written ONCE, at create, from
     a config value that CHANGES (``LANCE_FGA_MAINTAINERS``), so every warehouse that predates a change is
-    missing the new subject.
+    missing the new subject, and keeps one the change dropped ([[XC-164]]).
 
     Idempotent by the same mechanism the create path relies on: ``write_tuples`` retries one-by-one
     when OpenFGA rejects a batch for containing a duplicate, so a re-run lands only what is missing.
@@ -2712,4 +2713,8 @@ async def backfill_cascade_grants(
         return 0
     tuples = cascade_tuples(settings, warehouse_id=warehouse_id, project=project)
     await fga.write_tuples(client, tuples, actor=actor, origin="cascade_backfill")  # noqa: TID251
-    return len(tuples)
+    own = {fga.user_object(account) for account in settings.own_accounts}
+    revoked = await fga.revoke_undeclared(  # noqa: TID251 — the cascade's revoking site
+        client, tuples, obj=f"warehouse:{warehouse_id}", relation="maintenance", own=own, actor=actor, origin="cascade_backfill"
+    )
+    return len(tuples) + len(revoked)

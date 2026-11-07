@@ -5,11 +5,11 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 
 ## `apiVersion: batch/v1`
 
-Create the JetStream LINEAGE stream (subjects lineage.events.>) that the Dapr pubsub.jetstream
-component publishes to / consumes from. Dapr's jetstream component does NOT auto-create the stream,
-so this Job does it (idempotent: skip if it already exists), on the bus `nats.url` names. The bus is
-a prerequisite (ADR 0153), and the streams are rask's: without them every component would point at a
-server with no streams and every publish would fail.
+Declare the JetStream streams (LINEAGE, subjects lineage.events.>, and DLQ and the catalog's control streams) that the
+Dapr pubsub.jetstream components publish to and consume from. Dapr's jetstream component does NOT auto-create a stream,
+so this Job does it on the bus `nats.url` names, and on every run converges each stream to the config the chart
+declares (`converge_stream` below). The bus is a prerequisite (ADR 0153), and the streams are rask's: without them every
+component would point at a server with no streams and every publish would fail.
 
 NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. A daprd sidecar subscribes at startup, so an
 absent stream is a startup-time dependency of half the fleet; running the provisioner only after
@@ -42,6 +42,25 @@ The path of the `admin` creds file the nats CLI reads (values.yaml `nats.auth`),
 
 A server that is not up yet is waited for; one that refuses this Job's credential fails it now, by name.
 
+## `converge_stream() {`
+
+EVERY STREAM CONVERGES TO THE CONFIG THE CHART DECLARES ([[XC-164]]). A stream created once keeps its creation config
+while the chart moves on, so a changed max age (`nats.streamMaxAgeSeconds`), replica count (`nats.streamReplicas`) or
+retention would reach no running bus, and a reconciler re-applying git would change nothing. Each run therefore
+writes the stream's whole config (`declare_stream`), creates the stream from it when absent and edits the stream to it in
+place when present (`nats stream edit --config -f`). JetStream refuses some edits in place: storage, a mirror, retention
+to or from workqueue, lifting `deny_delete` or `deny_purge` (nats-server v2.14.2 `jsa.configUpdateCheck`); the Job then
+fails with the server's reason and names the hand step (drain, `nats stream rm`, re-run), rather than leaving a stream
+the chart does not describe. Measured on natscli v0.1.5 against nats-server 2.14.2: an edit to an unchanged config exits
+0, an allowed change (max age, retention `interest` to `limits`) applies and exits 0, a refused one exits 1 naming the
+reason (`... can not change retention policy to/from workqueue (10052)`). The Job's bus user (`nats.auth.users.admin`)
+holds `$JS.API.STREAM.UPDATE` for exactly the streams it edits, so an operator-mode bus admits the edits and nothing
+wider; the `nats-auth` lane runs this Job as that user against such a bus. `allow_direct: true` is in the declared config
+because `nats stream add --defaults` sets it, so a stream created that way edits to no change, and a config without it
+would turn it off. The mirror's `mirror_direct` is the server's: it derives `true` for a mirror of a stream that allows direct
+gets, on create and on an edit that omits it (measured on nats-server 2.14.2), so the declared config leaves it out. `tests/unit/test_the_stream_job_converges_each_stream_to_its_declared_config.py` runs the script against a
+stand-in CLI; the GitOps lane reads a running bus back after a change.
+
 ## `consumer_of() {`
 
 The drift passes judge a durable by its info, and a judgement on a failed read deleted a healthy durable, which the
@@ -67,8 +86,8 @@ the keyed ingest lands nothing twice from.
 ## `BROADCAST_INACTIVE_NS="{{ mul (int (required "catalog.controlConsumerInactiveSeconds is required" .Values.catalog.controlConsumerInactiveSeconds)) 1000000000 }}"`
 
 The mirror CATALOG_CONTROL_BROADCAST holds each catalog replica's durable ([[LH-305]]); its consumer limit is what
-reaps a deleted pod's, so the Job declares it in git and converges it: a mirror whose limit or message age differs from
-the value is edited from the same config (`nats stream edit --config`, measured on nats-server v2.14.2 to update both).
+reaps a deleted pod's, so the Job declares it in git and converges it: the mirror is edited to the same config on every run
+(`nats stream edit --config`, measured on nats-server v2.14.2 to update both its limit and its message age).
 The server refuses a change to a stream's consumer limits while any consumer exceeds them, comparing `max_ack_pending`
 too (v2.14.2 `stream.go:2420-2446`), so the limits name `max_ack_pending: 1000`, the server's default for a consumer
 that sets none, and a lowered limit first lowers each durable above it (`nats consumer edit --inactive-threshold`):

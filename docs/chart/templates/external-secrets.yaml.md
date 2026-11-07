@@ -11,21 +11,23 @@ is a chart value, so with no operator nothing would deliver one: the render refu
 a release whose pods wait on Secrets nobody creates. `.Capabilities` is the cluster's own answer on an
 install or upgrade; a cluster-less render states the target with `--api-versions`.
 
-## `{{- $stores := or (lookup "apps/v1" "StatefulSet" .Release.Namespace (include "lance.ageHost" .)) $objectStore }}`
+## `{{- range $key, $name := include "lance.devCredentials" . | fromJson }}`
 
 AN ESTATE THAT ALREADY HOLDS DATA KEEPS ITS CREDENTIALS. The AGE database and the object store keep the
 password and root they were initialised with, so generating fresh ones beside them hands every consumer a
-credential its server refuses. The object store counts only when its StatefulSet and its root's Secret,
-`<release>-object-store-root`, both exist (`$objectStore`). On an upgrade of an estate whose stores exist, the credential Secret must
-already exist: created from the current credentials before the first upgrade, and rotated in place
-afterwards (docs/OPERATORS.md 8). `lookup` answers only against a cluster, so a cluster-less render and a
-fresh install, where no store exists yet, generate.
+credential its server refuses. Each credential is guarded on its own (`$unlocks`): `postgres-password` while the AGE
+StatefulSet exists, `object-store-secret-key` while the object store does, which counts only when its StatefulSet and its
+root's Secret, `<release>-object-store-root`, both exist (`$objectStore`). On an upgrade of an estate whose store exists,
+that credential's Secret must already exist: carried forward from the current credential before the first upgrade, and
+rotated in place afterwards (docs/OPERATORS.md 8). A credential no store holds (`dapr-app-token`, or one added later) is
+generated when absent. `lookup` answers only against a cluster, so a cluster-less render and a fresh install, where no
+store exists yet, generate.
 
 ## `{{- if or (not $held) (dig "metadata" "ownerReferences" list $held) }}`
 
-THE DEV OPENBAO'S CREDENTIALS, GENERATED IN THE CLUSTER. The render carries none: ESO's Password generator
-fills `<release>-dev-credentials` once (`CreatedOnce`) and never again, and the dev OpenBao's seed mounts it
-and writes each key into the in-memory store. It is a Secret rather than store-only because the store
+THE DEV OPENBAO'S CREDENTIALS, GENERATED IN THE CLUSTER. The render carries none: ESO's Password generator fills
+each credential's own Secret (`lance.devCredentials`) once (`CreatedOnce`) and never again, and the dev OpenBao's seed
+mounts them as one directory and writes each key into the in-memory store. It is a Secret rather than store-only because the store
 forgets: the AGE database and the object store keep what they were initialised with across an OpenBao
 replacement, so the next seed must write the same values. `keep` holds it through an uninstall for the same
 reason the data volumes are held. Rendered only for the chart's own dev store (`lance.mintsDevCredentials`);

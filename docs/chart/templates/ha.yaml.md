@@ -18,10 +18,12 @@ second.
 ## `{{- range $name := list "catalog" "lineage" }}`
 
 The two services the chart runs, named, so a key a release's values hold under `.Values.services` for a service the
-chart does not run (a client's) renders no budget. Each is gated on its replicas > 1: an ungated budget, with PDBs
-enabled and a service left at one replica, writes `minAvailable: 1` over a single pod, which blocks EVERY voluntary
-drain — a node cordon then hangs instead of proceeding. That is this file's own header warning, applied to every
-backend. Scale first, bound second, never the inverse.
+chart does not run (a client's) renders no budget. Each is gated on the fewest replicas it runs
+(`lance.replicaBounds`: `autoscaling.minReplicas` while autoscaling is on, else its own `replicas`; while it is on the
+Deployment renders no `replicas`, `services.yaml`) being above one: an
+ungated budget, with PDBs enabled and a service left at one replica, writes `minAvailable: 1` over a single pod, which
+blocks EVERY voluntary drain — a node cordon then hangs instead of proceeding. That is this file's own header warning,
+applied to every backend. Scale first, bound second, never the inverse.
 
 ## `behavior:`
 

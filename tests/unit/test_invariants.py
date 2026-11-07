@@ -259,13 +259,13 @@ def test_a_per_component_pin_beats_the_global_tag_and_a_digest_beats_the_pin() -
     Precedence is asserted end to end, because a pin that is merely ACCEPTED and then overridden is
     worse than no pin: it reads as safety while the deploy still rewrites the image.
     """
-    pinned = _helm_template(*_REAL_REGISTRY, "image.tags.lance-rest-catalog=PINNED")
+    pinned = _helm_template(*_REAL_REGISTRY, "image.tag=GLOBAL", "image.tags.lance-rest-catalog=PINNED")
     assert 'image: "reg.example/lance-rest-catalog:PINNED"' in pinned, "a per-component tag did not reach the render"
-    elsewhere = _helm_template(*_REAL_REGISTRY, "image.tags.web-console=PINNED")
-    assert 'image: "reg.example/lance-rest-catalog:dev"' in elsewhere, "a pin leaked onto a component that did not ask for it"
+    elsewhere = _helm_template(*_REAL_REGISTRY, "image.tag=GLOBAL", "image.tags.web-console=PINNED")
+    assert 'image: "reg.example/lance-rest-catalog:GLOBAL"' in elsewhere, "a pin leaked onto a component that did not ask for it"
 
     # A digest is a CONTENT pin — a reconciler's, typically — so no tag may undo it.
-    both = _helm_template(*_REAL_REGISTRY, "image.tags.lance-rest-catalog=IGNORED", "image.digests.lance-rest-catalog=sha256:abc")
+    both = _helm_template(*_REAL_REGISTRY, "image.tag=GLOBAL", "image.tags.lance-rest-catalog=IGNORED", "image.digests.lance-rest-catalog=sha256:abc")
     assert 'image: "reg.example/lance-rest-catalog@sha256:abc"' in both, "a per-component tag overrode a digest"
 
 

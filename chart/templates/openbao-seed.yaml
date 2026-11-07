@@ -283,12 +283,12 @@ data:
     {{- end }}
     G=$DEV_CREDENTIALS
     {{- include "lance.scopedSecretFn" . | nindent 4 }}
+    {{- $generated := include "lance.devCredentials" . | fromJson | keys | sortAlpha | join " " }}
     fingerprint() {
-      cat "$G/object-store-secret-key" "$G/postgres-password" "$G/dapr-app-token" \
-        2>/dev/null | sha256sum | cut -d' ' -f1
+      for k in {{ $generated }}; do cat "$G/$k"; done 2>/dev/null | sha256sum | cut -d' ' -f1
     }
     derive() {
-      for k in object-store-secret-key postgres-password dapr-app-token; do
+      for k in {{ $generated }}; do
         [ -s "$G/$k" ] || { echo "the generated dev credential $k is missing, so this store stays not Ready" >&2; exit 1; }
       done
       root=$(cat "$G/object-store-secret-key")

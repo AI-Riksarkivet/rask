@@ -20,7 +20,13 @@ seedScripts: rask-openbao-seed
 # The roles and policies of every identity that reads the store, which rask's chart renders for any store, this one or a
 # platform's.
 storeIdentities: rask-secret-store-identities
-devCredentials: rask-dev-credentials
+# Each credential ESO generates for the dev stores is a Secret of its own (rask's `lance.devCredentials`), created once and
+# kept, so a credential rask adds is a new Secret and the ones the stores hold are never generated again; the seed reads
+# them as one directory.
+devCredentials:
+  - rask-dev-credential-dapr-app-token
+  - rask-dev-credential-object-store-secret-key
+  - rask-dev-credential-postgres-password
 resources:
   requests: { cpu: 50m, memory: 128Mi }
   limits: { cpu: "1", memory: 512Mi }

@@ -136,7 +136,7 @@ written here. The two Dex values are the development IdP's own (deploy/fixtures/
 ## `fingerprint() {`
 
 THE MOUNTED CREDENTIALS ARE READ ON EVERY SEED, and a change to them is a reason to seed: kubelet
-refreshes a mounted Secret in place, so rotating a key of `<release>-dev-credentials` reaches the
+refreshes a mounted Secret in place, so rotating a credential's Secret (`<release>-dev-credential-<key>`) reaches the
 store through the loop below without replacing the pod, whose
 replacement without a surge would re-mint the signing pairs and the NATS root (OPERATORS.md 6-8).
 

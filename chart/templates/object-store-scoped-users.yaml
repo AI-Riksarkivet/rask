@@ -3,19 +3,21 @@
 {{- $catalogAccount := include "lance.saAccount" (list . "catalog") }}
 {{- $backup := include "lance.backupIdentity" . }}
 {{- if .Values.objectStore.enabled }}
-{{- range $phase := ternary (list "install") (list "pre-upgrade" "post-upgrade") .Release.IsInstall }}
+{{- range $phase := ternary (list "install" "post-install") (list "pre-upgrade" "post-upgrade") .Release.IsInstall }}
+{{- $prune := hasPrefix "post-" $phase }}
 ---
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "rask.fullname" $ }}-object-store-scoped-users-{{ if eq $phase "post-upgrade" }}prune-{{ end }}{{ include "rask.bootstrapRev" $ }}
+  name: {{ include "rask.fullname" $ }}-object-store-scoped-users-{{ if $prune }}prune-{{ end }}{{ include "rask.bootstrapRev" $ }}
   labels: {{- include "lance.labels" $ | nindent 4 }}
-  {{- if ne $phase "install" }}
   annotations:
+    {{- if ne $phase "install" }}
     "helm.sh/hook": {{ $phase }}
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation
-  {{- end }}
+    {{- end }}
+    {{- include "lance.reconciledJob" (ternary "PostSync" "Sync" $prune) | nindent 4 }}
 spec:
   ttlSecondsAfterFinished: 3600
   {{- include "lance.bootstrapJobDeadline" $ | nindent 2 }}
@@ -280,7 +282,7 @@ spec:
                 {{- with $backup }}
                 --policy rask-backup=/tmp/policies/rask-backup.json --user {{ printf "%s=rask-backup" . | quote }} \
                 {{- end }}
-                {{- if ne $phase "pre-upgrade" }}
+                {{- if $prune }}
                 --prune \
                 {{- end }}
                 --keys-dir /keys

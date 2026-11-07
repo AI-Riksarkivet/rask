@@ -38,16 +38,18 @@ async def test_fga_off_is_a_no_op_not_a_failure() -> None:
 
 @pytest.mark.asyncio
 async def test_no_declared_maintainers_is_a_no_op() -> None:
-    """Empty by default. The backfill cannot change an estate that declares no maintenance identity."""
+    """Empty by default. An estate that declares no maintenance identity and names no account of its own has no rung to
+    grant or take back."""
     assert await cascade_backfill.backfill(_fga_settings()) == (0, 0, [])
 
 
 @pytest.mark.asyncio
-async def test_a_maintenance_only_estate_still_runs_the_backfill(monkeypatch) -> None:
-    """`backfill` early-returns when there is nothing to grant; a declared maintenance identity is something to
-    grant ([[LH-165]]), and skipping it is the silent-skip shape that leaves a new warehouse unmaintainable.
+async def test_an_estate_that_declares_only_its_own_accounts_still_runs_the_backfill(monkeypatch) -> None:
+    """`backfill` returns early when the release declares nothing. An estate that names its own accounts and no
+    maintainer still has rungs to take back: a maintenance account that stopped vending writes keeps `maintenance` on
+    every warehouse until a run revokes it, so the guard must not skip that estate.
     """
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
+    settings = _fga_settings(LANCE_OWN_ACCOUNTS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
     skipped: list[str] = []
 
     def _log_info(event: str, **kw: object) -> None:
@@ -64,7 +66,7 @@ async def test_a_maintenance_only_estate_still_runs_the_backfill(monkeypatch) ->
     with pytest.raises(RuntimeError, match="did not skip"):
         await cascade_backfill.backfill(settings)
 
-    assert skipped == [], f"a maintenance-only estate was skipped: {skipped}"
+    assert skipped == [], f"an estate naming only its own accounts was skipped: {skipped}"
 
 
 @pytest.mark.asyncio
@@ -79,7 +81,7 @@ async def test_a_record_without_a_project_is_REPORTED_not_guessed(monkeypatch) -
     async def _grant(_c, _s, *, warehouse_id: str, project: str, actor: str) -> int:
         return 2
 
-    monkeypatch.setattr(cascade_backfill.fga_deps, "backfill_cascade_grants", _grant)
+    monkeypatch.setattr(cascade_backfill.fga_deps, "converge_cascade_grants", _grant)
     monkeypatch.setattr(
         cascade_backfill.warehouses,
         "list_warehouses",
@@ -105,7 +107,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
             raise RuntimeError("openfga said no")
         return 2
 
-    monkeypatch.setattr(cascade_backfill.fga_deps, "backfill_cascade_grants", _flaky)
+    monkeypatch.setattr(cascade_backfill.fga_deps, "converge_cascade_grants", _flaky)
     monkeypatch.setattr(
         cascade_backfill.warehouses,
         "list_warehouses",

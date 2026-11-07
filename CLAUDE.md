@@ -73,7 +73,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   Lance-namespace/table-idiomatic, zero trust, always.** Put them in every agent brief, every mattpocock skill step
   (`/grill-with-docs`, `/to-spec`, `/to-tickets`, `/implement`, `/tdd`, `/code-review`) and every option, naming the fact
   each one meets or breaks, before offering it. **GitOps**: the estate is what git declares. Every object, value,
-  identity and policy is rendered from the repo and converges when a reconciler (Argo CD, Flux, the planned rask
+  identity and policy is rendered from the repo and converges when a reconciler (Argo CD, the planned rask
   operator) re-applies it, with no imperative step, live-only state or hand-run command that an install from git would
   miss, and drift is corrected by the next reconcile. **Cloud native**: platform services are named, never bundled
   ("Platform services are external" below), and every component is a declarative Kubernetes workload.

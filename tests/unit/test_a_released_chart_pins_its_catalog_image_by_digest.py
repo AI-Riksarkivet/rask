@@ -30,9 +30,10 @@ def test_a_released_chart_runs_the_catalog_image_it_was_released_with(tmp_path: 
         check=True,
     )  # fmt: skip
 
-    # A real deployment's inputs, less the overlay's own image source: the released chart's is the claim.
+    # A real deployment's inputs, less the overlay's own image source: the released chart's is the claim. A release ships
+    # the catalog image alone, so its render runs without the console, whose image no release names (XC-164).
     pairs = list(zip(PROD_ARGS[::2], PROD_ARGS[1::2], strict=True))
-    rendered = render_chart_text(chart, *(arg for pair in pairs if not pair[1].startswith("image.") for arg in pair))
+    rendered = render_chart_text(chart, *(arg for pair in pairs if not pair[1].startswith("image.") for arg in pair), "--set", "console.enabled=false")
     docs = tuple(doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict))
     catalog_images = {c["image"] for _, _, c in containers(docs) if "lance-rest-catalog" in c["image"]}
     assert catalog_images == {f"{REGISTRY}/lance-rest-catalog@{DIGEST}"}

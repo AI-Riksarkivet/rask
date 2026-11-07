@@ -52,7 +52,7 @@ dapr.io/log-as-json: "true"
 dapr.io/max-body-size: {{ . | quote }}
 {{- end }}
 dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
-checksum/dapr-pubsub: {{ include "lance.daprPubsubDigest" (list $root $appId) | quote }}
+checksum/dapr: {{ include "lance.daprDigest" (list $root $appId) | quote }}
 dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sidecarBlockShutdownSeconds) | quote }}
 {{- include "lance.daprSidecarResources" $root | nindent 0 }}
 
@@ -68,17 +68,20 @@ dapr.io/config: "lance-tracing"
 {{- end }}
 {{- end -}}
 
-{{- define "lance.daprPubsubDigest" -}}
+{{- define "lance.daprDigest" -}}
 {{- $root := index . 0 -}}
 {{- $appId := index . 1 -}}
-{{- $scoped := list -}}
-{{- range $doc := splitList "\n---" (include (print $root.Template.BasePath "/dapr-component.yaml") $root) -}}
-{{- $component := fromYaml $doc -}}
-{{- if and (eq (get $component "kind") "Component") (has $appId (get $component "scopes" | default list)) -}}
-{{- $scoped = append $scoped (toJson $component) -}}
+{{- $loaded := list -}}
+{{- range $template := list "dapr-component.yaml" "dapr-resiliency.yaml" -}}
+{{- range $doc := splitList "\n---" (include (print $root.Template.BasePath "/" $template) $root) -}}
+{{- $object := fromYaml $doc -}}
+{{- $scopes := get $object "scopes" | default list -}}
+{{- if and (has (get $object "kind") (list "Component" "Resiliency")) (or (not $scopes) (has $appId $scopes)) -}}
+{{- $loaded = append $loaded (toJson $object) -}}
 {{- end -}}
 {{- end -}}
-{{- join "\n" $scoped | sha256sum | trunc 16 -}}
+{{- end -}}
+{{- join "\n" $loaded | sha256sum | trunc 16 -}}
 {{- end -}}
 
 {{- define "lance.daprOtlpTarget" -}}
@@ -93,6 +96,22 @@ dapr.io/config: "lance-tracing"
 {{- define "lance.fullname" -}}{{ .Release.Name }}{{- end -}}
 
 {{- define "rask.bootstrapRev" -}}r{{ .Release.Revision }}{{- end -}}
+
+{{- define "lance.reconciledJob" -}}
+argocd.argoproj.io/hook: {{ . }}
+argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+{{- end -}}
+
+{{- define "lance.replicaBounds" -}}
+{{- $root := index . 0 -}}
+{{- $svc := index . 1 -}}
+{{- $fixed := int ((hasKey $svc "replicas") | ternary $svc.replicas 1) -}}
+{{- if $root.Values.autoscaling.enabled -}}
+{{- dict "min" (int $root.Values.autoscaling.minReplicas) "max" (int $root.Values.autoscaling.maxReplicas) | toJson -}}
+{{- else -}}
+{{- dict "min" $fixed "max" $fixed | toJson -}}
+{{- end -}}
+{{- end -}}
 
 {{- define "rask.isRealDeployment" -}}
 {{- $repo := (.Values.image.repository | default "") -}}
@@ -278,6 +297,23 @@ scopes:
 
 {{- define "lance.mintsDevCredentials" -}}
 {{- if .Values.openbao.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{- define "lance.fgaMaintainers" -}}
+{{- $out := list -}}
+{{- if and .Values.maintenance.enabled .Values.maintenance.vendWriteCredentials -}}
+{{- $out = append $out (include "lance.saSubject" (list . "maintenance")) -}}
+{{- end -}}
+{{- $out | toJson -}}
+{{- end -}}
+
+{{- define "lance.devCredentials" -}}
+{{- $root := . -}}
+{{- $out := dict -}}
+{{- range $key := list "object-store-secret-key" "postgres-password" "dapr-app-token" -}}
+{{- $_ := set $out $key (printf "%s-dev-credential-%s" (include "lance.fullname" $root) $key) -}}
+{{- end -}}
+{{- $out | toJson -}}
 {{- end -}}
 
 {{- define "lance.natsMints" -}}

@@ -32,9 +32,10 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 **Reach for the Dapr component when ALL of these hold:**
 1. **The surface has a sidecar.** Non-negotiable precondition — see the sidecar map below.
 2. **The need is cross-cutting** (every service wants it the same way) rather than one route's semantics.
-3. **Declarative Component YAML + rollout-restart is an acceptable change cadence** — this estate runs
+3. **Declarative Component YAML + a pod roll is an acceptable change cadence** — this estate runs
    `HotReload: false` (measured: ~540 ERROR lines/hour from a reconcile loop that cannot converge), so
-   a Component edit reaches sidecars only via `kubectl rollout restart`.
+   a Component edit reaches a sidecar only when its pod restarts; the chart rolls exactly the pods whose sidecar loads
+   it (`checksum/dapr`, `lance.daprDigest`, [[XC-164]]), so a reconcile of git delivers it with no hand step.
 4. **The block's guarantee matches the need as SPECIFIED, not approximately** — e.g. Jobs is
    "at-least-once, no ceiling on lateness"; a lock is acquire-or-fail. If you must wrap the block to
    correct its semantics, that wrapper IS the DIY and the block bought you a dependency.
@@ -214,6 +215,7 @@ sidecar.
   `ackWait`, so the same total split into many short steps overruns it and the broker redelivers
   underneath a retry still in flight. Gated by
   `tests/unit/test_the_pubsub_retry_window_is_the_one_the_chart_states.py`. **A Resiliency edit reaches
-  a sidecar ONLY on restart**, exactly like a Component (`HotReload: false`): after `helm upgrade` the
-  CR was correct in the API server while every running sidecar kept the old schedule, so rolling the
-  chart is half the change — `kubectl rollout restart` every app-id in `targets.components`.
+  a sidecar ONLY on restart**, exactly like a Component (`HotReload: false`), so the Resiliency is in every Dapr pod's
+  `checksum/dapr` digest beside its Components: an edit rolls the pods whose sidecar loads it ([[XC-164]]). Every
+  Component and the Resiliency live in `dapr-component.yaml` and `dapr-resiliency.yaml`, the two templates the digest
+  reads (`test_event_signing_is_wired_by_the_chart_in_every_deploy_mode.py` refuses one rendered anywhere else).

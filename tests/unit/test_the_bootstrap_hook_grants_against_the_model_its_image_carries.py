@@ -28,6 +28,10 @@ from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
 from tests.unit.openfga_stub import BY_NAME, CARRYING, PINNED, STORE, Recorded, openfga
 
 
+#: The warehouse the hook grants the maintenance rung on: the default warehouse the chart names.
+WAREHOUSE = "warehouse:lance_catalog"
+
+
 def _run(job: dict[str, Any], env: dict[str, str]) -> subprocess.CompletedProcess[str]:
     """The container's own command, with this interpreter standing in for the image's `python`."""
     try:
@@ -59,22 +63,31 @@ def test_every_tuple_request_names_the_model_the_image_carries(stores: list[dict
 
 
 def test_an_upgrade_revokes_only_what_the_releases_own_accounts_no_longer_declare(openfga_store: Any, tmp_path: Path) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
-    """An upgrade converges the estate roles of the release's own accounts and keeps every grant a door made ([[LH-563]]).
+    """An upgrade converges the machine roles the release's own accounts hold on every object the hook grants on, and keeps
+    every grant a door made ([[LH-563]], [[XC-164]]).
 
-    Run against the pinned OpenFGA: before the hook, the store holds a machine role the release's own maintenance account
-    was never declared, a client's three machine roles granted at the estate admin's tuple door (its ServiceAccount named
-    with the release's prefix, which a client's own release may give it), and a person's `admin`. After it, the release's
-    own account holds only what the render declares, and the client's grants and the person's rung stand.
+    Run against the pinned OpenFGA: before the hook, the store holds machine roles the release's own accounts were never
+    declared, on the estate root and on the default warehouse (where an earlier release had declared lineage a maintainer),
+    a client's machine roles granted at the doors (its ServiceAccount named with the release's prefix, which a client's own
+    release may give it), and a person's `admin`. After it, the release's own accounts hold only what the render declares,
+    and the client's grants and the person's rung stand.
     """
     job = next(c for workload, _, c in containers(render(*DEFAULT_ARGS)) if workload.endswith("-bootstrap-admin"))
     token = tmp_path / env_of(job)["RASK_FGA_TOKEN_FILE"].lstrip("/")
     token.parent.mkdir(parents=True)
     token.write_text("projected-sa-jobs-token\n")
-    own = user_object("kubernetes~system:serviceaccount:default:rask-sa-maintenance")
+    maintenance = user_object("kubernetes~system:serviceaccount:default:rask-sa-maintenance")
+    lineage = user_object("kubernetes~system:serviceaccount:default:rask-sa-lineage")
     client = user_object("kubernetes~system:serviceaccount:default:rask-sa-a-tenant-service")
-    door_made = {(client, role) for role in ("decider", "member_expander", "event_reader")}
+    door_made = {(client, role, "estate:rask") for role in ("decider", "member_expander", "event_reader")} | {(client, "maintenance", WAREHOUSE)}
     person = user_object("dex~alice")
-    openfga_store.write((own, "decider", "estate:rask"), *((user, role, "estate:rask") for user, role in door_made), (person, "admin", "estate:rask"))
+    openfga_store.write(
+        (maintenance, "decider", "estate:rask"),
+        (lineage, "maintenance", WAREHOUSE),
+        (lineage, "decider", WAREHOUSE),
+        *door_made,
+        (person, "admin", "estate:rask"),
+    )
 
     done = _run(
         job,
@@ -87,6 +100,7 @@ def test_an_upgrade_revokes_only_what_the_releases_own_accounts_no_longer_declar
         },
     )
 
-    declared = {(user_object(account), role) for account, roles in json.loads(env_of(job)["FGA_ESTATE_ROLES"]).items() for role in roles}
+    declared = {(user_object(account), role, "estate:rask") for account, roles in json.loads(env_of(job)["FGA_ESTATE_ROLES"]).items() for role in roles}
+    declared.add((maintenance, "maintenance", WAREHOUSE))
     assert done.returncode == 0, f"the hook exited {done.returncode}:\n{done.stdout}{done.stderr}"
-    assert {(user, relation) for user, relation, obj in openfga_store.tuples() if obj == "estate:rask"} == declared | door_made | {(person, "admin")}
+    assert openfga_store.tuples() == declared | door_made | {(person, "admin", "estate:rask")}

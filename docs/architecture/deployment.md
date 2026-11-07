@@ -197,7 +197,7 @@ make k3s-down         # uninstall   |   make k3s-purge  # + delete PVCs
 **The release's values are composed from git ([[XC-194]]).** `make k3s-up` upgrades with `--reset-values`, so the
 release holds the chart's defaults and exactly what it supplies: `deploy/values-local.yaml`, where the images come from
 (`image.repository=$(K3S_REGISTRY)`, the dev registry `localhost:5000` by default; `K3S_REGISTRY=` empty sets
-`image.localImages` for side-loaded images), the image tags in `deploy/values-live-pins.yaml` when it exists, and three
+`image.localImages` for side-loaded images), the image tags in `deploy/values-live-pins.yaml`, and three
 values it derives: `auth.oidc.issuer` (`DEV_ISSUER`), `vending.endpoint` (the store fixture's node port on the node's
 address) and `auth.bootstrapAdmin` (the Dex fixture's alice, from `scripts/dex_principal.py`, as the live lanes derive
 it). Nothing is read back from the live release, so a value that exists only there is dropped by the next upgrade, and
@@ -213,19 +213,22 @@ dagger call image --name=rest-catalog publish --address=172.17.0.1:5000/lance-re
 dagger call image --name=frontend publish --address=172.17.0.1:5000/web-console:<tag>
 make k3s-pins TAGS="lance-rest-catalog=<tag> web-console=<tag>"   # sets those tags in the pins file; reads no cluster
 make k3s-up
+git commit deploy/values-live-pins.yaml                             # the estate's images are what git declares
 ```
 
 With `K3S_REGISTRY` set, `make k3s-up` refuses a pins file that names no tag for `lance-rest-catalog` or
 `web-console`, which would otherwise pull `:dev` and wait out `--wait`, and the values schema admits `image.tags` and
-`image.digests` only for those two. `make k3s-pins` with no `TAGS` captures the tags the cluster runs instead, and `make k3s-converge STEM=<stem> TAG=<tag>`
-sets one stem's tag and upgrades past the split-stem check.
+`image.digests` only for those two. `make k3s-pins` takes the builds by name only (it refuses a run with no `TAGS`: the
+file is git's declaration, never a read of the cluster), and `make k3s-converge STEM=<stem> TAG=<tag>` sets one stem's
+tag and upgrades past the split-stem check.
 
 `k3s-build` builds every image through `scripts/dagger-image.sh --out`, as an OCI tarball in `build/k3s-images/`:
 `lance-rest-catalog` (the lakehouse image that serves catalog, lineage and maintenance) and `web-console` (the console's
 static-file image, from `frontend.dockerfile`). `k3s-import` loads each tarball into k3s containerd as `<image>:dev` with
 `sudo k3s ctr images import`; neither step runs docker. The release installs into `RELEASE_NAMESPACE` (default
-`default`, the fixtures' namespace), and `deploy/values-live-pins.yaml` is per-host state from `make k3s-pins`, never
-committed ([[XC-152]]). The dev-registry path (`make dev-registry`, then `dagger call image --name=<stem> publish
+`default`, the fixtures' namespace), and `deploy/values-live-pins.yaml` is committed: it is the development estate's image
+declaration, so a reconciler re-applying git deploys the images the estate runs ([[XC-164]]). Its tags name builds in
+`K3S_REGISTRY`, which an estate on another host fills with its own builds and pins. The dev-registry path (`make dev-registry`, then `dagger call image --name=<stem> publish
 --address=172.17.0.1:5000/<stem>:<tag>`) is `make k3s-up`'s default, the one the in-cluster loop `CLAUDE.md` describes.
 
 The kind lane (`make e2e-ci`, `scripts/e2e_stack.sh`) builds the same set the same way: every image the lane's render

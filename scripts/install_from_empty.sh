@@ -40,6 +40,8 @@ fi
 TIMEOUT="${TIMEOUT:-900s}"
 # shellcheck source=scripts/stack_values.sh
 . scripts/stack_values.sh
+# shellcheck source=scripts/install_common.sh
+. scripts/install_common.sh
 
 JOB_LOGS="$(mktemp -d)"
 RECORDER=""
@@ -50,41 +52,16 @@ diagnose() {
   [ -n "$RECORDER" ] && kill "$RECORDER" 2>/dev/null
   [ "$rc" -eq 0 ] && return 0
   echo "==> install-from-empty FAILED (exit $rc)"
-  kubectl get pods -A -o wide || true
-  kubectl get jobs -o wide || true
-  kubectl get externalsecrets -o custom-columns='NAME:.metadata.name,READY:.status.conditions[0].status,REASON:.status.conditions[0].reason,MESSAGE:.status.conditions[0].message' 2>/dev/null || true
-  for p in $(kubectl get pods -o jsonpath='{range .items[*]}{.metadata.name}{" "}{.status.containerStatuses[*].ready}{"\n"}{end}' | awk '/false/ || NF==1 {print $1}'); do
-    echo "--- NOT READY: $p"
-    kubectl describe pod "$p" 2>/dev/null | sed -n '/Events:/,$p' | head -15 || true
-    kubectl logs "$p" --all-containers --tail=40 2>/dev/null || true
-  done
-  for f in "$JOB_LOGS"/*; do [ -f "$f" ] && { echo "--- JOB POD (recorded during the install): ${f##*/}"; cat "$f"; }; done
+  print_cluster_state "$JOB_LOGS"
   return "$rc"
 }
 trap diagnose EXIT
 
 echo "==> fixtures"
-scripts/fixtures.sh external-secrets dapr nats
-scripts/fixtures.sh dex "${DEX_VALUES[@]}"
-scripts/fixtures.sh openbao
-# The object store runs the upstream RustFS image its fixture pins by digest, which the node pulls itself.
-scripts/fixtures.sh rustfs
+install_stack_fixtures "${DEX_VALUES[@]}"
 
 echo "==> rask"
-# A Job that exhausts its backoff has its pod deleted, and that pod's log with it: record each Job pod's state and log
-# (every container's, the attempt before a restart too) while the install runs.
-( while sleep 3; do
-    for p in $(kubectl get pods -l batch.kubernetes.io/job-name -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-      {
-        kubectl get pod "$p" -o jsonpath='{range .status.initContainerStatuses[*]}{.name} restarts={.restartCount} last={.lastState.terminated.reason}/{.lastState.terminated.exitCode} now={.state.terminated.reason}/{.state.terminated.exitCode}{"\n"}{end}{range .status.containerStatuses[*]}{.name} restarts={.restartCount} last={.lastState.terminated.reason}/{.lastState.terminated.exitCode} now={.state.terminated.reason}/{.state.terminated.exitCode}{"\n"}{end}'
-        for c in $(kubectl get pod "$p" -o jsonpath='{.spec.initContainers[*].name} {.spec.containers[*].name}'); do
-          echo "[$c, previous attempt]"; kubectl logs "$p" -c "$c" --previous --tail=40 2>/dev/null || true
-          echo "[$c]"; kubectl logs "$p" -c "$c" --tail=40 2>/dev/null || true
-        done
-      } > "$JOB_LOGS/$p.tmp" 2>&1 && mv "$JOB_LOGS/$p.tmp" "$JOB_LOGS/$p"
-    done
-  done ) &
-RECORDER=$!
+start_job_recorder "$JOB_LOGS"
 scripts/helm.sh upgrade --install "$RELEASE" "$CHART" ${CHART_VERSION:+--version "$CHART_VERSION"} --timeout "$TIMEOUT" "${HELM_SET[@]}" \
   --set "console.enabled=$CONSOLE_ENABLED" ${VALUES:+-f "$VALUES"}
 
