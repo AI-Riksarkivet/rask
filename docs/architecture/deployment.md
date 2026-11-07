@@ -378,7 +378,6 @@ token:
 | --- | --- |
 | The catalog image, amd64 and arm64 in one index | `ghcr.io/ai-riksarkivet/lance-rest-catalog@sha256:…` (the chart already names it) |
 | The product chart, pinned to that index's digest | `oci://ghcr.io/ai-riksarkivet/charts/rask`, `--version X.Y.Z` |
-| The platform package (XC-186) | `service-kit[governed] @ git+https://github.com/AI-Riksarkivet/rask@lakehouse-vX.Y.Z#subdirectory=packages/service-kit` |
 | A lakehouse for its e2e | `dagger install github.com/AI-Riksarkivet/rask@lakehouse-vX.Y.Z`, then `dag.Rask().Lakehouse("X.Y.Z", …)` |
 
 A new GHCR package is private until its visibility is set, and a job token cannot set it. So on the first release, the

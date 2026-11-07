@@ -1,9 +1,8 @@
 """The decision door (``/management/v1/decisions``): the authorization questions a check-only service asks ([[LH-442]]).
 
 OpenFGA authenticates its callers and authorizes none of them, so a service holding an OpenFGA token can write any
-tuple. The services that only CHECK therefore hold no OpenFGA credential and ask here, as Lakekeeper is OpenFGA's only
-client and its OPA bridge asks Lakekeeper's ``/management/v1/action/batch-check``
-(authz/opa-bridge/policies/lakekeeper/check.rego). The wire contract is :mod:`service_kit.governed.decider`, which the
+tuple. The services that only CHECK therefore hold no OpenFGA credential and ask here, so the catalog is the store's
+one reader for every service that writes no grant. The wire contract is :mod:`lakehouse.governed.decider`, which the
 client and this door share.
 
 A check is answered inside the caller's scope ([[LH-563]]): every object, for a caller holding ``can_decide_access`` on
@@ -24,9 +23,9 @@ through the request's `Resolver`, as every door resolves the name it is addresse
 keyed by the name, with the table's uuid and its namespace's when the subject holds the relation, since the event a
 check-only service records keys a table by its uuid (ADR 0173 §10). A name that names no table, one no grant can be held
 on and one in a quarantined warehouse are answered refused. A store fault is 503, and no route answers part of what it
-was asked. Every call is audited once with what was asked and what was answered, also when it is refused or fails, as
-Lakekeeper records ``IntrospectPermissions`` (crates/lakekeeper/src/api/management/v1/check.rs:1844-1891); a caller
-without the route's role is audited by the gate itself (`fga_deps.require_relation`).
+was asked. Every call is audited once with what was asked and what was answered, also when it is refused or fails:
+asking what a subject may do reads the authorization graph, so the question is itself an access. A caller without the
+route's role is audited by the gate itself (`fga_deps.require_relation`).
 """
 
 from __future__ import annotations
@@ -47,12 +46,11 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, require_names
 from catalog.services import table_claims
 from catalog.services.object_uuids import UnidentifiedObjectError
-from lakehouse_kit import location_claims
-from lakehouse_kit.base_refs import names_a_location
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.governed.decider import (
+from lakehouse import location_claims
+from lakehouse.base_refs import names_a_location
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.decider import (
     DECISIONS_PREFIX,
     DecisionCheck,
     DecisionCheckResult,
@@ -64,6 +62,7 @@ from service_kit.governed.decider import (
     DecisionLocateResult,
     TableDecision,
 )
+from lakehouse.location_claims import ClaimStore
 
 
 log = logging.getLogger(__name__)
@@ -78,8 +77,8 @@ _DECISION_PERMISSIONS: Final = frozenset({_SCOPE, "can_grant_decider", "can_expa
 
 #: The relation a check may name besides the `can_*` permissions: the `project#member` a notifier re-checks at
 #: delivery. Every other role (`owner`, `writer`, `reader`, `admin`, `operator`, the decision roles) is refused, so a
-#: client gates on a lakehouse verb: Lakekeeper's door takes typed actions only, never a raw relation
-#: (crates/lakekeeper/src/api/management/v1/check.rs:244-280).
+#: client gates on a lakehouse verb, never a raw relation: a raw relation would let a caller read the grant structure
+#: itself.
 _DECIDABLE_ROLES: Final = frozenset({"member"})
 
 #: The usersets list-users may expand: the groups a task or a grant names, resolved to the people in them.
@@ -286,7 +285,7 @@ def _table_at(store: ClaimStore, location: str) -> str | None:
     """The uuid of the table holding ``location``, or ``None`` where none does: a spelling that names no location, one no
     claim holds, a released claim, and a data directory's claim, which records no uuid.
 
-    A recoverable drop keeps its table's claim (`lakehouse_kit.location_claims`), so a trashed table's location still
+    A recoverable drop keeps its table's claim (`lakehouse.location_claims`), so a trashed table's location still
     answers the table: its grants decide what may be recorded about it, as they do by its name.
     """
     if not names_a_location(location):
@@ -303,11 +302,9 @@ async def decide_locate(token: CurrentToken, settings: SettingsDep, body: Decisi
     key) as well as by its name ([[LH-553]]): a location a table holds is that table, and its grants decide whether the
     producer may record it, while one no table holds is the outside world. The fact is structural, like ``governed``'s,
     so it answers to the same role. A claim that cannot be read (the store's error, a record that is no claim, a root the
-    conditional read does not serve: `lakehouse_kit.records`) is 503, never "holds none", which would exempt it. The
+    conditional read does not serve: `lakehouse.records`) is 503, never "holds none", which would exempt it. The
     claims are the answer because the ``dir`` backend keeps no location exclusive (``lance_docs/ns_catalog/catalog/dir``
-    § Manifest Table Commits) and the claim store picks one holder (`lakehouse_kit.location_claims`). Lakekeeper's S3
-    signer asks the same question of its own store (``resolve_signable_by_location``,
-    crates/lakekeeper/src/server/s3_signer/sign.rs).
+    § Manifest Table Commits) and the claim store picks one holder (`lakehouse.location_claims`).
     """
     caller = token.subject if token else "anonymous"
     asked = {"locations": ",".join(body.locations)}

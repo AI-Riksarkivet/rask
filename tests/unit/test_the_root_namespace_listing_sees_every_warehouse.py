@@ -35,7 +35,7 @@ from lance_namespace import ListNamespacesResponse
 
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 

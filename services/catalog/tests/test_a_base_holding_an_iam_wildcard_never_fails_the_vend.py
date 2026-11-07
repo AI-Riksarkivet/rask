@@ -25,8 +25,8 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from lakehouse_kit.store_session import IssuedSession
-from service_kit.governed.store_credential import S3KeyPair
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.store_session import IssuedSession
 
 
 def _options(two_stores: Any) -> dict[str, str]:  # noqa: ANN401 — conftest.TwoStores

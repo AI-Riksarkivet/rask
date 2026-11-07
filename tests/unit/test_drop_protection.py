@@ -29,10 +29,10 @@ from catalog.api.idempotency import KeyedDoor
 from catalog.core.config import Settings
 from catalog.services import table_claims
 from catalog.services.table_claims import ResolvedTable
-from lakehouse_kit import location_claims, protection
-from lakehouse_kit.control_emit import NoopControlEmitter
-from service_kit.naming import UUID_PROPERTY
-from service_kit.storage_options import StorageOptions
+from lakehouse import location_claims, protection
+from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.naming import UUID_PROPERTY
+from lakehouse.storage_options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -332,7 +332,7 @@ def test_expired_selects_only_past_deadlines_and_never_deletes(tmp_path: Any) ->
     table someone was still inside their window to recover."""
     from datetime import UTC, datetime, timedelta
 
-    from lakehouse_kit import trash
+    from lakehouse import trash
 
     now = datetime(2026, 8, 4, 12, 0, tzinfo=UTC)
     fresh = trash.make_record("ns$fresh", uuid=_uuid("ns$fresh"), location="s3://b/fresh", dropped_by="u", grace_days=7, now=now)
@@ -345,7 +345,7 @@ def test_expired_selects_only_past_deadlines_and_never_deletes(tmp_path: Any) ->
 def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:
     """ "We do not know when this expires" must read as "not yet" — the same fail-toward-not-deleting
     stance the sweep takes when the policy registry is unreadable."""
-    from lakehouse_kit import trash
+    from lakehouse import trash
 
     assert trash.expired([{"id": "a"}, {"id": "b", "expires_at": "not-a-date"}]) == []
 
@@ -364,7 +364,7 @@ class _TrashableNamespace(_RecordingNamespace):
 
 def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
     """The explicit opt-out: a caller who means 'destroy the bytes now' says so, and no trash is filed."""
-    from lakehouse_kit import trash
+    from lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
@@ -559,7 +559,7 @@ def test_a_recoverable_cascade_DETACHES_the_subtree_and_files_a_record_per_child
     lie, so with a grace period the cascade must never issue the destructive native call: tables are
     DEREGISTERED (bytes stay), namespaces emptied then dropped plainly, and every destroyed object —
     both tables, both namespaces — has a trash record undrop can act on."""
-    from lakehouse_kit import trash
+    from lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()
@@ -588,7 +588,7 @@ def test_cascade_purge_true_destroys_and_files_nothing(tmp_path: Any) -> None:
     does not implement the native cascade at all (#117). Which bytes a destroy deletes is pinned over moto
     (`tests/integration/test_moto_s3.py::test_a_destructive_drop_leaves_no_byte_of_the_table_at_its_location`).
     """
-    from lakehouse_kit import trash
+    from lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()
@@ -603,7 +603,7 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any, monkeypatch:
     """The plural undrop: namespaces shallowest-first, then every table re-registered at its old id
     from the RELATIVE location form (#75's dir-backend lesson), and the records cleared."""
     from catalog.api.v1.endpoints import namespaces as n_ep
-    from lakehouse_kit import trash
+    from lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()
@@ -672,7 +672,7 @@ def test_namespace_tasks_reports_the_pending_expiry(tmp_path: Any, monkeypatch: 
 def test_trash_kinds_do_not_collide(tmp_path: Any) -> None:
     """A namespace and a table sharing a canonical id are separate trash records — same rule the
     protection store already pins."""
-    from lakehouse_kit import trash
+    from lakehouse import trash
 
     settings = _settings(tmp_path)
     so = settings.storage_options()
@@ -711,7 +711,7 @@ def test_a_RECOVERABLE_cascade_UNBINDS_and_records_the_binding_for_the_undrop(tm
     it moved onto the record that already had to survive for the undrop to work at all.
     """
     from catalog.services import warehouses
-    from lakehouse_kit import trash
+    from lakehouse import trash
 
     settings = _settings(tmp_path, grace_days=7)
     so = settings.storage_options()

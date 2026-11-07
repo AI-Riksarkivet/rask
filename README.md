@@ -34,10 +34,10 @@ Polyglot monorepo: Python via [uv], JS/TS via [Bun] (oxlint + oxfmt), docs via [
 
 Two language-pure planes: Python at the repo root, all JS/TS under `frontend/`.
 
-- `packages/` — reusable Python libraries (uv workspace members, no entrypoints): `service-kit` (the platform
-  package a client pins by lakehouse tag: the app factory, the auth plane, the naming, and the contract the
-  lakehouse's events publish), `lakehouse-kit` (the lakehouse's kernel, with `lakehouse_kit.storage`, its S3 client,
-  STS and URI seam; no client imports it) and `lineage-kit` (OpenLineage emission and the Ed25519 signing seam)
+- `packages/` — reusable Python libraries (uv workspace members, no entrypoints): `lakehouse`, the lakehouse's one
+  library (the app factory, the auth plane, the naming, the data plane with `lakehouse.storage`, its S3 client, STS
+  and URI seam, the events, and the OpenLineage emission and Ed25519 signing seam). The three services import it and
+  no client does: a client reaches the lakehouse through its doors and events.
 - `services/` — runnable Python services (uv workspace members):
   - **the lakehouse**: `catalog` (governed Lance REST catalog — projects → warehouses → namespaces →
     tables, and the bronze→silver→gold tier governance a pipeline's writes pass through), `lineage`

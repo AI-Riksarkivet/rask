@@ -55,10 +55,10 @@ from catalog.schemas import (
     TupleCondition,
 )
 from catalog.services import principals, subject_tuples
-from lakehouse_kit.control_emit import ControlEmitter, emit_control
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.governed.principal import is_principal
+from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.principal import is_principal
 
 
 log = logging.getLogger(__name__)

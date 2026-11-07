@@ -5,7 +5,7 @@ verified bearer, and the bearer's unverified issuer decides which verifier answe
 
 - the cluster's service-account issuer (`RASK_SA_ISSUER`): a pod's projected token, verified offline against the
   cluster's key set; whatever its namespace it is the subject `kubernetes~system:serviceaccount:<ns>:<sa>`
-  (`service_kit.governed.machine_identity`, [[LH-220]], ADR 0156 C5). It comes back a `ServicePrincipal` and never
+  (`lakehouse.governed.machine_identity`, [[LH-220]], ADR 0156 C5). It comes back a `ServicePrincipal` and never
   falls through to the IdP;
 - anything else: the IdP's verifier (`IdpVerifier`, the same one the catalog uses), which answers a person as the
   principal their Dex connector maps to, `<idp-id>~<user id>` ([[LH-063]]), and a Dex client signed in for itself as
@@ -30,12 +30,12 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
+from lakehouse.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
+from lakehouse.governed.oidc import ProviderUnavailableError
 from lineage.api.dependencies import SettingsDep
 from lineage.core.config import LineageSettings
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.governed.idp_identity import IdpVerifier, PersonPrincipal
-from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
-from service_kit.governed.oidc import ProviderUnavailableError
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s render as problem+json.

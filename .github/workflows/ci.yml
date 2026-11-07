@@ -335,7 +335,7 @@ jobs:
           # R19 moved this tree: `services/common/auth/` no longer exists, and these four paths
           # pointed at it until 2026-07-28 — so this entire step was failing on a missing file and
           # the authz-model gate had not actually run since the merge. Paths are now the real ones.
-          AUTH=packages/service-kit/src/service_kit/governed/auth
+          AUTH=packages/lakehouse/src/lakehouse/governed/auth
           # VALIDITY FIRST — and it reads `.is_valid`, not the exit code. Measured with this exact
           # CLI version: `fga model validate` prints `{"is_valid":false,"error":"…"}` and EXITS 0,
           # so a bare call here would run, print the error and pass — a step naming a check it does
@@ -525,7 +525,7 @@ jobs:
   # ingest doors never learned. In CI those fixes stay fixed; the unit gates that ship with them catch the
   # next one before a build, and this catches what a unit gate cannot see.
   #
-  # FOUR PROOFS, one per seam: `smoke-rustfs` that `lakehouse_kit.storage` works against a real S3
+  # FOUR PROOFS, one per seam: `smoke-rustfs` that `lakehouse.storage` works against a real S3
   # backend rather than moto, `rustfs-lifecycle` that the catalog is S3-AGNOSTIC (its lifecycle with
   # the bytes on a RustFS service bound to one exec), `rustfs-provisioning` that the scoped-users hook
   # fails on a policy the store refuses before it binds anyone, and `governance-chain` that authorization

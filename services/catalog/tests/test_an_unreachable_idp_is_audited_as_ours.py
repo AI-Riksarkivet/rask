@@ -1,6 +1,6 @@
 """The catalog's door charges an IdP it cannot reach to itself: a 503 in the spec's envelope, audited `verifier_unavailable`.
 
-`catalog.api.security.authenticate` is its own door, not `service_kit.governed.deps`'s, so the split that module makes
+`catalog.api.security.authenticate` is its own door, not `lakehouse.governed.deps`'s, so the split that module makes
 between `verify`'s two refusals is made here too. Without it every request during an IdP outage writes an
 `invalid_token` record against a caller whose bearer was never read.
 
@@ -26,11 +26,11 @@ from fastapi.testclient import TestClient
 from catalog.api import security
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings
-from service_kit.exceptions import register_handlers
-from service_kit.governed.audit import AUDIT_LOGGER
-from service_kit.governed.idp_identity import IdpVerifier
-from service_kit.governed.oidc import OIDCVerifier
-from service_kit.ns_errors import install_problem_handlers
+from lakehouse.exceptions import register_handlers
+from lakehouse.governed.audit import AUDIT_LOGGER
+from lakehouse.governed.idp_identity import IdpVerifier
+from lakehouse.governed.oidc import OIDCVerifier
+from lakehouse.ns_errors import install_problem_handlers
 
 
 AUDIENCE = "lance-catalog"

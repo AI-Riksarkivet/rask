@@ -1,6 +1,6 @@
 """#3-A — warehouse registry, runtime bucket provisioning, and the admin FGA gate (unit).
 
-The registry round-trips against a LOCAL filesystem root (``lakehouse_kit.objectfs.fs_and_base`` falls back to
+The registry round-trips against a LOCAL filesystem root (``lakehouse.objectfs.fs_and_base`` falls back to
 the local FS for a non-``s3://`` uri), so no object storage is needed here. Provisioning is boto3,
 mocked. The gate is driven through the real ``require_can_create_warehouse`` resolver.
 """
@@ -22,11 +22,11 @@ from catalog.core.config import Settings
 from catalog.core.vending import ModeBVendor
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses
-from service_kit.governed import fga as fga_module
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed import fga as fga_module
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.storage_options import StorageOptions
 
 
 def _root(tmp_path: Any) -> str:
@@ -242,7 +242,7 @@ def _governed_settings(tmp_path: Any) -> Settings:
 
 def _create_as(settings: Settings, sub: str, body: Any) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
-    from lakehouse_kit.control_emit import NoopControlEmitter
+    from lakehouse.control_emit import NoopControlEmitter
 
     return asyncio.run(
         wh_ep.create_warehouse(
@@ -258,7 +258,7 @@ def _create_as(settings: Settings, sub: str, body: Any) -> Any:
 
 def _create_project_as(settings: Settings, sub: str, project_id: str) -> Any:
     from catalog.api.v1.endpoints import projects as proj_ep
-    from lakehouse_kit.control_emit import NoopControlEmitter
+    from lakehouse.control_emit import NoopControlEmitter
 
     return asyncio.run(
         proj_ep.create_project(
@@ -317,8 +317,8 @@ def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing
     creates a project must name the person who administers it; it is refused 400 before anything is written
     when it names nobody or a service account's subject, and when it names a person only that person is seeded."""
     from catalog.api.v1.endpoints import projects as proj_ep
-    from lakehouse_kit.control_emit import NoopControlEmitter
-    from service_kit.governed.machine_identity import ServicePrincipal
+    from lakehouse.control_emit import NoopControlEmitter
+    from lakehouse.governed.machine_identity import ServicePrincipal
 
     provisioner = "kubernetes~system:serviceaccount:ops:provisioner"
     store = _FakeStore(estate_admins=(provisioner,))
@@ -468,7 +468,7 @@ def _serving_settings(tmp_path: Any) -> Settings:
 
 def _create(settings: Settings, body: Any) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
-    from lakehouse_kit.control_emit import NoopControlEmitter
+    from lakehouse.control_emit import NoopControlEmitter
 
     # The project must EXIST now (Decision 1) — mint its registry record first, idempotently, so
     # these unit tests keep their real subject (the warehouse record contract) without re-testing

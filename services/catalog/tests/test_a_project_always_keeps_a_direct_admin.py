@@ -20,7 +20,7 @@ from typing import Any
 import httpx
 import pytest
 
-from service_kit.governed import fga
+from lakehouse.governed import fga
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).

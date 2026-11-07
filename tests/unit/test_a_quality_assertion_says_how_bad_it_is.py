@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from lakehouse_kit.quality import (
+from lakehouse.quality import (
     ERROR,
     Assertion,
 )

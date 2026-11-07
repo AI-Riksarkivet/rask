@@ -1,8 +1,7 @@
 /**
  * The reader's own activity: the outcome of every write this console sent for the signed-in person,
- * newest first. It is what the navbar's bell lists, and it is kept in the browser alone, as
- * Lakekeeper's console keeps its notifications (`console-components` `src/stores/notifications.ts`):
- * nothing here is read from or sent to a service.
+ * newest first. It is what the navbar's bell lists, and it is kept in the browser alone: nothing here
+ * is read from or sent to a service.
  *
  * Every write declared with `command` (`reads.svelte.ts`) records here, a success or a failure with its
  * HTTP status and detail. Reads record nothing: a read's failure renders on the page it belongs to.

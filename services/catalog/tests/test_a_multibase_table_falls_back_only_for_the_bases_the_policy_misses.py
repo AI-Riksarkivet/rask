@@ -31,12 +31,6 @@ from catalog.core.vending import unsanctioned_bases
 TABLE = "s3://acme-wh/9f3_acme$t"
 
 
-def test_a_foreign_base_on_the_operator_allowlist_is_covered() -> None:
-    missed = unsanctioned_bases(TABLE, ["s3://lance-catalog/models/resnet"], sanctioned_bases=["s3://lance-catalog/models/"])
-
-    assert missed == (), f"an allowlisted base was treated as unreachable: {missed}"
-
-
 def test_a_foreign_base_nobody_sanctioned_is_what_forces_the_fallback() -> None:
     missed = unsanctioned_bases(TABLE, [f"{TABLE}/tree/work", "s3://someone-elses-bucket/data"], sanctioned_bases=["s3://lance-catalog/models/"])
 

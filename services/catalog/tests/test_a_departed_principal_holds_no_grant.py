@@ -26,8 +26,8 @@ import pytest
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
-from service_kit.control_events import CatalogControlEvent
-from service_kit.governed import fga
+from lakehouse.control_events import CatalogControlEvent
+from lakehouse.governed import fga
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).

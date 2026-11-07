@@ -24,15 +24,15 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel
 
-from lakehouse_kit import outbox, outbox_metrics
+from lakehouse import outbox, outbox_metrics
+from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.storage_options import StorageOptions
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import storage_options
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload
 from lineage.services.forward import forward
 from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
-from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

@@ -1,0 +1,138 @@
+"""OpenLineage emission and event signing for the lakehouse's producers and the lineage door.
+
+A light wrapper over ``openlineage-python``: pydantic models of the OpenLineage run event
+(:mod:`lakehouse.lineage.schemas`), an emitter that never crashes the producer
+(:func:`build_emitter`), deterministic run ids (:func:`run_id_for`), and the Ed25519 signing and
+verifying seam the lineage door checks (:mod:`lakehouse.lineage.signing`).
+
+Transport is env-driven (``RASK_LINEAGE_ENDPOINT`` → HTTP; unset → logged no-op that
+never crashes the producer). See ``config.LineageSettings``.
+"""
+
+from lakehouse.lineage import metrics as metrics
+from lakehouse.lineage.config import LineageSettings
+from lakehouse.lineage.door import DoorMode, DoorVerdict, judge
+from lakehouse.lineage.emitter import (
+    ClientEmitter,
+    Emitter,
+    NoopEmitter,
+    RecordingEmitter,
+    build_emitter,
+)
+from lakehouse.lineage.keys import PublishedKeys
+from lakehouse.lineage.runs import run_id_for
+from lakehouse.lineage.schemas import (
+    BASE_FACET_SCHEMA_URL,
+    DATASET_VERSION_FACET_SCHEMA_URL,
+    DATASOURCE_FACET_SCHEMA_URL,
+    ERROR_MESSAGE_FACET_SCHEMA_URL,
+    JOB_TYPE_FACET_SCHEMA_URL,
+    OUTPUT_STATISTICS_FACET_SCHEMA_URL,
+    PARENT_RUN_FACET_SCHEMA_URL,
+    PRODUCER,
+    RUN_EVENT_SCHEMA_URL,
+    SCHEMA_FACET_SCHEMA_URL,
+    TERMINAL_STATES,
+    Dataset,
+    DatasetVersionFacet,
+    DatasourceFacet,
+    ErrorMessageRunFacet,
+    Job,
+    JobTypeJobFacet,
+    OutputDataset,
+    OutputStatisticsFacet,
+    ParentRunFacet,
+    Run,
+    RunEvent,
+    RunState,
+    SchemaDatasetFacet,
+    SchemaField,
+    WireModel,
+    custom_facet,
+)
+from lakehouse.lineage.signing import (
+    SIGNATURE_FACET,
+    SIGNATURE_FACET_SCHEMA_URL,
+    CanonError,
+    KeySourceUnavailableError,
+    PublicKeySource,
+    RefusalReason,
+    Signature,
+    SignatureError,
+    SignatureRefusedError,
+    SigningKey,
+    UnsignedEventError,
+    VerifiedSignature,
+    attach_control_signature,
+    attach_signature,
+    author_of,
+    canon_1,
+    control_signature_of,
+    parse_published_keys,
+    signature_of,
+    verify_control_signature,
+    verify_signature,
+)
+
+
+__all__ = [
+    "BASE_FACET_SCHEMA_URL",
+    "DATASET_VERSION_FACET_SCHEMA_URL",
+    "DATASOURCE_FACET_SCHEMA_URL",
+    "ERROR_MESSAGE_FACET_SCHEMA_URL",
+    "JOB_TYPE_FACET_SCHEMA_URL",
+    "OUTPUT_STATISTICS_FACET_SCHEMA_URL",
+    "PARENT_RUN_FACET_SCHEMA_URL",
+    "PRODUCER",
+    "RUN_EVENT_SCHEMA_URL",
+    "SCHEMA_FACET_SCHEMA_URL",
+    "SIGNATURE_FACET",
+    "SIGNATURE_FACET_SCHEMA_URL",
+    "TERMINAL_STATES",
+    "CanonError",
+    "ClientEmitter",
+    "Dataset",
+    "DatasetVersionFacet",
+    "DatasourceFacet",
+    "DoorMode",
+    "DoorVerdict",
+    "Emitter",
+    "ErrorMessageRunFacet",
+    "Job",
+    "JobTypeJobFacet",
+    "KeySourceUnavailableError",
+    "LineageSettings",
+    "NoopEmitter",
+    "OutputDataset",
+    "OutputStatisticsFacet",
+    "ParentRunFacet",
+    "PublicKeySource",
+    "PublishedKeys",
+    "RecordingEmitter",
+    "RefusalReason",
+    "Run",
+    "RunEvent",
+    "RunState",
+    "SchemaDatasetFacet",
+    "SchemaField",
+    "Signature",
+    "SignatureError",
+    "SignatureRefusedError",
+    "SigningKey",
+    "UnsignedEventError",
+    "VerifiedSignature",
+    "WireModel",
+    "attach_control_signature",
+    "attach_signature",
+    "author_of",
+    "build_emitter",
+    "canon_1",
+    "control_signature_of",
+    "custom_facet",
+    "judge",
+    "parse_published_keys",
+    "run_id_for",
+    "signature_of",
+    "verify_control_signature",
+    "verify_signature",
+]

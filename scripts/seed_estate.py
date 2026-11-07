@@ -25,7 +25,7 @@ a namespace. **A state that cannot be reached through the UI cannot be seeded he
 the whole point, and the reason the grants go last: a grant whose object is a create that FAILED is
 skipped rather than written, because writing it is precisely how a ghost is made.
 
-THE ESTATE MIRRORS THE FGA FIXTURES (``service_kit/governed/auth/model.fga.yaml``), the same set
+THE ESTATE MIRRORS THE FGA FIXTURES (``lakehouse/governed/auth/model.fga.yaml``), the same set
 ``fga_seed_demo.py`` loads and CI asserts against, so this is a replacement rather than a toy: three
 projects, three warehouses, the bronze/silver/gold cascade under acme, each project's admins as a role of
 that project, a validators persona,
@@ -90,7 +90,7 @@ from types import MappingProxyType
 import httpx
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.naming import CATALOG_DELIMITER
+from lakehouse.naming import CATALOG_DELIMITER
 
 
 #: The catalog's own port (``rask-catalog``), not the edge's — the seed drives the service directly so
@@ -138,7 +138,7 @@ CONVERGED: Mapping[int, tuple[str, str]] = MappingProxyType({409: ("converged", 
 #: that wording in the catalog has to reach this tuple in the same commit.
 BINDING_REFUSALS: tuple[str, ...] = ("already bound to another warehouse", "already exists in the default root")
 #: An FGA-backed door (``/management/v1/access``, a project's roles) answers 406 ``Unsupported`` when the stack runs
-#: auth-off (``service_kit.ns_errors``): there is no tuple store to seed, which is a legitimate local configuration, not a
+#: auth-off (``lakehouse.ns_errors``): there is no tuple store to seed, which is a legitimate local configuration, not a
 #: failure. Loud, never silent — the estate is then unguarded. What hangs off a skipped step is skipped with it.
 FGA_OFF: Mapping[int, tuple[str, str]] = MappingProxyType({406: ("skipped", "authorization is off — no tuple store to seed")})
 #: A role's create: converged when the project already holds the name, skipped when authorization is off.

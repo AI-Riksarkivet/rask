@@ -19,11 +19,11 @@ import pytest
 
 from catalog.api.v1.endpoints import members
 from catalog.core.config import Settings
-from lakehouse_kit.control_emit import NoopControlEmitter
-from service_kit.exceptions import ForbiddenError
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
+from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.exceptions import ForbiddenError
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
 
 
 def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:

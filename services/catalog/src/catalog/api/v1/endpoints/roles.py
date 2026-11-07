@@ -2,8 +2,8 @@
 
 A role is the estate's one group: ``role:<uuid>#assignee`` is a subject every grant door takes, so access is granted to
 a persona rather than person by person, and a grant to a role reaches each of its assignees (the model resolves it).
-Lakekeeper serves the same surface (``/management/v1/role``, ``role.fga``); here a role lives under its project, the
-tenant the model scopes it to, and what a role is granted goes through the per-object grant doors as any subject's does.
+A role lives under its project, the tenant the model scopes it to, and what a role is granted goes through the
+per-object grant doors as any subject's does.
 
 Who may do what is the model's (``model.fga``): ``can_create_role`` (the project's ``role_creator``), ``can_list_roles``
 and a role's ``can_read`` (the project's members and security admins), and a role's ``can_manage_assignees`` and
@@ -41,10 +41,10 @@ from catalog.core.identifiers import require_names
 from catalog.schemas import AssigneeRequest, Role, RoleCreateRequest, RoleDeleted, RoleList, RoleRecord
 from catalog.services import projects as project_registry
 from catalog.services import role_grants, role_membership, roles
-from lakehouse_kit.control_emit import emit_control
-from lakehouse_kit.records import RecordExistsError
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.control_emit import emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.records import RecordExistsError
 
 
 if TYPE_CHECKING:

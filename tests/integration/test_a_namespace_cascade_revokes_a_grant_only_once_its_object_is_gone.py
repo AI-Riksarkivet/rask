@@ -10,7 +10,7 @@ are ended only once the tables are gone. A table in the trash is not destroyed b
 undrop into the namespace created again.
 
 The real catalog app over a real `dir` namespace on pylance, the in-memory `TupleStore` behind the real
-`service_kit.governed.fga` seed and revoke, and a backend whose second deregister fails once, before or after the row goes.
+`lakehouse.governed.fga` seed and revoke, and a backend whose second deregister fails once, before or after the row goes.
 """
 
 from __future__ import annotations
@@ -26,10 +26,10 @@ from lance_namespace import DeregisterTableRequest, DeregisterTableResponse, Lan
 
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
-from lakehouse_kit import maintenance_policies
+from lakehouse import maintenance_policies
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.storage_options import StorageOptions
 from maintenance.services.purge import objects_held
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.storage_options import StorageOptions
 from tests.integration.openfga_grants import TupleStore, act_as
 
 

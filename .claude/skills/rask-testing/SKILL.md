@@ -124,7 +124,7 @@ consequences it does not spell out.
 | `make coverage`                                   | `-m "not e2e and not slow" --cov`, on request only                                                                |
 | CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed |
 | CI: `dagger call governance-chain` | a real Dex, OpenFGA, catalog and lineage as Dagger services on RustFS, asserting through `tests/e2e-py/test_governance_e2e.py` under `--require-live` (the e2e-stack lane runs the same module on the chart's render) |
-| CI: `dagger call rustfs-lifecycle`, `dagger call smoke-rustfs` | `tests/e2e-py/test_e2e.py` under `--require-live` against a catalog whose bytes are on RustFS, and `scripts/smoke_rustfs.py` through `lakehouse_kit.storage` |
+| CI: `dagger call rustfs-lifecycle`, `dagger call smoke-rustfs` | `tests/e2e-py/test_e2e.py` under `--require-live` against a catalog whose bytes are on RustFS, and `scripts/smoke_rustfs.py` through `lakehouse.storage` |
 | CI: `dagger call rustfs-provisioning` (= `make rustfs-provisioning`) | `tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py` (marker `rustfs_provisioning`) under `--require-live`: the scoped-users hook's `scripts/rustfs_admin.py` against a throwaway RustFS booted as the fixture boots it (root pair from files); the e2e-stack lane leaves the marker out, since it provisions IAM on the store it runs against |
 | CI: `dagger call nats-auth` (= `make nats-auth`, ms-gates leg `nats-auth`) | `tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py` (marker `nats_auth`) under `--require-live`: the NATS fixture's nats-server in operator mode with test-only nsc keys, the permission table read off the render's dev seed, every user's call set, foreign and credential-less publishes refused, and one real daprd 1.18.1 per component shape, judged by the broker's log ([[XC-078]]) |
 | CI: `e2e-stack` (= `make e2e-ci`) | against a stack the lane brings up with no client, three sessions under `--require-live`: every `tests/e2e-py` module carrying none of the markers the lane leaves out, then Phase 1's acceptance (`-m phase1 --chaos --keep-drive`), then its soak at once (`-m soak`); no client is installed (XC-183) |
@@ -134,7 +134,7 @@ consequences it does not spell out.
 A failure that appears under `make test` and not under `check-fast` points at a test that depends on
 sharing a worker with the rest of its file.
 
-### What the root `conftest.py` and service-kit's plugin already do
+### What the root `conftest.py` already does
 
 Don't redo any of it in a suite. At import, before collection builds any app, the root `conftest.py`:
 
@@ -149,15 +149,13 @@ On request the root `conftest.py` also serves the identity and authorization pla
 failing the test when the binary is missing) and `openfga_store` (a fresh store on it holding the bundled model, with
 `write()` for seeding tuples as the chart's bootstrap hook does).
 
-The platform's test seam is not the root conftest's: `service-kit` ships it as a pytest plugin
-(`service_kit.pytest_plugin`, entry point `pytest11` `service_kit`, [[XC-190]]), which pytest loads wherever the
-package is installed, so a client's suite in its own repository gets the same seam with the version it pins. It
-makes bare `@respx.mock` strict (`assert_all_called`; a test whose unused routes are the point takes the
+It also resets the process-global state the `lakehouse` library and its `dapr` dependency keep. It makes bare
+`@respx.mock` strict (`assert_all_called`; a test whose unused routes are the point takes the
 `respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it bounds the Dapr sidecar
 handshake to 1 s, gives the test a fresh cache of secret-store reads
-(`service_kit.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its own clock),
-and writes the projected service-account token files the catalog's and lineage's doors read. A fixture guarding state
-`service-kit` or its `dapr` dependency keeps across a process belongs in the plugin, never in the root conftest.
+(`lakehouse.governed.secret_cache.STORE_READS`; a test that drives the TTL replaces it with one on its own clock),
+and writes the projected service-account token files the catalog's and lineage's doors read. A new fixture guarding
+such state goes there too, so every suite in the repository gets it.
 
 ## What stands in for what
 
@@ -165,7 +163,7 @@ and writes the projected service-account token files the catalog's and lineage's
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | A service app                 | the real app under `with TestClient(app)`, set up per the service's settings shape: `references/fixtures.md` § A service app |
 | Lance / lance-namespace       | real pylance on `tmp_path`: `tests/integration/conftest.py::real_ns_client`, `tests/unit/conftest.py::overlay_dataset`. The `MagicMock(spec=LanceNamespace)` behind `::client` cannot see what Lance writes (a table landed at the wrong file version passes), so it serves only routing and error-mapping claims |
-| S3 through boto3 / `lakehouse_kit.storage` | moto `mock_aws()`                                                                                           |
+| S3 through boto3 / `lakehouse.storage` | moto `mock_aws()`                                                                                           |
 | S3 read by pylance or pyarrow | a moto server, `tests/integration/test_moto_s3.py::moto_endpoint`: `mock_aws()` patches botocore, which the native Lance and Arrow clients never go through |
 | Outbound HTTPX                | `respx` (`services/maintenance/tests/test_a_table_the_catalog_does_not_govern_is_left_alone.py`)            |
 | NATS JetStream                | a real broker through Dagger (`references/fixtures.md` § NATS); the `nats-auth` lane brings its own         |

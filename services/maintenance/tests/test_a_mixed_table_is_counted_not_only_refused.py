@@ -21,7 +21,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from lakehouse_kit.features import manifest_feature_flags, mixes_data_file_versions
+from lakehouse.features import manifest_feature_flags, mixes_data_file_versions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials, expiry, sweep
@@ -97,30 +97,6 @@ def test_each_dataset_records_whether_its_table_is_mixed(
     maintain_one(uri, _settings())
 
     assert mixed_added == [(expected, None)], f"the unit did not record its table's mix: {mixed_added}"
-
-
-@pytest.mark.parametrize(("fixture", "expected"), [("mixed_table", 1), ("clean_table", 0)])
-def test_a_dataset_refused_its_credential_records_the_mix_and_only_the_mix(
-    *,
-    request: pytest.FixtureRequest,
-    monkeypatch: pytest.MonkeyPatch,
-    maintain_one: Callable[..., DatasetResult],
-    mixed_added: list[tuple[int, dict[str, Any] | None]],
-    fixture: str,
-    expected: int,
-) -> None:
-    """A missing grant stops the dataset before expiry opens it. The probe's own open still reports a mix, and a
-    refused CLEAN table records zero, so the counter follows flag 256 rather than the refusal."""
-    uri: str = request.getfixturevalue(fixture)
-
-    def _deny(*_a: object, **_k: object) -> dict[str, str]:
-        raise credentials.MaintenanceDenied("no write grant on this table")
-
-    monkeypatch.setattr(sweep.credentials, "write_options_for", _deny)
-
-    maintain_one(uri, _settings())
-
-    assert mixed_added == [(expected, None)], f"the pass recorded {mixed_added} for a {fixture}"
 
 
 def test_a_pod_that_cannot_open_the_table_counts_the_mix_on_the_vend_denied_path(

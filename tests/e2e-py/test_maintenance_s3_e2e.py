@@ -66,16 +66,16 @@ from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
 from pydantic import BaseModel
 
-from lakehouse_kit import location_claims
-from lakehouse_kit.base_refs import normalise
-from lakehouse_kit.maintenance_due import list_due
+from lakehouse import location_claims
+from lakehouse.base_refs import normalise
+from lakehouse.maintenance_due import list_due
+from lakehouse.naming import UUID_PROPERTY
+from lakehouse.storage_options import s3_filesystem
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.reconcile import ReconcileReport, reconcile
 from maintenance.services.sweep import run_sweep, summarize
-from service_kit.naming import UUID_PROPERTY
-from service_kit.storage_options import s3_filesystem
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
@@ -144,10 +144,10 @@ def _wipe(client: Any, bucket: str) -> None:
 
 @pytest.fixture(scope="module")
 def s3() -> Any:
-    """A client on the real store, via lakehouse_kit.storage — never raw boto3 (repo rule)."""
+    """A client on the real store, via lakehouse.storage — never raw boto3 (repo rule)."""
     if not ENDPOINT:
         pytest.skip("set LANCE_E2E_S3_ENDPOINT (see the module docstring / scripts/e2e_stack.sh)")
-    from lakehouse_kit.storage import s3_client
+    from lakehouse.storage import s3_client
 
     client = s3_client(ENDPOINT, access_key=ACCESS_KEY, secret_key=SECRET_KEY)
     try:

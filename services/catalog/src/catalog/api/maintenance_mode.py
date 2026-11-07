@@ -21,7 +21,7 @@ from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode
 
 from catalog.core import vending
-from service_kit.ns_errors import problem_body
+from lakehouse.ns_errors import problem_body
 
 
 PROBLEM_JSON = "application/problem+json"

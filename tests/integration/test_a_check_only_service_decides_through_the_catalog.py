@@ -1,7 +1,7 @@
 """A check-only service asks the catalog's decision door and is answered only inside the scope it is granted ([[LH-442]], [[LH-563]]).
 
 OpenFGA authorizes none of its callers, so a service holding an OpenFGA token can write any tuple. The services that
-only check hold none and ask the catalog: `service_kit.governed.decider.CatalogDecider`, presenting the pod's projected
+only check hold none and ask the catalog: `lakehouse.governed.decider.CatalogDecider`, presenting the pod's projected
 `rask-catalog` token, against the real catalog app on a real socket, every decision the real model's on an OpenFGA store
 of the test's own.
 
@@ -37,9 +37,9 @@ import uvicorn
 from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.governed.decider import CatalogDecider, TableDecision
-from service_kit.governed.fga import user_object
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed.decider import CatalogDecider, TableDecision
+from lakehouse.governed.fga import user_object
 
 
 #: The two tenants, each mapped to its warehouse and the namespace bound to it; each namespace holds one table, `<ns>$t`.
@@ -229,10 +229,10 @@ async def test_a_check_only_service_is_answered_only_inside_its_scope(
 
     try:
         if isinstance(answer, Refused):
-            with caplog.at_level(logging.ERROR, logger="service_kit.governed.decider"), pytest.raises(ServiceUnavailableError):
+            with caplog.at_level(logging.ERROR, logger="lakehouse.governed.decider"), pytest.raises(ServiceUnavailableError):
                 await ask()
             # The client logs the door's answer as it fails closed: the status, and the problem body it read.
-            told = [vars(r) for r in caplog.records if r.name == "service_kit.governed.decider" and r.getMessage() in ("decision_refused", "decision_failed")]
+            told = [vars(r) for r in caplog.records if r.name == "lakehouse.governed.decider" and r.getMessage() in ("decision_refused", "decision_failed")]
             assert [Refused(status=r["status"], code=json.loads(r["body"])["code"]) for r in told] == [answer]
         elif route == "tables":
             assert isinstance(answer, dict)

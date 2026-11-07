@@ -35,7 +35,7 @@ import yaml
 from nats.errors import NoRespondersError
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
-from lineage_kit.signing import SigningKey
+from lakehouse.lineage.signing import SigningKey
 
 
 if TYPE_CHECKING:

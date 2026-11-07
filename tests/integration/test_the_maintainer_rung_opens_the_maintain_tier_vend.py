@@ -36,10 +36,10 @@ from pydantic import SecretStr
 
 from catalog.core.vending import Tier, VendedSession
 from catalog.services import table_claims
-from lakehouse_kit import location_claims
-from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.storage_options import StorageOptions
+from lakehouse import location_claims
+from lakehouse.governed.machine_identity import ServicePrincipal
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage_options import StorageOptions
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 

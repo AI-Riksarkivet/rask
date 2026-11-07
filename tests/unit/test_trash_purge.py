@@ -2,7 +2,7 @@
 
 This is the first thing in ``services/maintenance`` that deletes bytes it did not write, so the harness
 is deliberately the same shape as ``test_drop_protection.py`` / ``test_reconcile_report.py``: a real
-``file://`` control root written with the real ``lakehouse_kit.trash`` primitives, and a real
+``file://`` control root written with the real ``lakehouse.trash`` primitives, and a real
 Lance estate built through ``lance_namespace.connect("dir", …)`` — the impl the chart runs. Nothing about
 the object store or the trash registry is mocked, because every interesting refusal in this module is a
 statement about what is REALLY on disk, and a double would happily agree with a wrong one.
@@ -45,14 +45,14 @@ from lance_namespace import (
 )
 from pydantic import SecretStr
 
-from lakehouse_kit import location_claims, trash
-from lakehouse_kit.base_refs import BaseRefs, normalise
+from lakehouse import location_claims, trash
+from lakehouse.base_refs import BaseRefs, normalise
+from lakehouse.control_events import CatalogControlEvent
+from lakehouse.governed import fga as fga_module
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge as mod
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, CategoryUnavailable, IncompleteScan, ReconcileReport
-from service_kit.control_events import CatalogControlEvent
-from service_kit.governed import fga as fga_module
-from service_kit.storage_options import StorageOptions
 
 
 _NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
@@ -794,7 +794,7 @@ def test_the_protection_prepass_scans_AS_DEEP_AS_the_thing_it_protects_against(m
         seen["max_depth"] = kw.get("max_depth")
         return SimpleNamespace(uris=[], truncated=[])
 
-    from lakehouse_kit import base_refs as base_refs_mod
+    from lakehouse import base_refs as base_refs_mod
     from maintenance.services import discovery as discovery_mod
 
     monkeypatch.setattr(discovery_mod, "discover_datasets", _fake_discover)

@@ -22,7 +22,7 @@ exist rather than deciding for the operator.
 
 THE STORE AND MODEL ARE THE ONES THE CATALOG USES ([[LH-201]]): `write_model.carried_model`, i.e. the catalog's
 `RASK_FGA_STORE_ID` pin, else the newest store named `lance-catalog`, and in it the model the catalog image
-carries. Run inside that pod, the import is the image's own `service_kit`, so the grants are validated against
+carries. Run inside that pod, the import is the image's own `lakehouse`, so the grants are validated against
 the model the estate doors are checked against. A request naming no model is validated against the store's
 newest, which a legacy image's narrower body can be: it has no `estate` type and refuses every grant here.
 
@@ -40,7 +40,7 @@ from typing import Any, Final
 
 import httpx
 
-from service_kit.governed.auth.write_model import carried_model, fga_headers
+from lakehouse.governed.auth.write_model import carried_model, fga_headers
 
 
 #: Old rung -> new rung. Each maps to ITSELF rather than a promotion, and the list is SHORT on purpose.

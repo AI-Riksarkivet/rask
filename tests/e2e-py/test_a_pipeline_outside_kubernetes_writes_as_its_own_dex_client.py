@@ -26,8 +26,8 @@ from principals import DEX_AUDIENCE, principal_of
 from refusals import assert_refused, described, namespace_uuid
 from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned
 
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.governed import fga
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed import fga
 
 
 #: The machine client the Dex fixture declares, and its secret (`deploy/fixtures/dex/chart/values.yaml` `machineClients`).

@@ -28,8 +28,10 @@ from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from lakehouse_kit import trash
-from lakehouse_kit.control_emit import ControlEmitter
+from lakehouse import trash
+from lakehouse.control_emit import ControlEmitter
+from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.governed.signing_key import retry_until_signed
 from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import table_ids
@@ -45,8 +47,6 @@ from maintenance.services.repair import repair_drift
 from maintenance.services.sweep import emit_sweep_lineage, run_sweep, summarize
 from maintenance.services.tombstones import Tombstone, sweep_tombstones
 from maintenance.services.trash_release import release_expired_trash
-from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.governed.signing_key import retry_until_signed
 
 
 log = logging.getLogger(__name__)

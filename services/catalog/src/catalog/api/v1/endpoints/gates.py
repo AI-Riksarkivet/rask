@@ -30,10 +30,10 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.schemas import GateSpecRequest, GateSpecResponse
-from lakehouse_kit import gate_specs
-from lakehouse_kit.control_emit import emit_control
-from lakehouse_kit.gate_specs import GateSpec
-from service_kit.naming import CONTROL_ID_RE
+from lakehouse import gate_specs
+from lakehouse.control_emit import emit_control
+from lakehouse.gate_specs import GateSpec
+from lakehouse.naming import CONTROL_ID_RE
 
 
 log = logging.getLogger(__name__)

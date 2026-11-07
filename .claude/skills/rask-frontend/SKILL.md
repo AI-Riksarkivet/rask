@@ -111,7 +111,7 @@ Playwright project serves `e2e/console-config.off.json`). A missing or malformed
 `auth.svelte.ts` sets `configError`, and the root `+layout.ts` answers 503 saying why, with no `/api` call.
 
 **The scopes are load-bearing.** The lakehouse's governed doors refuse a token without `federated:id`
-(`service_kit.governed.idp_identity`: "a client asks for the federated:id scope") and one whose `aud` does not name the
+(`lakehouse.governed.idp_identity`: "a client asks for the federated:id scope") and one whose `aud` does not name the
 lakehouse, which Dex grants through `audience:server:client_id:<audience>`. The chart adds both to
 `console.oidc.scopes` itself (the audience scope is `auth.oidc.audienceScope`, or built from `auth.oidc.audience`), so
 no value can drop them; with `auth.enabled=false` it renders `{"signIn": false}`.

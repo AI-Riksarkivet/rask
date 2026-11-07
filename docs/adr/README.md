@@ -196,3 +196,4 @@ with its client to that client's own repository.
 | [0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) | LH-563 | A service's roles are granted at the catalog's doors, scoped to the tenants it serves (2026-11-06) |
 | [0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md) | XC-195 | The inbox is retired, and the console joins the product: the bell is a browser-side log of the reader's own writes (2026-11-06) |
 | [0194](0194-the-dev-estates-release-values-are-composed-from-git-alone.md) | XC-194 | The dev estate's release values are composed from git alone: no live values read back, and the schema refuses an undeclared key (2026-11-07) |
+| [0195](0195-the-three-kits-fold-into-one-lakehouse-library.md) | owner | The three kits fold into one lakehouse library: one package by module, no extras, no audience contracts, nothing a client imports (2026-11-07) |

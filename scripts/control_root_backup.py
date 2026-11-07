@@ -40,7 +40,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
-from lakehouse_kit.storage import s3_client
+from lakehouse.storage import s3_client
 
 
 #: The record prefixes a restore must bring back. Named explicitly rather than globbed on a leading
@@ -186,7 +186,7 @@ def do_prune(client: Any, *, dest: str, keep: int) -> dict[str, Any]:  # noqa: A
     backups identically on purpose: an operator reading one and reasoning about the other must not meet
     two different answers to "which is the newest".
     """
-    from lakehouse_kit.storage import prune_timestamped_prefixes
+    from lakehouse.storage import prune_timestamped_prefixes
 
     # ONE IMPLEMENTATION FOR BOTH BACKUP LANES. The retention walk used to live here and, in shell,
     # in the Postgres dump's CronJob — two answers to "which is the newest" held together by a

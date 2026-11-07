@@ -2,8 +2,8 @@ name: Lakehouse release
 
 # A lakehouse release ([[XC-187]], decided by the owner 2026-11-03): pushing the tag `lakehouse-vX.Y.Z` publishes the
 # catalog image (amd64 + arm64, one index) and the product chart pinned to that index's digest to public GHCR, and the
-# tag itself is the pin for the platform package (service-kit, through uv's git source) and for the Dagger module
-# another repository calls to stand the lakehouse up (`dagger call lakehouse --version X.Y.Z`). Nothing else publishes.
+# tag itself is the pin for the Dagger module another repository calls to stand the lakehouse up
+# (`dagger call lakehouse --version X.Y.Z`). Nothing else publishes.
 on:
   push:
     tags:

@@ -14,10 +14,10 @@ import asyncio
 
 import pytest
 
+from lakehouse.lineage_events import DatasetUuids
 from maintenance.core.lineage_emit import UNRESOLVED
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.sweep import emit_sweep_lineage
-from service_kit.lineage_events import DatasetUuids
 
 
 class _RecordingEmitter:

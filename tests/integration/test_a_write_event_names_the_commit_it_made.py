@@ -37,10 +37,10 @@ from lance_namespace import connect
 
 from catalog.core.lineage_emit import HttpLineageEmitter
 from catalog.services import dataplane
-from lakehouse_kit.control_emit import CatalogControlEvent
+from lakehouse.control_emit import CatalogControlEvent
+from lakehouse.storage_options import StorageOptions
 from lineage.models import parse_event
 from lineage.services.provenance import edges_of
-from service_kit.storage_options import StorageOptions
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -162,9 +162,9 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
     rather than a coincidentally equal one.
     """
     from catalog.api.security import CurrentToken
-    from service_kit.governed.idp_identity import PersonPrincipal
-    from service_kit.governed.oidc import IDToken
-    from service_kit.governed.principal import Principal
+    from lakehouse.governed.idp_identity import PersonPrincipal
+    from lakehouse.governed.oidc import IDToken
+    from lakehouse.governed.principal import Principal
 
     caller = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=4102444800, iat=1))
     real_ns_client.app.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: caller

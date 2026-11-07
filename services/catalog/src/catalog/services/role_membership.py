@@ -14,7 +14,7 @@ from lance_namespace import ConcurrentModificationError
 
 from catalog.services import project_admins
 from catalog.services.roles import ASSIGNEE, assignees_of, role_object
-from service_kit.governed import fga
+from lakehouse.governed import fga
 
 
 if TYPE_CHECKING:

@@ -26,10 +26,10 @@ from pydantic import SecretStr
 
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
+from lakehouse.governed import fga as fga_module
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
-from service_kit.governed import fga as fga_module
-from service_kit.storage_options import StorageOptions
 
 
 _PRIMARY_BUCKET = "lance-catalog"

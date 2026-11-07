@@ -32,10 +32,10 @@ from lance_namespace import PermissionDeniedError
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import columns as ep
 from catalog.services.table_claims import DoorTable, ResolvedTable
-from lakehouse_kit.location_claims import ClaimRead, ClaimStore, LocationClaim
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 
 
 @pytest.fixture

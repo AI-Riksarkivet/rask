@@ -1,6 +1,6 @@
 """The shared publish helper (§9 P1 claim-check guard + the sidecar timeout, 2026-07-11).
 
-Every publish site in the repo funnels through ``lakehouse_kit.dapr_publish.publish_event`` (grep-verified
+Every publish site in the repo funnels through ``lakehouse.dapr_publish.publish_event`` (grep-verified
 at review time: catalog + compaction lineage emitters, medallion produce/media/transform/train/
 ingest_trigger), so enforcing the claim-check invariant HERE covers them all:
 - payload > MAX_PAYLOAD_BYTES (900 KiB, just under NATS's ~1 MiB) → ``ValueError`` BEFORE any I/O —
@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from lakehouse_kit import dapr_publish
+from lakehouse import dapr_publish
 
 
 class _Publisher:
@@ -39,7 +39,7 @@ def test_oversize_payload_raises_before_any_io_AND_IS_COUNTED(monkeypatch: pytes
     this funnel, 2 happen to count a refusal themselves and 11 count nothing — they log and swallow, or
     return a retry sentinel. This is the only invisible failure at the funnel.
     """
-    from lakehouse_kit import bus_metrics
+    from lakehouse import bus_metrics
 
     recorded: list[tuple[int, dict[str, str]]] = []
     monkeypatch.setattr(bus_metrics, "_refused", type("C", (), {"add": lambda _s, n, a=None: recorded.append((n, dict(a or {})))})())

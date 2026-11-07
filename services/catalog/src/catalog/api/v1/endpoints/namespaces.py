@@ -73,13 +73,13 @@ from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.store_endpoint import require_estate_store
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, table_claims, trash_doors, warehouses
-from lakehouse_kit import base_registry, location_claims, protection, trash
-from lakehouse_kit.control_emit import emit_control
-from service_kit.control_events import ControlUuids
-from service_kit.governed import fga
-from service_kit.lineage_events import DatasetUuids
-from service_kit.naming import CATALOG_DELIMITER
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_registry, location_claims, protection, trash
+from lakehouse.control_emit import emit_control
+from lakehouse.control_events import ControlUuids
+from lakehouse.governed import fga
+from lakehouse.lineage_events import DatasetUuids
+from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

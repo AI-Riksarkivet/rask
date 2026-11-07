@@ -20,7 +20,7 @@ of three properties the storage and bus already have, plus two enforcement point
 | Layer | The contract | Where it lives |
 |---|---|---|
 | **Storage** | **The Lance manifest IS the schema; the version IS the handshake.** Every write commits an immutable, numbered version whose manifest embeds the full schema — data is self-describing, so there is nothing separate to register or drift from. A consumer that pins `(dataset, version)` gets bit-identical data + schema forever (time travel). | Lance format itself; CAS commit (put-if-not-exists), proven per store by `tests/e2e-py/test_object_store_cas_e2e.py` (`make e2e-cas`), verdict in `docs/DURABILITY.md` |
-| **Bus** | **Events carry POINTERS, never data** (claim-check): a catalog write announcement names the table, its Lance version, its branch and its author; a control event names an object and an action. The OpenLineage facets' `_schemaURL`s ARE the event-shape contract — official spec URLs, pinned in code. | `catalog/core/lineage_emit.py`; facet URLs in `packages/lakehouse-kit/src/lakehouse_kit/openlineage.py` |
+| **Bus** | **Events carry POINTERS, never data** (claim-check): a catalog write announcement names the table, its Lance version, its branch and its author; a control event names an object and an action. The OpenLineage facets' `_schemaURL`s ARE the event-shape contract — official spec URLs, pinned in code. | `catalog/core/lineage_emit.py`; facet URLs in `packages/lakehouse/src/lakehouse/openlineage.py` |
 | **Identity** | One uuid threads all planes: the catalog mints it for a table and keeps it across a rename (ADR 0173), and it is the OpenFGA object (`table:<uuid>`), the table's location (`<root>/<uuid>`) and the key lineage's edge list records; the name is how a caller addresses the table — so the contract's subject is never ambiguous, even across a rename. | catalog (`table_claims`) + `model.fga` + `lineage/services/provenance.py` |
 
 The **handshake in practice**: the catalog announces every committed write on lineage, naming the table and the
@@ -33,8 +33,8 @@ commit-event shape are LH-472 (#598).
 
 | When | Gate | What it enforces | Code |
 |---|---|---|---|
-| **Publish-time** | The project's quality gate, declared on the catalog's gates door and run by the publish door | the DATA is good enough to publish: `row_count_positive` + `not_null(key_column)` + `blob_resolves` per blob column (one real byte read from the first and last rows' payloads, so a dangling external pointer is caught at publish rather than at first read) + `column_declared` per column the gate declares a consumer depends on | `catalog/services/publication.py`, `packages/lakehouse-kit/src/lakehouse_kit/quality.py` |
-| **Access-time** | OpenFGA (fail-closed) | WHO may read/write/promote: concentric owner⊇writer⊇reader rungs + the separate `validator` rung for promotion, checked at every catalog door | `packages/service-kit/src/service_kit/governed/fga.py`, `catalog/api/fga_deps.py` |
+| **Publish-time** | The project's quality gate, declared on the catalog's gates door and run by the publish door | the DATA is good enough to publish: `row_count_positive` + `not_null(key_column)` + `blob_resolves` per blob column (one real byte read from the first and last rows' payloads, so a dangling external pointer is caught at publish rather than at first read) + `column_declared` per column the gate declares a consumer depends on | `catalog/services/publication.py`, `packages/lakehouse/src/lakehouse/quality.py` |
+| **Access-time** | OpenFGA (fail-closed) | WHO may read/write/promote: concentric owner⊇writer⊇reader rungs + the separate `validator` rung for promotion, checked at every catalog door | `packages/lakehouse/src/lakehouse/governed/fga.py`, `catalog/api/fga_deps.py` |
 
 Plus the provenance guard: a writer cannot drop, rename or rewrite the provenance columns (`stage`, `lineage`,
 `source_rowid`) or the `lineage.*` / `rask.*` schema-metadata keys (`catalog/core/provenance_guard.py`).
@@ -116,7 +116,7 @@ publish site is caught by review alone.
 
 ### 7.1 Envelope: CloudEvents, supplied by Dapr
 
-Every publish goes through the one bounded wrapper `packages/lakehouse-kit/src/lakehouse_kit/dapr_publish.py::publish_event`
+Every publish goes through the one bounded wrapper `packages/lakehouse/src/lakehouse/dapr_publish.py::publish_event`
 with `data_content_type="application/json"`; the Dapr **sidecar** wraps the payload in a CloudEvents
 envelope (id, source, type, traceparent) — application code never builds an envelope. Consumers
 receive the envelope as a dict and read `body["data"]`: `handle_cloud_event` in
@@ -128,7 +128,7 @@ untrusted `Any` and guard with `isinstance` before touching `data`.
 | Topic | Producer → consumer | Schema (the pydantic model) | Where the name lives |
 |---|---|---|---|
 | `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), maintenance (`maintenance/core/lineage_emit.py`) → lineage and, under `maintenance.arrivalEnabled`, maintenance's arrival lane, one per-app component each | `lineage.models.RunEvent` (OpenLineage) | defaults on `LINEAGE_DAPR_TOPIC` / `LANCE_DAPR_TOPIC` / `MAINTENANCE_LINEAGE_TOPIC` in each service's `core/config.py` |
-| `catalog.control.v1` | the catalog and maintenance through `packages/lakehouse-kit/src/lakehouse_kit/control_emit.py`, each signed as `control_signer_role` names → every catalog replica (broadcast, no `queueGroupName`), each verifying the signature | `service_kit.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/service-kit/src/service_kit/control_events.py`, imported by every producer and by the catalog subscriber |
+| `catalog.control.v1` | the catalog and maintenance through `packages/lakehouse/src/lakehouse/control_emit.py`, each signed as `control_signer_role` names → every catalog replica (broadcast, no `queueGroupName`), each verifying the signature | `lakehouse.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/lakehouse/src/lakehouse/control_events.py`, imported by every producer and by the catalog subscriber |
 | `dlq.*` | the Dapr sidecar on retry exhaustion → each app's parking route | the original delivery, parked | `dlq.lineage.events` (chart `services.yaml`); the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
 
 The two **cross-plane** topics carry an explicit `.v1`: the version in the NAME is the compatibility
@@ -162,7 +162,7 @@ already support (subjects `lineage.events.*` style bindings cost nothing).
 
 A registry earns its keep when producers and consumers ship independently. Here they cannot drift:
 **one repo, one CI** — producers and consumers import the same model classes
-(`service_kit.control_events`, `lineage.models.RunEvent`), so `ty` type-checks both sides of every topic
+(`lakehouse.control_events`, `lineage.models.RunEvent`), so `ty` type-checks both sides of every topic
 in the same run. A registry would add an operand and a failure mode to re-prove a property CI already
 proves. **Revisit trigger:** the moment a consumer is deployed from OUTSIDE
 this repo's CI — an independently-released service, or tenant-authored consumers on the bus — the

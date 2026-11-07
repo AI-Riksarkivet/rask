@@ -23,9 +23,9 @@ from pydantic import SecretStr
 
 from catalog.api.v1.endpoints import projects as ep
 from catalog.core.config import Settings
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
 
 
 class _Emitter:

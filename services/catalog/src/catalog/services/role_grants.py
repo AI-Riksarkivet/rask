@@ -20,16 +20,16 @@ from lance_namespace import ServiceUnavailableError
 from starlette.concurrency import run_in_threadpool
 
 from catalog.services import roles, subject_tuples
-from lakehouse_kit.control_emit import emit_control
-from service_kit.governed import fga
+from lakehouse.control_emit import emit_control
+from lakehouse.governed import fga
 
 
 if TYPE_CHECKING:
     from openfga_sdk.client import OpenFgaClient
 
     from catalog.schemas import RoleRecord
-    from lakehouse_kit.control_emit import ControlEmitter
-    from service_kit.storage_options import StorageOptions
+    from lakehouse.control_emit import ControlEmitter
+    from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ async def end_role(client: OpenFgaClient | None, role: RoleRecord, *, control_ro
 
     Raises:
         ConcurrentModificationError: Ending it would leave a project with no direct admin; nothing was changed.
-        lakehouse_kit.records.RecordChangedError: Its record changed under both of the ending's reads.
+        lakehouse.records.RecordChangedError: Its record changed under both of the ending's reads.
     """
     if client is None:
         await run_in_threadpool(roles.end_role_record, control_root, storage_options, role)

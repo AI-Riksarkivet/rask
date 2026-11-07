@@ -1,0 +1,67 @@
+[project]
+name = "lakehouse"
+version = "0.1.0"
+description = "The lakehouse's library: everything the catalog, lineage and maintenance run on. The storage internals, the auth plane, the control lane and the events, the OpenLineage emission and its signing, and the app factory the three services boot from."
+requires-python = ">=3.13"
+license = "Apache-2.0"
+dependencies = [
+    "fastapi>=0.115",
+    "pydantic>=2.13",
+    "pydantic-settings>=2.14",
+    "python-dotenv>=1.0",
+    "dapr>=1.18.1",
+    # The auth plane (`lakehouse.governed`): the OpenFGA client and its async transport, token verification, the
+    # bounded retries and the HTTP client the doors' callers send with.
+    "openfga-sdk>=0.10.4",
+    "pyjwt[crypto]>=2.15.1",
+    "aiohttp>=3.14.4",
+    "tenacity>=9.1.4",
+    "httpx>=0.27",
+    # The S3 client, STS and URI seam (`lakehouse.storage`), which also calls `urllib3` itself for an endpoint whose
+    # certificate it does not verify.
+    "boto3>=1.35",
+    # Floored at the versions the lock carries, so a re-resolution cannot land an older HTTP stack or trust store.
+    "urllib3>=2.8.0",
+    "certifi>=2026.10.23",
+    "pyarrow",
+    # Every Lance reader and writer moves together: pylance 8 could not read a 9-written blob-v2
+    # dataset. 11 does read a 12-written (file format 2.2) one, measured 2026-09-25;
+    # 12 and 13 read and write each other's 2.2 stable-row-id tables, measured 2026-10-12.
+    "pylance[otel]>=13.0.0",
+    # pylance 13.0.0 itself requires lance-namespace >=0.11.1,<0.12 (its PyPI requires_dist), and 0.12
+    # rejects the bare-string `MergeInsertIntoTableRequest.on` that 0.11 sends
+    # (`lance_docs/ns_catalog/spec.yaml:3063`). [[LH-022]] 0.13 moves with the first pylance that allows it (ADR 0157).
+    "lance-namespace>=0.11.0,<0.12",
+    "lance-namespace-urllib3-client>=0.11.0,<0.12",
+    # The official OpenLineage client: the transport of `lakehouse.lineage`'s emitter, and the spec authority its tests
+    # round-trip against.
+    "openlineage-python>=1.52.0",
+    # Ed25519 for `lakehouse.lineage.signing` ([[LH-064]]).
+    "cryptography>=49",
+    "opentelemetry-api>=1.44.0",
+    "opentelemetry-sdk>=1.44.0",
+    # The instrumentation every lakehouse service gets. The chart launches each one under `opentelemetry-instrument`
+    # when telemetry is on, which loads every instrumentor INSTALLED, so this list is that instrumentation: declared
+    # here, in the library all three services install, so none of them can ship without it.
+    "opentelemetry-exporter-otlp-proto-http>=1.44.0",
+    "opentelemetry-instrumentation-fastapi>=0.65b0",
+    "opentelemetry-instrumentation-httpx>=0.65b0",
+    "opentelemetry-instrumentation-logging>=0.65b0",
+    "opentelemetry-instrumentation-requests>=0.65b0",
+    "opentelemetry-instrumentation-grpc>=0.65b0",
+    "opentelemetry-instrumentation-aiohttp-client>=0.65b0",
+    "opentelemetry-instrumentation-botocore>=0.65b0",
+    "opentelemetry-instrumentation-urllib3>=0.65b0",
+]
+
+[dependency-groups]
+dev = [
+    "boto3-stubs[s3]>=1.34",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lakehouse"]

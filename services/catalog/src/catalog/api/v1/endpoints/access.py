@@ -51,9 +51,9 @@ from catalog.schemas import (
     MyPermissionsResponse,
     RelationGrants,
 )
-from lakehouse_kit.control_emit import ControlEmitter, emit_control
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 
 log = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ classification_router = APIRouter(prefix="/management/v1/classification", tags=[
 
 
 # The base rungs an admin may directly assign. The model defines each as directly assignable
-# (service_kit/governed/auth/model.fga) — a real user/userset grant, unlike the derived ``can_*`` actions or the
+# (lakehouse/governed/auth/model.fga) — a real user/userset grant, unlike the derived ``can_*`` actions or the
 # structural ``parent``/``child`` edges, none of which may be hand-granted. Intersected with the model below so a
 # renamed rung drops out (and test_fga_model_contract would catch the drift).
 #

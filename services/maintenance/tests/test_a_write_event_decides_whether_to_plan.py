@@ -31,7 +31,7 @@ import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lineage_kit.signing import RefusalReason
+from lakehouse.lineage.signing import RefusalReason
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.services.arrival import Acted, triggering_write
 

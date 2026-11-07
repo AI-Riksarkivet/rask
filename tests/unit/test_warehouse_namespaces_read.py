@@ -109,10 +109,10 @@ def test_the_estate_read_is_FILTERED_to_what_the_caller_may_see(monkeypatch: pyt
     namespace AND the tenant bucket it lives in, so leaking one leaks another tenant's shape. Ran
     untested until the audit — the three tests above all had FGA off."""
     from catalog.api.v1.endpoints import warehouses as wh_ep
-    from service_kit.governed import fga as fga_module
-    from service_kit.governed.idp_identity import PersonPrincipal
-    from service_kit.governed.oidc import IDToken
-    from service_kit.governed.principal import Principal
+    from lakehouse.governed import fga as fga_module
+    from lakehouse.governed.idp_identity import PersonPrincipal
+    from lakehouse.governed.oidc import IDToken
+    from lakehouse.governed.principal import Principal
 
     settings = _settings(tmp_path, fga_enabled=True)
     _seed(settings, warehouse_id="mine-wh", bindings=("mine",))
@@ -146,7 +146,7 @@ def test_an_unreadable_binding_refuses_rather_than_reporting_a_partial_estate(tm
     settings = _settings(tmp_path)
     _seed(settings, warehouse_id="ok-wh", bindings=("fine",))
     # A binding object the reader cannot parse — the corrupt-record case, written straight to the store.
-    fs, base = __import__("lakehouse_kit.objectfs", fromlist=["x"]).fs_and_base(settings.registry_root, settings.storage_options())
+    fs, base = __import__("lakehouse.objectfs", fromlist=["x"]).fs_and_base(settings.registry_root, settings.storage_options())
     with fs.open_output_stream(f"{base}/_warehouses/bindings/broken.json") as stream:
         stream.write(b"{not json")
 

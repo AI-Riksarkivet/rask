@@ -91,8 +91,8 @@ class, exactly the kind this estate's gates exist to catch.
 
 1. Use `scanner(columns=[…], blob_handling="all_binary")` — it preserves cardinality correctly, nulls
    included, and it returns the tabular columns in the SAME scan, so alignment holds by construction with
-   no mask to maintain. Inside the lakehouse that is `lakehouse_kit.blobs.read_aligned_table`; a client, which
-   imports no lakehouse-kit, makes the same scanner call itself.
+   no mask to maintain. Inside the lakehouse that is `lakehouse.blobs.read_aligned_table`; a client, which
+   imports nothing of the lakehouse's, makes the same scanner call itself.
 2. Key off the row address the API already returns — `read_blobs` yields `(row_address, payload)` and
    `read_blob_ranges` yields `(request_index, row_address, payload)`; map results back by that
    identifier rather than by position.
@@ -157,4 +157,4 @@ the cardinality bug in particular should be re-checked, and this note updated if
 
 A client's blob read path is what these measurements govern. In this repository the catalog's blob serving
 (`services/catalog/src/catalog/services/blob_serving.py`) and its fragment checks (`client_fragments.py`) read blob
-columns through `lakehouse_kit.blobs`.
+columns through `lakehouse.blobs`.

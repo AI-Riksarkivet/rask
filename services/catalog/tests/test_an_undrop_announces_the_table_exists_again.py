@@ -30,12 +30,12 @@ from catalog.api.v1.endpoints import namespaces as namespace_doors
 from catalog.api.v1.endpoints import tables as table_doors
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table
-from lakehouse_kit.base_registry import BaseRegistry
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.ns_errors import install_problem_handlers
-from service_kit.storage_options import StorageOptions
+from lakehouse.base_registry import BaseRegistry
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.storage_options import StorageOptions
 
 
 pytest.importorskip("lance")

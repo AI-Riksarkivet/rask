@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from lakehouse_kit.base_refs import BaseRefs
+from lakehouse.base_refs import BaseRefs
 from maintenance.services import sweep as sweep_module
 from maintenance.services.due import TableIds
 

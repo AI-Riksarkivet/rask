@@ -16,11 +16,11 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
+from lakehouse.governed import fga
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, require_metadata_access
 from lineage.schemas import Derived
 from lineage.services.provenance import MAX_DERIVED_DEPTH
-from service_kit.governed import fga
 
 
 router = APIRouter(prefix="/tables", tags=["query"], dependencies=[Depends(require_metadata_access)])

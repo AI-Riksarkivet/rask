@@ -26,9 +26,9 @@ from openfga_sdk.client import OpenFgaClient
 
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 

@@ -63,14 +63,14 @@ from typing import TYPE_CHECKING
 import lance
 from pydantic import BaseModel, Field
 
-from lakehouse_kit import trash
-from lakehouse_kit.lancekit.versions import committed_at
+from lakehouse import trash
+from lakehouse.lancekit.versions import committed_at
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import shared_lance_session
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, write_options_for
 from maintenance.services.due import TableIds
 from maintenance.services.orphans import OrphanFile, listed_at_or_below
 from maintenance.services.sweep import trashed_locations, why_in_trash
-from service_kit.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:

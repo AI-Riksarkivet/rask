@@ -64,12 +64,12 @@ from catalog.api.v1.endpoints.access import _can_relations as _model_can_relatio
 from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims
 from catalog.services.table_claims import ResolvedTable
-from service_kit.arrow_ipc import encode_arrow_stream
-from service_kit.governed import fga as fga_module
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.naming import UUID_PROPERTY
+from lakehouse.arrow_ipc import encode_arrow_stream
+from lakehouse.governed import fga as fga_module
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.naming import UUID_PROPERTY
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -973,7 +973,7 @@ def test_authz_decision_emits_an_audit_event(client: TestClient, fake_ns: MagicM
     # #41: every authz decision (not just denials) lands on the dedicated audit stream with who/what/outcome.
     import logging
 
-    from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
+    from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
 
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
     minted = claim_described("db1$users")

@@ -70,7 +70,7 @@ from typing import Any, Final
 
 import pytest
 
-from service_kit.governed.signing_key import signing_key_name
+from lakehouse.governed.signing_key import signing_key_name
 from tests.unit import chart_render
 from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_ARGS, REPO
 from tests.unit.openbao_standins import BAO, NK, NSC, install

@@ -26,7 +26,7 @@ import respx
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
-from lineage_kit.signing import RefusalReason
+from lakehouse.lineage.signing import RefusalReason
 
 
 SIGNER = "service-bronze-to-silver"
@@ -115,9 +115,9 @@ def door(monkeypatch: pytest.MonkeyPatch, refusals: Callable[[], dict[str, int]]
     }.items():
         monkeypatch.setenv(key, value)
 
+    from lakehouse.ns_errors import install_problem_handlers
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
-    from service_kit.ns_errors import install_problem_handlers
 
     get_settings.cache_clear()
     app = FastAPI()

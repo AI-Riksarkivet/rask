@@ -26,8 +26,8 @@ from catalog.api.dependencies import get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.storage_options import StorageOptions
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.storage_options import StorageOptions
 
 
 WAREHOUSE = "acme-bucket"

@@ -5,7 +5,7 @@ Two halves, run on the host while the store runs as a Dagger service:
     uv run python scripts/rustfs_web_identity_measure.py serve <port> <state-dir>      # a stand-in ServiceAccount issuer
     uv run python scripts/rustfs_web_identity_measure.py measure <endpoint> <state-dir>
 
-`serve` publishes what rask's issuer mirror publishes (`service_kit.governed.issuer_mirror`): the discovery document
+`serve` publishes what rask's issuer mirror publishes (`lakehouse.governed.issuer_mirror`): the discovery document
 of an issuer whose `iss` is the cluster's, `https://kubernetes.default.svc.cluster.local`, with `jwks_uri` pointed at
 itself, and the key set; an RSA key is made in <state-dir> on first run. `measure` mints tokens in the shape k3s
 projects (`iss`, `sub`, `aud`, `exp`, `iat`, `nbf`, `jti`, `kubernetes.io`) and prints one PASS/FAIL line per check.
@@ -42,7 +42,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse_kit.storage import S3Client
+from lakehouse.storage import S3Client
 
 
 ISSUER = "https://kubernetes.default.svc.cluster.local"

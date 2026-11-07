@@ -142,7 +142,7 @@ def test_main_exits_zero_on_a_clean_run(monkeypatch) -> None:
 def _stub_client(monkeypatch) -> None:
     """Replace the OpenFGA client construction — these tests are about the WALK, not the transport.
 
-    Patched on `service_kit.governed.fga` rather than on this module: the backfill builds its client
+    Patched on `lakehouse.governed.fga` rather than on this module: the backfill builds its client
     through the estate's ONE bootstrap (`auth_lifespan.build_fga_client`) instead of its own copy of
     pinned-else-provision, so the transport seam is the shared module's, not a name re-exported here.
     """
@@ -150,7 +150,7 @@ def _stub_client(monkeypatch) -> None:
     class _Client:
         async def close(self) -> None: ...
 
-    from service_kit.governed import fga
+    from lakehouse.governed import fga
 
     monkeypatch.setattr(fga, "make_client", lambda *a, **k: _Client())
     # BOTH HALVES, because which one the bootstrap takes is a POSTURE and postures change: since

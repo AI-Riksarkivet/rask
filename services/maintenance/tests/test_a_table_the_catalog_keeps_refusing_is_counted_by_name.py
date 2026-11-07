@@ -27,7 +27,7 @@ import pyarrow as pa
 import pytest
 import respx
 
-from lakehouse_kit import base_refs
+from lakehouse import base_refs
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials, sweep
 from maintenance.services.expiry import DatasetResult

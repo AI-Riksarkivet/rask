@@ -398,8 +398,7 @@ networkPolicy:
 # === Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ============
 auth:
   # THE CLUSTER'S SERVICE-ACCOUNT ISSUER: a service authenticates to a door as the ServiceAccount its pod
-  # runs as, never as a name it claims ([[LH-220]], D1; Lakekeeper's multi-provider path,
-  # docs/docs/authentication.md:457-483). Each caller projects one token per door audience
+  # runs as, never as a name it claims ([[LH-220]], D1). Each caller projects one token per door audience
   # (`rask-catalog`, `rask-lineage`) at /var/run/secrets/rask/identity/<audience>/token,
   # 600 s (the Kubernetes minimum; the kubelet rotates it at ~515 s, measured 2026-10-02) and re-read on
   # every request. A door verifies it offline against this issuer's JWKS, and any token that verifies is
@@ -601,7 +600,7 @@ catalog:
   # -- (float) Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately.
   trashGraceDays: 7 # @schema type: number; minimum: 0; maximum: 365
   # #3-A per-warehouse physical multi-tenancy (admin control plane). On → POST /management/v1/warehouses provisions a
-  # physically separate bucket per warehouse (Lakekeeper parity) and binds top-level namespaces to it, so a
+  # physically separate bucket per warehouse and binds top-level namespaces to it, so a
   # table under a bound namespace lands in that warehouse's bucket. Additive + backward-compatible: an
   # unbound namespace always routes to the shared objectStore.bucket, so single-tenant flows are untouched.
   warehouses:
@@ -1358,7 +1357,7 @@ nats:
   #     redelivers to the DLQ; a server upgrade that flips the flag changes these rows. A durable each pod names (the
   #     catalog's broadcast, `catalog-control-{podName}` on CATALOG_CONTROL_BROADCAST) takes D as `*`;
   #   - a sidecar parks a dead letter through the component the delivery came on, so a subscriber publishes its own dlq.<app>;
-  #   - each service probes its own sidecar's connections on probe.<app-id> (service_kit.bus_watchdog), which no stream
+  #   - each service probes its own sidecar's connections on probe.<app-id> (lakehouse.bus_watchdog), which no stream
   #     captures, so a probe stores nothing;
   #   - only admin (the stream Job's own command set, measured) creates a stream or deletes
   #     a consumer, no app holds $JS.API.>, and monitor reads stream and consumer state but no message and publishes nothing.
@@ -1433,7 +1432,7 @@ nats:
           - $JS.API.CONSUMER.INFO.CATALOG_CONTROL_BROADCAST.* # each replica's durable, named by its pod
           - $JS.API.CONSUMER.CREATE.CATALOG_CONTROL_BROADCAST.*.>
           - $JS.ACK.CATALOG_CONTROL_BROADCAST.*.>
-          - probe.catalog # its sidecar's own connections, probed (service_kit.bus_watchdog); no stream captures it
+          - probe.catalog # its sidecar's own connections, probed (lakehouse.bus_watchdog); no stream captures it
         subscribe: [_INBOX.>]
       lineage:
         publish:
@@ -1582,7 +1581,7 @@ openfga:
   #
   # RAISED TO 2Gi 2026-09-06. 512Mi was set against a much smaller store and OOMKilled the estate's
   # authorization backend NINETY-ONE times (`exitCode 137`, measured on the live pod). The blast radius
-  # is everything: `service_kit.governed` fails CLOSED, so a governed service does not start at all
+  # is everything: `lakehouse.governed` fails CLOSED, so a governed service does not start at all
   # — `ClientConnectorError: Cannot connect to host rask-openfga:8080`, CrashLoopBackOff, 11 restarts —
   # for as long as OpenFGA is down.
   #
@@ -1673,15 +1672,14 @@ openfga:
     - name: OPENFGA_AUTHN_OIDC_SUBJECTS
       valueFrom: { configMapKeyRef: { name: rask-openfga-authn, key: subjects } }
   # AUTHENTICATED ([[XC-077]]). With no authn the API answers any pod that presents no credential, so code in any pod
-  # could write `estate#admin` for itself or replace the model with no rask audit record. Lakekeeper
-  # authenticates to its OpenFGA as a client of an OIDC provider (crates/authz-openfga/src/config.rs, client
-  # credentials or an API key, refusing a half-configured pair); rask's provider is the cluster
-  # ServiceAccount issuer (D1), so a client presents its pod's projected token and holds no secret at all.
+  # could write `estate#admin` for itself or replace the model with no rask audit record. The API authenticates
+  # each client as an OIDC client of the cluster ServiceAccount issuer (D1), so a client presents its pod's
+  # projected token and holds no secret at all.
   # A preshared key would be a secret in a value or an env, which the secrets rule forbids.
   #
   # Each FGA client projects a 600 s token for the audience `rask-openfga` (`lance.fgaToken`, the
   # `lance.openfgaAudience` this must equal; templates/openfga-authn.yaml refuses a render where they
-  # differ) and re-reads it on every request (`service_kit.governed.fga.client_configuration`). OpenFGA
+  # differ) and re-reads it on every request (`lakehouse.governed.fga.client_configuration`). OpenFGA
   # admits a token only with that audience AND a subject on the allow-list above, so a pod in another
   # namespace, or an in-namespace pod running as a non-client account, is refused. The exclusive
   # NetworkPolicy ingress for OpenFGA, the row's other half, waits on XC-009 and is not rendered here.
@@ -1915,7 +1913,7 @@ signing:
   # whose doors take control events (the catalog under catalog.controlEmit) also carry RASK_CONTROL_SIGNER_ROLES, a JSON object
   # from each service that emits control events to the identities it signs as (lance.signers' `role`): catalog -> the
   # catalog, maintenance -> maintenance (its purge, under maintenance.controlEmit). The keys are
-  # exactly service_kit.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
+  # exactly lakehouse.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
   # every key is present, and a role whose service is not deployed is an empty list. A door's per-action policy
   # (control_signer_role) resolves every action's allowed signers from it. Without the store or auth nothing is rendered and the doors
   # verify nothing, as lineage does.

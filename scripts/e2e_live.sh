@@ -160,8 +160,8 @@ if [ -n "$FGA" ]; then
   STORE_ID="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_FGA_STORE_ID")].value}' 2>/dev/null || true)"
   [ -n "$STORE_ID" ] || STORE_ID="$(curl -s -m 10 -H "$FGA_AUTH" "http://$FGA/stores" | uv run python -c "
 import json, sys
-from service_kit.governed.auth.write_model import STORE_NAME
-from service_kit.governed.fga import newest_store
+from lakehouse.governed.auth.write_model import STORE_NAME
+from lakehouse.governed.fga import newest_store
 named = newest_store(json.load(sys.stdin).get('stores') or [], STORE_NAME)
 print(named['id'] if named else '')" 2>/dev/null || true)"
   [ -n "$STORE_ID" ] && export LANCE_E2E_FGA_STORE_ID="$STORE_ID"
@@ -171,7 +171,7 @@ print(named['id'] if named else '')" 2>/dev/null || true)"
   MODEL_ID=""
   [ -z "$STORE_ID" ] || MODEL_ID="$(uv run python -c "
 import sys
-from service_kit.governed.auth.write_model import carried_model
+from lakehouse.governed.auth.write_model import carried_model
 try:
     print(carried_model(sys.argv[1], token_file=sys.argv[3], pinned=sys.argv[2])[1])
 except LookupError as exc:
@@ -179,7 +179,7 @@ except LookupError as exc:
   # The principal the catalog keys a bearer on (LH-063), and the OpenFGA user it is, through the one seam.
   principal_of() { curl -s -m 20 "http://$CATALOG/management/v1/me" -H "authorization: Bearer $1" \
     | uv run python -c "import sys,json;print(json.load(sys.stdin).get('sub',''))" 2>/dev/null || true; }
-  fga_user() { uv run python -c "import sys; from service_kit.governed.fga import user_object; print(user_object(sys.argv[1]))" "$1" 2>/dev/null || true; }
+  fga_user() { uv run python -c "import sys; from lakehouse.governed.fga import user_object; print(user_object(sys.argv[1]))" "$1" 2>/dev/null || true; }
   can_administer() {
     curl -s -m 10 -X POST "http://$FGA/stores/$STORE_ID/check" -H "$FGA_AUTH" -H 'content-type: application/json' \
       -d "{\"authorization_model_id\":\"$MODEL_ID\",\"tuple_key\":{\"user\":\"$(fga_user "$1")\",\"relation\":\"can_administer\",\"object\":\"project:${LANCE_E2E_PROJECT:-acme}\"}}" \

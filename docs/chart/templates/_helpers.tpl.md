@@ -300,7 +300,7 @@ Measured against the live cluster 2026-08-31.
 
 The bus a pod's sidecar connects to, named to the pods whose sidecar holds a `pubsub.jetstream` component (catalog,
 lineage, maintenance). Each service watches its own sidecar with it and restarts the sidecar once one of
-its connections has closed for good and the bus greets a new connection again (`service_kit.bus_watchdog`, [[XC-095]]):
+its connections has closed for good and the bus greets a new connection again (`lakehouse.bus_watchdog`, [[XC-095]]):
 Dapr 1.18.1's component never reconnects past nats.go's default 60 attempts (components-contrib#4563). An address, not
 a credential: the sidecar's own connection carries the app's bus user.
 
@@ -608,7 +608,7 @@ Side-loaded: a bare name the kubelet must already hold. Never valid for a remote
 `(include "lance.governedOidcEnv" $root)` -> RASK_OIDC_*, everywhere, for every service.
 
 The helper takes no variable PREFIX: the auth field-set is declared once, in
-`service_kit.governed.settings`, and binds one RASK_* name each. A prefix parameter here would
+`lakehouse.governed.settings`, and binds one RASK_* name each. A prefix parameter here would
 emit variables nothing reads.
 
 Split into OIDC / FGA / PINS rather than one block, because a caller may need a subset: a
@@ -1112,7 +1112,7 @@ Named by the hash of its spec, so an edit renames it; the object and the pod's `
 EVENT SIGNING ([[LH-064]]; values.yaml `signing:`). `lance.signers` is the ONE declaration, an (identity, key name, app-id,
 control-event role) per signer: the mint and seed loops, the store's reads (`lance.storeReads`), RASK_SIGNING_IDENTITY, LINEAGE_SIGNERS and the doors' env
 are views of it. The identity is the signer's service-account subject (lance.saSubject), the author its events are authorized as;
-the key name is its ServiceAccount's name, which `service_kit.governed.signing_key.signing_key_name` derives from the identity,
+the key name is its ServiceAccount's name, which `lakehouse.governed.signing_key.signing_key_name` derives from the identity,
 because a subject's `~` and `:` belong in no secret name, OpenBao path or shell word.
 
 ## `{{- define "lance.signingKeys" -}}`

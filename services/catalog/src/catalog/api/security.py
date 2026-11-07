@@ -28,11 +28,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.dependencies import SettingsDep
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.governed.deps import ANONYMOUS_SUBJECT
-from service_kit.governed.idp_identity import IdpVerifier, PersonPrincipal
-from service_kit.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
-from service_kit.governed.oidc import ProviderUnavailableError
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
+from lakehouse.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
+from lakehouse.governed.oidc import ProviderUnavailableError
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s are problem+json.

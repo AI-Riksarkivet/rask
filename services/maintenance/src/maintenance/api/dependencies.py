@@ -6,7 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, Request
 
-from lakehouse_kit.control_emit import ControlEmitter, NoopControlEmitter
+from lakehouse.control_emit import ControlEmitter, NoopControlEmitter
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import MaintenanceEmitter
 

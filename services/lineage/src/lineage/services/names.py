@@ -19,15 +19,15 @@ from __future__ import annotations
 import asyncio
 from typing import Final
 
-from lakehouse_kit.lancekit.catalog_client import catalog_api_client, request_headers
-from lakehouse_kit.lancekit.reader import translate_catalog_errors
+from lakehouse.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
+from lakehouse.governed.decider import AccessDecider
+from lakehouse.lancekit.catalog_client import catalog_api_client, request_headers
+from lakehouse.lancekit.reader import translate_catalog_errors
+from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.naming import CATALOG_DELIMITER, identifier_location, uuid_of
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, RunEvent
-from service_kit.exceptions import ForbiddenError, NotFoundError, UnauthorizedError
-from service_kit.governed.decider import AccessDecider
-from service_kit.lineage_events import DatasetUuids, with_dataset_uuids
-from service_kit.naming import CATALOG_DELIMITER, identifier_location, uuid_of
 
 
 #: The catalog's answers that mean "no object the caller may see by this name": the name names none, the caller may

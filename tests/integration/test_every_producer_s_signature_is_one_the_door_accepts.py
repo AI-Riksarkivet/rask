@@ -30,11 +30,11 @@ import pytest
 import respx
 from lance_namespace import PermissionDeniedError
 
+from lakehouse.governed import fga
+from lakehouse.governed.decider import OpenFgaDecider
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import UnverifiedEventError, parse_event
-from service_kit.governed import fga
-from service_kit.governed.decider import OpenFgaDecider
 
 
 #: The person the catalog acts for, as the principal key their Dex connector maps to.

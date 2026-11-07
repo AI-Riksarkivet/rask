@@ -11,9 +11,9 @@ from typing import Any, Final
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lakehouse_kit.openlineage import BRANCH_IDENTIFIER
-from lineage_kit.signing import SIGNATURE_FACET, RefusalReason
-from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, static_event_id
+from lakehouse.lineage.signing import SIGNATURE_FACET, RefusalReason
+from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, static_event_id
+from lakehouse.openlineage import BRANCH_IDENTIFIER
 
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
@@ -222,7 +222,7 @@ class UnverifiedEventError(PermissionDeniedError):
     this answer: the bus ACKS it and counts it (`Outcome.SIGNATURE_REFUSED`), and the drain records it and
     retires the staged object, which is the only copy a retry would have re-read.
 
-    ``reason`` is the kit's closed :data:`~lineage_kit.signing.RefusalReason`, the label `lineage.signature.refused`
+    ``reason`` is the kit's closed :data:`~lakehouse.lineage.signing.RefusalReason`, the label `lineage.signature.refused`
     is keyed on; the message names what was wrong with the signature and never its bytes.
 
     THE OUTAGE IS NOT THIS TYPE. A public-key list that cannot be read says nothing about the signature, so
@@ -331,7 +331,7 @@ class DatasetEvent(BaseModel):
     def feed_id(self) -> str:
         """The id the durable feed stores this change under — derived from its content, never minted.
 
-        A static change has no run id, so the feed keys it under :func:`service_kit.lineage_events.static_event_id`.
+        A static change has no run id, so the feed keys it under :func:`lakehouse.lineage_events.static_event_id`.
         ONE derivation for the writer (`services.provenance.feed_key`) and the reader that asks whether this
         exact event is already there (`api.fga_deps._is_replay`), so the two cannot look in different places.
         """

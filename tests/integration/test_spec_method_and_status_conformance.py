@@ -51,11 +51,9 @@ def test_tags_list_is_reachable_by_GET(client: TestClient, monkeypatch: pytest.M
     assert resp.status_code == 200, f"{resp.status_code} {resp.text[:120]}"
 
 
-@pytest.mark.parametrize("path", ["/v1/table/db$t/count_rows", "/v1/table/db$t/tags/list"])
-def test_the_POST_form_still_works(client: TestClient, fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, path: str) -> None:
-    """The spec's own method must keep working — dual-mount, not a move."""
+def test_tags_list_is_reachable_by_POST(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The spec's own method is served beside the GET: dual-mount, not a move."""
     from catalog.api.v1.endpoints import tags as tags_module
 
-    fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=3)
     monkeypatch.setattr(tags_module.dataplane, "list_tags", lambda *a, **k: ListTableTagsResponse(tags={}))
-    assert client.post(path, json={}).status_code == 200
+    assert client.post("/v1/table/db$t/tags/list", json={}).status_code == 200

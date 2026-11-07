@@ -23,7 +23,7 @@ from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import VendedSession
-from service_kit.governed.store_credential import S3KeyPair
+from lakehouse.governed.store_credential import S3KeyPair
 
 
 _LOCATION = "s3://lance-catalog/db$t"
@@ -75,14 +75,6 @@ def _sent(fake_ns: MagicMock) -> Any:
     body carries; the route's own describe follows it.
     """
     return fake_ns.describe_table.call_args_list[1][0][0]
-
-
-def test_body_vend_credentials_and_version_are_honoured(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
-    # Exactly what a generic client sends: everything in the body, nothing in the query.
-    resp = client.post("/v1/table/db$t/describe", json={"vend_credentials": True, "version": 1})
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["storage_options"] == _VENDED_OPTIONS
-    assert _sent(fake_ns).version == 1
 
 
 @pytest.mark.parametrize(

@@ -12,7 +12,7 @@ medallion is **governance over those tiers, applied in the catalog's write path*
 through the catalog's Lance Namespace doors (`CreateTable`, `InsertIntoTable`, `MergeInsertIntoTable`,
 `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`), exactly as any client does.
 The lakehouse runs no stage, no training and no engine, and it imports none: the import contract
-`the-lakehouse-knows-no-client` (`.importlinter`) forbids its services and kits from importing `ray` or any
+`the-lakehouse-knows-no-client` (`.importlinter`) forbids its services and the `lakehouse` library from importing `ray` or any
 client.
 
 Data enters bronze the same way ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)). Until
@@ -40,7 +40,7 @@ those events' `rask_author.sub` (the contract is [`COMMIT-EVENTS.md`](COMMIT-EVE
 - **Who may write.** Every namespace door authorizes the caller on OpenFGA (`can_create_table` on the parent namespace
   for a create, `can_write_data` on the table for a write), the same rule in every tier.
 - **Provenance columns are reserved.** A governed tier row's provenance columns (`stage`, `lineage` and
-  `source_rowid`, named by `lakehouse_kit.stage_stamp`) and the `lineage.*` / `rask.*` schema-metadata keys
+  `source_rowid`, named by `lakehouse.stage_stamp`) and the `lineage.*` / `rask.*` schema-metadata keys
   cannot be dropped, renamed or rewritten by a writer (`catalog/core/provenance_guard.py`). The rest of a tier row is
   the writer's: no tier carries a workload-shaped schema.
 - **The quality gate.** A project declares its gate on the catalog's gates door (which column identifies a row, which

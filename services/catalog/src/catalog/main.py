@@ -41,19 +41,19 @@ from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
-from lakehouse_kit.control_emit import make_control_emitter
-from lakehouse_kit.lance_app import build_lance_service_app
-from lakehouse_kit.lance_metrics import instrument_lance_if_available
-from lakehouse_kit.store_session import StoreSession
-from lineage_kit import SigningKey, parse_published_keys
-from service_kit.body_limit import BodySizeLimitMiddleware
-from service_kit.bus_watchdog import start_bus_watchdog
-from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.governed.dapr_auth import assert_app_token_configured
-from service_kit.governed.settings import assert_authentication_configured
-from service_kit.governed.signing_key import attach_signing, make_signing_holder, signing_ready_check
-from service_kit.obs import configure_app_logging
-from service_kit.schemas.health import Readiness, ReadinessStatus
+from lakehouse.body_limit import BodySizeLimitMiddleware
+from lakehouse.bus_watchdog import start_bus_watchdog
+from lakehouse.control_emit import make_control_emitter
+from lakehouse.governed.auth_lifespan import attach_auth
+from lakehouse.governed.dapr_auth import assert_app_token_configured
+from lakehouse.governed.settings import assert_authentication_configured
+from lakehouse.governed.signing_key import attach_signing, make_signing_holder, signing_ready_check
+from lakehouse.lance_app import build_lance_service_app
+from lakehouse.lance_metrics import instrument_lance_if_available
+from lakehouse.lineage import SigningKey, parse_published_keys
+from lakehouse.obs import configure_app_logging
+from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.store_session import StoreSession
 
 
 log = logging.getLogger(__name__)
@@ -356,7 +356,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # its tables until the namespace exists, so a slow OpenFGA or store must not delay this catalog's readiness.
     provenance_task = asyncio.create_task(_ensure_provenance_namespace(app))
     # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
-    # outage (`service_kit.bus_watchdog`); None where the chart names this pod no bus.
+    # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
     bus_watchdog = await start_bus_watchdog()
     try:
         yield
@@ -402,7 +402,7 @@ async def _namespace_ready(request: Request) -> Readiness:
 _settings = get_settings()
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
 # gate, the handler pair in the order that makes it work, one request id, and the probes — see
-# `lakehouse_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
+# `lakehouse.lance_app` for what each of those five is for and what a copy of it got wrong.
 #
 # `maintenance_middleware` (the read-only gate, a no-op unless LANCE_MAINTENANCE_READ_ONLY=true) and
 # `signing_gate_middleware` (the writes a catalog without its signing key refuses) go

@@ -32,8 +32,8 @@ import pytest
 
 from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable, ResolvedTable
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.storage_options import StorageOptions
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 @pytest.fixture

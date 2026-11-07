@@ -30,7 +30,7 @@ from catalog.api.cron import mount_cron
 from catalog.api.dependencies import SettingsDep
 from catalog.services import manifest_reclaim
 from catalog.services.manifest_reclaim import RootReclaim
-from service_kit.governed.dapr_auth import require_dapr_token
+from lakehouse.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)

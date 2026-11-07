@@ -28,10 +28,10 @@ import httpx
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
+from lakehouse.governed.secrets import fetch_required_secrets
 from lineage.core import metrics
 from lineage.core.config import LineageSettings
 from lineage.services.provenance import ProvenanceStore
-from service_kit.governed.secrets import fetch_required_secrets
 
 
 log = logging.getLogger(__name__)

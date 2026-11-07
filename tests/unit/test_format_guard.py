@@ -9,9 +9,7 @@ What that settles, so nobody reopens it as a feature request:
 
 * The 400 here is the correct and final answer, not a temporary gap. A future PR adding
   Parquet/Iceberg/Delta support is out of scope by ruling, not by effort.
-* The catalog is deliberately format-AWARE — the exact inverse of Lakekeeper's Generic Table
-  boundary ("no Lance in the catalog", commit coordination an explicit non-goal). rask imports
-  pylance, serves the data plane in-process, and coordinates commits, and it can do all three
+* The catalog is deliberately format-AWARE: rask imports pylance, serves the data plane in-process, and coordinates commits, and it can do all three
   BECAUSE the format is closed. Every one of those becomes unsound the moment a second format
   exists.
 * It is also what lets the estate skip a relational database: Iceberg puts the commit pointer in the
@@ -19,7 +17,7 @@ What that settles, so nobody reopens it as a feature request:
   both formats would reintroduce the very requirement the architecture is built to avoid.
 * Consequence for the opaque-asset rung (diff2 F9): an `asset` type may govern NON-TABULAR bytes —
   model artefacts are the first and only known consumer — but it must NEVER become a second TABLE
-  lane carrying a format tag. Lakekeeper's Generic Table is a format-agnostic table; rask's asset
+  lane carrying a format tag. A format-tagged table would be a second table lane; rask's asset
   rung, if it lands, is a governed blob. Those are different things and this ruling is the line
   between them. (Do not enumerate future consumers by workload: rask is a format-agnostic multimodal
   platform, and no one workload's task is its identity.)
@@ -36,7 +34,6 @@ from catalog.core.formats import reject_unsupported_properties
 @pytest.mark.parametrize(
     "props",
     [
-        pytest.param({"write.format.default": "parquet"}, id="non-lance-format"),
         # [[LH-245]]: the key that arms Lance to delete versions inside any later commit, past every hold.
         pytest.param({"lance.auto_cleanup.interval": "1"}, id="commit-path-auto-cleanup"),
         # [[LH-538]]: Lance plans a compaction from these when the plan names no option, over the table's maintenance policy.

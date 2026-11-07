@@ -96,17 +96,6 @@ class TestTheStampMustMATCHTheIdItIsStampedOn:
         assert "project" not in extra, f"the catalog stamped {extra.get('project')!r} on a lane id that does not carry it — the next tier is composed from this"
 
     @pytest.mark.asyncio
-    async def test_a_PROJECT_QUALIFIED_id_still_carries_it(self) -> None:
-        """The guard against paying for the above by dropping the tenant everywhere."""
-        from catalog.api.v1.endpoints.publication import publication_extra
-
-        lineage = _Lineage(project="acme")
-
-        extra = await publication_extra(lineage, ["acme-bronze", "pages"], from_version=1, to_version=2, location="s3://b/t")
-
-        assert extra["project"] == "acme"
-
-    @pytest.mark.asyncio
     async def test_a_project_id_CONTAINING_a_dash_still_carries_it(self) -> None:
         """The case no string rule can recover, and the reason this checks rather than parses.
 

@@ -18,14 +18,14 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Self
 from pydantic import AfterValidator, AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse_kit.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
-from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
-from lakehouse_kit.store_session import WebIdentity, held_session
-from service_kit.governed.principal import PrincipalKey
-from service_kit.governed.settings import GovernedAuthSettings
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.signature_doors import SignatureDoorSettings
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed.principal import PrincipalKey
+from lakehouse.governed.settings import GovernedAuthSettings
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
+from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
+from lakehouse.signature_doors import SignatureDoorSettings
+from lakehouse.storage_options import StorageOptions
+from lakehouse.store_session import WebIdentity, held_session
 
 
 if TYPE_CHECKING:
@@ -154,7 +154,7 @@ class CatalogReadBounds(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", extra="ignore")
 
-    #: Object-store call bounds, in TWO PLANES (`lakehouse_kit.objectfs.StoreTimeouts` holds the
+    #: Object-store call bounds, in TWO PLANES (`lakehouse.objectfs.StoreTimeouts` holds the
     #: measurements). object_store's request timeout covers the WHOLE request, body included, so one
     #: budget cannot serve both a manifest read and a 5 MiB upload part.
     #:
@@ -406,7 +406,7 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: the last condition before the subject's bytes leave storage. Read here only to say it; the sweep owns it.
     erasure_cleanup_window_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_CLEANUP_WINDOW_DAYS")
     #: How old the maintenance sweep's clone list may be when ``version/create`` judges a compaction against it
-    #: (``lakehouse_kit.maintenance_due``, ADR 0162). An older list means the sweep has stopped, and a
+    #: (``lakehouse.maintenance_due``, ADR 0162). An older list means the sweep has stopped, and a
     #: dataset cloned since is unknown, so the compaction is refused; the sweep writes one every tick.
     clone_list_max_age_seconds: int = Field(default=3600, ge=60, alias="LANCE_CLONE_LIST_MAX_AGE_SECONDS")
 
@@ -781,12 +781,12 @@ def shared_lance_session() -> lance.Session:
     on pylance 12.0.0, a version this session has read, whose manifest cleanup kept, keeps answering
     after cleanup deletes its data file, which is why a read that must see storage opens on
     :func:`fresh_lance_session` instead.
-    `lakehouse_kit.lance_session` records its thread-safety under concurrent opens.
+    `lakehouse.lance_session` records its thread-safety under concurrent opens.
 
     ONE OBJECT per cap pair: `lance_session` is `@cache`d on its arguments, so every caller here gets
     the same session and the opens actually share a cache rather than each minting one.
     """
-    from lakehouse_kit.lance_session import lance_session
+    from lakehouse.lance_session import lance_session
 
     return lance_session(*_affordable_caps())
 
@@ -815,7 +815,7 @@ def fresh_lance_session() -> lance.Session:
 def _affordable_caps() -> tuple[int, int]:
     """The configured cache caps, clamped from the cgroup rather than by lowering the defaults, so they
     track the pod's real limit instead of a literal somebody has to remember to change."""
-    from lakehouse_kit.lance_session import affordable_cache_bytes
+    from lakehouse.lance_session import affordable_cache_bytes
 
     caps = _session_caps()
     return affordable_cache_bytes(caps.lance_metadata_cache_mb << 20, caps.lance_index_cache_mb << 20)

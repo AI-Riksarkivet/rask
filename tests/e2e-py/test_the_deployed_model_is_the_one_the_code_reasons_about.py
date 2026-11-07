@@ -24,7 +24,7 @@ exports it (`scripts/e2e_live.sh`, which honours the catalog's pin), else the ne
 estate whose services all fail closed.
 
 A RED RUN NAMES THE DIFF against the store's newest model per type and relation
-(`service_kit.governed.auth.write_model.shape`), which is what an operator needs from it. Bodies are
+(`lakehouse.governed.auth.write_model.shape`), which is what an operator needs from it. Bodies are
 compared canonically, never as whole documents: a stored model carries a server-assigned `id` and
 default fills the shipped document does not, so that comparison would fail permanently and for the
 wrong reason. A rule narrowed under unchanged names leaves the name diff empty, and the message says
@@ -40,8 +40,8 @@ from typing import Any
 
 import pytest
 
-from service_kit.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document, shape
-from service_kit.governed.fga import ModelHistory, newest_store
+from lakehouse.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document, shape
+from lakehouse.governed.fga import ModelHistory, newest_store
 
 
 #: ALREADY CARRIES ITS SCHEME. `scripts/e2e_live.sh`'s `url` helper exports `http://<host>`, so

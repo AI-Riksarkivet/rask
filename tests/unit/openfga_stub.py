@@ -27,7 +27,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from pydantic import BaseModel, Field
 
-from service_kit.governed.auth.write_model import STORE_NAME, model_document
+from lakehouse.governed.auth.write_model import STORE_NAME, model_document
 
 
 STORE: Final = "01J00000000000000000000ST1"

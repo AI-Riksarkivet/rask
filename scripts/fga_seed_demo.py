@@ -46,11 +46,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from service_kit.governed.auth.write_model import carried_model, fga_headers
-from service_kit.governed.fga import user_object
+from lakehouse.governed.auth.write_model import carried_model, fga_headers
+from lakehouse.governed.fga import user_object
 
 
-_FIXTURES = Path(__file__).resolve().parents[1] / "packages/service-kit/src/service_kit/governed/auth/model.fga.yaml"
+_FIXTURES = Path(__file__).resolve().parents[1] / "packages/lakehouse/src/lakehouse/governed/auth/model.fga.yaml"
 
 #: The development Dex's two static demo identities as the principals they are ([[LH-063]]): `dex~` and the userID the
 #: Dex fixture declares (deploy/fixtures/dex/chart/values.yaml). Kept in step with ``seed_estate.DEX_PRINCIPALS`` — a

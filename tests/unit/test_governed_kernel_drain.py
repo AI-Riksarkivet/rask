@@ -1,4 +1,4 @@
-"""The `service_kit.governed` kernel's own contracts, pinned where the audit found them broken.
+"""The `lakehouse.governed` kernel's own contracts, pinned where the audit found them broken.
 
 Each test names the finding it closes and fails for that finding's own reason without its fix:
 
@@ -38,11 +38,11 @@ from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 from pydantic import BaseModel
 
-from service_kit.exceptions import register_handlers
-from service_kit.governed import fga, oidc, secrets
-from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
-from service_kit.governed.deps import make_auth_deps
-from service_kit.ns_errors import install_problem_handlers
+from lakehouse.exceptions import register_handlers
+from lakehouse.governed import fga, oidc, secrets
+from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
+from lakehouse.governed.deps import make_auth_deps
+from lakehouse.ns_errors import install_problem_handlers
 
 
 def _client(c: object) -> OpenFgaClient:
@@ -259,7 +259,7 @@ _OptionalSubject = Annotated[str, Depends(_auth_deps.optional_subject)]
 def _governed_app() -> FastAPI:
     """An app wired the way every consumer of `make_auth_deps` actually wires one: BOTH installers.
 
-    Verified rather than assumed — `lakehouse_kit.lance_app` calls `register_handlers` then
+    Verified rather than assumed — `lakehouse.lance_app` calls `register_handlers` then
     `install_problem_handlers`. Building this with only
     one of them would prove a defect in a configuration nothing ships.
     """

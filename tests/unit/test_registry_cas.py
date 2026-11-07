@@ -5,7 +5,7 @@ plain overwrites, so every guard in front of them was check-then-act: two concur
 warehouse id under different projects both read "absent" and the last writer won — on exactly the
 tenant-isolation guards (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" CAT-CORE-05, same defect class). The store
 demonstrably honors put-if-not-exists (`tests/e2e-py/test_object_store_cas_e2e.py` proves
-``If-None-Match: *`` against RustFS), so the fix is to USE it: ``lakehouse_kit.records``
+``If-None-Match: *`` against RustFS), so the fix is to USE it: ``lakehouse.records``
 is the one conditional-create seam, and the id-minting doors go through it.
 
 Local-FS branch is exercised directly (``open(..., "xb")`` exclusivity — the same arbitration, by
@@ -24,10 +24,10 @@ import pytest
 from botocore.exceptions import ClientError
 from lance_namespace import NamespaceAlreadyExistsError
 
-import lakehouse_kit.storage as storage
+import lakehouse.storage as storage
 from catalog.services import warehouses
-from lakehouse_kit import records
-from service_kit.storage_options import StorageOptions
+from lakehouse import records
+from lakehouse.storage_options import StorageOptions
 
 
 def _root(tmp_path: Any) -> str:

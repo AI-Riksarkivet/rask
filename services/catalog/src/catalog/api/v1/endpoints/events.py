@@ -31,7 +31,7 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.control_buffer import ControlEventBuffer
 from catalog.schemas import EventsResponse
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 
 log = logging.getLogger(__name__)

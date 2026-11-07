@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings as catalog_settings
 from catalog.core.lineage_emit import HttpLineageEmitter
-from lakehouse_kit.storage import S3Client
+from lakehouse.storage import S3Client
 from maintenance.core.config import get_settings as maintenance_settings
 from tests.integration.openfga_grants import TupleStore, act_as
 

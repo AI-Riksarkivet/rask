@@ -1,6 +1,6 @@
 """``GET /management/v1/table/{id}/history`` — the commit log, read out of the format.
 
-The question this answers is the Lakekeeper-console one the owner asked for: *what changed in the data, and
+The question this answers is the one the owner asked for: *what changed in the data, and
 when*. Lance is immutable and append-only at the manifest level, so the answer is already in the dataset —
 ``versions()`` for the timestamps, the transaction log for the substance — rather than in a side-table the
 catalog would have to keep in sync with the data it describes.

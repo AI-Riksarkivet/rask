@@ -3,7 +3,7 @@
 THE BUG THIS EXISTS FOR, found 2026-08-04 while gating the object routes (#90).
 
 `make_auth_deps(settings_dep)` annotates its inner dependencies with `settings_dep`, a LOCAL name.
-`service_kit/governed/deps.py` used to carry `from __future__ import annotations`, which turned that
+`lakehouse/governed/deps.py` used to carry `from __future__ import annotations`, which turned that
 into the string `"settings_dep"` — and FastAPI resolves annotations with `get_type_hints` against the
 DEFINING MODULE's globals, where no such name exists.
 
@@ -31,7 +31,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI
 from pydantic import BaseModel
 
-from service_kit.governed.deps import make_auth_deps
+from lakehouse.governed.deps import make_auth_deps
 
 
 class _Settings(BaseModel):

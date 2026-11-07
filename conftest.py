@@ -1,6 +1,6 @@
 """Root conftest — make the suite hermetic against the HARNESS's own environment.
 
-There is exactly one rule here, and it exists because of a measured failure rather than a principle.
+Its first rule exists because of a measured failure rather than a principle.
 
 THE FAILURE. `dagger call test` would not finish: two runs were abandoned, one at 22 minutes and one
 at 56, with the pytest worker sitting in `wchan=hrtimer_nanosleep` at ~1.7% CPU. It was not slow, it
@@ -38,8 +38,13 @@ harness leaked into the run" and "this test is exercising the enabled path".
 import os
 import pathlib
 from collections.abc import Iterator
+from typing import Final
 
 import pytest
+import respx
+from dapr.conf import settings as dapr_settings
+
+from lakehouse.governed import secret_cache
 
 
 #: The OTLP variables a CI harness may inject. `OTEL_EXPORTER_OTLP_ENDPOINT` is the one Dagger sets
@@ -123,6 +128,87 @@ def _no_harness_telemetry() -> None:
     is still writing its report.
     """
     _strip_harness_otlp()
+
+
+# ── THE PROCESS-GLOBAL STATE THE LAKEHOUSE AND ITS DAPR SDK KEEP, RESET PER TEST ─────────────────────────────────────
+# Each fixture below guards state a lakehouse module or its `dapr` dependency keeps across a process: every test gets
+# its own cache of secret-store reads and the token files a pod's kubelet projects, Dapr's sidecar handshake is bounded,
+# and respx's bare `@respx.mock` is strict.
+
+#: How long any test may let Dapr's sidecar handshake run. The SDK's own default is 60 s, and where there is no sidecar
+#: nothing is cached, so every unstubbed Dapr client construction (`DaprClient`, its HTTP client) pays it again: CI run
+#: 35726435185 spent 8m17s in `wait_for_sidecar` before `--timeout=300` took the offline suite and four e2e lanes with
+#: it.
+DAPR_HANDSHAKE_BUDGET_SECONDS: Final = 1.0
+
+#: The doors whose callers read a projected token file, `RASK_<DOOR>_IDENTITY_TOKEN_FILE`.
+PROJECTED_TOKEN_DOORS: Final = ("catalog", "lineage")
+
+
+# respx's own default is strict (`MockRouter.__init__` takes assert_all_called=True), and that holds for the
+# `respx_mock` fixture and the called decorator form, but the bare `@respx.mock` is a module-level router built with
+# `_assert_all_called = False`, so a route registered for a call the code no longer makes passes silently. Measured
+# when first switched on in this repository: 17 of 227 tests across 16 respx files went red, thirteen of them mocking a
+# namespace-create the cascade never makes and the real catalog answers 400. Flipping the one instance covers every
+# bare use; `@respx.mock(assert_all_called=...)` would build a new router, and a module-level `respx.post(...)` in the
+# test body would then register on the global one. To assert a call is not made, register no route for it
+# (`assert_all_mocked` already raises on an unregistered call) or assert over `respx.calls`.
+respx.mock._assert_all_called = True
+
+
+@pytest.fixture
+def respx_allows_unused_routes() -> Iterator[None]:
+    """Opt out of the strict default, for a test whose uncalled route is the point.
+
+    A dead route (the code stopped making the call) is what the default catches. A negative route is registered so the
+    test can prove it was not called, or which subset fired, and deleting it would delete the proof: taking this
+    fixture declares a test of the second kind. A fixture rather than a decorator argument, because
+    `@respx.mock(assert_all_called=False)` builds a new router and module-level `respx.get(...)` in the body would
+    register on the global one.
+    """
+    respx.mock._assert_all_called = False
+    try:
+        yield
+    finally:
+        respx.mock._assert_all_called = True
+
+
+@pytest.fixture(autouse=True)
+def _a_fresh_secret_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test its own process-global cache of secret-store reads.
+
+    It holds what a store double answered for up to ten minutes, so one test's answer would otherwise be the next
+    test's, and a test asserting what the store is asked would pass or fail by collection order. A test that drives the
+    TTL replaces it again with a cache on its own clock.
+    """
+    monkeypatch.setattr(secret_cache, "STORE_READS", secret_cache.SecretCache())
+
+
+@pytest.fixture(autouse=True)
+def _projected_identity_tokens(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give each test the token files the kubelet projects into a pod, one per door ([[LH-220]]).
+
+    A service authenticates to the catalog's and lineage's doors with the token projected for that audience, read
+    afresh on every call, and a call whose file is absent is not sent. So a test that drives such a call reads a file
+    the way the pod does, at the path the settings name. The contents are opaque: the door under test is a double, or a
+    real verifier minted its own token.
+    """
+    for door in PROJECTED_TOKEN_DOORS:
+        path = tmp_path / f"projected-rask-{door}-token"
+        path.write_text(f"projected-for-rask-{door}")
+        monkeypatch.setenv(f"RASK_{door.upper()}_IDENTITY_TOKEN_FILE", str(path))
+
+
+@pytest.fixture(autouse=True)
+def _bounded_dapr_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bound the sidecar handshake for each test without stubbing the handshake itself.
+
+    A stub of `DaprHealth.wait_for_sidecar` would swap the handshake production runs for one it never runs; lowering
+    the budget leaves it polling, sleeping and raising as it does, and only stops it costing a minute per call. A test
+    that needs another duration sets its own inside a `MonkeyPatch.context`. The patch raises if the SDK renames the
+    setting, so a rename fails every test rather than silently restoring the 60 s wait.
+    """
+    monkeypatch.setattr(dapr_settings, "DAPR_HEALTH_TIMEOUT", DAPR_HANDSHAKE_BUDGET_SECONDS)
 
 
 class ServiceAccountIssuer:
@@ -423,7 +509,7 @@ def _nkey(prefix: bytes, raw: bytes) -> str:
 
 
 def canon_1(value: object) -> bytes:
-    """The LH-064 contract's canonical bytes, written from the contract and not imported from lineage-kit."""
+    """The LH-064 contract's canonical bytes, written from the contract and not imported from `lakehouse.lineage`."""
     import json
     import math
 
@@ -451,7 +537,7 @@ class EventSigner:
     """An Ed25519 signing identity in the LH-064 wire format, for tests of the doors that verify it ([[LH-064]]).
 
     Built from the contract alone (NKEY-encoded keys, canon-1, a 16-hex kid, the `rask_signature` facet with only its
-    `signature` member left out of the signed bytes), never from lineage-kit, so a door test checks conformance to the
+    `signature` member left out of the signed bytes), never from `lakehouse.lineage`, so a door test checks conformance to the
     wire format instead of agreeing with the code it tests. A control event ([[XC-078]]) has no facet bag: `sign_control`
     puts the same facet at the top level of the flat envelope.
     """
@@ -488,7 +574,7 @@ class EventSigner:
         import base64
 
         facet: dict[str, object] = {
-            "_producer": "https://github.com/AI-Riksarkivet/rask/tree/main/packages/lineage-kit",
+            "_producer": "https://github.com/AI-Riksarkivet/rask/tree/main/packages/lakehouse",
             "_schemaURL": "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask/RaskSignatureRunFacet.json",
             "alg": "Ed25519",
             "canon": 1,
@@ -598,7 +684,7 @@ class OpenFgaStore:
         import asyncio
         import uuid
 
-        from service_kit.governed import fga
+        from lakehouse.governed import fga
 
         self.url = url
         # The bootstrap seam on a throwaway store, so the model a test is judged by is the one the catalog writes.
@@ -610,7 +696,7 @@ class OpenFgaStore:
 
         from openfga_sdk.client.models import ClientTuple, ClientWriteRequest
 
-        from service_kit.governed import fga
+        from lakehouse.governed import fga
 
         async def _write() -> None:
             async with fga.make_client(self.url, self.store_id, self.model_id, token_file=None) as client:
@@ -625,7 +711,7 @@ class OpenFgaStore:
         """Every `(user, relation, object)` the store holds, read back as an auditor reads it."""
         import asyncio
 
-        from service_kit.governed import fga
+        from lakehouse.governed import fga
 
         async def _read() -> set[tuple[str, str, str]]:
             held: set[tuple[str, str, str]] = set()

@@ -51,9 +51,9 @@ from catalog.core.identifiers import parse_identifier, with_minted_uuid
 from catalog.core.lineage_emit import COMPACT_TABLE
 from catalog.schemas import PolicyRequest
 from catalog.services import native, object_uuids
-from lakehouse_kit import maintenance_policies, protection
-from service_kit.governed import fga
-from service_kit.naming import CATALOG_DELIMITER
+from lakehouse import maintenance_policies, protection
+from lakehouse.governed import fga
+from lakehouse.naming import CATALOG_DELIMITER
 
 
 log = logging.getLogger(__name__)

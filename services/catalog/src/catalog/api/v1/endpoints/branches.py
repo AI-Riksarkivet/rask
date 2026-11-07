@@ -27,9 +27,9 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable
-from lakehouse_kit.control_emit import ControlEmitter, emit_control
-from service_kit.governed import fga
-from service_kit.storage_options import StorageOptions
+from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.governed import fga
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

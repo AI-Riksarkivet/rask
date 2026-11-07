@@ -38,12 +38,12 @@ from fastapi.testclient import TestClient
 
 from catalog.core.config import Settings
 from catalog.core.control_signing import control_sign
-from lakehouse_kit import outbox
-from lakehouse_kit.control_emit import DaprControlEmitter
-from lineage_kit import SigningKey, parse_published_keys
-from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
-from service_kit.governed.signing_key import SigningKeyHolder, attach_signing
-from service_kit.storage_options import StorageOptions
+from lakehouse import outbox
+from lakehouse.control_emit import DaprControlEmitter
+from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent
+from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
+from lakehouse.lineage import SigningKey, parse_published_keys
+from lakehouse.storage_options import StorageOptions
 
 
 BINDING = "catalog-control-relay-cron"

@@ -20,7 +20,7 @@ and should stay that way". What is not fine is no door at all.
 
 from __future__ import annotations
 
-from service_kit.governed import fga as fga_module
+from lakehouse.governed import fga as fga_module
 
 
 #: Rungs delegated somewhere OTHER than `access.py`'s per-object grant surface, with the door named.

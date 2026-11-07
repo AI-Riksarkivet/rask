@@ -10,7 +10,7 @@ or manually against any S3-compatible endpoint (RustFS / AWS / any S3):
     RASK_S3_INSECURE=1 uv run python scripts/smoke_rustfs.py
 
 It exercises the SAME code the lakehouse uses:
-  - `lakehouse_kit.storage.s3_client()` (boto3, the client the registries' conditional writes use): bucket + object round-trip.
+  - `lakehouse.storage.s3_client()` (boto3, the client the registries' conditional writes use): bucket + object round-trip.
   - pylance over `s3://` (Lance's object_store, the catalog's data plane and the strictest S3-compat
     surface): create a 2.2 table with stable row ids, as the catalog's create does, and read it back.
 Exits non-zero on any failure. No credentials are hard-coded; everything is env-driven
@@ -28,9 +28,9 @@ import lance
 import pyarrow as pa
 from dotenv import load_dotenv
 
-from lakehouse_kit.storage import configured_endpoint, s3_client
-from lakehouse_kit.storage.client import AwsRegionSettings, S3EnvSettings
-from service_kit.endpoint_scheme import allow_http_for
+from lakehouse.endpoint_scheme import allow_http_for
+from lakehouse.storage import configured_endpoint, s3_client
+from lakehouse.storage.client import AwsRegionSettings, S3EnvSettings
 
 
 def _check(label: str, fn: Callable[[], object]) -> bool:
@@ -60,8 +60,8 @@ def main() -> int:
     body = b"hello rustfs from rask storage"
     ok = True
 
-    # ---- boto3 path: lakehouse_kit.storage.s3_client, the lakehouse's S3 client ----
-    print("\n== boto3 path (lakehouse_kit.storage.s3_client) ==", flush=True)
+    # ---- boto3 path: lakehouse.storage.s3_client, the lakehouse's S3 client ----
+    print("\n== boto3 path (lakehouse.storage.s3_client) ==", flush=True)
     c = s3_client()
 
     def ensure_bucket() -> None:

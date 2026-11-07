@@ -70,7 +70,7 @@ mint() { curl -s http://localhost:5556/dex/token -d grant_type=password -d clien
   python3 -c "import sys,json;print(json.load(sys.stdin).get('id_token',''))"; }
 principal_of() { curl -s "http://localhost:$CAT_PORT/management/v1/me" -H "Authorization: Bearer $1" | \
   python3 -c "import sys,json;print(json.load(sys.stdin).get('sub',''))"; }
-fga_user() { uv run python -c "import sys; from service_kit.governed.fga import user_object; print(user_object(sys.argv[1]))" "$1"; }
+fga_user() { uv run python -c "import sys; from lakehouse.governed.fga import user_object; print(user_object(sys.argv[1]))" "$1"; }
 
 ALICE="$(mint alice@example.com)"; [ -n "$ALICE" ] || fail "could not mint alice's Dex token (is dex ready?)"
 BOB="$(mint bob@example.com)"; [ -n "$BOB" ] || fail "could not mint bob's Dex token"

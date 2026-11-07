@@ -30,10 +30,10 @@ from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
 from catalog.schemas import DueTable, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
 from catalog.services import maintenance, table_claims
-from lakehouse_kit import maintenance_due
-from lakehouse_kit.history_fences import HistoryWork
-from service_kit.governed import fga
-from service_kit.storage_options import StorageOptions
+from lakehouse import maintenance_due
+from lakehouse.governed import fga
+from lakehouse.history_fences import HistoryWork
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

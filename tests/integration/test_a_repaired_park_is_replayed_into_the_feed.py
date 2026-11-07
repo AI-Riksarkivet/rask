@@ -23,7 +23,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from service_kit.governed.fga import user_object
+from lakehouse.governed.fga import user_object
 from tests.integration.lineage_app import RELAY, SUBJECT_HEADER, governed_lineage, live_catalog, run_event
 
 

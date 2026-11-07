@@ -2,10 +2,10 @@
 
 A write moves a table's fragment and index counts, and a bring-your-own job's compaction is a write through the
 catalog like any other: refreshing the record after it is exactly what takes the table off the due list. Expiry runs
-on the commit too, once the table carries ``MAINTENANCE_MIN_VERSIONS_TO_EXPIRE`` reclaimable versions — Lakekeeper
-schedules expire-snapshots after a commit for the same reason: a cron that polls every table pays for the tables
-nobody wrote. The sweep stays the backstop, because the bus is incomplete — an external OpenLineage producer emits
-over HTTP only — and a table nobody writes has no commit to react to.
+on the commit too, once the table carries ``MAINTENANCE_MIN_VERSIONS_TO_EXPIRE`` reclaimable versions, because a
+cron that polls every table pays for the tables nobody wrote. The sweep stays the backstop, because the bus is
+incomplete — an external OpenLineage producer emits over HTTP only — and a table nobody writes has no commit to react
+to.
 
 **The event is a hint; the evaluation is the decision.** A write event carries the table id, the version and the
 operation, and no fragment or row count, so nothing here can tell whether work is due — only whether it is worth asking.
@@ -22,15 +22,15 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from lakehouse_kit import trash
-from lakehouse_kit.base_refs import decoded_path
-from lakehouse_kit.maintenance_due import CloneList, read_clone_list
+from lakehouse import trash
+from lakehouse.base_refs import decoded_path
+from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
+from lakehouse.maintenance_due import CloneList, read_clone_list
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import TableIds, refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict
 from maintenance.services.plan import PlanContext, buckets_to_sweep, load_policies, resolve_plan
 from maintenance.services.sweep import NamedDataset, SweepPlan, expire_dataset, name_dataset, trashed_locations, why_in_trash
-from service_kit.lineage_events import LANCE_FACET, dataset_uuids
 
 
 log = logging.getLogger(__name__)
@@ -154,7 +154,7 @@ def should_replan(*, last_planned: int | None, event_version: int | None, min_ve
 
     THE DEBOUNCE, and it runs before the evaluation rather than inside it: an evaluation reads the bucket's
     ``__manifest``, the policy registry and the clone list and opens the dataset, so a table taking a burst of writes
-    would otherwise pay that per write. Lakekeeper's `min-snapshots-to-expire`, against rask's own version stamps.
+    would otherwise pay that per write. The threshold is counted against rask's own version stamps.
 
     Three cases MAINTAIN rather than skip, and each is the direction that fails loud instead of silent:
 

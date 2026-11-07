@@ -31,20 +31,20 @@ import respx
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, TransactionNotFoundError, UnsupportedOperationError
 
 from catalog.core.lineage_emit import INSERT, build_write_event
-from lakehouse_kit import outbox, outbox_metrics
-from lakehouse_kit.openlineage import run_id_for
+from lakehouse import outbox, outbox_metrics
+from lakehouse.governed import fga
+from lakehouse.governed.decider import OpenFgaDecider
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.lineage.signing import signature_of
+from lakehouse.lineage_events import DatasetUuids, event_identity
+from lakehouse.openlineage import run_id_for
+from lakehouse.storage_options import StorageOptions
 from lineage.api import fga_deps, relay_cron
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import DatasetEvent, UnverifiedEventError
-from lineage_kit.signing import signature_of
-from service_kit.governed import fga
-from service_kit.governed.decider import OpenFgaDecider
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.lineage_events import DatasetUuids, event_identity
-from service_kit.storage_options import StorageOptions
 
 
 _CATALOG = "service-catalog"

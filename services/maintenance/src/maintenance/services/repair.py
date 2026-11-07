@@ -54,7 +54,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from service_kit.governed import fga
+from lakehouse.governed import fga
 
 
 if TYPE_CHECKING:

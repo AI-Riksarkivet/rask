@@ -11,7 +11,7 @@ help:
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
 
 # --all-packages, not a bare `uv sync`: a bare sync installs the ROOT project only and
-# omits every workspace member, so a fresh clone gets a venv where `import service_kit`
+# omits every workspace member, so a fresh clone gets a venv where `import lakehouse`
 # fails. Same flag as .dagger — one behaviour everywhere.
 install:
 	bun --cwd=frontend install
@@ -81,6 +81,7 @@ test-slow: $(OPENFGA_BIN)
 lint:
 	uv run ruff check .
 	uv run python scripts/lakehouse_names_no_client.py
+	uv run python scripts/code_names_no_reference_product.py
 	bun --cwd=frontend run lint
 
 # The import-layer contracts in `.importlinter` (the lakehouse's, which name no client module), then each member's
@@ -263,7 +264,7 @@ fga-estate-migrate: ## Carry the estate privileges from the default warehouse on
 # that state from the one after the hook ran. `fga-store-check` is the only thing that can, and it is
 # deliberately NOT in `check`: it needs a live cluster, and `check` is offline.
 fga-test: ## The OpenFGA model's validity + its own suite + the three-copy drift check
-	@AUTH=packages/service-kit/src/service_kit/governed/auth; \
+	@AUTH=packages/lakehouse/src/lakehouse/governed/auth; \
 	FGA=$$(command -v fga 2>/dev/null || echo $(LOCALBIN)/fga); \
 	test -x "$$FGA" || { echo "fga not found — run 'make bootstrap'"; exit 1; }; \
 	"$$FGA" model validate --file $$AUTH/model.fga > $(LOCALBIN)/model.validate.json; \
@@ -385,7 +386,7 @@ seed-dev: ## Seed the dev estate's projects, warehouses, namespaces and grants t
 	uv run python scripts/seed_estate.py
 
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
-# Prove lakehouse_kit.storage and pylance work against a REAL rustfs backend (not moto).
+# Prove lakehouse.storage and pylance work against a REAL rustfs backend (not moto).
 # rustfs serves the S3 API on :9000; rask is storage-agnostic, so this is env-only.
 # ONE command, not three. This replaced `rustfs-up` (a DETACHED `docker run`), `smoke-rustfs` and
 # `rustfs-down` — the last of which an operator had to remember. The service is bound for exactly the

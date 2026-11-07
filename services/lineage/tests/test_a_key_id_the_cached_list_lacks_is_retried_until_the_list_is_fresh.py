@@ -32,9 +32,9 @@ import respx
 from fastapi import FastAPI
 from starlette.testclient import TestClient
 
+from lakehouse.governed.signing_key import KEY_READ_TIMEOUT_SECONDS
+from lakehouse.lineage.keys import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SECONDS
 from lineage.services.signature import dapr_published_keys
-from lineage_kit.keys import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SECONDS
-from service_kit.governed.signing_key import KEY_READ_TIMEOUT_SECONDS
 
 
 SIGNER = "service-maintenance"
@@ -169,10 +169,10 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
         monkeypatch.setenv(key, value)
     # One key id remembered: the second distinct unknown one pushes the first out. `raising=False` lets the test run against a reader
     # with no bound at all (the red check); if the patch ever fails to take effect the eviction case fails, so it cannot pass unnoticed.
-    monkeypatch.setattr("lineage_kit.keys.MAX_UNKNOWN_KEY_IDS", 1, raising=False)
+    monkeypatch.setattr("lakehouse.lineage.keys.MAX_UNKNOWN_KEY_IDS", 1, raising=False)
+    from lakehouse.ns_errors import install_problem_handlers
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
-    from service_kit.ns_errors import install_problem_handlers
 
     get_settings.cache_clear()
     app = FastAPI()

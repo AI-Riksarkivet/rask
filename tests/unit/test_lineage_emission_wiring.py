@@ -12,7 +12,7 @@ carries its own queueGroupName); the TOPIC must match. ``test_invariants._PINNED
 service's in-code DEFAULT, but it cannot see the chart — and the chart overrides those defaults on every
 deployed pod, so a template that stopped deriving from ``.Values.pubsub.topic`` would satisfy that pin while
 dropping every event. A producer outside the estate posts OpenLineage to lineage's HTTP door with its own
-transport (lineage-kit's ``build_emitter``, configured by that producer), which this chart renders nothing for.
+transport (any OpenLineage client, configured by that producer), which this chart renders nothing for.
 
 Asserted against ``helm template`` output rather than values.yaml, because the rendered manifest is what
 actually runs.

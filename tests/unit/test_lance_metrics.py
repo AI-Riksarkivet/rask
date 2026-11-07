@@ -7,7 +7,7 @@ import types
 
 import pytest
 
-from lakehouse_kit.lance_metrics import instrument_lance_if_available
+from lakehouse.lance_metrics import instrument_lance_if_available
 
 
 def test_activates_against_the_really_installed_pylance() -> None:

@@ -38,10 +38,10 @@ from catalog.api.control_relay import bounded, published_keys
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
-from lineage_kit.door import DoorMode, judge
-from lineage_kit.signing import RefusalReason, control_signature_of, verify_control_signature
-from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
-from service_kit.governed.dapr_auth import require_dapr_token
+from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
+from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.lineage.door import DoorMode, judge
+from lakehouse.lineage.signing import RefusalReason, control_signature_of, verify_control_signature
 
 
 log = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ async def _screen(arrived: dict[str, Any], event: CatalogControlEvent, request: 
     The signature is checked over ``arrived``, the CloudEvent's data exactly as delivered: a model dump grows the fields
     a schema defaults, and the signer signed what it wrote.
     """
-    mode = DoorMode(settings.signature_doors)
+    mode = settings.signature_doors
     if mode is DoorMode.OFF:
         return None
     signers = settings.control_signer_roles.get(control_signer_role(event.action), frozenset())

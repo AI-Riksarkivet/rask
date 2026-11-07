@@ -26,9 +26,9 @@ from fastapi import FastAPI
 from openfga_sdk import OpenFgaClient
 from starlette.testclient import TestClient
 
+from lakehouse.governed.decider import OpenFgaDecider
+from lakehouse.governed.signing_key import signing_public_secret
 from lineage.models import DatasetEvent
-from service_kit.governed.decider import OpenFgaDecider
-from service_kit.governed.signing_key import signing_public_secret
 
 
 CATALOG, STAGE, UNLISTED, PERSON = "service-catalog", "service-bronze-to-silver", "service-trainer", "dex~alice"
@@ -112,10 +112,10 @@ def _door(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], gover
     }.items():
         monkeypatch.setenv(key, value)
 
+    from lakehouse.governed import fga
+    from lakehouse.ns_errors import install_problem_handlers
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
-    from service_kit.governed import fga
-    from service_kit.ns_errors import install_problem_handlers
 
     async def answer(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
         del user, relation

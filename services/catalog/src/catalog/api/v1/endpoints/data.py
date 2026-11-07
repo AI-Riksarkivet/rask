@@ -57,9 +57,9 @@ from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
 from catalog.services import blob_serving, dataplane, table_create
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
-from service_kit.governed import fga
-from service_kit.governed.audit import audit_read
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from lakehouse.governed import fga
+from lakehouse.governed.audit import audit_read
 
 
 log = logging.getLogger(__name__)
@@ -652,7 +652,7 @@ def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: S
     available, not a metadata lookup.
 
     THE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find
-    it. That `ControlAction` (`service_kit/control_events.py:92`) announces a version advance and
+    it. That `ControlAction` (`lakehouse.control_events.ControlAction`) announces a version advance and
     carries `{from_version, to_version}` — "the RANGE (D-R3) the notification carries, so a consumer
     resolves the delta" (`catalog/services/publication.py:245-254`) — which is exactly the window this
     door takes. Its emitter is a DIFFERENT `publication.py`, the route module

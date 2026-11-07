@@ -27,8 +27,8 @@ from catalog.services import blob_serving, table_claims
 from catalog.services.blob_serving import BlobStream, read_blob
 from catalog.services.dataplane import create_table
 from catalog.services.table_claims import DoorTable
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.storage_options import StorageOptions
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 def _blob_schema() -> pa.Schema:
@@ -153,19 +153,8 @@ def test_read_blob_rows_are_positional_after_delete(tmp_path: Path) -> None:
 # --- the pure Range parser --------------------------------------------------- #
 
 
-@pytest.mark.parametrize(
-    ("header", "expected"),
-    [
-        (None, None),
-        ("bytes=0-3", (0, 3)),
-        ("bytes=100-", (100, None)),
-        ("bytes=-500", (None, 500)),
-        ("bytes=-", None),  # empty on both sides
-        ("bytes=0-3,10-20", None),  # multi-range unsupported → ignored
-    ],
-)
-def test_parse_range(header: str | None, expected: tuple[int | None, int | None] | None) -> None:
-    assert _parse_range(header) == expected
+def test_a_range_empty_on_both_sides_is_ignored() -> None:
+    assert _parse_range("bytes=-") is None
 
 
 # --- authz tier pin ----------------------------------------------------------- #

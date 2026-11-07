@@ -56,11 +56,10 @@ with `{ workspace = true }`, and the package name under `[project] dependencies`
 
 ```toml
 [project]
-dependencies = ["service-kit[governed]", "lineage-kit", "uvicorn>=0.30"]
+dependencies = ["lakehouse", "uvicorn>=0.30"]
 
 [tool.uv.sources]
-service-kit = { workspace = true }
-lineage-kit = { workspace = true }
+lakehouse = { workspace = true }
 ```
 
 `[tool.hatch.build.targets.wheel] packages = ["src/<import_name>"]` so the

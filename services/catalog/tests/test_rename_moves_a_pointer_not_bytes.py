@@ -37,8 +37,8 @@ from lance_namespace import (
 )
 
 from catalog.services import dataplane, table_claims
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.storage_options import StorageOptions
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 def _namespace(tmp_path: Path):  # noqa: ANN202 - LanceNamespace, no exported protocol

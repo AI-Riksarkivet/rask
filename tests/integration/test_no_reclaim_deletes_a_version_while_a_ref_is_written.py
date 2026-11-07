@@ -4,7 +4,7 @@ Lance's ``cleanup_old_versions`` reads the refs once, when it starts (``rust/lan
 v13.0.0), so a tag or branch written while it runs can name a version it then deletes. Measured on pylance 13.0.0, a
 tag created on version 2 a few milliseconds into ``cleanup_old_versions(older_than=0)`` named a deleted version in 20 of
 60 races, and a branch could not be read in 9 of 60. A ref write and a reclaim therefore each hold the table's history
-fence (:mod:`lakehouse_kit.history_fences`); the ref doors' side is pinned in
+fence (:mod:`lakehouse.history_fences`); the ref doors' side is pinned in
 ``services/catalog/tests/test_tag_and_branch_failures_carry_their_spec_code.py``.
 
 One estate on moto: the catalog over HTTP and maintenance's own pass. While a ref write holds the table's history,
@@ -26,17 +26,17 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from lakehouse_kit.base_refs import normalise
-from lakehouse_kit.history_fences import HistoryWork, TableHistory
-from lakehouse_kit.maintenance_due import CloneList
-from lakehouse_kit.objectfs import lance_storage_options
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.base_refs import normalise
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.history_fences import HistoryWork, TableHistory
+from lakehouse.maintenance_due import CloneList
+from lakehouse.naming import UUID_PROPERTY
+from lakehouse.objectfs import lance_storage_options
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.due import TableIds
 from maintenance.services.plan import PlanContext
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.naming import UUID_PROPERTY
 
 
 TABLE = "db$t"

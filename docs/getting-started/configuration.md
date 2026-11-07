@@ -1,14 +1,14 @@
 # Configuration
 
 rask is configured through environment variables, read by each service's
-`Settings` (pydantic-settings, via `service-kit`) from the process environment.
+`Settings` (pydantic-settings, through the `lakehouse` library) from the process environment.
 In-cluster, the chart renders them from `chart/values.yaml` into each Deployment's `env`, and every
 credential reaches a pod from the secret store (the Dapr secret store, or an
 ExternalSecret), never as a chart value. A local `.env` is git-ignored and never committed.
 
 ## Identity and authorization (every governed service)
 
-Declared once in `packages/service-kit/src/service_kit/governed/settings.py`, one name per setting:
+Declared once in `packages/lakehouse/src/lakehouse/governed/settings.py`, one name per setting:
 
 | Variable | Purpose |
 |---|---|
@@ -67,7 +67,7 @@ the issuer.
 ## Storage
 
 The object store is S3-compatible: the RustFS fixture in development, the platform's S3 in production
-(`objectStore.externalEndpoint`). Services reach it through `lakehouse_kit.storage` and the catalog's vended credentials; the
+(`objectStore.externalEndpoint`). Services reach it through `lakehouse.storage` and the catalog's vended credentials; the
 store's root key is held by the store alone, and each service presents a scoped identity.
 
 Changes to the environment are read once at service startup — restart the relevant service to pick them up.

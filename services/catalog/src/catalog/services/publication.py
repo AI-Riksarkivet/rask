@@ -56,16 +56,16 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.core.config import shared_lance_session
 from catalog.services import dataplane
-from lakehouse_kit import gate_specs
-from lakehouse_kit.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, tier_contract_violations
-from service_kit.storage_options import StorageOptions
+from lakehouse import gate_specs
+from lakehouse.quality import NOT_NULL, STRUCTURAL_ASSERTIONS, Assertion, assert_quality, tier_contract_violations
+from lakehouse.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
     from catalog.services.table_claims import DoorTable
-    from lakehouse_kit.gate_specs import GateSpec
+    from lakehouse.gate_specs import GateSpec
 
 
 log = logging.getLogger(__name__)
@@ -238,7 +238,7 @@ def declared_gate(registry_root: str, storage_options: StorageOptions, project: 
     takes an estate down for a config blip, while the request's own values remain a real gate. Logged
     at ERROR because it is still a defect — a declaration nobody can read is a policy nobody is under.
 
-    Read through `lakehouse_kit.gate_specs`, the record's one format, rather than a reader of
+    Read through `lakehouse.gate_specs`, the record's one format, rather than a reader of
     its own.
     """
     if not project or not registry_root:

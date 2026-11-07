@@ -21,10 +21,10 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.v1.endpoints import projects as ep
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.storage_options import StorageOptions
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:

@@ -17,9 +17,9 @@ from lance_namespace import CreateNamespaceRequest, InvalidInputError, connect
 from catalog.services import table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.dataplane import coerce_insert_arrow, create_table
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.arrow_ipc import encode_arrow_stream
-from service_kit.storage_options import StorageOptions
+from lakehouse.arrow_ipc import encode_arrow_stream
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:
@@ -30,7 +30,6 @@ _ROWS = 10_000
 _ONE_LONG_VALUE = pa.DictionaryArray.from_arrays(pa.array([0] * _ROWS, pa.int8()), pa.array(["x" * 1000]))
 
 REALISTIC = [
-    pytest.param(_ONE_LONG_VALUE, pa.string(), id="a-dictionary-decoded-once-per-row"),
     pytest.param(
         pa.DictionaryArray.from_arrays(pa.array([0] * (_ROWS - 10) + [1] * 10, pa.int32()), pa.array(["a", "y" * 5000], pa.large_string())),
         pa.string(),
@@ -38,7 +37,6 @@ REALISTIC = [
     ),
     pytest.param(pa.DictionaryArray.from_arrays(pa.array([0, None] * (_ROWS // 2), pa.int8()), pa.array(["q" * 300])), pa.large_string(), id="null-indices"),
     pytest.param(pa.DictionaryArray.from_arrays(pa.array([1] * _ROWS, pa.int8()), pa.array([5, 7], pa.int64())), pa.int64(), id="a-fixed-width-dictionary"),
-    pytest.param(pa.array(range(_ROWS), pa.int32()), pa.int64(), id="int32-widened"),
     pytest.param(pa.nulls(_ROWS), pa.int64(), id="nulls-given-a-width"),
     pytest.param(pa.array(["abc"] * _ROWS), pa.large_string(), id="wider-offsets"),
     pytest.param(

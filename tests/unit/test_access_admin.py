@@ -32,11 +32,11 @@ from catalog.schemas import (
     AccessTuple,
     TupleCondition,
 )
-from lakehouse_kit.control_emit import NoopControlEmitter
-from service_kit.governed import fga
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
+from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.governed import fga
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
 
 
 def _settings(*, fga_enabled: bool = True) -> Any:

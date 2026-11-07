@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Final
 
 from lance_namespace import ConcurrentModificationError
 
-from service_kit.governed import fga
+from lakehouse.governed import fga
 
 
 if TYPE_CHECKING:

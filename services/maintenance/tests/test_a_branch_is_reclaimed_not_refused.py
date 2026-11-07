@@ -36,7 +36,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 
-from lakehouse_kit.base_refs import BaseRefs, containment_of
+from lakehouse.base_refs import BaseRefs, containment_of
 from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 
 

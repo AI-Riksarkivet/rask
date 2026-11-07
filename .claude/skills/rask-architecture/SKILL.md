@@ -40,16 +40,15 @@ the globs safe (see the invariants).
 | ↳ JS libraries | `frontend/packages/<name>` | reusable TS/Svelte libraries | **No** |
 | **scripts** | `scripts/` | ALL dev/ops scripts, shell **and** python, flat | one-shot, **not** a workspace member |
 
-**Python packages** (3):
-
-- `service-kit` — the platform package a client pins by lakehouse tag (XC-186), and the pieces of it the lakehouse runs:
-  exceptions, the request-id middleware, logging, the probes and the drain, the body cap, the auth plane (`governed`), the naming a client needs, the input and
-  credential guards, the contract the lakehouse's events publish, and its pytest plugin (XC-190).
-- `lakehouse-kit` — the lakehouse's kernel, which only its own services import: the lance-plane app factory
-  (`lance_app`), the records, registries and governance guards, the namespace clients, the outbox and control lane, and
-  the S3 client, STS and URI seam (`lakehouse_kit.storage`).
-- `lineage-kit` — the OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used
-  by the three lakehouse services and by a client to verify what it reads.
+**Python packages** (1): `lakehouse` (`packages/lakehouse`, ADR 0195), the lakehouse's one library, which only its
+own services import and no client: the lance-plane app factory (`lance_app`) and what it installs (exceptions, the
+request-id middleware, logging, the probes and the drain, the body cap), the auth plane (`governed`), the naming and
+the input and credential guards, the records, registries and governance guards, the namespace clients, the events (the
+control lane, the outbox, the OpenLineage builders), the OpenLineage emission and Ed25519 signing seam
+(`lakehouse.lineage`), and the S3 client, STS and URI seam (`lakehouse.storage`). One package, organised by module: a
+new package exists only for a real reason of its own (a backend swapped behind an interface, a leaf with no lakehouse
+imports, a language necessity), never for an audience, because a client reaches the lakehouse through its doors and
+events and imports none of it.
 
 **Python services** (3): `catalog` (`:2333`), `lineage` (`:8000`), `maintenance` (`:8000`) — the lakehouse, one image
 (`.docker/rest-catalog.dockerfile`) run with three commands. This repository hosts no client: the notifications inbox
@@ -74,15 +73,14 @@ own, in its own repository, whose admissions it supplies to a lakehouse install 
 
 ## The composition seam: one app factory
 
-`lakehouse_kit.lance_app.build_lance_service_app(*, title, docs_enabled, audit_enabled, lifespan, log, ready_check,
+`lakehouse.lance_app.build_lance_service_app(*, title, docs_enabled, audit_enabled, lifespan, log, ready_check,
 routers=(), inner_middleware=())` builds `catalog`, `lineage` and `maintenance`: routers mount at the root, config
 is each service's own `core/config.py::get_settings()`, and the factory owns the logging, the docs gate, the audit
 trail, the problem handlers, the request-id layer and `/livez` + `/readyz`. The **lifespan is injectable** and
 required: each service passes its own, which builds its resources and sets the lifecycle flags `/readyz` reads. So is
 `ready_check`: each service's `/readyz` also answers for its own dependency or fact (the catalog's namespace and
 signing key, lineage's feed, maintenance's signing key).
-service-kit ships no app factory (owner, 2026-11-07): a client is an outside tool on the public API and builds its own
-app. The lance services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout; the factory owns
+A client is an outside tool on the public API and builds its own app (owner, 2026-11-07). The lance services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout; the factory owns
 the boot, not the layout. A `main.py` that opens
 its own `app = FastAPI(...)` is the exception to justify, not the norm: copied boots drift, and one once lost its
 request-id layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12).
@@ -99,15 +97,12 @@ request-id layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
   Python package under `frontend/`.** See `references/adding-a-package.md`.
 - **One lock.** The root `uv.lock` is the only Python lockfile — dev, tests, and every docker image resolve from it
   (`uv sync --frozen --package <name>`).
-- **`service-kit` is the platform package, and it keeps a light base.** Base deps are `fastapi`, `pydantic`,
-  `pydantic-settings`, `python-dotenv`, `dapr` and `opentelemetry-api`. The OTel SDK, the OTLP/HTTP exporter and the
-  instrumentors are the lakehouse's runtime, declared in `lakehouse-kit` (the chart launches every lakehouse service
-  under `opentelemetry-instrument` when telemetry is on, and it instruments what is installed, so that list is the
-  instrumentation a service gets). The auth plane's deps live
-  behind `[governed]` and the Arrow guards' behind `[arrow]` — keep them there. **It imports nothing from
-  `lakehouse_kit`** (`.importlinter`, `the-platform-knows-no-kernel`), and the lakehouse image refuses `lancedb` at its
-  import gate (`.docker/rest-catalog.dockerfile`, `--absent`). Never add `lancedb`, `ray` or
-  `sqlmodel` to either kit.
+- **`lakehouse` declares every dependency the three services run on, with no extras.** Every importer installs all of
+  it, so an extra would guard nothing. The OTel SDK, the OTLP/HTTP exporter and the instrumentors are among them: the
+  chart launches every lakehouse service under `opentelemetry-instrument` when telemetry is on, and it instruments what
+  is installed, so that list is the instrumentation a service gets. The lakehouse image import-gates the library and
+  the three services and refuses `lancedb` (`.docker/rest-catalog.dockerfile`, `--absent`). Never add `lancedb`, `ray`
+  or `sqlmodel` to it.
 - **The lakehouse knows no client.** `.importlinter`'s `the-lakehouse-knows-no-client` forbids every lakehouse module
   from importing a client's package (`ray`, `lance_ray`, `lancedb`, …) by any chain, and
   `scripts/lakehouse_names_no_client.py` (in `make lint`) refuses a client's name in any file the lakehouse owns, the
@@ -116,7 +111,7 @@ request-id layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md
   it needs no edit when one is added, and a client that leaves the tree joins `DEPARTED` in
   the commit that deletes it, as `notifications` and `mailpit` did (ADR 0193).
 - **`known-first-party` is COMPLETE — keep it that way.** It lists every first-party import name (`catalog`,
-  `lakehouse_kit`, `lineage`, `lineage_kit`, `maintenance`, `service_kit`); a name missing from it sorts
+  `lakehouse`, `lineage`, `maintenance`); a name missing from it sorts
   into the THIRD-PARTY block, and a backlog of ten missing names once cost one repo-wide re-sort of 391 files. Step 4 of
   `references/adding-a-package.md` keeps it complete: add or remove the name in the change that adds or deletes the
   member.

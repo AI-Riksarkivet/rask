@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from service_kit.ns_errors import install_problem_handlers
+from lakehouse.ns_errors import install_problem_handlers
 from tests.unit import chart_render
 
 

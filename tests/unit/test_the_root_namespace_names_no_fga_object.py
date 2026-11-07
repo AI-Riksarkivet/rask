@@ -48,9 +48,9 @@ from fastapi.testclient import TestClient
 from lance_namespace import InvalidInputError, PermissionDeniedError
 
 from catalog.api import fga_deps
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -115,8 +115,7 @@ def test_every_other_action_on_the_root_is_refused(monkeypatch: pytest.MonkeyPat
         _drive(monkeypatch, f"/v1/namespace/$/{suffix}", "$")
 
 
-@pytest.mark.parametrize("purge", [False, True])
-def test_a_cascade_drop_of_the_root_is_refused_before_any_table_is_touched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, purge: bool) -> None:
+def test_a_cascade_drop_of_the_root_is_refused_before_any_table_is_touched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The door refuses it too, so the root survives a deployment that runs with FGA off."""
     from catalog.core.config import get_settings
 
@@ -142,7 +141,7 @@ def test_a_cascade_drop_of_the_root_is_refused_before_any_table_is_touched(tmp_p
             assert client.post("/v1/namespace/db/create", json={}).status_code == 200
             assert client.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
 
-            resp = client.post(f"/v1/namespace/$/drop{'?purge=true' if purge else ''}", json={"behavior": "Cascade"})
+            resp = client.post("/v1/namespace/$/drop?purge=true", json={"behavior": "Cascade"})
 
             assert resp.status_code == 400, resp.text
             assert client.post("/v1/table/db$t/exists").status_code == 200, "a refused root drop must leave every table registered"

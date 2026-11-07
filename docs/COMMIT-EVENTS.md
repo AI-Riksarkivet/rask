@@ -203,8 +203,10 @@ emitted):
 | `run.facets.rask_lance.project` | the tenant the run wrote in, whose members may choose to watch it; a run without one reaches no watcher |
 | `outputs[].facets.rask_lance.tableUuid` | each table the run wrote, as the object `table:<tableUuid>` every check is asked on; an output without one names no object a grant could reach |
 
-A value is an address only when it is one person's principal (`service_kit.governed.subjects.is_person_subject`): a role
-literal, a service account's principal, a userset and `*` address nobody.
+A value is an address only when it is one person's principal: `<idp-id>~<subject>`, where the idp id is `[a-z0-9-]+`
+(so the first `~` ends it) and is neither `kubernetes` (a service account) nor `dex-client` (a Dex client signed in for
+itself), and the subject is non-empty and carries no control character. A role literal, a service account's
+principal, a userset, an OpenFGA object id and `*` address nobody.
 
 ### Whom a control event names
 
@@ -254,19 +256,35 @@ so a notifier that must not miss a run walks the feed. The topics are internal: 
 `-durable` on a stream it walks that no component in the release renders (`chart/templates/nats-stream-job.yaml`), so a
 durable a client creates there does not outlive the next upgrade.
 
-### The names a Python client imports
+### The names that carry the contract
 
-A client reads these events with no import from `lakehouse_kit`, the lakehouse's kernel. service-kit, the platform
-package a client pins by lakehouse tag, carries the contract:
+A client reads these events with no import from the lakehouse: this section and the facet schemas
+(`spec/facets/rask/`) are the contract. Inside the lakehouse its producers and doors share one definition of each
+name, in the `lakehouse` library:
 
-- `service_kit.control_events`: `CatalogControlEvent`, `ControlAction`, `CONTROL_TOPIC` and `control_signer_role`;
-- `service_kit.lineage_events`: the `rask_lance` and `rask_author` facet keys and their schema URLs, `dataset_uuids`
-  and `with_dataset_uuids`, and `event_identity` and `static_event_id`, the one derivation of an event's identity, so a
-  notifier reading the bus and one walking the feed key a change alike;
-- `service_kit.governed.subjects`: `is_person_subject`, the one rule for whether a value is an address;
-- `service_kit.signature_doors`: `SignatureDoorSettings`, a verifying door's mode (`RASK_SIGNATURE_DOORS`) and the
+- `lakehouse.control_events`: `CatalogControlEvent`, `ControlAction`, `CONTROL_TOPIC` and `control_signer_role`;
+- `lakehouse.lineage_events`: the `rask_lance` and `rask_author` facet keys and their schema URLs, `dataset_uuids`
+  and `with_dataset_uuids`, and `event_identity` and `static_event_id`, the one derivation of an event's identity
+  (§ An event's identity below), so a notifier reading the bus and one walking the feed key a change alike;
+- `lakehouse.governed.subjects`: `is_person_subject`, the address rule above;
+- `lakehouse.signature_doors`: `SignatureDoorSettings`, a verifying door's mode (`RASK_SIGNATURE_DOORS`) and the
   identities that sign the lakehouse's events (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`,
-  `RASK_CONTROL_SIGNER_ROLES`), against which a notifier verifies each event's `rask_signature` (`lineage_kit.signing`)
+  `RASK_CONTROL_SIGNER_ROLES`), against which a notifier verifies each event's `rask_signature` (`lakehouse.lineage.signing`)
   before it tells anyone. Each signer's public key is the secret `signing-public-<key name>` (the signer's
   ServiceAccount name, `lance.signingKeys`) in the platform's secret store. No store role the product chart renders
   names a client (`lance.storeReads`), so a notifier's release provisions its own role to read those keys.
+
+### An event's identity
+
+A notifier keys what it delivers by an event's identity and state, and lineage's feed keys a row by the same identity,
+so a reader of the bus and a walker of the feed must derive it alike:
+
+- **A run event** is its run: the identity is `run.runId`.
+- **A `DatasetEvent`** (a static metadata event) carries no run id, so its identity is derived from its content, never
+  minted: the RFC 4122 version-5 UUID, in the namespace `6f0d9bb2-3c47-5f1a-9b8e-4a2d1c7e5f30`, of the UTF-8 string
+  `<producer>|<dataset.namespace>|<dataset.name>|<operation>|<eventTime>`, where `<operation>` is the `rask_lance`
+  facet's `operation`, every field is taken exactly as the event carries it, and an absent one is the empty string.
+  `eventTime` is part of it on purpose: a redelivery carries the same instant and collapses onto one identity, while a
+  table dropped and created again carries another and stays a second fact.
+
+The signature an event carries is verified as `docs/LINEAGE.md` § Signed events (the `rask_signature` facet) describes.

@@ -98,7 +98,7 @@ service directly. See `rask-frontend`.
    (`rask-lakehouse`, never a client's own sign-in id): the console asks Dex for it with
    `audience:server:client_id:<audience>`, which Dex grants only to a client the audience client lists in
    `trustedPeers` ([[LH-515]]), so a token for the sign-in client alone is a 401. A token without `federated:id` is a
-   401 too (`service_kit.governed.idp_identity`). A request through the Gateway reaches the app port directly and never
+   401 too (`lakehouse.governed.idp_identity`). A request through the Gateway reaches the app port directly and never
    carries a Dapr sidecar token, so `require_dapr_token` alone refuses it on a sidecar-only door; any verified
    service-account token authenticates at any door (ADR 0156 C5), through the edge included. The FGA denials read
    `<subject> lacks <relation> on <object>`. A client asks a lakehouse verb through the catalog's decision door, which

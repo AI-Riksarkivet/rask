@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from catalog.services import maintenance
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 class _Index:
@@ -140,7 +140,7 @@ def test_a_protected_map_with_NO_LOCATION_to_check_it_against_refuses() -> None:
     irreversible deletion of another dataset's only copy."""
     from lance_namespace import UnsupportedOperationError
 
-    from lakehouse_kit.base_refs import BaseRefs
+    from lakehouse.base_refs import BaseRefs
 
     ds = _FakeDs(version=1, versions=[], tags={})  # no `uri`
     with pytest.raises(UnsupportedOperationError, match="location"):
@@ -160,7 +160,7 @@ def test_sibling_base_refs_FINDS_a_real_clone_reference(tmp_path: Any) -> None:
     import lance
     import pyarrow as pa
 
-    from lakehouse_kit import base_refs, base_registry
+    from lakehouse import base_refs, base_registry
 
     source = str(tmp_path / "aa11_ns$src.lance")
     clone = str(tmp_path / "bb22_ns$clone.lance")
@@ -199,7 +199,7 @@ def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) 
     """
     import lance
 
-    from lakehouse_kit.features import describe_gc_unsupported_flags, manifest_feature_flags
+    from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
 
     source = str(tmp_path / "src.lance")
     src = lance.write_dataset(_rows(), source)

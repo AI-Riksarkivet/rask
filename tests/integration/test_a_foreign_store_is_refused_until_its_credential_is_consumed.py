@@ -26,8 +26,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.services import projects, warehouses
-from lakehouse_kit.storage import s3_client
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage import s3_client
+from lakehouse.storage_options import StorageOptions
 
 
 _ESTATE_KEY_ID = "estate-key-id"

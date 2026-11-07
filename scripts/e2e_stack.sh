@@ -405,7 +405,7 @@ BOB_PRINCIPAL="$(principal_of "$BOB")"
 # Dex's token proves. A mismatch is an estate whose admin is nobody the suites can log in as.
 [ "$PRINCIPAL" = "$ADMIN_PRINCIPAL" ] || { echo "!! auth.bootstrapAdmin=$ADMIN_PRINCIPAL but alice's token proves $PRINCIPAL"; exit 1; }
 # The OpenFGA user a principal is, through the one seam every tuple writer uses.
-ALICE_USER="$(uv run python -c "import sys; from service_kit.governed.fga import user_object; print(user_object(sys.argv[1]))" "$PRINCIPAL")"
+ALICE_USER="$(uv run python -c "import sys; from lakehouse.governed.fga import user_object; print(user_object(sys.argv[1]))" "$PRINCIPAL")"
 
 # One call on a catalog door; success is any of the codes named, anything else prints the answer and fails.
 door() {
@@ -425,7 +425,7 @@ door() {
 PROJECT=acme
 WAREHOUSE=e2e-acme
 door "$ALICE" POST /management/v1/projects "{\"id\":\"$PROJECT\"}" 200 201 409 || exit 1
-# NEWEST store of that name — the same selector service_kit.governed.fga.provision uses (max created_at), so a boot-race
+# NEWEST store of that name — the same selector lakehouse.governed.fga.provision uses (max created_at), so a boot-race
 # double-create (two catalog pods provisioning against a freshly-rolled OpenFGA) can never make the seeder
 # and the serving catalog disagree about which store the grants live in (CI flake 2026-07-15: the CLI
 # verified can_create_warehouse=allowed on stores[0] while the catalog checked its own newer store → 403).

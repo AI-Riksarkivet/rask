@@ -41,7 +41,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 #: settings class that will not import without its service's deps would turn a discovery walk into a
 #: skip, and a skipping gate measures nothing.
 _SETTINGS: list[tuple[str, str, str]] = [
-    ("packages/lineage-kit", "lineage_kit.config", "LineageSettings"),
+    ("packages/lakehouse", "lakehouse.lineage.config", "LineageSettings"),
     ("services/lineage", "lineage.core.config", "LineageSettings"),
     ("services/catalog", "catalog.core.config", "Settings"),
     ("services/maintenance", "maintenance.core.config", "MaintenanceSettings"),
@@ -70,7 +70,7 @@ def _declared(cls: type[BaseSettings], field_name: str, field: Any) -> set[str]:
 
     Two declaration styles are in use and both are legitimate. An explicit `alias=` names the variable
     outright (the fleet's `LANCE_*`/`MAINTENANCE_*` classes). Otherwise `env_prefix` + the field name IS
-    the declaration (`lineage_kit`'s `RASK_LINEAGE_*`). Reading only the first
+    the declaration (`lakehouse.lineage`'s `RASK_LINEAGE_*`). Reading only the first
     style left the prefix-style classes with an empty declared set, which made the alias half of this
     gate silently exercise nothing on them.
     """

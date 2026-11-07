@@ -17,7 +17,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from lakehouse_kit.control_emit import NoopControlEmitter
+from lakehouse.control_emit import NoopControlEmitter
 from maintenance.api import routes
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.reconcile import ReconcileReport
@@ -109,16 +109,15 @@ def test_the_service_never_provisions_an_fga_store(monkeypatch: pytest.MonkeyPat
     ``None`` and treated that as proof of not-provisioning, which conflated two different claims and
     pinned a real bug in place: see the sibling test for what unpinned must actually do.
     """
-    from maintenance import service
-
-    async def _no_store(*_a: Any, **_kw: Any) -> Any:
-        return None
-
-    # Patched on `service_kit.governed.fga`, not on `maintenance.service`: this service builds its
+    # Patched on `lakehouse.governed.fga`, not on `maintenance.service`: this service builds its
     # client through the estate's ONE bootstrap (`auth_lifespan.build_fga_client`) rather than a
     # private copy, so the transport seam is the shared module's. The claim under test is unchanged —
     # `provision` must never be CALLED.
-    from service_kit.governed import fga
+    from lakehouse.governed import fga
+    from maintenance import service
+
+    async def _no_store(api_url: str, **_kw: Any) -> tuple[str, str]:
+        raise fga.OpenFgaModelAbsentError(f"OpenFGA at {api_url} holds no store named 'lance-catalog'")
 
     provisioned: list[object] = []
 
@@ -134,18 +133,15 @@ def test_the_service_never_provisions_an_fga_store(monkeypatch: pytest.MonkeyPat
 
 
 def test_an_UNPINNED_store_is_RESOLVED_by_name_rather_than_abandoned(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reading is not authoring — the distinction ingest already paid for once.
+    """Reading is not authoring.
 
     The chart's DEFAULT posture is `auth.fgaStoreId: ""`, because a store id is a per-cluster ULID that
-    cannot be a committed default. Unpinned used to return ``None`` outright, so in every default
-    deployment this service had no FGA client at all: `ghost_projects`, `ghost_warehouses` and
-    `unreferenced_projects` reported UNAVAILABLE on every tick (measured live 2026-08-16), and because
-    `report_is_clean` blocks on ANY unavailable category, the #79 expired-trash purge could never
-    certify anywhere.
+    cannot be a committed default. Without a client, `ghost_projects`, `ghost_warehouses` and
+    `unreferenced_projects` report UNAVAILABLE on every tick, and because `report_is_clean` blocks on ANY
+    unavailable category, the expired-trash purge could never certify (measured live 2026-08-16).
 
-    `fga.resolve` is read-only: it cannot create a store or write a model, and answers ``None`` when the
-    estate is not bootstrapped. So this still fails closed — it just stops failing closed against an
-    estate that is sitting right there. Same fix, same reasoning, as `ingest.__init__`'s.
+    `fga.resolve` is read-only: it cannot create a store or write a model, and raises when the estate is
+    not bootstrapped. So this fails closed against an estate that is not there, never against one that is.
     """
     from maintenance import service
 
@@ -156,7 +152,7 @@ def test_an_UNPINNED_store_is_RESOLVED_by_name_rather_than_abandoned(monkeypatch
         return ("store-01ABC", "model-01XYZ")
 
     made: list[tuple[str, str, str]] = []
-    from service_kit.governed import fga
+    from lakehouse.governed import fga
 
     monkeypatch.setattr(fga, "resolve", _resolve)
     monkeypatch.setattr(fga, "make_client", lambda url, store, model, **_kw: made.append((url, store, model)) or "CLIENT")
@@ -179,7 +175,7 @@ def test_a_resolve_that_raises_degrades_rather_than_killing_the_sweep(monkeypatc
     async def _boom(*_a: Any, **_kw: Any) -> Any:
         raise ConnectionRefusedError("openfga not up yet")
 
-    from service_kit.governed import fga
+    from lakehouse.governed import fga
 
     monkeypatch.setattr(fga, "resolve", _boom)
     assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None
@@ -231,7 +227,7 @@ def test_the_reconcile_route_is_reachable_over_http() -> None:
 
     The token gate is overridden here (that is proven separately, above) so this asserts REACHABILITY —
     the thing that was missing and that no amount of unit-testing `reconcile()` could have caught."""
-    from service_kit.governed.dapr_auth import require_dapr_token
+    from lakehouse.governed.dapr_auth import require_dapr_token
 
     app = FastAPI()
     app.include_router(_router())

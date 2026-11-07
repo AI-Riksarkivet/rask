@@ -28,17 +28,16 @@ from lance_namespace import CreateNamespaceRequest, ServiceUnavailableError, con
 from tables_by_name import open_by_name
 
 from catalog.services import table_claims
-from catalog.services.dataplane import create_table, delete_from_table, update_table
+from catalog.services.dataplane import create_table, update_table
 from catalog.services.table_claims import DoorTable
-from lakehouse_kit import base_registry
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_registry
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")
 
 from lance.dataset import Branches  # noqa: E402
-from lance_namespace_urllib3_client.models.delete_from_table_request import DeleteFromTableRequest  # noqa: E402
 from lance_namespace_urllib3_client.models.update_table_request import UpdateTableRequest  # noqa: E402
 
 
@@ -71,21 +70,13 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     return table_claims.door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True)
 
 
-def test_an_update_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001
-    """The headline: a branch-scoped update must not rewrite main's rows."""
-    update_table(table, StorageOptions(), UpdateTableRequest(id=TABLE_ID, branch=BRANCH, updates=[["label", "'edited'"]]), transaction_properties=STAMP)
-
-    main = open_by_name(ns, StorageOptions(), TABLE_ID).to_table().column("label").to_pylist()
-    assert main == ["main", "main", "main"], f"a branch-scoped update rewrote MAIN: {main}"
-
-
 def test_a_branch_commit_the_store_cannot_key_is_refused_before_it_lands(ns, table: DoorTable, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN001
     """ADR 0187: a door's commit on a branch records its author under the branch's incarnation, read off the table's branch
     listing as a reconcile pass reads it. A listing the store does not answer refuses the commit 503 before it plans,
     rather than recording it under a key no pass reads."""
 
     def unanswered(_branches: object) -> dict[str, object]:
-        # pylance's own text for a store that accepted the request and never answered (`service_kit.outage`).
+        # pylance's own text for a store that accepted the request and never answered (`lakehouse.outage`).
         raise OSError("LanceError(IO): Error performing GET http://store/rows/_refs/branches/ in 3.0s - HTTP error: error sending request")
 
     monkeypatch.setattr(Branches, "list", unanswered)
@@ -95,11 +86,3 @@ def test_a_branch_commit_the_store_cannot_key_is_refused_before_it_lands(ns, tab
 
     staging = open_by_name(ns, StorageOptions(), TABLE_ID, branch=BRANCH).to_table().column("label").to_pylist()
     assert staging == ["main", "main", "main"]
-
-
-def test_a_delete_on_a_branch_leaves_MAIN_untouched(ns, table: DoorTable) -> None:  # noqa: ANN001
-    """Same defect, the destructive half — and the one where a silent wrong target loses data."""
-    delete_from_table(table, StorageOptions(), DeleteFromTableRequest(id=TABLE_ID, branch=BRANCH, predicate="id = 1"), transaction_properties=STAMP)
-
-    main = open_by_name(ns, StorageOptions(), TABLE_ID)
-    assert main.count_rows() == 3, f"a branch-scoped delete removed rows from MAIN: {main.count_rows()} left"

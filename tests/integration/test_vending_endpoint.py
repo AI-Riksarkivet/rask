@@ -18,7 +18,7 @@ from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import Tier, VendedSession
-from service_kit.governed.store_credential import S3KeyPair
+from lakehouse.governed.store_credential import S3KeyPair
 
 
 def _described(location: str | None) -> DescribeTableResponse:

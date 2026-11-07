@@ -35,7 +35,7 @@ export interface StoredLayoutStore<T> {
 	save(layout: T): Promise<boolean>;
 }
 
-/** The document as the catalog serves it — mirrors `service_kit.schemas.dock_layout.DockLayouts`. */
+/** The document the console keeps a subject's dock layouts in. */
 interface DockLayoutsDocument<T> {
 	workbenches: Record<string, T>;
 }

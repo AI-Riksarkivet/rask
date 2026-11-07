@@ -34,11 +34,11 @@ measuring on the installed pylance"). Measured examples of the gap:
   `2^0` through `2^17`). pylance 13.0.0 allocates fourteen (`rust/lance-table/src/feature_flags.rs` at `v13.0.0`,
   `FLAG_UNKNOWN = 1 << 14`): `FLAG_MANAGED_BLOBS` (`2^14`, `lance/format/table/blob.md` § Capability and Compatibility),
   `FLAG_NON_REUSABLE_FIELD_IDS` (`2^15`), and the reserved `2^16` and `2^17` are newer than the installed release.
-  `lakehouse_kit.features` names the fourteen pylance 13.0.0 allocates; a table carrying a newer one is refused
+  `lakehouse.features` names the fourteen pylance 13.0.0 allocates; a table carrying a newer one is refused
   as an unknown flag, which is the refusal the format asks of a reader that does not support it.
 - **The table layout adds `_blobs/{UUID}.blob`** (`lance/format/table/layout.md` § Basic Layout), Managed blob
   payloads under `FLAG_MANAGED_BLOBS`. pylance 13.0.0 writes no such object, so the vend allow-list
-  (`lakehouse_kit.table_layout.WRITER_PUT_GLOBS`) names none; a pylance bump that brings Managed blobs needs
+  (`lakehouse.table_layout.WRITER_PUT_GLOBS`) names none; a pylance bump that brings Managed blobs needs
   the directory judged there, and in the orphan scan, before a table may opt in.
 - **The blob-v1 marker.** `lance/guide/data_types.md:43` says a 2.2 write rejects `lance-encoding:blob`, and
   `lance/guide/blob.md:65` that it is "Accepted as input; written as Blob v2"; pylance 13.0.0 does the second (measured
@@ -64,7 +64,7 @@ Read against these docs on 2026-10-26 (each item absent from pylance 13.0.0, mea
   `ReserveFragments` would be refused at `version/create`.
 - **`lance.row_lineage.spill`** stamps `FLAG_SPILLED_ROW_LINEAGE` (2^11) once a release spills on config; the table is
   then refused by every flag gate unless the key is refused at the doors or the feature is served.
-- **Flags 2^14 to 2^17** need names in `lakehouse_kit.features` so a refusal names them; 2^15
+- **Flags 2^14 to 2^17** need names in `lakehouse.features` so a refusal names them; 2^15
   (`max_allocated_field_id`) changes how field ids are minted, which `vending.labelled_fields`,
   `encoding._encoding_by_field_id` and `client_fragments` compare by; 2^17 (object metadata) must survive a commit.
 - **New encoding knobs** (`lance-encoding:alp`, `lance-encoding:axis-delta`, 2.3 writers): `catalog.core.encoding`
@@ -124,7 +124,7 @@ ids:
   `update(data_storage_version="2.1")` on a 2.2 table leaves flags `(258, 258)`. No rask code passes it, and a stock
   client's `update` is judged at `version/create`, which refuses the files that would set it.
 
-`lakehouse_kit.features.describe_foreign_data_file_versions` names the files that would set it.
+`lakehouse.features.describe_foreign_data_file_versions` names the files that would set it.
 
 ### The thread pools
 

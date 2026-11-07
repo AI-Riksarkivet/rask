@@ -33,8 +33,8 @@ from pathlib import Path
 
 import pytest
 
+from lakehouse.storage_options import StorageOptions
 from maintenance.services.purge import NotADatasetRootError, delete_location
-from service_kit.storage_options import StorageOptions
 
 
 def _dataset(root: Path) -> str:

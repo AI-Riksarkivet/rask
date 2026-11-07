@@ -41,11 +41,11 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from catalog.core.lineage_emit import INSERT, build_write_event
-from lakehouse_kit import outbox
-from lakehouse_kit.openlineage import run_id_for
+from lakehouse import outbox
+from lakehouse.openlineage import run_id_for
+from lakehouse.storage_options import StorageOptions
 from lineage.api import relay_cron
 from lineage.core.config import LineageSettings
-from service_kit.storage_options import StorageOptions
 
 
 def _staged(uri: str, *, author: str, run: str, token: str) -> None:

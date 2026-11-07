@@ -12,7 +12,7 @@ READ FROM THE RENDER, per container, because each failure this exists for is onl
 template whose bound names another pod's grace, a literal that matches today's defaults, and a uvicorn the
 helper never reached. The second overlay moves every lifecycle number, so only a computed bound passes it.
 What uvicorn does with the flag once the drain has handed it SIGTERM is proven against a real process in
-`packages/service-kit/tests/test_sigterm_still_stops_the_server.py`.
+`packages/lakehouse/tests/test_sigterm_still_stops_the_server.py`.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from tests.unit.chart_render import DEFAULT_ARGS, OBSERVABILITY_SETS, REPO, cont
 
 _FLAG = "--timeout-graceful-shutdown="
 
-#: Workloads whose lifespan arms `service_kit.draining.arm_drain_on_sigterm`, so the drain hands SIGTERM to
+#: Workloads whose lifespan arms `lakehouse.draining.arm_drain_on_sigterm`, so the drain hands SIGTERM to
 #: THIS uvicorn. A floor: a detection that stopped finding uvicorn must not pass by finding nothing.
 _DRAIN_ARMED = frozenset(
     {

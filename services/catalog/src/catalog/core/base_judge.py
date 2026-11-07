@@ -4,7 +4,7 @@ A MANIFEST'S BASE LIST IS A WRITER'S CLAIM. Any holder of the table's write vend
 ``UpdateBases`` commit, and a base pylance resolves a fragment through is a base the reader reads through:
 measured on pylance 12.0.0 (lh279 m2), a table that planted another table's root answered a query with
 the other table's rows, and a vend for it would have granted READ on that root. So the doors that hand
-out a table's rows or a credential for them ask :func:`lakehouse_kit.base_registry.judge_bases`
+out a table's rows or a credential for them ask :func:`lakehouse.base_registry.judge_bases`
 first — its own root, a configured external blob base, or the catalog's record — and refuse the rest with
 ``InvalidTableStateError`` (code 19, 409): the caller holds the rung, the TABLE is in a state no read
 should serve. A 403 would send an operator to FGA tuples that are not what is wrong.
@@ -27,10 +27,10 @@ from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidTableStateError, ServiceUnavailableError
 from pydantic import BaseModel
 
-from lakehouse_kit import base_refs, base_registry
-from lakehouse_kit.base_refs import BaseRefs
-from lakehouse_kit.features import BasePathRef
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_refs, base_registry
+from lakehouse.base_refs import BaseRefs
+from lakehouse.features import BasePathRef
+from lakehouse.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:
@@ -104,7 +104,7 @@ class BaseJudge(BaseModel):
             raise ServiceUnavailableError("the store holding a table's base record did not answer, so its declared bases were not judged") from exc
 
     def sibling_base_refs(self, location: str, storage_options: StorageOptions) -> BaseRefs:
-        """:func:`lakehouse_kit.base_refs.sibling_base_refs`, judged against this catalog's record and configured bases.
+        """:func:`lakehouse.base_refs.sibling_base_refs`, judged against this catalog's record and configured bases.
 
         The on-demand compaction, reclamation, version-delete and erasure doors ask this, so a planted base
         freezes no table at those doors either ([[LH-279]]).
@@ -121,7 +121,7 @@ class BaseJudge(BaseModel):
         )
 
     def judge(self, location: str, refs: Sequence[BasePathRef]) -> list[base_registry.BaseJudgement]:
-        """:func:`lakehouse_kit.base_registry.judge_bases`, with a configured base that covers governed storage judged by the record alone.
+        """:func:`lakehouse.base_registry.judge_bases`, with a configured base that covers governed storage judged by the record alone.
 
         A configured entry can cover governed storage, so CONFIGURED standing there would let a holder of a
         table's write credential ``add_bases`` a prefix holding another tenant's bytes and have the blob door

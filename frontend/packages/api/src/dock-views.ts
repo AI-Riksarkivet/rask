@@ -32,7 +32,7 @@ export interface DockView<T> {
 	readonly updated: string;
 }
 
-/** The document as the catalog serves it — mirrors `service_kit.schemas.dock_layout.DockLayoutLibrary`. */
+/** The document the console keeps a subject's library of saved dock layouts in. */
 interface LibraryDocument<T> {
 	workbenches: Record<string, { views: DockView<T>[] }>;
 }

@@ -22,9 +22,9 @@ from pydantic import BaseModel, SecretStr
 
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import Tier, VendedSession
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.governed.audit import AUDIT_FORMAT, AUDIT_LOGGER, AuditAction, AuditOutcome, configure_audit
-from service_kit.governed.store_credential import S3KeyPair
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed.audit import AUDIT_FORMAT, AUDIT_LOGGER, AuditAction, AuditOutcome, configure_audit
+from lakehouse.governed.store_credential import S3KeyPair
 
 
 _PAYLOAD = b"hello-world"

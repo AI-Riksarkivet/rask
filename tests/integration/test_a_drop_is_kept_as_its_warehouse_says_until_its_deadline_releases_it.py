@@ -9,7 +9,7 @@ is on. The bytes stay for the purge, which the default chart ships off.
 
 ONE ESTATE ON MOTO, TWO SERVICES (``catalog_and_maintenance``): the real catalog app drops through its door and files the
 record, and the real maintenance app runs its reconcile tick over the same control root. One in-memory ``TupleStore``
-stands behind both through the real ``service_kit.governed.fga`` functions, since the claim is which tuples remain. A
+stands behind both through the real ``lakehouse.governed.fga`` functions, since the claim is which tuples remain. A
 table still in its window and a live table whose undrop crashed before clearing its record are the controls: the tick
 must keep both tables' grants.
 """
@@ -25,10 +25,10 @@ import pyarrow as pa
 import pytest
 
 from catalog.core.config import get_settings as catalog_settings
-from lakehouse_kit import trash
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.control_events import CatalogControlEvent
-from service_kit.governed.fga import user_object
+from lakehouse import trash
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.control_events import CatalogControlEvent
+from lakehouse.governed.fga import user_object
 from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance
 from tests.integration.openfga_grants import principal_key
 

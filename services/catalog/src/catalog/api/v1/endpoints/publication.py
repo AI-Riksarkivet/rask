@@ -55,12 +55,12 @@ from catalog.core.lineage_emit import PUBLISH_TABLE, RESTORE_TABLE, LineageEmitt
 from catalog.schemas import PromotionDecision, PromotionDecisionRequest, PromotionHold, PromotionsListResponse, PublishRequest, PublishResult
 from catalog.services import dataplane, promotions, publication, table_claims, warehouses
 from catalog.services.table_claims import DoorTable
-from lakehouse_kit import commit_records
-from lakehouse_kit.control_emit import ControlEmitter, emit_control
-from lakehouse_kit.records import RecordChangedError
-from service_kit.governed import fga
-from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.storage_options import StorageOptions
+from lakehouse import commit_records
+from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.machine_identity import ServicePrincipal
+from lakehouse.records import RecordChangedError
+from lakehouse.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:

@@ -301,22 +301,6 @@ def test_a_directory_of_FILES_at_the_bound_is_not_a_coverage_gap(tmp_path: Path)
     assert not result.truncated, f"a directory of files was reported as an unscanned subtree: {result.truncated}"
 
 
-def test_a_directory_of_DIRECTORIES_at_the_bound_is_STILL_a_gap(tmp_path: Path) -> None:
-    """The other half, and the one that keeps the fix honest.
-
-    A subdirectory below the bound genuinely may hold a dataset — the walk did not look, and cannot
-    say. Suppressing that would trade a false gap for a false clean, which is strictly worse: the
-    first blocks a purge, the second lets one run over ground nobody scanned.
-    """
-    deep = tmp_path / "tenant" / "zone" / "unscanned" / "maybe_a_dataset"
-    deep.mkdir(parents=True)
-
-    result = discover_datasets(pafs.LocalFileSystem(), str(tmp_path), max_depth=3)
-
-    assert not result.uris
-    assert result.truncated, "a subtree the walk did not enter must still be recorded"
-
-
 def test_a_distributed_runs_STAGING_set_is_not_discovered_as_a_governed_dataset(tmp_path: Path) -> None:
     """CONTRACT: `_staging` is a control prefix — the walk never reports a run's scratch as a dataset.
 

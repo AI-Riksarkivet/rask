@@ -29,7 +29,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core.provenance_guard import RESERVED_METADATA_PREFIXES, is_reserved_key
 from catalog.core.run_context import INPUTS_HEADER, INPUTS_PROPERTY, RUN_ID_HEADER, RUN_ID_PROPERTY, RunContext
 from catalog.services import native
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 
 log = logging.getLogger(__name__)

@@ -26,11 +26,11 @@ from catalog.api import fga_deps, lineage_deps
 from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import versions as version_door
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.ns_errors import install_problem_handlers
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

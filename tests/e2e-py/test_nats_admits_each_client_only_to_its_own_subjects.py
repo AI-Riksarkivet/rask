@@ -22,10 +22,12 @@ Run by `dagger call nats-auth` (`make nats-auth`), which provides the binaries a
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
 import re
+import secrets
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -80,7 +82,7 @@ BROADCAST_REPLAY = "catalog-control-replay-catalog"
 #: lineage: catalog/core/lineage_emit.py, lineage/services/staged.py (recovered signed bytes), maintenance/core/
 #: lineage_emit.py. control: catalog's control_emit and control_relay.py, plus the flagged announcer below. maintenance
 #: work: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog only. dlq.<app>: the
-#: `deadLetterTopic` of that app's subscriptions. probe.<app>: service_kit/bus_watchdog.py, which each service runs over its
+#: `deadLetterTopic` of that app's subscriptions. probe.<app>: lakehouse/bus_watchdog.py, which each service runs over its
 #: own sidecar's connections.
 def _values() -> Path:
     return Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
@@ -217,6 +219,34 @@ async def _without_credential(url: str) -> list[str]:
     return landed or ["a client with no credential connected"]
 
 
+async def _owner_publish(client: Client, user: str, subject: str) -> list[str]:
+    """An owner's publish of one of its subjects: acknowledged when a stream captures it, the broker's log judging the
+    rest. Nothing when it lands; the finding when it is refused."""
+    if subject in UNSTORED:
+        await client.nc.publish(subject, json.dumps({"probe": user}).encode())
+        return []
+    try:
+        await client.js.publish(subject, json.dumps({"probe": user}).encode(), timeout=3)
+    except Exception as exc:  # noqa: BLE001 — any failure to land is the finding
+        return [f"{user} publishes {subject} and was refused ({type(exc).__name__})"]
+    return []
+
+
+async def _permitted_inside_the_window(clients: dict[str, Client]) -> list[str]:
+    """One acknowledged publish by an owner of every stored subject, sent inside the refused-publish window.
+
+    A deploy's own producers keep publishing while the matrix runs, and the broadcast stream mirrors the control stream
+    behind its writes, so a stream can take a permitted message at any moment of the window. Every run carries one on
+    each stream, so the check is held to telling a permitted message from a foreign one rather than to an empty window.
+    """
+    findings: list[str] = []
+    for subject, owners in sorted(PUBLISHERS.items()):
+        owner = next((user for user in sorted(owners) if user in clients), None)
+        if subject not in UNSTORED and owner is not None:
+            findings += await _owner_publish(clients[owner], owner, subject)
+    return findings
+
+
 async def _publish_matrix(url: str, mint_: Mint, table: dict[str, Permissions], rig: Client) -> tuple[list[str], set[tuple[str, str]], dict[str, Client]]:
     """Every table user against every data subject: an owner's publish is acked, anyone else's must not land.
 
@@ -227,24 +257,40 @@ async def _publish_matrix(url: str, mint_: Mint, table: dict[str, Permissions], 
     findings: list[str] = []
     for user, client in clients.items():
         for subject in (s for s in universe if user in PUBLISHERS.get(s, ())):
-            if subject in UNSTORED:
-                await client.nc.publish(subject, json.dumps({"probe": user}).encode())
-                continue
-            try:
-                await client.js.publish(subject, json.dumps({"probe": user}).encode(), timeout=3)
-            except Exception as exc:  # noqa: BLE001 — any failure to land is the finding
-                findings.append(f"{user} publishes {subject} and was refused ({type(exc).__name__})")
+            findings += await _owner_publish(client, user, subject)
     foreign = {(user, s) for user in clients for s in universe if user not in PUBLISHERS.get(s, ())}
+    marker = secrets.token_hex(16)
     before = await _last_seqs(rig)
+    findings += await _permitted_inside_the_window(clients)
     for user, subject in sorted(foreign):
-        await clients[user].nc.publish(subject, json.dumps({"probe": user}).encode())
+        await clients[user].nc.publish(subject, json.dumps({"probe": user, "refused": marker}).encode())
     for client in clients.values():
         await client.settle()
-    after = await _last_seqs(rig)
-    findings += [
-        f"stream {name} moved {seq} -> {after.get(name)} under publishes that must be refused" for name, seq in before.items() if after.get(name) != seq
-    ]
+    findings += await _landed_in_the_window(rig, before, await _last_seqs(rig), marker)
     return findings, foreign, clients
+
+
+async def _landed_in_the_window(rig: Client, before: dict[str, int], after: dict[str, int], marker: str) -> list[str]:
+    """Each message a stream took inside the refused-publish window that a foreign probe sent, or that cannot be read.
+
+    A permitted publisher's message (an owner's, or the broadcast stream's mirrored copy of one) may land in the window and
+    proves nothing; one carrying this run's marker is a publish the broker had to refuse, and one the rig cannot read is
+    not shown to be anything else.
+    """
+    findings: list[str] = []
+    for name in sorted(before.keys() | after.keys()):
+        first, last = before.get(name, 0), after.get(name, -1)
+        if first < 0 or last < first:
+            findings.append(f"stream {name} cannot be read across the refused-publish window (last_seq {first} -> {last})")
+            continue
+        for seq in range(first + 1, last + 1):
+            got = await rig.request(f"$JS.API.STREAM.MSG.GET.{name}", {"seq": seq})
+            message = (got or {}).get("message")
+            if message is None:
+                findings.append(f"stream {name} took seq {seq} inside the refused-publish window, and the rig cannot read it: {got}")
+            elif marker.encode() in base64.b64decode(message.get("data", "")):
+                findings.append(f"stream {name} took a publish that must be refused, at seq {seq} on {message.get('subject')}")
+    return findings
 
 
 async def _publish_until_delivered(sidecar: Sidecar, pubsub: str, topic: str, app: SubscriberApp, route: str, timeout: float = 30.0) -> str | None:
@@ -484,7 +530,7 @@ async def _stream_job_deletes_nothing_it_could_not_read(
 
 def _monitor_reads(tools: Tools, broker: Broker, mint_: Mint, home: Path) -> list[str]:
     """nats-box's read-only operator view, as `monitor`."""
-    findings = []
+    findings: list[str] = []
     for args in (["stream", "ls"], ["stream", "info", "LINEAGE"], ["consumer", "ls", "LINEAGE"], ["consumer", "info", "LINEAGE", "lineage-durable"]):
         done = run_cli(tools.box_cli, args, mint_.credentials["monitor"], broker.url, home)
         if done.returncode:

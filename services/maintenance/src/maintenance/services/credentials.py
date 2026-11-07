@@ -35,11 +35,11 @@ import httpx
 from lance_namespace.errors import ErrorCode
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse_kit.base_refs import decoded_path, normalise
+from lakehouse.base_refs import decoded_path, normalise
+from lakehouse.endpoint_scheme import allow_http_for
+from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.metrics import record_credential_tier
-from service_kit.endpoint_scheme import allow_http_for
-from service_kit.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
-from service_kit.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:

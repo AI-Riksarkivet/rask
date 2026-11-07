@@ -69,7 +69,7 @@ groups:
       # rule naming the bare form matches nothing and can never fire. Verified against the live store's
       # information_schema: `outbox_oldest_age_seconds` exists, `outbox_oldest_age` does not. The gate
       # could not have caught it either, because it read only the service's own metrics.py while this
-      # instrument lives in service_kit's shared outbox module — both halves fixed together.
+      # instrument lives in the library's shared outbox module (`lakehouse.outbox_metrics`) — both halves fixed together.
       # SAME GUARD, same reason: a refused event ages forever, so without this the warning would also
       # never clear. Aging only means "the relay is lagging" when the relay is supposed to be moving it.
       - alert: LineageOutboxBacklogAging

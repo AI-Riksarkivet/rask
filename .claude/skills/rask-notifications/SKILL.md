@@ -10,9 +10,9 @@ hosts none: the console's bell is a browser-side log of the reader's own writes,
 The lakehouse publishes its events, the fields in them that name whom each is about, and the verbs a notifier asks
 before it tells anyone (`can_be_notified` through the catalog's decision door, the whole run feed at
 `GET /events/projection` for an `event_reader`). That contract lives in `docs/COMMIT-EVENTS.md` § Telling people, and a
-client reads it through service-kit (`service_kit.control_events`, `service_kit.lineage_events`,
-`service_kit.governed.subjects`, `service_kit.signature_doors`), never through `lakehouse_kit`. This skill is the
-producer's side of it.
+client reads it from there, importing nothing of the lakehouse's; inside the lakehouse its producers and doors share
+one definition of it (`lakehouse.control_events`, `lakehouse.lineage_events`, `lakehouse.governed.subjects`,
+`lakehouse.signature_doors`). This skill is the producer's side of it.
 
 **A notification names a PERSON and a REASON; a feed names an estate.** A notifier's whole job is to discard everything
 except events that name a person under one of six reasons. So **a state change that names nobody is not
@@ -66,7 +66,7 @@ notifier runs no visibility check on a control event: **being named IS the targe
 Four things must ALL hold, or the run names nobody. A notifier answers such an event "ack it, tell nobody", and that
 ack is a SUCCESS, so nothing anywhere reports the loss: the estate's most expensive silent failure mode.
 
-1. **Terminal state** — `COMPLETE` / `FAIL` / `ABORT` (`lineage_kit.TERMINAL_STATES`). `START`/`RUNNING` end nothing.
+1. **Terminal state** — `COMPLETE` / `FAIL` / `ABORT` (`lakehouse.lineage.TERMINAL_STATES`). `START`/`RUNNING` end nothing.
    `RECONCILED` is lineage's REPAIR marker for a run whose real terminal event was lost, not an outcome anyone chose.
 2. **A VERIFIED `rask_author.sub`** — see traps 1 and 2. This is the one that keeps biting.
 3. **`rask_lance.project`** — optional, but omitting it costs you **every** watcher.
@@ -78,8 +78,8 @@ ack is a SUCCESS, so nothing anywhere reports the loss: the estate's most expens
 
 **And the event is SIGNED.** Lineage verifies the `rask_signature` of every event on the bus and in the outbox
 (`signing.enforce`, on by default) and refuses what does not verify (trap 5). A notifier verifies the same signature
-against the same signer sets through `service_kit.signature_doors`, so an unsigned event reaches nobody whose notifier
-enforces.
+against the same signer sets, by the contract `docs/LINEAGE.md` § Signed events (the `rask_signature` facet) publishes,
+so an unsigned event reaches nobody whose notifier enforces.
 
 ```python
 event = {
@@ -93,7 +93,7 @@ event = {
             #     (5) binds it: a signer is its own author, so a service stamps its own signing
             #     identity and the person rides in `rask_lance.originator` (Q2). Only the catalog signs
             #     for a person it authenticated (`on_behalf_of=`).
-            "rask_author": {"name": token.subject, "sub": token.subject},  # AUTHOR_FACET, service_kit.lineage_events
+            "rask_author": {"name": token.subject, "sub": token.subject},  # AUTHOR_FACET, lakehouse.lineage_events
             "rask_lance": {  # LANCE_FACET
                 "operation": "promote",
                 "runId": producer_run_id,  # what YOUR detail door answers to; a catalog commit names its writer's run as `parent` (ADR 0191)
@@ -102,7 +102,7 @@ event = {
             "errorMessage": {"message": reason},
         },
     },
-    # (4) Each output carries its table's uuids (`service_kit.lineage_events.with_dataset_uuids` stamps `facets.rask_lance.tableUuid` and
+    # (4) Each output carries its table's uuids (`lakehouse.lineage_events.with_dataset_uuids` stamps `facets.rask_lance.tableUuid` and
     #     `namespaceUuid`), as the table's and namespace's DescribeTable/DescribeNamespace answer them (`rask.uuid`).
     #     An output without one names no object any grant reaches, so the run reaches nobody.
     "outputs": [with_dataset_uuids({"namespace": "gold", "name": f"{project_id}-gold$catalog"}, uuids, producer=PRODUCER)],
@@ -150,7 +150,7 @@ unresolved. No relay signs: the catalog's control relay republishes a staged eve
 signed by the catalog's own identity and retires anything else as poison.
 
 **A notifier that enforces signatures hears an action only from the role that emits it.**
-`service_kit.control_events.control_signer_role(action)` names that role; a notifier's door verifies the envelope's
+`lakehouse.control_events.control_signer_role(action)` names that role; a notifier's door verifies the envelope's
 top-level `rask_signature` against that role's identities, so a valid signature from another service is refused. A
 person actor (`user:<sub>`) verifies only under a delegation from a delegator, `onBehalfOf` equal to the whole actor. No
 action is exempt, so the lane carries only the lakehouse's own signed events (ADR 0171).
@@ -159,7 +159,7 @@ action is exempt, so the lane carries only the lakehouse's own signed events (AD
 names the principal in `extra.subject`; nobody is left to tell, so a notifier erases what it keeps for them. A userset,
 wildcard or service account names nobody to erase.
 
-**A new action is a change to `service_kit/control_events.py`:** add the member to `ControlAction`, or the envelope
+**A new action is a change to `lakehouse/control_events.py`:** add the member to `ControlAction`, or the envelope
 will not validate, and its case to `control_signer_role` (ty fails the `assert_never` until it has one), which names the
 role whose signature a notifier requires. Then name its subject in `docs/COMMIT-EVENTS.md` § Whom a control event names
 if it names a person. `ControlAction` is a wire contract reaching the console through `docs/catalog-openapi.json`: see

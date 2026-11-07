@@ -9,9 +9,8 @@ end, an endpoint other than the estate's is refused at create, and an existing r
 refused at every door that would reach a store for it.
 
 "Resolvable" is answered by what the estate consumes: open, provision and vend sign only with the catalog's own
-identity, so a warehouse reference resolves to nothing any of them would sign with. Lakekeeper makes the same call at
-the same door: it validates a warehouse's storage credential at create and refuses the warehouse when it cannot
-(``crates/lakekeeper/src/api/management/v1/warehouse/mod.rs:97-110``).
+identity, so a warehouse reference resolves to nothing any of them would sign with. The call is made at create, the
+door that can still refuse the warehouse, rather than at the first read that would fail.
 
 "The estate's endpoint" is ``Settings.s3_endpoint``, compared after normalisation so a respelling of it
 is still the estate (scheme and host case, a default port, a trailing slash or dot) while anything

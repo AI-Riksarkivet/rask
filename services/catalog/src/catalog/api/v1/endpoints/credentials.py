@@ -31,9 +31,9 @@ from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core.base_judge import BaseJudge
 from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, role_session_name, table_has_branch, unsanctioned_bases, vend_or_refuse
 from catalog.schemas import CredentialResponse, VendedCredentials
-from lakehouse_kit.version_retention import recorded_branch
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.version_retention import recorded_branch
 
 
 log = logging.getLogger(__name__)

@@ -71,9 +71,9 @@ def test_lineage_verifies_the_previous_key_after_a_rotation_and_refuses_an_unpub
         "LINEAGE_DELEGATORS": json.dumps([]),
     }.items():
         monkeypatch.setenv(key, value)
+    from lakehouse.ns_errors import install_problem_handlers
     from lineage.api.dapr import register_dapr
     from lineage.core.config import get_settings
-    from service_kit.ns_errors import install_problem_handlers
 
     get_settings.cache_clear()
     app = FastAPI()

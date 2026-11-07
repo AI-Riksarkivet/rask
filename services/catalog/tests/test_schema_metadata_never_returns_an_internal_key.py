@@ -21,9 +21,9 @@ from lance_namespace import CreateNamespaceRequest, connect
 
 from catalog.services import dataplane, table_claims
 from catalog.services.table_claims import DoorTable
-from lakehouse_kit import base_registry
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_registry
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

@@ -12,15 +12,11 @@ tenant that loses it is one nobody can administer, grant on, or delete. Until no
 detect that and not recover from it, and "the tuple estate cannot be rebuilt after a loss" is a
 resilience gap rather than a missing convenience.
 
-**STRUCTURE IS REBUILT; A PERMISSION IS NEVER RE-GRANTED — and that line is upstream's, not ours.**
-Lakekeeper's `lakekeeper openfga reconcile` solves the same problem for the same pair of stores, and
-its scope is "the parent/child edges between server, projects, warehouses, namespaces, tables, views,
-and roles", with "ownership tuples, grants, role assignments, bootstrap admin tuples, and
-authorization-model bookkeeping ... left alone"
-(https://docs.lakekeeper.io/docs/latest/authorization-openfga/). This module holds the same line.
+**STRUCTURE IS REBUILT; A PERMISSION IS NEVER RE-GRANTED.** The rebuild writes the parent/child edges between
+the estate, projects, warehouses, namespaces, tables and roles, and leaves ownership tuples, grants, role assignments,
+bootstrap admin tuples and the model's own bookkeeping alone.
 
-THE REASON IT IS THE RIGHT LINE HERE TOO, and it is specific rather than deference: **the registry does
-not record REVOCATION.** A project record carries ``created_by`` — 93 of 93, measured on the live
+THE REASON IT IS THE RIGHT LINE: **the registry does not record REVOCATION.** A project record carries ``created_by`` — 93 of 93, measured on the live
 control root 2026-09-19 — but that field says who created the tenant, not who may administer it today.
 An admin deliberately removed leaves the record untouched, so "the record justifies this grant" is
 FALSE for exactly the person an operator took care to remove, and re-granting them is a privilege
@@ -51,7 +47,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from service_kit.governed import fga
+from lakehouse.governed import fga
 
 
 if TYPE_CHECKING:
@@ -109,7 +105,7 @@ def _warehouse_tenancy(record: dict[str, str]) -> RebuiltTuple | None:
     type does not declare; writing it makes OpenFGA reject the whole seed with a 503. The catalog's
     `seed_warehouse` writes this relation directly for the same reason, and its being a plain pointer
     rather than a hierarchy edge is why rebuilding it does not touch the TID251 banned-api entry on
-    `service_kit.governed.fga.hierarchy_edge_tuples`, whose closed set of callers is about
+    `lakehouse.governed.fga.hierarchy_edge_tuples`, whose closed set of callers is about
     `parent`/`child` pairs.
     """
     warehouse, project = record.get("id"), record.get("project")

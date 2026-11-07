@@ -38,8 +38,8 @@ import pyarrow as pa
 from catalog.api import pagination
 from catalog.api.v1.endpoints import versions as versions_ep
 from catalog.services import table_claims
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.storage_options import StorageOptions
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 def _table_with(version_count: int) -> table_claims.DoorTable:

@@ -33,8 +33,8 @@ from lance_namespace import (
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table, delete_from_table, update_table
 from catalog.services.table_claims import DoorTable
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.storage_options import StorageOptions
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 #: The stamp a door commits with ([[LH-497]]).

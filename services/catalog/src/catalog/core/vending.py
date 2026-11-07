@@ -40,17 +40,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
-from lakehouse_kit import store_session
-from lakehouse_kit.base_refs import decoded_path, location_within
-from lakehouse_kit.base_registry import BaseJudgement, BaseRole, BaseStanding
-from lakehouse_kit.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
-from lakehouse_kit.features import BasePathRef
-from lakehouse_kit.objectfs import lance_storage_options
-from lakehouse_kit.store_session import IssuedSession, WebIdentity
-from lakehouse_kit.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, WRITER_PUT_GLOBS
-from service_kit.governed.machine_identity import IdentityTokenUnavailableError
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.storage_options import StorageOptions
+from lakehouse import store_session
+from lakehouse.base_refs import decoded_path, location_within
+from lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
+from lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
+from lakehouse.features import BasePathRef
+from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.objectfs import lance_storage_options
+from lakehouse.storage_options import StorageOptions
+from lakehouse.store_session import IssuedSession, WebIdentity
+from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, WRITER_PUT_GLOBS
 
 
 log = logging.getLogger(__name__)
@@ -105,8 +105,7 @@ class VendedSession(BaseModel):
     """A session vended for one table at one tier ([[LH-072]]): the key pair STS issued and how a client reaches the store with it.
 
     The secret access key and the session token are ``SecretStr`` (:class:`S3KeyPair`), so a repr, a str, a model dump, a
-    log line or an error that echoes a vend carries neither; Lakekeeper derives ``Redact`` on its credential structs for
-    the same reason. They leave the catalog only through :meth:`as_storage_options`' ``in_clear``, called where the vend
+    log line or an error that echoes a vend carries neither. They leave the catalog only through :meth:`as_storage_options`' ``in_clear``, called where the vend
     is handed over or used.
     """
 
@@ -531,8 +530,8 @@ def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str
         ServiceUnavailableError: The dataset opened and its base list could not be read. Answering "no
             bases" here would vend without judging them, which the base judge exists to refuse.
     """
-    from lakehouse_kit.features import manifest_base_path_refs
-    from lakehouse_kit.objectfs import same_store_uri
+    from lakehouse.features import manifest_base_path_refs
+    from lakehouse.objectfs import same_store_uri
 
     try:
         ds = open_location(location, storage_options, branch=branch or None)
@@ -655,7 +654,7 @@ def build_session_policy(
 
     * ``read``: nothing else.
     * ``write`` (``can_write_data``): put and abort-upload on what a managed-versioning writer stages under
-      the ref it writes (``lakehouse_kit.table_layout.WRITER_PUT_GLOBS``: ``data/``,
+      the ref it writes (``lakehouse.table_layout.WRITER_PUT_GLOBS``: ``data/``,
       ``_transactions/``, ``_deletions/``, ``_indices/`` and a staged ``_versions/<n>.manifest-<uuid>``), and
       an explicit Deny on every final manifest under it, at any depth (``FINAL_MANIFEST_GLOB``). The table's
       own credential (no ``branch``) also puts under ``tree/`` ([[LH-490]]): a stock client opens a branch
@@ -908,7 +907,7 @@ class WebIdentityVendor:
     its own exchange, never the catalog's own session, so what a client holds is scoped to the table it was vended
     for, and its name (:func:`role_session_name`) says who it was vended for.
 
-    ``exchange`` is :func:`lakehouse_kit.store_session.exchange` and is injectable for tests.
+    ``exchange`` is :func:`lakehouse.store_session.exchange` and is injectable for tests.
     """
 
     def __init__(

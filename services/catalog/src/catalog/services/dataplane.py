@@ -119,7 +119,7 @@ from catalog.core.vending import classified_columns, labelled_fields
 from catalog.services import changes, commit_authors, committed_files, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.object_uuids import UnidentifiedObjectError
-from lakehouse_kit import (
+from lakehouse import (
     auto_cleanup,
     base_registry,
     branch_layout,
@@ -130,21 +130,21 @@ from lakehouse_kit import (
     location_claims,
     trash,
 )
-from lakehouse_kit.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
-from lakehouse_kit.control_prefixes import CONTROL_PREFIXES
-from lakehouse_kit.features import manifest_base_path_refs
-from lakehouse_kit.history_fences import HistoryWork
-from lakehouse_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
-from lakehouse_kit.lancekit.versions import committed_at
-from lakehouse_kit.schema import SchemaFields, facet_fields
-from lakehouse_kit.stage_stamp import declare_dataset_id
-from lakehouse_kit.storage import s3_client, split_s3_uri
-from lakehouse_kit.version_retention import MAIN_BRANCH, recorded_branch
-from service_kit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
-from service_kit.naming import CATALOG_DELIMITER
-from service_kit.ns_errors import PartiallyApplied
-from service_kit.outage import reads_as_store_outage
-from service_kit.storage_options import StorageOptions, s3_filesystem
+from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
+from lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
+from lakehouse.control_prefixes import CONTROL_PREFIXES
+from lakehouse.features import manifest_base_path_refs
+from lakehouse.history_fences import HistoryWork
+from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
+from lakehouse.lancekit.versions import committed_at
+from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.ns_errors import PartiallyApplied
+from lakehouse.outage import reads_as_store_outage
+from lakehouse.schema import SchemaFields, facet_fields
+from lakehouse.stage_stamp import declare_dataset_id
+from lakehouse.storage import s3_client, split_s3_uri
+from lakehouse.storage_options import StorageOptions, s3_filesystem
+from lakehouse.version_retention import MAIN_BRANCH, recorded_branch
 
 
 log = logging.getLogger(__name__)
@@ -230,8 +230,8 @@ def committed_version(table: table_claims.DoorTable, so: StorageOptions, transac
     For the native ops whose response carries a ``transaction_id`` and no version (restore, schema
     metadata, the index doors): the spec's ``DescribeTransaction`` answers ``properties.version``
     (``spec.yaml`` ``/v1/transaction/{id}/describe``), the version that transaction made rather than the
-    one the table is at now. Lakekeeper builds its commit event from its own transaction's context the
-    same way, never from a re-read.
+    one the table is at now: a commit event is built from its own transaction's context, never from a re-read,
+    because a re-read can see a later writer's version.
 
     A BRANCH IS SEARCHED ON ITS OWN HANDLE, because the ``dir`` backend's ``describe_transaction`` reads
     main's history only: measured on pylance 12.0.0, a restore on branch ``x`` answered a transaction id
@@ -495,7 +495,7 @@ def _write_blob(
 def read_arrow_body(data: bytes, *, max_bytes: int) -> pa.Table:
     """A write body as a table, or `InvalidInputError` (400, code 13) saying it is too large or not a valid Arrow IPC stream.
 
-    Decoded by the fleet's one validating decoder (`service_kit.arrow_ipc`): read whole, then
+    Decoded by the fleet's one validating decoder (`lakehouse.arrow_ipc`): read whole, then
     validated in full, because framing that parses says nothing about the buffers — Lance writes an
     offset past its values buffer as bytes from outside the request (pyarrow 25.0.0, pylance 12.0.0).
     ``max_bytes`` is the catalog's body cap (``LANCE_MAX_BODY_BYTES``), which the body may not exceed
@@ -1003,7 +1003,7 @@ def rename_table(
     THE LOCATION CLAIM IS THE ARBITRATION ([[LH-204]]). ``source`` is the table the request's name resolved to when
     it reached the door, its location and that location's claim as read then (ADR 0173 §7, [[LH-521]]). Before
     either backend call the claim is handed from the source id to the destination id under the ETag that read
-    found (:mod:`lakehouse_kit.location_claims`), so of N concurrent renames of one source exactly one
+    found (:mod:`lakehouse.location_claims`), so of N concurrent renames of one source exactly one
     holds the location and the rest answer code 14, and so does a rename of a table a drop or deregister is
     acting on. Nothing in the backend can do this: measured on
     pylance 12.0.0 (lh204 m1), concurrent deregisters of one id all succeed and a register at an occupied
@@ -1295,7 +1295,7 @@ def commit_stamped[T](
     (:func:`_discard_unlanded_attempt`, [[LH-564]]); one whose outcome is unknown keeps everything.
 
     A COMMIT THAT LOST ITS RACE TAKES ITS REF'S TURN for its remaining attempts ([[LH-259]],
-    :mod:`lakehouse_kit.commit_turns`), whether Lance refused the plan for a version committed since or the finalize
+    :mod:`lakehouse.commit_turns`), whether Lance refused the plan for a version committed since or the finalize
     lost: a writer committing more often than one plan takes would otherwise win every version, and Lance cannot rebase a
     schema change over an append (``lance_docs/lance/format/table/transaction.md`` § Merge Compatibility). While the turn is
     held every other finalize of the ref waits, so the next plans meet only the writers already past their wait; a commit
@@ -1840,7 +1840,7 @@ def destroy_table(
        prefix, and neither be nor contain an ``estate_roots`` entry; at its key it must hold nothing, a ``_versions/``
        tree, or the reservation marker alone (a declared table); as spelled, at most the marker. A refusal leaves the
        table registered and every byte in place. The table's own data directories on its data bases are read from its
-       base record here too ([[LH-286]], :func:`lakehouse_kit.data_directories.directories_to_end`), since
+       base record here too ([[LH-286]], :func:`lakehouse.data_directories.directories_to_end`), since
        they are its bytes as much as its root is.
     2. A location holding a ``_versions/`` tree gets a residue trash record on ``control`` before the row goes
        (:func:`trash.make_record`'s ``residue``, grace 0), so bytes a failed delete leaves keep their location's claim
@@ -2196,7 +2196,7 @@ def refuse_an_unbounded_result(dataset: lance.LanceDataset, *, k: int, offset: i
 
     `k` is capped by the projected row width: exact for fixed-width columns, and estimated from
     :data:`_WIDTH_SAMPLE_ROWS` rows of the projection when it carries a variable-width one. `offset` is
-    not, so a reader pages a large read with a bounded `k` (`lakehouse_kit.lancekit.reader`): the rows an
+    not, so a reader pages a large read with a bounded `k` (`lakehouse.lancekit.reader`): the rows an
     offset skips are streamed past, not held. MEASURED on the same table and process: `k=1000,
     offset=39000` (skipping 156 MB) peaked at 395,256 kB, beside 381,412 kB for `k=4000` with no offset.
 
@@ -3170,7 +3170,7 @@ def _raise_if_store_outage(exc: BaseException, *, table: str) -> None:
     table because the store blinked.
 
     Raises:
-        ServiceUnavailableError: ``exc`` is an object-store outage (`service_kit.outage`).
+        ServiceUnavailableError: ``exc`` is an object-store outage (`lakehouse.outage`).
     """
     if reads_as_store_outage(exc):
         raise ServiceUnavailableError(f"the object store did not answer reading the change window on table {table}") from exc

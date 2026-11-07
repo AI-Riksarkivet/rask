@@ -1,4 +1,4 @@
-"""A commit expires its table's versions once enough are reclaimable, and not before (Lakekeeper's min-snapshots-to-expire).
+"""A commit expires its table's versions once enough are reclaimable, and not before.
 
 Driven through the real app's `/maintenance-arrival` route over a moto store, for a table registered in a real `dir`
 namespace's `__manifest`, under a policy keeping one version, with a fresh clone list as the last sweep leaves it. The
@@ -30,12 +30,12 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest, Descri
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
-from lakehouse_kit import location_claims, maintenance_policies
-from lakehouse_kit.maintenance_due import CloneList, write_clone_list
-from lakehouse_kit.objectfs import lance_storage_options
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.naming import UUID_PROPERTY
-from service_kit.storage_options import StorageOptions
+from lakehouse import location_claims, maintenance_policies
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.maintenance_due import CloneList, write_clone_list
+from lakehouse.naming import UUID_PROPERTY
+from lakehouse.objectfs import lance_storage_options
+from lakehouse.storage_options import StorageOptions
 
 
 TABLE = "db$räksmörgås"

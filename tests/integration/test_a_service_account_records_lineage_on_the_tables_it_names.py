@@ -30,10 +30,10 @@ import pyarrow as pa
 import pytest
 from pydantic import BaseModel
 
-from lakehouse_kit.openlineage import SYMLINKS_FACET_SCHEMA_URL
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.governed import fga
-from service_kit.naming import location_identifier
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed import fga
+from lakehouse.naming import location_identifier
+from lakehouse.openlineage import SYMLINKS_FACET_SCHEMA_URL
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event
 
 
@@ -155,7 +155,7 @@ def test_a_dataset_named_by_a_tables_location_or_symlink_is_decided_and_recorded
 
 
 def location_input(location: str) -> dict[str, Any]:
-    """An input named by a storage location, as OpenLineage's clients name one (``service_kit.naming.location_identifier``)."""
+    """An input named by a storage location, as OpenLineage's clients name one (``lakehouse.naming.location_identifier``)."""
     namespace, name = location_identifier(location)
     return {"namespace": namespace, "name": name}
 

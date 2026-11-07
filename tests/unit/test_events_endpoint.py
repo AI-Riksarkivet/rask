@@ -15,10 +15,10 @@ from typing import Any, cast
 
 from catalog.api.v1.endpoints import events as ep
 from catalog.core.control_buffer import ControlEventBuffer
-from service_kit.control_events import CatalogControlEvent
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
+from lakehouse.control_events import CatalogControlEvent
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
 
 
 def _evt(object_id: str = "table:db1$t") -> CatalogControlEvent:

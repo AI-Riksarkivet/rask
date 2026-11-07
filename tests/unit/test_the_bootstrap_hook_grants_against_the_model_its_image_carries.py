@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from service_kit.governed.fga import user_object
+from lakehouse.governed.fga import user_object
 from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
 from tests.unit.openfga_stub import BY_NAME, CARRYING, PINNED, STORE, Recorded, openfga
 

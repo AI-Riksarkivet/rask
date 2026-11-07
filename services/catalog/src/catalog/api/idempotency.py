@@ -36,9 +36,9 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
-from lakehouse_kit import idempotency
-from service_kit.ns_errors import status_for
-from service_kit.storage_options import StorageOptions
+from lakehouse import idempotency
+from lakehouse.ns_errors import status_for
+from lakehouse.storage_options import StorageOptions
 
 
 #: The header: a UUID, in any case, because the key becomes part of an object key and a UUID is a segment no spelling

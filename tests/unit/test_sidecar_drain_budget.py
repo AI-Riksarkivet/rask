@@ -12,7 +12,7 @@ sidecar is gone before the app's drain window has properly opened.
 THE CONCRETE FAILURE, and it is silent. A catalog door that is mid-handler when a rollout
 starts finishes its Lance write and then calls `publish_event` to announce it against a sidecar
 that has already stopped: the write landed, the announcement did not, and nothing distinguishes that
-from a write nobody subscribed to. `lakehouse_kit.dapr_publish` bounds a wedged sidecar's hang without making the publish succeed. It
+from a write nobody subscribed to. `lakehouse.dapr_publish` bounds a wedged sidecar's hang without making the publish succeed. It
 also undermines the drain gate on a delivered route, whose RETRY verdict has to travel back through
 the sidecar to reach the broker.
 

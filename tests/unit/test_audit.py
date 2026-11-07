@@ -1,4 +1,4 @@
-"""Unit tests for the compliance audit trail (``service_kit.governed.audit``)."""
+"""Unit tests for the compliance audit trail (``lakehouse.governed.audit``)."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from service_kit.context import request_id_ctx
-from service_kit.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome, audit, configure_audit
+from lakehouse.context import request_id_ctx
+from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome, audit, configure_audit
 
 
 class _Capture(logging.Handler):

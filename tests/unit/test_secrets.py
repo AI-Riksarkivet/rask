@@ -7,9 +7,9 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from lakehouse.governed.secrets import fetch_dapr_secret
+from lakehouse.governed.store_credential import StoreCredential, make_store_credential
 from lineage.core.config import LineageSettings, storage_options
-from service_kit.governed.secrets import fetch_dapr_secret
-from service_kit.governed.store_credential import StoreCredential, make_store_credential
 
 
 def test_fetch_dapr_secret_fails_fast_on_4xx_but_retries_transient(
@@ -50,7 +50,7 @@ def test_lineage_reads_no_store_when_secrets_from_dapr_is_off(monkeypatch: pytes
         called = True
         return {}
 
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fail)
+    monkeypatch.setattr("lakehouse.governed.secrets.fetch_dapr_secret", _fail)
     # model_validate (not LineageSettings(...)) so field-name keys validate cleanly past ty: the fields
     # carry LINEAGE_* aliases and populate_by_name accepts the names only at runtime.
     settings = LineageSettings.model_validate({"secrets_from_dapr": False})
@@ -61,7 +61,7 @@ def test_lineage_reads_no_store_when_secrets_from_dapr_is_off(monkeypatch: pytes
 
 def test_lineage_takes_the_outbox_pair_from_the_store_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "service_kit.governed.secrets.fetch_dapr_secret",
+        "lakehouse.governed.secrets.fetch_dapr_secret",
         lambda *_a, **_k: {"access_key": "id-from-store", "secret_key": "from-store"},
     )
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "s3_access_key_id": "id-from-env", "s3_secret_access_key": "from-env"})
@@ -73,7 +73,7 @@ def test_lineage_takes_the_outbox_pair_from_the_store_alone(monkeypatch: pytest.
 @pytest.mark.parametrize("bundle", [{}, {"secret_key": "only-the-secret"}], ids=["store-empty", "secret-without-its-key-id"])
 def test_lineage_refuses_to_boot_without_the_whole_outbox_pair(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str]) -> None:
     # Store empty, or half a pair, AND no env fallback → must raise, never boot signing with half a credential.
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: dict(bundle))
+    monkeypatch.setattr("lakehouse.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: dict(bundle))
     settings = LineageSettings.model_validate({"secrets_from_dapr": True, "s3_secret_access_key": ""})
     with pytest.raises(RuntimeError, match="failing closed|half a credential"):
         StoreCredential(settings).read_at_boot()

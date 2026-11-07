@@ -1,6 +1,6 @@
 """Every readiness probe the product chart renders asks `/readyz`, never a static badge.
 
-A readiness probe answers whether a pod can serve now, so it has to report draining: `service_kit.probes`' `/readyz`
+A readiness probe answers whether a pod can serve now, so it has to report draining: `lakehouse.probes`' `/readyz`
 answers 503 `shutting_down` while a pod drains, where a liveness badge such as `/api/health` answers 200 and keeps the
 pod in the Service's rotation. Liveness asks "am I alive?", readiness "can I serve?", and one path answering both asks
 neither.

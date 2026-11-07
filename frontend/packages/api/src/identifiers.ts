@@ -46,7 +46,7 @@ export const DELIMITER = '$';
  *
  * `lastIndexOf`, and the difference from `indexOf` is a correctness bug rather than a nicety. The
  * backend is the authority and states it in one line — `parent_namespace_id` is "all segments but the
- * last" (`packages/service-kit/src/service_kit/governed/fga.py:187-201`) — and THAT is the id the grant
+ * last" (`packages/lakehouse/src/lakehouse/governed/fga.py:187-201`) — and THAT is the id the grant
  * and check paths key on. Splitting on the first delimiter instead names a different object:
  *
  *     acme$bronze$pages   lastIndexOf → acme$bronze   ← the real parent; what authz checks

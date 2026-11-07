@@ -34,15 +34,15 @@ from typing import Any, cast
 import pytest
 from lance_namespace import PermissionDeniedError
 
-from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE
+from lakehouse.governed import fga
+from lakehouse.governed.decider import OpenFgaDecider
+from lakehouse.governed.machine_identity import ServicePrincipal
+from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE
 from lineage.api.fga_deps import Governed, enforce_output_authz, is_external_source
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, Job, Run, RunEvent
 from lineage.schemas import EventRecord
-from service_kit.governed import fga
-from service_kit.governed.decider import OpenFgaDecider
-from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.lineage_events import DatasetUuids, with_dataset_uuids
 
 
 GOVERNED = "bind86-bronze$pages"
@@ -237,7 +237,7 @@ def test_the_discriminator_is_a_URI_SCHEME_OR_A_DECLARED_NAMESPACE(namespace: st
 
     A store URI carrying a scheme is external by shape. A bare identifier is exactly what a catalog
     namespace looks like, so the bare external namespaces are DECLARED in
-    `service_kit.naming` — the one place both this service and every producer read them
+    `lakehouse.naming` — the one place both this service and every producer read them
     from. For the bare form the NAME is part of the answer: a governed table id always carries the
     catalog delimiter, so it is never exempted even under a declared namespace."""
     assert is_external_source(namespace, name) is external

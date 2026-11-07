@@ -61,16 +61,16 @@ CATALOG_URL = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 STORE_URL = os.environ.get("LANCE_E2E_S3", "").rstrip("/")
 #: The catalog's container port (`services.catalog.port`), which its readiness is read on from inside the pod.
 CATALOG_PORT = int(os.environ.get("LANCE_E2E_CATALOG_PORT", "2333"))
-#: A signer re-reads its key from the store every 300 s while it holds one (`service_kit.governed.signing_key`), so it
+#: A signer re-reads its key from the store every 300 s while it holds one (`lakehouse.governed.signing_key`), so it
 #: drops the key within that of the store's loss; the rest is the slack of one failed re-read.
 SIGNER_DROP_SECONDS = 360.0
 #: How long a sidecar's NATS client goes on reconnecting before it closes for good: nats.go v1.39.1's 60 attempts per
-#: server, 2 s apart, which Dapr 1.18.1's jetstream component leaves at their defaults (`service_kit.bus_watchdog`).
+#: server, 2 s apart, which Dapr 1.18.1's jetstream component leaves at their defaults (`lakehouse.bus_watchdog`).
 RECONNECT_WINDOW_SECONDS = 120.0
 #: The container the Dapr injector adds to every annotated pod, an ordinary container while rask sets no native sidecar.
 SIDECAR = "daprd"
 #: How many times Lance issues a failed listing per dataset open, whatever `client_max_retries` says (measured on
-#: pylance 12.0.0, `lakehouse_kit.objectfs.StoreTimeouts`).
+#: pylance 12.0.0, `lakehouse.objectfs.StoreTimeouts`).
 LISTINGS_PER_OPEN = 6
 
 

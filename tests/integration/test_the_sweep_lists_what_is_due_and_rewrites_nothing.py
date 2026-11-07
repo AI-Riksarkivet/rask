@@ -34,13 +34,13 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest, Regist
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
-from lakehouse_kit import location_claims, maintenance_policies
-from lakehouse_kit.maintenance_due import DueRecord, read_due, write_due
-from lakehouse_kit.objectfs import lance_storage_options
+from lakehouse import location_claims, maintenance_policies
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.lineage_events import DatasetUuids, dataset_uuids
+from lakehouse.maintenance_due import DueRecord, read_due, write_due
+from lakehouse.objectfs import lance_storage_options
+from lakehouse.storage_options import StorageOptions
 from maintenance.services import sweep
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.lineage_events import DatasetUuids, dataset_uuids
-from service_kit.storage_options import StorageOptions
 
 
 BUCKET = "lake"

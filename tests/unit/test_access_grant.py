@@ -20,12 +20,12 @@ from openfga_sdk.client import OpenFgaClient
 
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
-from lakehouse_kit.control_emit import NoopControlEmitter
-from service_kit.governed.audit import AUDIT_LOGGER, AuditOutcome, configure_audit
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.ns_errors import status_for
+from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome, configure_audit
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.ns_errors import status_for
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -210,7 +210,7 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
 def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
     """An OpenFGA tuple cannot carry its grantor, and `read_changes` cannot attribute an actor — so
     "who granted this?" is unanswerable from the authz store alone. That is a real OpenFGA limitation
-    nobody has solved inside it; Lakekeeper leans on audit events for exactly the same reason.
+    nobody has solved inside it, so the answer has to come from audit events.
 
     What makes it answerable HERE is that the grant door audits all four coordinates of the grant in
     one row: the grantor (`audit.subject`), the grantee, the relation, and the object. So a review

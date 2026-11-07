@@ -10,9 +10,9 @@ from __future__ import annotations
 from typing import cast
 
 from catalog.api.dependencies import ObjectUuids
+from lakehouse.control_events import ControlUuids
+from lakehouse.lineage_events import DatasetUuids
 from lineage.services.names import CatalogNames
-from service_kit.control_events import ControlUuids
-from service_kit.lineage_events import DatasetUuids
 
 
 class _NoObjectUuids:

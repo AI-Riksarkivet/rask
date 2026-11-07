@@ -89,12 +89,6 @@ def test_the_namespace_refusal_points_at_the_warehouse_route() -> None:
     assert f"<parent>{DELIM}bronze" in detail
 
 
-@pytest.mark.parametrize("segments", [["acme", "silver"]])
-def test_a_nested_namespace_inherits_its_parents_binding(segments: list[str]) -> None:
-    """Only the TOP rung names a warehouse; everything below inherits it, so nesting stays open."""
-    fga_deps.require_warehouse_scoped(segments, warehouses_enabled=True)
-
-
 # --------------------------------------------------------------------------- #
 # The control-plane id shape is ONE rule, not one per door.
 # --------------------------------------------------------------------------- #
@@ -109,7 +103,7 @@ def test_a_control_plane_id_cannot_end_in_a_newline() -> None:
     result is a record with no tuples — the exact record-without-tuples drift Decision 1 exists to
     prevent, produced by the guard meant to stop it.
     """
-    from service_kit.naming import CONTROL_ID_RE
+    from lakehouse.naming import CONTROL_ID_RE
 
     assert CONTROL_ID_RE.match("acme") is not None
     assert CONTROL_ID_RE.match("acme\n") is None

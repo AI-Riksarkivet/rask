@@ -14,12 +14,12 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from lakehouse_kit import maintenance_policies, warehouse_records
+from lakehouse import maintenance_policies, warehouse_records
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import DueQuestion
 from maintenance.services.expiry import ExpiryPolicy
 from maintenance.services.naming import PolicyOwners
-from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

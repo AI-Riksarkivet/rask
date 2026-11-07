@@ -146,7 +146,7 @@ data:
     # issued up to the stored JWT's issue time is revoked, so the old grant stops admitting. Measured 2026-11-07 on
     # nats-server 2.14.2, nsc 2.15.0 and nats.go 1.39.1: an older JWT for a reissued key keeps its grant until such a
     # revocation, which refuses it and admits the newer one; nsc writes the grants sorted, `>` as `>`; and a client
-    # holding the revoked JWT is closed after two refused reconnects, which service_kit.bus_watchdog restarts its sidecar
+    # holding the revoked JWT is closed after two refused reconnects, which lakehouse.bus_watchdog restarts its sidecar
     # from, onto the JWT the store then holds.
     nats_user() {
       j=; s=

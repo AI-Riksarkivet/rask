@@ -163,7 +163,7 @@ reads.
 the catalog's `/control-events` and maintenance's `/maintenance-arrival` act on a bus event only when
 a signer that door allows verifiably signed it: a lineage event against `RASK_EVENT_SIGNERS` and `RASK_EVENT_DELEGATORS`,
 a control event against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role
-`service_kit.control_events.control_signer_role` names for its action. A refusal is **acked**: the event drove nothing,
+`lakehouse.control_events.control_signer_role` names for its action. A refusal is **acked**: the event drove nothing,
 is not retried and is not parked. The reasons read as in § Lineage refusing a signer's events, with two differences. At a
 control door, `signer` also means a listed identity signed an action its role does not emit. And here `unsigned` and
 `signer` page: every bus publisher signs and no action is exempt, so an unsigned or unlisted event on the bus is a

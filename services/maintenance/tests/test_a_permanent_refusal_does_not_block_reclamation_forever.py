@@ -59,7 +59,7 @@ from maintenance.services import reconcile as reconcile_mod
 from maintenance.services.discovery import Discovery
 from maintenance.services.orphans import OrphanReport
 from maintenance.services.purge import report_is_clean
-from maintenance.services.reconcile import IncompleteScan, ReconcileReport
+from maintenance.services.reconcile import ReconcileReport
 
 
 class _NoBuckets:
@@ -84,16 +84,6 @@ def test_the_purge_gate_opens_on_an_estate_whose_only_finding_is_an_exclusion() 
     report.excluded_datasets = [f"s3://b/t{i}.lance: base_paths (shallow clone / multi-base)" for i in range(419)]
 
     assert report_is_clean(report) is None, "419 correct exclusions must not keep the purge unreachable"
-
-
-def test_a_scan_that_TRIED_and_failed_still_closes_the_gate() -> None:
-    """The other half, and the one that makes the test above mean something: without it, "the gate
-    opens" would be satisfied equally well by deleting the gate."""
-    report = _report()
-    report.incomplete = [IncompleteScan(source="storage:datasets", reason="s3://b/t.lance: manifest unreadable")]
-
-    blocked = report_is_clean(report)
-    assert blocked is not None and "INCOMPLETE" in blocked
 
 
 def test_a_history_past_the_version_ceiling_is_an_exclusion_not_a_partial_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

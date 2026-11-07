@@ -16,11 +16,11 @@ from typing import Annotated
 from pydantic import AfterValidator, AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse_kit.objectfs import lance_storage_options
-from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
-from service_kit.governed.settings import GovernedAuthSettings
-from service_kit.governed.store_credential import S3KeyPair, store_key_pair
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed.settings import GovernedAuthSettings
+from lakehouse.governed.store_credential import S3KeyPair, store_key_pair
+from lakehouse.objectfs import lance_storage_options
+from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
+from lakehouse.storage_options import StorageOptions
 
 
 class Signing(BaseSettings):
@@ -152,7 +152,7 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
 
     # --- Secret consumption from the Dapr secret store (OpenBao), symmetric with the catalog. When on, the
     # outbox's S3 key pair is the store's, NOT plaintext env: the chart renders neither half into pod env,
-    # and `service_kit.governed.store_credential` reads it at boot (failing closed) and again while lineage runs.
+    # and `lakehouse.governed.store_credential` reads it at boot (failing closed) and again while lineage runs.
     secrets_from_dapr: bool = Field(default=False, alias="LINEAGE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —

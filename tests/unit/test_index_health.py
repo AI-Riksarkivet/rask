@@ -17,7 +17,7 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
-from lakehouse_kit.maintenance_due import IndexDue
+from lakehouse.maintenance_due import IndexDue
 from maintenance.services import index_health
 from maintenance.services.index_health import due_indices
 

@@ -95,14 +95,14 @@ from catalog.schemas import (
 from catalog.services import native, object_uuids, table_claims, trash_doors, warehouses
 from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
-from lakehouse_kit import base_registry, data_directories, location_claims, object_records, trash
-from lakehouse_kit.control_emit import ControlEmitter, emit_control
-from lakehouse_kit.records import RecordExistsError, RecordMissingError
-from lakehouse_kit.storage import s3_client, split_s3_uri
-from service_kit.governed import fga
-from service_kit.governed.deps import ANONYMOUS_SUBJECT
-from service_kit.naming import CATALOG_DELIMITER, CONTROL_ID_RE
-from service_kit.ns_errors import PartiallyApplied
+from lakehouse import base_registry, data_directories, location_claims, object_records, trash
+from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
+from lakehouse.ns_errors import PartiallyApplied
+from lakehouse.records import RecordExistsError, RecordMissingError
+from lakehouse.storage import s3_client, split_s3_uri
 
 
 log = logging.getLogger(__name__)

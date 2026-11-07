@@ -31,7 +31,7 @@ from typing import Any
 import pytest
 
 from catalog.services import warehouses
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 #: Each target's grant door and the door dave reads it through: a namespace's describe, a warehouse's own self-view.

@@ -26,14 +26,14 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 
-from service_kit.governed import secret_cache
-from service_kit.governed.dapr_auth import assert_app_token_configured, expected_app_tokens, require_dapr_token
-from service_kit.ns_errors import install_problem_handlers
+from lakehouse.governed import secret_cache
+from lakehouse.governed.dapr_auth import assert_app_token_configured, expected_app_tokens, require_dapr_token
+from lakehouse.ns_errors import install_problem_handlers
 
 
 @pytest.fixture(autouse=True)
 def _store_mode(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every test here runs a store-mode door; service-kit's pytest plugin starts each one on an unread store."""
+    """Every test here runs a store-mode door; the root conftest starts each one on an unread store."""
     monkeypatch.setenv("RASK_APP_TOKEN_FROM_STORE", "true")
     monkeypatch.delenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", raising=False)
 
@@ -41,7 +41,7 @@ def _store_mode(monkeypatch: pytest.MonkeyPatch) -> None:
 def _store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str] | None) -> list[tuple[str, str]]:
     """Stand in for the sidecar's secret store; returns the calls it received.
 
-    Patched at `service_kit.governed.secrets.fetch_dapr_secret` rather than on `dapr_auth`, because
+    Patched at `lakehouse.governed.secrets.fetch_dapr_secret` rather than on `dapr_auth`, because
     that is where the door's read imports it from at call time — patching the consuming module would
     leave the real fetch in place and every test here would fail against a store that is not there.
     """
@@ -51,7 +51,7 @@ def _store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str] | None) -> li
         calls.append((store, key))
         return bundle if bundle is not None else {}
 
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fetch)
+    monkeypatch.setattr("lakehouse.governed.secrets.fetch_dapr_secret", _fetch)
     return calls
 
 
@@ -183,7 +183,7 @@ def test_env_mode_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     def _never(*_: object, **__: object) -> dict[str, str]:
         raise AssertionError("env mode must not touch the secret store")
 
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _never)
+    monkeypatch.setattr("lakehouse.governed.secrets.fetch_dapr_secret", _never)
 
     assert expected_app_tokens() == ("from-the-env",)
     require_dapr_token(dapr_api_token="from-the-env", dapr_caller_app_id="")
@@ -199,7 +199,7 @@ def test_a_LATE_seed_heals_without_a_restart(monkeypatch: pytest.MonkeyPatch) ->
     """
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
     bundle: dict[str, str] = {"unrelated-field": "irrelevant"}
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: dict(bundle))
+    monkeypatch.setattr("lakehouse.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: dict(bundle))
 
     with pytest.raises(PermissionDeniedError, match="not configured"):
         require_dapr_token(dapr_api_token="seeded-later", dapr_caller_app_id="")

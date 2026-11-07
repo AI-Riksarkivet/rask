@@ -32,7 +32,7 @@ from tables_by_name import open_by_name
 
 from catalog.services.dataplane import create_table
 from catalog.services.publication import gate
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -68,7 +68,7 @@ def test_gate_refuses_a_nonconforming_tier_exactly_as_publish_does(tmp_path: Pat
     )
 
     # `InvalidInputError` — the spec's typed error, which `install_problem_handlers` renders as a 400
-    # problem+json carrying code 4. Matching the CONCRETE type is the point: a service_kit exception
+    # problem+json carrying code 4. Matching the CONCRETE type is the point: a lakehouse exception
     # here would escape the spec envelope, which the catalog has an AST gate against.
     with pytest.raises(InvalidInputError, match="source_rowid"):
         gate(uri, key_column="id", version=1)

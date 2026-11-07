@@ -11,7 +11,7 @@ Grants are keyed by the uuid too, so a rename writes no tuple; that half is pinn
 ``services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py``.
 
 The real catalog app over a real `dir` namespace on pylance, the in-memory `TupleStore` behind the real
-`service_kit.governed.fga` seed and revoke; maintenance's own policy resolution over the same control root.
+`lakehouse.governed.fga` seed and revoke; maintenance's own policy resolution over the same control root.
 """
 
 from __future__ import annotations
@@ -28,14 +28,14 @@ from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings
 from catalog.services import promotions, warehouses
-from lakehouse_kit import location_claims, maintenance_due, object_records
-from lakehouse_kit.maintenance_due import CompactionDue, DueRecord
+from lakehouse import location_claims, maintenance_due, object_records
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.maintenance_due import CompactionDue, DueRecord
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import table_ids
 from maintenance.services.naming import policy_owners
 from maintenance.services.plan import PlanContext, load_policies, resolve_plan
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.storage_options import StorageOptions
 from tests.integration.openfga_grants import TupleStore, act_as
 
 

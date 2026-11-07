@@ -1,0 +1,767 @@
+"""Lance manifest feature flags — the refusal gate for datasets this pass cannot correctly maintain.
+
+The spec settles the rule (``lance_docs/lance/format/table/versioning.md`` "Feature Flags"): a reader checks
+``reader_feature_flags``, a writer checks ``writer_feature_flags``, and "if either sees a flag they
+don't know, they should return an 'unsupported' error on any read or write operation". Compaction and
+GC are **writers** — one commits, the other deletes manifests — so they check both fields. The ORPHAN
+SCAN writes nothing and checks the READER field alone, because the spec's own table gives a per-bit
+answer and one row is already asymmetric: ``FLAG_TABLE_CONFIG`` (8) is Reader-No / Writer-Yes, and
+pylance sets it that way (measured: ``update_config`` -> ``reader=0, writer=8``). ORing the fields for
+a read refuses a dataset over a bit only a writer must understand.
+
+**Why this exists, concretely.** Two flags were measured against real datasets on pylance 9.0.0:
+
+* **Flag 16 (``base_paths`` — shallow clone / multi-base) is unsafe to COMPACT when this dataset's
+  files live under the base.** A shallow clone opens fine and a compaction happily rewrites it: an
+  8-fragment clone with **no ``data/`` directory at all** came back with its own full copy of every
+  row. That is silent storage amplification which defeats the entire point of the feature, and
+  ``cleanup_old_versions`` then ran on the result. **The flag alone does not say which kind of base a
+  dataset has**, and refusing on the flag alone cost the estate its bronze compaction for 785 sweep
+  ticks — so compaction gates on OBSERVED evidence about the bases instead
+  (:func:`describe_compaction_unsupported_flags`), while every other consumer keeps the flags-only
+  refusal.
+* **Flag 64 (data overlays) is only ACCIDENTALLY safe.** pylance 9.0.0 refuses the open itself
+  (``ValueError: Not supported: This dataset cannot be read by this version of Lance… Flags: 64``),
+  which surfaced as a generic ``open:`` error that the sweep's lineage selection treats as transient
+  non-dataset noise and ``summarize`` buried in ``errors``. A pylance that gains overlay support
+  flips that to a silent correctness bug with zero code change on our side.
+
+pylance exposes neither flag field. ``LanceDataset._ds.serialized_manifest()`` returns the Manifest
+protobuf (pylance's own pickle path uses it), and the two flags are top-level varints at fields 9 and
+10. Verified empirically on pylance 9.0.0 against the documented values: plain -> ``(0, 0)``, a
+``delete()`` -> ``(1, 1)``, ``enable_stable_row_ids`` -> ``(2, 2)``, both -> ``(3, 3)``, a
+``shallow_clone`` of the deletion dataset -> ``(17, 17)`` = 1|16, ``add_bases`` -> ``(16, 16)``, a
+committed ``LanceOperation.DataOverlay`` -> ``(64, 64)``.
+
+**The failure direction is deliberate and it has a cost.** :data:`SUPPORTED` is a WHITELIST, so a
+pylance upgrade that introduces a legitimate new flag stops this pass maintaining every dataset that
+sets it — versions grow forever while the sweep still reports success. That is why a refusal must be
+its own counted, logged and metric'd line in the sweep summary rather than folded into ``errors`` or
+``skipped``. There is deliberately **no env escape hatch**: "maintain it anyway" is exactly the
+answer that rewrote a shallow clone.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from typing import TYPE_CHECKING, Final, Protocol
+
+from pydantic import BaseModel, Field
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterable, Sequence
+
+
+log = logging.getLogger(__name__)
+
+
+class _SerializedManifestHandle(Protocol):
+    def serialized_manifest(self) -> bytes: ...
+
+
+class ManifestCarrier(Protocol):
+    """The one seam this module needs from a ``lance.LanceDataset``, kept structural so importing this module loads no
+    Lance (both the maintenance sweep AND the catalog's on-demand doors gate on it, and neither can import the
+    other)."""
+
+    @property
+    def _ds(self) -> _SerializedManifestHandle: ...
+
+
+class _DataFileHandle(Protocol):
+    @property
+    def base_id(self) -> int | None: ...
+
+
+class _FragmentHandle(Protocol):
+    def data_files(self) -> Sequence[_DataFileHandle]: ...
+
+
+class VersionedDataFile(Protocol):
+    """A fragment data file's own format version — what ``lance.fragment.DataFile`` exposes."""
+
+    @property
+    def file_major_version(self) -> int: ...
+
+    @property
+    def file_minor_version(self) -> int: ...
+
+
+class FragmentCarrier(ManifestCarrier, Protocol):
+    """The manifest seam PLUS the fragment walk :func:`gather_compaction_bases` needs.
+
+    Separate from :class:`ManifestCarrier` because every other consumer here reads only the manifest,
+    and widening the one protocol would make them all claim a dependency they do not have.
+    """
+
+    def get_fragments(self) -> Sequence[_FragmentHandle]: ...
+
+
+#: "Is a Lance dataset rooted at this path" — the object store's answer, injected. Bound in the fleet
+#: to :func:`lakehouse.objectfs.is_lance_dataset_root`.
+type DatasetRootProbe = Callable[[str], bool]
+
+
+#: The documented flags (``lance_docs/lance/format/table/versioning.md``, "Current Feature Flags"). Named rather than
+#: inlined so a refusal message and this module's whitelist cannot drift apart.
+FLAG_DELETION_FILES = 1
+FLAG_STABLE_ROW_IDS = 2
+FLAG_USE_V2_FORMAT_DEPRECATED = 4
+FLAG_TABLE_CONFIG = 8
+FLAG_BASE_PATHS = 16
+#: THE BITS ABOVE 16. Upstream's `rust/lance-table/src/feature_flags.rs` at v13.0.0 allocates FOURTEEN
+#: flags and puts its `FLAG_UNKNOWN` sentinel at `1 << 14`. The vendored `lance_docs/lance/format/table/versioning.md`
+#: § Current Feature Flags names eighteen (2^0 to 2^17, bits 16 and 17 reserved), of which pylance 13.0.0 allocates
+#: the fourteen named here; see `lance_docs/PROVENANCE.md` § "These docs run ahead of the installed pylance". Named here so a refusal says WHICH feature it
+#: declined instead of "32 (unknown)": an operator can act on "disable_transaction_file", not on a bare
+#: bit. **Naming is not supporting** — none of them enters :data:`SUPPORTED`, so all of them still
+#: refuse.
+#:
+#: 32 is WRITER-REQUIRED ONLY, which is why it is the concrete case for the reader/writer split: a
+#: dataset that sets it writer-side is one a read-only pass may safely scan.
+FLAG_DISABLE_TRANSACTION_FILE = 32
+#: Measured, not inferred: a committed ``LanceOperation.DataOverlay`` sets it, and an overlay writes
+#: new cell values to ``data/overlay-<uuid>.lance`` referenced from ``DataFragment.overlays`` rather
+#: than ``data_files()``. Release builds of Lance reject it unless
+#: ``LANCE_ENABLE_UNSTABLE_DATA_OVERLAY_FILES`` is set — which rask never sets in a deployed image
+#: (verified: zero occurrences in the repo and zero in the live Deployments).
+FLAG_DATA_OVERLAYS = 64
+#: Reader- and writer-required, and STICKY once set.
+FLAG_COVERED_INDEX_METADATA = 128
+#: A dataset setting it references recognised V2 data files at DIFFERENT exact versions, which is a
+#: layout no rewrite here has been checked against. Named for the refusal message only.
+FLAG_MIXED_DATA_FILE_VERSIONS = 256
+#: THE FRAGMENT REUSE INDEX PAIR and the three bits above them, read from
+#: `rust/lance-table/src/feature_flags.rs` at v13.0.0. None is set by anything this estate does —
+#: measured on pylance 13.0.0, a `compact_files` with `defer_index_remap=True` (the sweep's own call,
+#: and the one that USES the FRI) writes a legacy FRI and leaves the manifest at `(0, 0)`; a release
+#: build sets 512 only in debug builds, 2048 only behind an environment opt-in, and masks 4096 and 8192
+#: as reserved — so naming them changes no verdict now. They are here because `SUPPORTED` fails closed:
+#: the day a pylance bump starts stamping one, the sweep refuses that dataset, and the only difference
+#: between a diagnosable refusal and a dead end is whether the bit has a name.
+FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS = 512
+FLAG_FRAGMENT_REUSE_INDEX = 1024
+FLAG_SPILLED_ROW_LINEAGE = 2048
+FLAG_FRAGMENT_TREE = 4096
+FLAG_INDEPENDENT_COVERING_FIELDS = 8192
+
+#: Flags this pass can compact / GC / scan without being wrong.
+#:
+#: WIDENING THIS IS A DELIBERATE EDIT, NEVER A DEFAULT. An unknown flag means the on-disk layout
+#: carries something our rewrite does not account for; adding a bit here is a claim that compaction,
+#: version GC and the orphan pass have each been checked against that layout on a real dataset.
+SUPPORTED = FLAG_DELETION_FILES | FLAG_STABLE_ROW_IDS | FLAG_USE_V2_FORMAT_DEPRECATED | FLAG_TABLE_CONFIG
+
+#: The same whitelist plus ``base_paths``, for the operations that are ROOT-SCOPED and therefore safe on
+#: a shallow clone: ``cleanup_old_versions``, ``delete_config_keys`` and ``optimize_indices``.
+#:
+#: A SECOND mask rather than a widening of ``SUPPORTED``, because that constant is also consumed by
+#: ``maintenance/services/orphans.py`` and ``catalog/services/maintenance.py`` — and for the orphan scan
+#: the refusal is genuinely required: a shallow clone's files resolve through ``base_paths`` to another
+#: dataset's root, so "list the prefix, subtract what is referenced" would report live data as garbage.
+#: Widening one constant would have silently changed all three call sites.
+#:
+#: MEASURED on pylance 9.0.0 rather than argued, because the blanket refusal's own docstring asserted it
+#: was necessary. The discriminating experiment: a clone whose overwrite orphaned dead fragments on BOTH
+#: sides, then ONE ``cleanup_old_versions(delete_unverified=True)`` call — it removed the 2 clone-owned
+#: files and left all 4 base-owned ones, base data files 4 -> 4, and the base still read in a fresh
+#: process. The same held for inherited ``_deletions/`` and ``_indices/``, across six cleanup shapes and
+#: ten repeat cycles, with zero base files deleted in every run. ``optimize_indices`` likewise writes a
+#: delta into the clone's own root and leaves the base byte-identical.
+#:
+#: ``compact_files`` is EXCLUDED and stays on ``SUPPORTED``: it silently materialises the shared data into
+#: the clone's own root — a pristine clone went 1,072 -> 108,199 bytes against a 119,693-byte base —
+#: which defeats the point of cloning. It never damages the base, so this is a cost refusal, not a safety
+#: one, but it is still the wrong thing to do behind an operator's back.
+#:
+#: That measurement is about a CLONE, and a dataset whose only base is an external blob prefix compacts
+#: safely — so a flags-only refusal is over-broad, and its cost is a table created with
+#: ``initial_bases`` accumulating fragments forever. :func:`describe_compaction_unsupported_flags` now makes that distinction from
+#: EVIDENCE rather than from the flag, and :func:`lakehouse.compaction_gate.compaction_refusal` asks it — see that
+#: function for the three readings and the measurements behind each.
+SUPPORTED_FOR_GC = SUPPORTED | FLAG_BASE_PATHS
+
+_FLAG_NAMES = {
+    FLAG_DELETION_FILES: "deletion files",
+    FLAG_STABLE_ROW_IDS: "stable row ids",
+    FLAG_USE_V2_FORMAT_DEPRECATED: "v2 format (deprecated)",
+    FLAG_TABLE_CONFIG: "table config",
+    FLAG_BASE_PATHS: "base_paths (shallow clone / multi-base)",
+    FLAG_DISABLE_TRANSACTION_FILE: "disable_transaction_file (writer-required only)",
+    FLAG_DATA_OVERLAYS: "data overlays",
+    FLAG_COVERED_INDEX_METADATA: "covered index metadata (sticky)",
+    FLAG_MIXED_DATA_FILE_VERSIONS: "mixed data file versions",
+    FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS: "fragment reuse with stable row ids",
+    FLAG_FRAGMENT_REUSE_INDEX: "fragment reuse index",
+    FLAG_SPILLED_ROW_LINEAGE: "spilled row lineage (unstable)",
+    FLAG_FRAGMENT_TREE: "fragment tree (reserved)",
+    FLAG_INDEPENDENT_COVERING_FIELDS: "independent covering fields (reserved)",
+}
+
+#: Manifest protobuf field numbers. Pinned by ``test_maintenance_features.py`` against the documented
+#: flag values, so a manifest reshuffle in a future pylance fails THERE — loudly — instead of here,
+#: silently, by reading some other field as the flags.
+_MANIFEST_READER_FLAGS_FIELD = 9
+_MANIFEST_WRITER_FLAGS_FIELD = 10
+
+#: pylance's own refusal names the offending bits: "… Please upgrade Lance to read this dataset.
+#: Flags: 64, /home/runner/work/lance/…". Match on Lance's WORDING, never on "the open failed" —
+#: a missing directory must keep reading as an ordinary ``open:`` error, not as a feature refusal.
+_OPEN_REFUSAL_MARKERS = ("cannot be read by this version of Lance", "Flags:")
+_OPEN_REFUSAL_FLAGS = re.compile(r"Flags:\s*(\d+)")
+
+
+def manifest_feature_flags(ds: ManifestCarrier) -> tuple[int, int]:
+    """``(reader_feature_flags, writer_feature_flags)`` from the dataset's own manifest.
+
+    Both default to 0 — proto3 omits a zero varint, so an ABSENT field is genuinely "no flags set"
+    rather than "unknown". Every other field is skipped by wire type, so an unrelated manifest change
+    cannot shift the read.
+    """
+    blob: bytes = ds._ds.serialized_manifest()  # noqa: SLF001 — pylance's own __reduce__ path uses it
+    reader = writer = 0
+    i, n = 0, len(blob)
+    while i < n:
+        key, i = _varint(blob, i)
+        field, wire = key >> 3, key & 7
+        if wire == 0:
+            value, i = _varint(blob, i)
+            if field == _MANIFEST_READER_FLAGS_FIELD:
+                reader = value
+            elif field == _MANIFEST_WRITER_FLAGS_FIELD:
+                writer = value
+        elif wire == 2:
+            length, i = _varint(blob, i)
+            i += length
+        elif wire == 5:
+            i += 4
+        elif wire == 1:
+            i += 8
+        else:
+            # A wire type we cannot skip. STOP rather than misread the remaining bytes as flags —
+            # a garbage reader value would refuse a healthy dataset forever.
+            break
+    return reader, writer
+
+
+class BasePathRef(BaseModel):
+    """One ``BasePath`` entry out of a manifest: WHERE the base is, and WHAT the manifest SAYS it is.
+
+    Flag 16 says only that a dataset spans bases; it cannot tell a shallow CLONE (whose base is
+    another dataset's root and holds the only copy of the clone's rows) from an ingest bronze table
+    (whose base is a plain object-store prefix where external blobs already live, its own data files
+    under its own root). Those two need opposite answers from the compaction gate, so this model
+    carries ``is_dataset_root`` alongside the path.
+
+    IT IS A SELF-REPORT, NOT AN OBSERVATION, and on its own it is not enough to gate on. Measured on
+    pylance 10.0.0: ``shallow_clone`` is the only writer that ever sets the bit, so an ``add_bases``
+    pointed straight at a live Lance root reads False here. :func:`gather_compaction_bases` therefore
+    pairs it with the object store's own answer and with ``DataFile.base_id`` — see
+    :class:`CompactionBases`.
+    """
+
+    path: str
+    #: False for a plain prefix. Absent in the manifest means false — proto3 omits a zero.
+    is_dataset_root: bool = False
+    #: The manifest's alias for the base (`DatasetBasePath.name`); ``None`` when the writer gave none,
+    #: which is what `shallow_clone` writes (lh279 p4). The catalog's base record carries it for an
+    #: operator reading the record, and decides nothing on it.
+    name: str | None = None
+
+
+def manifest_base_path_refs(ds: ManifestCarrier) -> list[BasePathRef]:
+    """Every ``BasePath`` this dataset declares, path AND kind, from the LIBRARY rather than the bytes.
+
+    `ds.base_paths()` (public from pylance 13.0.0) returns `{id: DatasetBasePath(id, name, path, is_dataset_root)}` and is the
+    authoritative answer. This function used to walk the manifest protobuf for field 18 instead —
+    a second source of truth for something the library exposes, and the one that travels with any
+    schema copy. Verified equal on pylance 10.0.0 against a real `shallow_clone`: the accessor gives
+    `{0: DatasetBasePath(id=0, name=None, path=<source>, is_dataset_root=true)}` and the varint walk
+    gave `[BasePathRef(path=<source>, is_dataset_root=True)]` — the same two facts.
+
+    THE VARINT WALK STAYS FOR THE FLAGS AND ONLY FOR THEM (:func:`manifest_feature_flags`): pylance
+    exposes neither the reader nor the writer flag field, so there the bytes ARE the only source. The
+    distinction is the point of this change — parse what the library will not answer, ask it for what
+    it will.
+
+    A base carrying no path is dropped rather than recorded as an empty root: `""` compares equal to
+    nothing useful downstream and reads as a base that exists.
+    """
+    accessor = getattr(ds, "base_paths", None)
+    if accessor is None:
+        # A carrier that is not a real `LanceDataset` (a double) declares nothing
+        # rather than raising: every caller treats "no bases" as the ordinary case, and the refusal
+        # this feeds is fail-closed on the FLAG, which is read from the bytes and unaffected here.
+        return []
+    return [
+        BasePathRef(path=str(base.path), is_dataset_root=bool(base.is_dataset_root), name=getattr(base, "name", None) or None)
+        for base in accessor().values()
+        if str(getattr(base, "path", "") or "")
+    ]
+
+
+def manifest_base_paths(ds: ManifestCarrier) -> list[str]:
+    """Every ``BasePath.path`` this dataset's manifest declares — the roots its files may live under.
+
+    WHY THIS IS NEEDED AT ALL, and why the feature flag is not enough. Flag 16 tells you that THIS
+    dataset spans bases, and that is what stops a scan subtracting a prefix listing from a clone. It
+    says nothing about the opposite direction, which is the destructive one: the SOURCE of a shallow
+    clone carries NO flag and looks completely ordinary, while its data files are the only copy the
+    clone's manifest resolves through. Delete or compact the source and the clone breaks — a defect
+    reproduced as 8 data files becoming 1, after which the clone fails to open in a fresh process.
+
+    So the paths have to be read from the referring side and collected across the estate, which is
+    what `lakehouse.base_refs` does with this. A per-dataset check cannot see it, because
+    the endangered dataset is not the one carrying the evidence.
+
+    Returns absolute paths as the manifest states them (the format calls them "interpretable by the
+    object store"). An empty list is the overwhelmingly common case and means exactly what it says:
+    this dataset resolves everything under its own root.
+
+    The PATHS view of :func:`manifest_base_path_refs`, and derived from it rather than read a second
+    time — one source, so a pylance change cannot fix one reader and leave the other misreading.
+    """
+    return [ref.path for ref in manifest_base_path_refs(ds)]
+
+
+def _varint(blob: bytes, i: int) -> tuple[int, int]:
+    """One protobuf base-128 varint starting at ``i``; returns ``(value, next_index)``."""
+    value = shift = 0
+    while i < len(blob):
+        byte = blob[i]
+        i += 1
+        value |= (byte & 0x7F) << shift
+        shift += 7
+        if not byte & 0x80:
+            break
+    return value, i
+
+
+def unsupported_features(ds: ManifestCarrier) -> str | None:
+    """Why this dataset must be REFUSED, or ``None`` when every flag it sets is understood.
+
+    The reason NAMES the offending bits, because "unsupported" alone is not actionable: an operator
+    needs to know it is looking at a shallow clone rather than at a broken dataset.
+    """
+    reader, writer = manifest_feature_flags(ds)
+    return unsupported_read_flags(reader=reader, writer=writer)
+
+
+def describe_unsupported_flags(reader: int, writer: int) -> str | None:
+    """The refusal reason for an already-read flag pair, or ``None`` when both are understood.
+
+    THE FLAGS-ONLY gate, and the strictest of the three: it refuses ``base_paths`` in every form. THE
+    ORPHAN SCAN is what needs it, and is now its only caller — a shallow clone's files resolve through
+    another dataset's root, so "list the prefix, subtract what is referenced" would report live data
+    as garbage.
+
+    **Neither maintenance door asks this one, in the sweep or in the catalog.** Compaction asks
+    :func:`describe_compaction_unsupported_flags`, which weighs evidence about the bases themselves;
+    version reclamation and index maintenance ask :func:`describe_gc_unsupported_flags`, which
+    tolerates ``base_paths`` outright. This docstring used to say the catalog's on-demand doors gated
+    here — they did, one check in front of every verb, which made the BUTTON stricter than the CRON
+    while its refusal told the operator the two agreed. They now ask the same two gates the sweep
+    asks, per verb (``catalog/services/maintenance.py::require_compactable`` / ``require_reclaimable``).
+
+    **It asks BOTH fields because it is the gate a WRITE takes.** A read-only pass is entitled to
+    ignore the writer field and asks :func:`describe_read_unsupported_flags` instead.
+    """
+    unknown = (reader | writer) & ~SUPPORTED
+    if not unknown:
+        return None
+    return f"unsupported manifest feature flags: {_named(unknown)} (reader={reader}, writer={writer})"
+
+
+def describe_read_unsupported_flags(reader: int) -> str | None:
+    """The refusal reason for a READ-ONLY pass, or ``None`` when every reader bit is understood.
+
+    **THE TWO FIELDS ARE ASKED SEPARATELY, AND THEY DO NOT CARRY THE SAME BITS.** The format spec is
+    explicit (``lance_docs/lance/format/table/versioning.md``, "Format Versioning"): *"Readers should check the
+    ``reader_feature_flags`` to see if there are any flag it is not aware of. Writers should check
+    ``writer_feature_flags``."* Its table gives a per-bit answer, and one row is already asymmetric —
+    ``FLAG_TABLE_CONFIG`` (8) is **Reader Required: No, Writer Required: Yes**. Measured on pylance
+    10.0.0: ``update_config({"k": "v"})`` produces ``reader=0, writer=8``, so the asymmetry is what
+    Lance actually writes rather than a note in a table.
+
+    So ORing the fields — which every gate here used to do — refuses a read over a bit only a writer
+    must understand. Nothing is wrongly refused TODAY, because every bit through 16 is known; it bites
+    the day Lance adds a writer-only flag at 32 or above, and the spec says that is exactly where new
+    flags go. That failure would be silent in the worst way: the orphan scan is the estate's one
+    read-only, report-only pass, so it would simply stop seeing every dataset that sets the new bit
+    and go on reporting clean.
+
+    **This is not a weakening, and the direction matters.** An unknown bit in the READER field still
+    refuses, because that field is by definition the set a reader must understand — proceeding there
+    means enumerating a layout we cannot resolve, and a scan that names live data as garbage is a far
+    worse failure than one that declines. Only the writer field is dropped, and only for a caller that
+    writes nothing.
+    """
+    unknown = reader & ~SUPPORTED
+    if not unknown:
+        return None
+    return f"unsupported manifest reader feature flags: {_named(unknown)} (reader={reader})"
+
+
+def unsupported_read_flags(*, reader: int, writer: int) -> str | None:
+    """:func:`describe_read_unsupported_flags` for a caller that holds both fields.
+
+    Keyword-only, and it takes the writer field it then ignores, on purpose: the call site reads as a
+    deliberate choice about WHICH field a read-only pass consults rather than as a dropped argument.
+    """
+    del writer  # a reader is not entitled to care — see describe_read_unsupported_flags
+    return describe_read_unsupported_flags(reader)
+
+
+def describe_foreign_data_file_versions(table_version: str, data_files: Iterable[VersionedDataFile]) -> str | None:
+    """Why committing ``data_files`` to a table at ``table_version`` would mix file versions, or ``None``.
+
+    pylance 12 and 13 commit such a set and stamp reader and writer flag 256, which no operation removes:
+    maintenance refuses the table, and pylance 11 and lancedb 0.34 (lance core 8) cannot open it (lancedb 0.40 can).
+    pylance 11 refused the commit itself. Measured on 12.0.0 over 2.0/2.1/2.2 tables, with and without
+    stable row ids, and appends at every version: this refuses exactly when Lance's commit sets the flag.
+
+    Only V2 files on a V2 table are compared. A legacy table declares ``0.x`` while its files report
+    ``(0, 2)``, and Lance itself refuses to mix V1 and V2. A file stamped ``(0, 3)`` is compared as 2.0:
+    pylance 12.0.0 writes 2.0 files as ``(2, 0)`` but still reads ``(0, 3)`` as 2.0, and a forged
+    ``(0, 3)`` fragment committed onto a 2.1 table set flag 256 (measured).
+
+    Args:
+        table_version: The table's ``data_storage_version`` at the commit's read version.
+        data_files: Every data file the commit would add.
+
+    Returns:
+        The refusal reason naming the foreign versions, or ``None`` when the commit keeps one version.
+
+    Raises:
+        TypeError: If ``table_version`` is not a string.
+    """
+    if not isinstance(table_version, str):
+        raise TypeError(f"table_version must be a str, got {type(table_version).__name__}: {table_version!r}")
+    major, _, minor = table_version.partition(".")
+    if not (major.isdigit() and minor.isdigit()):
+        return f"the table's data_storage_version {table_version!r} is unreadable, so its data files cannot be judged"
+    declared = (int(major), int(minor))
+    if declared[0] < 2:
+        return None
+    versions = {_format_version(f.file_major_version, f.file_minor_version) for f in data_files}
+    foreign = sorted({v for v in versions if v[0] >= 2} - {declared})
+    if not foreign:
+        return None
+    named = ", ".join(f"{a}.{b}" for a, b in foreign)
+    unknown = [v for v in foreign if v not in _LANCE_V2_FILE_VERSIONS]
+    if unknown:
+        return (
+            f"data files at {', '.join(f'{a}.{b}' for a, b in unknown)}, which is not a Lance file format version "
+            "(lance_docs/lance/format/file/versioning.md, Versioning)"
+        )
+    return (
+        f"data files at {named} under a table whose data_storage_version is {table_version}: committing them would set "
+        f"reader flag {FLAG_MIXED_DATA_FILE_VERSIONS} (mixed data file versions), which no operation removes"
+    )
+
+
+#: The V2 file format versions Lance defines (lance_docs/lance/format/file/versioning.md, Versioning; 2.3 is unstable).
+_LANCE_V2_FILE_VERSIONS: Final = frozenset({(2, 0), (2, 1), (2, 2), (2, 3)})
+
+
+def _format_version(major: int, minor: int) -> tuple[int, int]:
+    """A data file's format version as Lance reads it: ``(0, 3)`` is 2.0."""
+    return (2, 0) if (major, minor) == (0, 3) else (major, minor)
+
+
+def mixes_data_file_versions(reader: int) -> bool:
+    """Whether a manifest's reader flags carry the sticky mixed-data-file-versions bit (256)."""
+    return bool(reader & FLAG_MIXED_DATA_FILE_VERSIONS)
+
+
+def flags_from_open_error(exc: BaseException) -> int | None:
+    """The feature flags pylance named when it refused to open a dataset, or ``None`` if it named none."""
+    text = str(exc)
+    if not any(marker in text for marker in _OPEN_REFUSAL_MARKERS):
+        return None
+    match = _OPEN_REFUSAL_FLAGS.search(text)
+    return int(match.group(1)) if match else None
+
+
+class BaseEvidence(BaseModel):
+    """One declared base, as the manifest states it AND as the object store answers for it."""
+
+    path: str
+    #: The manifest's self-report (``BasePath.is_dataset_root``). True only for a ``shallow_clone``.
+    declares_dataset_root: bool = False
+    #: The listing's answer: ``<path>/_versions/`` is a directory. ``None`` = the store could not be
+    #: asked (permission, endpoint, a path shape the filesystem cannot resolve) — treated as a refusal.
+    probed_dataset_root: bool | None = None
+    #: The probe was REFUSED rather than failed: the credential this maintainer holds does not cover
+    #: the base. Same verdict as any other unknown — a denial is no more evidence about the base than
+    #: an outage — but a different INSTRUCTION, because the fix is the scope and not the store.
+    #: Measured 2026-09-08: 69 datasets a tick refused this way against a base that the root credential
+    #: shows is not a dataset root at all, so every one of those refusals was false.
+    probe_denied: bool = False
+
+
+class CompactionBases(BaseModel):
+    """Everything the compaction gate could OBSERVE about a flag-16 dataset's bases.
+
+    Three readings, because no one of them is sufficient — each was measured on pylance 10.0.0 against
+    a fixture built by hand, and each catches a shape the others miss:
+
+    ``bases[].declares_dataset_root``
+        The manifest's own ``BasePath.is_dataset_root``. Set by ``shallow_clone`` and by nothing else,
+        so it is a true positive and a useless negative: an ``add_bases`` pointed straight at a live
+        Lance root reports False.
+    ``bases[].probed_dataset_root``
+        The OBJECT STORE's answer — does ``<base>/_versions/`` exist. Ground truth about the base,
+        independent of what the referring manifest chose to say. ``None`` means the store could not
+        answer, which is a refusal, never a permission.
+    ``data_resolves_through_a_base``
+        Whether any ``DataFile`` of any fragment carries a ``base_id`` — i.e. whether OUR data is
+        living over there. This is the one that decides the hazard, and it is the only signal that
+        catches ``write_dataset(..., target_bases=[...])``: measured, that lands our own data files
+        under a base which is neither declared nor probed a dataset root, and compacting pulled them
+        home (local root 3,540 -> 5,991 bytes, the base's three files left behind as garbage).
+        ``None`` means the fragments could not be read — again a refusal.
+
+    A model rather than three arguments because they are ONE answer with one failure direction, and a
+    caller that gathered two of three must not be able to spell that as a permit.
+    """
+
+    #: Every ``BasePath`` the manifest declares. EMPTY while flag 16 is set is itself a refusal: the
+    #: dataset says it spans bases and we could not read which.
+    bases: list[BaseEvidence] = Field(default_factory=list)
+    #: None = unread. See the class docstring — this is the deciding signal.
+    data_resolves_through_a_base: bool | None = None
+
+
+#: Bases already reported as permission-denied, so the same permanent refusal is announced once rather
+#: than once per dataset that declares it. Process-scoped deliberately — see the branch that fills it.
+_REPORTED_BASE_DENIALS: set[str] = set()
+
+
+def forget_reported_base_denials() -> None:
+    """Drop the record of which denials have been announced — for tests, which need a cold process.
+
+    Exported rather than reached into, because a test poking a module-level set is a test that breaks
+    when the de-duplication changes shape, and this one is meant to survive that.
+    """
+    _REPORTED_BASE_DENIALS.clear()
+
+
+def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> CompactionBases:
+    """The evidence :func:`describe_compaction_unsupported_flags` weighs, gathered off one open dataset.
+
+    ``probe`` answers "is a Lance dataset rooted at this path" — in the fleet,
+    :func:`lakehouse.objectfs.is_lance_dataset_root` bound to the caller's storage options.
+    It is injected rather than imported so this module stays free of the object-store layer (the
+    catalog and the sweep both gate here and neither can import the other's plumbing), and so a test
+    can drive the ambiguous branch without an unreachable endpoint.
+
+    NOTHING HERE RAISES. Every read that fails is recorded as the unknown it is — ``None`` — because a
+    gatherer that threw would surface as a per-dataset ``error`` and be reported as a failure of the
+    dataset rather than as a refusal by the gate. The cost of a wrong refusal is wasted space; the
+    cost of a wrong permit is a clone's whole reason to exist, so unknown resolves to refusal.
+
+    Cheap by construction: one ``get_file_info`` per declared base (datasets declare one, or none),
+    and the fragment walk reads metadata the open manifest already holds.
+    """
+    bases: list[BaseEvidence] = []
+    try:
+        refs = manifest_base_path_refs(ds)
+    except Exception:
+        # A manifest we cannot re-read is one whose bases we do not know. An empty list is the refusal
+        # (see `_base_paths_compaction_refusal`), which is what "we could not tell" must mean here.
+        log.warning("compaction_base_paths_unreadable", exc_info=True)
+        refs = []
+    for ref in refs:
+        denied = False
+        try:
+            probed: bool | None = probe(ref.path)
+        except Exception as exc:
+            denied = _is_permission_denial(exc)
+            if denied:
+                # REPORTED ONCE PER BASE, PER PROCESS, AND WITHOUT A STACK. A denial is configuration,
+                # not an incident: it is the answer of the policy on the identity this service signs
+                # as, so it is deterministic for a given base. A rotation replaces that identity's key
+                # and keeps its policy ([[XC-082]]), so it changes no answer here; a changed policy is
+                # a deployment change, and a rollout is a new process and therefore a fresh report.
+                #
+                # Measured on the running sweep 2026-09-15: 134 rendered tracebacks in ONE pass, every
+                # one `base='s3://lance-catalog/models/' denied=True` — the same base, the same key,
+                # the same answer. They sat beside 315 refusals that were CORRECT, which is how a
+                # reader learns to scroll past the category that refuses to sign a rewrite with the
+                # deployment's ambient key.
+                #
+                # The stack goes because the classification already names the cause completely; a
+                # traceback of an S3 403 adds nothing an operator can act on. A NON-denial keeps both
+                # its traceback and its repetition — an outage or a probe bug is precisely where the
+                # stack matters, and it is not deterministic for the life of the process.
+                if ref.path not in _REPORTED_BASE_DENIALS:
+                    _REPORTED_BASE_DENIALS.add(ref.path)
+                    log.warning("compaction_base_probe_denied", extra={"base": ref.path, "denied": True})
+            else:
+                log.warning("compaction_base_probe_failed", extra={"base": ref.path, "denied": False}, exc_info=True)
+            probed = None
+        bases.append(BaseEvidence(path=ref.path, declares_dataset_root=ref.is_dataset_root, probed_dataset_root=probed, probe_denied=denied))
+    try:
+        resolves: bool | None = any(file.base_id is not None for fragment in ds.get_fragments() for file in fragment.data_files())
+    except Exception:
+        log.warning("compaction_fragment_read_failed", exc_info=True)
+        resolves = None
+    return CompactionBases(bases=bases, data_resolves_through_a_base=resolves)
+
+
+def data_file_base_paths(ds: FragmentCarrier) -> set[str]:
+    """The path of every base some data file of ``ds`` resolves through, as the manifest states it.
+
+    :class:`CompactionBases` answers WHETHER any file lives under a base; a caller that must tell one
+    base from another needs WHICH. ``DataFile.base_id`` names the base and ``ds.base_paths()`` maps
+    it to its path, the accessor :func:`manifest_base_path_refs` reads.
+
+    RAISES when either cannot be read, or when a file names a base the manifest does not declare: which
+    base a file lives under is the whole question, so unknown must reach the caller as unknown.
+    """
+    through = {file.base_id for fragment in ds.get_fragments() for file in fragment.data_files() if file.base_id is not None}
+    if not through:
+        return set()
+    accessor = getattr(ds, "base_paths", None)
+    if accessor is None:
+        raise TypeError(f"{type(ds).__name__} cannot map the bases {sorted(through)} its data files name")
+    declared = {int(base_id): str(base.path) for base_id, base in accessor().items()}
+    if undeclared := through - declared.keys():
+        raise ValueError(f"data files name bases {sorted(undeclared)} the manifest does not declare")
+    return {declared[base_id] for base_id in through}
+
+
+#: What an object store says when the credential is the problem rather than the path. Matched on the
+#: MESSAGE because that is all `pyarrow.fs` surfaces — the same constraint, and the same approach, as
+#: `_OPEN_REFUSAL_MARKERS` for pylance's own refusals.
+_DENIAL_MARKERS: Final = ("ACCESS_DENIED", "AccessDenied", "403 Forbidden", "InvalidAccessKeyId", "SignatureDoesNotMatch")
+
+
+def _is_permission_denial(exc: BaseException) -> bool:
+    """Whether a failed base probe was REFUSED rather than broken.
+
+    Both refuse, so a wrong answer here costs an operator the right instruction and never the guard.
+    """
+    return any(marker in str(exc) for marker in _DENIAL_MARKERS)
+
+
+def describe_compaction_unsupported_flags(reader: int, writer: int, bases: CompactionBases | None) -> str | None:
+    """The refusal reason for COMPACTION, or ``None`` when the rewrite is safe and honest here.
+
+    :func:`describe_unsupported_flags` refuses flag 16 outright, and that is too wide. TWO shapes set
+    the flag and only one of them is the one that was measured:
+
+    * a **shallow clone** — its base is another DATASET's root and its ``DataFile``s resolve through
+      it, so compaction materialises the shared data into the clone's own root (a pristine clone went
+      1,072 -> 108,199 bytes against a 119,693-byte base). Still refused, and this is a COST refusal:
+      it never damages the base, it just defeats the point of cloning behind an operator's back.
+    * an **external blob base** — a table created with one plain object-store prefix in
+      ``initial_bases``, naming where this table's payload bytes already live. Its own data files sit
+      under its own root like any other table's, so compaction merges its own fragments and copies
+      nothing. MEASURED on pylance 10.0.0: 4 fragments -> 1, 9,445 -> 14,366 bytes locally, the base
+      directory byte-identical, 20/20 external payloads still resolving afterwards.
+
+    Folded together, the refusal covered every ingest bronze table and every medallion tier — the rows
+    with the most fragments in the estate — which then accumulated fragments forever while the sweep
+    reported a successful pass over them (``fragments_removed_total=0`` across 785 ticks).
+
+    **THE FLAG CANNOT MAKE THIS DISTINCTION AND NEITHER CAN ANY SINGLE BIT.** An earlier attempt read
+    ``BasePath.is_dataset_root`` alone; measured on pylance 10.0.0, ``shallow_clone`` is the only
+    writer that ever sets it, so ``add_bases`` pointed at a live Lance root reports False and would
+    have been waved through. What decides the hazard is whether OUR FILES LIVE OVER THERE, and
+    :class:`CompactionBases` carries three readings of that question — the manifest's self-report, the
+    object store's own listing, and ``DataFile.base_id``. Compaction is permitted only when all three
+    say no, and the last one is not redundant: ``target_bases=[...]`` puts our data under a base that
+    is a dataset root by neither reading (measured: compacting it pulled 3,540 -> 5,991 bytes home and
+    orphaned the base's three files).
+
+    **FAIL CLOSED, deliberately asymmetric.** ``bases`` is ``None``, or declares no base, or carries a
+    base whose probe could not be answered, or could not read the fragments -> REFUSE. The cost of a
+    wrong refusal is wasted space and a loud counted line in the sweep summary; the cost of a wrong
+    permit is destroying the reason a clone exists. Every OTHER unknown flag still refuses exactly as
+    before, and the base-path allowance never waves one of those through.
+    """
+    unknown = (reader | writer) & ~SUPPORTED
+    clause: str | None = None
+    if unknown & FLAG_BASE_PATHS:
+        clause = _base_paths_compaction_refusal(bases)
+        if clause is None:
+            unknown &= ~FLAG_BASE_PATHS
+    if not unknown:
+        return None
+    reason = f"unsupported manifest feature flags: {_named(unknown)} (reader={reader}, writer={writer})"
+    return f"{reason} — {clause}" if clause is not None else reason
+
+
+def _base_paths_compaction_refusal(bases: CompactionBases | None) -> str | None:
+    """Why flag 16 still refuses THIS dataset, or ``None`` when its bases are provably foreign to it.
+
+    The order is evidence-first: the reading that decides the hazard is checked before the two that
+    only describe the base, so the reason an operator reads names the thing that would actually have
+    been rewritten.
+    """
+    if bases is None:
+        return "no base evidence was gathered for this dataset, so its bases could be another dataset's root — refusing rather than guessing"
+    if bases.data_resolves_through_a_base is None:
+        return "this dataset's fragments could not be read, so whether its data files live under a base is unknown — refusing rather than guessing"
+    if bases.data_resolves_through_a_base:
+        return "this dataset's data files resolve through a base, so compacting would materialise another root's bytes into this one"
+    if not bases.bases:
+        return "the manifest sets base_paths but declares no BasePath this reader could parse — refusing rather than guessing"
+    for base in bases.bases:
+        if base.declares_dataset_root:
+            return f"the base at {base.path} is declared a dataset root (a shallow clone) — compacting would materialise the shared data into this root"
+        if base.probed_dataset_root is None:
+            if base.probe_denied:
+                return (
+                    f"this maintainer is not permitted to read the base at {base.path}, so whether it is a dataset root is unknown — "
+                    "refusing rather than guessing. The credential's scope excludes the base, so this refuses on every tick until the scope covers it"
+                )
+            return f"the base at {base.path} could not be read in object storage, so whether it is a dataset root is unknown — refusing rather than guessing"
+        if base.probed_dataset_root:
+            return f"a Lance dataset is rooted at the base {base.path} — compacting would materialise its data into this root"
+    return None
+
+
+def describe_gc_unsupported_flags(reader: int, writer: int) -> str | None:
+    """The refusal reason for the ROOT-SCOPED operations, or ``None`` when they are safe to run.
+
+    Version reclamation and index maintenance touch only the dataset's own root, so a shallow clone's
+    ``base_paths`` does not endanger them — see :data:`SUPPORTED_FOR_GC` for the measurement. Everything
+    else refuses exactly as before.
+    """
+    unknown = (reader | writer) & ~SUPPORTED_FOR_GC
+    if not unknown:
+        return None
+    return f"unsupported manifest feature flags: {_named(unknown)} (reader={reader}, writer={writer})"
+
+
+def unsupported_features_from_open_error(exc: BaseException) -> str | None:
+    """The same refusal, recovered from an open that pylance itself rejected — or ``None`` when the
+    failure is an ordinary unopenable path.
+
+    pylance refuses a manifest whose flags IT does not know before we can read them ourselves, so
+    for those datasets this is the only place the refusal can be recognised. Without it the pass
+    reports a Rust source path from a GitHub runner as a generic ``open:`` error, which the sweep's
+    lineage selection classifies as transient non-dataset noise and drops entirely.
+    """
+    if not any(marker in str(exc) for marker in _OPEN_REFUSAL_MARKERS):
+        return None
+    flags = flags_from_open_error(exc)
+    if flags is None:
+        return "pylance refused the open: unsupported manifest feature flags (the error named none)"
+    # Describe the bits pylance named. They are unsupported by DEFINITION here (pylance would not
+    # have refused otherwise), so mask against SUPPORTED only to drop the ones we do understand.
+    return f"pylance refused the open: unsupported manifest feature flags: {_named(flags & ~SUPPORTED or flags)} (flags={flags})"
+
+
+def _named(mask: int) -> str:
+    return ", ".join(f"{bit} ({_FLAG_NAMES.get(bit, 'unknown')})" for bit in _bits(mask))
+
+
+def _bits(mask: int) -> list[int]:
+    """The set bits of ``mask``, low to high, as their integer values."""
+    return [1 << i for i in range(64) if mask >> i & 1]

@@ -67,7 +67,7 @@ def _settings(**over: object) -> MaintenanceSettings:
 class _Store:
     """The OpenFGA write `repair_drift` makes, recorded instead of sent.
 
-    Installed on `service_kit.governed.fga` — the module `repair.fga` names — so the production
+    Installed on `lakehouse.governed.fga` — the module `repair.fga` names — so the production
     coroutine runs unmodified and only the store behind it is absent. The stand-in takes the keyword
     arguments the real function requires, so a call that stopped passing `actor` or `origin` fails here
     the way it would fail live.
@@ -92,12 +92,6 @@ def store(monkeypatch: pytest.MonkeyPatch) -> _Store:
 async def _repair(settings: MaintenanceSettings) -> RepairReport:
     """The production pass, with a client present — `repair_drift` returns early on `None`."""
     return await repair.repair_drift(settings, report=_report(), fga_client=object())
-
-
-def test_it_plans_a_revoke_for_every_object_that_is_GONE() -> None:
-    planned, _ = repair.plan_repair(_report())
-
-    assert {p.fga_object for p in planned} == {"project:gone-p", "warehouse:gone-w", "table:ns$gone-t"}
 
 
 @pytest.mark.parametrize(

@@ -4,8 +4,8 @@ DUP-12: "The lance-service entrypoint is hand-assembled eight times; there is no
 `make_lance_service_app`." Each opened `app = FastAPI(...)` at module level and then repeated the same five
 steps in prose comments copied between them.
 
-This pins what `lakehouse_kit.lance_app` gives catalog, lineage and maintenance: the copies had drifted, one service serving no `RequestIDMiddleware` at all, and nothing
-compared them.
+This pins what `lakehouse.lance_app` gives catalog, lineage and maintenance: the copies had drifted, one service
+serving no `RequestIDMiddleware` at all, and nothing compared them.
 """
 
 from __future__ import annotations

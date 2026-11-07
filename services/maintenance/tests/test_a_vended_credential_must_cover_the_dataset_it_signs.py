@@ -29,10 +29,10 @@ from __future__ import annotations
 import pytest
 from pydantic import SecretStr
 
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.storage_options import StorageOptions
 
 
 AMBIENT = StorageOptions.from_flat({"aws_access_key_id": "rustfsadmin", "aws_secret_access_key": "rustfsadmin"})

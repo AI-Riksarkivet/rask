@@ -13,8 +13,7 @@ import (
 
 // A lakehouse release ([[XC-187]], decided by the owner 2026-11-03): the git tag `lakehouse-vX.Y.Z` publishes the
 // catalog image as one amd64+arm64 index and the product chart, pinned to that index's digest, as an OCI artifact on
-// GHCR; the platform package is pinned by the same tag through uv's git source. A client names the whole lakehouse by
-// that one version.
+// GHCR. A client names the whole lakehouse by that one version.
 // catalogImageName is the one first-party image the product chart names (`image.catalog.repository`).
 const catalogImageName = "lance-rest-catalog"
 
@@ -129,8 +128,8 @@ func (m *Rask) Publish(
 	if chartDigest == nil {
 		return "", fmt.Errorf("helm push printed no digest:\n%s", pushed)
 	}
-	return fmt.Sprintf("image  %s/%s@%s\nchart  oci://%s/charts/rask:%s@%s\nplatform package  service-kit @ git+https://github.com/AI-Riksarkivet/rask@lakehouse-v%s#subdirectory=packages/service-kit\n",
-		registry, catalogImageName, digest, registry, version, chartDigest[1], version), nil
+	return fmt.Sprintf("image  %s/%s@%s\nchart  oci://%s/charts/rask:%s@%s\n",
+		registry, catalogImageName, digest, registry, version, chartDigest[1]), nil
 }
 
 // requireReleaseVersion refuses a version that is not semver, before anything is built or pushed.

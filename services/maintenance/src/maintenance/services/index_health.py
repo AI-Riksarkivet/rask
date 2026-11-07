@@ -1,7 +1,7 @@
 """Which of a dataset's indices an optimize is due on: rows it does not cover, or too many delta segments.
 
 Read-only. Maintenance builds and optimizes no index (ADR 0156 C6); it names the ones a bring-your-own job should
-optimize, on the table's due record (:mod:`lakehouse_kit.maintenance_due`).
+optimize, on the table's due record (:mod:`lakehouse.maintenance_due`).
 
 MEASURED against pylance 9.0.0. ``stats.index_stats(name)`` returns ``num_indexed_rows``, ``num_unindexed_rows``,
 ``num_indexed_fragments``, ``num_unindexed_fragments`` and ``num_indices`` (the delta segments a query fans out over);
@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from lakehouse_kit.maintenance_due import IndexDue
+from lakehouse.maintenance_due import IndexDue
 
 
 log = logging.getLogger(__name__)

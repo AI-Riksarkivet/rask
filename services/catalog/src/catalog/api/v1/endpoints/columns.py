@@ -58,7 +58,7 @@ from catalog.core.lineage_emit import (
 )
 from catalog.services import dataplane
 from catalog.services.table_claims import ResolvedTable
-from service_kit.governed import fga
+from lakehouse.governed import fga
 
 
 #: The GOVERNANCE namespace in field metadata: keys the estate acts on, not user properties.

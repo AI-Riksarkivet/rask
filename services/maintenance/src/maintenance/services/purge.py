@@ -74,20 +74,20 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse_kit import location_claims, object_records, trash, warehouse_records
-from lakehouse_kit.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
-from lakehouse_kit.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError, forget_base_record
-from lakehouse_kit.control_emit import ControlEmitter, NoopControlEmitter, emit_control
-from lakehouse_kit.control_prefixes import CONTROL_PREFIXES
-from lakehouse_kit.data_directories import delete_directories, directories_to_end, directory_uri
-from lakehouse_kit.objectfs import fs_and_base
+from lakehouse import location_claims, object_records, trash, warehouse_records
+from lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
+from lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError, forget_base_record
+from lakehouse.control_emit import ControlEmitter, NoopControlEmitter, emit_control
+from lakehouse.control_events import ControlAction, ControlObjectType, ControlUuids
+from lakehouse.control_prefixes import CONTROL_PREFIXES
+from lakehouse.data_directories import delete_directories, directories_to_end, directory_uri
+from lakehouse.governed import fga
+from lakehouse.objectfs import fs_and_base
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
 from maintenance.services.naming import manifest_uuid
 from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, ReconcileReport
-from service_kit.control_events import ControlAction, ControlObjectType, ControlUuids
-from service_kit.governed import fga
-from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -618,7 +618,7 @@ def delete_location(location: str, storage_options: StorageOptions, *, protected
     still there.
 
     ``protected`` is the #128d guard: the estate's foreign ``base_paths`` collected by
-    :func:`lakehouse_kit.base_refs.protected_roots`. When a dataset that outlives this delete resolves its
+    :func:`lakehouse.base_refs.protected_roots`. When a dataset that outlives this delete resolves its
     files through these bytes, deleting them breaks it, so this refuses with :class:`ProtectedBaseError`. A referrer
     inside the location, the table's own branch, goes with it (:meth:`BaseRefs.protects_from_deletion`).
 
@@ -1096,7 +1096,7 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, setti
     gaps narrow the protection rather than widening the deletion, which is the safe direction — but a
     caller reading this should know the set is a floor, not a proof of completeness.
     """
-    from lakehouse_kit.base_refs import protected_roots
+    from lakehouse.base_refs import protected_roots
     from maintenance.services.discovery import discover_datasets
     from maintenance.services.sweep import base_record_reader
 
@@ -1126,7 +1126,7 @@ def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, setti
 def _judged_data_directories(location: str, *, registry: BaseRegistry, table: str, protected: BaseRefs | None) -> list[RecordedBase]:
     """The data directories ending the table at ``location`` deletes, each judged before any byte goes ([[LH-286]]).
 
-    :func:`lakehouse_kit.data_directories.directories_to_end` decides which are the table's (its claim names
+    :func:`lakehouse.data_directories.directories_to_end` decides which are the table's (its claim names
     the table, held or released by it, and every other one is left); one a live dataset resolves its files through
     refuses the whole delete, as the root does.
 

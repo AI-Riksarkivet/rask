@@ -38,12 +38,12 @@ from fastapi import FastAPI
 from starlette.testclient import TestClient
 
 from catalog.core.lineage_emit import build_write_event
+from lakehouse.ns_errors import install_problem_handlers
 from lineage.api.v1.router import api_router
 from lineage.core.metrics import Door
 from lineage.models import DatasetEvent, RunEvent
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import ProvenanceStore
-from service_kit.ns_errors import install_problem_handlers
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 

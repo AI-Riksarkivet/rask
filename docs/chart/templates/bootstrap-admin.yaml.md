@@ -30,7 +30,7 @@ fire, behind a values key that has nothing to do with any of them. Who the
 first HUMAN owner is, is a deployment's choice; that the sweep may maintain is a property of the
 software.
 There is no fga CLI image, so the Job reuses the catalog image and speaks the OpenFGA HTTP API with
-service_kit's own store and model rules, CHECKS each grant first (the idempotence guard), and only
+lakehouse's own store and model rules, CHECKS each grant first (the idempotence guard), and only
 then writes it, treating a duplicate-write 400/409 as success.
 
 ## `"helm.sh/hook-weight": "10"`
@@ -62,7 +62,7 @@ one user and never a userset.
 ## `- { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }`
 
 The DEFAULT WAREHOUSE, matching `fga_default_warehouse_object` in
-packages/service-kit/src/service_kit/governed/settings.py — the structural root a
+packages/lakehouse/src/lakehouse/governed/settings.py — the structural root a
 top-level namespace hangs off, not the estate root the privileges are checked on.
 `tests/unit/test_the_bootstrap_hook_grants_against_the_model_its_image_carries.py`
 holds the two apart: it runs this hook's default-render grants against a stub OpenFGA
@@ -79,7 +79,7 @@ still gets the bootstrap grant in the right place.
 THE ESTATE ROLES THE RELEASE DECLARES, one JSON object from each account's subject to the machine roles it holds on the
 estate root (`lance.fgaEstateRoles`): lineage's `decider` and `governance_prober`, on the subject the door verifies its
 token as (`lance.saSubject`), so the two cannot drift. Every grant names the user its subject is
-(`service_kit.governed.fga.user_object`, `:` written `%3A`). A client's roles are not here ([[LH-563]]): a client is
+(`lakehouse.governed.fga.user_object`, `:` written `%3A`). A client's roles are not here ([[LH-563]]): a client is
 granted them at the catalog's access doors as its own identity, `decider` scoped to the projects or warehouses it serves,
 or on the estate root at the estate admin's tuple door for one serving every tenant, such as a notifier's
 `event_reader` (`can_read_event_feed`, [[CTL-021]]: lineage's run feed with no per-dataset filter,
@@ -91,7 +91,7 @@ THE RELEASE'S OWN ACCOUNTS CONVERGE TO WHAT IT DECLARES, AND NO OTHER PRINCIPAL 
 adds, so on its own a role taken from lineage's list would keep standing for as long as the store lives: a grant no file
 in git declares, which an install from git would not reproduce (GitOps). The machine relations are the estate root's
 relations only a user holds directly (`[user]`: `decider`, `event_reader`, `governance_prober`, `member_expander`),
-read off the model this image carries (`service_kit.governed.fga.machine_relations`), the rule the catalog's offboarding
+read off the model this image carries (`lakehouse.governed.fga.machine_relations`), the rule the catalog's offboarding
 door asks too. The hook reads every tuple of each on the estate root, following OpenFGA's `continuation_token` page by
 page, and deletes each one naming one of
 the release's own ServiceAccounts that `estate_roles` does not declare. A tuple naming any other principal was made at a

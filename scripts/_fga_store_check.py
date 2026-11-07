@@ -22,8 +22,8 @@ from typing import Any
 from _fga_model_rungs import rungs
 from pydantic import BaseModel
 
-from service_kit.governed.auth.write_model import STORE_NAME, model_document
-from service_kit.governed.fga import MODEL_MAX_PAGES, MODEL_PAGE_SIZE, ModelHistory, canonical_model, newest_store
+from lakehouse.governed.auth.write_model import STORE_NAME, model_document
+from lakehouse.governed.fga import MODEL_MAX_PAGES, MODEL_PAGE_SIZE, ModelHistory, canonical_model, newest_store
 
 
 class StoreListing(BaseModel):

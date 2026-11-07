@@ -14,7 +14,7 @@ payload carries.
 
 THE PROVENANCE COLUMN. A governed row needs no column (ADR 0156 C9): its run and inputs ride the commit
 ([[LH-225]]), and `stage` and `lineage` are the writer's own. `source_rowid` is the one column the platform names
-(`lakehouse_kit.stage_stamp`), an opt-in that traces a row to the source row it descends from, and every
+(`lakehouse.stage_stamp`), an opt-in that traces a row to the source row it descends from, and every
 reader resolves it by that name, so it is protected by name wherever it appears. The row identity is protected by Lance's own declaration instead: any
 field carrying `lance-schema:unenforced-primary-key`, and each of its ancestors, in any table
 (`lance_docs/lance/format/table/index.md` § Unenforced Primary Key). Measured on pylance 12.0.0:
@@ -41,7 +41,7 @@ from typing import Final
 import pyarrow as pa
 from lance_namespace import InvalidInputError
 
-from lakehouse_kit.stage_stamp import SOURCE_ROWID_COLUMN
+from lakehouse.stage_stamp import SOURCE_ROWID_COLUMN
 
 
 #: Schema-metadata namespaces only the platform writes. A key under either is refused at every write door.

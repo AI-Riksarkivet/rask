@@ -17,7 +17,7 @@ import pytest
 from lance_namespace import InvalidInputError
 
 from catalog.services import dataplane
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 def _table() -> pa.Table:

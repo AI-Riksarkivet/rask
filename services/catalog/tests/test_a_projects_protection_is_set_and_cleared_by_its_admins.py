@@ -18,8 +18,8 @@ from typing import Any
 import pytest
 
 from catalog.core.config import get_settings
-from lakehouse_kit import maintenance_policies
-from service_kit.naming import CONTROL_ID_RE
+from lakehouse import maintenance_policies
+from lakehouse.naming import CONTROL_ID_RE
 
 
 PROJECT = "acme"

@@ -28,7 +28,7 @@ import pyarrow as pa
 import requests
 from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 
-from service_kit.lineage_events import DatasetUuids
+from lakehouse.lineage_events import DatasetUuids
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")

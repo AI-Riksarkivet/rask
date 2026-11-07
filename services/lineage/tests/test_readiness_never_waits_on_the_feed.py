@@ -14,8 +14,8 @@ import time
 import pytest
 from starlette.testclient import TestClient
 
+from lakehouse.exceptions import ServiceUnavailableError
 from lineage import main
-from service_kit.exceptions import ServiceUnavailableError
 
 
 #: Longer than the one second the chart's probe allows.

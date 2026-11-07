@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from lakehouse.naming import is_external_source_namespace
 from lineage.core.config import get_settings
-from service_kit.naming import is_external_source_namespace
 
 
 def is_external_source(namespace: str, name: str) -> bool:
@@ -21,7 +21,7 @@ def is_external_source(namespace: str, name: str) -> bool:
     data, the terminal event was authorized fine, and the run was never recorded as opened. Ten
     configuration causes were investigated before the service's own message was read.
 
-    The discriminator has TWO forms and lives in `service_kit.naming`, because it is a
+    The discriminator has TWO forms and lives in `lakehouse.naming`, because it is a
     convention this service and every producer must agree on. A
     store URI carrying a scheme (``s3://bucket``) is external by shape. A BARE identifier cannot be
     decided by shape at all, since that is exactly what a catalog namespace looks like (``bronze``,

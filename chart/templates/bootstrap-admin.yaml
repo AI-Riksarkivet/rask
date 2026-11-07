@@ -47,8 +47,8 @@ spec:
             - |
               import json, os, sys, time
               import httpx
-              from service_kit.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document
-              from service_kit.governed.fga import machine_relations, newest_store, user_object
+              from lakehouse.governed.auth.write_model import STORE_NAME, fga_headers, history, model_document
+              from lakehouse.governed.fga import machine_relations, newest_store, user_object
 
               api = os.environ["FGA_API_URL"].rstrip("/")
               token_file = os.environ["RASK_FGA_TOKEN_FILE"]

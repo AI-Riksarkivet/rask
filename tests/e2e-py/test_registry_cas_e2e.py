@@ -21,8 +21,8 @@ import uuid
 import pytest
 from botocore.exceptions import BotoCoreError, ClientError
 
-from lakehouse_kit import records
-from service_kit.storage_options import StorageOptions
+from lakehouse import records
+from lakehouse.storage_options import StorageOptions
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")

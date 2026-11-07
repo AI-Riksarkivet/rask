@@ -1,8 +1,8 @@
 """An event lane with no debounce re-evaluates on every commit, and an evaluation is not cheap.
 
 Refreshing a table's due record reads its bucket's `__manifest`, the policy registry and the clone list and opens the
-dataset, so a table taking a burst of writes would pay that per write. The debounce is Lakekeeper's
-`min-snapshots-to-expire` in rask's own registry: record the version a table was last evaluated at, under the table uuid
+dataset, so a table taking a burst of writes would pay that per write. The debounce lives in rask's own registry:
+record the version a table was last evaluated at, under the table uuid
 the event names (ADR 0173 §8), and do not evaluate again until enough versions have accumulated. It must short-circuit
 BEFORE the expensive work, or it saves nothing. A table with no stamp has never been evaluated by this lane, and is.
 """
@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import pytest
 
+from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from maintenance.services.arrival import should_replan
-from service_kit.lineage_events import DatasetUuids, with_dataset_uuids
 
 
 TABLE_UUID = "0a6f3c8e-5b1d-4e2a-9c7f-3d8b2e1a4f60"

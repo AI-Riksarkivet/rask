@@ -14,7 +14,7 @@ its fork version included (both measured on pylance 13.0.0), so main's history a
 pins a version of main or of a branch, which cleanup retains, so it is in one of those lists.
 
 ONLY A DIRECTORY THE RECORD NAMES AS THE TABLE'S OWN, AND WHOSE CLAIM THE TABLE HOLDS, is listed: a ``data`` entry, a
-plain base (:mod:`lakehouse_kit.data_directories` holds the rule). A dataset-root base is another dataset's (a
+plain base (:mod:`lakehouse.data_directories` holds the rule). A dataset-root base is another dataset's (a
 clone's source, a branch's parent) and is never listed here, and a record naming a directory whose claim the table does
 not hold, such as an approved base itself, which every table naming it once shared, is never listed either.
 
@@ -33,11 +33,11 @@ from typing import Final
 import lance
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse_kit.base_refs import decoded_path, store_of
-from lakehouse_kit.base_registry import RecordedBase
-from lakehouse_kit.data_directories import directory_uri
-from lakehouse_kit.stored_objects import StoredObject, delete_objects, list_under
-from service_kit.storage_options import StorageOptions
+from lakehouse.base_refs import decoded_path, store_of
+from lakehouse.base_registry import RecordedBase
+from lakehouse.data_directories import directory_uri
+from lakehouse.storage_options import StorageOptions
+from lakehouse.stored_objects import StoredObject, delete_objects, list_under
 
 
 log = logging.getLogger(__name__)

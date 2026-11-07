@@ -7,15 +7,12 @@ project record holding no tuples at all) and could do nothing about it, and that
 the project-admin tuple is what makes a tenant self-sustaining, so a tenant without it is one nobody can
 administer, grant on, or delete.
 
-THE LINE THESE TESTS HOLD IS UPSTREAM'S, and it is narrower than the row asked for. Lakekeeper's
-`lakekeeper openfga reconcile` rebuilds "the parent/child edges between server, projects, warehouses,
-namespaces, tables, views, and roles" and leaves "ownership tuples, grants, role assignments, bootstrap
-admin tuples, and authorization-model bookkeeping ... alone"
-(https://docs.lakekeeper.io/docs/latest/authorization-openfga/).
+THE LINE THESE TESTS HOLD is narrower than the row asked for: the rebuild writes the parent/child edges between
+the estate, projects, warehouses, namespaces, tables and roles, and leaves ownership tuples, grants, role
+assignments, bootstrap admin tuples and the model's own bookkeeping alone.
 
-It is right for rask for a specific reason, not by deference: **the registry does not record
-REVOCATION.** Project records carry `created_by` (93 of 93, live 2026-09-19) and warehouse records do
-not (0 of 97) — but `created_by` names who CREATED a tenant, never who may administer it today. An
+It is right for a specific reason: **the registry does not record REVOCATION.** Project records carry `created_by`
+(93 of 93, live 2026-09-19) and warehouse records do not (0 of 97) — but `created_by` names who CREATED a tenant, never who may administer it today. An
 admin deliberately removed leaves the record untouched, so re-asserting that grant restores exactly the
 person an operator took care to remove. `test_a_stranded_project_is_REPORTED_not_re_granted` is the one
 that matters here; a structural edge cannot confer access, and a grant can.

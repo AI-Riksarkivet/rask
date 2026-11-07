@@ -22,10 +22,11 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+
+from _files_under import files_under
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -35,9 +36,7 @@ LAKEHOUSE_MEMBERS = (
     "services/catalog",
     "services/lineage",
     "services/maintenance",
-    "packages/lakehouse-kit",
-    "packages/lineage-kit",
-    "packages/service-kit",
+    "packages/lakehouse",
 )
 #: The platform's development fixtures: stand-ins for what a platform team runs, none of them a client.
 PLATFORM_FIXTURES = ("cloudnative-pg", "dapr", "dex", "external-secrets", "marquez", "nats", "observability", "openbao", "rustfs")
@@ -63,7 +62,7 @@ DEPARTED = frozenset({
     "kuberay-operator", "mailpit", "notifications", "nvidia-device-plugin", "ray-cluster", "ray-cluster-env", "ray-kit",
     "search", "studio", "table-maintenance", "topics", "viewer", "voiceprint",
 })  # fmt: skip
-#: The zones that became the console. Their names are the lakehouse's own words (`lakehouse_kit`, "the home page"), so
+#: The zones that became the console. Their names are the lakehouse's own words (`lakehouse`, "the home page"), so
 #: they are matched only as a path under `microfrontends/`, which no lakehouse path has.
 CONSOLE_ZONES = frozenset({"home", "lakehouse"})
 
@@ -104,34 +103,18 @@ def pattern(names: set[str]) -> re.Pattern[str]:
 
 
 def lakehouse_files(root: Path) -> list[str]:
-    """The files the lakehouse owns: the tracked ones and the untracked ones git does not ignore, or every file under its
-    paths where the tree carries no `.git` (a CI container's copy of the source)."""
+    """The files under the lakehouse's paths (`_files_under.files_under`), less the vendored ones and the gates' own tests."""
     scope = [*LAKEHOUSE_MEMBERS, *LAKEHOUSE_CONSOLE, *LAKEHOUSE_DEPLOY, *LAKEHOUSE_TESTS, *(f"deploy/fixtures/{f}" for f in PLATFORM_FIXTURES)]
-    if (root / ".git").exists():
-        listed = subprocess.run(  # noqa: S603
-            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "--", *scope],  # noqa: S607
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        names = listed.splitlines()
-    else:
-        names = [
-            str(p.relative_to(root))
-            for entry in scope
-            for p in ([root / entry] if (root / entry).is_file() else (root / entry).rglob("*"))
-            if p.is_file() and not any(part in {".venv", "__pycache__", ".pytest_cache", ".ruff_cache"} for part in p.parts)
-        ]
-    return [f for f in names if not any(v in f for v in VENDORED) and f not in CLIENT_GATES]
+    return [f for f in files_under(root, scope) if not any(v in f for v in VENDORED) and f not in CLIENT_GATES]
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Print every place a lakehouse file names a client, and answer 1 when there is one."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--root", type=Path, default=ROOT, help="the repository to judge")
     args = parser.parse_args(argv)
     found = pattern(client_names(args.root) | DEPARTED | CONSOLE_ZONES)
-    hits = []
+    hits: list[str] = []
     for name in lakehouse_files(args.root):
         try:
             text = (args.root / name).read_text(encoding="utf-8")

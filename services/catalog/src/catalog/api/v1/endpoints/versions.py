@@ -48,11 +48,11 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
-from lakehouse_kit import commit_records, maintenance_due
-from lakehouse_kit.history_fences import HistoryWork
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.storage_options import StorageOptions
+from lakehouse import commit_records, maintenance_due
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.history_fences import HistoryWork
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

@@ -15,7 +15,7 @@ THREE COPIES, AND THE GATE ONLY EVER SAW TWO. `make fga-test` diffs `model.json`
 The store is the third and was checked by nothing, which is exactly how it fell nine relations behind
 without a single test going red.
 
-NO FOURTH COPY. The model already ships INSIDE the service image — `service_kit/governed/auth/`
+NO FOURTH COPY. The model already ships INSIDE the service image — `lakehouse/governed/auth/`
 carries `model.fga`, `model.fga.yaml` and `model.json` in site-packages — so the hook reads it from
 there. Rendering it into a ConfigMap would have created the fourth copy this row is about.
 """

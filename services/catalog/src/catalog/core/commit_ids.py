@@ -31,10 +31,10 @@ from typing import Final
 
 from fastapi import FastAPI, Request
 
-from service_kit.governed.secrets import fetch_dapr_secret
-from service_kit.governed.signing_key import SigningKeyUnavailableError
-from service_kit.probes import ReadyCheck
-from service_kit.schemas.health import Readiness, ReadinessStatus
+from lakehouse.governed.secrets import fetch_dapr_secret
+from lakehouse.governed.signing_key import SigningKeyUnavailableError
+from lakehouse.probes import ReadyCheck
+from lakehouse.schemas.health import Readiness, ReadinessStatus
 
 
 log = logging.getLogger(__name__)

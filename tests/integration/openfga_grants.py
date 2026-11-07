@@ -1,4 +1,4 @@
-"""OpenFGA stores held in memory, which the real catalog app asks through the real `service_kit.governed.fga` functions.
+"""OpenFGA stores held in memory, which the real catalog app asks through the real `lakehouse.governed.fga` functions.
 
 ``Grants`` is for a test whose claim is who may act: it answers each check from an explicit grant set, so a test
 names every grant it relies on and nothing else is allowed. ``TupleStore`` is for a test whose claim is which tuples a
@@ -18,10 +18,10 @@ from openfga_sdk.models import CheckResponse, ListUsersResponse, ReadRequestTupl
 from openfga_sdk.models.error_code import ErrorCode
 from openfga_sdk.models.validation_error_message_response import ValidationErrorMessageResponse
 
-from service_kit.governed.fga import user_object
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal, is_principal
+from lakehouse.governed.fga import user_object
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal, is_principal
 
 
 if TYPE_CHECKING:

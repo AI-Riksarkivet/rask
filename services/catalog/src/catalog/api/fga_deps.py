@@ -1,7 +1,7 @@
 """OpenFGA authorization dependency.
 
 Router-level guard: when FGA is enabled it maps the request (resource + operation) to a
-``can_*`` ACTION relation defined in the model (``service_kit/governed/auth/model.fga``) and checks the
+``can_*`` ACTION relation defined in the model (``lakehouse/governed/auth/model.fga``) and checks the
 authenticated caller against OpenFGA. A no-op when FGA is disabled.
 
 The op -> ``can_*`` mapping below is the ONLY policy logic in the app; the privilege math
@@ -59,19 +59,19 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
 from catalog.services import dataplane, maintenance, native, object_uuids, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
-from lakehouse_kit import location_claims, object_records, protection, trash
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.governed.machine_identity import ServicePrincipal
-from service_kit.governed.subjects import is_person_subject
-from service_kit.naming import CATALOG_DELIMITER
-from service_kit.storage_options import StorageOptions
+from lakehouse import location_claims, object_records, protection, trash
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.machine_identity import ServicePrincipal
+from lakehouse.governed.subjects import is_person_subject
+from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
 
 # Guarded resource prefixes, in match order. Each but ``transaction`` maps to its own dedicated FGA type in the model
-# (``service_kit/governed/auth/model.fga``). A transaction is no object of its own: its id names the table it belongs
+# (``lakehouse/governed/auth/model.fga``). A transaction is no object of its own: its id names the table it belongs
 # to, and both its doors are authorized on that table (``_authorize_transaction``, [[LH-221]]).
 #: `classification` is the odd one and belongs here anyway: it is a governance VOCABULARY rather than a
 #: data object — no rows, no parent warehouse, and the path segment IS the label ([[LH-055]]). It
@@ -292,8 +292,8 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # are missing, so the person who most needs the answer is exactly the one who may not change it.
         # Gating the read at the write's bar turns a stated policy back into an unexplained absence.
         "managed-access/describe": "can_get_metadata",
-        # The self-view sits at the READER bar here too — see the table block for why. Spelled out per
-        # type: each type's map is its own, and a suffix it does not declare is refused.
+        # The self-view sits at the READER bar here too — see the table block for why. Spelled out per type:
+        # each type's map is its own, and a suffix it does not declare is refused.
         "access/my-permissions": "can_get_metadata",
         "access/graph": "can_delete",
     },
@@ -2610,7 +2610,7 @@ async def require_can_create_warehouse(
     """Gate the #3-A admin control-plane warehouse-create on ``project#can_create_warehouse``.
 
     The model's highest-privilege action (``project.can_create_warehouse = admin``,
-    ``service_kit/governed/auth/model.fga``): provisioning a physical bucket is a project-admin
+    ``lakehouse/governed/auth/model.fga``): provisioning a physical bucket is a project-admin
     operation, not the writer-tier create-on-parent that guards tables/namespaces. Fail-closed like
     every other gate: 403 on deny, 503 on an OpenFGA outage. With FGA off it allows (:func:`authorization`).
 
@@ -2638,7 +2638,7 @@ async def seed_warehouse(
     under it. No-op when FGA is off / unauthenticated / unwired.
 
     NOTE: the warehouse's parent-pointer relation is ``project`` (``define project: [project]`` in
-    ``service_kit/governed/auth/model.fga``) — NOT the ``parent`` name that namespaces/tables use. So this writes
+    ``lakehouse/governed/auth/model.fga``) — NOT the ``parent`` name that namespaces/tables use. So this writes
     the two tuples directly rather than via :func:`fga.grant_on_create` (whose parent edge is hardcoded to
     ``parent``, a relation the ``warehouse`` type does not define — writing it makes OpenFGA reject the whole
     seed → 503). Idempotent: ``write_tuples`` swallows duplicate-tuple writes on a create retry.

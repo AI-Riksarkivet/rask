@@ -8,7 +8,7 @@ import { seed as seedFor } from '../mock-client';
 // `t.slice(0, t.indexOf('$'))`. Catalog ids are a hierarchy flattened with a delimiter, so
 // `acme$bronze$pages` is the table `pages` inside the namespace `acme$bronze` — and the backend says
 // so in one line (`parent_namespace_id` is "all segments but the last",
-// `service_kit/governed/fga.py:187-201`). Splitting on the FIRST delimiter yielded `acme`: a
+// `lakehouse/governed/fga.py:187-201`). Splitting on the FIRST delimiter yielded `acme`: a
 // DIFFERENT OpenFGA object, quite possibly one that does not exist, while the real parent was never
 // offered at all. These strings are not decoration — the user picks one and runs an authorization
 // check against it, so in the single view whose job is "who can do what on THIS object", the picker

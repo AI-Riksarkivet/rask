@@ -14,22 +14,22 @@ from typing import Final
 import httpx
 from fastapi import FastAPI, Request
 
-from lakehouse_kit.lance_app import build_lance_service_app
+from lakehouse.bus_watchdog import start_bus_watchdog
+from lakehouse.draining import arm_drain_on_sigterm
+from lakehouse.governed.auth_lifespan import attach_auth
+from lakehouse.governed.dapr_auth import assert_app_token_configured
+from lakehouse.governed.fga import dispose as fga_dispose
+from lakehouse.governed.settings import assert_authentication_configured
+from lakehouse.governed.store_credential import make_store_credential
+from lakehouse.lance_app import build_lance_service_app
+from lakehouse.obs import configure_app_logging
+from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lineage.api.dapr import register_dapr
 from lineage.api.v1.router import api_router
 from lineage.core.config import get_settings
 from lineage.services.feed_watch import FeedWatch
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
-from service_kit.bus_watchdog import start_bus_watchdog
-from service_kit.draining import arm_drain_on_sigterm
-from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.governed.dapr_auth import assert_app_token_configured
-from service_kit.governed.fga import dispose as fga_dispose
-from service_kit.governed.settings import assert_authentication_configured
-from service_kit.governed.store_credential import make_store_credential
-from service_kit.obs import configure_app_logging
-from service_kit.schemas.health import Readiness, ReadinessStatus
 
 
 log = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         await store_credential.start()
     app.state.store_credential = store_credential
     # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
-    # outage (`service_kit.bus_watchdog`); None where the chart names this pod no bus.
+    # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
     bus_watchdog = await start_bus_watchdog()
     _disarm_drain: Callable[[], None] = _no_disarm
     feed_watch: FeedWatch | None = None
@@ -168,7 +168,7 @@ async def _feed_ready(request: Request) -> Readiness:
 
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
 # gate, the handler pair in the order that makes it work, one request id, and the probes — see
-# `lakehouse_kit.lance_app` for what each of those five is for and what a copy of it got wrong.
+# `lakehouse.lance_app` for what each of those five is for and what a copy of it got wrong.
 app = build_lance_service_app(
     title="Lance Lineage Service",
     docs_enabled=get_settings().docs_enabled,

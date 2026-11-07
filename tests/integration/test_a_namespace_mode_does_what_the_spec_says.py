@@ -9,7 +9,7 @@ succeeded." Skip is the retry lever for a drop that removed the namespace and di
 ran, so a Skip over an absent namespace finishes that trailer: no tuple, protection record, policy or
 binding survives for the next namespace created at the id.
 
-The OpenFGA store is an in-memory double behind the real `service_kit.governed.fga` functions, so the
+The OpenFGA store is an in-memory double behind the real `lakehouse.governed.fga` functions, so the
 seed and revoke paths run as written; every check is allowed, because who may act is not the claim here.
 """
 
@@ -29,9 +29,9 @@ from openfga_sdk.models import CheckResponse, ReadRequestTupleKey, ReadResponse,
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
-from lakehouse_kit import maintenance_policies
-from lakehouse_kit.control_emit import CatalogControlEvent
-from service_kit.storage_options import StorageOptions
+from lakehouse import maintenance_policies
+from lakehouse.control_emit import CatalogControlEvent
+from lakehouse.storage_options import StorageOptions
 from tests.integration.openfga_grants import act_as
 
 

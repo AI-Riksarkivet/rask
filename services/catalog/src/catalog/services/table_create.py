@@ -74,10 +74,10 @@ from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane, native, provenance_namespace, table_bases, table_claims, table_inputs
-from lakehouse_kit import base_registry, data_directories, location_claims
-from lakehouse_kit.control_emit import ControlEmitter, emit_control
-from service_kit.governed import fga
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_registry, data_directories, location_claims
+from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.governed import fga
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

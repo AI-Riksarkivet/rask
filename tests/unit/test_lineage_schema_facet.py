@@ -7,7 +7,7 @@ from typing import cast
 import pyarrow as pa
 from lance import blob_field
 
-from lakehouse_kit import schema
+from lakehouse import schema
 
 
 def test_type_label_renders_media_types() -> None:
@@ -37,7 +37,7 @@ def test_schema_facet_caps_metadata_bloat(caplog) -> None:
     # from storage where the manifest IS the schema).
     import logging
 
-    from lakehouse_kit import openlineage as ol
+    from lakehouse import openlineage as ol
 
     wide = [{"name": f"c{i}", "type": "int64"} for i in range(ol.FACET_MAX_FIELDS + 88)]
     with caplog.at_level(logging.WARNING):

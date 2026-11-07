@@ -12,9 +12,7 @@ root_packages =
     catalog
     lineage
     maintenance
-    service_kit
-    lakehouse_kit
-    lineage_kit
+    lakehouse
     dapr
 include_external_packages = True
 
@@ -24,78 +22,37 @@ type = forbidden
 source_modules =
     catalog.api
 forbidden_modules =
-    service_kit.exceptions
+    lakehouse.exceptions
 allow_indirect_imports = True
 
 # The lakehouse knows no client (XC-175): a client and a compute engine (ADR 0155) reach the lakehouse only through its
-# public doors, so deleting every client changes nothing in the lakehouse. A client may import the platform package;
-# no lakehouse service and no kit it runs imports Ray, lance-ray or lancedb, by any chain. Each is forbidden as an
-# external name, not a root package, so this file holds with no client installed. lancedb
-# matches the lakehouse image's import gate (`.docker/rest-catalog.dockerfile`, `--absent`): the lakehouse reads and
-# writes through pylance and lance-namespace, and lancedb is a client's library.
+# public doors, so deleting every client changes nothing in the lakehouse. No lakehouse service and nothing in the
+# library they run imports Ray, lance-ray or lancedb, by any chain. Each is forbidden as an external name, not a root
+# package, so this file holds with no client installed. lancedb matches the lakehouse image's import gate
+# (`.docker/rest-catalog.dockerfile`, `--absent`): the lakehouse reads and writes through pylance and lance-namespace,
+# and lancedb is a client's library.
 [importlinter:contract:the-lakehouse-knows-no-client]
-name = Phase 1 (3), XC-176, XC-178, XC-188: no lakehouse service and no lakehouse kit imports a client or a compute engine
+name = Phase 1 (3), XC-176, XC-178, XC-188: no lakehouse service and nothing in the lakehouse library imports a client or a compute engine
 type = forbidden
 source_modules =
     catalog
     lineage
     maintenance
-    service_kit
-    lakehouse_kit
-    lineage_kit
+    lakehouse
 forbidden_modules =
     ray
     lance_ray
     lancedb
 
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
-name = Phase 1 (3): no lakehouse service and no shared kit imports a workflow engine
+name = Phase 1 (3): no lakehouse service and nothing in the lakehouse library imports a workflow engine
 type = forbidden
 source_modules =
     catalog
     lineage
     maintenance
-    service_kit
-    lakehouse_kit
-    lineage_kit
+    lakehouse
 forbidden_modules =
     dapr.ext.workflow
     durabletask
 allow_indirect_imports = True
-
-[importlinter:contract:the-error-types-import-no-app-factory]
-name = importing service_kit.exceptions loads neither the logging setup nor dotenv
-type = forbidden
-source_modules =
-    service_kit.exceptions
-forbidden_modules =
-    service_kit.app
-    dotenv
-
-# Neither kit declares the other, so an import across would pass in the root venv and fail in an image whose closure
-# lacks the package. What crosses between them is a callable (a key loader, a key parser, a secret fetch) or a name
-# spelled out on both sides (the door modes).
-[importlinter:contract:the-two-kits-import-neither-way]
-name = service_kit and lineage_kit never import each other
-type = independence
-modules =
-    service_kit
-    lineage_kit
-
-# The platform a client pins never reaches into the kernel only the lakehouse runs (XC-186): the kernel builds on the
-# platform, never the other way, so a refactor of the kernel cannot change what a client pinned.
-[importlinter:contract:the-platform-knows-no-kernel]
-name = XC-186: service_kit, the platform a client may pin, imports nothing from lakehouse_kit, the lakehouse's kernel
-type = forbidden
-source_modules =
-    service_kit
-forbidden_modules =
-    lakehouse_kit
-
-# Neither declares the other, as for the platform above.
-[importlinter:contract:the-kernel-and-lineage-kit-import-neither-way]
-name = lakehouse_kit and lineage_kit never import each other
-type = independence
-modules =
-    lakehouse_kit
-    lineage_kit

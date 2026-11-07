@@ -48,21 +48,21 @@ from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-import lakehouse_kit.storage as storage
-from lakehouse_kit import base_registry
-from lakehouse_kit.base_refs import BaseRefs, normalise
-from lakehouse_kit.features import manifest_base_path_refs
-from lakehouse_kit.maintenance_due import CloneList
-from lakehouse_kit.objectfs import lance_storage_options
-from lakehouse_kit.storage import S3Client
+import lakehouse.storage as storage
+from lakehouse import base_registry
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.base_refs import BaseRefs, normalise
+from lakehouse.features import manifest_base_path_refs
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.maintenance_due import CloneList
+from lakehouse.naming import UUID_PROPERTY
+from lakehouse.objectfs import lance_storage_options
+from lakehouse.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge, sweep
 from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
 from maintenance.services.plan import PlanContext
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.naming import UUID_PROPERTY
 
 
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -440,7 +440,7 @@ def _registered(estate: _Estate, table: str, location: str) -> str:
 
 def _purge_expired(estate: _Estate, table: str, location: str) -> None:
     """The maintenance purge of the trash record ``table``'s recoverable drop filed, re-stamped long expired, under a clean drift report."""
-    from lakehouse_kit import trash
+    from lakehouse import trash
     from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
 
     (filed,) = trash.named(estate.root, estate.key, table)
@@ -461,7 +461,7 @@ def _purge_expired(estate: _Estate, table: str, location: str) -> None:
 
 
 def test_a_table_location_is_exclusive(estate: _Estate) -> None:
-    """The register door's location-exclusivity (Lakekeeper's rule): the only thing keeping ``_bases/`` out of every vend.
+    """The register door's location-exclusivity: the only thing keeping ``_bases/`` out of every vend.
 
     The ``dir`` backend accepts a register at the namespace root, at a control prefix and at another table's
     directory (lh279 m4), and a write vend covers the registered prefix (lh279 s1). It also accepts a spelling

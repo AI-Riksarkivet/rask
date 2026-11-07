@@ -107,8 +107,8 @@ When a workflow step points to a rule ID, open the matching file in `references/
 | `references/grant-provenance.md` | Who GAVE a grant — the audit-join review procedure, and why a tuple cannot answer it |
 
 **Every subject is a principal, `<idp-id>~<subject>`, and becomes a `user` id in one place,
-`service_kit.governed.fga.user_object`** (ADR 0159 D5, ADR 0156 C5, [[LH-063]], [[LH-474]];
-`service_kit.governed.principal`). A service account is `kubernetes~system:serviceaccount:<ns>:<sa>`; a person is the idp
+`lakehouse.governed.fga.user_object`** (ADR 0159 D5, ADR 0156 C5, [[LH-063]], [[LH-474]];
+`lakehouse.governed.principal`). A service account is `kubernetes~system:serviceaccount:<ns>:<sa>`; a person is the idp
 id the deployment names their Dex connector (`RASK_OIDC_CONNECTORS`, chart `auth.oidc.connectors`; the dev Dex's
 `local` is `dex`) and the user id Dex reports in `federated_claims`, never Dex's `sub`, which encodes the connector.
 `user_object` refuses a value that names no identity provider (`InvalidInputError`, 400), so no tuple, seed or check
@@ -168,7 +168,7 @@ warehouse, a project, a classification label and a transaction keep their ids.
   Run:
 
 ```bash
-fga model validate --file packages/service-kit/src/service_kit/governed/auth/model.fga
+fga model validate --file packages/lakehouse/src/lakehouse/governed/auth/model.fga
 ```
 
   If validation fails: read the reported relation or type errors, fix the model, and re-run validation before continuing.
@@ -177,7 +177,7 @@ fga model validate --file packages/service-kit/src/service_kit/governed/auth/mod
   Run:
 
 ```bash
-fga model test --tests packages/service-kit/src/service_kit/governed/auth/model.fga.yaml
+fga model test --tests packages/lakehouse/src/lakehouse/governed/auth/model.fga.yaml
 ```
 
   If tests fail: update tuples, assertions, or permission definitions, then re-run tests until all checks and list queries pass.

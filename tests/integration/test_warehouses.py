@@ -23,13 +23,13 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.vending import EncryptionAtRest, VendedSession
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
-from service_kit.governed import fga as fga_module
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.naming import UUID_PROPERTY
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed import fga as fga_module
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.naming import UUID_PROPERTY
+from lakehouse.storage_options import StorageOptions
 
 
 def _settings(tmp_path: Any, *, enabled: bool = True, fga: bool = False, reserved: str = "") -> Settings:
@@ -468,7 +468,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     # (`upsert_warehouse` → `mutate_json` → `read_json`), so counting `get_warehouse` calls stopped
     # measuring anything. Count where the work actually happens now; the property under test —
     # "the store, not the guard, refused" — is unchanged.
-    from lakehouse_kit import records as rec
+    from lakehouse import records as rec
 
     real_read_json = rec.read_json
     conditional_reads = {"n": 0}

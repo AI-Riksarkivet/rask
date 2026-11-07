@@ -23,7 +23,7 @@ from pydantic import SecretStr
 from catalog.api.v1.endpoints import warehouses as endpoint
 from catalog.core.vending import VendedSession
 from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, ProbeCheck
-from service_kit.governed.store_credential import S3KeyPair
+from lakehouse.governed.store_credential import S3KeyPair
 
 
 if TYPE_CHECKING:
@@ -363,9 +363,9 @@ class TestTheDoorGatesBeforeItWrites:
 
 def _token() -> Any:
     """A verified person, the shape `CurrentToken` resolves to."""
-    from service_kit.governed.idp_identity import PersonPrincipal
-    from service_kit.governed.oidc import IDToken
-    from service_kit.governed.principal import Principal
+    from lakehouse.governed.idp_identity import PersonPrincipal
+    from lakehouse.governed.oidc import IDToken
+    from lakehouse.governed.principal import Principal
 
     claims = IDToken(iss="https://dex.test/dex", sub="user-1", aud="lance-catalog", iat=0, exp=1 << 31)
     return PersonPrincipal(principal=Principal(idp_id="dex", subject="user-1"), claims=claims)

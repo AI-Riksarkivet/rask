@@ -1,6 +1,6 @@
 """``/management/v1/projects`` — first-class tenants: an explicit registry record, created in ONE operation with its tuples.
 
-A *project* is the FGA model's tenant type (``service_kit/governed/auth/model.fga``): warehouses hang off it
+A *project* is the FGA model's tenant type (``lakehouse/governed/auth/model.fga``): warehouses hang off it
 via their ``project`` field, and every grant cascades down from it. A project EXISTS when its registry
 record does (``catalog/services/projects.py`` — ``_projects/<id>.json`` on the control root, no DB), and
 ``POST /management/v1/projects`` writes that record AND the creator's ``admin`` tuple in one operation, so existence
@@ -77,14 +77,14 @@ from catalog.schemas import (
 from catalog.services import projects as project_registry
 from catalog.services import role_grants, roles, warehouses
 from catalog.services.control_records import ProtectionChange
-from lakehouse_kit import maintenance_policies, protection
-from lakehouse_kit.control_emit import emit_control
-from lakehouse_kit.records import RecordExistsError, RecordMissingError
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.governed.deps import ANONYMOUS_SUBJECT
-from service_kit.naming import CONTROL_ID_RE
-from service_kit.storage_options import StorageOptions
+from lakehouse import maintenance_policies, protection
+from lakehouse.control_emit import emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.records import RecordExistsError, RecordMissingError
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

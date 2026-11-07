@@ -32,12 +32,12 @@ from fastapi.testclient import TestClient
 from lance.blob import Blob, blob_array
 from pydantic import SecretStr
 
-from lakehouse_kit import blobs
-from lakehouse_kit.objectfs import lance_storage_options
-from lakehouse_kit.storage import S3Client
-from lakehouse_kit.store_session import IssuedSession, WebIdentity
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.governed.store_credential import S3KeyPair
+from lakehouse import blobs
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.objectfs import lance_storage_options
+from lakehouse.storage import S3Client
+from lakehouse.store_session import IssuedSession, WebIdentity
 
 
 _INVALID_INPUT = 13

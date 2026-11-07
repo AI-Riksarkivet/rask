@@ -83,7 +83,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   whose purpose is closing a zero-trust gap (an unsigned writer admitted, a credential that never rotates, an identity
   trusted by position) is pre-approved: do it and report it. Still ask before anything destructive on shared live
   state, and still ask a real trade-off between two designs that both meet the four facts.
-- **The lakehouse names no client, anywhere** (owner, 2026-11-04: "Lakehouse don't know anything about the other stuff what so ever. It does not eg know flows or compute"). No file the lakehouse owns (the product chart, `deploy/values-*`, its alert rules, the platform dev fixtures, the kits, catalog/lineage/maintenance, their tests) names a client; `scripts/lakehouse_names_no_client.py` enforces it in `make lint` and `dagger call lint` ([[XC-191]]), over the console's tree too. **This repository hosts no client** (owner, 2026-11-06: "Console in product", ADR 0193): the console is the lakehouse's own UI, shipped by the product chart with its own settings and its own sign-in client, and the notifications inbox is retired. The lakehouse ships only the generic seam, with empty defaults: `openbao.externalReaders`, `networkPolicy.objectStoreExtraFrom`, `nats.auth.users`, the Dex fixture's `clients`. A client's roles on the catalog are no value at all: they are grants to its own identity made at the catalog's access doors, which no upgrade or boot revokes ([[LH-563]]). A client's integration values (its Dex sign-in client, its store peer) are written in the client's own repository and supplied to a lakehouse install from there (`-f <client values>`, or `Lakehouse(values, dexClient, …)` for its e2e). The removal test holds for files as well as imports: deleting every client changes no lakehouse file.
+- **The lakehouse names no client, anywhere** (owner, 2026-11-04: "Lakehouse don't know anything about the other stuff what so ever. It does not eg know flows or compute"). No file the lakehouse owns (the product chart, `deploy/values-*`, its alert rules, the platform dev fixtures, the `lakehouse` library, catalog/lineage/maintenance, their tests) names a client; `scripts/lakehouse_names_no_client.py` enforces it in `make lint` and `dagger call lint` ([[XC-191]]), over the console's tree too. **This repository hosts no client** (owner, 2026-11-06: "Console in product", ADR 0193): the console is the lakehouse's own UI, shipped by the product chart with its own settings and its own sign-in client, and the notifications inbox is retired. The lakehouse ships only the generic seam, with empty defaults: `openbao.externalReaders`, `networkPolicy.objectStoreExtraFrom`, `nats.auth.users`, the Dex fixture's `clients`. A client's roles on the catalog are no value at all: they are grants to its own identity made at the catalog's access doors, which no upgrade or boot revokes ([[LH-563]]). A client's integration values (its Dex sign-in client, its store peer) are written in the client's own repository and supplied to a lakehouse install from there (`-f <client values>`, or `Lakehouse(values, dexClient, …)` for its e2e). The removal test holds for files as well as imports: deleting every client changes no lakehouse file.
 - **Platform services are external in production** (owner, 2026-10-04). OpenBao, Dex, S3, the OTel backend, ESO, the
   operators, NATS and OpenFGA's Postgres are the platform's; the bundled copies are development fixtures. rask
   references them by name, mints no production trust root, and does not engineer a fixture's durability. The app
@@ -253,26 +253,21 @@ plane lives under `frontend/`, its own bun workspace root. There is no Polylith-
 build straight from the root uv workspace via `uv sync --package <name>`, one dockerfile per deployable in `.docker/`.
 
 - `packages/` — reusable **Python** libraries, **no entrypoints**. uv workspace members.
-  - `packages/service-kit` — the **platform package** a client pins by lakehouse tag ([[XC-186]]), and the pieces of it
-    the lakehouse itself runs: exceptions, the request-id middleware, logging (`setup_logging`), the probes and the drain,
-    the body cap, the auth plane (`governed`), the naming a client needs (`naming`, `ns_errors`, `spec_routes`,
-    `endpoint_scheme`), the input and credential guards (`arrow_ipc`, `storage_options`), and the contract a client
-    reads the lakehouse's events by ([[XC-188]]: `control_events`, `lineage_events`, `governed.subjects`,
-    `signature_doors`). It also ships the test seam a client's suite needs, as a pytest plugin
-    (`service_kit.pytest_plugin`, entry point `pytest11`, [[XC-190]]). It ships no app factory (owner, 2026-11-07): the lakehouse builds from
-    `lakehouse_kit.lance_app`, and a client, an outside tool on the public API, builds its own app. Dependency-light (no
-    lancedb/ray/sqlmodel), and it imports nothing from the lakehouse's kernel (`.importlinter`,
-    `the-platform-knows-no-kernel`).
-  - `packages/lakehouse-kit` — the lakehouse's **kernel**, imported only by its own services (`catalog`, `lineage`,
-    `maintenance`): the lance app factory (`lakehouse_kit.lance_app`); the catalog's records, registries and governance
-    guards (protection, trash, history fences, quality gates, retention); the table layout and feature checks; the
-    namespace clients, readers and writers (`lakehouse_kit.lancekit`); the OpenLineage emission builders, the
-    control-event emitter and the outbox seams with the Dapr publish; the store session; and the S3 client, STS and URI
-    seam (`lakehouse_kit.storage`: `s3_client`/`S3Client`, `configured_endpoint`, `sts_client`, `iter_keys`, `split_s3_uri`,
-    the `StorageError` family). No client may import it.
-  - `packages/lineage-kit` — the OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage
-    events (`lineage_kit.signing`), used by catalog, lineage and maintenance, and by a client to verify the lakehouse's
-    events.
+  - `packages/lakehouse` — **the lakehouse's one library** (import `lakehouse`, ADR 0195), imported only by its own
+    services (`catalog`, `lineage`, `maintenance`) and by no client: everything they run on, organised by module. The
+    lance app factory (`lakehouse.lance_app`) and what it installs: exceptions, the request-id middleware, logging
+    (`setup_logging`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
+    the spec's error mapping (`naming`, `ns_errors`, `spec_routes`, `endpoint_scheme`); the input and credential guards
+    (`arrow_ipc`, `storage_options`); the catalog's records, registries and governance guards (protection, trash,
+    history fences, quality gates, retention); the table layout and feature checks; the namespace clients, readers and
+    writers (`lakehouse.lancekit`); the events (`control_events`, `control_emit`, `signature_doors`, `lineage_events`,
+    `governed.subjects`, the outbox seams with the Dapr publish, the OpenLineage builders in `openlineage`); the
+    OpenLineage emission and the Ed25519 signing and verifying seam (`lakehouse.lineage`, `lakehouse.lineage.signing`);
+    the store session; and the S3 client, STS and URI seam (`lakehouse.storage`: `s3_client`/`S3Client`,
+    `configured_endpoint`, `sts_client`, `iter_keys`, `split_s3_uri`, the `StorageError` family). A client reaches the
+    lakehouse through its doors and events, never by importing this package: the doors are `docs/*-openapi.json`, the
+    events `docs/COMMIT-EVENTS.md`. The suite's process-global seams (the secret-read cache, the projected token files,
+    the bounded Dapr handshake, strict respx) are autouse fixtures in the root `conftest.py`.
 - `services/` — runnable **Python** code:
   - `services/catalog`, `services/lineage`, `services/maintenance` — **the lakehouse**, built from the lance app factory
     and shipped as ONE image (`.docker/rest-catalog.dockerfile`) run with three commands.
@@ -358,7 +353,8 @@ Key facts that aren't obvious from any single file:
 
 - **LANCE ONLY, ALWAYS — a permanent ruling (owner, 2026-08-15), not a current-scope note.** The catalog
   stores Lance tables and **no other format, ever**. A create naming a non-Lance format is refused 400
-  at the door (`core/formats.py::reject_unsupported_properties`; pinned by `tests/unit/test_format_guard.py`) —
+  at the door (`core/formats.py::reject_unsupported_properties`; pinned by
+  `services/catalog/tests/test_create_validates_shape_before_round_trips.py::test_a_non_lance_format_is_refused_without_dialling_out`) —
   that 400 is the final answer, not a gap awaiting Parquet/Iceberg/Delta support. This is load-bearing,
   not a preference: the catalog is deliberately format-AWARE (imports pylance, serves the data plane
   in-process, coordinates commits), and all three are only sound because the format is closed. It is
@@ -373,7 +369,7 @@ Key facts that aren't obvious from any single file:
   COMMITTED and stamps reader flag 256 (mixed data file versions), which no operation removes:
   maintenance refuses the table, and pylance 11 and lancedb 0.34 cannot open it, while lancedb 0.40 (the
   pinned one) can (`lance_docs/PROVENANCE.md`). The catalog's `version/create` (a stock client's commit, ADR 0157) and the register door refuse
-  such a set (`lakehouse_kit.features.describe_foreign_data_file_versions`), and the maintenance
+  such a set (`lakehouse.features.describe_foreign_data_file_versions`), and the maintenance
   counter `compaction.datasets.mixed_file_versions` pages on one. pylance 13's `update()`,
   `merge_insert().data_storage_version()` and `compact_files()` also take a `data_storage_version` that
   can stamp the flag: a stock client's such commit is refused at `version/create`, and rask code never passes it.
@@ -385,7 +381,7 @@ Key facts that aren't obvious from any single file:
   harmless: read as policy, "trusted network" made an unguarded service look deliberate rather than
   unfinished. Owner ruling 2026-08-26: authenticated is the truth, the ungated services get the door
   their siblings share, and body caps + rate limiting land as one seam rather than per route (the catalog's
-  `service_kit.body_limit` cap and its write-concurrency shed). That work landed: the tracking
+  `lakehouse.body_limit` cap and its write-concurrency shed). That work landed: the tracking
   file, `open_fastapi-audit.md`, was **DRAINED AND DELETED 2026-08-28** — all 55 findings fixed
   RED-first, every closure adversarially re-verified (the drain's own commits carry the record).
   **rask runs no edge process** (ADR 0165): the platform's
@@ -399,7 +395,7 @@ Key facts that aren't obvious from any single file:
   is Traefik's Gateway provider (`deploy/k3s/traefik-gateway.yaml`, Gateway `traefik-gateway` in `kube-system`).
 - **State surface:** the lakehouse (Lance datasets on S3; RustFS in development, `rask-rustfs`, ADR 0168) governed by the catalog, plus the chart-managed **OpenFGA** Postgres database — served by the `rask-age` **StatefulSet**, NOT by CloudNativePG. Lineage keeps no database (ADR 0158): its commit feed (`provenance$events`), table-level edge list (`provenance$edges`), outbox refusals and forwarder cursors are Lance tables in the catalog's provenance namespace, written and read through the catalog's doors, and the lineage graph is bring-your-own (the relay forwards every recorded event as OpenLineage to `services.lineage.forward.url`; Marquez in development). Measured live 2026-09-07: **zero** `cluster.postgresql.cnpg.io` objects exist, and `age.cnpgCluster.enabled` defaults **false** because the AGE-on-CNPG cutover needs a built extension image (`.docker/cnpg-age-ext.dockerfile`), K8s 1.33+ and CNPG >= 1.27 — the two paths are mutually exclusive and `age-cluster.yaml` fails the render if both are on. The CNPG **operator** is a prerequisite (ADR 0153; in development the `cloudnative-pg` fixture in `cnpg-system`) and runs with nothing to reconcile, so a running operator is not evidence that a `Cluster` exists. **The app's own relational DB is gone** (P7a): no batches table, no Alembic, no `DATABASE_URL` in the fleet. **No Redis**; events ride Dapr pub/sub on NATS JetStream. (`.docker/` still carries 3 `docker-compose*.yml` files: the local stack and two auth/dex variants. They are side stacks for local bring-up, not the deploy path; the Helm chart is.) The Helm chart in `chart/` is the single deploy artifact for both local k3s and production, and installs no operator: the External Secrets Operator, the Dapr control plane, NATS JetStream and the CloudNativePG operator are prerequisites, installed in development from `deploy/fixtures`, each its own release; the chart renders a CNPG `Cluster` only with `age.cnpgCluster.enabled`, for a cluster that serves `postgresql.cnpg.io/v1`. No compute engine is in the chart (ADR 0153, ADR 0155): the engine is bring-your-own, and the product chart names no part of it — no address, token, scrape job, alert or network peer (ADR 0189). `make k3s-up` installs the lakehouse with its console and no client (XC-183, ADR 0193). Local deploy: `make k3s-install` (one-time), then `make k3s-up`, which pulls from `K3S_REGISTRY` (default `localhost:5000`) at the tags `deploy/values-live-pins.yaml` pins, or `make k3s-build` → `make k3s-import` → `make k3s-up K3S_REGISTRY=` for side-loaded images; tear down with `make k3s-down` / `make k3s-purge`. See `docs/architecture/deployment.md` and `chart/README.md`.
 - **Observability (optional, `observability.enabled`):** rask ships ONE thing: the **OTel Collector** (`chart/templates/otel-collector.yaml`, app-id `rask-otel`), its telemetry seam. **Vector was RETIRED 2026-07-27** (owner ruling): the Collector is the single log shipper — its filelog receiver tails infra-pod logs, and it scrapes the Dapr sidecars and control plane and OpenFGA. Every plane (the fleet, Dapr, OpenFGA) exports plain OTLP/HTTP to the Collector and names no store; the Collector exports to **`observability.export.endpoint`** with the backend's headers from `observability.export.*` (GreptimeDB's db-name, trace-pipeline and audit-table headers by default) and basic auth from the store's `otel-collector-export` secret. **The store, dashboards and alerting are the platform's, not the chart's** ([[XC-127]], ADR 0153): the alert rules are an artefact of their own, `deploy/alerting/rules.yml` (promtool-proven by `make alert-rules-check`, replayed against GreptimeDB by `make alert-rules-drill`), for the platform's evaluator. Development gets the chain from the `observability` fixture (`deploy/fixtures/observability`, namespace `observability`): GreptimeDB (`greptimedb.observability:4000`, local volume, retention Job) → Perses (rask's dashboards) and vmalert → Alertmanager, which `deploy/values-local.yaml` names. Standard OTLP throughout (not OTel-Arrow).
-- **The lakehouse runs no ingest, no stage, no training and no engine (ADR 0154, ADR 0155).** Data enters through the catalog's namespace doors and the catalog announces each committed write; nothing inside the lakehouse reacts to that announcement by copying rows into the next tier — a user's pipeline does, on its own compute. Ingest of an external source is a bring-your-own client job (CP-061, not yet built) that commits through the catalog; until it lands, data reaches bronze only from a client speaking the namespace doors; the live lane `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` is such a client, seeding bronze with stock pylance on the credential the catalog vends. A create that commits no rows is a DDL event, and one that commits rows is announced as a write (LH-492). **No tier carries a workload-shaped schema**: a governed row needs no column, because its run and inputs ride the commit as `rask.*` transaction properties (ADR 0156 C9, LH-225); `source_rowid` is the one column the platform names (`lakehouse_kit.stage_stamp`), an opt-in held to uint64 stable row ids and reserved by name in the catalog (`catalog/core/provenance_guard.py`), and the rest of the row, `stage` and `lineage` included, is the writer's. A workload's own output shape belongs to the user's pipeline.
+- **The lakehouse runs no ingest, no stage, no training and no engine (ADR 0154, ADR 0155).** Data enters through the catalog's namespace doors and the catalog announces each committed write; nothing inside the lakehouse reacts to that announcement by copying rows into the next tier — a user's pipeline does, on its own compute. Ingest of an external source is a bring-your-own client job (CP-061, not yet built) that commits through the catalog; until it lands, data reaches bronze only from a client speaking the namespace doors; the live lane `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` is such a client, seeding bronze with stock pylance on the credential the catalog vends. A create that commits no rows is a DDL event, and one that commits rows is announced as a write (LH-492). **No tier carries a workload-shaped schema**: a governed row needs no column, because its run and inputs ride the commit as `rask.*` transaction properties (ADR 0156 C9, LH-225); `source_rowid` is the one column the platform names (`lakehouse.stage_stamp`), an opt-in held to uint64 stable row ids and reserved by name in the catalog (`catalog/core/provenance_guard.py`), and the rest of the row, `stage` and `lineage` included, is the writer's. A workload's own output shape belongs to the user's pipeline.
 - **Source bytes are a WORKLOAD concern.** A workload may read from S3, an HTTP endpoint, a read-through cache, anywhere — the platform takes data only through the catalog's namespace doors and does not care where the bytes came from. A workload's source and sink adapters are its own code; the platform ships none and has no privileged ingress for any particular protocol.
 
 ## Conventions
@@ -423,6 +419,10 @@ Key facts that aren't obvious from any single file:
   the prose exists to preserve. `scripts/comment_history_gate.py` enforces it on CHANGED lines only;
   its `--report` mode is an advisory whole-tree count and never gates. Passing the gate is a floor
   under the rule, not proof of conformance — only a reader can tell the three kinds apart.
+- **The code names no reference product** (owner, 2026-11-07: "I don't like you mentioning lakekeeper in code"). A
+  comment, docstring, test, chart value or script states the rationale itself; the comparison with Lakekeeper (or any
+  catalog the research reads) stays in questions, ADRs, `docs/`, issue bodies and commit messages.
+  `scripts/code_names_no_reference_product.py` enforces it in `make lint` and `dagger call lint`.
 
 ## Agent skills
 

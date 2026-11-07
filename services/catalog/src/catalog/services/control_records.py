@@ -8,7 +8,7 @@ registries together over a helper that is about neither of them.
 
 They are here because they are about neither: "one JSON document on the control root" is the shared
 concept, and both registries now import it under a public name. Conditional writes (mint-iff-absent,
-ETag-guarded mutate) stay in ``lakehouse_kit.records``; these two are the unconditional pair
+ETag-guarded mutate) stay in ``lakehouse.records``; these two are the unconditional pair
 those build on.
 
 All IO here is BLOCKING; callers threadpool it.
@@ -24,9 +24,9 @@ from typing import Self
 from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from lakehouse_kit.objectfs import fs_and_base
-from lakehouse_kit.protection import is_protected
-from service_kit.storage_options import StorageOptions
+from lakehouse.objectfs import fs_and_base
+from lakehouse.protection import is_protected
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ def write_json(root_uri: str, storage_options: StorageOptions, key: str, record:
 
     UNCONDITIONAL, which is why the registries only reach for it on paths with no concurrency to lose
     to (seeding, fixtures): a put assembled from an earlier read silently discards whatever landed in
-    between. Every real mutation goes through ``lakehouse_kit.records``' conditional doors.
+    between. Every real mutation goes through ``lakehouse.records``' conditional doors.
     """
     fs, base = fs_and_base(root_uri, storage_options)
     parent = f"{base}/{key}".rsplit("/", 1)[0]

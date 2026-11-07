@@ -5,9 +5,10 @@ description = "Lance Namespace REST catalog — namespaces/tables/branches/tags 
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
-    "service-kit[governed,arrow]",
-    # The lakehouse's kernel: the storage internals, the control lane and the events this service runs on.
-    "lakehouse-kit[data]",
+    # The lakehouse's library: the storage internals, the auth plane, the control lane and the events this service runs
+    # on, and the lineage signing seam ([[LH-064]]) the verifier in `services/lineage` shares, so both sides hold one
+    # definition of what was signed.
+    "lakehouse",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "pydantic-settings>=2.5",
@@ -16,13 +17,10 @@ dependencies = [
     "pyarrow",
     "pylance[otel]>=13.0.0",
     "lance-namespace>=0.11.0,<0.12",
-    # Signs the lineage this service emits ([[LH-064]]); the verifier in `services/lineage` uses the
-    # same module, so both sides share one definition of what was signed.
-    "lineage-kit",
-    # >=0.10.4 with service-kit: the shared FGA write path rides `on_duplicate_writes=IGNORE`.
+    # >=0.10.4 with `lakehouse`: the shared FGA write path rides `on_duplicate_writes=IGNORE`.
     "openfga-sdk>=0.10.4",
     # Declared for the `botocore.exceptions` imports (`ClientError` handling in the credentials door
-    # and the warehouse registry). Every CLIENT — S3 and STS alike — is built by `lakehouse_kit.storage`.
+    # and the warehouse registry). Every CLIENT — S3 and STS alike — is built by `lakehouse.storage`.
     "boto3>=1.35",
     "dapr>=1.18.1",
     "dapr-ext-fastapi>=1.18.1",
@@ -37,6 +35,4 @@ build-backend = "hatchling.build"
 packages = ["src/catalog"]
 
 [tool.uv.sources]
-lakehouse-kit = { workspace = true }
-lineage-kit = { workspace = true }
-service-kit = { workspace = true }
+lakehouse = { workspace = true }

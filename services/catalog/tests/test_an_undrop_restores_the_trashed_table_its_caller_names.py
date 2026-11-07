@@ -17,7 +17,7 @@ from typing import Any
 import pyarrow as pa
 import pytest
 
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 def _ok(catalog: Any, path: str, caller: str = "alice", **kwargs: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog and the request's keywords

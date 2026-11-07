@@ -55,7 +55,7 @@ func (m *Rask) pythonBase(src *dagger.Directory) *dagger.Container {
 //
 // --all-packages is LOAD-BEARING, not a flourish. A bare `uv sync` in a uv
 // workspace installs the ROOT project only and silently omits every member, so
-// `lineage_kit`, `service_kit` and the rest are absent from the environment ty
+// `lakehouse` and the services are absent from the environment ty
 // then checks. This comment used to claim a bare sync was "a full uv sync"; it
 // is not, and believing it kept `main` red from 2026-07-23 to 2026-07-29 with
 // `error[unresolved-import]: Cannot resolve imported module 'lineage_kit'` on

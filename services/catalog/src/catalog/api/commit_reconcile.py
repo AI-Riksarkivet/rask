@@ -49,13 +49,13 @@ from catalog.core.commit_ids import commit_ids_of, tag_move_run_id
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import PUBLISH_TABLE, LineageEmitter, emit_write_event, run_inputs
 from catalog.services import commit_reconcile, dataplane, erasure_derived, native, table_claims
-from lakehouse_kit import location_claims
-from lakehouse_kit.base_refs import decoded_path
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.lineage_events import DatasetUuids
-from service_kit.storage_options import StorageOptions
+from lakehouse import location_claims
+from lakehouse.base_refs import decoded_path
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.lineage_events import DatasetUuids
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

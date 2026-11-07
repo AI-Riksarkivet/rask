@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from catalog.schemas import RoleRecord
 from catalog.services import roles, warehouses
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`lance_docs/ns_catalog/spec.yaml`).

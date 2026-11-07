@@ -30,10 +30,10 @@ from openlineage.client import facet_v2
 
 from catalog.core import lineage_emit as catalog_emit
 from catalog.core.run_context import RunContext
-from lakehouse_kit import openlineage as ol
+from lakehouse import lineage_events
+from lakehouse import openlineage as ol
 from lineage.models import RunEvent
 from maintenance.core import lineage_emit as compaction_emit
-from service_kit import lineage_events
 from tests.unit.rask_facets import rask_facet_errors
 
 

@@ -27,9 +27,9 @@ import lance
 import pyarrow as pa
 import pytest
 
-from lakehouse_kit import base_registry, location_claims
-from lakehouse_kit.base_refs import normalise, protected_roots
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_registry, location_claims
+from lakehouse.base_refs import normalise, protected_roots
+from lakehouse.storage_options import StorageOptions
 
 
 def _registry(tmp_path: Path) -> base_registry.BaseRegistry:

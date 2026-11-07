@@ -94,7 +94,7 @@ COPY --from=builder --link /opt/venv /opt/venv
 # THREE FILES OUT OF `scripts/`, NAMED ONE BY ONE. Each is run by a chart workload, so each has to
 # exist in an image; copying the whole directory would put every dev and ops script into a
 # request-serving image for the sake of three. Each imports stdlib plus what the venv above already
-# carries (`lakehouse_kit.storage`, boto3/botocore, pydantic), so none adds a dependency, and no chart Job needs a
+# carries (`lakehouse.storage`, boto3/botocore, pydantic), so none adds a dependency, and no chart Job needs a
 # third-party image that a registry could withdraw.
 #
 # INTO THE FINAL STAGE, not the builder: the builder hands over `/opt/venv` and nothing else, so a
@@ -114,9 +114,11 @@ COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 # Import every module this image serves, against the venv the runtime stage ships. A missing
 # DECLARED dependency is invisible to the workspace venv (a sibling member resolves it) and can
 # only be seen here, where the deployable's own closure is the only one present. See the script.
+# `lakehouse` is gated beside the three services because the chart runs modules of it directly (the issuer mirror,
+# the authorization model's writer), so a module no service imports still has to import here.
 # `--absent`: lancedb (a client's dataset reader) never ships in the lakehouse image ([[XC-178]]).
 COPY .docker/import-gate.py /tmp/import-gate.py
-RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance --absent lancedb && rm /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance lakehouse --absent lancedb && rm /tmp/import-gate.py
 
 # ── the pool gate ────────────────────────────────────────────────────────────
 # Measure the pools OMP_NUM_THREADS bounds, under the environment this stage ships: a pool wider than it fails the build.

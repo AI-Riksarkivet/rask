@@ -27,7 +27,7 @@ import pytest
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from service_kit.governed.settings import FgaSettings
+from lakehouse.governed.settings import FgaSettings
 
 
 class _Probe(FgaSettings, BaseSettings):
@@ -65,7 +65,7 @@ def test_a_retired_name_in_a_DOTENV_is_refused_like_one_in_the_environment(tmp_p
     is not a hard rename — it is the silent half-authenticated estate the rename was chosen to prevent,
     reachable by a slightly different deployment habit.
     """
-    from service_kit.governed.settings import RETIRED_AUTH_ENV_NAMES, GovernedAuthSettings
+    from lakehouse.governed.settings import RETIRED_AUTH_ENV_NAMES, GovernedAuthSettings
 
     retired = RETIRED_AUTH_ENV_NAMES[0]
     dotenv = tmp_path / ".env"

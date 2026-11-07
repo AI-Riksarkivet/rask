@@ -52,22 +52,22 @@ from opentelemetry import trace
 from opentelemetry.trace import SpanContext
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from lakehouse_kit import derived_tables
-from lakehouse_kit.derived_tables import EDGES
-from lakehouse_kit.lancekit.catalog_client import catalog_api_client, request_headers
-from lakehouse_kit.lancekit.filters import in_lists, sql_literal
-from lakehouse_kit.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
-from lakehouse_kit.lancekit.writer import RestCatalogWriteTransport
-from lakehouse_kit.openlineage import BRANCH_IDENTIFIER
+from lakehouse import derived_tables
+from lakehouse.arrow_ipc import encode_arrow_stream
+from lakehouse.derived_tables import EDGES
+from lakehouse.governed.machine_identity import read_identity_token
+from lakehouse.lancekit.catalog_client import catalog_api_client, request_headers
+from lakehouse.lancekit.filters import in_lists, sql_literal
+from lakehouse.lancekit.reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
+from lakehouse.lancekit.writer import RestCatalogWriteTransport
+from lakehouse.lineage import ParentRunFacet
+from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
+from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.openlineage import BRANCH_IDENTIFIER
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
-from lineage_kit import ParentRunFacet
-from service_kit.arrow_ipc import encode_arrow_stream
-from service_kit.governed.machine_identity import read_identity_token
-from service_kit.lineage_events import LANCE_FACET, dataset_uuids
-from service_kit.naming import CATALOG_DELIMITER
 
 
 log = logging.getLogger(__name__)

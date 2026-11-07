@@ -35,11 +35,14 @@ from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, Field
 
-from lakehouse_kit import auto_cleanup, base_refs, base_registry, data_directories, location_claims, maintenance_policies, trash
-from lakehouse_kit.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
-from lakehouse_kit.history_fences import TableHistory
-from lakehouse_kit.lance_session import affordable_cache_bytes
-from lakehouse_kit.maintenance_due import CloneList, DueRecord, delete_due, due_record_name, due_record_names, list_due, write_clone_list
+from lakehouse import auto_cleanup, base_refs, base_registry, data_directories, location_claims, maintenance_policies, trash
+from lakehouse.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.history_fences import TableHistory
+from lakehouse.lance_session import affordable_cache_bytes
+from lakehouse.lineage_events import DatasetUuids
+from lakehouse.maintenance_due import CloneList, DueRecord, delete_due, due_record_name, due_record_names, list_due, write_clone_list
+from lakehouse.storage_options import StorageOptions, s3_filesystem
 from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
@@ -62,9 +65,6 @@ from maintenance.services.due import refresh_due, table_ids
 from maintenance.services.expiry import DatasetResult, DueVerdict, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, summarize_refusals
 from maintenance.services.naming import PolicyOwners, TableIds, policy_owners, read_uuids, table_uuid
 from maintenance.services.plan import DatasetPlan, PlanContext, buckets_to_sweep, cadence_skip, load_policies, resolve_plan
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.lineage_events import DatasetUuids
-from service_kit.storage_options import StorageOptions, s3_filesystem
 
 
 log = logging.getLogger(__name__)

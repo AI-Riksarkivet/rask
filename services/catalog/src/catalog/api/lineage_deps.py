@@ -29,8 +29,8 @@ from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_eve
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane, table_inputs
 from catalog.services.table_claims import ResolvedTable
-from service_kit.governed import fga
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed import fga
+from lakehouse.storage_options import StorageOptions
 
 
 def door_stamp(token: Caller | None, operation: str, run: RunContext | None = None) -> dict[str, str]:

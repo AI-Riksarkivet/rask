@@ -1,4 +1,4 @@
-"""Unit tests for the revoke-on-delete path (service_kit.governed.fga + catalog.fga_deps).
+"""Unit tests for the revoke-on-delete path (lakehouse.governed.fga + catalog.fga_deps).
 
 A dropped object's FGA tuples are removed, so the store holds no grant on an object that is gone. These pin the read+delete contract WITHOUT
 the network: the paginated read returns the COMPLETE set, the delete issues exactly those tuples,
@@ -19,7 +19,7 @@ from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.exceptions import ApiException
 
 from catalog.api import fga_deps
-from service_kit.governed import fga
+from lakehouse.governed import fga
 
 
 def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:
@@ -190,7 +190,7 @@ def test_a_revoke_the_server_says_was_never_there_is_not_audited_as_a_revoke(cap
     the audit trail said it was gone."""
     import logging
 
-    from service_kit.governed.audit import configure_audit
+    from lakehouse.governed.audit import configure_audit
 
     configure_audit(enabled=True)
     with caplog.at_level(logging.INFO, logger="lance.audit"):

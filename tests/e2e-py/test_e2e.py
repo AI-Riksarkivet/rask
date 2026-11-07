@@ -14,7 +14,7 @@ import pytest
 import requests
 from topology import assert_parent_exists, create_top_level
 
-from service_kit.naming import CATALOG_DELIMITER
+from lakehouse.naming import CATALOG_DELIMITER
 
 
 URL = os.environ.get("LANCE_REST_E2E_URL", "")

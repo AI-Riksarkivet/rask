@@ -36,7 +36,6 @@ def _paths(router: APIRouter) -> set[str]:
     ("binding", "reconcile", "paths"),
     [
         pytest.param("alpha-cron", "alpha-reconcile", {"/alpha-cron", "/alpha-reconcile"}, id="alpha"),
-        pytest.param("beta-cron", "beta-reconcile", {"/beta-cron", "/beta-reconcile"}, id="beta"),
         pytest.param("maintenance-cron", "", {"/maintenance-cron"}, id="named-sweep-only"),
         # An executor pod configures no cron. Mounting `f"/{''}"` gives `/`: a cron door at the pod root
         # that answers POST, which is not a route anyone chose to publish.

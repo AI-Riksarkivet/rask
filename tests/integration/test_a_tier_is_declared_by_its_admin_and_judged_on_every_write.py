@@ -1,7 +1,7 @@
 """A table's tier is the `rask.tier` its namespace declares, only an admin declares it, and every write is judged under it.
 
 ADR 0156 C8 and ADR 0160, on the real catalog app over real pylance with OIDC, FGA and warehouses on. The
-OpenFGA store is an in-memory double behind the real `service_kit.governed.fga` functions that answers a
+OpenFGA store is an in-memory double behind the real `lakehouse.governed.fga` functions that answers a
 check from an explicit grant set, so who may act IS the claim here. Namespaces are named against their
 tier on purpose (`sales` is silver, `gold` is untiered): a judge reading names would answer both wrong.
 """
@@ -22,9 +22,9 @@ from fastapi.testclient import TestClient
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims, warehouses
-from service_kit.governed import fga
-from service_kit.governed.audit import AUDIT_LOGGER
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AUDIT_LOGGER
+from lakehouse.storage_options import StorageOptions
 from tests.integration.openfga_grants import Grants, act_as
 
 

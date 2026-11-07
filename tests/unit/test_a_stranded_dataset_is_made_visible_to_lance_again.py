@@ -29,15 +29,15 @@ import pyarrow as pa
 import pytest
 import respx
 
-from lakehouse_kit import trash
-from lakehouse_kit.base_refs import normalise
-from lakehouse_kit.lancekit.versions import committed_at
+from lakehouse import trash
+from lakehouse.base_refs import normalise
+from lakehouse.lancekit.versions import committed_at
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.credentials import MaintenanceDenied
 from maintenance.services.due import TableIds
 from maintenance.services.floor import FLOOR_KEY, FloorReport, raise_listing_floors
 from maintenance.services.orphans import OrphanFile
-from service_kit.storage_options import StorageOptions
 
 
 def _settings(control_root: Path, *, enabled: bool = True, dry_run: bool = False, max_per_tick: int = 10, catalog_url: str = "") -> MaintenanceSettings:

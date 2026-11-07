@@ -17,12 +17,12 @@ from typing import TYPE_CHECKING, Annotated
 from pydantic import AfterValidator, AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse_kit.objectfs import lance_storage_options
-from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
-from service_kit.governed.settings import FgaSettings
-from service_kit.governed.store_credential import S3KeyPair, store_key_pair
-from service_kit.signature_doors import SignatureDoorSettings
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed.settings import FgaSettings
+from lakehouse.governed.store_credential import S3KeyPair, store_key_pair
+from lakehouse.objectfs import lance_storage_options
+from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
+from lakehouse.signature_doors import SignatureDoorSettings
+from lakehouse.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:
@@ -90,10 +90,10 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: of writes from paying an evaluation each. A compaction's or an index's commit skips it. The sweep covers
     #: whatever this skips, which is what makes a threshold safe rather than a way to lose a refresh.
     event_min_versions: int = Field(default=10, ge=1, alias="MAINTENANCE_EVENT_MIN_VERSIONS")
-    #: Expire a table's versions only once at least this many are RECLAIMABLE under its policy — Lakekeeper's
-    #: `min-snapshots-to-expire`. Both lanes ask it: an expiry pass that reclaims one version a tick costs a vend, a
-    #: manifest commit read and a listing for almost nothing. The count is Lance's own, ``explain_cleanup_old_versions``
-    #: with the arguments the pass's ``cleanup_old_versions`` takes ([[LH-562]]).
+    #: Expire a table's versions only once at least this many are RECLAIMABLE under its policy. Both lanes ask it: an
+    #: expiry pass that reclaims one version a tick costs a vend, a manifest commit read and a listing for almost nothing.
+    #: The count is Lance's own, ``explain_cleanup_old_versions`` with the arguments the pass's ``cleanup_old_versions``
+    #: takes ([[LH-562]]).
     min_versions_to_expire: int = Field(default=20, ge=1, alias="MAINTENANCE_MIN_VERSIONS_TO_EXPIRE")
     #: How old a manifest a stock writer staged for a version its table already holds must be before expiry removes it
     #: ([[LH-529]]): one whose commit lost its version is garbage Lance's own cleanup never lists, and the grace outlasts any
@@ -358,7 +358,7 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
 
     # --- Secret consumption from the Dapr secret store (OpenBao) — symmetric with catalog + lineage.
     # When on, the S3 key pair is the store's (NOT plaintext env), read at boot (failing closed if absent)
-    # and again while the service runs (`service_kit.governed.store_credential`).
+    # and again while the service runs (`lakehouse.governed.store_credential`).
     secrets_from_dapr: bool = Field(default=False, alias="MAINTENANCE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
@@ -436,8 +436,8 @@ def shared_lance_session() -> lance.Session:
     minting and discarding Lance's default 1 GiB + 6 GiB ceilings per open — ceilings that dwarf
     the pod's own 512Mi limit. Caps are LRU soft bounds; session keys carry (uri, version, etag),
     so a commit bumping a version writes new keys and a new version is never served stale. An old
-    version whose data files were reclaimed can be (`lakehouse_kit.lance_session`)."""
-    from lakehouse_kit.lance_session import affordable_cache_bytes, lance_session
+    version whose data files were reclaimed can be (`lakehouse.lance_session`)."""
+    from lakehouse.lance_session import affordable_cache_bytes, lance_session
 
     settings = get_settings()
     # CLAMPED TO WHAT THIS CONTAINER HOLDS, because the configured pair did not fit it. 128 + 256 MB

@@ -26,18 +26,18 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Unau
 from openfga_sdk import OpenFgaClient
 from pydantic import ValidationError
 
+from lakehouse.governed import fga
+from lakehouse.governed.decider import OpenFgaDecider
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.lineage_events import DatasetUuids
 from lineage.api import fga_deps, security
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
 from lineage.schemas import EventRecord
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
-from service_kit.governed import fga
-from service_kit.governed.decider import OpenFgaDecider
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.lineage_events import DatasetUuids
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
@@ -356,7 +356,7 @@ def test_output_authz_output_less_still_requires_auth() -> None:
 
 # --- A service principal on the HTTP ingest ----------------------------------------------------------
 # A sidecar-less in-cluster producer (a user's pipeline job on its own compute, ADR 0155) POSTs the HTTP ingest with
-# its pod's projected token, which the door verifies into a `ServicePrincipal` (`service_kit.governed.machine_identity`).
+# its pod's projected token, which the door verifies into a `ServicePrincipal` (`lakehouse.governed.machine_identity`).
 # The door itself is driven over HTTP in `services/lineage/tests/test_a_claimed_service_name_authenticates_nobody.py`;
 # this pins what the ingest gates do with the principal it hands them.
 

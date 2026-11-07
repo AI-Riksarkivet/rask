@@ -25,9 +25,9 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
 from tests.integration.lineage_app import free_port, live_catalog, live_lineage
 
 

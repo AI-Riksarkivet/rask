@@ -29,10 +29,10 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
-from lakehouse_kit import base_refs, base_registry
-from lakehouse_kit.base_refs import BaseRefs
-from lakehouse_kit.history_fences import HistoryWork, TableHistory
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_refs, base_registry
+from lakehouse.base_refs import BaseRefs
+from lakehouse.history_fences import HistoryWork, TableHistory
+from lakehouse.storage_options import StorageOptions
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.

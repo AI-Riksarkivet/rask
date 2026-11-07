@@ -284,18 +284,22 @@ def test_an_image_reference_that_helm_parsed_as_a_number_is_refused_at_render(ke
 
 
 @pytest.mark.parametrize(
-    ("values", "where"),
+    ("values", "node"),
     [
-        pytest.param("undeclared:\n  enabled: true\n", "at ''", id="top-level-key"),
-        pytest.param("image:\n  tags:\n    undeclared: x\n", "at '/image/tags'", id="image-the-chart-renders-none-of"),
+        pytest.param("undeclared:\n  enabled: true\n", r"\(root\)|at ''", id="top-level-key"),
+        pytest.param("image:\n  tags:\n    undeclared: x\n", r"image\.tags|at '/image/tags'", id="image-the-chart-renders-none-of"),
     ],
 )
-def test_a_values_file_naming_what_the_chart_does_not_declare_fails_the_render(tmp_path: Path, values: str, where: str) -> None:
+def test_a_values_file_naming_what_the_chart_does_not_declare_fails_the_render(tmp_path: Path, values: str, node: str) -> None:
     """[[XC-194]]: a key the chart stopped reading, kept by a release or an overlay, is refused rather than carried unread.
 
     Measured 2026-11-06 at rask helm revision 12: the live release held top-level keys of departed clients and image tags
     of departed images that no template read, and nothing refused them. The values schema's root admits only the keys
     `values.yaml` declares, and Helm's `global`; `image.tags` and `image.digests` only the images `rask.image` renders.
+
+    The refusal is read by the node it names, the key and the verdict, never by Helm's sentence, which differs by
+    version (measured 2026-11-07): Helm 3.16 writes "image.tags: Additional property undeclared is not allowed" and
+    Helm 3.22 "at '/image/tags': additional properties 'undeclared' not allowed", `(root)` and `at ''` for the root.
     """
     overlay = tmp_path / "values.yaml"
     overlay.write_text(values)
@@ -303,7 +307,8 @@ def test_a_values_file_naming_what_the_chart_does_not_declare_fails_the_render(t
     with pytest.raises(subprocess.CalledProcessError) as refused:
         chart_render.render_text(*chart_render.DEFAULT_ARGS, "-f", str(overlay))
 
-    assert f"{where}: additional properties 'undeclared' not allowed" in refused.value.stderr, refused.value.stderr
+    refusal = refused.value.stderr
+    assert (bool(re.search(node, refusal)), "undeclared" in refusal, "not allowed" in refusal) == (True, True, True), refusal
 
 
 def test_no_env_var_is_rendered_twice_on_any_workload() -> None:

@@ -48,7 +48,7 @@ def main(argv: list[str]) -> int:
         print(f"!! {args.source} holds no files — refusing to record an empty backup", file=sys.stderr)
         return 1
 
-    from lakehouse_kit.storage import prune_timestamped_prefixes, s3_client, split_s3_uri
+    from lakehouse.storage import prune_timestamped_prefixes, s3_client, split_s3_uri
 
     bucket, base = split_s3_uri(args.dest)
     stamp = _stamp()

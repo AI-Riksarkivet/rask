@@ -22,9 +22,9 @@ from typing import Any, cast
 
 import pytest
 
+from lakehouse.governed import fga
+from lakehouse.governed.decider import OpenFgaDecider
 from lineage.api.fga_deps import _none_are_governed
-from service_kit.governed import fga
-from service_kit.governed.decider import OpenFgaDecider
 
 
 #: Two tables' objects, ``table:<uuid>`` ([[LH-524]]).

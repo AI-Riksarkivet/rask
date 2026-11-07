@@ -33,10 +33,10 @@ from fastapi.testclient import TestClient
 from moto.iam.access_control import IAMPolicy, PermissionResult
 from pydantic import SecretStr
 
-from lakehouse_kit import location_claims
-from lakehouse_kit.features import manifest_base_path_refs
-from lakehouse_kit.store_session import IssuedSession
-from service_kit.governed.store_credential import S3KeyPair
+from lakehouse import location_claims
+from lakehouse.features import manifest_base_path_refs
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.store_session import IssuedSession
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

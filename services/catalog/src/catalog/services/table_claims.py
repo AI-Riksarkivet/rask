@@ -1,6 +1,6 @@
 """The catalog's half of the location claims ([[LH-204]]): who may take a location, when a holder is gone, and the uuid a new table's claim records.
 
-:mod:`lakehouse_kit.location_claims` is the store-arbitrated record; this module is what only the
+:mod:`lakehouse.location_claims` is the store-arbitrated record; this module is what only the
 catalog can answer about it — whether a claim's holder still resolves to the location — and the one
 shape every door calls it in. A table's uuid is recorded here when a door brings the table into being (ADR 0173
 §2): :func:`claim_new_table` for create, declare and register, :func:`take` for a table that already exists and
@@ -38,12 +38,12 @@ from catalog.core.config import Settings
 from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.services import native
 from catalog.services.object_uuids import UnidentifiedObjectError
-from lakehouse_kit import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
-from lakehouse_kit.base_refs import decoded_path
-from lakehouse_kit.location_claims import ClaimRead, ClaimStore, LocationClaim
-from lakehouse_kit.version_retention import recorded_branch
-from service_kit.governed import fga
-from service_kit.storage_options import StorageOptions
+from lakehouse import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
+from lakehouse.base_refs import decoded_path
+from lakehouse.governed import fga
+from lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
+from lakehouse.storage_options import StorageOptions
+from lakehouse.version_retention import recorded_branch
 
 
 log = logging.getLogger(__name__)
@@ -232,7 +232,7 @@ class DoorTable:
     def finalize_version(self, request: CreateTableVersionRequest, *, turn: str | None = None) -> Any:  # noqa: ANN401 — the backend's own answer, as `native.call` types it
         """Finalize a catalog door's version through the backend's put-if-not-exists (:meth:`write_natively`), once no commit
         but the one holding ``turn`` holds the commit turn of the ref it names ([[LH-259]],
-        :mod:`lakehouse_kit.commit_turns`).
+        :mod:`lakehouse.commit_turns`).
 
         Raises:
             ConcurrentModificationError: Another writer took the version first.
@@ -318,7 +318,7 @@ class DoorTable:
     @contextmanager
     def commit_turn(self, ref: str | None) -> Generator[str]:
         """``ref``'s commit turn held while the block runs, its token handed to the block: every other finalize of the ref
-        waits until the block ends, or the turn lapses (:data:`lakehouse_kit.commit_turns.HOLD`).
+        waits until the block ends, or the turn lapses (:data:`lakehouse.commit_turns.HOLD`).
 
         Raises:
             CommitTurnBusyError: Every round of the take lost to another writer of the turn's record; the block did not run.
@@ -360,7 +360,7 @@ class DoorTable:
     @contextmanager
     def history_held(self, work: history_fences.HistoryWork) -> Generator[None]:
         """The table's history held for ``work`` while the block runs: no reclaim deletes a version while a tag or branch
-        is written, and no ref is written while a reclaim runs ([[LH-308]], :mod:`lakehouse_kit.history_fences`).
+        is written, and no ref is written while a reclaim runs ([[LH-308]], :mod:`lakehouse.history_fences`).
 
         Raises:
             ConcurrentModificationError: Work that excludes ``work`` holds the history (another kind, or another branch
@@ -626,7 +626,7 @@ def kept_in_trash(store: ClaimStore, claim: LocationClaim) -> bool:
 def take(
     ns: LanceNamespace, store: ClaimStore, location: str, table: str, segments: list[str], *, previous: str | None = None, token: str | None = None
 ) -> LocationClaim:
-    """:func:`lakehouse_kit.location_claims.take` for a table that already exists, judging a stale holder against this namespace.
+    """:func:`lakehouse.location_claims.take` for a table that already exists, judging a stale holder against this namespace.
 
     The table keeps the uuid its location's claim carries: a rename hands it over, and a recoverable drop and the
     undrops re-take what they hold.

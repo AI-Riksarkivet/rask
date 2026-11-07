@@ -52,7 +52,7 @@ acknowledged nothing for the sixteen minutes that followed and both outboxes kep
 list stayed correct, because the lineage relay records the outbox without the bus.
 
 The fix is upstream (components-contrib#4563; #4564, `MaxReconnects(-1)`, unmerged). Until a Dapr release ships it, the
-catalog, lineage and maintenance each run `service_kit.bus_watchdog` over their own sidecar. The watchdog probes every
+catalog, lineage and maintenance each run `lakehouse.bus_watchdog` over their own sidecar. The watchdog probes every
 `pubsub.jetstream` component every 30 s on `probe.<app-id>`, a subject no stream captures. When a probe answers that the
 connection is closed, the watchdog waits until the bus greets a new connection, then asks the sidecar to shut down, and
 the kubelet restarts it. A shorter outage needs none of this: a client still reconnecting buffers its publishes and
@@ -90,7 +90,7 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    response returns, but its errors are swallowed so a lineage outage never fails the write. If the catalog
    crashes (or its sidecar is down) **between the S3 write and the publish**, the data exists on storage but
    **the lineage event is lost** — the feed under-reports that write. No corruption, but a provenance hole.
-   *Mitigation (shipped):* the **object-store outbox** (`lakehouse_kit.outbox`, opt-in via the
+   *Mitigation (shipped):* the **object-store outbox** (`lakehouse.outbox`, opt-in via the
    catalog's `LANCE_LINEAGE_OUTBOX_URI` and the relay's `LINEAGE_OUTBOX_URI`) narrows the window to commit→stage
    for producers that stage the event before publishing. A crash between the write and the stage is not detected:
    nothing compares on-disk versions with the feed (parked as LH-497, "the commit is the outbox"). *Ops surface (#83):* the outbox
@@ -200,7 +200,7 @@ chart and live-verified on kind.
   (maintenance gets a longer budget for an in-flight sweep) so endpoint removal propagates before SIGTERM —
   in-flight requests drain instead of connection-refusing (`lance.preStop`, `lifecycle.*`).
 - **Bounded Dapr publishes.** Every `publish_event` is wrapped in `asyncio.timeout`
-  (`lakehouse_kit/dapr_publish.py`) so a wedged sidecar/NATS can't hang a write handler past its ack window.
+  (`lakehouse/dapr_publish.py`) so a wedged sidecar/NATS can't hang a write handler past its ack window.
 - **Liveness + readiness probes on every workload.** App pods get an HTTP `readinessProbe` (`/readyz`,
   dependency-aware) **and** `livenessProbe` (`/livez`, process-up only — never restarts on a slow backend);
   a workload with no HTTP health route gets a `tcpSocket` probe (`lance.appProbes` / `lance.tcpProbes`).
@@ -219,12 +219,12 @@ The lakehouse runs no batch pipeline ([ADR 0155](adr/0155-the-medallion-is-tier-
 pipeline's own invariants are its engine's business. Two rules bind the work the lakehouse does run, and each has a
 test that fails without it:
 
-- **Refuse new work while draining.** `service_kit.draining.retry_when_draining` guards every sidecar-delivered work
+- **Refuse new work while draining.** `lakehouse.draining.retry_when_draining` guards every sidecar-delivered work
   door (maintenance's arrival, work and index routes): a draining process answers
   RETRY so the broker redelivers to a live replica. It answers RETRY, not DROP, because on a subscription that
   declares a `deadLetterTopic` daprd routes a DROP to that topic, so a good message would be parked for a human to
-  find (`service_kit/draining.py` carries the daprd source references). Pinned by
-  `packages/service-kit/tests/test_draining_refuses_admission.py`.
+  find (`lakehouse/draining.py` carries the daprd source references). Pinned by
+  `packages/lakehouse/tests/test_draining_refuses_admission.py`.
 - **Randomise iteration order.** The maintenance sweep shuffles its dataset list and its failure-retry list
   (`maintenance/services/sweep.py`), so a dataset that fails every pass cannot starve the ones listed after it.
   Deleting the shuffle passes every functional test, which is why

@@ -33,10 +33,10 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
-import lakehouse_kit.storage as storage
+import lakehouse.storage as storage
 from catalog.services import warehouses
-from lakehouse_kit import records
-from service_kit.storage_options import StorageOptions
+from lakehouse import records
+from lakehouse.storage_options import StorageOptions
 
 
 def _root(tmp_path: Any) -> str:

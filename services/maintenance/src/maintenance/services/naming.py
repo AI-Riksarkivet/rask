@@ -13,12 +13,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from lakehouse_kit import location_claims
-from lakehouse_kit.base_refs import normalise
-from lakehouse_kit.branch_layout import BRANCH_CONTAINER
-from service_kit.governed import fga
-from service_kit.lineage_events import DatasetUuids
-from service_kit.naming import CATALOG_DELIMITER, uuid_of
+from lakehouse import location_claims
+from lakehouse.base_refs import normalise
+from lakehouse.branch_layout import BRANCH_CONTAINER
+from lakehouse.governed import fga
+from lakehouse.lineage_events import DatasetUuids
+from lakehouse.naming import CATALOG_DELIMITER, uuid_of
 
 
 log = logging.getLogger(__name__)

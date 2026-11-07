@@ -31,15 +31,15 @@ import respx
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lakehouse_kit.control_emit import emit_control
-from lineage_kit import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
+from lakehouse.control_emit import emit_control
+from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
+from lakehouse.lineage import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
+from lakehouse.lineage_events import DatasetUuids, dataset_uuids
 from maintenance.api.arrival import register_arrival_route
 from maintenance.api.routes import build_router
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import DaprMaintenanceEmitter, NoopEmitter
 from maintenance.services.purge import ACTOR
-from service_kit.governed.signing_key import SigningKeyHolder, attach_signing
-from service_kit.lineage_events import DatasetUuids, dataset_uuids
 
 
 if TYPE_CHECKING:

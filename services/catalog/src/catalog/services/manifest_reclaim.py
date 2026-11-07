@@ -24,8 +24,8 @@ from pydantic import BaseModel
 
 from catalog.core.config import Settings, shared_lance_session
 from catalog.services import warehouses
-from lakehouse_kit.objectfs import fs_and_base
-from service_kit.storage_options import StorageOptions
+from lakehouse.objectfs import fs_and_base
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

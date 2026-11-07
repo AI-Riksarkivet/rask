@@ -10,7 +10,7 @@ The sidecar owns retry/backoff + trace-propagation (no DLQ — see docs/RESILIEN
 config (no broker client here).
 
 Self-contained: the maintenance service never imports the catalog (zero cross-service imports — the
-mergeability invariant). The only shared code is ``service_kit.governed.fga`` for the id↔namespace derivation, so the
+mergeability invariant). The only shared code is ``lakehouse.governed.fga`` for the id↔namespace derivation, so the
 lineage ``Dataset`` is named as the catalog names the table, and the event carries the table's uuid, which its OpenFGA
 object names (ADR 0173 §8, §10).
 
@@ -37,8 +37,11 @@ from typing import Any, Final, Protocol, runtime_checkable
 
 from dapr.aio.clients import DaprClient
 
-from lakehouse_kit import outbox
-from lakehouse_kit.openlineage import (
+from lakehouse import outbox
+from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
+from lakehouse.lineage import CanonError, SigningKey, attach_signature
+from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
+from lakehouse.openlineage import (
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
     SYMLINKS_FACET,
@@ -47,10 +50,7 @@ from lakehouse_kit.openlineage import (
     run_id_for,
     symlinks_facet,
 )
-from lineage_kit import CanonError, SigningKey, attach_signature
-from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
-from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

@@ -21,13 +21,13 @@ from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse.governed.dapr_auth import require_dapr_token
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import get_settings
 from lineage.core.metrics import Door, Outcome, create_signature_refused_series, record_outcome
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload, run_id_from_payload
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import PARKED_KEY_PREFIX, delivery_feed_key
-from service_kit.governed.dapr_auth import require_dapr_token
 
 
 log = logging.getLogger(__name__)

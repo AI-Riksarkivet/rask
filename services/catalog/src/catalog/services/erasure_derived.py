@@ -15,7 +15,7 @@ such a table, and the verification walks both together, following chains through
   and opened in-process as the commit reconciler opens ``provenance$events`` (ADR 0158: governance decisions read only
   what rask holds), which also holds what an outside producer's events asserted.
 
-Both are walked as lineage's ``GET /tables/{name}/derived`` walks its edges (:mod:`lakehouse_kit.derived_tables`),
+Both are walked as lineage's ``GET /tables/{name}/derived`` walks its edges (:mod:`lakehouse.derived_tables`),
 but to the last table: a table left unnamed is a subject forgotten.
 
 A derived table is:
@@ -30,7 +30,7 @@ A derived table is:
 * ``gone`` once no obligation can be recorded on it and nothing of it stands: its claim released and no dataset at its
   location, or no claim recording it any more, its location taken by another table since.
 
-The claims are read whole (:func:`lakehouse_kit.location_claims.every_claim`): a claim that cannot be read may be
+The claims are read whole (:func:`lakehouse.location_claims.every_claim`): a claim that cannot be read may be
 the table's own, which would otherwise pass as gone.
 
 **WHAT THIS CANNOT PROMISE.** A write that declares no inputs derives from nothing, so a run that read this table and said
@@ -59,10 +59,10 @@ from catalog.core.config import Settings
 from catalog.services import erasure_obligations, native, table_claims, table_inputs
 from catalog.services.erasure import OPEN_OUTCOMES, SurfaceResult, derived_key, derived_surface
 from catalog.services.erasure_obligations import ErasureObligation
-from lakehouse_kit import derived_tables, location_claims, objectfs
-from lakehouse_kit.base_refs import key_uri, store_of
-from lakehouse_kit.lancekit.filters import in_lists
-from service_kit.storage_options import StorageOptions
+from lakehouse import derived_tables, location_claims, objectfs
+from lakehouse.base_refs import key_uri, store_of
+from lakehouse.lancekit.filters import in_lists
+from lakehouse.storage_options import StorageOptions
 
 
 _FOLLOWED: Final = "an erasure obligation recorded on it follows this one, and judges it with a predicate of its own"

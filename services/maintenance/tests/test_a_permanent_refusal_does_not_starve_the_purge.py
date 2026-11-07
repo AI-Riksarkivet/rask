@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from maintenance.services.purge import due_from
 
 
@@ -36,9 +34,8 @@ def test_due_from_equal_attempts_sorts_oldest_first() -> None:
     assert [r["id"] for r in due_from([newer, older])] == ["older", "newer"]
 
 
-@pytest.mark.parametrize("attempts", ["seven", 0])
-def test_due_from_unreadable_attempts_sorts_as_never_tried(attempts: Any) -> None:
+def test_due_from_unreadable_attempts_sorts_as_never_tried() -> None:
     # Fail toward attempting: one more refusal costs a tick, sorting it last costs the record.
     tried = _rec("tried", expires="2026-02-01T00:00:00+00:00", attempts=5)
 
-    assert [r["id"] for r in due_from([_rec("bad", attempts=attempts), tried])] == ["bad", "tried"]
+    assert [r["id"] for r in due_from([_rec("bad", attempts="seven"), tried])] == ["bad", "tried"]

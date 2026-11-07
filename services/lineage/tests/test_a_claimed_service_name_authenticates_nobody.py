@@ -24,11 +24,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from lakehouse.exceptions import register_handlers
+from lakehouse.governed.auth_lifespan import attach_auth
+from lakehouse.ns_errors import install_problem_handlers
 from lineage.api import security
 from lineage.core.config import get_settings
-from service_kit.exceptions import register_handlers
-from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.ns_errors import install_problem_handlers
 
 
 _SHARED = "the-estate-wide-app-token"

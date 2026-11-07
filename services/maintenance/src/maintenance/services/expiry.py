@@ -18,24 +18,24 @@ from typing import Any, Final, Literal
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse_kit import auto_cleanup
-from lakehouse_kit.base_refs import BaseRefs, rewrite_refusal
-from lakehouse_kit.base_registry import RecordedBase
-from lakehouse_kit.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
-from lakehouse_kit.features import (
+from lakehouse import auto_cleanup
+from lakehouse.base_refs import BaseRefs, rewrite_refusal
+from lakehouse.base_registry import RecordedBase
+from lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
+from lakehouse.features import (
     describe_gc_unsupported_flags,
     flags_from_open_error,
     manifest_feature_flags,
     mixes_data_file_versions,
     unsupported_features_from_open_error,
 )
-from lakehouse_kit.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from lakehouse_kit.stored_objects import delete_objects, list_under
+from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
+from lakehouse.lineage_events import DatasetUuids
+from lakehouse.storage_options import StorageOptions
+from lakehouse.stored_objects import delete_objects, list_under
 from maintenance.core.config import shared_lance_session
 from maintenance.core.metrics import CatalogRefusal
 from maintenance.services import base_reclaim
-from service_kit.lineage_events import DatasetUuids
-from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -183,7 +183,7 @@ class _Opened(BaseModel):
 def _disarm_commit_path_cleanup(ds: lance.LanceDataset, *, uri: str) -> DisarmOutcome:
     """Remove every ``lance.auto_cleanup.*`` key, the backstop for a table no door commits on ([[LH-245]]).
 
-    Every catalog door that commits disarms the ref first (:mod:`lakehouse_kit.auto_cleanup` records the
+    Every catalog door that commits disarms the ref first (:mod:`lakehouse.auto_cleanup` records the
     measurements); a table nobody commits on is disarmed here, so it does not stay armed until some later commit
     reclaims behind the sweep's gates.
 
@@ -279,7 +279,7 @@ def _refuse_a_referenced_root(opened: _Opened, target: ExpiryTarget) -> DatasetR
     The source of a shallow clone carries no flag and no ``base_paths`` of its own; only the whole-estate pre-pass
     knows another manifest resolves through these bytes. Measured: ``cleanup_old_versions`` after a rewrite removed the
     obsoleted originals and the clone failed to open IN A FRESH PROCESS. The rule is
-    :func:`lakehouse_kit.base_refs.rewrite_refusal`, which permits an in-root branch and a root held by its
+    :func:`lakehouse.base_refs.rewrite_refusal`, which permits an in-root branch and a root held by its
     pins. DEBUG, not WARNING: measured 2026-09-18, the line fired 116 times in ONE tick for the same permanent facts;
     the sweep's summary reports the count and the breakdown once.
     """

@@ -27,7 +27,7 @@ from tables_by_name import open_by_name
 
 from catalog.core.namespace import open_resolved_dataset
 from catalog.services.dataplane import create_table
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 TABLE_ID = ["db", "pages"]

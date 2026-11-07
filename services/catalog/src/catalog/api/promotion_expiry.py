@@ -31,11 +31,11 @@ from catalog.api.dependencies import ClockDep, ControlEmitterDep, SettingsDep, S
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services import promotions, provenance_namespace, table_claims
-from lakehouse_kit.control_emit import emit_control
-from lakehouse_kit.records import RecordChangedError
-from service_kit.governed import fga
-from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.storage_options import StorageOptions
+from lakehouse.control_emit import emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.records import RecordChangedError
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

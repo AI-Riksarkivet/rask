@@ -22,7 +22,7 @@ The ConfigMap `<fullname>-console-config` holds the `config.json` the browser bo
 against), the client is `console.oidc.clientId` (`rask-console` by default, a public client with no secret, which the
 render refuses empty), and the scopes are `console.oidc.scopes` with `federated:id` and the lakehouse's audience scope
 (`lance.oidcAudienceScope`: `auth.oidc.audienceScope`, or Dex's `audience:server:client_id:<auth.oidc.audience>`)
-added and deduplicated. Every governed door refuses a token without either (`service_kit.governed.idp_identity`, the
+added and deduplicated. Every governed door refuses a token without either (`lakehouse.governed.idp_identity`, the
 audience check), so the chart adds them and no value can drop them. With `auth.enabled` off the config is
 `{"signIn": false}` and the console sends no bearer.
 

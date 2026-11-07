@@ -1,6 +1,6 @@
 """The lakehouse control-plane kernel drain — SKG-08, SKG-11.
 
-Two findings against `lakehouse_kit`, both about a seam written more than once:
+Two findings against `lakehouse`, both about a seam written more than once:
 
 * **SKG-08** — four hand-rolled object-store record registries (`protection`, `maintenance_policies`,
   `trash`, `warehouse_records`) each carrying their own byte-identical hashed-key helper and their own
@@ -21,10 +21,10 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse_kit import warehouse_registry
-from lakehouse_kit.maintenance_policies import get_policy, put_policy
-from lakehouse_kit.warehouse_registry import clear_cache, project_root
-from service_kit.storage_options import StorageOptions
+from lakehouse import warehouse_registry
+from lakehouse.maintenance_policies import get_policy, put_policy
+from lakehouse.storage_options import StorageOptions
+from lakehouse.warehouse_registry import clear_cache, project_root
 
 
 _TABLE_UUID = "7c0e2f4a-5b1d-4e8f-9a3c-2d6b8e1f0a47"
@@ -51,7 +51,7 @@ def test_the_record_key_shape_is_unchanged_by_the_de_duplication() -> None:
     Protection and policy records are keyed by their object's uuid (ADR 0173 §8), the trash record by the
     dropped object's name; the derivation from that key is the one ``record_key``.
     """
-    from lakehouse_kit.record_store import record_key
+    from lakehouse.record_store import record_key
 
     assert record_key("_protection", "table", _TABLE_UUID) == "_protection/table-9f9a37202eeb7dc7cabba84b.json"
     assert record_key("_policies", "namespace", _NAMESPACE_UUID) == "_policies/namespace-3c0b296fe7c2d32e9edd2812.json"

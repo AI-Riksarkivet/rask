@@ -37,8 +37,8 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import MeProject, MeResponse
-from service_kit.governed import fga
-from service_kit.governed.idp_identity import PersonPrincipal
+from lakehouse.governed import fga
+from lakehouse.governed.idp_identity import PersonPrincipal
 
 
 log = logging.getLogger(__name__)

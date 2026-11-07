@@ -23,7 +23,7 @@ from typing import get_args
 
 from opentelemetry import metrics
 
-from lineage_kit.signing import RefusalReason
+from lakehouse.lineage.signing import RefusalReason
 
 
 _meter = metrics.get_meter("lance.lineage")
@@ -97,7 +97,7 @@ def create_signature_refused_series() -> None:
 
 
 def record_signature_refused(reason: str) -> None:
-    """Count one refused event. ``reason`` is `lineage_kit.signing.RefusalReason`, a closed set, never the event's own text."""
+    """Count one refused event. ``reason`` is `lakehouse.lineage.signing.RefusalReason`, a closed set, never the event's own text."""
     _signature_refused.add(1, {"lance.lineage.reason": reason})
 
 

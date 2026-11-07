@@ -62,7 +62,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 - **The catalog's store identity is its ServiceAccount token, and it holds no key** (ADR 0170). Its pod projects a token
   for `objectStore.identity.audience` (`rask-object-store`), and unsigned STS `AssumeRoleWithWebIdentity` exchanges it
   for every session the catalog signs with: its own IO's (an hour, renewed at half life,
-  `lakehouse_kit.store_session`) and each vend's (900 s, narrowed by the per-table session policy, named for the
+  `lakehouse.store_session`) and each vend's (900 s, narrowed by the per-table session policy, named for the
   caller). The fixture's provider (§5) sets `CLAIM_NAME=sub` and no role policy, so a verified token is granted the
   canned policy its `sub` names (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`), and the hook writes the
   catalog's under `system:serviceaccount:<ns>:<release>-sa-catalog` with no user bound to it. A `sub` naming no
@@ -189,7 +189,7 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
   (measured 2026-10-18, `.dagger/storage.go:17-20`). uid/gid 10001, `fsGroup: 10001`.
 - **Path-style only.** Without `RUSTFS_SERVER_DOMAINS` only path-style addressing works
   (`rustfs@1.0.3:rustfs/src/config/cli.rs:1535-1548`). rask's clients are path-style by default
-  (`packages/lakehouse-kit/src/lakehouse_kit/objectfs.py:37,45`); keep vended options path-style too.
+  (`packages/lakehouse/src/lakehouse/objectfs.py:37,45`); keep vended options path-style too.
 - **A pre-GA image refused pyarrow 25's multipart.** 1.0.0-alpha.60 answered `UploadPart` with
   `XAmzContentSHA256Mismatch`; 1.0.1 and 1.0.3 take it (`.dagger/storage.go`; `docs/agents/lessons.md:97-101`). Pin a
   GA tag, by digest, and re-run rask's own writer and `scripts/rustfs_sts_measure.py` on every bump.
@@ -240,7 +240,7 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
   `_bases/table-x.json` and `_bases/x` and admitted the bare key `_bases/` (the same for `_projects/`). AWS's `*`
   matches zero characters, so a conformant store refuses that PUT: a test on this fixture cannot show a defect that
   only a directory marker triggers. Assert that the code writes no marker instead (pyarrow's `delete_file` PUTs the
-  parent `<prefix>/` after every delete; `lakehouse_kit.stored_objects` deletes by key).
+  parent `<prefix>/` after every delete; `lakehouse.stored_objects` deletes by key).
 
 ## 7. Testing against RustFS
 

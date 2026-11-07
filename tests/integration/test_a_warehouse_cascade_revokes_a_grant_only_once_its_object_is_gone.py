@@ -10,7 +10,7 @@ clears with the warehouse.
 
 ONE TENANT ON MOTO: the real catalog app, its warehouse bucket provisioned through the create door, its namespaces bound
 through the warehouse door, each table created through the namespace doors on real pylance, and the in-memory
-`TupleStore` behind the real `service_kit.governed.fga` seed and revoke. Every check is allowed, because who may act is
+`TupleStore` behind the real `lakehouse.governed.fga` seed and revoke. Every check is allowed, because who may act is
 not the claim: the tuples each call leaves behind are. A table's tuples are what its owner reads it through
 (`model.fga.yaml` pins that a project's admin owns a table through its parent edges).
 """
@@ -35,10 +35,10 @@ from openfga_sdk.client.models import ClientWriteRequest
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import HttpLineageEmitter
 from catalog.services import warehouses
-from lakehouse_kit import base_registry, maintenance_policies, object_records, trash
-from lakehouse_kit.storage import S3Client
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_registry, maintenance_policies, object_records, trash
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.storage import S3Client
+from lakehouse.storage_options import StorageOptions
 from tests.integration.openfga_grants import Options, TupleStore, act_as
 
 

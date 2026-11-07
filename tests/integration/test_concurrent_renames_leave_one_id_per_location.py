@@ -31,8 +31,8 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ConcurrentModificationError, LanceNamespace, TableAlreadyExistsError
 
-from lakehouse_kit import location_claims, records
-from service_kit.storage_options import StorageOptions
+from lakehouse import location_claims, records
+from lakehouse.storage_options import StorageOptions
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -107,15 +107,18 @@ class _RivalBefore:
         return _call
 
 
+#: Each door at each landing point, but a recoverable drop only where the rival lands as the door acts: one that lands
+#: after the door read the claim is refused at the claim fence on a plain drop's branch, before the trash arm.
 @pytest.mark.parametrize(
-    ("door", "act", "trash_grace_days"),
+    ("rival_lands", "door", "act", "trash_grace_days"),
     [
-        pytest.param("drop", "deregister_table", "0", id="drop"),
-        pytest.param("drop", "deregister_table", "7", id="recoverable-drop"),
-        pytest.param("deregister", "deregister_table", "0", id="deregister"),
+        pytest.param("after-the-door-read-the-claim", "drop", "deregister_table", "0", id="after-the-door-read-the-claim-drop"),
+        pytest.param("after-the-door-read-the-claim", "deregister", "deregister_table", "0", id="after-the-door-read-the-claim-deregister"),
+        pytest.param("as-the-door-acts", "drop", "deregister_table", "0", id="as-the-door-acts-drop"),
+        pytest.param("as-the-door-acts", "drop", "deregister_table", "7", id="as-the-door-acts-recoverable-drop"),
+        pytest.param("as-the-door-acts", "deregister", "deregister_table", "0", id="as-the-door-acts-deregister"),
     ],
 )
-@pytest.mark.parametrize("rival_lands", ["after-the-door-read-the-claim", "as-the-door-acts"])
 def test_a_door_racing_a_rename_acts_only_on_the_table_it_resolved(
     real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, door: str, act: str, trash_grace_days: str, rival_lands: str
 ) -> None:

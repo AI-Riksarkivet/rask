@@ -16,7 +16,7 @@ from __future__ import annotations
 from lance_namespace import ErrorCode, ServiceUnavailableError, UnsupportedOperationError
 from lance_namespace.errors import InternalError
 
-from service_kit.ns_errors import _STATUS, problem_detail, status_for
+from lakehouse.ns_errors import _STATUS, problem_detail, status_for
 
 
 def test_every_sdk_error_code_is_mapped() -> None:

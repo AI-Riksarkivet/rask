@@ -55,17 +55,17 @@ only claims about routing, identifier parsing and error mapping.
 - A test that needs another value sets it with `monkeypatch.setenv`, clears the `lru_cache`d getter and calls
   `importlib.reload(<module>)`, clearing the getter again at teardown
   (`tests/integration/test_a_commit_expires_its_table_once_enough_versions_are_reclaimable.py::maintenance`).
-- Code in `service_kit` itself builds a bare `FastAPI()` carrying the piece under test
-  (`packages/service-kit/tests/test_shared_body_cap.py`).
+- Code in `lakehouse` itself builds a bare `FastAPI()` carrying the piece under test
+  (`packages/lakehouse/tests/test_shared_body_cap.py`).
 
-**Authorization.** `service_kit.governed.deps.make_auth_deps` builds each service's `current_subject`
+**Authorization.** `lakehouse.governed.deps.make_auth_deps` builds each service's `current_subject`
 and `get_checker`. Override those callables: `security._deps.current_subject` and
 `security._deps.get_checker` on the service's security module
 (`tests/unit/test_auth_deps_resolve.py` resolves them).
 
 **Real OTLP exporters.** No suite builds one. A suite that does caps `OTEL_EXPORTER_OTLP_TIMEOUT` with a
 function-scoped `monkeypatch` from the ambient value (so a developer's own setting still wins): an exporter aimed at an
-endpoint nothing serves waits out the SDK's 10 s default at process exit (measured on service-kit's suite: 10.19 s,
+endpoint nothing serves waits out the SDK's 10 s default at process exit (measured on the platform library's suite: 10.19 s,
 and 3.08 s with a 1 s cap).
 
 ## The catalog with authorization on
@@ -102,8 +102,8 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
   never go through botocore.
 - The fixture is `scope="module"`: one server and one bucket per module. Each test isolates itself by
   namespace name, not by bucket.
-- Plain `lakehouse_kit.storage`/boto3 code does not need the server. `with mock_aws():` plus a boto3 client that
-  seeds the bucket is enough (`packages/lakehouse-kit/tests/test_storage.py`).
+- Plain `lakehouse.storage`/boto3 code does not need the server. `with mock_aws():` plus a boto3 client that
+  seeds the bucket is enough (`packages/lakehouse/tests/test_storage.py`).
 - To count what a door asks the store (how many listings of a table's `_versions/` an open costs), put
   `tests/integration/store_requests.counted(<moto url>)` between the catalog and the server and point
   `LANCE_S3_ENDPOINT` at its `url`: it forwards every request unchanged, chunked bodies included, and
@@ -111,7 +111,7 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
   count is taken on the wire (`tests/integration/test_a_door_judges_whether_a_table_is_only_declared_by_its_storage.py`).
 - To fail one read a door makes, the same proxy's `answering_unavailable(<predicate over StoreRequest>)` answers each
   matching request 503 `ServiceUnavailable` for the life of the block and forwards the rest: pylance then raises the
-  object-store outage `service_kit.outage` reads. A client that must keep reaching the store is pointed past the
+  object-store outage `lakehouse.outage` reads. A client that must keep reaching the store is pointed past the
   proxy with `LANCE_S3_VENDED_ENDPOINT`. The catalog suite imports the helper as `tests.integration.store_requests`, which
   its conftest makes resolvable by putting the repository root on `sys.path`
   (`services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py`, [[LH-545]]).

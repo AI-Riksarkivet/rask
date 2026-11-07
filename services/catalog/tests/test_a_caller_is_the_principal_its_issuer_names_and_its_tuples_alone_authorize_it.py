@@ -45,8 +45,8 @@ from lance_namespace_urllib3_client.models import CreateNamespaceRequest
 from openfga_sdk.client.models import ClientCheckRequest, ClientWriteRequest
 from openfga_sdk.exceptions import ValidationException
 
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.naming import UUID_PROPERTY
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 
 
 #: A pipeline's own account in a namespace the release knows nothing about.

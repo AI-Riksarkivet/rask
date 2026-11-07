@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from catalog.core.config import Settings, get_settings
 from catalog.core.control_buffer import ControlEventBuffer
-from service_kit.governed.signing_key import signing_public_secret
+from lakehouse.governed.signing_key import signing_public_secret
 
 
 CATALOG = "kubernetes~system:serviceaccount:default:rask-sa-catalog"

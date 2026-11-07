@@ -175,7 +175,7 @@ PYEOF
 echo
 echo "== 2) OpenFGA tuples for removed warehouses/projects ($OPENFGA_API_URL) =="
 # Store selection = the seed scripts' pattern: NEWEST store named lance-catalog (max created_at — the
-# same selector service_kit.governed.fga.provision uses, so we clean the store the catalog actually serves from).
+# same selector lakehouse.governed.fga.provision uses, so we clean the store the catalog actually serves from).
 FGA_TOKEN="$(cat "${OPENFGA_TOKEN_FILE:?set OPENFGA_TOKEN_FILE to a rask-openfga token file}")"
 SID="$("$FGA_BIN" store list --api-url "$OPENFGA_API_URL" --api-token "$FGA_TOKEN" \
   | uv run --no-sync python -c "import sys,json;s=[x for x in json.load(sys.stdin)['stores'] if x['name']=='lance-catalog'];print(max(s,key=lambda x:x['created_at'])['id'] if s else '')")"

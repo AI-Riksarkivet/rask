@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING
 from catalog.api import fga_deps
 from catalog.core.config import get_settings
 from catalog.services import warehouses
-from service_kit.governed.auth_lifespan import build_fga_client
+from lakehouse.governed.auth_lifespan import build_fga_client
 
 
 if TYPE_CHECKING:

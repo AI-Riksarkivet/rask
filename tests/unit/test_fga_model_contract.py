@@ -2,7 +2,7 @@
 
 The bug class this exists to make unshippable: the app checks a ``can_*`` relation that the target
 type does not define. OpenFGA answers that with a 400 (``relation 'namespace#can_write_data' not
-found``, error code 2000) — an ``ApiException`` that is NOT retryable, so ``service_kit.governed.fga.check``'s
+found``, error code 2000) — an ``ApiException`` that is NOT retryable, so ``lakehouse.governed.fga.check``'s
 fail-closed handler converts it to ``ServiceUnavailableError`` → **HTTP 503 for every caller, owners
 included**, logged as ``openfga_check_unavailable`` (an outage, which it is not). It is a total
 outage of the route that masquerades as an infra blip. That is exactly how the namespaced
@@ -15,7 +15,7 @@ not be the pairs the *app* sends (the yaml exercised ``transaction:``; the app c
 ``namespace:``). Only a cross-check of the app's own mapping tables against the compiled model
 closes it — so this test enumerates the pairs by DRIVING the real resolvers in
 ``catalog.api.fga_deps`` (never a hand-copied list, which would drift) and asserts each pair
-resolves in ``service_kit/governed/auth/model.json``, the file the app actually loads.
+resolves in ``lakehouse/governed/auth/model.json``, the file the app actually loads.
 """
 
 from __future__ import annotations
@@ -32,10 +32,10 @@ from openfga_sdk import OpenFgaClient
 from catalog.api import fga_deps
 from catalog.core import tier_policy
 from catalog.core.config import Settings
-from service_kit.governed import fga as fga_module
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
+from lakehouse.governed import fga as fga_module
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
 from tests.unit.named_resolver import NamedResolver
 
 
@@ -207,8 +207,8 @@ def test_every_relation_the_catalog_checks_exists_in_the_model(monkeypatch: pyte
 
     phantom = sorted(f"{t}#{r}" for t, r in pairs if t not in model or r not in model.get(t, set()))
     assert not phantom, (
-        f"the app can check relations that do NOT exist in service_kit/governed/auth/model.json: {phantom}. "
-        "OpenFGA rejects these (relation not found) and service_kit.governed.fga fails closed → 503 for every caller."
+        f"the app can check relations that do NOT exist in lakehouse/governed/auth/model.json: {phantom}. "
+        "OpenFGA rejects these (relation not found) and lakehouse.governed.fga fails closed → 503 for every caller."
     )
 
 

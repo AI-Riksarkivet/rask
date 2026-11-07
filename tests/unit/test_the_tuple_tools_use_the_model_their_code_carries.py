@@ -21,7 +21,7 @@ from pathlib import Path
 
 import pytest
 
-from service_kit.governed.auth.write_model import carried_model
+from lakehouse.governed.auth.write_model import carried_model
 from tests.unit.openfga_stub import BY_NAME, CARRYING, PINNED, STORE, Recorded, openfga
 
 

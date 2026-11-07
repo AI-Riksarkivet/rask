@@ -1,13 +1,13 @@
 """Warehouse registry + runtime bucket provisioning (#3-A) — the admin control plane.
 
 A *warehouse* = one physical S3 bucket owned by a project (the FGA model's catalog-root type,
-``service_kit/governed/auth/model.fga``: "A warehouse = exactly one S3 bucket, owned by one project"). Today
+``lakehouse/governed/auth/model.fga``: "A warehouse = exactly one S3 bucket, owned by one project"). Today
 the catalog is single-bucket (one ``LANCE_REST_ROOT``); this makes a warehouse a **runtime-provisioned,
 physically isolated bucket**, so a table created under warehouse A lands in bucket-a and is ABSENT from
 bucket-b — physical multi-tenancy, provisioned through an admin API rather than a bucket list fixed in the
 chart's values.
 
-Stateless-over-object-store, the same shape as ``lakehouse_kit/outbox.py``: the registry IS a set of JSON
+Stateless-over-object-store, the same shape as ``lakehouse/outbox.py``: the registry IS a set of JSON
 objects under ``<control_root>/_warehouses/`` — there is no DB to add. A warehouse record lives at
 ``_warehouses/<id>.json``; a namespace→warehouse binding at ``_warehouses/bindings/<top_ns>.json`` (so any
 op on a bound namespace can resolve its physical root). Bucket creation uses boto3 ``create_bucket``, idempotent:
@@ -35,11 +35,11 @@ from catalog.services.control_records import (
     with_protection,
     write_json,
 )
-from lakehouse_kit import trash
-from lakehouse_kit.objectfs import fs_and_base
-from lakehouse_kit.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
-from service_kit.naming import CATALOG_DELIMITER
-from service_kit.storage_options import StorageOptions
+from lakehouse import trash
+from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.objectfs import fs_and_base
+from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -92,13 +92,13 @@ def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — 
     credential is a session (ADR 0170), and a session's key signed without its token is an identity the
     store does not hold.
 
-    Via ``lakehouse_kit.storage.s3_client``, the estate's canonical S3 seam, never a raw ``boto3.client``: path-style
+    Via ``lakehouse.storage.s3_client``, the estate's canonical S3 seam, never a raw ``boto3.client``: path-style
     addressing, s3v4 signing, retries and timeouts live there once, and a hand-rolled client silently
     forfeits all of them (against RustFS, virtual-hosted addressing resolves a DNS name that does
     not exist). The region rides on ``create_bucket``'s ``LocationConstraint`` where it matters — see
     :func:`provision_bucket` — so it is not threaded through here.
     """
-    from lakehouse_kit.storage import s3_client
+    from lakehouse.storage import s3_client
 
     _access_key, _secret_key, _session_token = storage_options.credential_in_clear()
     return s3_client(
@@ -295,7 +295,7 @@ def upsert_warehouse(
 def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
     """Mint ``_warehouses/<id>.json`` iff absent — the STORE arbitrates (F1).
 
-    Raises :class:`lakehouse_kit.records.RecordExistsError` on a lost race. The caller
+    Raises :class:`lakehouse.records.RecordExistsError` on a lost race. The caller
     re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
     guard's read may predate the rival's write; this refusal is what closes that window).
     """

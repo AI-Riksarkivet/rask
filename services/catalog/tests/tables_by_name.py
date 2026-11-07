@@ -11,7 +11,7 @@ import lance
 from lance_namespace import DescribeTableRequest, LanceNamespace, TableNotFoundError
 
 from catalog.core.namespace import open_resolved_dataset
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 def open_by_name(

@@ -1,7 +1,7 @@
 """The author of a version Lance committed itself, recorded just after it lands (ADR 0187).
 
 Every commit of an operation the doors announce records the caller its door authenticated
-(:mod:`lakehouse_kit.commit_records`), and the commit reconciler signs a re-announcement only for that record. A
+(:mod:`lakehouse.commit_records`), and the commit reconciler signs a re-announcement only for that record. A
 detached commit (``dataplane.commit_stamped``) and a stock commit through ``version/create`` record before their
 finalize. The create door's ``write_dataset`` and an unkeyed ``/insert`` let Lance commit in one call, and Lance mints the
 transaction's uuid inside it, so the author is recorded just after the version lands, under the transaction its files

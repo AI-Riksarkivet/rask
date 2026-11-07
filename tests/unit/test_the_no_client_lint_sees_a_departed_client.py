@@ -16,16 +16,12 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-_SPEC = importlib.util.spec_from_file_location("lakehouse_names_no_client", REPO_ROOT / "scripts" / "lakehouse_names_no_client.py")
-assert _SPEC is not None and _SPEC.loader is not None
-gate = importlib.util.module_from_spec(_SPEC)
-sys.modules["lakehouse_names_no_client"] = gate
-_SPEC.loader.exec_module(gate)
+_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
 _SUITE = """\
 ACCOUNT = "rask-sa-flows"
@@ -40,7 +36,19 @@ RELAY = "rask-mailpit"
 """
 
 
-def test_the_lint_reports_each_place_a_lakehouse_file_names_a_departed_client(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.fixture
+def gate(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """`scripts/lakehouse_names_no_client.py`, imported the way `python scripts/...` resolves its sibling `_files_under`."""
+    monkeypatch.syspath_prepend(str(_SCRIPTS))
+    spec = importlib.util.spec_from_file_location("lakehouse_names_no_client", _SCRIPTS / "lakehouse_names_no_client.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_lint_reports_each_place_a_lakehouse_file_names_a_departed_client(gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     for tree in ("services", "packages", "frontend/console", "deploy/fixtures"):
         (tmp_path / tree).mkdir(parents=True)
     (tmp_path / "frontend/console/package.json").write_text("{}", encoding="utf-8")

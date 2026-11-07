@@ -4,7 +4,7 @@ A writer's vend may put over any file a commit adds under its table (``table_lay
 vend may also delete one. Lance checks no file's content: measured on pylance 13.0.0, a same-size overwrite of a data
 file is served silently, while Lance requires a published payload to stay immutable while a protected snapshot references
 it (``lance_docs/lance/format/table/blob.md:254-257``). The catalog records every file a commit adds, with its ETag and
-size, before the version lands (``lakehouse_kit.file_identities``), and the sweep reads each one again.
+size, before the version lands (``lakehouse.file_identities``), and the sweep reads each one again.
 
 A recorded file is named when the store holds it with another ETag or size, or no longer holds it while a retained
 version of any ref still names it. No legitimate writer does either: every Lance file name is minted once, and cleanup
@@ -25,11 +25,11 @@ from collections.abc import Callable, Iterable
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse_kit import file_identities, stored_objects
-from lakehouse_kit.base_refs import decoded_path
-from lakehouse_kit.branch_layout import BRANCH_CONTAINER
+from lakehouse import file_identities, stored_objects
+from lakehouse.base_refs import decoded_path
+from lakehouse.branch_layout import BRANCH_CONTAINER
+from lakehouse.storage_options import StorageOptions
 from maintenance.services import base_reclaim
-from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

@@ -34,10 +34,10 @@ def derive_hcp_creds() -> dict[str, str] | None:
 
 def main() -> None:
     load_dotenv()
-    # The client the estate actually ships: `lakehouse_kit.storage.s3_client` resolves endpoint and
+    # The client the estate actually ships: `lakehouse.storage.s3_client` resolves endpoint and
     # insecure/CA flags, so smoking IT smokes the production path. An HCP key pair is this
     # script's own, passed to that one client.
-    from lakehouse_kit.storage import configured_endpoint, s3_client
+    from lakehouse.storage import configured_endpoint, s3_client
 
     # `configured_endpoint` rather than a local env chain: what this line PRINTS has to be what the
     # client below CONNECTS to, and a second copy of the precedence list is how those two diverge.

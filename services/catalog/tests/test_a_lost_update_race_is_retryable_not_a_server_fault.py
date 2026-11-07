@@ -19,9 +19,9 @@ from lance_namespace import CreateNamespaceRequest, DeleteFromTableRequest, Upda
 from catalog.services import table_claims
 from catalog.services.dataplane import captured, commit_stamped, create_table, delete_from_table, update_table
 from catalog.services.table_claims import DoorTable
-from lakehouse_kit import base_registry
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_registry
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 TABLE_ID = ["db", "rows"]

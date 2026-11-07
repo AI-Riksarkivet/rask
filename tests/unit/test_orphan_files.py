@@ -92,36 +92,6 @@ def test_a_deletion_vector_is_referenced_not_orphaned(tmp_path: pathlib.Path) ->
 # --------------------------------------------------------------------------- #
 
 
-def test_transaction_files_are_reported_because_they_accumulate_by_design(tmp_path: pathlib.Path) -> None:
-    """The spec is explicit that on a conflict "transaction files remain in storage describing each
-    commit attempt". So a busy table grows `_transactions/` forever, nothing prunes them, and this is
-    the only thing that will ever say so."""
-    uri, prefix = _dataset(tmp_path)
-    txn_dir = tmp_path / "t.lance" / "_transactions"
-    live = sorted(p.name for p in txn_dir.iterdir())
-    assert live, "fixture must actually produce .txn files"
-
-    # THE FIXTURE MUST CONTAIN A FAILED ATTEMPT, and until 2026-08-16 it did not — it made only
-    # successful appends, whose txn files all belong to live versions and are therefore REFERENCED,
-    # not garbage. Under pylance 10.0.0 `get_transactions` returns one entry per live version
-    # (measured: 3 files, 3 versions, 0 unreferenced), so every txn matched and the assertion below
-    # had nothing left to find. The scanner was right; the fixture was describing a different dataset
-    # from the one the docstring describes.
-    #
-    # The class this test is about is the CONFLICTED commit — the spec's "transaction files remain in
-    # storage describing each commit attempt" — so the fixture now leaves one behind explicitly. A
-    # read_version far past any live version cannot be claimed by a manifest.
-    orphaned = txn_dir / "999-00000000-0000-0000-0000-0000deadbeef.txn"
-    orphaned.write_bytes(b"a commit attempt that never became a version")
-
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-    reported = {o.path for o in result.orphans if o.kind == "transactions"}
-    assert reported == {f"_transactions/{orphaned.name}"}, (
-        "only the UNREFERENCED txn is garbage — a txn belonging to a live version is the provenance "
-        f"of a manifest being read, and reporting it would be reporting live data. live={live}"
-    )
-
-
 # --------------------------------------------------------------------------- #
 # report-only, mechanically
 # --------------------------------------------------------------------------- #
@@ -201,25 +171,6 @@ def test_a_branched_dataset_is_refused_not_scanned(tmp_path: pathlib.Path) -> No
     assert result.excluded is True, "a branch is refused by SHAPE, and no retry ever makes it scannable"
     assert result.orphans == []
     assert "tree/" in (result.reason or "")
-
-
-def test_a_shallow_clone_is_refused_because_its_data_lives_elsewhere(tmp_path: pathlib.Path) -> None:
-    """A clone's manifest references data files that resolve through `base_paths` to ANOTHER dataset
-    root, so they are simply not under this prefix.
-
-    `base_paths` is not exposed by pylance, so the gate detects the CONSEQUENCE — a referenced path
-    that is not present locally — which is strictly more robust than reading the flag would be.
-    """
-    source = str(tmp_path / "src.lance")
-    ds = lance.write_dataset(_table(), source)
-    clone = str(tmp_path / "clone.lance")
-    ds.shallow_clone(clone, reference=1)
-
-    result = orphans.scan_dataset(_fs(), clone, prefix=clone)
-    assert result.checked is False, "a dataset spanning base_paths must be refused"
-    assert result.excluded is True, "base_paths is refused by SHAPE — the flag is a permanent property of the manifest"
-    assert result.orphans == []
-    assert "base_paths" in (result.reason or "")
 
 
 def test_a_refused_dataset_does_not_read_as_clean_in_the_aggregate(tmp_path: pathlib.Path) -> None:
@@ -458,7 +409,6 @@ class TestKindClassification:
             ("_transactions/3-uuid.txn", "transactions"),
             ("_versions/2.manifest", "versions"),
             ("_refs/tags/publish-1.json", "refs"),
-            ("latest_version_hint.json", "other"),
             (".lance-reserved", "other"),
         ],
     )

@@ -20,9 +20,9 @@ from fastapi.testclient import TestClient
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
-from lakehouse_kit.base_refs import decoded_path, normalise
-from lakehouse_kit.objectfs import lance_storage_options
-from service_kit.governed.store_credential import S3KeyPair
+from lakehouse.base_refs import decoded_path, normalise
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.objectfs import lance_storage_options
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -565,7 +565,7 @@ def _age_the_claim(moto_endpoint: str, location: str) -> None:
     import json
     from datetime import UTC, datetime
 
-    from lakehouse_kit.location_claims import LEASE, claim_key
+    from lakehouse.location_claims import LEASE, claim_key
 
     s3 = boto3.client("s3", endpoint_url=moto_endpoint, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     key = claim_key(location)
@@ -584,7 +584,7 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
     register adopts the bytes, and no undrop restores them."""
     import catalog.services.dataplane as dataplane_mod
     from catalog.core.config import get_settings
-    from lakehouse_kit import trash
+    from lakehouse import trash
 
     prefix = uuid.uuid4().hex[:8]
     namespace = f"lh532r{prefix}"
@@ -648,8 +648,8 @@ def _expire_trash_record(moto_endpoint: str, table_uuid: str) -> None:
     """
     import json
 
-    from lakehouse_kit.record_store import record_key
-    from lakehouse_kit.trash import _TRASH_PREFIX
+    from lakehouse.record_store import record_key
+    from lakehouse.trash import _TRASH_PREFIX
 
     s3 = boto3.client(
         "s3",

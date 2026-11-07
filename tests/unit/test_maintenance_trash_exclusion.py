@@ -31,11 +31,11 @@ import lance
 import pyarrow as pa
 import pytest
 
-from lakehouse_kit import location_claims, trash
-from lakehouse_kit.base_refs import normalise
+from lakehouse import location_claims, trash
+from lakehouse.base_refs import normalise
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.discovery import Discovery
-from service_kit.storage_options import StorageOptions
 
 
 def _dataset(path: Path) -> str:
@@ -155,7 +155,7 @@ def test_a_trashed_clone_still_protects_its_live_source(tmp_path: Path, settings
     Asserted through the pre-pass's own output rather than by constructing a real shallow clone, which
     needs a Lance feature this suite does not otherwise depend on.
     """
-    from lakehouse_kit import base_refs
+    from lakehouse import base_refs
     from maintenance.services import sweep as sweep_mod
 
     source = _dataset(tmp_path / "source.lance")

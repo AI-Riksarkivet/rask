@@ -13,8 +13,8 @@ from typing import Any
 
 import requests
 
-from service_kit.governed.auth.write_model import STORE_NAME, fga_headers
-from service_kit.governed.fga import newest_store
+from lakehouse.governed.auth.write_model import STORE_NAME, fga_headers
+from lakehouse.governed.fga import newest_store
 
 
 FGA = os.environ.get("LANCE_E2E_FGA", "").rstrip("/")

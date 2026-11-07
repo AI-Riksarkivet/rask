@@ -25,7 +25,7 @@ from pathlib import Path
 
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 def _root(tmp_path: Path) -> str:
@@ -72,7 +72,7 @@ def test_an_UNREADABLE_binding_refuses_as_unreadable_rather_than_as_already_boun
     An operator sent to find the competing warehouse is looking for something that does not exist.
     """
     import pytest
-    from lance_namespace import ServiceUnavailableError  # the catalog's own — service_kit ships a same-named, different class
+    from lance_namespace import ServiceUnavailableError  # the catalog's own — lakehouse ships a same-named, different class
 
     _write(tmp_path, "_warehouses/bindings", "bronze", {"top_ns": "bronze", "warehouse_id": ["not", "a", "string"], "root_uri": "s3://bkt"})
 

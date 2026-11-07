@@ -30,9 +30,9 @@ from catalog.services.control_records import (
     with_protection,
     write_json,
 )
-from lakehouse_kit.objectfs import fs_and_base
-from lakehouse_kit.records import RecordMissingError, create_json, mutate_json
-from service_kit.storage_options import StorageOptions
+from lakehouse.objectfs import fs_and_base
+from lakehouse.records import RecordMissingError, create_json, mutate_json
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -116,7 +116,7 @@ def set_project_protection(control_root: str, storage_options: StorageOptions, p
 def create_project_record(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
     """Mint ``_projects/<id>.json`` iff absent — the STORE arbitrates (F1).
 
-    Raises :class:`lakehouse_kit.records.RecordExistsError` on a lost race; the caller
+    Raises :class:`lakehouse.records.RecordExistsError` on a lost race; the caller
     re-reads and converges on the winner's identity fields (``created_at``/``created_by``), exactly
     like the sequential idempotent re-POST path.
     """

@@ -10,7 +10,7 @@ A WRITE IS ITS PUBLISHER'S CLAIM UNTIL ITS SIGNATURE IS CHECKED ([[XC-078]], own
 proves that this pod's own sidecar delivered an event, not who published it, and the location a write names is what
 this service reads. So before evaluating, the door checks the write's `rask_signature` against the keys its signer
 publishes, with the signer sets lineage verifies with (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`), and
-`RASK_SIGNATURE_DOORS` decides what it does with the verdict (`lineage_kit.door`): off checks nothing, observe evaluates
+`RASK_SIGNATURE_DOORS` decides what it does with the verdict (`lakehouse.lineage.door`): off checks nothing, observe evaluates
 as before and counts what enforcing would refuse, and enforce evaluates only a write a listed signer's key verifies. A
 refusal is acknowledged and evaluates nothing, since no redelivery can sign bytes already published; a key list that
 cannot be read is retried, since it says nothing about the signature. Only a write the lane would evaluate is checked
@@ -26,19 +26,19 @@ from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 
-from lakehouse_kit import maintenance_policies
-from lineage_kit.door import DoorMode, DoorVerdict, judge
-from lineage_kit.keys import PublishedKeys
-from lineage_kit.signing import signature_of, verify_signature
+from lakehouse import maintenance_policies
+from lakehouse.draining import retry_when_draining
+from lakehouse.governed.dapr_auth import require_dapr_token
+from lakehouse.governed.signing_key import published_key_fetch, retry_until_signed
+from lakehouse.lineage.door import DoorMode, DoorVerdict, judge
+from lakehouse.lineage.keys import PublishedKeys
+from lakehouse.lineage.signing import signature_of, verify_signature
 from maintenance.api.dependencies import LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import SignatureDoor, create_signature_refused_series, record_signature_refused, record_signature_would_refuse
 from maintenance.services.arrival import act_on_write, plannable_write, should_replan
 from maintenance.services.sweep import emit_sweep_lineage
-from service_kit.draining import retry_when_draining
-from service_kit.governed.dapr_auth import require_dapr_token
-from service_kit.governed.signing_key import published_key_fetch, retry_until_signed
 
 
 log = logging.getLogger(__name__)
@@ -77,7 +77,7 @@ async def _judge_arrival(arrived: dict[str, Any], *, event_id: object, request: 
     answers before any key is read; otherwise the check reads the store through a blocking client, so it runs in the
     threadpool.
     """
-    mode = DoorMode(settings.signature_doors)
+    mode = settings.signature_doors
     if mode is DoorMode.OFF:
         return DoorVerdict(act=True)
     keys = _published_keys(request, settings)

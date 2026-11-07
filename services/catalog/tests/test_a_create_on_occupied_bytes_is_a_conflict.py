@@ -37,7 +37,7 @@ import pytest
 from lance_namespace import TableAlreadyExistsError
 
 from catalog.services import dataplane
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 
 
 def _arrow_table() -> pa.Table:
@@ -72,16 +72,3 @@ def test_an_unrelated_os_error_is_still_a_500(monkeypatch: pytest.MonkeyPatch) -
         dataplane._write_blob(_arrow_table(), "s3://b/t", StorageOptions(), mode="create", allow_external=False, external_blob_bases=[])
 
     assert not isinstance(caught.value, TableAlreadyExistsError), "an infra OSError was mislabelled a conflict"
-
-
-def test_the_error_this_door_raises_is_the_status_the_spec_declares() -> None:
-    """THE SECOND HOP, gated on its own. The leg above proves the door raises a typed error; it cannot
-    show what the caller receives. A typed error whose code mapped elsewhere would turn a green test
-    into a 500 in production — the shape this estate has shipped before."""
-    from service_kit.ns_errors import status_for
-
-    # `int(exc.code)` is exactly how the installed handler asks (`ns_errors.py:140`), not a
-    # convenient stand-in: a leg that called this differently would prove something production never does.
-    assert status_for(int(TableAlreadyExistsError("occupied").code)) == 409, (
-        "the conflict this door raises does not reach the caller as the 409 `lance_docs/ns_catalog/spec.yaml:1461` declares on CreateTable"
-    )

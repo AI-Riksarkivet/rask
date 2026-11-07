@@ -33,8 +33,8 @@ from catalog.api.fga_deps import GovernedObject
 from catalog.api.v1.endpoints import namespaces as n_ep
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
-from service_kit.control_events import ControlUuids
-from service_kit.storage_options import StorageOptions
+from lakehouse.control_events import ControlUuids
+from lakehouse.storage_options import StorageOptions
 
 
 class _Tracker:

@@ -23,8 +23,8 @@ from catalog.api.pagination import ListLimit
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, publication
-from lakehouse_kit.control_emit import emit_control
-from service_kit.governed import fga
+from lakehouse.control_emit import emit_control
+from lakehouse.governed import fga
 
 
 router = APIRouter(prefix="/v1/table", tags=["tag"])

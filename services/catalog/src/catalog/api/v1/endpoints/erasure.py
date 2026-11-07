@@ -49,13 +49,13 @@ from catalog.schemas import ErasureRequest, ErasureVerifyRequest
 from catalog.services import dataplane, erasure, erasure_derived, erasure_obligations, erasure_release, table_claims
 from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
 from catalog.services.erasure_obligations import ErasureObligation, ErasureObligations, ErasureObligationView, ErasureVerification
-from lakehouse_kit import derived_tables
-from lakehouse_kit.control_emit import ControlEmitter, emit_control
-from lakehouse_kit.history_fences import TableHistory
-from lakehouse_kit.records import RecordExistsError
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.storage_options import StorageOptions
+from lakehouse import derived_tables
+from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.history_fences import TableHistory
+from lakehouse.records import RecordExistsError
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

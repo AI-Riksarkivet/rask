@@ -20,7 +20,7 @@ fail a catalog write. Two transports sit behind the same :class:`LineageEmitter`
   ``dapr.resiliency.enabled`` chart resiliency; the subscriber's ``/dlq-event`` route ERROR-logs + acks —
   park-and-alert, not replay — docs/RESILIENCE.md gap #2, fixed 2026-07-12). The lineage
   service subscribes via its own sidecar. With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
-  object-store outbox (``lakehouse_kit.outbox``) before the publish, which narrows the loss window
+  object-store outbox (``lakehouse.outbox``) before the publish, which narrows the loss window
   to commit→stage; the catalog's reconcile cron announces a version whose event a crash in that window lost,
   from the version log (``catalog.api.commit_reconcile``, [[LH-497]]).
 
@@ -46,8 +46,15 @@ from pydantic import BaseModel
 
 from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, tag_move_run_id
 from catalog.core.run_context import RunContext
-from lakehouse_kit import outbox
-from lakehouse_kit.openlineage import (
+from lakehouse import outbox
+from lakehouse.governed import fga
+from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
+from lakehouse.governed.subjects import is_person_subject
+from lakehouse.lineage import CanonError, ParentRunFacet, SigningKey, attach_signature, author_of
+from lakehouse.lineage.schemas import JobRef, RunRef
+from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, event_identity, with_dataset_uuids
+from lakehouse.naming import is_safe_project
+from lakehouse.openlineage import (
     BRANCH_IDENTIFIER,
     DATASET_EVENT_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
@@ -64,15 +71,8 @@ from lakehouse_kit.openlineage import (
     schema_facet,
     symlinks_facet,
 )
-from lakehouse_kit.schema import SchemaFields
-from lineage_kit import CanonError, ParentRunFacet, SigningKey, attach_signature, author_of
-from lineage_kit.schemas import JobRef, RunRef
-from service_kit.governed import fga
-from service_kit.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
-from service_kit.governed.subjects import is_person_subject
-from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, event_identity, with_dataset_uuids
-from service_kit.naming import is_safe_project
-from service_kit.storage_options import StorageOptions
+from lakehouse.schema import SchemaFields
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -238,12 +238,12 @@ def _input_dataset(ref: InputRef, *, namespace: str) -> dict[str, Any]:
 
 #: Principals that are not an address: a wildcard names everyone, a role names a job.
 #: Values that name a role, a machine, or everyone — never one person. `anon` is the estate-wide
-#: ANONYMOUS_SUBJECT (`service_kit.governed.deps`): with OIDC off every verified-subject dependency
+#: ANONYMOUS_SUBJECT (`lakehouse.governed.deps`): with OIDC off every verified-subject dependency
 #: resolves to it, so without this entry a dev or auth-off estate would address one shared inbox
 #: actor literally named `anon` on behalf of everybody.
 
 
-#: `is_person_subject` is imported from service-kit rather than defined here: it has more than one
+#: `is_person_subject` is imported from the library rather than defined here: it has more than one
 #: producer, and the medallion — whose authors ARE chart role literals — cannot depend on the catalog,
 #: so a rule written here could only ever be applied here. See that module for why that matters.
 def _is_ddl(operation: str) -> bool:
@@ -321,9 +321,10 @@ def build_write_event(
 
     ``table_id`` is the catalog's canonical id (e.g. ``alpha$bronze$images``), the lineage ``Dataset`` name a caller of
     the doors reads, under ``namespace``, the catalog's dataset namespace (``lance-namespace://<host><prefix>``,
-    :data:`service_kit.naming.CATALOG_DATASET_SCHEME`, [[LH-553]]), which every input is named under too; the table's identity across a rename is the uuid ``uuids`` carries in the output's ``rask_lance`` facet,
-    which its OpenFGA object (``table:<uuid>``) names (ADR 0173 §8, §10). ``operation`` is the catalog op (``create_table`` / ``insert`` / ``merge_insert``
-    / ``update`` / ``delete``). ``version`` is the Lance version the write produced; when it is ``None``
+    :data:`lakehouse.naming.CATALOG_DATASET_SCHEME`, [[LH-553]]), which every input is named under too; the table's
+    identity across a rename is the uuid ``uuids`` carries in the output's ``rask_lance`` facet, which its OpenFGA object
+    (``table:<uuid>``) names (ADR 0173 §8, §10). ``operation`` is the catalog op (``create_table`` / ``insert`` /
+    ``merge_insert`` / ``update`` / ``delete``). ``version`` is the Lance version the write produced; when it is ``None``
     (e.g. an insert whose response carries no version) the standard version facet is omitted so the
     event records the run without asserting a version. ``run_id`` / ``event_time`` are injected
     so the builder is pure and deterministically testable.
@@ -425,7 +426,7 @@ def build_write_event(
     if schema_fields:
         # Standard schema facet → the per-version column schema (blob/vector-aware) (#24), so a
         # catalog-written table carries its real columns in the feed and in a forwarded graph backend.
-        # Built by the SHARED lakehouse_kit.openlineage helper — one spec version across all emitters.
+        # Built by the SHARED lakehouse.openlineage helper — one spec version across all emitters.
         facets["schema"] = schema_facet(_PRODUCER, schema_fields)
     # WHICH CATALOG GOVERNS THIS, so two estates writing `bronze$events` are not one dataset in a shared
     # graph backend. `job_namespace` is reused as the catalog's NAME rather than taking a second parameter:
@@ -651,7 +652,7 @@ class _BaseLineageEmitter:
     best-effort — ``_send`` swallows failures so a lineage outage never breaks a catalog write."""
 
     _job_namespace: str
-    #: The namespace every dataset this catalog names is under: its endpoint (:data:`service_kit.naming.CATALOG_DATASET_SCHEME`,
+    #: The namespace every dataset this catalog names is under: its endpoint (:data:`lakehouse.naming.CATALOG_DATASET_SCHEME`,
     #: [[LH-553]]), required of every transport so no wiring falls back to a name another estate holds too.
     _dataset_namespace: str
     #: Set by `make_emitter`; absent in the hand-constructed emitters the tests build, which is why it

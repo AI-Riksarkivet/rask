@@ -4,10 +4,11 @@ The bus door authenticates the sidecar that delivered an event, never the produc
 stamped inside is a claim until a signature proves it. A producer signs with an Ed25519 key only its own sidecar can
 read; lineage holds PUBLIC keys only, so a compromised lineage can admit or refuse events and cannot forge one.
 
-WHAT THIS MODULE OWNS is the part the kit cannot: this pod's Dapr sidecar as the place each identity's published list is
-read from (`lineage_kit.keys.PublishedKeys` caches and paces the reads, through service-kit's `published_key_fetch`, the
-read every verifying door shares), and turning the kit's outcomes into the three answers a door needs.
-`lineage_kit.signing.verify_signature` owns what a valid signature is.
+WHAT THIS MODULE OWNS is the part the library leaves to each service: this pod's Dapr sidecar as the place each
+identity's published list is read from (`lakehouse.lineage.keys.PublishedKeys` caches and paces the reads, through
+`lakehouse.governed.signing_key.published_key_fetch`, the read every verifying door shares), and turning the library's
+outcomes into the three answers a door needs.
+`lakehouse.lineage.signing.verify_signature` owns what a valid signature is.
 
 * VERIFIED: the event's signer and the key that signed it are known. The caller may act on what the signature attests.
 * REFUSED (`UnverifiedEventError`, a `PermissionDeniedError`): no listed signer's published key verifies the event.
@@ -29,12 +30,12 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
 
+from lakehouse.governed.signing_key import published_key_fetch
+from lakehouse.lineage.keys import PublishedKeys
+from lakehouse.lineage.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature, signature_of, verify_signature
 from lineage.core.config import LineageSettings
 from lineage.core.metrics import record_signature_refused, record_signature_verified
 from lineage.models import UnverifiedEventError, run_id_from_payload
-from lineage_kit.keys import PublishedKeys
-from lineage_kit.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature, signature_of, verify_signature
-from service_kit.governed.signing_key import published_key_fetch
 
 
 log = logging.getLogger(__name__)

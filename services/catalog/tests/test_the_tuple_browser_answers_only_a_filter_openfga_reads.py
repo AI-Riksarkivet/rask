@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 
-from service_kit.governed import fga
+from lakehouse.governed import fga
 
 
 TUPLES = "/management/v1/access/tuples"

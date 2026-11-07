@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from service_kit.governed.auth import write_model
+from lakehouse.governed.auth import write_model
 from tests.unit.openfga_stub import BY_NAME, Recorded, openfga
 
 

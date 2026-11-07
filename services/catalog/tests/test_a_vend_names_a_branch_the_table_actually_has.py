@@ -41,10 +41,10 @@ from pydantic import SecretStr
 from catalog.api.v1.endpoints.credentials import vend_credentials
 from catalog.core.vending import VendedSession
 from catalog.services.table_claims import DoorTable, ResolvedTable
-from lakehouse_kit import location_claims
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.storage_options import StorageOptions
+from lakehouse import location_claims
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

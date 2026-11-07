@@ -32,9 +32,9 @@ from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
-from lakehouse_kit.control_emit import emit_control
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.control_emit import emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 
 if TYPE_CHECKING:
@@ -52,8 +52,7 @@ ProjectId = Annotated[str, Path(min_length=3, max_length=63, pattern=r"^[a-z0-9]
 
 #: Losing the last one strands the tenant: nobody inside it could grant, and ``can_administer`` also
 #: gates DELETE, so it could be neither administered nor retired without estate intervention. Refusing
-#: is what makes ``can_grant_admin: admin`` safe — it is the pairing Lakekeeper's model calls
-#: "lock-out protection" and states as ``project_admin``'s first purpose.
+#: is what makes ``can_grant_admin: admin`` safe: lock-out protection, the reason a tenant may govern its own admins.
 ADMINISTRATIVE: frozenset[str] = frozenset({"admin"})
 
 

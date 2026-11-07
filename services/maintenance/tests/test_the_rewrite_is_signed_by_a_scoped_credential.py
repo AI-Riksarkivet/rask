@@ -29,11 +29,11 @@ from typing import Any
 import httpx
 import pytest
 
+from lakehouse.context import DiagnosticFormatter
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned
-from service_kit.context import DiagnosticFormatter
-from service_kit.storage_options import StorageOptions
 
 
 pytestmark = pytest.mark.usefixtures("catalog_identity_token")

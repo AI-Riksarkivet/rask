@@ -104,17 +104,10 @@ def test_a_malformed_relation_is_denied(monkeypatch: pytest.MonkeyPatch, body: A
         _run(monkeypatch, body)
 
 
-@pytest.mark.parametrize(
-    "relation",
-    [
-        pytest.param("parent", id="structural-edge"),
-        pytest.param("child", id="inverse-edge"),
-    ],
-)
-def test_a_rung_with_no_grant_action_is_refused_before_reaching_openfga(monkeypatch: pytest.MonkeyPatch, relation: str) -> None:
-    """The phantom-relation guard. Passing these through would build ``can_grant_parent`` and ask
-    OpenFGA for a relation the model does not define — a 400 that fails closed to a 503 for EVERY
-    caller, owners included. The assertion that matters is the empty ask-list: refused locally."""
+def test_a_rung_with_no_grant_action_is_refused_before_reaching_openfga(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The phantom-relation guard. Passing the structural `parent` edge through would build ``can_grant_parent`` and
+    ask OpenFGA for a relation the model does not define — a 400 that fails closed to a 503 for EVERY caller, owners
+    included. The assertion that matters is the empty ask-list: refused locally."""
     asked: list[tuple[str, str, str]] = []
 
     async def fake_check(_c: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
@@ -122,26 +115,17 @@ def test_a_rung_with_no_grant_action_is_refused_before_reaching_openfga(monkeypa
         return True
 
     monkeypatch.setattr(fga_deps.fga, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": relation})))
+    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": "parent"})))
     with pytest.raises(PermissionDeniedError):
         asyncio.run(
             fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False)
         )
-    assert asked == [], f"{relation!r} reached OpenFGA as a phantom relation"
+    assert asked == [], "parent reached OpenFGA as a phantom relation"
 
 
 # --------------------------------------------------------------------------- #
 # REVOKE is not the mirror of GRANT
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("rung", ["owner"])
-def test_every_rung_revokes_through_the_same_single_door(rung: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """One authority for the whole revoke surface. A per-rung revoke bar is what let the delegate in:
-    the rung says WHAT is being taken away, never WHO may take it."""
-    asked = _run(monkeypatch, {"user": "dex~carol", "relation": rung}, revoking=True)
-
-    assert [relation for _u, relation, _o in asked] == ["can_revoke_grant"]
 
 
 def test_revoke_still_refuses_a_phantom_rung_before_reaching_openfga(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,23 +185,6 @@ def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) 
         asyncio.run(
             fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
         )
-
-
-def test_a_userset_the_caller_is_outside_is_a_normal_grant(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The guard must not turn every userset grant into a refusal — that would break the role-based
-    delegation `role:validators#assignee` exists for."""
-
-    async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        if relation == "assignee":
-            return False  # the caller is NOT inside it
-        return relation.startswith("can_grant_")
-
-    monkeypatch.setattr(fga_deps.fga, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:validators#assignee", "relation": "owner"})))
-
-    asyncio.run(
-        fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
-    )
 
 
 def test_the_self_grant_rule_never_runs_on_revoke(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -429,11 +429,9 @@ export interface paths {
          *     key) as well as by its name ([[LH-553]]): a location a table holds is that table, and its grants decide whether the
          *     producer may record it, while one no table holds is the outside world. The fact is structural, like ``governed``'s,
          *     so it answers to the same role. A claim that cannot be read (the store's error, a record that is no claim, a root the
-         *     conditional read does not serve: `lakehouse_kit.records`) is 503, never "holds none", which would exempt it. The
+         *     conditional read does not serve: `lakehouse.records`) is 503, never "holds none", which would exempt it. The
          *     claims are the answer because the ``dir`` backend keeps no location exclusive (``lance_docs/ns_catalog/catalog/dir``
-         *     § Manifest Table Commits) and the claim store picks one holder (`lakehouse_kit.location_claims`). Lakekeeper's S3
-         *     signer asks the same question of its own store (``resolve_signable_by_location``,
-         *     crates/lakekeeper/src/server/s3_signer/sign.rs).
+         *     § Manifest Table Commits) and the claim store picks one holder (`lakehouse.location_claims`).
          */
         post: operations["decide_locate_management_v1_decisions_locate_post"];
         delete?: never;
@@ -1580,7 +1578,7 @@ export interface paths {
          *     available, not a metadata lookup.
          *
          *     THE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find
-         *     it. That `ControlAction` (`service_kit/control_events.py:92`) announces a version advance and
+         *     it. That `ControlAction` (`lakehouse.control_events.ControlAction`) announces a version advance and
          *     carries `{from_version, to_version}` — "the RANGE (D-R3) the notification carries, so a consumer
          *     resolves the delta" (`catalog/services/publication.py:245-254`) — which is exactly the window this
          *     door takes. Its emitter is a DIFFERENT `publication.py`, the route module
@@ -5221,7 +5219,7 @@ export interface components {
          *     `actor` is the person the emitting service authenticated (`user:<principal>`), or a service principal or None when a
          *     service acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs
          *     each action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it
-         *     (`lineage_kit.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
+         *     (`lakehouse.lineage.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
          *     envelope parse alike.
          */
         CatalogControlEvent: {
@@ -7106,7 +7104,7 @@ export interface components {
          *     Omitting ``project`` is the security half: a body-supplied project would let an admin of one
          *     tenant pass ``can_administer`` on their own project while rewriting somebody else's gate.
          *
-         *     Field semantics live on ``lakehouse_kit.gate_specs.GateSpec``, which is the model this
+         *     Field semantics live on ``lakehouse.gate_specs.GateSpec``, which is the model this
          *     validates into.
          */
         GateSpecRequest: {

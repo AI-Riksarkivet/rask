@@ -2,7 +2,7 @@
 
 The lineage service owns the commit feed and the edge list, so it must protect them itself (in-service: the
 cluster route in front of it checks nothing). It mirrors the catalog's authz guard (``services/catalog/api/fga_deps.py``)
-and asks every question through ``app.state.decider`` (:mod:`service_kit.governed.decider`): deployed, that is the
+and asks every question through ``app.state.decider`` (:mod:`lakehouse.governed.decider`): deployed, that is the
 catalog's decision door, and lineage holds no credential to the OpenFGA store at all ([[LH-442]]). The thin FastAPI
 authz + filter dependencies are re-derived here because they bind to ``LineageSettings`` rather than the catalog's
 ``Settings``.
@@ -37,7 +37,13 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse_kit.openlineage import SYMLINKS_FACET, author_facet, lifecycle_state
+from lakehouse.governed import fga
+from lakehouse.governed.decider import AccessDecider
+from lakehouse.governed.principal import is_principal
+from lakehouse.lineage.signing import VerifiedSignature
+from lakehouse.lineage_events import AUTHOR_FACET, dataset_uuids
+from lakehouse.naming import identifier_location
+from lakehouse.openlineage import SYMLINKS_FACET, author_facet, lifecycle_state
 from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep
 from lineage.api.security import Caller, CurrentToken
 from lineage.core.config import LineageSettings
@@ -53,12 +59,6 @@ from lineage.models import (
     author_sub_from_payload,
 )
 from lineage.services.signature import verify_arrived_event
-from lineage_kit.signing import VerifiedSignature
-from service_kit.governed import fga
-from service_kit.governed.decider import AccessDecider
-from service_kit.governed.principal import is_principal
-from service_kit.lineage_events import AUTHOR_FACET, dataset_uuids
-from service_kit.naming import identifier_location
 
 
 log = logging.getLogger(__name__)
@@ -415,7 +415,7 @@ def _is_an_attested_drop(event: RunEvent | DatasetEvent, verified: VerifiedSigna
     table's tuples in the same request, so a delivery that arrives after the revoke — every bus delivery
     and every outbox drain — asks FGA about a table nobody may write, and the drop could never be recorded.
     The catalog enforced `can_drop` before it mutated anything; its verified signature is that
-    attestation, the way Lakekeeper treats the catalog's own events as facts rather than re-asking a grant.
+    attestation, so the catalog's own signed event is a fact here rather than a grant to ask again.
     """
     return isinstance(event, DatasetEvent) and _attested(verified, settings) and lifecycle_state(event.operation or "") == "DROP"
 

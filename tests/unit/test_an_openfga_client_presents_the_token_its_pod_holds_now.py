@@ -19,9 +19,9 @@ from openfga_sdk.client.models import ClientCheckRequest
 from openfga_sdk.exceptions import UnauthorizedException
 from pydantic_settings import BaseSettings
 
-from service_kit.governed.auth_lifespan import build_fga_client
-from service_kit.governed.fga import OpenFgaCredentialRefusedError
-from service_kit.governed.settings import FgaSettings
+from lakehouse.governed.auth_lifespan import build_fga_client
+from lakehouse.governed.fga import OpenFgaCredentialRefusedError
+from lakehouse.governed.settings import FgaSettings
 from tests.unit.openfga_stub import BY_NAME, Recorded, openfga
 
 

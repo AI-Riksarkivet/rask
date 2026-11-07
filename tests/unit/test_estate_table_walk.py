@@ -23,7 +23,7 @@ from lance_namespace import LanceNamespace, ListNamespacesRequest, ListNamespace
 
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
-from service_kit.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions
 from tests.unit.named_resolver import NamedResolver
 
 

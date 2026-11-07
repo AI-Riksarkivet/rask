@@ -8,7 +8,7 @@
  * happens to be flat today, which is why nothing noticed.
  *
  * The backend is the authority and says it in one line: `parent_namespace_id` is "all segments but the
- * last" (`packages/service-kit/src/service_kit/governed/fga.py:187-201`), and that id is what the grant
+ * last" (`packages/lakehouse/src/lakehouse/governed/fga.py:187-201`), and that id is what the grant
  * and check paths use. A frontend deriving a different one does not merely render oddly — it disagrees
  * with authorization about which object a table belongs to, and links the user to a namespace page for
  * an object that is not its parent.

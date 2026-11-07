@@ -1,6 +1,6 @@
 """The storage builders derive `allow_http` and the pyarrow scheme from the endpoint by one case-insensitive rule.
 
-Two builders hand options to object_store: `lakehouse_kit.objectfs.lance_storage_options`
+Two builders hand options to object_store: `lakehouse.objectfs.lance_storage_options`
 (every vend and most service opens) and the catalog's `namespace_properties` (its own `dir` connection).
 object_store lowercases the scheme — measured on pylance 12.0.0 against a closed
 port, `HTTP://127.0.0.1:1` with `allow_http=true` requests `http://127.0.0.1:1/…` and with
@@ -31,9 +31,9 @@ import pytest
 from pydantic import SecretStr
 
 from catalog.core.config import Settings as CatalogSettings
-from lakehouse_kit.objectfs import lance_storage_options
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.storage_options import s3_filesystem
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.objectfs import lance_storage_options
+from lakehouse.storage_options import s3_filesystem
 
 
 def _lance(endpoint: str) -> str:

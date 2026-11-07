@@ -5,7 +5,7 @@ botocore or urllib3 instrumentor exists, and 8 of the 14 apps open no span of th
 
 The services' instrumentation covered fastapi, httpx, logging, requests, grpc (both variants) and aiohttp, and
 neither botocore nor urllib3, whose instrumentors were in no lock. boto3 is live in four
-places — `catalog/core/vending.py`, `catalog/services/warehouses.py`, `lakehouse_kit/records.py`
+places — `catalog/core/vending.py`, `catalog/services/warehouses.py`, `lakehouse/records.py`
 and `storage/client.py` — and the Kubernetes client rides urllib3. So every S3 call and every k8s call
 in the estate is invisible in a trace.
 

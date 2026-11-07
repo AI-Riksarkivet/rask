@@ -1,4 +1,4 @@
-"""Unit tests for the derivation primitives in ``service_kit.governed.fga``: ``expand`` / ``expand_tree``,
+"""Unit tests for the derivation primitives in ``lakehouse.governed.fga``: ``expand`` / ``expand_tree``,
 plus the two widenings an estate admin's access questions need from ``list_objects`` / ``list_users``.
 
 What these pin, and why each matters more than it looks:
@@ -27,7 +27,7 @@ from typing import Any, cast
 import pytest
 from openfga_sdk import OpenFgaClient
 
-from service_kit.governed import fga
+from lakehouse.governed import fga
 
 
 # --------------------------------------------------------------------------- #

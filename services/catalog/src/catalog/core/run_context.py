@@ -15,7 +15,7 @@ reader of the version's transaction cannot recover.
 ``rask.author`` names who committed: the verified caller, which the catalog stamps on every commit its own doors make and
 refuses any other value of at ``version/create``. A property any committer can write proves who wrote it only because of
 that refusal. A stock client's commit that names no author (a compaction cannot, pylance 13.0.0) has its caller recorded
-by the catalog before it finalizes (``lakehouse_kit.commit_records``). Every version therefore names its author,
+by the catalog before it finalizes (``lakehouse.commit_records``). Every version therefore names its author,
 which is what lets the catalog announce a commit whose announcement was lost from its version log alone
 (``catalog.services.commit_reconcile``), on behalf of that author ([[LH-497]]).
 
@@ -152,7 +152,7 @@ def require_caller_authored(properties: Mapping[str, str], *, caller: str | None
     """Refuse a staged commit whose ``rask.author`` is not the verified ``caller``.
 
     A commit naming no author is admitted: a stock compaction cannot carry one, and the catalog records the caller as
-    its author before it finalizes (`lakehouse_kit.commit_records`, [[LH-497]]). ``caller`` is ``None`` when the
+    its author before it finalizes (`lakehouse.commit_records`, [[LH-497]]). ``caller`` is ``None`` when the
     catalog authenticates nobody, and then there is no one to compare with.
 
     Raises:

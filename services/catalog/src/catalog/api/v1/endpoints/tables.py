@@ -95,14 +95,14 @@ from catalog.core.vending import (
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import commit_reconcile, dataplane, native, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.table_claims import DoorTable, ResolvedTable
-from lakehouse_kit import base_registry, location_claims, object_records, protection, trash
-from lakehouse_kit.control_emit import ControlEmitter, emit_control
-from service_kit.governed import fga
-from service_kit.governed.audit import AuditAction, AuditOutcome, audit
-from service_kit.governed.deps import ANONYMOUS_SUBJECT
-from service_kit.naming import uuid_of
-from service_kit.ns_errors import PartiallyApplied
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_registry, location_claims, object_records, protection, trash
+from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.governed import fga
+from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.deps import ANONYMOUS_SUBJECT
+from lakehouse.naming import uuid_of
+from lakehouse.ns_errors import PartiallyApplied
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)

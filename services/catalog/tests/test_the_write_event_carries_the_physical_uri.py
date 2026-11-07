@@ -27,8 +27,8 @@ from typing import Any, cast
 
 import pytest
 
-from service_kit.lineage_events import DatasetUuids
-from service_kit.storage_options import StorageOptions
+from lakehouse.lineage_events import DatasetUuids
+from lakehouse.storage_options import StorageOptions
 
 
 class _NoUuids:

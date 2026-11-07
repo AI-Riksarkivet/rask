@@ -34,7 +34,7 @@ DECLARED = {b"lineage.dataset_id": b"m$t"}
 FORGED_UUID = "00000000-0000-4000-8000-000000000000"
 
 #: A governed tier's shape: the key (top level and nested, so ancestors are exercised) and the three
-#: provenance columns `lakehouse_kit.stage_stamp` names.
+#: provenance columns `lakehouse.stage_stamp` names.
 SCHEMA = pa.schema(
     [
         pa.field("id", pa.int64(), nullable=False, metadata=PK),

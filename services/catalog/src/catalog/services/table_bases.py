@@ -1,13 +1,12 @@
 """What a create or a register may leave a table declaring, and where a table may be registered ([[LH-279]]).
 
 The catalog's two table-making doors are the only writers of the ``_bases/`` record
-(:mod:`lakehouse_kit.base_registry`), and this is their half of it: the entries each door records,
+(:mod:`lakehouse.base_registry`), and this is their half of it: the entries each door records,
 the register door's judge of the bases a dataset arrives declaring, and the location-exclusivity rule
 that keeps every table prefix — and so every vended session policy — off the control root.
 
-LOCATION-EXCLUSIVITY is Lakekeeper's rule (``tabular/mod.rs`` and ``sign.rs``: no table location may equal,
-contain or sit under another table, the namespace root, or a control prefix) translated onto the ``dir``
-backend, which enforces none of it: measured on pylance 12.0.0 (lh279 m4) it accepts a register at
+LOCATION-EXCLUSIVITY (no table location may equal, contain or sit under another table, the namespace root, or a
+control prefix) is enforced here because the ``dir`` backend enforces none of it: measured on pylance 12.0.0 (lh279 m4) it accepts a register at
 ``.``, at ``_bases`` and at another table's directory. A write vend is scoped to the table's prefix, so a
 table registered at ``.`` is vended ``<bucket>/*`` and one at ``_bases`` is vended the record store itself
 (lh279 s1). The rule is what makes the record unreachable by any vend.
@@ -30,11 +29,11 @@ from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.core.namespace import registered_dataset_facts
 from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import native, table_claims
-from lakehouse_kit import base_registry, blobs, location_claims
-from lakehouse_kit.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise
-from lakehouse_kit.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
-from lakehouse_kit.objectfs import fs_and_base
-from service_kit.storage_options import StorageOptions
+from lakehouse import base_registry, blobs, location_claims
+from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise
+from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
+from lakehouse.objectfs import fs_and_base
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -117,7 +116,7 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
 
     - it must be relative (the backend refuses an absolute one too; this door refuses it first);
     - its spelling must name the location the store opens, by the rule the base judge applies
-      (:func:`~lakehouse_kit.base_refs.names_a_location`): each segment, percent-decoded once, is
+      (:func:`~lakehouse.base_refs.names_a_location`): each segment, percent-decoded once, is
       not empty, ``.`` or ``..`` (which also refuses the namespace root itself), holds no ASCII control
       character, no ``?`` and no ``/`` or ``\\`` the decode added. The store keeps a ``?`` under a re-encoded name
       that holds no table, so an id registered there finds no table on query or count (measured on pylance 13.0.0

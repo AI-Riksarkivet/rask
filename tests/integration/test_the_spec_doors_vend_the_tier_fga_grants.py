@@ -31,11 +31,11 @@ from catalog.api.dependencies import get_resolver, get_vendor
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import VendedSession
 from catalog.services import table_claims
-from service_kit.governed import fga as fga_module
-from service_kit.governed.idp_identity import PersonPrincipal
-from service_kit.governed.oidc import IDToken
-from service_kit.governed.principal import Principal
-from service_kit.governed.store_credential import S3KeyPair
+from lakehouse.governed import fga as fga_module
+from lakehouse.governed.idp_identity import PersonPrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
+from lakehouse.governed.store_credential import S3KeyPair
 from tests.unit.named_resolver import NamedResolver
 
 

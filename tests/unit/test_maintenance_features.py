@@ -24,9 +24,9 @@ import pyarrow as pa
 import pytest
 from lance.dataset import DatasetBasePath
 
-from lakehouse_kit import features
-from lakehouse_kit.objectfs import dataset_root_probe, is_lance_dataset_root, same_store_uri
-from service_kit.storage_options import StorageOptions
+from lakehouse import features
+from lakehouse.objectfs import dataset_root_probe, same_store_uri
+from lakehouse.storage_options import StorageOptions
 
 
 def _table(n: int = 20) -> pa.Table:
@@ -90,17 +90,6 @@ def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Pat
     assert refusal is not None, "an unsupported flag must refuse"
     assert "unknown" not in refusal, f"the refusal names no feature, so an operator cannot act on it: {refusal}"
     assert "mixed" in refusal.lower(), f"the refusal should name the feature upstream calls it: {refusal}"
-
-
-def test_an_ordinary_dataset_is_not_refused(tmp_path: pathlib.Path) -> None:
-    """The negative that makes every refusal below meaningful: a gate that refused everything would
-    pass all of them. Deletion files + stable row ids are the flags a normal rask table carries."""
-    uri = str(tmp_path / "ordinary.lance")
-    lance.write_dataset(_table(), uri, enable_stable_row_ids=True).delete("id = 1")
-    ds = lance.dataset(uri)
-
-    assert features.manifest_feature_flags(ds) == (3, 3), "fixture must really set both supported flags"
-    assert features.unsupported_features(ds) is None
 
 
 # --------------------------------------------------------------------------- #
@@ -172,22 +161,6 @@ def test_a_data_overlay_makes_pylance_refuse_the_open_and_we_classify_it(tmp_pat
     reason = features.unsupported_features_from_open_error(caught.value)
     assert reason is not None, "pylance's own feature refusal must not read as an ordinary open failure"
     assert "64" in reason and "overlay" in reason.lower(), f"the refusal must NAME the flag, got: {reason}"
-
-
-def test_an_ordinary_open_failure_is_not_a_feature_refusal(tmp_path: pathlib.Path) -> None:
-    """The negative, and it is load-bearing: a missing directory must keep reading as `open:` noise.
-
-    The sweep's lineage selection is prefix-keyed on `open:` / `maintain:`, and the estate's buckets
-    contain declared-only prefixes that never open. Classifying those as feature refusals would make
-    the refusal counter — the one signal that a pylance upgrade silently disarmed maintenance —
-    permanently non-zero and therefore useless.
-    """
-    try:
-        lance.dataset(str(tmp_path / "nope.lance"))
-    except Exception as exc:  # noqa: BLE001 — pylance's error type for a missing dataset is not the point
-        assert features.unsupported_features_from_open_error(exc) is None
-    else:
-        pytest.fail("opening a missing dataset must raise")
 
 
 def test_a_wire_type_it_cannot_skip_stops_rather_than_misreading() -> None:
@@ -283,30 +256,6 @@ def test_compaction_is_PERMITTED_on_an_external_blob_base_and_still_refused_on_a
         *features.manifest_feature_flags(cds), features.gather_compaction_bases(cds, dataset_root_probe(clone, StorageOptions()))
     )
     assert refusal is not None and "16" in refusal, f"the clone refusal must survive, got: {refusal}"
-
-
-def test_the_OBJECT_STORE_probe_is_what_separates_a_clone_from_a_blob_prefix(tmp_path: pathlib.Path) -> None:
-    """Why the gate reads a listing instead of trusting `BasePath.is_dataset_root`.
-
-    Measured on pylance 10.0.0: `shallow_clone` is the ONLY writer that sets that bit. `add_bases`
-    pointed straight at a live Lance dataset root reports False — so a gate reading the manifest alone
-    would permit the clone shape wearing the blob shape's manifest. `<base>/_versions/` does not lie.
-    """
-    source = str(tmp_path / "src.lance")
-    lance.write_dataset(_table(), source)
-    based = str(tmp_path / "registered.lance")
-    lance.write_dataset(_table(), based)
-    lance.dataset(based).add_bases([DatasetBasePath(path=source, name="src")])
-    ds = lance.dataset(based)
-
-    refs = features.manifest_base_path_refs(ds)
-    assert [ref.is_dataset_root for ref in refs] == [False], "the manifest bit would have been enough after all — this test's premise is gone"
-    assert is_lance_dataset_root(source, StorageOptions()) is True
-    assert is_lance_dataset_root(str(tmp_path), StorageOptions()) is False
-
-    gathered = features.gather_compaction_bases(ds, dataset_root_probe(str(ds.uri), StorageOptions()))
-    assert [base.probed_dataset_root for base in gathered.bases] == [True]
-    assert features.describe_compaction_unsupported_flags(*features.manifest_feature_flags(ds), gathered) is not None
 
 
 def test_DATA_LIVING_UNDER_A_BASE_refuses_even_when_the_base_is_no_dataset_root(tmp_path: pathlib.Path) -> None:

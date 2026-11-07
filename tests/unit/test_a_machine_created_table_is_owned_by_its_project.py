@@ -31,8 +31,8 @@ import pytest
 from catalog.api import fga_deps
 from catalog.api.security import Caller
 from catalog.core.config import Settings
-from service_kit.governed import fga
-from service_kit.governed.machine_identity import ServicePrincipal
+from lakehouse.governed import fga
+from lakehouse.governed.machine_identity import ServicePrincipal
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 

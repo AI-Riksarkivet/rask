@@ -46,5 +46,5 @@ spec:
             {{- with .Values.auth.fgaStoreId }}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
-          command: ["python", "-m", "service_kit.governed.auth.write_model"]
+          command: ["python", "-m", "lakehouse.governed.auth.write_model"]
 {{- end }}

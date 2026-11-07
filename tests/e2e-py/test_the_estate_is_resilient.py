@@ -14,15 +14,15 @@ The drills, and what each outage must look like while it lasts:
 1. The object store. A write through the catalog's own door is refused ServiceUnavailable (code 17, 503), or gets no
    answer within the bound the catalog's own store timeouts set, and never lands while the store is gone.
 2. OpenFGA, the authorization decision. A governed write answers ServiceUnavailable at its authorization check: never an
-   allow, and never a deny, which would read as a missing grant (`service_kit.governed.fga`).
+   allow, and never a deny, which would read as a missing grant (`lakehouse.governed.fga`).
 3. Lineage, the commit feed's recorder. Commits go on landing, and each announcement is recorded once lineage is back:
    its durable consumer resumes where it stopped.
 4. The bus, held down past the window a sidecar's NATS client reconnects for. Commits and grants go on landing while
    NATS is gone, each announcement staged in the catalog's outbox, and the lineage relay records the staged writes
    without the bus. The outage closes every sidecar's connection for good, so each service restarts its own sidecar once
-   the bus answers again (`service_kit.bus_watchdog`), and both relays publish what they hold.
+   the bus answers again (`lakehouse.bus_watchdog`), and both relays publish what they hold.
 5. The issuer. A door verifies a bearer offline against the issuer's key set, which it holds for 300 s
-   (`service_kit.governed.oidc`): an existing token is accepted while the door holds the keys, answered
+   (`lakehouse.governed.oidc`): an existing token is accepted while the door holds the keys, answered
    ServiceUnavailable once a door must fetch them and cannot (never Unauthenticated, the caller is not at fault), and
    accepted again when the issuer is back, with no restart.
 6. The secret store, sealed in place. The catalog drops its signing key once it can no longer re-read it from the store,

@@ -22,9 +22,9 @@ from typing import Any
 import httpx
 import pytest
 
+from lakehouse.storage_options import StorageOptions
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceDenied, MaintenanceUnauthenticated, denial_remedy
-from service_kit.storage_options import StorageOptions
 
 
 class _Settings:

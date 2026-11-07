@@ -1,6 +1,6 @@
-# lakehouse_kit.storage
+# lakehouse.storage
 
-The lakehouse kernel's seam over S3-compatible stores (`packages/lakehouse-kit/src/lakehouse_kit/storage`): the boto3 S3 client factory, the STS client, key listing with
+The lakehouse library's seam over S3-compatible stores (`packages/lakehouse/src/lakehouse/storage`): the boto3 S3 client factory, the STS client, key listing with
 timestamped-prefix retention, S3 URI parsing, and the `StorageError` family every S3 call answers in.
 
 **Protocol-agnostic on purpose.** Nothing here knows one workload's source format or where a workload reads its bytes

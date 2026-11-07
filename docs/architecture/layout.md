@@ -16,9 +16,7 @@ flowchart TD
             lake["the lakehouse: catalog · lineage · maintenance"]
         end
         subgraph packages["packages/ · reusable libraries (no entrypoints)"]
-            psk["service-kit (the platform a client pins)"]
-            phk["lakehouse-kit (the lakehouse's kernel, with lakehouse_kit.storage)"]
-            plk["lineage-kit"]
+            plh["lakehouse (the lakehouse's one library, with lakehouse.storage and lakehouse.lineage)"]
         end
         cx["scripts/ · dev + ops tools"]
     end
@@ -26,9 +24,7 @@ flowchart TD
         app["console/ · one single-page app"]
         fpk["packages/ · ui · api · dockview · flow"]
     end
-    lake --> phk
-    lake --> plk
-    phk --> psk
+    lake --> plh
     app --> fpk
 ```
 
@@ -39,9 +35,7 @@ Each is unambiguous from inside its plane, and language purity is what lets both
 
 | Package | Language | Purpose |
 |---|---|---|
-| `packages/service-kit` | Python | The platform package a client pins by lakehouse tag, and the pieces of it the lakehouse runs: exceptions, the request-id middleware, logging, the probes and the drain, the body cap, the auth plane (`service_kit.governed`), the naming a client needs, the input and credential guards (`service_kit.arrow_ipc`, `service_kit.storage_options`), the contract the lakehouse's events publish (`service_kit.control_events`, `service_kit.lineage_events`, `service_kit.governed.subjects`, `service_kit.signature_doors`), and its pytest plugin. It ships no app factory. Dependency-light (no lancedb/ray/sqlmodel), and imports nothing from the lakehouse's kernel. |
-| `packages/lakehouse-kit` | Python | The lakehouse's kernel: the lance app factory, the catalog's records, registries and governance guards, the namespace clients, the OpenLineage, control-event and outbox seams, the store session, and [`lakehouse_kit.storage`](../packages/storage.md), the S3 client, STS and URI seam. Imported by catalog, lineage and maintenance; no client imports it. |
-| `packages/lineage-kit` | Python | The OpenLineage emission kernel and the Ed25519 signing and verifying seam for lineage events, used by catalog, lineage and maintenance, and by a client verifying the lakehouse's signed events. |
+| `packages/lakehouse` | Python | The lakehouse's one library ([ADR 0195](../adr/0195-the-three-kits-fold-into-one-lakehouse-library.md)), imported by catalog, lineage and maintenance and by no client: the lance app factory and what it installs (exceptions, the request-id middleware, logging, the probes and the drain, the body cap), the auth plane (`lakehouse.governed`), the naming and the input and credential guards (`lakehouse.arrow_ipc`, `lakehouse.storage_options`), the catalog's records, registries and governance guards, the namespace clients (`lakehouse.lancekit`), the events (`lakehouse.control_events`, `lakehouse.lineage_events`, `lakehouse.governed.subjects`, `lakehouse.signature_doors`, the outbox), the OpenLineage emission and Ed25519 signing seam (`lakehouse.lineage`), the store session, and [`lakehouse.storage`](../packages/storage.md), the S3 client, STS and URI seam. |
 | `frontend/packages/ui` | TS / Svelte | `@rask/ui`: Svelte 5 + Bits UI + Tailwind 4 component library with Storybook; `@rask/ui/shell` exports the console's `AppShell`. |
 | `frontend/packages/api` | TS | `@rask/api`: the typed client generated from `docs/catalog-openapi.json` and `docs/lineage-openapi.json` and the lineage client, calling same-origin `/api/*` with the signed-in person's bearer. |
 | `frontend/packages/dockview` | TS / Svelte | `@rask/dockview`: the console's workbench docks. |

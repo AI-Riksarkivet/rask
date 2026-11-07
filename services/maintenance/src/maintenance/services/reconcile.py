@@ -24,7 +24,7 @@ page ceiling, unreadable record and paginated listing lands in :attr:`ReconcileR
 Why the registries are re-read here rather than imported from the catalog: maintenance has no catalog
 client BY DESIGN, and declaring one would put the whole catalog closure in the maintenance image, because
 `uv sync --package` installs a member's declared closure. This is the same catalog↔maintenance shape as
-:mod:`lakehouse_kit.maintenance_policies` and :mod:`lakehouse_kit.warehouse_registry`:
+:mod:`lakehouse.maintenance_policies` and :mod:`lakehouse.warehouse_registry`:
 one service writes the records, another reads them straight off the bucket. The record layout is the
 shared contract, and the reader below is deliberately the *tolerant* half of it — a record it cannot
 parse is reported as an incomplete scan, never allowed to void a category.
@@ -44,17 +44,17 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse_kit import location_claims, trash
-from lakehouse_kit.base_refs import decoded_path, normalise
-from lakehouse_kit.objectfs import fs_and_base
+from lakehouse import location_claims, trash
+from lakehouse.base_refs import decoded_path, normalise
+from lakehouse.governed import fga
+from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.objectfs import fs_and_base
+from lakehouse.storage_options import StorageOptions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.discovery import discover_datasets
 from maintenance.services.naming import TableIds
 from maintenance.services.orphans import OrphanFile, scan_datasets
-from service_kit.governed import fga
-from service_kit.naming import CATALOG_DELIMITER
-from service_kit.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -1371,10 +1371,10 @@ async def reconcile(
     resolved_namespace_root = namespace_root or f"s3://{settings.s3_bucket}"
     storage_options = settings.storage_options()
     if bucket_client is None and resolved_namespace_root.startswith("s3://"):
-        # Via the canonical wrapper (lakehouse_kit.storage), never boto3 directly, and with the sweep's own
+        # Via the canonical wrapper (lakehouse.storage), never boto3 directly, and with the sweep's own
         # credentials passed explicitly — the env chain is one global pair and this process may address
         # a different backend than the ambient one.
-        from lakehouse_kit.storage import s3_client
+        from lakehouse.storage import s3_client
 
         pair = settings.s3_key_pair()
         bucket_client = s3_client(settings.s3_endpoint, access_key=pair.access_key_id, secret_key=pair.secret_access_key.get_secret_value())

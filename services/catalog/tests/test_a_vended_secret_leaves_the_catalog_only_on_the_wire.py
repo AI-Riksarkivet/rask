@@ -2,8 +2,7 @@
 
 A vend is the catalog's own token exchanged for a session narrowed to one table ([[XC-083]], ADR 0170): short-lived, and
 still a credential. Inside the catalog its secret access key and session token are `SecretStr`, so a repr, a str, a model
-dump, a log line or an error that echoes the vend carries neither, as Lakekeeper derives `Redact` on its credential
-structs (`crates/lakekeeper/src/service/storage/s3.rs`). A client is handed one flat `storage_options` map
+dump, a log line or an error that echoes the vend carries neither. A client is handed one flat `storage_options` map
 (`lance_docs/ns_catalog/spec.yaml:2883-2892`), the expiry beside it on the management door and inside it on a spec
 door, at the keys `lance_docs/lance/guide/object_store.md:127-136` names.
 
@@ -31,11 +30,11 @@ from catalog.api.v1.endpoints import credentials, tables
 from catalog.core.config import Settings
 from catalog.core.vending import EncryptionAtRest, VendFacts, WebIdentityVendor
 from catalog.services import table_claims
-from lakehouse_kit import location_claims
-from lakehouse_kit.store_session import IssuedSession, WebIdentity
-from service_kit.context import DiagnosticFormatter
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.ns_errors import install_problem_handlers
+from lakehouse import location_claims
+from lakehouse.context import DiagnosticFormatter
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.ns_errors import install_problem_handlers
+from lakehouse.store_session import IssuedSession, WebIdentity
 
 
 log = logging.getLogger(__name__)

@@ -40,14 +40,14 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
-from lakehouse_kit import base_registry, maintenance_policies, trash
-from lakehouse_kit.objectfs import dataset_root_probe, lance_storage_options
-from lakehouse_kit.storage import S3Client
+from lakehouse import base_registry, maintenance_policies, trash
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.objectfs import dataset_root_probe, lance_storage_options
+from lakehouse.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import objects_held, purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
-from service_kit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from service_kit.governed.store_credential import S3KeyPair
 
 
 _ROWS = pa.table({"id": pa.array([1, 2, 3], pa.int64())})

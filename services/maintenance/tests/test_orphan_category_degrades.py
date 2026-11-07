@@ -20,10 +20,10 @@ import pyarrow.fs as pafs
 import pytest
 from pydantic import SecretStr
 
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans as orphans_mod
 from maintenance.services import reconcile as mod
-from service_kit.storage_options import StorageOptions
 
 
 class _NoBuckets:

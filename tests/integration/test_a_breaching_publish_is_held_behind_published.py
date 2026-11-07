@@ -32,10 +32,10 @@ from catalog.api.promotion_expiry import mount_promotion_expiry
 from catalog.core.config import Settings, get_settings
 from catalog.core.lineage_emit import make_emitter
 from catalog.services import object_uuids, table_claims, warehouses
-from lakehouse_kit.location_claims import ClaimStore
-from service_kit.governed import fga
-from service_kit.lineage_events import AUTHOR_FACET, LANCE_FACET, dataset_uuids
-from service_kit.storage_options import StorageOptions
+from lakehouse.governed import fga
+from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, dataset_uuids
+from lakehouse.location_claims import ClaimStore
+from lakehouse.storage_options import StorageOptions
 from tests.integration.openfga_grants import Grants, act_as
 
 

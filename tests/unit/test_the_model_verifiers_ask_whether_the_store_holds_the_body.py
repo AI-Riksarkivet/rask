@@ -39,8 +39,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from service_kit.governed.auth.write_model import model_document
-from service_kit.governed.fga import MODEL_PAGE_SIZE
+from lakehouse.governed.auth.write_model import model_document
+from lakehouse.governed.fga import MODEL_PAGE_SIZE
 
 
 _ROOT = Path(__file__).resolve().parents[2]

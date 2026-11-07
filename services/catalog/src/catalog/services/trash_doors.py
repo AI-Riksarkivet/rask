@@ -18,7 +18,7 @@ from lance_namespace import InvalidTableStateError
 from catalog.core.config import Settings
 from catalog.schemas import TrashEntry
 from catalog.services import warehouses
-from lakehouse_kit import trash
+from lakehouse import trash
 
 
 def entry(record: dict[str, Any]) -> TrashEntry:

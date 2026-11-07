@@ -33,9 +33,9 @@ from catalog.core.lineage_emit import (
     make_emitter,
 )
 from catalog.core.run_context import RunContext
-from lakehouse_kit.openlineage import DEFAULT_DATASET_NAMESPACE
+from lakehouse.lineage_events import LANCE_FACET, DatasetUuids
+from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE
 from lineage.models import RunEvent
-from service_kit.lineage_events import LANCE_FACET, DatasetUuids
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -582,7 +582,7 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
 @pytest.mark.parametrize("junk", ["system"])
 async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
     """An originator is an address, so it must identify a person; a role, a wildcard or a userset is not one, and
-    carrying it would address whatever it names (`service_kit.governed.subjects.is_person_subject`)."""
+    carrying it would address whatever it names (`lakehouse.governed.subjects.is_person_subject`)."""
     client = _CapturingClient()
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog", dataset_namespace=DEFAULT_DATASET_NAMESPACE)
 

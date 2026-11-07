@@ -304,7 +304,7 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   stored JWT's `iat` (`NATS user <u>: replaced`), the seed stopping only on a stored JWT that names no key; and the APP
   account's `*` revocation sits one second before the oldest JWT a declared user
   holds, taking back whatever earlier reseeds left (measured 2026-11-07, nats-server 2.14.2, nsc 2.15.0, nats.go 1.39.1:
-  a client holding a revoked JWT is closed after two refused reconnects, the state `service_kit.bus_watchdog` restarts a
+  a client holding a revoked JWT is closed after two refused reconnects, the state `lakehouse.bus_watchdog` restarts a
   sidecar from); a non-dev store waits for
   `nats.auth.provisioned`. **The seed revokes every APP bus user the release stops declaring**: it lists the
   `nats-user-*` secrets in its own store and the one behind the Service, reads each undeclared user's key out of its

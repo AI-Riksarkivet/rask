@@ -42,7 +42,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
 
-from lakehouse_kit.lancekit.versions import committed_at
+from lakehouse.lancekit.versions import committed_at
 from maintenance.services.orphans import scan_dataset
 
 

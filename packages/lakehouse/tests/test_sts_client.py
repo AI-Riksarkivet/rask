@@ -1,0 +1,29 @@
+"""STS client construction — the named seam that keeps `import boto3` inside this one package.
+
+STS is not S3, but the estate's rule is about the DEPENDENCY, not the service: `boto3` is declared and
+imported by `storage` alone, so timeouts, retries and endpoint handling are decided once. A hand-rolled
+`boto3.client("sts", ...)` elsewhere inherits botocore's defaults, which include NO connect/read
+timeout — an unreachable STS endpoint then hangs the vending call rather than failing it.
+"""
+
+from botocore import UNSIGNED
+
+
+def test_sts_client_carries_region_endpoint_and_timeouts_and_signs_nothing():
+    """`AssumeRoleWithWebIdentity` is authenticated by the token in its body; the pod holds no key to sign with."""
+    from lakehouse.storage import sts_client
+
+    client = sts_client(region="eu-north-1", endpoint="http://rustfs:9000")
+
+    assert client.meta.region_name == "eu-north-1"
+    assert client.meta.endpoint_url == "http://rustfs:9000"
+    assert client.meta.config.connect_timeout == 5
+    assert client.meta.config.read_timeout == 15
+    assert client.meta.config.signature_version is UNSIGNED
+
+
+def test_sts_client_defaults_to_the_aws_endpoint_when_none_is_given():
+    """`endpoint=None` must mean "resolve normally", not "pass an empty endpoint"."""
+    from lakehouse.storage import sts_client
+
+    assert sts_client(region="us-east-1").meta.endpoint_url == "https://sts.us-east-1.amazonaws.com"

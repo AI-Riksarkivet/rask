@@ -29,12 +29,12 @@ from catalog.core import formats
 from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import Settings, StorePlane, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
-from lakehouse_kit import auto_cleanup
-from lakehouse_kit.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
-from lakehouse_kit.lancekit.absence import reads_as_absent
-from service_kit.governed.store_credential import S3KeyPair
-from service_kit.outage import reads_as_store_outage
-from service_kit.storage_options import StorageOptions
+from lakehouse import auto_cleanup
+from lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
+from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.lancekit.absence import reads_as_absent
+from lakehouse.outage import reads_as_store_outage
+from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -223,7 +223,7 @@ def disarm_commit_path_cleanup(dataset: lance.LanceDataset, table_id: list[str])
     """Remove any ``lance.auto_cleanup.*`` key from the ref ``dataset`` is on, BEFORE a door commits on it ([[LH-245]]).
 
     Lance deletes versions inside the commit whose resulting manifest carries those keys, under whoever
-    commits and past every hold (:mod:`lakehouse_kit.auto_cleanup`). Measured on pylance 12.0.0: the
+    commits and past every hold (:mod:`lakehouse.auto_cleanup`). Measured on pylance 12.0.0: the
     hook reads the manifest the commit PRODUCES, so a config-only commit that drops the keys deletes nothing
     and the door's own commit, rebased onto it, deletes nothing either. So an armed table — armed out of band
     by a maintain-tier credential, since no catalog door writes manifest config — is disarmed by its next

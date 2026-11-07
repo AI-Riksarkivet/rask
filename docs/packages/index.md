@@ -5,9 +5,7 @@ its own: Python libraries in the root `packages/`, TS/Svelte libraries in `front
 
 | Package | Language | Imported by | Docs |
 |---|---|---|---|
-| `packages/service-kit` | Python | every service, and any client: the platform package a client pins by lakehouse tag (the auth plane, naming and guards, and the contract the lakehouse's events publish: `control_events`, `lineage_events`, `governed.subjects`, `signature_doors`), and its pytest plugin | — |
-| `packages/lakehouse-kit` | Python | catalog, lineage and maintenance: the lakehouse's kernel, which no client imports. `lakehouse_kit.storage` is its S3 client, STS and URI seam | [Storage](storage.md) · [API reference](../reference/storage.md) |
-| `packages/lineage-kit` | Python | catalog, lineage, maintenance, and a client verifying the lakehouse's signed events | — |
+| `packages/lakehouse` | Python | catalog, lineage and maintenance, and no client: the lakehouse's one library (the app factory, the auth plane, the naming and guards, the data plane, the events, the lineage emission and signing). `lakehouse.storage` is its S3 client, STS and URI seam | [Storage](storage.md) · [API reference](../reference/storage.md) |
 | `frontend/packages/ui` (`@rask/ui`) | TS / Svelte | the console (design system, Storybook) | — |
 | `frontend/packages/api` (`@rask/api`) | TS | the console: the typed client generated from `docs/catalog-openapi.json` and `docs/lineage-openapi.json`, and the lineage client | — |
 | `frontend/packages/dockview` (`@rask/dockview`) | TS / Svelte | the console's workbench | — |
