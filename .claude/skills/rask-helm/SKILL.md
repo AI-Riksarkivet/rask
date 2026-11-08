@@ -375,8 +375,10 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
 - **OpenFGA admits only a projected `rask-openfga` token from a listed ServiceAccount** ([[XC-077]]): OIDC
   against the cluster SA issuer, keys fetched through the issuer mirror in `templates/issuer-mirror.yaml`
   (OpenFGA fetches discovery with no bearer and k3s answers that 401; the dev object store reads the same mirror), the subject allow-list from
-  `lance.openfgaSubjects` (a ConfigMap OpenFGA reads at start, so a new client needs an OpenFGA restart; maintenance
-  is not on it, since it holds no OpenFGA token and asks the catalog's grant doors, ADR 0197),
+  `lance.openfgaSubjects` (a ConfigMap OpenFGA reads at start; the pod names the same clients in
+  `openfga.podAnnotations."rask.dev/openfga-clients"`, which the render holds equal to `lance.openfgaClients`, so a
+  change to them rolls OpenFGA at the next reconcile; maintenance is not on it, since it holds no OpenFGA token and asks
+  the catalog's grant doors, ADR 0197),
   playground off, CORS closed. A pod that names OpenFGA renders all three parts of `lance.fgaToken` (env,
   volume, mount) under the condition its URL has, and `lance.openfgaSubjects` must list its account under
   the same condition. A list-valued `OPENFGA_*` env is comma-joined (measured on v1.18.3). An operator tool

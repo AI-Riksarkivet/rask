@@ -40,8 +40,8 @@ def test_openfga_runs_oidc_against_the_mirrored_cluster_issuer_with_no_playgroun
     assert server.get("OPENFGA_HTTP_CORS_ALLOWED_ORIGINS", "*") != "*"
 
 
-#: The accounts that write tuples ([[LH-442]]): the catalog and maintenance, plus the jobs that publish the model and seed the
-#: estate's grants, whatever else the release runs. Every other governed service decides through the catalog.
+#: The accounts that write tuples ([[LH-442]]): the catalog, plus the jobs that publish the model and seed the estate's
+#: grants, whatever else the release runs. Every other governed service decides through the catalog.
 _WRITERS = {"catalog", "jobs", "hooks"}
 
 
@@ -70,6 +70,10 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
     )
     config_map = next(d for d in docs if d.get("kind") == "ConfigMap" and d["metadata"]["name"] == subjects_ref["name"])
     admitted = set(config_map["data"][subjects_ref["key"]].split(","))
+    # OpenFGA reads its subjects into its env at start, so only a change to its pod template reaches a running server:
+    # the pod names the clients it admits, and a change to them restarts it.
+    server_pod = next(d for d in docs if d.get("kind") == "Deployment" and d["metadata"]["name"] == "rask-openfga")["spec"]["template"]
+    named = (server_pod["metadata"].get("annotations") or {}).get("rask.dev/openfga-clients", "")
     writers = {f"system:serviceaccount:default:rask-sa-{w}" for w in _WRITERS}
     seeded = json.loads(next(env_of(c)["FGA_ESTATE_ROLES"] for w, _n, c in containers(docs) if w == "Job/rask-bootstrap-admin"))
     reaching = next(d for d in docs if d.get("kind") == "NetworkPolicy" and d["metadata"]["name"] == "rask-openfga")["spec"]["ingress"][0]["from"]
@@ -101,8 +105,8 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
             wrong.append(f"{workload}/{name}: projects a {audience!r} token, and {account} writes no tuple")
 
     assert wrong == [], wrong
-    assert admitted == openfga_clients == writers, (
-        f"OpenFGA admits {sorted(admitted)}; its clients are {sorted(openfga_clients)}; the writers are {sorted(writers)}"
+    assert admitted == openfga_clients == writers == {f"system:serviceaccount:default:rask-sa-{c}" for c in named.split(",")}, (
+        f"OpenFGA admits {sorted(admitted)}; its clients are {sorted(openfga_clients)}; the writers are {sorted(writers)}; its pod names {named!r}"
     )
     deciding = {subject for subject, roles in seeded.items() if "decider" in roles}
     assert deciders and set(deciders) == deciding, f"deciders {sorted(deciders)} vs the decision roles bootstrap seeds {sorted(deciding)}"

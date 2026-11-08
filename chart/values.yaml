@@ -1601,8 +1601,9 @@ openfga:
   # one, every account that is not an FGA client. A list-valued OPENFGA_* env is COMMA-joined: measured
   # 2026-10-05 on openfga v1.18.3 run through Dagger, a comma-joined subjects env admitted both listed
   # accounts and refused the unlisted ones, while a space-joined one refused all of them.
-  # A change to the client set reaches OpenFGA when its pods restart (env from a ConfigMap is read at
-  # start); until then a new client is refused, never an old one admitted.
+  # OpenFGA reads the list into its env at start, and a ConfigMap edit restarts nothing, so a running server keeps
+  # admitting a client the chart no longer names until its pod is replaced: `podAnnotations` below makes the pod
+  # template name the clients, so a change to them replaces it.
   # -- Subchart passthrough env: OPENFGA_EXPERIMENTALS=weighted_graph_check, the OIDC issuer alias, and the subject allow-list from `rask-openfga-authn`.
   extraEnvVars:
     - name: OPENFGA_EXPERIMENTALS
@@ -1611,6 +1612,12 @@ openfga:
       value: *serviceAccountIssuer
     - name: OPENFGA_AUTHN_OIDC_SUBJECTS
       valueFrom: { configMapKeyRef: { name: rask-openfga-authn, key: subjects } }
+  # THE POD NAMES THE CLIENTS ITS SUBJECT LIST ADMITS, so the next reconcile restarts OpenFGA whenever they change. The
+  # subchart renders `podAnnotations` verbatim, with no tpl, so the list is written here, and templates/openfga-authn.yaml
+  # refuses a render where it differs from the clients the chart derives (`lance.openfgaClients`).
+  # -- Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits, so a change to them restarts it.
+  podAnnotations:
+    rask.dev/openfga-clients: "catalog,hooks,jobs"
   # AUTHENTICATED ([[XC-077]]). With no authn the API answers any pod that presents no credential, so code in any pod
   # could write `estate#admin` for itself or replace the model with no rask audit record. The API authenticates
   # each client as an OIDC client of the cluster ServiceAccount issuer (D1), so a client presents its pod's

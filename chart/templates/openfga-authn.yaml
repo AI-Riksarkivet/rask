@@ -9,6 +9,10 @@
 {{- fail "OpenFGA must read OPENFGA_AUTHN_OIDC_SUBJECTS from a configMapKeyRef with key `subjects` (openfga.extraEnvVars), or it admits every ServiceAccount in the cluster" }}
 {{- end }}
 {{- $cm := $ref.name }}
+{{- $named := index (($fga.podAnnotations) | default dict) "rask.dev/openfga-clients" | default "" }}
+{{- if ne $named (include "lance.openfgaClients" .) }}
+{{- fail (printf "openfga.podAnnotations.rask.dev/openfga-clients is %q, but OpenFGA's clients are %q (lance.openfgaClients): a running OpenFGA would keep admitting the subjects it started with" $named (include "lance.openfgaClients" .)) }}
+{{- end }}
 {{- $subjects := include "lance.openfgaSubjects" . }}
 
 {{- if not $subjects }}{{- $subjects = "system:serviceaccount:-:no-fga-client" }}{{- end }}

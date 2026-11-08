@@ -1328,6 +1328,15 @@
                         }
                     }
                 },
+                "podAnnotations": {
+                    "description": "Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits, so a change to them restarts it.",
+                    "type": "object",
+                    "properties": {
+                        "rask.dev/openfga-clients": {
+                            "type": "string"
+                        }
+                    }
+                },
                 "replicaCount": {
                     "description": "Subchart passthrough: number of OpenFGA server replicas.",
                     "type": "integer"

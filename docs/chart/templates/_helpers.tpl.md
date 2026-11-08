@@ -841,6 +841,11 @@ THE SERVICES THAT WRITE OPENFGA TUPLES, space-joined: the catalog alone (ADR 019
 callers, so a client able to write one tuple writes any; every other service asks the catalog's doors. The network policy
 admits exactly these, beside the model hook and bootstrap-admin, to OpenFGA's API.
 
+## `{{- define "lance.openfgaClients" -}}`
+
+The components whose ServiceAccounts OpenFGA admits, comma-joined and sorted: the one list `lance.openfgaSubjects`
+qualifies and the OpenFGA pod's `rask.dev/openfga-clients` annotation must equal (openfga-authn.yaml).
+
 ## `{{- define "lance.openfgaSubjects" -}}`
 
 The ServiceAccounts OpenFGA admits (`authn.oidc.subjects`), comma-joined: exactly the pods that render

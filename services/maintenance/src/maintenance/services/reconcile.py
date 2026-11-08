@@ -51,7 +51,7 @@ from lakehouse.base_refs import decoded_path, normalise
 from lakehouse.governed import fga
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, object_client
 from lakehouse.trash import TrashKind
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
@@ -1313,13 +1313,9 @@ async def reconcile(
     resolved_namespace_root = namespace_root or f"s3://{settings.s3_bucket}"
     storage_options = settings.storage_options()
     if bucket_client is None and resolved_namespace_root.startswith("s3://"):
-        # Via the canonical wrapper (lakehouse.storage), never boto3 directly, and with the sweep's own
-        # credentials passed explicitly — the env chain is one global pair and this process may address
-        # a different backend than the ambient one.
-        from lakehouse.storage import s3_client
-
-        pair = settings.s3_key_pair()
-        bucket_client = s3_client(settings.s3_endpoint, access_key=pair.access_key_id, secret_key=pair.secret_access_key.get_secret_value())
+        # The storage seam's client for the sweep's own options: signed by the whole credential in force (a session's
+        # access key signs only beside its token), at the options' endpoint and region, never by the ambient chain.
+        bucket_client = object_client(storage_options)
 
     # `settings.platform_buckets`, not `sweep_buckets`: the swept set alone omits infrastructure the
     # estate creates for ITSELF and never governs — `rask-observability` (GreptimeDB's object store,

@@ -723,11 +723,15 @@ catalog
 {{- if has (index . 1) (include "lance.fgaWriters" (index . 0) | splitList " ") }}true{{ end -}}
 {{- end -}}
 
+{{- define "lance.openfgaClients" -}}
+{{- list "catalog" "hooks" "jobs" | sortAlpha | join "," -}}
+{{- end -}}
+
 {{- define "lance.openfgaSubjects" -}}
 {{- $v := .Values -}}{{- $p := printf "system:serviceaccount:%s:" .Release.Namespace -}}{{- $sa := printf "%s%s-sa-" $p (include "lance.fullname" .) -}}
 {{- $out := list -}}
 {{- if $v.auth.enabled -}}
-{{- range list "catalog" "jobs" "hooks" }}{{ $out = append $out (printf "%s%s" $sa .) }}{{ end -}}
+{{- range splitList "," (include "lance.openfgaClients" .) }}{{ $out = append $out (printf "%s%s" $sa .) }}{{ end -}}
 {{- end -}}
 {{- $out | uniq | sortAlpha | join "," -}}
 {{- end -}}
