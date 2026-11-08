@@ -33,11 +33,14 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]), openbao.externalAddr its secret
 # store ([[XC-149]]), and route.parentRefs the platform's Gateway (ADR 0165),
 # and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA and its secret store, which
-# no URL can derive ([[XC-143]]).
+# no URL can derive ([[XC-143]]). image.tags is the pin a released chart carries for each first-party image: the `dev`
+# default names no build, which a real deployment refuses (templates/prod-credentials.yaml, [[XC-164]]).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr.io/v1alpha1
         --set auth.oidc.issuer=https://auth.example.com/dex
         --set-json 'auth.oidc.connectors={"ldap":"corp"}'
         --set image.repository=ghcr.io/example/rask
+        --set-string image.tags.lance-rest-catalog=1.2.3
+        --set-string image.tags.web-console=1.2.3
         --set signing.provisioned=true
         --set nats.auth.provisioned=true
         --set-string nats.url=nats://nats.example.com:4222

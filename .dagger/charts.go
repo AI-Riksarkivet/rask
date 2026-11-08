@@ -195,7 +195,10 @@ func (m *Rask) Charts(
 // ([[XC-146]], ADR 0165). `networkPolicy.apiServerEgress` and `openbao.egress` state the peers the isolation layer admits
 // the API server and the platform's secret store at, which no URL can derive ([[XC-143]]). `objectStore.externalEndpoint` names the platform's S3: a real deployment
 // refuses the development store (`templates/prod-credentials.yaml`), whose root signs every STS token on RustFS.
+// `image.tags` is the pin a released chart carries for each first-party image: the `dev` default names no build, which a
+// real deployment refuses (`templates/prod-credentials.yaml`, [[XC-164]]).
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
+	"--set-string image.tags.lance-rest-catalog=1.2.3 --set-string image.tags.web-console=1.2.3 " +
 	"--set-string nats.url=nats://nats.example.com:4222 " +
 	"--set route.parentRefs[0].name=edge --set route.parentRefs[0].namespace=edge-system " +
 	"--set route.hostnames[0]=lance.example.com " +
