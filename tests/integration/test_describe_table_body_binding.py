@@ -28,7 +28,8 @@ from lakehouse.governed.store_credential import S3KeyPair
 
 _LOCATION = "s3://lance-catalog/db$t"
 _VEND = VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
-#: What the describe door answers for `_VEND`: its storage options, AWS proper so no endpoint, and its expiry inside them.
+#: What the describe door answers for `_VEND`: its storage options, AWS proper so no endpoint, its signing pinned on, and
+#: its expiry inside them.
 _VENDED_OPTIONS = {
     "aws_access_key_id": "AK",
     "aws_secret_access_key": "SK",
@@ -36,6 +37,7 @@ _VENDED_OPTIONS = {
     "allow_http": "false",
     "aws_virtual_hosted_style_request": "false",
     "aws_provider_scheme": "token",
+    "aws_skip_signature": "false",
     "expires_at_millis": "1",
 }
 

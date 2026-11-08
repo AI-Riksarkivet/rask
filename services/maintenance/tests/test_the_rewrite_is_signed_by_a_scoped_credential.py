@@ -86,7 +86,15 @@ def test_the_pass_is_signed_by_the_vended_credential_at_maintenances_own_store_a
     options = credentials.write_options_for(_URI, settings, table_id=_TABLE)
 
     assert settings.s3_endpoint.startswith("http://")
-    assert options.in_clear() == {**_SCOPED, "aws_endpoint": settings.s3_endpoint, "allow_http": "true", "aws_provider_scheme": "token"}
+    assert options.in_clear() == {
+        **_SCOPED,
+        "aws_endpoint": settings.s3_endpoint,
+        "aws_endpoint_url_s3": settings.s3_endpoint,
+        "aws_s3_express": "false",
+        "allow_http": "true",
+        "aws_provider_scheme": "token",
+        "aws_skip_signature": "false",
+    }
 
 
 def test_the_credential_maintenance_holds_renders_neither_its_secret_nor_its_session_token(router: respx.MockRouter, caplog: pytest.LogCaptureFixture) -> None:

@@ -123,11 +123,14 @@ def doors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClien
 
 
 #: The vend each door answers this rig with: the https store's address with no plaintext permit, each in the spelling a
-#: conflicting environment cannot override ([[LH-238]]), the vended key pair and session pinned to the static provider
-#: ([[LH-219]]), and none of the catalog's own connection. Compared as JSON values, since an object's key order is nothing
-#: a client reads (RFC 8259 §4).
+#: conflicting environment cannot override and with the S3 service endpoint, S3 Express and signing pinned beside it
+#: ([[LH-238]]), the vended key pair and session pinned to the static provider ([[LH-219]]), and none of the catalog's
+#: own connection. Compared as JSON values, since an object's key order is nothing a client reads (RFC 8259 §4).
 _OPTIONS = {
     "aws_endpoint": "https://s3.example.com",
+    "aws_endpoint_url_s3": "https://s3.example.com",
+    "aws_s3_express": "false",
+    "aws_skip_signature": "false",
     "aws_access_key_id": "AK",
     "aws_secret_access_key": "vended-secret-wJalrXUtnFEMI",
     "aws_region": "eu-north-1",

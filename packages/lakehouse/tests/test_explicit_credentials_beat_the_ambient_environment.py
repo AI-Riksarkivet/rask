@@ -95,6 +95,9 @@ def test_every_fresh_process_sends_the_explicit_credential_to_the_explicit_store
     ambient, explicit = stores
     conflicting = {
         "AWS_ENDPOINT_URL": ambient.url,
+        "AWS_ENDPOINT_URL_S3": ambient.url,
+        "AWS_SKIP_SIGNATURE": "true",
+        "AWS_S3_EXPRESS": "true",
         "AWS_REGION": "eu-north-1",
         "AWS_DEFAULT_REGION": "eu-north-1",
         "AWS_ACCESS_KEY_ID": "AMBIENT",

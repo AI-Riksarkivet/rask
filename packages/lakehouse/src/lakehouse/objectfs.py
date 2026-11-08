@@ -47,8 +47,10 @@ def lance_storage_options(
     EVERY KEY IS SPELLED AS LANCE READS THE ENVIRONMENT INTO IT (``aws_endpoint``, ``aws_region``,
     ``aws_virtual_hosted_style_request``), so an ambient ``AWS_ENDPOINT_URL``, ``AWS_REGION`` or
     ``AWS_VIRTUAL_HOSTED_STYLE_REQUEST`` cannot stand in for it ([[LH-238]]; the measurement is at
-    :data:`lakehouse.storage_options._OPTION_ALIASES`). An empty endpoint (AWS proper) names no endpoint at all: the
-    client resolves the regional one, and an empty value would pin it to nothing.
+    :data:`lakehouse.storage_options._OPTION_ALIASES`), and a named endpoint is also set as the S3 service's own
+    (:data:`lakehouse.storage_options.S3_ENDPOINT`), which ``AWS_ENDPOINT_URL_S3`` would otherwise fill and which outranks
+    it. An empty endpoint (AWS proper) names no endpoint at all: the client resolves the regional one, and an empty value
+    would pin it to nothing.
 
     ``allow_http`` IS DERIVED FROM THE ENDPOINT'S SCHEME and cannot be passed: ``"true"`` exactly for an ``http`` scheme,
     in any case. It is a PERMIT — "Allow non-TLS, i.e. non-HTTPS connections" (``lance_docs/lance/guide/object_store.md:32``)

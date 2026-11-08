@@ -59,6 +59,18 @@ _ALIASED_KEYS: Final = frozenset(key for aliases in _OPTION_ALIASES for key in a
 ENDPOINT: Final = _OPTION_ALIASES[0][0]
 REGION: Final = _OPTION_ALIASES[1][0]
 VIRTUAL_HOSTED: Final = _OPTION_ALIASES[2][0]
+#: The S3 service's own endpoint, a key of its own to object_store that outranks :data:`ENDPOINT`, which Lance fills from
+#: ``AWS_ENDPOINT_URL_S3`` wherever the options do not hold it, so it is set beside the endpoint rather than as one of its
+#: spellings. Measured 2026-11-08 on pylance 13.0.0 against the dev estate's vend: ten fresh processes under
+#: ``AWS_ENDPOINT_URL_S3`` all sent the vended credential to the ambient endpoint; with this key set to the vended
+#: endpoint, all ten reached the vended store.
+S3_ENDPOINT: Final = "aws_endpoint_url_s3"
+#: S3 Express One Zone resolves an endpoint of its own from the bucket, so it is pinned off wherever an endpoint is named:
+#: under an ambient ``AWS_S3_EXPRESS=true`` the same ten processes could open nothing.
+S3_EXPRESS: Final = "aws_s3_express"
+#: Pinned off wherever a key pair signs: under an ambient ``AWS_SKIP_SIGNATURE=true`` the same ten processes sent every
+#: request unsigned, so the credential they held reached no store.
+_SKIP_SIGNATURE: Final = "aws_skip_signature"
 #: The region a client signs for when the options name none: never the ambient ``AWS_REGION``, which is another value in
 #: another process. It is the region RustFS serves (`rustfs@1.0.3:crates/config/src/constants/app.rs:289-292`).
 DEFAULT_REGION: Final = "us-east-1"
@@ -177,18 +189,25 @@ class StorageOptions(BaseModel):
         expired or broken credential rather than a precedence bug, and no test process has an ambient AWS_*
         environment, so the spelling that fails in every pod passes every unit test.
 
-        A key pair is pinned as the only credential Lance may sign with (``aws_provider_scheme``, :data:`_PROVIDER_SCHEME`).
+        A key pair is pinned as the only credential Lance may sign with (``aws_provider_scheme``, :data:`_PROVIDER_SCHEME`),
+        and every request is signed with it (:data:`_SKIP_SIGNATURE`). A named endpoint is pinned as the S3 service's own
+        too (:data:`S3_ENDPOINT`) with S3 Express off (:data:`S3_EXPRESS`), here rather than where the endpoint is set,
+        so options read from the wire are pinned as the ones this module builds are ([[LH-238]]).
         """
+        options = dict(self.options)
+        if endpoint := self.endpoint:
+            options |= {S3_ENDPOINT: endpoint, S3_EXPRESS: "false"}
         if (pair := self.key_pair) is None:
-            return dict(self.options)
+            return options
         credential = {
             "aws_access_key_id": pair.access_key_id,
             "aws_secret_access_key": pair.secret_access_key.get_secret_value(),
             _PROVIDER_SCHEME: "token",
+            _SKIP_SIGNATURE: "false",
         }
         if pair.session_token is not None and (token := pair.session_token.get_secret_value()):
             credential["aws_session_token"] = token
-        return {**self.options, **credential}
+        return {**options, **credential}
 
     def credential_in_clear(self) -> tuple[str | None, str | None, str | None]:
         """The (access key, secret, session token) these options sign with, in clear for the boto3 or pyarrow client being

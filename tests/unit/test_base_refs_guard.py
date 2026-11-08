@@ -295,7 +295,15 @@ def test_the_pre_pass_actually_USES_the_credentials_it_is_given(monkeypatch: pyt
     protected_roots(["s3://bucket/a.lance"], creds, configured=[], record_of=lambda _location: None)
 
     assert seen, "protected_roots never opened the dataset at all"
-    handed = {"aws_endpoint": "http://rustfs:9000", "aws_access_key_id": "k", "aws_secret_access_key": "s", "aws_provider_scheme": "token"}
+    handed = {
+        "aws_endpoint": "http://rustfs:9000",
+        "aws_endpoint_url_s3": "http://rustfs:9000",
+        "aws_s3_express": "false",
+        "aws_access_key_id": "k",
+        "aws_secret_access_key": "s",
+        "aws_provider_scheme": "token",
+        "aws_skip_signature": "false",
+    }
     assert seen[0].get("storage_options") == handed, f"the credentials were not threaded into the open — the guard is inert against s3://. got {seen[0]}"
     # The #102 bounded session, for the same reason every other maintenance open threads it: without it
     # each dataset mints Lance's default 1 GiB metadata + 6 GiB index caches against a 512Mi pod.
