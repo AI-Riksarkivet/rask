@@ -183,7 +183,15 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     # The stamps the sweep and the write-event lane took while the table stood ([[LH-562]]).
     maintenance_policies.write_state(estate.root, estate.key, policy, table_uuid=policy_uuid, uri=location, at=datetime.now(UTC).isoformat())
     maintenance_policies.write_planned_version(estate.root, estate.key, policy_uuid, 3)
-    trash.put(estate.root, estate.key, {**dropped, "expires_at": (datetime.now(UTC) - timedelta(days=29)).isoformat()})
+    trash.put(
+        estate.root,
+        estate.key,
+        {
+            **dropped,
+            "expires_at": (datetime.now(UTC) - timedelta(days=29)).isoformat(),
+            trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=28)).isoformat(),
+        },
+    )
     # A table created since under the dropped table's name, which the purge of the dropped one must leave as it is.
     estate.made(table)
     standing = {key: size for key, size in estate.objects().items() if not key.startswith("spelled/")}

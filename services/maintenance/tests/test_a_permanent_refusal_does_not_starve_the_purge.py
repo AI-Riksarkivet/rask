@@ -14,7 +14,8 @@ from maintenance.services.purge import due_from
 
 
 def _rec(rid: str, *, expires: str = "2026-01-01T00:00:00+00:00", attempts: Any = None) -> dict[str, Any]:
-    record: dict[str, Any] = {"id": rid, "kind": "table", "expires_at": expires}
+    """An expired record, released as the catalog's release door leaves one the purge may act on."""
+    record: dict[str, Any] = {"id": rid, "kind": "table", "expires_at": expires, "released_at": expires}
     if attempts is not None:
         record["attempts"] = attempts
     return record

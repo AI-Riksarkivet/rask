@@ -5,7 +5,7 @@ backend is a runtime choice (endpoint + credentials), never a code one. It deriv
 credential of its own: a key pair is passed per client or comes from the standard AWS chain.
 """
 
-from typing import Any
+from typing import Any, Final
 
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -15,6 +15,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # resolves to `Any` at the type level; callers get a usable name without
 # reaching past storage's boundary into `mypy_boto3_s3`.
 type S3Client = Any
+
+#: The most requests one client has in flight at once, and so the connections its pool keeps: the widest fan-out that
+#: shares a client, `lakehouse.stored_objects.identities`. botocore's default pool keeps ten, so sixteen reads closed six
+#: connections and opened them again on the next batch (measured on the dev estate 2026-11-08: urllib3's `Connection
+#: pool is full, discarding connection` on every sweep tick).
+MAX_POOL_CONNECTIONS: Final = 16
 
 
 _TRUE_FLAGS = ("1", "true", "yes")
@@ -103,6 +109,7 @@ def s3_client(
         retries={"max_attempts": 3, "mode": "adaptive"},
         connect_timeout=10,
         read_timeout=60,
+        max_pool_connections=MAX_POOL_CONNECTIONS,
     )
     if session_token and not (access_key and secret_key):
         raise ValueError("session_token needs access_key and secret_key: botocore drops a lone token and signs with the env credential chain instead")

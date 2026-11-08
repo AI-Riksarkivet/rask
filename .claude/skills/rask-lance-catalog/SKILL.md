@@ -735,12 +735,16 @@ governing their data. The project-scoped surface is the console's project page, 
   estate root, which only the `reclaimer` estate role opens (seeded for maintenance's ServiceAccount by the chart's
   bootstrap-admin hook, `lance.fgaEstateRoles`): `POST .../release` revokes the object's grants once the record is past
   its deadline by `trash.RELEASE_SETTLE`, announces a catalog-signed `grant_revoked` per person and stamps the record;
-  `POST .../credentials` vends a due table record's bytes session (`vending.ReclaimScope`: list and delete over its
+  `POST .../credentials` vends a released table record's bytes session (`vending.ReclaimScope`: list and delete over its
   location in both spellings and its data directories, nothing on the control root, a whole-bucket place refused);
-  `DELETE ...` ends the record once its place holds nothing (`lakehouse.trash.end`: the object's records, its claim,
-  its base record, then the record); `POST .../refusals` notes maintenance's own refusals. The catalog judges on reads no
-  session writes: the path's kind and uuid, the record it filed, and the location's claim, which must record that uuid;
-  a refusal is 409 code 19 and noted on the record (`trash.note_refusal`).
+  `DELETE ...` ends a released record once its place holds nothing (`lakehouse.trash.end`: the object's records, its
+  claim, its base record, then the record); `POST .../refusals` notes maintenance's own refusals. The release comes
+  first, so the settle an undrop admitted at the deadline needs and the telling of each person who loses access
+  precede any delete; maintenance's purge selects released records only (`purge.due_from`), so the tick that releases a
+  record purges and ends it (measured on helm rev 25: without the order the purge deleted a drop's bytes and revoked its
+  grants unannounced three minutes after its deadline). The catalog judges on reads no session writes: the path's kind
+  and uuid, the record it filed, and the location's claim, which must record that uuid; a refusal is 409 code 19 and
+  noted on the record (`trash.note_refusal`).
   **Maintenance holds no OpenFGA credential** (ADR 0197): its drift reconciler reads the grant census and asks for its
   repairs at `/management/v1/grants` (`GET /census`, `POST /ghosts/revoke`, `POST /tenancy/rebuild`;
   `api/v1/endpoints/grant_reconcile.py`, judgement `services/grant_reconcile.py`), each asking `can_reconcile_grants`,

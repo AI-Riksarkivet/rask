@@ -201,7 +201,11 @@ def _clean_report() -> ReconcileReport:
 
 def _expired(estate: _Estate, table: str) -> None:
     (dropped,) = trash.named(estate.root, estate.key, table)
-    trash.put(estate.root, estate.key, {**dropped, "expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat()})
+    trash.put(
+        estate.root,
+        estate.key,
+        {**dropped, "expires_at": (datetime.now(UTC) - timedelta(days=1)).isoformat(), trash.RELEASED_AT: datetime.now(UTC).isoformat()},
+    )
 
 
 @pytest.mark.parametrize(

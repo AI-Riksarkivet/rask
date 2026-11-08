@@ -21,14 +21,15 @@ import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.objectfs import fs_and_base
+from lakehouse.storage.client import MAX_POOL_CONNECTIONS
 from lakehouse.storage_options import StorageOptions, object_client
 
 
 #: The most keys one S3 DeleteObjects request takes.
 _DELETE_BATCH: Final = 1000
 
-#: How many objects :func:`identities` asks the store about at once.
-_IDENTITY_READS: Final = 16
+#: How many objects :func:`identities` asks the store about at once: as many as one client's pool keeps.
+_IDENTITY_READS: Final = MAX_POOL_CONNECTIONS
 
 #: How much of a local object :func:`identities` hashes per read.
 _HASH_CHUNK: Final = 1 << 20

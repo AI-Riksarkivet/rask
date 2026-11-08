@@ -32,6 +32,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -272,6 +273,31 @@ def _due(estate: _Estate, monkeypatch: pytest.MonkeyPatch, *, name: str = "gone"
     return uuid, location
 
 
+def _released(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str]:
+    """A table dropped into the trash and released through the catalog's door, the catalog's clock past the settle."""
+    uuid, location = _due(estate, monkeypatch)
+    from catalog.api.dependencies import get_clock
+    from catalog.main import app
+
+    settled = datetime.now(UTC) + trash.RELEASE_SETTLE + timedelta(seconds=1)
+    monkeypatch.setitem(app.dependency_overrides, get_clock, lambda: lambda: settled)
+    released = estate.client.post(f"/management/v1/trash/table/{uuid}/release")
+    assert released.status_code == 200, released.text
+    return uuid, location
+
+
+def _past_its_deadline(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> str:
+    return _due(estate, monkeypatch)[0]
+
+
+def _emptied_before_its_release(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A record past its deadline whose bytes are gone, as a lost bucket leaves one, and which is not released."""
+    uuid, location = _due(estate, monkeypatch)
+    for listed in estate.s3.list_objects_v2(Bucket=estate.bucket, Prefix=f"{_within(location, estate.bucket)}/").get("Contents", []):
+        estate.s3.delete_object(Bucket=estate.bucket, Key=listed["Key"])
+    return uuid
+
+
 def _filed_at(estate: _Estate, uuid: str, location: str) -> None:
     """Rewrite the record ``uuid`` keeps to name ``location``, as any writer of the record could."""
     estate.s3.put_object(Bucket=estate.bucket, Key=trash.key(uuid), Body=json.dumps({**_record(estate, uuid), "location": location}).encode())
@@ -298,19 +324,23 @@ def _at_a_place_no_table_claims(estate: _Estate, monkeypatch: pytest.MonkeyPatch
     ("door", "arrange"),
     [
         pytest.param("POST /credentials", _short_of_its_deadline, id="session-short-of-its-deadline"),
+        pytest.param("POST /credentials", _past_its_deadline, id="session-before-its-release"),
         pytest.param("POST /credentials", _at_a_place_another_table_claims, id="session-at-another-tables-place"),
         pytest.param("POST /credentials", _at_a_place_no_table_claims, id="session-at-an-unclaimed-place"),
         pytest.param("POST /release", _short_of_its_deadline, id="release-short-of-its-deadline"),
         pytest.param("DELETE ", _short_of_its_deadline, id="end-with-its-bytes"),
+        pytest.param("DELETE ", _emptied_before_its_release, id="end-before-its-release"),
     ],
 )
 def test_a_trash_door_refuses_what_is_not_the_trashs_to_end(
     estate: _Estate, monkeypatch: pytest.MonkeyPatch, door: str, arrange: Callable[[_Estate, pytest.MonkeyPatch], str]
 ) -> None:
     """[[XC-084]] Maintenance ends the trash only through the catalog's doors, which judge each record on what no session
-    can write: a drop still recoverable is released and vended nothing, a record's place must be the one its claim keeps
-    for the record's own uuid (so no record names its way to another table's bytes, trashed or held), and a record is
-    ended only once its place holds nothing. Each refusal is noted on the record, as maintenance's own are."""
+    can write: a drop still recoverable is released and vended nothing, a record past its deadline is vended nothing and
+    ended only once released (the settle an undrop admitted at the deadline needs, and the release that tells each person
+    who loses access, come first), a record's place must be the one its claim keeps for the record's own uuid (so no
+    record names its way to another table's bytes, trashed or held), and a record is ended only once its place holds
+    nothing. Each refusal is noted on the record, as maintenance's own are."""
     uuid = arrange(estate, monkeypatch)
     method, _, act = door.partition(" ")
 
@@ -325,11 +355,11 @@ def test_a_trash_door_refuses_what_is_not_the_trashs_to_end(
 
 
 def test_a_reclaim_session_deletes_its_tables_bytes_and_nothing_else(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
-    """[[XC-084]] A record past its deadline is vended a session that deletes its table's bytes, and reaches nothing on
+    """[[XC-084]] A released record is vended a session that deletes its table's bytes, and reaches nothing on
     the control root (neither its own record, which the catalog alone writes and judges on, nor a record kept under its
     uuid, such as the inputs an erasure walks to the tables derived from it), no put over its own table's bytes and no
     other table's: maintenance holds no other write."""
-    uuid, location = _due(estate, monkeypatch)
+    uuid, location = _released(estate, monkeypatch)
 
     vended = estate.client.post(f"/management/v1/trash/table/{uuid}/credentials")
 
@@ -354,9 +384,9 @@ def test_a_reclaim_session_deletes_its_tables_bytes_and_nothing_else(estate: _Es
 
 
 def test_the_catalog_ends_a_trash_record_whose_place_holds_nothing(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
-    """[[XC-084]] Once nothing the record names holds a byte, the catalog ends it under its own identity: the record goes,
-    and the claim it kept on its place is released, so the place is free again."""
-    uuid, location = _dropped(estate, monkeypatch, grace_days="1")
+    """[[XC-084]] Once a released record's place holds no byte, the catalog ends it under its own identity: the record
+    goes, and the claim it kept on its place is released, so the place is free again."""
+    uuid, location = _released(estate, monkeypatch)
     for key in [o["Key"] for o in estate.s3.list_objects_v2(Bucket=estate.bucket, Prefix=f"{_within(location, estate.bucket)}/").get("Contents", [])]:
         estate.s3.delete_object(Bucket=estate.bucket, Key=key)
 

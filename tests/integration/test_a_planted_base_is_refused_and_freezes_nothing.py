@@ -445,11 +445,11 @@ def _purge_expired(estate: _Estate, table: str, location: str) -> None:
     from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
 
     (filed,) = trash.named(estate.root, estate.key, table)
-    trash.put(
-        estate.root,
-        estate.key,
-        trash.make_record(table, uuid=str(filed["uuid"]), location=location, dropped_by="user:alice", grace_days=1, now=datetime.now(UTC) - timedelta(days=30)),
+    record = trash.make_record(
+        table, uuid=str(filed["uuid"]), location=location, dropped_by="user:alice", grace_days=1, now=datetime.now(UTC) - timedelta(days=30)
     )
+    # Released, as the catalog's release door leaves a record the purge may act on.
+    trash.put(estate.root, estate.key, {**record, trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=1)).isoformat()})
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),
         counts={category: 0 for category in CATEGORIES if category != "orphan_files"},

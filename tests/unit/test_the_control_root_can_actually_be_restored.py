@@ -28,9 +28,10 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from botocore.exceptions import ClientError
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -69,6 +70,28 @@ SEED = {
 }
 
 
+#: A record the fixture writes by a multipart upload, not by a single put.
+STREAMED = "_policies/state/streamed.json"
+
+
+class _ConditionalCopies:
+    """moto's S3 client, honouring ``CopySourceIfMatch`` as RustFS 1.0.3 does and moto does not: a copy whose source no
+    longer holds that ETag is refused 412 (measured 2026-11-08 on RustFS 1.0.3, `rustfs/src/app/object/copy.rs:519`)."""
+
+    def __init__(self, client: Any) -> None:  # noqa: ANN401 — boto3 client has no public stub
+        self._client = client
+
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401
+        return getattr(self._client, name)
+
+    def copy_object(self, **request: Any) -> dict[str, Any]:  # noqa: ANN401
+        if (expected := request.get("CopySourceIfMatch")) is not None:
+            source = request["CopySource"]
+            if self._client.head_object(Bucket=source["Bucket"], Key=source["Key"])["ETag"] != expected:
+                raise ClientError(cast(Any, {"Error": {"Code": "PreconditionFailed"}, "ResponseMetadata": {"HTTPStatusCode": 412}}), "CopyObject")
+        return self._client.copy_object(**request)
+
+
 @pytest.fixture
 def s3() -> Any:  # noqa: ANN401 — boto3 client has no public stub
     from moto import mock_aws
@@ -80,7 +103,14 @@ def s3() -> Any:  # noqa: ANN401 — boto3 client has no public stub
         client.create_bucket(Bucket=BUCKET)
         for key, body in SEED.items():
             client.put_object(Bucket=BUCKET, Key=key, Body=body)
-        yield client
+        # A record written by a multipart upload, as a pyarrow output stream writes one: its ETag is `<md5>-1`, and a
+        # server-side copy of it gets a plain MD5 of its own (measured on RustFS 1.0.3 and moto 2026-11-08).
+        upload = client.create_multipart_upload(Bucket=BUCKET, Key=STREAMED)
+        part = client.upload_part(Bucket=BUCKET, Key=STREAMED, UploadId=upload["UploadId"], PartNumber=1, Body=b'{"state": "streamed"}')
+        client.complete_multipart_upload(
+            Bucket=BUCKET, Key=STREAMED, UploadId=upload["UploadId"], MultipartUpload={"Parts": [{"ETag": part["ETag"], "PartNumber": 1}]}
+        )
+        yield _ConditionalCopies(client)
 
 
 def test_a_backup_captures_every_RECORD_prefix(s3: Any) -> None:
@@ -88,10 +118,12 @@ def test_a_backup_captures_every_RECORD_prefix(s3: Any) -> None:
 
     manifest = crb.read_manifest(s3, result["backup"])
     captured = set(manifest["objects"])
-    records = {k for k in SEED if not k.startswith(("_control_outbox/", "_lineage_outbox/")) and not k.endswith("/")}
+    records = {k for k in SEED if not k.startswith(("_control_outbox/", "_lineage_outbox/")) and not k.endswith("/")} | {STREAMED}
 
     assert captured == records, f"the backup does not match the record set; missing={records - captured} extra={captured - records}"
     assert result["objects"] == len(records)
+    # Nothing wrote the store during this backup, so nothing raced it, the streamed record included.
+    assert result["raced"] == [], result
 
 
 def test_a_RESTORE_puts_the_bytes_back_and_proves_it(s3: Any) -> None:

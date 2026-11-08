@@ -48,13 +48,11 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
     ns.create_table(CreateTableRequest(id=["team", "orders"]), sink.getvalue())
     location = str(ns.describe_table(DescribeTableRequest(id=["team", "orders"])).location)
     ns.deregister_table(DeregisterTableRequest(id=["team", "orders"]))
-    trash.put(
-        control_root,
-        StorageOptions(),
-        trash.make_record(
-            "team$orders", uuid=str(uuid4()), location=location, dropped_by="user:alice", grace_days=7, now=datetime.now(UTC) - timedelta(days=30)
-        ),
+    record = trash.make_record(
+        "team$orders", uuid=str(uuid4()), location=location, dropped_by="user:alice", grace_days=7, now=datetime.now(UTC) - timedelta(days=30)
     )
+    # Released, as the catalog's release door leaves a record the purge may act on.
+    trash.put(control_root, StorageOptions(), {**record, trash.RELEASED_AT: (datetime.now(UTC) - timedelta(days=1)).isoformat()})
     ns.register_table(RegisterTableRequest(id=["team", "renamed"], location=location.rstrip("/").rsplit("/", 1)[-1]))
     report = ReconcileReport(
         checked_at=datetime.now(UTC).isoformat(),

@@ -135,6 +135,7 @@ class _Estate:
         dropped_at: datetime | None = None,
         uuid: str | None = None,
         namespace_uuid: str | None = None,
+        released: bool = True,
     ) -> tuple[str, str]:
         """The catalog's recoverable drop, for real: deregister (bytes stay) + file a trash record.
 
@@ -148,7 +149,9 @@ class _Estate:
         minted = str(uuid4()) if uuid is None else uuid
         claims = location_claims.ClaimStore(control_root=self.control_root)
         location_claims.take(claims, location, canonical, list(segments), is_gone=lambda _claim: False, uuid=minted or None)
-        self.put_record(canonical, uuid=minted, location=location, grace_days=grace_days, dropped_at=dropped_at, namespace_uuid=namespace_uuid)
+        self.put_record(
+            canonical, uuid=minted, location=location, grace_days=grace_days, dropped_at=dropped_at, namespace_uuid=namespace_uuid, released=released
+        )
         return canonical, location
 
     def reregister(self, *segments: str, location: str) -> None:
@@ -166,7 +169,9 @@ class _Estate:
         kind: trash.TrashKind = "table",
         properties: dict[str, str] | None = None,
         namespace_uuid: str | None = None,
+        released: bool = True,
     ) -> dict[str, Any]:
+        """A trash record, stamped released as the catalog's release door leaves one, unless ``released`` is false."""
         record = trash.make_record(
             canonical,
             uuid=str(uuid4()) if uuid is None else uuid,
@@ -178,6 +183,8 @@ class _Estate:
             properties=properties,
             namespace_uuid=namespace_uuid,
         )
+        if released:
+            record[trash.RELEASED_AT] = (_NOW - timedelta(days=1)).isoformat()
         trash.put(self.control_root, StorageOptions(), record)
         return record
 
@@ -504,6 +511,19 @@ def test_the_record_is_ended_only_once_its_bytes_are_gone(tmp_path: Path, doors:
     out = _run(estate)
 
     assert ([p.id for p in out.purged], bytes_at_the_end) == (["team$orders"], [False]), "the record was ended while its bytes were still there"
+
+
+def test_an_expired_record_the_catalog_has_not_released_is_not_purged(tmp_path: Path, doors: respx.MockRouter) -> None:
+    """The catalog vends a record's bytes session and ends it only once the release has run ([[XC-084]]): the settle an
+    undrop admitted at the deadline needs, and the telling of each person who loses access, come first. So the purge
+    leaves an expired record the catalog has not released for the tick that releases it, and asks no door of it."""
+    estate = _Estate(tmp_path)
+    _, location = estate.drop_recoverably("team", "orders", uuid=_ORDERS_UUID, released=False)
+
+    out = _run(estate)
+
+    asked = [route.name for route in doors.routes if route.called]
+    assert (out.purged, out.refused, Path(location.removeprefix("file://")).exists(), asked) == ([], [], True, [])
 
 
 # --------------------------------------------------------------------------- #

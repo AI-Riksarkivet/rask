@@ -44,6 +44,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
+from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 from lakehouse.store_session import JobStoreIdentity, job_client
@@ -117,6 +118,12 @@ def list_objects(client: Any, bucket: str, prefix: str) -> dict[str, str]:  # no
         token = page.get("NextContinuationToken")
 
 
+def _copy(client: Any, dst_bucket: str, dst_key: str, src_bucket: str, src_key: str, *, if_match: str | None) -> dict[str, Any]:  # noqa: ANN401
+    """Copy one object server-side, only while its ETag is still ``if_match`` when one is named."""
+    condition = {} if if_match is None else {"CopySourceIfMatch": f'"{if_match}"'}
+    return client.copy_object(Bucket=dst_bucket, Key=dst_key, CopySource={"Bucket": src_bucket, "Key": src_key}, **condition)
+
+
 def do_backup(client: Any, *, root: str, dest: str | None, stamp: str) -> dict[str, Any]:  # noqa: ANN401
     src_bucket, src_prefix = split_uri(root)
     dest_uri = dest or f"s3://{src_bucket}/{_join(src_prefix, DEFAULT_DEST_PREFIX)}"
@@ -143,22 +150,26 @@ def do_backup(client: Any, *, root: str, dest: str | None, stamp: str) -> dict[s
             if is_directory_marker(key):
                 continue
             relative = key[len(_join(src_prefix, "")) :].lstrip("/") if src_prefix else key
-            response = client.copy_object(
-                Bucket=dst_bucket,
-                Key=_join(run_prefix, relative),
-                CopySource={"Bucket": src_bucket, "Key": key},
-            )
+            # A RACE IS WHAT THE STORE REFUSES, NOT AN ETAG THAT DIFFERS. A server-side copy of an object written by a
+            # multipart upload gets an ETag of its own (measured on RustFS 1.0.3 and moto 2026-11-08: listed `…-1`,
+            # copied a plain MD5), so comparing the two flagged every streamed record as raced on a quiet store. The
+            # copy is conditional on the listed ETag instead (`x-amz-copy-source-if-match`, which RustFS 1.0.3
+            # refuses 412 once the source changed, measured), and a refused one copies the version there now.
+            try:
+                response = _copy(client, dst_bucket, _join(run_prefix, relative), src_bucket, key, if_match=listed_etag)
+            except ClientError as exc:
+                if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") != 412:
+                    raise
+                raced.append(relative)
+                response = _copy(client, dst_bucket, _join(run_prefix, relative), src_bucket, key, if_match=None)
             # THE COPY'S ETAG, NOT THE LISTING'S. A live control root is written while it is being
             # read — measured 2026-09-14, three records changed between the list and the
             # copy on a single run — so recording the listed value made the manifest describe a
             # version the backup does not contain, and `verify` then reported a perfectly good backup
             # as corrupt. The manifest must describe the BYTES IT HAS.
-            written = str(response.get("CopyObjectResult", {}).get("ETag", listed_etag)).strip('"')
-            manifest["objects"][relative] = written
-            # Reported rather than hidden: a backup of a live store is not a point-in-time snapshot,
+            # The raced keys are reported rather than hidden: a backup of a live store is not a point-in-time snapshot,
             # and which records moved under it is exactly what an operator needs to know afterwards.
-            if written != listed_etag:
-                raced.append(relative)
+            manifest["objects"][relative] = str(response.get("CopyObjectResult", {}).get("ETag", listed_etag)).strip('"')
             copied += 1
     manifest["raced"] = sorted(raced)
 

@@ -196,7 +196,11 @@ class TrashPurgeReport(BaseModel):
 
 
 def due_records(control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
-    """Every trash record past its deadline, OLDEST FIRST.
+    """Every trash record past its deadline and released, OLDEST FIRST.
+
+    Released, since the catalog vends a record's bytes session and ends it only then (``catalog.services.trash_reclaim``):
+    the release waits out the settle an undrop admitted at the deadline needs, and tells each person who loses access.
+    The reconcile tick releases before it purges, so a record is purged on the tick that releases it.
 
     One rule for "what is expired", shared with the sweep's report-only log, so the thing that gets
     reported and the thing that gets deleted can never be two different sets. ``trash.expired`` refuses
@@ -216,10 +220,10 @@ def due_from(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     datasets it must not rewrite, and this report-only due list). Before the split it called
     `due_records`, which re-listed the whole index — a second full read per tick for a log line.
 
-    The rule itself is unchanged and stays in ONE place on purpose: the set that gets reported and the
-    set that gets deleted can never be two different answers.
+    The rule itself stays in ONE place on purpose: the set that gets reported and the set that gets deleted can never be
+    two different answers.
     """
-    return sorted(trash.expired(records), key=_drain_order)
+    return sorted((record for record in trash.expired(records) if trash.is_released(record)), key=_drain_order)
 
 
 def _drain_order(record: dict[str, Any]) -> tuple[int, str]:

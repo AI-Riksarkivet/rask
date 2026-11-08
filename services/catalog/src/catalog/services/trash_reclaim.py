@@ -6,11 +6,17 @@ write of its own on the store and no client that writes grants, so every write i
 
 - the release, once the deadline has settled (:data:`lakehouse.trash.RELEASE_SETTLE`): the catalog revokes the
   object's grants, tells each person who lost one, and stamps the record released;
-- the purge of a table's bytes, under a session the catalog vends for that record alone (:func:`scope_of`), which
-  lists and deletes at the location and in the table's own data directories and reaches nothing on the control root;
-- the ending, once nothing the record names holds a byte: the catalog revokes what grants remain, ends the records the
-  object holds under its uuid, its base record and its claims, and the trash record last (:func:`end_records`, the
-  same ending the warehouse cascade gives its trash).
+- the purge of a released table's bytes, under a session the catalog vends for that record alone (:func:`scope_of`),
+  which lists and deletes at the location and in the table's own data directories and reaches nothing on the control
+  root;
+- the ending of a released record, once nothing it names holds a byte: the catalog revokes what grants remain, ends the
+  records the object holds under its uuid, its base record and its claims, and the trash record last
+  (:func:`end_records`, the same ending the warehouse cascade gives its trash).
+
+The release comes first because the settle is what lets an undrop admitted at the deadline finish, and because only the
+release tells the people who lose access: measured on the dev estate 2026-11-08 (helm revision 25), a bytes session
+vended on the deadline alone let maintenance delete a dropped table's bytes and end its record, revoking its grants
+unannounced, three minutes after its deadline and twelve before its release.
 
 Every judgement reads only what no session can write: the kind and uuid the door names, the record the catalog filed
 under them, and the claim on the record's location, which must record that uuid, so a record naming another table's
@@ -25,7 +31,7 @@ Every function is BLOCKING IO; callers threadpool it.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Final
 
 from lance_namespace import NamespaceNotFoundError, TableNotFoundError
 
@@ -41,6 +47,13 @@ from lakehouse.location_claims import LocationClaim
 from lakehouse.stored_objects import list_under
 from lakehouse.table_paths import objects_at
 from lakehouse.trash import TrashKind
+
+
+#: Why a record past its deadline is neither purged nor ended before its release.
+_UNRELEASED: Final = (
+    "the record is not released yet: an undrop admitted at its deadline may still be finishing, and its grants go, told "
+    "to each person who held one, at the release"
+)
 
 
 def read_record(settings: Settings, kind: TrashKind, uuid: str) -> dict[str, Any]:
@@ -73,22 +86,24 @@ def location_claim(settings: Settings, record: dict[str, Any]) -> LocationClaim 
 
 
 def vend_refusal(record: dict[str, Any], claim: LocationClaim | None, *, kind: TrashKind, uuid: str, now: datetime) -> str | None:
-    """Why no session deleting the record's bytes is vended, or ``None``: a table's, past its deadline, at its own place."""
+    """Why no session deleting the record's bytes is vended, or ``None``: a released table's, at its own place."""
     location = trash.location_of(record)
     if kind != "table" or not location:
-        return "the record names no bytes, so no session deletes anything of it; end it once it is due"
+        return "the record names no bytes, so no session deletes anything of it; end it once it is released"
     if (misplaced := _place_refusal(location, claim, uuid=uuid)) is not None:
         return misplaced
     if not trash.past_deadline(record, now=now):
         return "the record is short of its deadline, so its bytes are still an undrop's to restore"
+    if not trash.is_released(record):
+        return _UNRELEASED
     return None
 
 
 def end_refusal(settings: Settings, record: dict[str, Any], claim: LocationClaim | None, *, kind: TrashKind, uuid: str, now: datetime) -> str | None:
-    """Why the record is not ended yet, or ``None``: at its own place holding no byte, or naming none and past its deadline.
+    """Why the record is not ended yet, or ``None``: released, and naming no byte or at its own place holding none.
 
-    A table record whose bytes are gone is ended at any time, as the purge leaves one after its deletes and a warehouse
-    whose bucket went before its trash leaves one: no undrop restores what is not there.
+    A released table record whose bytes are gone is ended at any time, as the purge leaves one after its deletes and a
+    warehouse whose bucket went before its trash leaves one: no undrop restores what is not there.
 
     Raises:
         UnreadableBaseRecordError: The table's base record exists and cannot be read.
@@ -97,8 +112,12 @@ def end_refusal(settings: Settings, record: dict[str, Any], claim: LocationClaim
     location = trash.location_of(record)
     if location and kind == "namespace":
         return f"a namespace's record names no bytes, and this one names the location {location!r}"
+    if not trash.past_deadline(record, now=now):
+        return "the record is short of its deadline, so it is still an undrop's"
+    if not trash.is_released(record):
+        return _UNRELEASED
     if not location:
-        return None if trash.past_deadline(record, now=now) else "the record is short of its deadline and names no bytes, so it is still an undrop's"
+        return None
     if (misplaced := _place_refusal(location, claim, uuid=uuid)) is not None:
         return misplaced
     if held := _objects_held(settings, record):
