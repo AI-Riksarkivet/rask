@@ -1,5 +1,10 @@
 # 0045. The lakehouse cloud-native cutover (2026-09-03/04)
 
+**Status:** superseded in part by [ADR 0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md)
+(2026-11-08): "maintenance discovers work by listing buckets, and must" rested on writers committing past the catalog,
+which no stock client can since [ADR 0157](0157-stock-clients-commit-through-managed-versioning.md); work is enqueued at
+the commit instead.
+
 The cloud-native cutover plan asked one question: can the lakehouse stop doing unbounded work in request
 handlers and stop signing writes with a root object-store key. It is closed, and the durable findings
 are here because the plan doc is deleted — a finished plan left in the tree reads as outstanding work.

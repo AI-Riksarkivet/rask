@@ -1,7 +1,9 @@
 # 0162. The lakehouse builds nothing: compaction and indexing commit through `version/create`, and maintenance decides (2026-10-15)
 
 **Status:** accepted. Source: owner, 2026-10-15, through the multi-question tool while taking LH-467 (#587). Amends
-ADR 0156 C4 and C6.
+ADR 0156 C4 and C6. Decision 3 (the clone list and its 503 ceiling) is superseded by
+[ADR 0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) (2026-11-08): a registered
+clone keeps its source by a Lance tag, and the commit judge reads no list maintenance writes.
 
 ## Context
 

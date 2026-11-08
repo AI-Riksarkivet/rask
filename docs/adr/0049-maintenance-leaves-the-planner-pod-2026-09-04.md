@@ -1,5 +1,9 @@
 # 0049. Maintenance leaves the planner pod (2026-09-04)
 
+**Status:** superseded in part by [ADR 0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md)
+(2026-11-08): the whole-estate shallow-clone pre-pass goes, since a registered clone keeps its source by a Lance tag
+taken at its register.
+
 Compaction, index-optimize and prune ran in ONE deployment pinned to `replicas: 1` on a 512Mi tier —
 planning and rewriting in the same process, so the rewrite's memory ceiling was the planner's. Two
 changes separate them, and each is independently useful.
