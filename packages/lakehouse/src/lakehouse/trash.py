@@ -7,9 +7,10 @@ to rewind to. Time-travel covers bad-WRITE recovery, never bad-DROP recovery.
 
 The durable fix: a drop DEREGISTERS the table (detach, bytes untouched) and writes a trash record
 carrying where the bytes are and when the grace period ends. Undrop re-registers from that record until
-then. Past the deadline the drop is DropTable's, its data deleted asynchronously (ADR 0146): maintenance's
-reconcile tick revokes the object's grants and marks the record released (:func:`mark_released`), and the
-purge, a separate opt-in, deletes the bytes and the record.
+then. Past the deadline the drop is DropTable's, its data deleted asynchronously (ADR 0146): on maintenance's
+reconcile tick the catalog revokes the object's grants and marks the record released (:func:`mark_released`), and
+the purge, a separate opt-in, deletes the bytes under a session the catalog vends for the record, after which the
+catalog ends the record and what it keeps (:func:`end`, [[XC-084]]).
 
 Two disciplines this module exists to keep:
 
@@ -31,8 +32,13 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
+import pyarrow.fs as pafs
+
+from lakehouse import location_claims, object_records
+from lakehouse.base_registry import BaseRegistry, forget_base_record
+from lakehouse.objectfs import fs_and_base
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
 from lakehouse.records import RecordChangedError, RecordMissingError, mutate_json
 from lakehouse.storage_options import StorageOptions
@@ -41,6 +47,9 @@ from lakehouse.storage_options import StorageOptions
 log = logging.getLogger(__name__)
 
 _TRASH_PREFIX = "_trash"
+
+#: What a trash record keeps: a dropped table, or a namespace a recoverable cascade dropped.
+type TrashKind = Literal["table", "namespace"]
 
 #: The field marking a record a destructive drop filed for bytes it was deleting (:func:`make_record`'s ``residue``).
 RESIDUE = "residue"
@@ -52,6 +61,11 @@ RELEASED_AT = "released_at"
 _EVENT = "trash_record"
 
 
+def key(uuid: str, *, kind: TrashKind = "table") -> str:
+    """The control-root key of the trash record of the ``kind`` object ``uuid`` names."""
+    return record_key(_TRASH_PREFIX, kind, uuid)
+
+
 def make_record(
     canonical_id: str,
     *,
@@ -60,7 +74,7 @@ def make_record(
     dropped_by: str | None,
     grace_days: float,
     now: datetime | None = None,
-    kind: str = "table",
+    kind: TrashKind = "table",
     binding: dict[str, str] | None = None,
     properties: dict[str, str] | None = None,
     namespace_uuid: str | None = None,
@@ -129,9 +143,19 @@ def make_record(
     return record
 
 
-def kind_of(record: dict[str, Any]) -> Literal["table", "namespace"]:
+def kind_of(record: dict[str, Any]) -> TrashKind:
     """The kind of object ``record`` keeps: a ``namespace`` a recoverable cascade dropped, else a ``table``."""
     return "namespace" if record.get("kind") == "namespace" else "table"
+
+
+def name_of(record: dict[str, Any]) -> str:
+    """The canonical id the object ``record`` keeps was dropped under; empty for a record that names none."""
+    return str(record.get("id") or "")
+
+
+def location_of(record: dict[str, Any]) -> str:
+    """Where the table ``record`` keeps has its bytes; empty for a namespace and a declared-only table."""
+    return str(record.get("location") or "").rstrip("/")
 
 
 def is_residue(record: dict[str, Any]) -> bool:
@@ -153,7 +177,18 @@ def past_deadline(record: dict[str, Any], *, now: datetime | None = None) -> boo
     return bool(expired([record], now=now))
 
 
-def mark_released(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: str = "table", now: datetime | None = None) -> bool:
+#: How long past its deadline a record waits before its grants go: well over any one undrop request, which is the
+#: window an undrop admitted at the deadline needs to finish (it registers before it clears the record, and a revoke
+#: landing between the two would leave the restored object ownerless). The location claim's lease is the same order.
+RELEASE_SETTLE: Final = timedelta(minutes=15)
+
+
+def releasable(record: dict[str, Any], *, now: datetime | None = None) -> bool:
+    """Whether ``record`` is :data:`RELEASE_SETTLE` past its deadline, so its grants may go (ADR 0146)."""
+    return past_deadline(record, now=(now or datetime.now(UTC)) - RELEASE_SETTLE)
+
+
+def mark_released(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table", now: datetime | None = None) -> bool:
     """Stamp the record of the ``kind`` object ``uuid`` names as released, once its grants are revoked.
 
     Conditional (:func:`records.mutate_json`), so a concurrent :func:`note_refusal` survives and ``expires_at`` never
@@ -161,19 +196,29 @@ def mark_released(control_root: str, storage_options: StorageOptions, uuid: str,
     """
     at = (now or datetime.now(UTC)).isoformat()
     try:
-        mutate_json(control_root, storage_options, record_key(_TRASH_PREFIX, kind, uuid), lambda record: {**record, RELEASED_AT: record.get(RELEASED_AT) or at})
+        mutate_json(control_root, storage_options, key(uuid, kind=kind), lambda record: {**record, RELEASED_AT: record.get(RELEASED_AT) or at})
     except RecordMissingError:
         return False
     return True
 
 
 def put(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
-    put_record(control_root, storage_options, record_key(_TRASH_PREFIX, str(record.get("kind", "table")), str(record["uuid"])), record)
+    put_record(control_root, storage_options, key(str(record["uuid"]), kind=kind_of(record)), record)
 
 
-def get(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: str = "table") -> dict[str, Any] | None:
+def keeps(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> bool:
+    """Whether a record is filed for the ``kind`` object ``uuid`` names, readable or not.
+
+    For a caller deciding from the answer that the object is gone: :func:`get` reads a record it cannot parse as absent,
+    and one that is there but unreadable still keeps its object for an undrop.
+    """
+    fs, base = fs_and_base(control_root, storage_options)
+    return fs.get_file_info(f"{base}/{key(uuid, kind=kind)}").type == pafs.FileType.File
+
+
+def get(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> dict[str, Any] | None:
     """The trash record of the ``kind`` object ``uuid`` names, or ``None``."""
-    return get_record(control_root, storage_options, record_key(_TRASH_PREFIX, kind, uuid), event=_EVENT)
+    return get_record(control_root, storage_options, key(uuid, kind=kind), event=_EVENT)
 
 
 def named(control_root: str, storage_options: StorageOptions, canonical_id: str, *, kind: str = "table") -> list[dict[str, Any]]:
@@ -191,8 +236,28 @@ def named(control_root: str, storage_options: StorageOptions, canonical_id: str,
     return sorted(held, key=lambda record: str(record.get("dropped_at") or ""))
 
 
-def clear(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: str = "table") -> bool:
-    return delete_record(control_root, storage_options, record_key(_TRASH_PREFIX, kind, uuid))
+def clear(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> bool:
+    return delete_record(control_root, storage_options, key(uuid, kind=kind))
+
+
+def end(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, kind: TrashKind, uuid: str) -> None:
+    """End what the trashed object ``uuid`` names kept for an undrop besides its grants: the records it holds under its
+    uuid (:func:`lakehouse.object_records.end_object_records`), a table's claim and base record, then ``record`` itself.
+
+    The record goes last: it is all that still names what the object holds, so a failure before it is cleared leaves it
+    for the next attempt to end. Every step is idempotent. The base record is forgotten with its data directories'
+    claims (:func:`lakehouse.base_registry.forget_base_record`): a caller that deletes the bytes deletes the directories
+    before this (:func:`lakehouse.data_directories.delete_table_directories`).
+
+    Raises:
+        UnreadableBaseRecordError: The table's base record exists and cannot be read.
+        botocore.exceptions.ClientError: The store refused a read or a write.
+    """
+    object_records.end_object_records(control_root, storage_options, kind, uuid)
+    if location := location_of(record):
+        location_claims.release(location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location, name_of(record))
+        forget_base_record(BaseRegistry(control_root=control_root, storage_options=storage_options), location, table=name_of(record))
+    clear(control_root, storage_options, uuid, kind=kind)
 
 
 def object_uuid(record: dict[str, Any]) -> str | None:
@@ -206,7 +271,7 @@ def note_refusal(
     storage_options: StorageOptions,
     uuid: str,
     *,
-    kind: str = "table",
+    kind: TrashKind = "table",
     reason: str,
     now: datetime | None = None,
 ) -> int | None:
@@ -245,7 +310,7 @@ def note_refusal(
         }
 
     try:
-        updated = mutate_json(control_root, storage_options, record_key(_TRASH_PREFIX, kind, uuid), _mutate)
+        updated = mutate_json(control_root, storage_options, key(uuid, kind=kind), _mutate)
     except (RecordMissingError, RecordChangedError) as exc:
         log.warning("trash_refusal_not_recorded", extra={"kind": kind, "uuid": uuid, "reason": str(exc)})
         return None

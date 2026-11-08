@@ -4,21 +4,23 @@ WHY THIS EXISTS RATHER THAN A STORE VENDOR'S CLI. A vendor client image is the o
 chart's `backups.pgDump` CronJob, and a fragile one: measured 2026-09-24 with the bearer DECODED, the
 `minio/mc` image refuses ANONYMOUS pulls on every registry this estate can reach — Docker Hub issues a
 token whose `access` is `[]`, quay.io one with `actions: []`, both 401 on the manifest ([[XC-075]]).
-The dump is the authorization store (OpenFGA) and the Dapr state store, so a CronJob that cannot pull
-backs the estate's two most irreplaceable databases up nowhere, and says so once, in an event nobody
-reads. This runs in rask's own image, against any S3 store.
+The dump is the authorization store (OpenFGA), so a CronJob that cannot pull backs the estate's most
+irreplaceable database up nowhere, and says so once, in an event nobody reads. This runs in rask's own
+image, against any S3 store.
 
 Every verb such a CLI offers here is plain S3: `cp` is `put_object`, `ls` + `rm` are the retention
 walk that `storage.prune_timestamped_prefixes` owns for both backup lanes.
 
-    RASK_S3_ENDPOINT_URL=… AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… \\
+THE RUN HOLDS NO KEY ([[XC-084]]): it signs with one session its pod's ServiceAccount token is exchanged for
+(`lakehouse.store_session.job_client`), under the policy the store binds to that account.
+
+    RASK_S3_ENDPOINT_URL=… RASK_S3_WEB_IDENTITY_TOKEN_FILE=… RASK_S3_STS_ENDPOINT=… RASK_S3_ASSUME_ROLE_ARN=… \\
         uv run python scripts/pg_dump_upload.py /dump s3://bucket/_backups/pg --keep 7
 """
 
 from __future__ import annotations
 
 import argparse
-import os
 import pathlib
 import sys
 from datetime import UTC, datetime
@@ -48,20 +50,18 @@ def main(argv: list[str]) -> int:
         print(f"!! {args.source} holds no files — refusing to record an empty backup", file=sys.stderr)
         return 1
 
-    from lakehouse.storage import prune_timestamped_prefixes, s3_client, split_s3_uri
+    from pydantic import ValidationError
 
+    from lakehouse.storage import prune_timestamped_prefixes, split_s3_uri
+    from lakehouse.store_session import JobStoreIdentity, job_client
+
+    try:
+        client = job_client(JobStoreIdentity(), session_name="backup-pg")
+    except (ValidationError, RuntimeError) as exc:
+        print(f"!! no store session for this run: {exc}", file=sys.stderr)
+        return 1
     bucket, base = split_s3_uri(args.dest)
     stamp = _stamp()
-    secret_file = os.environ.get("RASK_S3_SECRET_KEY_FILE")
-    if secret_file:
-        access_key = os.environ.get("AWS_ACCESS_KEY_ID")
-        secret = pathlib.Path(secret_file).read_text(encoding="utf-8").strip()
-        if not (access_key and secret):
-            print(f"!! RASK_S3_SECRET_KEY_FILE={secret_file} needs AWS_ACCESS_KEY_ID and a non-empty file", file=sys.stderr)
-            return 1
-        client = s3_client(access_key=access_key, secret_key=secret)
-    else:
-        client = s3_client()
     for path in files:
         key = f"{base.rstrip('/')}/{stamp}/{path.relative_to(args.source).as_posix()}"
         with path.open("rb") as handle:

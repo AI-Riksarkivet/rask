@@ -95,7 +95,7 @@ from catalog.schemas import (
 from catalog.services import native, object_uuids, table_claims, trash_doors, warehouses
 from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
-from lakehouse import base_registry, data_directories, location_claims, object_records, trash
+from lakehouse import base_registry, data_directories, location_claims, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
@@ -1059,31 +1059,21 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
 
 
 async def _forget_trashed(settings: Settings, entry: dict[str, Any], *, purge: bool) -> None:
-    """End what one trashed object kept for an undrop besides its grants: its policy, claim and base record, then its record.
+    """End what one trashed object kept for an undrop besides its grants, as the trash's own ending does
+    (:func:`lakehouse.trash.end`): its records, a table's claim and base record, then its record.
 
     A purge deletes a trashed table's data directories before its base record ([[LH-286]]): they are on approved bases,
     which the bucket purge does not reach, and nothing names them once the record is gone. Without one the bytes stay,
-    as the bucket does, where a later register can attach them again.
-
-    The record goes last, as the trash purge orders it: it is all that still names what the object holds, so a
-    failure before it is cleared leaves it for the re-issue to end. Its records are ended, and it is cleared, under the
-    uuid it keeps.
+    as the bucket does, where a later register can attach them again. A record that keeps no uuid is filed under none,
+    so nothing of it can be ended.
     """
+    if (uuid := trash.object_uuid(entry)) is None:
+        return
     so = settings.storage_options()
-    kind, canonical, location = str(entry.get("kind") or "table"), str(entry.get("id") or ""), str(entry.get("location") or "")
-    claims = table_claims.claim_store(settings)
-    uuid = trash.object_uuid(entry)
-    if uuid is not None:
-        await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, uuid)
-    if location:
-        await run_in_threadpool(location_claims.release, claims, location, canonical)
+    if purge and (location := trash.location_of(entry)):
         registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
-        if purge:
-            await run_in_threadpool(partial(data_directories.end_base_record, registry, location, table=canonical, storage_options=so))
-        else:
-            await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, table=canonical))
-    if uuid is not None:
-        await run_in_threadpool(trash.clear, settings.registry_root, so, uuid, kind=kind)
+        await run_in_threadpool(partial(data_directories.delete_table_directories, registry, location, table=trash.name_of(entry), storage_options=so))
+    await run_in_threadpool(partial(trash.end, settings.registry_root, so, entry, kind=trash.kind_of(entry), uuid=uuid))
 
 
 def _require_bucket_purgeable(settings: Settings, records: list[dict[str, str]], record: dict[str, str], warehouse_id: str) -> None:
@@ -1466,7 +1456,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         return checks
 
     access_key, secret_key, session_token = options.credential_in_clear()
-    s3 = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.options["region"])
+    s3 = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.region)
 
     def _step(name: str, fn: Callable[[], object], *, expect_refusal: bool = False) -> bool:
         try:

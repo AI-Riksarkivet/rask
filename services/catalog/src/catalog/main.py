@@ -53,7 +53,7 @@ from lakehouse.lance_metrics import instrument_lance_if_available
 from lakehouse.lineage import SigningKey, parse_published_keys
 from lakehouse.obs import configure_app_logging
 from lakehouse.schemas.health import Readiness, ReadinessStatus
-from lakehouse.store_session import StoreSession
+from lakehouse.store_session import require_env_pair, start_store_session
 
 
 log = logging.getLogger(__name__)
@@ -100,17 +100,6 @@ async def _backfill_cascade_grants(app: FastAPI) -> None:
         return
     if seen:
         log.info("cascade_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})
-
-
-def require_env_secret(settings: Settings) -> None:
-    """With no projected token, refuse to boot without the environment's secret.
-
-    The catalog's own posture: an empty key is a boot failure rather than a service that comes up and
-    signs every S3 request wrong. With a token, `StoreSession.start` fails the boot closed instead.
-    A named function, not an inline block, so the unit tier can drive the decision without a lifespan.
-    """
-    if settings.web_identity is None and not settings.s3_secret_access_key.get_secret_value():
-        raise RuntimeError("LANCE_S3_SECRET_ACCESS_KEY is required when the catalog holds no projected token (LANCE_S3_WEB_IDENTITY_TOKEN_FILE)")
 
 
 def bound_lance_scans(settings: Settings) -> None:
@@ -178,12 +167,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # needed. Every `storage_options()` read peeks at what that loop holds, and nothing built here keeps a credential of
     # its own: the connections are keyed on it, the judge reads it at each use, and the emitters take
     # `storage_options` as a callable. With no token (the offline and Dagger lanes) the environment's pair signs.
-    store_session = None
-    if (identity := settings.web_identity) is None:
-        require_env_secret(settings)
-    else:
-        store_session = StoreSession(identity, session_name="catalog", duration_seconds=settings.s3_session_seconds)
-        await store_session.start()
+    store_session = await start_store_session(settings.web_identity, session_name="catalog", duration_seconds=settings.s3_session_seconds)
+    if store_session is None:
+        require_env_pair(settings.env_pair, prefix="LANCE")
     app.state.store_session = store_session
     app.state.connections = NamespaceConnections()
     app.state.connections.connection(settings)  # fail fast if storage misconfigured

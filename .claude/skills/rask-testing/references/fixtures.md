@@ -24,13 +24,19 @@ Every service builds `app` at module import. Pick the fixture by how settings re
 
 1. `monkeypatch.setenv` every variable the service needs to build and boot. For the catalog that
    includes both S3 keys, even on the `dir` backend: with no projected token
-   (`LANCE_S3_WEB_IDENTITY_TOKEN_FILE`), `Settings` requires `LANCE_S3_ACCESS_KEY_ID` at construction and
-   the lifespan's `require_env_secret` refuses to boot with an empty `LANCE_S3_SECRET_ACCESS_KEY`. With
-   `LANCE_SECRETS_FROM_DAPR` on, the store identity is that projected token exchanged at STS
-   (`LANCE_S3_STS_ENDPOINT`), a key pair beside it is refused, and the sidecar's secret API serves only
-   the signing keys: answer it with respx, and the STS exchange and the store with the moto server of
-   `services/catalog/tests/conftest.py::two_stores`
-   (`services/catalog/tests/test_the_catalog_signs_for_the_person_it_authenticated.py`, its `boot` fixture).
+   (`LANCE_S3_WEB_IDENTITY_TOKEN_FILE`), the lifespan refuses to boot without both halves of the pair
+   (`lakehouse.store_session.require_env_pair`, shared by catalog, lineage and maintenance). With
+   `*_SECRETS_FROM_DAPR` on, a service's store identity is its projected token exchanged at STS
+   (`*_S3_STS_ENDPOINT`), a key pair beside it is refused, and the sidecar's secret API serves only
+   the signing keys: answer it with respx, and the STS exchange and the store with a moto server
+   (`services/catalog/tests/conftest.py::two_stores` for the catalog,
+   `services/maintenance/tests/test_the_sweep_signs_what_it_emits.py` for maintenance, on its suite's `moto_url`).
+   A maintenance pass that rewrites a table asks the catalog's maintain-tier door first ([[LH-219]]), and one that
+   purges, releases or sweeps the trash, or repairs grants, asks the catalog's trash and grant doors ([[XC-084]]): give
+   it `catalog_url` and answer the doors with respx (`tests/integration/maintenance_vend_doors.py`:
+   `maintain_tier_door` over each table's location from a real catalog, `MAINTAIN_TIER_DOOR` for a door of a test's
+   own; `trash_doors` acting on a control root as the catalog's doors act, its routes named and its end handler
+   `end_door` reusable; `catalog_doors` forwarding the trash and grant doors to a real catalog app).
 2. `.cache_clear()` on that getter, or the previous test's values survive.
 3. Import the app **inside** the fixture.
 4. Set `app.dependency_overrides[...]` on the registered callables (`real_ns_client` overrides

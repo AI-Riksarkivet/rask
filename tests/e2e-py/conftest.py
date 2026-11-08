@@ -32,6 +32,7 @@ import pytest
 
 if TYPE_CHECKING:
     from byo_scenario import ScenarioRun, Tenant
+    from throwaway_rustfs import ThrowawayStore
 
 
 _HERE = Path(__file__).parent
@@ -97,6 +98,18 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 __all__ = ["pytest_addoption", "pytest_sessionfinish"]
+
+
+@pytest.fixture
+def rustfs_store() -> ThrowawayStore:
+    """The throwaway RustFS `dagger call rustfs-provisioning` binds; a skip anywhere else, which the lane's
+    `--require-live` fails."""
+    from throwaway_rustfs import bound_store
+
+    store = bound_store()
+    if store is None:
+        pytest.skip("RASK_RUSTFS_PROVISIONING_ENDPOINT names no throwaway RustFS; `dagger call rustfs-provisioning` binds one")
+    return store
 
 
 @pytest.fixture(scope="session")

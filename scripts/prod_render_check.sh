@@ -173,7 +173,7 @@ peak=$((cap * body + headroom))
 # 10. The production overlay names the platform's S3: no in-cluster store DNS anywhere in the render (app env, jobs,
 # configs), nothing provisioned on the store with its root, and the endpoint it names reaches the render.
 grep -q "rask-rustfs" "$OUT" && fail "a production render dials the development object store"
-grep -q "app.kubernetes.io/component: object-store-scoped-users" "$OUT" && fail "a production render provisions users on the store with its root: objectStore.enabled must be false"
+grep -q "app.kubernetes.io/component: object-store-provisioning" "$OUT" && fail "a production render provisions the store with its root: objectStore.enabled must be false"
 grep -q "https://s3.example.com" "$OUT" || fail "the platform's S3 at objectStore.externalEndpoint reaches nothing in the render"
 
 # 11. The prod render takes every credential from the store through ESO: the SecretStore and the

@@ -41,7 +41,7 @@ def _lance(endpoint: str) -> str:
 
 
 def _catalog(endpoint: str) -> str:
-    return CatalogSettings(LANCE_S3_ENDPOINT=endpoint, LANCE_S3_ACCESS_KEY_ID="k").namespace_properties()["storage.allow_http"]
+    return CatalogSettings(LANCE_S3_ENDPOINT=endpoint, s3_access_key_id="k").namespace_properties()["storage.allow_http"]
 
 
 _BUILDERS: dict[str, Callable[[str], str]] = {

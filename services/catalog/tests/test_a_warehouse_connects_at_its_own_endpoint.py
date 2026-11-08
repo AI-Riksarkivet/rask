@@ -29,8 +29,8 @@ _STORAGE = "storage."
 def settings() -> Settings:
     """An HTTPS estate default, so an http warehouse below is a genuine mixed pair."""
     return Settings(
-        LANCE_S3_ACCESS_KEY_ID="k",
-        LANCE_S3_SECRET_ACCESS_KEY="s",
+        s3_access_key_id="k",
+        s3_secret_access_key="s",
         LANCE_S3_ENDPOINT="https://estate.example:9000",
         LANCE_REST_ROOT="s3://estate-root",
     )
@@ -53,7 +53,7 @@ def test_a_warehouse_with_NO_endpoint_uses_the_estate_default(settings: Settings
     """The control. Without it, a builder that ignored the override entirely would pass below."""
     namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket")
 
-    assert captured[0][f"{_STORAGE}endpoint"] == "https://estate.example:9000"
+    assert captured[0][f"{_STORAGE}aws_endpoint"] == "https://estate.example:9000"
     assert captured[0]["root"] == "s3://tenant-bucket"
 
 

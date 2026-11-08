@@ -16,7 +16,6 @@ import httpx
 import pytest
 import respx
 
-from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.credentials import MaintenanceUnauthenticated
@@ -26,7 +25,6 @@ _CATALOG = "http://catalog:2333"
 _URI = "s3://acme-bucket/db$t"
 _VEND = f"{_CATALOG}/management/v1/table/db$t/credentials"
 _SCOPED = {"aws_access_key_id": "VENDEDKEY", "aws_secret_access_key": "vended-secret-9f3a"}
-_AMBIENT = StorageOptions.from_flat({"aws_access_key_id": "ambient", "aws_secret_access_key": "ambient"})
 
 
 def _settings() -> MaintenanceSettings:
@@ -43,9 +41,9 @@ def test_each_vend_presents_the_token_the_kubelet_last_wrote_and_no_claimed_name
     settings = _settings()
     door = _vend_door()
 
-    credentials.write_options_for(_URI, settings, table_id="db$t", fallback=_AMBIENT)
+    credentials.write_options_for(_URI, settings, table_id="db$t")
     catalog_identity_token.write_text("sa-token-two\n")
-    credentials.write_options_for(_URI, settings, table_id="db$t", fallback=_AMBIENT)
+    credentials.write_options_for(_URI, settings, table_id="db$t")
 
     sent = [call.request.headers for call in door.calls]
     assert [headers.get("authorization") for headers in sent] == ["Bearer sa-token-one", "Bearer sa-token-two"]
@@ -59,6 +57,6 @@ def test_an_unreadable_token_stops_the_pass_as_unauthenticated_and_sends_nothing
     catalog_identity_token.unlink()
 
     with pytest.raises(MaintenanceUnauthenticated, match="cannot present its catalog credential"):
-        credentials.write_options_for(_URI, _settings(), table_id="db$t", fallback=_AMBIENT)
+        credentials.write_options_for(_URI, _settings(), table_id="db$t")
 
     assert not door.called

@@ -157,9 +157,9 @@ _drift_items = _meter.create_gauge(
 _trash_planned = _meter.create_counter(
     "maintenance.trash.purge_planned",
     unit="{record}",
-    description="Expired trash records a DRY RUN would have reclaimed — an upper bound, since the FGA revoke, "
+    description="Expired trash records a DRY RUN would have reclaimed — an upper bound, since the catalog's judgement, "
     "a non-dataset location and a failing delete can each still refuse one and none can be evaluated without "
-    "performing the act it guards. Non-zero here with `dry_run=false` nowhere is a preview nobody turned off.",
+    "asking for or performing the act it guards. Non-zero here with `dry_run=false` nowhere is a preview nobody turned off.",
 )
 
 #: The record kinds a purge can see (#96 — a recoverable cascade trashes namespaces too). Both series are
@@ -183,19 +183,6 @@ _datasets_swept = _meter.create_counter(
     "compaction.datasets.swept",
     unit="{dataset}",
     description="Datasets the sweep loop reached this pass (including policy-skips) — the progress heartbeat of a running sweep.",
-)
-
-
-#: WHICH credential signed each expiry pass. Measured 2026-09-11, 600 records in one window: 300 vends answered 401
-#: and 300 passes took the ambient fallback, with zero scoped, and the only signal was an `info` line per dataset.
-#:
-#: ONE series with a `tier` attribute rather than two counters: the number an operator wants is the
-#: RATIO. "8 ambient of 285" is a posture; "8 ambient" alone is not, and it is the ratio reaching 1
-#: that names the failure this exists to catch.
-_credential_tier = _meter.create_counter(
-    "compaction.credential.tier",
-    unit="{pass}",
-    description="Expiry passes by how their storage credential was obtained (table-scoped vend vs the ambient process credential).",
 )
 
 
@@ -397,15 +384,6 @@ def record_failed(errors_by_type: dict[str, int]) -> None:
     """
     for error_type, count in errors_by_type.items():
         _failed.add(count, {"error.type": error_type})
-
-
-def record_credential_tier(*, tier: str) -> None:
-    """Record that one expiry pass was signed by a ``scoped`` or ``ambient`` credential.
-
-    Keyword-only because the argument is a vocabulary, not a value: a positional string here would
-    accept a table id as readily as a tier and the series would be unreadable before anyone noticed.
-    """
-    _credential_tier.add(1, {"tier": tier})
 
 
 def record_drift(counts: dict[str, int]) -> None:

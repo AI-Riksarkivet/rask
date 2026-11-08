@@ -25,7 +25,13 @@ property of that coroutine, and a copy of its decision logic could be right whil
 
 from __future__ import annotations
 
+import json
+from collections.abc import Iterator
+from pathlib import Path
+
+import httpx
 import pytest
+import respx
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import repair
@@ -56,42 +62,40 @@ def _report() -> ReconcileReport:
     )
 
 
+CATALOG = "http://catalog.test"
+_DOOR = f"{CATALOG}/management/v1/grants/ghosts/revoke"
+
+
 def _settings(**over: object) -> MaintenanceSettings:
     """Built through `model_validate` so the ALIASES are exercised — those strings are the operator's
     interface, and a settings object constructed by field name would pass while the env var an operator
     actually sets did not bind."""
-    base: dict[str, object] = {"MAINTENANCE_DRIFT_REPAIR_ENABLED": True, "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": True}
+    base: dict[str, object] = {"MAINTENANCE_DRIFT_REPAIR_ENABLED": True, "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": True, "MAINTENANCE_CATALOG_URL": CATALOG}
     return MaintenanceSettings.model_validate({**base, **over})
 
 
-class _Store:
-    """The OpenFGA write `repair_drift` makes, recorded instead of sent.
-
-    Installed on `lakehouse.governed.fga` — the module `repair.fga` names — so the production
-    coroutine runs unmodified and only the store behind it is absent. The stand-in takes the keyword
-    arguments the real function requires, so a call that stopped passing `actor` or `origin` fails here
-    the way it would fail live.
-    """
-
-    def __init__(self) -> None:
-        self.revoked: list[str] = []
-
-    async def revoke_object_tuples(self, client: object, obj: str, *, actor: str, origin: str) -> list[object]:
-        del client, actor, origin
-        self.revoked.append(obj)
-        return []
-
-
 @pytest.fixture
-def store(monkeypatch: pytest.MonkeyPatch) -> _Store:
-    fake = _Store()
-    monkeypatch.setattr(repair.fga, "revoke_object_tuples", fake.revoke_object_tuples)
-    return fake
+def door(catalog_identity_token: Path) -> Iterator[respx.MockRouter]:
+    """The catalog's side of the wire ([[XC-084]]): maintenance holds no OpenFGA credential, so the revoke is the
+    catalog's. A request no route matches fails the test, so a pass that asks when it must not fails here."""
+    del catalog_identity_token
+    with respx.mock() as router:
+        yield router
+
+
+def _revoking(door: respx.MockRouter, *, kept: str | None = None) -> respx.Route:
+    """The ghost door, revoking every object it is asked about but ``kept``, which a registry still names."""
+
+    def _answer(request: httpx.Request) -> httpx.Response:
+        asked = json.loads(request.content)["objects"]
+        revoked = {obj: 2 for obj in asked if obj != kept}
+        return httpx.Response(200, json={"revoked": revoked, "refused": {kept: "a trash record keeps the table for its undrop"} if kept else {}})
+
+    return door.post(_DOOR).mock(side_effect=_answer)
 
 
 async def _repair(settings: MaintenanceSettings) -> RepairReport:
-    """The production pass, with a client present — `repair_drift` returns early on `None`."""
-    return await repair.repair_drift(settings, report=_report(), fga_client=object())
+    return await repair.repair_drift(settings, report=_report())
 
 
 @pytest.mark.parametrize(
@@ -113,38 +117,49 @@ def test_a_DATA_tier_finding_is_never_planned_for_deletion(category: str, needle
 
 
 @pytest.mark.asyncio
-async def test_a_DRY_RUN_plans_and_revokes_NOTHING(store: _Store) -> None:
-    """The operator arming this must be able to see the plan without it acting."""
+async def test_a_DRY_RUN_plans_and_asks_NOTHING(door: respx.MockRouter) -> None:
+    """The operator arming this must be able to see the plan without it acting: no route, so an ask fails."""
     out = await _repair(_settings())
 
-    assert out.dry_run is True
-    assert len(out.revoked) == 3, out.model_dump()
-    assert store.revoked == [], f"a dry run revoked {store.revoked}"
+    assert (out.dry_run, len(out.revoked)) == (True, 3), out.model_dump()
 
 
 @pytest.mark.asyncio
-async def test_DISABLED_does_not_even_plan(store: _Store) -> None:
+async def test_DISABLED_does_not_even_plan(door: respx.MockRouter) -> None:
     out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_ENABLED=False))
 
-    assert out.enabled is False
-    assert out.revoked == [] and store.revoked == []
+    assert (out.enabled, out.revoked) == (False, [])
 
 
 @pytest.mark.asyncio
-async def test_ARMED_revokes_exactly_the_planned_objects(store: _Store) -> None:
+async def test_ARMED_asks_the_catalog_for_exactly_the_planned_objects_and_reports_what_it_kept(door: respx.MockRouter) -> None:
+    asked = _revoking(door, kept="table:ns$gone-t")
+
     out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False))
 
-    assert sorted(store.revoked) == ["project:gone-p", "table:ns$gone-t", "warehouse:gone-w"]
-    assert out.dry_run is False and len(out.revoked) == 3
+    assert sorted(json.loads(asked.calls.last.request.content)["objects"]) == ["project:gone-p", "table:ns$gone-t", "warehouse:gone-w"]
+    assert sorted((r.fga_object, r.tuples) for r in out.revoked) == [("project:gone-p", 2), ("warehouse:gone-w", 2)]
+    assert out.kept_by_the_catalog == {"table:ns$gone-t": "a trash record keeps the table for its undrop"}
 
 
 @pytest.mark.asyncio
-async def test_the_CAP_truncates_and_SAYS_it_did(store: _Store) -> None:
+async def test_a_door_that_cannot_decide_degrades_rather_than_failing_the_tick(door: respx.MockRouter) -> None:
+    """The reconcile report is what everything else is gated on: a repair the catalog could not make is reported."""
+    door.post(_DOOR).mock(return_value=httpx.Response(503, json={"code": 17, "detail": "the store did not answer"}))
+
+    out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False))
+
+    assert (out.revoked, "could not decide" in (out.error or "")) == ([], True), out.model_dump()
+
+
+@pytest.mark.asyncio
+async def test_the_CAP_truncates_and_SAYS_it_did(door: respx.MockRouter) -> None:
     """A truncated pass that reads as a complete one is how drift looks fixed and is not."""
+    asked = _revoking(door)
+
     out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False, MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK=2))
 
-    assert len(out.revoked) == 2 and out.capped == 1
-    assert len(store.revoked) == 2, f"the cap truncated the report but not the writes: {store.revoked}"
+    assert (len(out.revoked), out.capped, len(json.loads(asked.calls.last.request.content)["objects"])) == (2, 1, 2)
 
 
 def test_a_CLEAN_report_plans_nothing() -> None:

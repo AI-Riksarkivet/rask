@@ -1,7 +1,7 @@
 {{- if .Values.backups.pgDump.enabled }}
 # pg_dump the OpenFGA database (gzip) → the lakehouse S3 under _backups/pg/<date>/.
 # SELF-CONTAINED FALLBACK ONLY: when AGE is a CloudNativePG cluster (the rask path), disable this and use
-# CNPG's scheduled backups / PITR instead — they do this better. Reads creds from the infra-tier Secret.
+# CNPG's scheduled backups / PITR instead — they do this better.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -23,7 +23,7 @@ spec:
             app.kubernetes.io/component: backup-pg
         spec:
           restartPolicy: OnFailure
-
+          serviceAccountName: {{ include "lance.saName" (list . "backup-pg") }}
           {{- with .Values.imagePullSecrets }}
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
@@ -31,9 +31,10 @@ spec:
           securityContext: { fsGroup: 10001 }
           volumes:
             - { name: dump, emptyDir: {} }
-            # The backups' scoped identity (`objectStore.backupAccessKey`), never the store's root: a FILE, never env.
-            - name: backup-s3
-              secret: { secretName: {{ include "lance.fullname" . }}-backup-s3, items: [{ key: secret-key, path: secret-key }], defaultMode: 0400 }
+            - { name: pgpass, emptyDir: { medium: Memory, sizeLimit: 1Mi } }
+            - name: postgres-password
+              secret: { secretName: {{ include "lance.fullname" . }}-infra-credentials, items: [{ key: postgres-password, path: password }], defaultMode: 0400 }
+            {{- include "lance.identityTokens" (list "volumes" (include "lance.objectStoreAudience" .)) | nindent 12 }}
           initContainers:
             - name: pg-dump
               image: {{ .Values.age.image }}
@@ -41,36 +42,26 @@ spec:
                 requests: { cpu: "100m", memory: "64Mi" }
                 limits: { cpu: "1", memory: "256Mi" }
               env:
-                - name: PGPASSWORD
-                  valueFrom:
-                    secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: postgres-password }
+                - { name: PGPASSFILE, value: /pgpass/.pgpass }
               command:
                 - sh
                 - -c
                 - |
                   set -e
                   rm -f /tmp/.dump-failed
-                  # The database that holds state: OpenFGA's tuples, which nothing else can rebuild.
+                  (umask 077; printf '%s:%s:*:%s:%s\n' {{ include "lance.ageConnectHost" . | quote }} {{ .Values.age.port | quote }} {{ .Values.age.user | quote }} "$(sed 's/[\\:]/\\&/g' /postgres-password/password)" > "$PGPASSFILE")
                   for db in {{ .Values.age.openfgaDb }}; do
-                    # NOT `pg_dump | gzip`. A pipeline reports only the LAST command's status, and this is
-                    # `sh` — dash, where `set -o pipefail` does not exist. So a pg_dump that dies mid-stream
-                    # still leaves a structurally valid gzip and the pipeline exits 0: `set -e` sees a clean
-                    # run and the upload container ships a TRUNCATED dump as that day's backup. That is the
-                    # failure a backup can least afford, because nothing reveals it until a restore.
-                    # Streaming is preserved on purpose (an uncompressed dump of the graph would have to fit
-                    # the emptyDir); the marker file carries pg_dump's real status out of the subshell, and
-                    # lives in /tmp rather than /dump so it can never be uploaded into the backup prefix.
                     { pg_dump -h {{ include "lance.ageConnectHost" . }} -p {{ .Values.age.port }} -U {{ .Values.age.user }} -d "$db" || touch /tmp/.dump-failed ; } | gzip > /dump/"$db".sql.gz
                     if [ -f /tmp/.dump-failed ]; then
                       echo "pg_dump failed for database $db — refusing to upload a partial backup" >&2
                       exit 1
                     fi
-                    # Catches the dump file never being written at all. It does NOT catch truncation —
-                    # a truncated gzip is non-empty — which is what the marker above is for.
                     [ -s /dump/"$db".sql.gz ] || { echo "no dump produced for database $db" >&2; exit 1; }
                   done
-              volumeMounts: [{ name: dump, mountPath: /dump }]
-          serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
+              volumeMounts:
+                - { name: dump, mountPath: /dump }
+                - { name: pgpass, mountPath: /pgpass }
+                - { name: postgres-password, mountPath: /postgres-password, readOnly: true }
           containers:
             - name: upload
               image: "{{ include "lance.catalogImage" . }}"
@@ -79,14 +70,11 @@ spec:
               resources:
                 requests: { cpu: "50m", memory: "64Mi" }
                 limits: { cpu: "500m", memory: "512Mi" }
-              # THE SECRET IS A MOUNTED FILE, never env: `pg_dump_upload.py` reads it from
-              # `RASK_S3_SECRET_KEY_FILE`. `configured_endpoint` owns the endpoint's resolution order.
               env:
-                - { name: RASK_S3_SECRET_KEY_FILE, value: /backup-s3/secret-key }
-                - { name: AWS_ACCESS_KEY_ID, value: {{ include "lance.backupIdentity" . | quote }} }
                 - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" . | quote }} }
-                - { name: AWS_REGION, value: "us-east-1" }
-              command:
+                - { name: RASK_S3_REGION, value: "us-east-1" }
+                {{- include "lance.objectStoreSessionEnv" (list . "RASK" "backup-pg") | nindent 16 }}
+              args:
                 - python
                 - /srv/pg_dump_upload.py
                 - /dump
@@ -95,5 +83,5 @@ spec:
                 - {{ .Values.backups.pgDump.keep | quote }}
               volumeMounts:
                 - { name: dump, mountPath: /dump }
-                - { name: backup-s3, mountPath: /backup-s3, readOnly: true }
+                {{- include "lance.identityTokens" (list "mounts" (include "lance.objectStoreAudience" .)) | nindent 16 }}
 {{- end }}

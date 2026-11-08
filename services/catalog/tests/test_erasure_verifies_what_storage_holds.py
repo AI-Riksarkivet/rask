@@ -609,7 +609,7 @@ def _door(namespace: Any, settings: Settings) -> Generator[TestClient]:
 
 
 def _settings(tmp_path: Path) -> Settings:
-    return Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
+    return Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
 
 
 def _recorded(namespace: LanceNamespace, settings: Settings, erasure_job: Any) -> str:  # noqa: ANN401 — conftest.ErasureJob
@@ -849,7 +849,7 @@ def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names
     the create wrote, as the deployed lifespan installs it."""
     root = tmp_path / "data"
     predicate = f"pii = '{_IDENTIFIER}'"
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(_control(root)))
+    settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(_control(root)))
     base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))
     try:
         namespace = build(root)

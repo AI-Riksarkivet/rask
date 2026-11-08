@@ -26,7 +26,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import perf_counter
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import lance
 import pyarrow.fs as pafs
@@ -305,7 +305,10 @@ def _probe_before_vending(
     minute on this estate — and the previous store became unable to restart at 107,485 of them. Expiry writes only
     when commit-path cleanup is armed (the disarm commits), when the policy's threshold of reclaimable versions is met,
     counted by the same rule the pass itself applies, or when the table's data directories hold a file the pass would
-    delete ([[LH-286]]), found by the rule the pass applies again under its vend (`base_reclaim.unreferenced`).
+    delete ([[LH-286]]), found by the rule the pass applies again under its vend (`base_reclaim.unreferenced`). A held
+    table, whose policy keeps its whole history, is written nothing, its disarm included: the catalog vends it no
+    maintain tier ([[XC-084]]), and the cleanup it may be armed with fires only inside a commit, which every catalog
+    door disarms before it makes (`lakehouse.auto_cleanup`).
 
     CONSERVATIVE BY CONSTRUCTION: an unreadable dataset answers `True`, because skipping a dataset that WOULD have been
     maintained is the failure this service exists to prevent while a spare credential is only a cost. Logged, never
@@ -313,7 +316,7 @@ def _probe_before_vending(
     """
     try:
         ds = lance.dataset(uri, storage_options=options.in_clear(), session=shared_lance_session())
-        armed = bool(auto_cleanup.armed_keys(ds.config()))
+        armed = policy.cleanup_enabled and bool(auto_cleanup.armed_keys(ds.config()))
         reclaimable = policy.cleanup_enabled and count_reclaimable(ds, policy) >= policy.min_reclaimable
         stranded = policy.cleanup_enabled and bool(directories) and bool(base_reclaim.unreferenced(ds, directories, options, now=now))
         return WriteProbe(
@@ -334,6 +337,10 @@ def _on_unauthenticated(result: DatasetResult, exc: Exception, _table_id: str | 
     result.refuse(str(exc), gate="unauthenticated")
 
 
+def _on_vending_not_direct(result: DatasetResult, exc: Exception, _table_id: str | None) -> None:
+    result.refuse(str(exc), gate="vending_not_direct")
+
+
 def _on_vend_denied(result: DatasetResult, exc: Exception, table_id: str | None) -> None:
     result.park(str(exc), gate="vend_denied", table_id=table_id)
 
@@ -347,23 +354,36 @@ def _on_vend_undecided(result: DatasetResult, exc: Exception, _table_id: str | N
 
 
 #: How each answer of the vend door that stops the dataset is recorded, and the line it logs. A refusal and a park are
-#: not failures: nothing broke, a grant is missing or a stamp is wrong. Only an undecided door is a failure, retried
-#: next tick. Every one of them stops the dataset: anything done after it would be signed by the ambient key.
+#: not failures: nothing broke, a grant is missing, a stamp is wrong, or this deployment vends no direct credential.
+#: Only an undecided door is a failure, retried next tick. Every one of them stops the dataset: a rewrite is signed by
+#: its table's vend or not at all ([[LH-219]]).
 _VEND_ANSWERS: dict[type[Exception], tuple[str, Callable[[DatasetResult, Exception, str | None], None]]] = {
     credentials.GovernedElsewhere: ("maintenance_governed_elsewhere", _on_governed_elsewhere),
     credentials.MaintenanceUnauthenticated: ("maintenance_unauthenticated", _on_unauthenticated),
+    credentials.VendingNotDirect: ("maintenance_vending_not_direct", _on_vending_not_direct),
     credentials.MaintenanceDenied: ("maintenance_vend_denied", _on_vend_denied),
     credentials.TableNotGoverned: ("maintenance_table_not_governed", _on_table_not_governed),
     credentials.VendUndecided: ("maintenance_vend_undecided", _on_vend_undecided),
 }
 
 
+#: Every answer of the vend door that stops a write, caught as one.
+_VEND_STOPS: Final = tuple(_VEND_ANSWERS)
+
+
+def _record_vend_answer(result: DatasetResult, exc: Exception, *, table_id: str | None) -> None:
+    """Log the vend door's answer that stopped a write, and record it on ``result`` unless the result already carries
+    the pass's refusal or error, which a later ask of the same door must not replace."""
+    event, record = _VEND_ANSWERS[type(exc)]
+    log.warning(event, extra={"uri": result.uri, "table_id": table_id, "reason": str(exc)})
+    if result.refused is None and result.error is None:
+        record(result, exc, table_id)
+
+
 def _stopped_by_vend(probe: WriteProbe, target: ExpiryTarget, exc: Exception) -> DatasetResult:
     """The result of a dataset the vend door's answer stopped, carrying the census the probe already read."""
-    event, record = _VEND_ANSWERS[type(exc)]
-    log.warning(event, extra={"uri": target.uri, "table_id": target.table_id, "reason": str(exc)})
     stopped = DatasetResult(uri=target.uri, data_storage_version=probe.data_storage_version, mixed_data_file_versions=probe.mixed_data_file_versions)
-    record(stopped, exc, target.table_id)
+    _record_vend_answer(stopped, exc, table_id=target.table_id)
     return stopped
 
 
@@ -397,27 +417,27 @@ def _data_directories(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettin
 
 
 def _expire(uri: str, named: NamedDataset, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
-    """One dataset's expiry, signed by a vend scoped to the table ``__manifest`` names it as, where expiry may write.
+    """One dataset's expiry: read under maintenance's own session, and written only under a vend scoped to the table
+    ``__manifest`` names it as ([[LH-219]]), asked for where the probe finds something to write.
 
     One name feeds the vend and the result, so the table a credential is scoped to and the table events name cannot
-    disagree. The pass holds that table's history fence, keyed by its uuid, while it deletes ([[LH-308]]), so a pass over
-    a branch holds the same fence as a pass over its table.
+    disagree. The pass holds that table's history fence, keyed by its uuid and written under the vend, while it deletes
+    ([[LH-308]]), so a pass over a branch holds the same fence as a pass over its table.
     """
     table = named.table
     options = settings.storage_options()
     policy = plan.expiry_policy(min_reclaimable=settings.min_versions_to_expire, staged_grace=timedelta(seconds=settings.staged_manifest_grace_seconds))
     directories = _data_directories(uri, sweep=sweep, settings=settings, options=options)
     probe = _probe_before_vending(uri, options, policy=policy, directories=directories, now=sweep.context.now)
-    history = TableHistory(control_root=settings.resolved_control_root, storage_options=options, table_uuid=named.owners.table_uuid)
-    target = ExpiryTarget(
-        uri=uri, storage_options=options, protected=sweep.protected, table_id=table, data_directories=directories, now=sweep.context.now, history=history
-    )
-    if probe.may_write:
-        try:
-            target.storage_options = credentials.write_options_for(uri, settings, table_id=table, fallback=options)
-        except (credentials.MaintenanceDenied, credentials.TableNotGoverned, credentials.VendUndecided) as exc:
-            return _stopped_by_vend(probe, target, exc)
-    return expire_versions(target, policy)
+    target = ExpiryTarget(uri=uri, storage_options=options, protected=sweep.protected, table_id=table, data_directories=directories, now=sweep.context.now)
+    if not probe.may_write:
+        return expire_versions(target, policy)
+    try:
+        vended = credentials.write_options_for(uri, settings, table_id=table)
+    except _VEND_STOPS as exc:
+        return _stopped_by_vend(probe, target, exc)
+    history = TableHistory(control_root=settings.resolved_control_root, storage_options=vended, table_uuid=named.owners.table_uuid)
+    return expire_versions(target.model_copy(update={"write_options": vended, "history": history}), policy)
 
 
 def _expire_in_span(uri: str, named: NamedDataset, plan: DatasetPlan, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:
@@ -498,13 +518,15 @@ def maintain_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSetting
 
 
 def _check_committed_files(result: DatasetResult, named: NamedDataset, *, sweep: SweepPlan, settings: MaintenanceSettings) -> None:
-    """Name each file a commit added that the store no longer holds as the catalog recorded it ([[LH-419]]).
+    """Name each file a commit added that the store no longer holds as the catalog recorded it ([[LH-419]]), and forget
+    each record no retained version needs.
 
     On the table's own pass only: a branch's files are recorded under its table, whose pass reads them. Whatever the
     expiry did, so a table the expiry refuses is still read. A pass the policy cadence skips reads nothing, so a table
-    under a policy interval is read at that interval.
+    under a policy interval is read at that interval. The read is under maintenance's own session; forgetting is a write,
+    signed by the table's vend ([[LH-219]]), asked for only when a record is reclaimed.
     """
-    if sweep.table_ids.of(result.uri) is None:
+    if (table := sweep.table_ids.of(result.uri)) is None:
         return
     options = settings.storage_options()
     try:
@@ -522,6 +544,24 @@ def _check_committed_files(result: DatasetResult, named: NamedDataset, *, sweep:
             result.error, result.error_type = f"committed files: {exc}", type(exc).__name__
         return
     result.overwritten_files = found.overwritten
+    if found.reclaimed:
+        _forget_reclaimed(result, table=table, table_uuid=named.owners.table_uuid, reclaimed=found.reclaimed, settings=settings)
+
+
+def _forget_reclaimed(result: DatasetResult, *, table: str, table_uuid: str, reclaimed: list[str], settings: MaintenanceSettings) -> None:
+    """Forget the ``reclaimed`` commits' records under the table's vend ([[LH-219]]).
+
+    A record no retained version needs governs nothing, so an undecided vend or a failed delete leaves it for a later
+    pass and fails nothing: the versions the pass reclaimed stand. A refused vend is a refusal, recorded on the result as
+    the expiry records its own.
+    """
+    try:
+        vended = credentials.write_options_for(result.uri, settings, table_id=table)
+        committed_files.forget(settings.resolved_control_root, vended, table_uuid=table_uuid, reclaimed=reclaimed)
+    except (credentials.VendUndecided, OSError) as exc:
+        log.warning("committed_files_not_forgotten", extra={"uri": result.uri, "table_id": table, "error": f"{type(exc).__name__}: {exc}"[:300]})
+    except _VEND_STOPS as exc:
+        _record_vend_answer(result, exc, table_id=table)
 
 
 def expire_dataset(uri: str, *, sweep: SweepPlan, settings: MaintenanceSettings) -> DatasetResult:

@@ -18,8 +18,8 @@ The store's own pod holds every secret it serves and is not counted. What it hol
 root token in may reach no other pod, and no store token is published: none rides a component, an env value, an argument
 or a probe header.
 
-The store's root access key is named only where it is created: by the scoped-users hook that provisions the store's users
-with it and prunes those git no longer declares, and by the dev store's seed, which writes it (ADR 0168).
+The store's root access key is named only where it is used or created: by the provisioning hook that writes each identity's
+policy with it and prunes what git no longer declares, and by the dev store's seed, which writes it (ADR 0168).
 """
 
 from __future__ import annotations
@@ -57,8 +57,6 @@ _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 
 #: secret -> {"store": identities whose login reads it, "dapr": apps whose sidecar API serves it, "pods": workloads given it by ESO}.
 EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
-    "lineage-s3": {"store": frozenset({"lineage"}), "dapr": frozenset({"lineage"})},
-    "maintenance-s3": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "dapr-app-token": {"store": _DOORS | {"eso"}, "dapr": _DOORS, "pods": _SIDECARS},
     "signing-key-rask-sa-catalog": {"store": frozenset({"catalog"}), "dapr": frozenset({"catalog"})},
     # The key the catalog derives every announcement's run id under ([[LH-497]]): the catalog's alone.
@@ -76,9 +74,8 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "postgres": {"store": frozenset({"eso"}), "pods": _POSTGRES_CLIENTS},
     "object-store-root": {
         "store": frozenset({"eso"}),
-        "pods": frozenset({"StatefulSet/rask-rustfs", "Job/rask-object-store-scoped-users-r1", "Job/rask-object-store-scoped-users-prune-r1"}),
+        "pods": frozenset({"StatefulSet/rask-rustfs", "Job/rask-object-store-provisioning-r1", "Job/rask-object-store-provisioning-prune-r1"}),
     },
-    "backup-s3": {"store": frozenset({"eso"}), "pods": frozenset({"CronJob/rask-control-root-backup", "CronJob/rask-pg-backup"})},
     "otel-collector-export": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-otel-collector"})},
 }
 
@@ -336,8 +333,8 @@ def test_every_secret_in_the_dev_store_has_exactly_its_readers_and_no_published_
     assert not (published := _published_tokens(estate)), f"a store token is a literal of the render: {published}"
     assert presenters == {
         f"{STORE_POD}/seed",
-        "Job/rask-object-store-scoped-users-r1/provision",
-        "Job/rask-object-store-scoped-users-prune-r1/provision",
+        "Job/rask-object-store-provisioning-r1/provision",
+        "Job/rask-object-store-provisioning-prune-r1/provision",
     }, sorted(presenters)
 
 

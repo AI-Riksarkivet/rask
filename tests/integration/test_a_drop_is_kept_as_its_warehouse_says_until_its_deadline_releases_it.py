@@ -3,15 +3,16 @@
 A warehouse's ``delete_profile`` decides what a drop under it does (ADR 0146): ``hard`` destroys the table at once,
 ``soft`` keeps it recoverable for the profile's ``grace_days``, and a warehouse naming none, or naming ``estate``, takes
 the estate's ``LANCE_TRASH_GRACE_DAYS``. The deadline is stamped on the trash record at the drop. Past it, the drop is
-DropTable's, its data deleted asynchronously: the maintenance reconcile tick revokes the trashed object's grants,
-announcing a ``grant_revoked`` per principal, and stamps the record released, on every tick and whether or not the purge
-is on. The bytes stay for the purge, which the default chart ships off.
+DropTable's, its data deleted asynchronously: on the maintenance reconcile tick the catalog revokes the trashed object's
+grants, announcing a ``grant_revoked`` per principal under its own signature, and stamps the record released
+([[XC-084]]), on every tick and whether or not the purge is on. The bytes stay for the purge, which the default chart
+ships off.
 
 ONE ESTATE ON MOTO, TWO SERVICES (``catalog_and_maintenance``): the real catalog app drops through its door and files the
-record, and the real maintenance app runs its reconcile tick over the same control root. One in-memory ``TupleStore``
-stands behind both through the real ``lakehouse.governed.fga`` functions, since the claim is which tuples remain. A
-table still in its window and a live table whose undrop crashed before clearing its record are the controls: the tick
-must keep both tables' grants.
+record, and the real maintenance app runs its reconcile tick over the same control root, asking the catalog's own
+release door (``catalog_doors``). One in-memory ``TupleStore`` stands behind the catalog through the real
+``lakehouse.governed.fga`` functions, since the claim is which tuples remain. A table still in its window and a live
+table whose undrop crashed before clearing its record are the controls: the tick must keep both tables' grants.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.governed.fga import user_object
 from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance
+from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import principal_key
 
 
@@ -38,7 +40,7 @@ _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
 class _Captured:
-    """The maintenance service's control emitter, keeping what it was handed."""
+    """The catalog's control emitter, keeping what it was handed."""
 
     def __init__(self) -> None:
         self.events: list[CatalogControlEvent] = []
@@ -76,7 +78,7 @@ class _Estate:
     def location(self, table: str) -> str:
         return str(self.post(f"/v1/table/{table}/describe")["location"])
 
-    def record(self, object_uuid: str, *, kind: str = "table") -> dict[str, Any] | None:
+    def record(self, object_uuid: str, *, kind: trash.TrashKind = "table") -> dict[str, Any] | None:
         settings = catalog_settings()
         return trash.get(settings.registry_root, settings.storage_options(), object_uuid, kind=kind)
 
@@ -84,7 +86,7 @@ class _Estate:
         settings = catalog_settings()
         trash.put(settings.registry_root, settings.storage_options(), record)
 
-    def age(self, object_uuid: str, *, kind: str = "table") -> None:
+    def age(self, object_uuid: str, *, kind: trash.TrashKind = "table") -> None:
         """Move the deadline of the record ``object_uuid`` keeps a day into the past: a drop whose window has ended."""
         record = self.record(object_uuid, kind=kind)
         assert record is not None, f"no {kind} record for {object_uuid}"
@@ -99,10 +101,10 @@ class _Estate:
 @pytest.fixture
 def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     """The catalog with the estate's seven-day grace period, as alice, and maintenance reading the same control root with
-    FGA on and the purge off, as the default chart ships it; both ask one store."""
+    the purge off, as the default chart ships it."""
     captured = _Captured()
-    env = {"LANCE_TRASH_GRACE_DAYS": "7", "MAINTENANCE_TRASH_PURGE_ENABLED": "false"}
-    with catalog_and_maintenance(moto_url, monkeypatch, env=env, maintenance_fga=True, control=captured) as both:
+    env = {"LANCE_TRASH_GRACE_DAYS": "7", "MAINTENANCE_TRASH_PURGE_ENABLED": "false", "MAINTENANCE_CATALOG_URL": CATALOG_URL}
+    with catalog_and_maintenance(moto_url, monkeypatch, env=env, catalog_control=captured) as both:
         answer = both.catalog.post("/management/v1/projects", json={"id": PROJECT})
         assert answer.status_code == 200, answer.text
         yield _Estate(both, captured)
@@ -150,7 +152,8 @@ def test_a_reconcile_tick_releases_the_grants_of_a_drop_past_its_deadline_and_ke
     held = estate.store.naming(sorted(released | kept))
     assert all(held.get(obj) for obj in released | kept), f"a drop kept no grant, so releasing them would pass vacuously: {held}"
 
-    answer = estate.maintenance.post("/maintenance-reconcile-cron")
+    with catalog_doors(estate.catalog):
+        answer = estate.maintenance.post("/maintenance-reconcile-cron")
 
     assert answer.status_code == 200, answer.text
     report = answer.json()["trash_release"]
@@ -162,8 +165,8 @@ def test_a_reconcile_tick_releases_the_grants_of_a_drop_past_its_deadline_and_ke
     alice = user_object(principal_key("alice"))
     assert {(obj, alice) for obj in released} <= revoked, f"no grant_revoked told alice of each release: {revoked}"
     for obj in released:
-        kind, object_uuid = obj.split(":")
-        record = estate.record(object_uuid, kind=kind)
+        prefix, object_uuid = obj.split(":")
+        record = estate.record(object_uuid, kind="namespace" if prefix == "namespace" else "table")
         assert record is not None and trash.is_released(record), f"the record of {obj} was not stamped released: {record}"
     assert estate.objects_at(location), "the tick deleted the bytes the purge owns"
     refused = estate.catalog.post("/management/v1/table/bronze$expired/undrop", json={})

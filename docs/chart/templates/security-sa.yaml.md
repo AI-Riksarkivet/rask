@@ -18,7 +18,7 @@ the stale client key by tests/unit/test_the_product_chart_renders_no_client.py.
 ## `"hooks"` in the component list (`lance.saComponents`)
 
 `<release>-sa-hooks`, the identity of the hooks that run before the release manifest (openfga-model at
-pre-upgrade, object-store-scoped-users), is an ORDINARY ServiceAccount: an identity is never a hook ([[XC-126]]). A
+pre-upgrade, object-store-provisioning), is an ORDINARY ServiceAccount: an identity is never a hook ([[XC-126]]). A
 hook-shaped SA, Role or binding has a lifecycle of its own, deleted by `hook-succeeded` while a failed hook's pod
 still holds its token, so every later hook on it is refused, and it does not exist between upgrades. An ordinary SA
 exists from the revision that introduces it on, so a pre-upgrade hook on any later upgrade finds it. The one upgrade

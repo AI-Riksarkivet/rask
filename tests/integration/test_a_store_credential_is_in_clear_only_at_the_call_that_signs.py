@@ -77,10 +77,10 @@ def catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     monkeypatch.setattr(store_session, "SESSIONS", sessions)
     settings = Settings(
         LANCE_S3_ENDPOINT="http://rustfs:9000",
-        LANCE_S3_ACCESS_KEY_ID="",
-        LANCE_S3_SECRET_ACCESS_KEY="",
-        LANCE_S3_WEB_IDENTITY_TOKEN_FILE=str(token),
-        LANCE_S3_STS_ENDPOINT="http://rustfs:9000",
+        s3_access_key_id="",
+        s3_secret_access_key="",
+        s3_web_identity_token_file=str(token),
+        s3_sts_endpoint="http://rustfs:9000",
         LANCE_CONTROL_ROOT=str(tmp_path / "control"),
     )
     identity = settings.web_identity
@@ -98,8 +98,8 @@ def maintenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MaintenanceS
     monkeypatch.setenv("RASK_CATALOG_IDENTITY_TOKEN_FILE", str(token))
     return MaintenanceSettings(
         MAINTENANCE_CATALOG_URL=_CATALOG_URL,
-        MAINTENANCE_S3_ACCESS_KEY_ID="rask-maintenance",
-        MAINTENANCE_S3_SECRET_ACCESS_KEY=_MAINTENANCE_SECRET,
+        s3_access_key_id="rask-maintenance",
+        s3_secret_access_key=_MAINTENANCE_SECRET,
     )
 
 
@@ -138,7 +138,7 @@ def _expiry_target(rig: _Rig) -> BaseModel:
     options = rig.maintenance.storage_options()
     history = TableHistory(control_root=rig.maintenance.resolved_control_root, storage_options=options, table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
     target = ExpiryTarget(uri=_URI, storage_options=options, table_id=_TABLE, history=history)
-    target.storage_options = credentials.write_options_for(_URI, rig.maintenance, table_id=_TABLE, fallback=options)
+    target.storage_options = credentials.write_options_for(_URI, rig.maintenance, table_id=_TABLE)
     return target
 
 

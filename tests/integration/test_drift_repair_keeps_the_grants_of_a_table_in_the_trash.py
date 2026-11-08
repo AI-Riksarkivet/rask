@@ -8,8 +8,8 @@ Measured on the live estate at helm rev 18, the reconcile ticks at 18:04 and 18:
 
 ONE ESTATE ON MOTO, TWO SERVICES (`catalog_and_maintenance`): the real catalog app drops the table through its door, so
 the trash record is the one that door writes, and the real maintenance app runs its reconcile tick over the same control
-root with drift repair armed. One in-memory `TupleStore` stands behind both through the real `lakehouse.governed.fga`
-functions. A ghost beside the trashed table, a grant on a table nothing names, is the control: the tick must revoke it,
+root with drift repair armed, asking the catalog's own grant doors for the census and the revokes (`catalog_doors`,
+[[XC-084]]). One in-memory `TupleStore` stands behind the catalog through the real `lakehouse.governed.fga` functions. A ghost beside the trashed table, a grant on a table nothing names, is the control: the tick must revoke it,
 so a pass that revokes nothing cannot pass. A live table and a renamed one are no ghosts: a rename keeps the uuid its
 grants are held by. Every object is a table's uuid (``table:<uuid>``, [[LH-524]]), and the trashed table's is the one
 its record keeps.
@@ -29,6 +29,7 @@ from lakehouse import trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.fga import user_object
 from tests.integration.catalog_and_maintenance import catalog_and_maintenance
+from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import TupleStore, principal_key
 
 
@@ -72,7 +73,12 @@ class _Estate:
 def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     """The catalog with a seven-day grace period, as alice, and maintenance reading the same control root with drift
     repair armed; both ask one OpenFGA store."""
-    env = {"LANCE_TRASH_GRACE_DAYS": "7", "MAINTENANCE_DRIFT_REPAIR_ENABLED": "true", "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": "false"}
+    env = {
+        "LANCE_TRASH_GRACE_DAYS": "7",
+        "MAINTENANCE_DRIFT_REPAIR_ENABLED": "true",
+        "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": "false",
+        "MAINTENANCE_CATALOG_URL": CATALOG_URL,
+    }
     with catalog_and_maintenance(moto_url, monkeypatch, env=env) as both:
         warehouse = f"lh516-{uuid.uuid4().hex[:10]}-wh"
         for path, body in (("/management/v1/projects", {"id": PROJECT}), ("/management/v1/warehouses", {"id": warehouse, "project": PROJECT})):
@@ -94,7 +100,8 @@ def test_a_reconcile_tick_revokes_a_ghost_and_keeps_the_grants_of_a_table_in_the
     held = estate.store.naming([dropped])
     assert held and estate.in_trash("bronze$dropped"), "the drop kept nothing for an undrop, so keeping it would pass vacuously"
 
-    answer = estate.maintenance.post("/maintenance-reconcile-cron")
+    with catalog_doors(estate.catalog):
+        answer = estate.maintenance.post("/maintenance-reconcile-cron")
 
     assert answer.status_code == 200, answer.text
     tick = answer.json()

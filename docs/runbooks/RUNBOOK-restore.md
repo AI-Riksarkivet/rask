@@ -48,9 +48,11 @@ and AGE's hook needs `ag_catalog` to exist, so a database without it fails every
 target must therefore have the extension available. Do NOT `psql < dump` into a database that already holds data —
 drop/recreate it first.
 
-1. **Fetch the dump** from S3 with the backups' identity (`backup-s3` in the store), through the estate's S3 seam:
-   `uv run python -c "from storage import s3_client; s3_client().download_file('<bucket>', '_backups/pg/<UTC>/openfga.sql.gz', 'openfga.sql.gz')"`
-   with `RASK_S3_ENDPOINT_URL`, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` set to that pair.
+1. **Fetch the dump** from S3 under the pg backup's own identity, a session its ServiceAccount's token is exchanged for
+   (ADR 0197): write `kubectl create token <release>-sa-backup-pg --audience <objectStore.identity.audience>` to a file,
+   then, with `RASK_S3_ENDPOINT_URL` and `RASK_S3_STS_ENDPOINT` at the store, `RASK_S3_ASSUME_ROLE_ARN` at
+   `objectStore.identity.roleArns.backup-pg` and `RASK_S3_WEB_IDENTITY_TOKEN_FILE` at that file,
+   `uv run python -c "from lakehouse.store_session import JobStoreIdentity, job_client; job_client(JobStoreIdentity(), session_name='restore').download_file('<bucket>', '_backups/pg/<UTC>/openfga.sql.gz', 'openfga.sql.gz')"`.
 2. **Recreate the target DB** clean (managed PG or the in-cluster `age-postgres`):
    `DROP DATABASE IF EXISTS openfga; CREATE DATABASE openfga;`
 3. **Ensure the extension is installable** in the target (the AGE image ships it):
@@ -71,6 +73,11 @@ drop/recreate it first.
 The control root holds the estate's governance as small JSON objects. The Lance data can survive intact
 while every statement about **who may touch it** is gone, and that is a different failure from losing a
 dataset — so it has its own backup and its own restore.
+
+Every run signs with a session a ServiceAccount token is exchanged for (`RASK_S3_*`, as in the Postgres fetch above):
+`backup` and `verify` with the control-root backup's (`<release>-sa-backup-control-root`, whose policy reads the records
+and writes only the backups), and `restore`, which writes records, with the catalog's (`<release>-sa-catalog`), the one
+identity whose policy writes them.
 
 ```bash
 # Back up. --dest ANOTHER BUCKET for real DR; the default lands under the control root itself.

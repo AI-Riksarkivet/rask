@@ -73,18 +73,19 @@ not name — so the request was refused before the per-base credential was ever 
 and nothing said why (measured 2026-09-22). A render-time failure names the mistake; the
 runtime one is indistinguishable from a caller inventing a bucket.
 
-## `- { name: LANCE_S3_WEB_IDENTITY_TOKEN_FILE, value: "/var/run/secrets/rask/identity/{{ include "lance.objectStoreAudience" . }}/token" }`
+## `{{- include "lance.objectStoreSessionEnv" (list $root "LANCE" "catalog") | nindent 12 }}`
 
 THE CATALOG'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-083]], ADR 0170). The pod projects a token for
 `objectStore.identity.audience` (the volume `lance.identityTokens` renders), and the catalog exchanges it through STS
-`AssumeRoleWithWebIdentity` for every session it signs with: its own IO's, renewed at half life, and each vend's. It
-holds no key pair, in its environment or in the store, so nothing it reads outlives a session.
+`AssumeRoleWithWebIdentity` for every session it signs with: its own IO's, renewed at half life, and each vend's
+(`lakehouse.store_session`). It holds no key pair, in its environment or in the store, so nothing it reads outlives a
+session. The helper renders the four variables every store-reaching pod gets (`_helpers.tpl.md`
+`lance.objectStoreSessionEnv`): the token file, the STS endpoint, the role `objectStore.identity.roleArns.catalog` and
+the session length.
 
-## `- { name: LANCE_S3_STS_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }`
-
-The store's own endpoint, where RustFS and Ceph RGW serve STS. Always named: without it boto3 would send the catalog's
-token to the public AWS STS, and the catalog refuses to boot (`Settings._validate_store_identity`). An AWS deployment
-needs its regional STS endpoint here, for which the chart has no value yet.
+The STS endpoint is the store's own, where RustFS and Ceph RGW serve STS. Always named: without it boto3 would send the
+catalog's token to the public AWS STS, and the catalog refuses to boot (`Settings._validate_store_identity`). An AWS
+deployment needs its regional STS endpoint here, for which the chart has no value yet.
 
 ## `- { name: LANCE_SECRETS_FROM_DAPR, value: "true" }`
 
@@ -331,27 +332,14 @@ Bound the DaprClient gRPC deadline (the SDK env) — covers the boot-time secret
 
 Mounts the relay tick's route at this binding name (matches the bindings.cron component above).
 
-## `{{- $_ := required "objectStore.lineageAccessKey names lineage's scoped store identity; …" .Values.objectStore.lineageAccessKey }}`
+## `{{- include "lance.objectStoreSessionEnv" (list $root "LINEAGE" "lineage") | nindent 12 }}`
 
-THE LINEAGE PLANE'S SCOPED IDENTITY (§F2-1), and `required`: a blank access key fails the render, since the only
-other pair lineage could present is the store's root, whose secret signs every STS session token on RustFS
-(ADR 0168). The ACCESS KEY alone scopes the plane; the secret is DERIVED in-cluster (`lance.scopedSecretFn`), so
-naming the identity needs no secret anywhere.
-
-## `- { name: LINEAGE_DAPR_SECRET_KEY, value: "lineage-s3" }`
-
-Lineage's own secret in the store, which only lineage's Configuration allows and only its store login reads ([[XC-165]]).
-
-## `- { name: LINEAGE_DAPR_SECRET_S3_ID_FIELD, value: "access_key" }`
-
-The scoped identity's key id, read from the store with its secret ([[XC-082]], ADR 0166): a rotation
-issues a new id, so the id cannot be configuration.
-
-## `- { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "secret_key" }`
-
-THE OTHER HALF OF THE PAIR, named beside the key id because a scoped key signed with any other
-secret fails `SignatureDoesNotMatch` on every operation (measured on two scoped pairs).
-`dapr_secret_s3_field` defaults to the same field, so a service run without the chart reads its own pair too.
+LINEAGE'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-084]], ADR 0170). The pod projects a token for
+`objectStore.identity.audience` beside its `rask-catalog` one, and lineage exchanges it through STS
+`AssumeRoleWithWebIdentity` for the sessions its outbox drain signs with (`lakehouse.store_session`). It holds no key
+pair. The session's reach is its canned policy, `<release>-sa-lineage` in the ConfigMap
+`<release>-object-store-identities` (`lance.objectStorePolicy`): list, get and delete under `_lineage_outbox/` and
+nothing else, so a compromised lineage pod can drain its own outbox and reach no table.
 
 ## `{{- include "lance.governedOidcEnv" . | nindent 12 }}`
 

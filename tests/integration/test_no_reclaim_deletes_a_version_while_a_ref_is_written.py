@@ -37,6 +37,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.due import TableIds
 from maintenance.services.plan import PlanContext
+from tests.integration.maintenance_vend_doors import CATALOG_URL, described_by, maintain_tier_door
 
 
 TABLE = "db$t"
@@ -84,9 +85,11 @@ class _Estate:
                 "policy_root": self.root,
                 "control_root": self.root,
                 "min_versions_to_expire": 1,
+                "catalog_url": CATALOG_URL,
             }
         )
-        return sweep.maintain_dataset(self.location, sweep=tick, settings=settings)
+        with maintain_tier_door(described_by(self.client)):
+            return sweep.maintain_dataset(self.location, sweep=tick, settings=settings)
 
 
 @pytest.fixture

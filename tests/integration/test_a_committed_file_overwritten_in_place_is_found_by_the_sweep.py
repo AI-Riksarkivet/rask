@@ -12,7 +12,8 @@ ONE ESTATE, ON MOTO: the real catalog served by uvicorn over a fresh bucket, and
 table. Each case commits through one of the catalog's commit paths and adds one kind of file the version names (a data
 file, a blob sidecar, a deletion file, an index file, a transaction file, a branch's data file), which is then replaced
 by bytes of its size, or deleted and put back, as a holder of the table's vend can. The sweep names that file and no
-other. A record is forgotten once no retained version names its files.
+other. A record is forgotten once no retained version names its files, under the table's vend ([[LH-219]]); when the
+catalog refuses that vend, the record is kept and the pass carries the refusal.
 """
 
 from __future__ import annotations
@@ -21,7 +22,8 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import AbstractContextManager, contextmanager
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
@@ -31,6 +33,7 @@ import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
+import respx
 import uvicorn
 from lance import blob_array
 from pydantic import SecretStr
@@ -46,7 +49,9 @@ from lakehouse.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.due import TableIds
+from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import PlanContext
+from tests.integration.maintenance_vend_doors import CATALOG_URL, MAINTAIN_TIER_DOOR, VENDED, described_by, maintain_tier_door
 
 
 _TABLE_ID: list[str] = ["db", "t"]
@@ -114,9 +119,9 @@ class _Estate:
         """The transaction uuids of the commits whose records the control root still holds."""
         return sorted(commit.transaction_uuid for commit in file_identities.recorded(f"s3://{self.bucket}", self.key, self.table_uuid()))
 
-    def swept(self, location: str, *, reclaiming: bool = False) -> list[str]:
-        """The files maintenance's own sweep pass over the table names as not as committed; ``reclaiming`` expires every
-        version but the latest first."""
+    def swept(self, location: str, *, reclaiming: bool = False, door: AbstractContextManager[respx.MockRouter] | None = None) -> DatasetResult:
+        """Maintenance's own sweep pass over the table, ``door`` answering its maintain-tier vends (by default, each over
+        the table's location); ``reclaiming`` expires every version but the latest first."""
         described = self.client.post("/v1/namespace/db/describe", json={})
         assert described.status_code == 200, described.text
         now = datetime.now(UTC)
@@ -134,12 +139,14 @@ class _Estate:
                 "s3_bucket": self.bucket,
                 "policy_root": f"s3://{self.bucket}",
                 "control_root": f"s3://{self.bucket}",
+                "catalog_url": CATALOG_URL,
                 **({"min_versions_to_expire": 1} if reclaiming else {}),
             }
         )
-        result = sweep.maintain_dataset(location, sweep=tick, settings=settings)
+        with door or maintain_tier_door(described_by(self.client)):
+            result = sweep.maintain_dataset(location, sweep=tick, settings=settings)
         assert result.error is None, result.error
-        return result.overwritten_files
+        return result
 
 
 @pytest.fixture
@@ -263,7 +270,7 @@ def _deleted_then_put_back(estate: _Estate, location: str, relative: str) -> Non
     added = {key: estate.read(location, key) for key in estate.keys(location) if key == relative or re.fullmatch(r"_transactions/[^/]+\.txn", key)}
     for key in added:
         estate.delete(location, key)
-    assert estate.swept(location) == sorted(added), "every file a retained version names is named while it is gone"
+    assert estate.swept(location).overwritten_files == sorted(added), "every file a retained version names is named while it is gone"
     for key, held in added.items():
         estate.put(location, key, bytes([held[0] ^ 0xFF]) + held[1:] if key == relative else held)
 
@@ -290,13 +297,46 @@ def test_a_file_a_commit_added_is_named_by_the_sweep_once_it_is_not_as_committed
     location, relative = commit(estate)
     tamper(estate, location, relative)
 
-    assert estate.swept(location) == [relative]
+    assert estate.swept(location).overwritten_files == [relative]
 
 
-def test_a_record_is_forgotten_once_no_retained_version_names_its_files(estate: _Estate) -> None:
+def _vended(location: str) -> httpx.Response:
+    return httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": VENDED}, "location": location})
+
+
+def _refused(_location: str) -> httpx.Response:
+    return httpx.Response(403, json={"title": "Forbidden", "status": 403, "detail": "the caller may not maintain the table"})
+
+
+@contextmanager
+def _maintain_door_answering(*answers: httpx.Response) -> Generator[respx.MockRouter]:
+    """The maintain-tier door answering each ask in turn: the expiry's, then the forget's."""
+    with respx.mock() as router:
+        router.post(url__regex=MAINTAIN_TIER_DOOR, params={"tier": "maintain"}).mock(side_effect=list(answers))
+        yield router
+
+
+@pytest.mark.parametrize(
+    ("forget_answer", "kept", "refusal"),
+    [
+        pytest.param(_vended, ("overwrite",), (None, None), id="forgotten-under-the-tables-vend"),
+        pytest.param(_refused, ("create", "overwrite"), ("vend_denied", _TABLE), id="kept-and-refused-when-its-vend-is-refused"),
+    ],
+)
+def test_a_record_is_forgotten_once_no_retained_version_names_its_files(
+    estate: _Estate, forget_answer: Callable[[str], httpx.Response], kept: tuple[str, ...], refusal: tuple[str | None, str | None]
+) -> None:
     location = estate.create(_rows("bob"))
     estate.write("create?mode=Overwrite", _rows("eve"))
-    overwrite = lance.dataset(location, storage_options=estate.key.in_clear()).read_transaction(2)
-    assert overwrite is not None, "precondition: the overwrite's version names its transaction"
+    table = lance.dataset(location, storage_options=estate.key.in_clear())
+    create, overwrite = table.read_transaction(1), table.read_transaction(2)
+    assert create is not None and overwrite is not None, "precondition: each version names its transaction"
+    transactions = {"create": create.uuid, "overwrite": overwrite.uuid}
 
-    assert (estate.swept(location, reclaiming=True), estate.recorded()) == ([], [overwrite.uuid])
+    swept = estate.swept(location, reclaiming=True, door=_maintain_door_answering(_vended(location), forget_answer(location)))
+
+    assert (swept.overwritten_files, (swept.refused_by, swept.refused_table_id), estate.recorded()) == (
+        [],
+        refusal,
+        sorted(transactions[commit] for commit in kept),
+    )

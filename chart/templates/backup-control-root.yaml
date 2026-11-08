@@ -23,17 +23,13 @@ spec:
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
+          serviceAccountName: {{ include "lance.saName" (list . "backup-control-root") }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 65534
             seccompProfile: { type: RuntimeDefault }
           volumes:
-            - name: s3-credentials
-              secret:
-                secretName: {{ include "lance.fullname" . }}-backup-s3
-                items: [{ key: credentials.json, path: credentials.json }]
-                optional: false
+            {{- include "lance.identityTokens" (list "volumes" (include "lance.objectStoreAudience" .)) | nindent 12 }}
           containers:
             - name: backup
               image: "{{ include "lance.catalogImage" . }}"
@@ -46,20 +42,15 @@ spec:
                 requests: { cpu: "50m", memory: "128Mi" }
                 limits: { cpu: "500m", memory: "512Mi" }
               volumeMounts:
-                - { name: s3-credentials, mountPath: /var/run/secrets/rask/s3, readOnly: true }
+                {{- include "lance.identityTokens" (list "mounts" (include "lance.objectStoreAudience" .)) | nindent 16 }}
               env:
-                # The ENDPOINT is not a secret — it is the address the credential is used against, and
-                # `s3_client` resolves it from this chain while the keys come from the mounted file.
-                # `RASK_S3_ENDPOINT_URL`, which is the name `storage/client.py:34` actually resolves
-                # (`_ENDPOINT_ENVS`). The bare `RASK_S3_ENDPOINT` reads correctly and is read by
-                # nothing.
-                - name: RASK_S3_ENDPOINT_URL
-                  value: {{ include "lance.s3Endpoint" . | quote }}
-              command: ["python", "/srv/control_root_backup.py"]
+                - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" . | quote }} }
+                - { name: RASK_S3_REGION, value: "us-east-1" }
+                {{- include "lance.objectStoreSessionEnv" (list . "RASK" "backup-control-root") | nindent 16 }}
               args:
+                - python
+                - /srv/control_root_backup.py
                 - backup
-                - --credentials-file
-                - /var/run/secrets/rask/s3/credentials.json
                 - --root
                 # The SAME expression `services.yaml:75` renders as LANCE_REST_ROOT, so the backup and
                 # the catalog cannot disagree about which root is the control root.

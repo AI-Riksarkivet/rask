@@ -535,7 +535,78 @@ securityContext:
 {{- define "lance.saComponents" -}}
 {{- $components := list "catalog" "lineage" "maintenance" "jobs" "issuer-mirror" "hooks" -}}
 {{- if .Values.age.enabled }}{{- $components = append $components "age" }}{{- end -}}
+{{- if .Values.backups.pgDump.enabled }}{{- $components = append $components "backup-pg" }}{{- end -}}
+{{- if .Values.backups.controlRoot.enabled }}{{- $components = append $components "backup-control-root" }}{{- end -}}
 {{- toJson $components -}}
+{{- end -}}
+
+{{- define "lance.objectStoreIdentities" -}}
+{{- $root := . -}}
+{{- $identities := list -}}
+{{- range (include "lance.saComponents" . | fromJsonArray) }}
+{{- if and (has . (list "catalog" "lineage" "maintenance" "backup-pg" "backup-control-root")) (or (ne . "maintenance") $root.Values.maintenance.enabled) }}{{- $identities = append $identities . }}{{- end }}
+{{- end -}}
+{{- toJson $identities -}}
+{{- end -}}
+
+{{- define "lance.objectStorePolicy" -}}
+{{- $statements := include (printf "lance.objectStorePolicy.%s" (index . 1)) (index . 0) | fromJsonArray -}}
+{{- toPrettyJson (dict "Version" "2012-10-17" "Statement" $statements) -}}
+{{- end -}}
+
+{{- define "lance.objectStorePolicy.catalog" -}}
+{{- toJson (list (dict "Sid" "TheWholeDataPlaneItGoverns" "Effect" "Allow" "Action" (list "s3:ListBucket" "s3:GetBucketLocation" "s3:ListAllMyBuckets" "s3:GetObject" "s3:PutObject" "s3:DeleteObject" "s3:AbortMultipartUpload" "s3:CreateBucket" "s3:DeleteBucket") "Resource" (list "arn:aws:s3:::*" "arn:aws:s3:::*/*"))) -}}
+{{- end -}}
+
+{{- define "lance.objectStorePolicy.lineage" -}}
+{{- $control := .Values.objectStore.bucket -}}
+{{- toJson (list
+  (dict "Sid" "FindTheBucket" "Effect" "Allow" "Action" (list "s3:GetBucketLocation") "Resource" (list (printf "arn:aws:s3:::%s" $control)))
+  (dict "Sid" "ListItsOwnOutbox" "Effect" "Allow" "Action" (list "s3:ListBucket") "Resource" (list (printf "arn:aws:s3:::%s" $control)) "Condition" (dict "StringLike" (dict "s3:prefix" (list "_lineage_outbox" "_lineage_outbox/" "_lineage_outbox/*"))))
+  (dict "Sid" "DrainItsOwnOutboxAndNothingElse" "Effect" "Allow" "Action" (list "s3:GetObject" "s3:DeleteObject") "Resource" (list (printf "arn:aws:s3:::%s/_lineage_outbox" $control) (printf "arn:aws:s3:::%s/_lineage_outbox/*" $control)))) -}}
+{{- end -}}
+
+{{- define "lance.objectStorePolicy.maintenance" -}}
+{{- $control := .Values.objectStore.bucket -}}
+{{- $own := list (printf "arn:aws:s3:::%s/_maintenance_due/*" $control) (printf "arn:aws:s3:::%s/_policies/state/*" $control) (printf "arn:aws:s3:::%s/_lineage_outbox/*" $control) -}}
+{{- toJson (list
+  (dict "Sid" "ListAccountForReconcileDriftReport" "Effect" "Allow" "Action" (list "s3:ListAllMyBuckets") "Resource" (list "arn:aws:s3:::*"))
+  (dict "Sid" "ReadTheEstateItSweeps" "Effect" "Allow" "Action" (list "s3:ListBucket" "s3:GetBucketLocation" "s3:GetObject") "Resource" (list "arn:aws:s3:::*" "arn:aws:s3:::*/*"))
+  (dict "Sid" "WriteItsOwnRecordsAndNothingElse" "Effect" "Allow" "Action" (list "s3:PutObject" "s3:DeleteObject") "Resource" $own)) -}}
+{{- end -}}
+
+{{- define "lance.objectStorePolicy.backup-pg" -}}
+{{- $control := .Values.objectStore.bucket -}}
+{{- toJson (list
+  (dict "Sid" "FindTheBucket" "Effect" "Allow" "Action" (list "s3:GetBucketLocation") "Resource" (list (printf "arn:aws:s3:::%s" $control)))
+  (dict "Sid" "ListItsOwnDumps" "Effect" "Allow" "Action" (list "s3:ListBucket") "Resource" (list (printf "arn:aws:s3:::%s" $control)) "Condition" (dict "StringLike" (dict "s3:prefix" (list "_backups/pg/" "_backups/pg/*"))))
+  (dict "Sid" "WriteAndPruneItsOwnDumps" "Effect" "Allow" "Action" (list "s3:GetObject" "s3:PutObject" "s3:DeleteObject" "s3:AbortMultipartUpload" "s3:ListMultipartUploadParts") "Resource" (list (printf "arn:aws:s3:::%s/_backups/pg/*" $control)))) -}}
+{{- end -}}
+
+{{- define "lance.objectStorePolicy.backup-control-root" -}}
+{{- $control := .Values.objectStore.bucket -}}
+{{- $records := list "_projects" "_warehouses" "_trash" "_protection" "_policies" "_gates" "_bases" -}}
+{{- $dest := splitList "/" (trimSuffix "/" (trimPrefix "s3://" (.Values.backups.controlRoot.dest | default (printf "s3://%s/_backups/control" $control)))) | compact -}}
+{{- $destBucket := first $dest -}}{{- $destPrefix := join "/" (rest $dest) -}}
+{{- $listed := list -}}{{- $read := list -}}
+{{- range $records }}{{- $listed = concat $listed (list . (printf "%s/" .) (printf "%s/*" .)) }}{{- $read = append $read (printf "arn:aws:s3:::%s/%s/*" $control .) }}{{- end -}}
+{{- $listDest := dict "Sid" "ListItsOwnBackups" "Effect" "Allow" "Action" (list "s3:ListBucket") "Resource" (list (printf "arn:aws:s3:::%s" $destBucket)) -}}
+{{- if $destPrefix }}{{- $_ := set $listDest "Condition" (dict "StringLike" (dict "s3:prefix" (list (printf "%s/" $destPrefix) (printf "%s/*" $destPrefix)))) }}{{- end -}}
+{{- toJson (list
+  (dict "Sid" "FindTheBuckets" "Effect" "Allow" "Action" (list "s3:GetBucketLocation") "Resource" (list (printf "arn:aws:s3:::%s" $control) (printf "arn:aws:s3:::%s" $destBucket) | uniq))
+  (dict "Sid" "ListTheRecordsItCopies" "Effect" "Allow" "Action" (list "s3:ListBucket") "Resource" (list (printf "arn:aws:s3:::%s" $control)) "Condition" (dict "StringLike" (dict "s3:prefix" $listed)))
+  (dict "Sid" "ReadTheRecordsItCopies" "Effect" "Allow" "Action" (list "s3:GetObject") "Resource" $read)
+  $listDest
+  (dict "Sid" "WriteAndPruneItsOwnBackups" "Effect" "Allow" "Action" (list "s3:GetObject" "s3:PutObject" "s3:DeleteObject" "s3:AbortMultipartUpload" "s3:ListMultipartUploadParts") "Resource" (list (printf "arn:aws:s3:::%s/*" (join "/" (compact (list $destBucket $destPrefix))))))) -}}
+{{- end -}}
+
+{{- define "lance.objectStoreSessionEnv" -}}
+{{- $root := index . 0 -}}{{- $prefix := index . 1 -}}{{- $component := index . 2 -}}
+{{- $identity := $root.Values.objectStore.identity -}}
+- { name: {{ $prefix }}_S3_WEB_IDENTITY_TOKEN_FILE, value: "/var/run/secrets/rask/identity/{{ include "lance.objectStoreAudience" $root }}/token" }
+- { name: {{ $prefix }}_S3_STS_ENDPOINT, value: {{ include "lance.s3Endpoint" $root | quote }} }
+- { name: {{ $prefix }}_S3_ASSUME_ROLE_ARN, value: {{ required (printf "objectStore.identity.roleArns.%s names the role the %s token is exchanged for" $component $component) (index $identity.roleArns $component) | quote }} }
+- { name: {{ $prefix }}_S3_SESSION_SECONDS, value: {{ required "objectStore.identity.sessionSeconds is how long each store session lasts" $identity.sessionSeconds | quote }} }
 {{- end -}}
 
 {{- define "lance.serviceAccounts" -}}
@@ -645,7 +716,7 @@ securityContext:
 {{- define "lance.openfgaAudience" -}}rask-openfga{{- end -}}
 
 {{- define "lance.fgaWriters" -}}
-catalog maintenance
+catalog
 {{- end -}}
 
 {{- define "lance.isFgaWriter" -}}
@@ -657,7 +728,6 @@ catalog maintenance
 {{- $out := list -}}
 {{- if $v.auth.enabled -}}
 {{- range list "catalog" "jobs" "hooks" }}{{ $out = append $out (printf "%s%s" $sa .) }}{{ end -}}
-{{- if $v.maintenance.enabled }}{{ $out = append $out (printf "%smaintenance" $sa) }}{{ end -}}
 {{- end -}}
 {{- $out | uniq | sortAlpha | join "," -}}
 {{- end -}}
@@ -666,6 +736,7 @@ catalog maintenance
 {{- $out := dict -}}
 {{- if .Values.auth.enabled -}}
 {{- $_ := set $out (include "lance.saSubject" (list . "lineage")) (list "decider" "governance_prober") -}}
+{{- if .Values.maintenance.enabled }}{{- $_ := set $out (include "lance.saSubject" (list . "maintenance")) (list "reclaimer" "reconciler") -}}{{- end -}}
 {{- end -}}
 {{- toJson $out -}}
 {{- end -}}
@@ -717,21 +788,7 @@ activeDeadlineSeconds: 1800
 {{- end -}}
 
 {{- define "lance.objectStoreAudience" -}}
-{{- required "objectStore.identity.audience names the audience the catalog's store token is projected for, which the store trusts as its identity provider's client; the catalog holds no store key (ADR 0170)" .Values.objectStore.identity.audience -}}
-{{- end -}}
-
-{{- define "lance.backupIdentity" -}}
-{{- if or .Values.backups.pgDump.enabled .Values.backups.controlRoot.enabled -}}
-{{- required "objectStore.backupAccessKey names the backups' identity; a backup never holds the store's root (ADR 0168)" .Values.objectStore.backupAccessKey -}}
-{{- end -}}
-{{- end -}}
-
-{{- define "lance.scopedSecretFn" -}}
-scoped_secret() {
-  s=$(printf '%s-s3-%s' "$1" "$root" | sha256sum | cut -c1-40)
-  [ ${#s} -eq 40 ] || { echo "could not derive the scoped secret for $1" >&2; exit 1; }
-  (umask 077; printf '%s' "$s" > "$2")
-}
+{{- required "objectStore.identity.audience names the audience every lakehouse workload's store token is projected for, which the store trusts as its identity provider's client; no workload holds a store key (ADR 0170)" .Values.objectStore.identity.audience -}}
 {{- end -}}
 
 {{- define "lance.storeReads" -}}
@@ -746,9 +803,9 @@ scoped_secret() {
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
   (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token" "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" true)
-  (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "lineage-s3" "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
+  (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
 {{- if $v.maintenance.enabled -}}
-{{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "maintenance-s3" "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
+{{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
 {{- end -}}
 {{- range $apps -}}
 {{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}
@@ -757,7 +814,7 @@ scoped_secret() {
 {{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api "components" $components) -}}
 {{- end -}}
 {{- end -}}
-{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "openbao-seeded" "commit-id-key" "lineage-s3" "maintenance-s3" "backup-s3" "otel-collector-export" "object-store-root" "postgres" "dapr-app-token") -}}
+{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "openbao-seeded" "commit-id-key" "otel-collector-export" "object-store-root" "postgres" "dapr-app-token") -}}
 {{- range $reads }}{{- $held = concat $held .api .components }}{{- end -}}
 {{- $lakehouseApps := list $v.services.catalog.daprAppId $v.services.lineage.daprAppId $v.maintenance.daprAppId -}}
 {{- $external := $v.openbao.externalReaders | default dict -}}
@@ -790,7 +847,6 @@ scoped_secret() {
 {{- $reads := list "postgres" -}}
 {{- if $v.objectStore.enabled }}{{- $reads = append $reads "object-store-root" }}{{- end -}}
 {{- if $v.observability.enabled }}{{- $reads = append $reads "otel-collector-export" }}{{- end -}}
-{{- if include "lance.backupIdentity" . }}{{- $reads = append $reads "backup-s3" }}{{- end -}}
 {{- if or $v.dapr.enabled $v.auth.enabled }}{{- $reads = append $reads "dapr-app-token" }}{{- end -}}
 {{- range $files := include "lance.natsFiles" . | fromJson }}{{- $reads = concat $reads $files }}{{- end -}}
 {{- toJson ($reads | uniq | sortAlpha) -}}

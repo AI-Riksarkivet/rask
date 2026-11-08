@@ -3,7 +3,8 @@
 The estate is built with the CATALOG's own registry writers against a local filesystem control root
 (``file://{tmp_path}``, exactly as ``tests/unit/test_warehouses.py`` does), so these tests prove the
 reconciler reads what the catalog actually writes rather than a copy of the layout that could drift.
-OpenFGA and S3 are faked at the seam the reconciler uses (``fga.read_tuples`` / ``list_buckets``).
+OpenFGA and S3 are faked at the seam the reconciler uses: the catalog's grant census, which maintenance reads in place of
+OpenFGA ([[XC-084]]), and ``list_buckets``.
 
 REPORT ONLY is asserted MECHANICALLY, not by comment: :func:`test_a_full_run_leaves_every_store_byte_identical`
 snapshots the control root before and after a run and drives it with stores whose write paths raise.
@@ -21,7 +22,6 @@ from typing import Any, cast
 import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, CreateTableRequest, ServiceUnavailableError, connect
-from openfga_sdk.client.models import ClientTuple
 from pydantic import SecretStr
 
 from catalog.services import projects as proj_svc
@@ -52,54 +52,29 @@ _FGA_DERIVED_CATEGORIES = {
 # --------------------------------------------------------------------------- #
 
 
-class _FakeFga:
-    """A stand-in for the OpenFGA store's READ half, keyed the way the reconciler scans it.
-
-    ``tuples`` maps a full object (``"project:acme"``) to its (user, relation) pairs. ``read_tuples``
-    honours the bare-type filter (``obj="project:"``) the scan sends, and can be made to fail or to
-    page forever — the two behaviours the report must survive without lying.
+class _FakeGrants:
+    """The catalog's grant census as the reconciler reads it (``GET /management/v1/grants/census``), built from tuples
+    keyed by full object (``"project:acme"`` to its (user, relation) pairs) and counted as the catalog counts them:
+    bookkeeping relations are no grant. It can fail, or stop short of the store, the two answers the report must survive
+    without lying. The deployment's own objects are not in it, since the catalog counts without them.
     """
 
     def __init__(self, tuples: dict[str, list[tuple[str, str]]] | None = None, *, error: Exception | None = None, endless: bool = False) -> None:
         self.tuples = tuples or {}
         self.error = error
         self.endless = endless
-        self.writes: list[Any] = []
 
-    async def read_tuples(self, _client: object, *, obj: str | None = None, user: str | None = None, **_kw: object) -> tuple[list[ClientTuple], str | None]:
+    def census(self) -> fga_module.GrantCensus:
         if self.error is not None:
             raise self.error
-        # Real OpenFGA REJECTS a tuple_key that carries neither an object id nor a user:
-        #   "the 'tuple_key' field was provided but the object type field is required and both the
-        #    object id and user cannot be empty"  (HTTP 400, measured live 2026-08-04)
-        # A bare-type filter (`obj="project:"`) is exactly that shape. The double used to accept it,
-        # which is how four categories shipped built on a call no real server would answer — every
-        # unit test green, every one of them UNAVAILABLE in production. Refuse it here so that can
-        # never happen again: the only legal reads are a full object id, a user filter, or NO filter.
-        if obj is not None and obj.endswith(":") and not user:
-            raise AssertionError(
-                f"read_tuples(obj={obj!r}) is the bare-type shape OpenFGA answers with HTTP 400 — "
-                "read the whole store (no filter) and bucket by object type instead"
-            )
-        prefix = obj or ""
-        page = [
-            ClientTuple(user=user, relation=relation, object=name)
-            for name, pairs in sorted(self.tuples.items())
-            for user, relation in pairs
-            if name.startswith(prefix)
-        ]
-        return page, ("more" if self.endless else None)
-
-    async def write_tuples(self, *_a: object, **_kw: object) -> None:
-        raise AssertionError("the reconciler wrote FGA tuples — it is report-only")
-
-    async def delete_tuples(self, *_a: object, **_kw: object) -> None:
-        raise AssertionError("the reconciler deleted FGA tuples — it is report-only")
-
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(fga_module, "read_tuples", self.read_tuples)
-        monkeypatch.setattr(fga_module, "write_tuples", self.write_tuples)
-        monkeypatch.setattr(fga_module, "delete_tuples", self.delete_tuples)
+        counted = fga_module.GrantCensus(truncated="the tuple read hit its page ceiling with a cursor outstanding" if self.endless else None)
+        for name, pairs in sorted(self.tuples.items()):
+            kind, _, key = name.partition(":")
+            for _user, relation in pairs:
+                if relation not in fga_module.BOOKKEEPING_RELATIONS:
+                    bucket = counted.counts_by_type.setdefault(kind, {})
+                    bucket[key] = bucket.get(key, 0) + 1
+        return counted
 
 
 class _FakeS3:
@@ -150,12 +125,10 @@ class _Estate:
         )
         wh_svc.bind_namespace(self.control_root, StorageOptions(), "team_ns", "wh-a", self.warehouse_root)
         self.namespace_dir(tmp_path, "team_ns")
-        self.fga = _FakeFga(
+        self.fga = _FakeGrants(
             {
                 "project:acme": [("user:alice", "admin")],
                 "warehouse:wh-a": [("user:alice", "owner"), ("project:acme", "project")],
-                # The platform's default warehouse: real tuples, no registry record, BY DESIGN.
-                mod.DEFAULT_FGA_WAREHOUSE_OBJECT: [("user:alice", "owner")],
             }
         )
         self.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a"])
@@ -183,11 +156,10 @@ class _Estate:
         ns.create_table(CreateTableRequest(id=[name]), sink.getvalue())
 
     def run(self, monkeypatch: pytest.MonkeyPatch, *, warehouses_enabled: bool = True) -> mod.ReconcileReport:
-        self.fga.install(monkeypatch)
         return asyncio.run(
             mod.reconcile(
                 _settings(),
-                cast(Any, object()),
+                self.fga.census,
                 warehouses_enabled=warehouses_enabled,
                 control_root=self.control_root,
                 namespace_root=self.namespace_root,
@@ -221,15 +193,14 @@ def test_a_fully_consistent_estate_reports_no_drift(tmp_path: Path, monkeypatch:
 # --------------------------------------------------------------------------- #
 
 
-def test_ghost_warehouses_fires_but_never_on_the_estate_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The root object (`Settings.fga_root_object`) holds real tuples and has no registry record BY
-    DESIGN — reporting it every run would train the reader to skip the category. A real ghost still fires."""
+def test_ghost_warehouses_fires_on_a_warehouse_no_record_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A warehouse holding grants that no registry record names is a ghost. The deployment's own default warehouse and
+    the estate root hold grants and no record BY DESIGN, and the catalog's census counts without them."""
     estate = _Estate(tmp_path)
-    report = estate.run(monkeypatch)
-    assert report.ghost_warehouses == []  # the root object alone is NOT drift
-
     estate.fga.tuples["warehouse:wh-vanished"] = [("user:alice", "owner")]
+
     report = estate.run(monkeypatch)
+
     assert [g.fga_object for g in report.ghost_warehouses] == ["warehouse:wh-vanished"]
 
 
@@ -348,7 +319,7 @@ def test_categories_over_the_same_two_sources_report_the_same_reason() -> None:
     sources.tuples_error = "openfga: ServiceUnavailableError"
     sources.project_records_error = "registry: PermissionError"
 
-    report = mod.build_report(sources, warehouses_enabled=False, platform_buckets=set(), fga_root_object="warehouse:root")
+    report = mod.build_report(sources, warehouses_enabled=False, platform_buckets=set())
 
     reasons = {u.category: u.reason for u in report.unavailable if u.category in _TUPLES_AND_PROJECTS}
     assert set(reasons) == _TUPLES_AND_PROJECTS, f"a category over these two sources went missing: {reasons}"
@@ -360,7 +331,7 @@ def test_a_single_failing_source_is_still_the_reason_every_time() -> None:
     sources = mod.Sources()
     sources.project_records_error = "registry: PermissionError"
 
-    report = mod.build_report(sources, warehouses_enabled=False, platform_buckets=set(), fga_root_object="warehouse:root")
+    report = mod.build_report(sources, warehouses_enabled=False, platform_buckets=set())
 
     reasons = {u.reason for u in report.unavailable if u.category in _TUPLES_AND_PROJECTS}
     assert reasons == {"registry: PermissionError"}
@@ -413,12 +384,10 @@ def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_a_missing_control_root_is_not_a_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A control root with nothing on it yet (a fresh estate) lists as empty, not as an error — the
     reconciler must be safe to schedule from day one."""
-    fga = _FakeFga()
-    fga.install(monkeypatch)
     report = asyncio.run(
         mod.reconcile(
             _settings(),
-            cast(Any, object()),
+            _FakeGrants().census,
             warehouses_enabled=True,
             control_root=f"file://{tmp_path / 'nothing-here'}",
             namespace_root=f"file://{tmp_path / 'nothing-here'}",
@@ -429,11 +398,10 @@ def test_a_missing_control_root_is_not_a_crash(tmp_path: Path, monkeypatch: pyte
     assert report.unavailable == []
 
 
-def test_an_unwired_openfga_client_is_reported_not_assumed_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`client=None` is a scan that cannot run, NOT an estate with no ghosts. Silently empty authz
+def test_an_unwired_grant_census_is_reported_not_assumed_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`grants=None` is a scan that cannot run, NOT an estate with no ghosts. Silently empty authz
     categories would let a report certify an estate it never looked at."""
     estate = _Estate(tmp_path)
-    estate.fga.install(monkeypatch)
     report = asyncio.run(
         mod.reconcile(
             _settings(),
@@ -445,7 +413,7 @@ def test_an_unwired_openfga_client_is_reported_not_assumed_clean(tmp_path: Path,
         )
     )
     assert {u.category for u in report.unavailable} == _FGA_DERIVED_CATEGORIES
-    assert all("no OpenFGA client" in u.reason for u in report.unavailable)
+    assert all("no grant census" in u.reason for u in report.unavailable)
 
 
 # --------------------------------------------------------------------------- #
@@ -684,7 +652,7 @@ def test_load_sources_reads_the_independent_stores_concurrently(monkeypatch: pyt
 
     asyncio.run(
         mod.load_sources(
-            client=cast(Any, object()),
+            grants=_FakeGrants().census,
             control_root="file:///control",
             namespace_root="file:///data",
             storage_options=cast(Any, {}),

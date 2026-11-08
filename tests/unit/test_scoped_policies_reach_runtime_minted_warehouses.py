@@ -1,37 +1,29 @@
-"""The scoped RustFS users reach the buckets their consumers open, and nothing else.
+"""Maintenance's own identity reads every bucket it sweeps and writes nothing but its own records ([[XC-084]]).
 
-THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, which is why neither policy enumerates one.
-`catalog.warehouses.enabled` (on by default) provisions one physically separate bucket per warehouse at
-`POST /management/v1/warehouses`, with an operator-chosen name, so no value in the chart can name it. The sweep's
-credential opens those buckets: `sweep.py::_buckets_to_sweep` extends its configured list from the warehouse
-registry itself.
+THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so the read grant enumerates none. `catalog.warehouses.enabled` (on by
+default) provisions one physically separate bucket per warehouse at `POST /management/v1/warehouses`, with an
+operator-chosen name, and the sweep's discovery and the purge's protection pre-pass open those buckets
+(`sweep.py::_buckets_to_sweep` extends its configured list from the warehouse registry itself). Measured on the live
+estate 2026-09-04/05: a policy that reached warehouses through a `*-wh` name pattern refused `acme-bucket`.
 
-So the policies ALLOW the data planes on every bucket and DENY the control plane precisely — every
-`*_PREFIX` under a control root plus the `__manifest` namespace index — and the control bucket keeps
-its tight listing through `StringNotLike` on `s3:prefix` rather than through its name.
+EVERY WRITE IS A VEND'S, owner, 2026-11-03: a compromised maintenance pod must not be able to defeat an erasure or a hold.
+So its own identity writes only the records no table owns, on the control root: its due records, its cadence stamps and
+its lineage outbox. A table's bytes, refs and records are written under the catalog's maintain-tier vend for that table,
+and the trash under the reclaim session the catalog vends for one record (`catalog.core.vending`).
 
-MEASURED on the live estate 2026-09-04/05, which is what these tests encode. A cascade re-run for
-project `acme` submitted a Ray job that died `AccessDenied` on
-``GET /acme-bucket?list-type=2&prefix=medallion/_versions/``, because the policy reached warehouses
-only through a `*-wh` name pattern and `acme-bucket` does not match it. `StringNotLike` was probed
-against this estate's RustFS (1.0.0-beta.8) before the policy was written to depend on it: with a
-`Deny s3:ListBucket` conditioned `StringNotLike s3:prefix medallion*`, listing `lance-catalog/medallion/`
-was ALLOWED while `lance-catalog/` and `lance-catalog/_projects/` were DENIED and other buckets listed
-freely. After the fix, from the Ray credential itself, `PUT` to all nine control prefixes answered
-DENIED and the three warehouse data paths answered ALLOWED.
-
-The evaluator below is IAM-shaped (explicit Deny wins, otherwise an Allow must match) so each test
-states the OUTCOME a credential gets. A string grep cannot: it can only check the buckets the chart
-names, and a registry-discovered one is by definition not among them.
+The evaluator below is IAM-shaped (explicit Deny wins, otherwise an Allow must match) so each test states the OUTCOME a
+credential gets. A string grep cannot: it can only check the buckets the chart names, and a registry-discovered one is
+by definition not among them.
 """
 
 from __future__ import annotations
 
 import json
-import textwrap
 from fnmatch import fnmatchcase
 
 import pytest
+import yaml
+from chart_yaml import FAST_LOADER
 
 from tests.unit.test_invariants import _helm_template
 
@@ -45,25 +37,20 @@ CONTROL_BUCKET = "lance-catalog"
 _BUCKET_ACTIONS = frozenset({"s3:ListBucket", "s3:GetBucketLocation", "s3:ListAllMyBuckets"})
 
 
-def _render() -> str:
-    return _helm_template(
-        "objectStore.maintenanceAccessKey=rask-maintenance",
-    )
-
-
 def _policy(rendered: str, name: str) -> dict:
-    """The policy document the Job writes for `name`, parsed.
+    """The policy `<release>-object-store-identities` declares for the `name` identity, parsed.
 
-    Read out of the heredoc rather than out of a values file on purpose: what governs the credential
-    is the JSON the hook hands the store's `add-canned-policy` call, and a template that renders valid YAML around
-    invalid JSON is exactly the failure this parse catches.
+    Read out of the render rather than out of a values file on purpose: what governs the credential is the JSON the hook
+    hands the store's `add-canned-policy` call, and a template that renders valid YAML around invalid JSON is exactly
+    the failure this parse catches.
     """
-    job = rendered[rendered.index("component: object-store-scoped-users") :]
-    start = job.index(f"cat >/tmp/policies/rask-{name}.json <<'POLICY'")
-    body = job[start:]
-    body = body[body.index("\n") + 1 :]
-    body = body[: body.index("POLICY\n")]
-    return json.loads(textwrap.dedent(body))
+    [identities] = [
+        doc["data"]
+        for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
+        if doc and doc.get("kind") == "ConfigMap" and doc["metadata"]["name"].endswith("-object-store-identities")
+    ]
+    [document] = [body for key, body in identities.items() if key.endswith(f"-sa-{name}.json")]
+    return json.loads(document)
 
 
 def _matches(pattern: str, value: str) -> bool:
@@ -117,22 +104,27 @@ def allowed(policy: dict, *, action: str, bucket: str, key: str = "", prefix: st
 
 @pytest.fixture(scope="module")
 def maintenance() -> dict:
-    return _policy(_render(), "maintenance")
+    return _policy(_helm_template(), "maintenance")
 
 
 # ---- the maintenance sweep ----------------------------------------------------------------------
 
 
-def test_the_sweep_still_reads_the_records_it_must_read(maintenance: dict) -> None:
-    """READ, not write. It resolves the buckets to sweep out of `_warehouses/` and the per-object
-    protection verdict out of `_protection/`; denying the read would blind the pre-pass rather than
-    constrain it."""
-    assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key="_warehouses/acme-bucket.json")
-    assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key="_protection/table.json")
-    assert allowed(maintenance, action="s3:ListBucket", bucket=CONTROL_BUCKET, prefix="_warehouses/")
-    # [[LH-279]] The base records: read by the pre-pass, removed by the purge with the table it destroys, and
-    # never written — a maintainer that could write one could sanction any base it liked.
-    record = "_bases/table-0123456789abcdef01234567.json"
-    assert allowed(maintenance, action="s3:GetObject", bucket=CONTROL_BUCKET, key=record)
-    assert allowed(maintenance, action="s3:DeleteObject", bucket=CONTROL_BUCKET, key=record)
-    assert not allowed(maintenance, action="s3:PutObject", bucket=CONTROL_BUCKET, key=record)
+@pytest.mark.parametrize(
+    ("action", "bucket", "key", "granted"),
+    [
+        pytest.param("s3:GetObject", RUNTIME_BUCKET, "medallion/_versions/1.manifest", True, id="reads-a-runtime-warehouse"),
+        pytest.param("s3:GetObject", CONTROL_BUCKET, "_protection/table-x.json", True, id="reads-the-records-it-judges-by"),
+        pytest.param("s3:PutObject", CONTROL_BUCKET, "_maintenance_due/table-x.json", True, id="writes-its-due-records"),
+        pytest.param("s3:PutObject", CONTROL_BUCKET, "_policies/state/u/cadence-x.json", True, id="writes-its-cadence-stamps"),
+        pytest.param("s3:DeleteObject", CONTROL_BUCKET, "_lineage_outbox/run.json", True, id="drains-its-own-outbox"),
+        pytest.param("s3:DeleteObject", RUNTIME_BUCKET, "medallion/_versions/1.manifest", False, id="deletes-no-version"),
+        pytest.param("s3:PutObject", RUNTIME_BUCKET, "medallion/_refs/tags/t.json", False, id="writes-no-ref"),
+        pytest.param("s3:PutObject", CONTROL_BUCKET, "_policies/table-x.json", False, id="writes-no-policy"),
+        pytest.param("s3:DeleteObject", CONTROL_BUCKET, "_erasure_obligations/x.json", False, id="ends-no-erasure"),
+        pytest.param("s3:DeleteObject", CONTROL_BUCKET, "_trash/table-x.json", False, id="ends-no-trash-record"),
+        pytest.param("s3:PutObject", CONTROL_BUCKET, "_history_fences/table-x.json", False, id="holds-no-fence"),
+    ],
+)
+def test_maintenance_reads_the_estate_and_writes_only_its_own_records(maintenance: dict, action: str, bucket: str, key: str, granted: bool) -> None:
+    assert allowed(maintenance, action=action, bucket=bucket, key=key) is granted

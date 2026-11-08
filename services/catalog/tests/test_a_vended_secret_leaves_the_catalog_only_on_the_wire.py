@@ -109,8 +109,8 @@ def doors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClien
     monkeypatch.setattr(credentials, "dataset_facts", lambda location, storage_options, branch="": VendFacts(read_version=1))
     settings = Settings(
         LANCE_S3_ENDPOINT="http://rustfs:9000",
-        LANCE_S3_ACCESS_KEY_ID="ROOTKEY",
-        LANCE_S3_SECRET_ACCESS_KEY="ROOTSECRET",
+        s3_access_key_id="ROOTKEY",
+        s3_secret_access_key="ROOTSECRET",
         LANCE_CONTROL_ROOT=str(tmp_path),
     )
     location_claims.take(
@@ -122,17 +122,19 @@ def doors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClien
         yield client
 
 
-#: The vend each door answered this rig with at 4c407a538, where its bodies were recorded byte for byte (2026-10-30): the
-#: https store's address with no plaintext permit, the vended key pair and session, and none of the catalog's own
-#: connection. Compared as JSON values, since an object's key order is nothing a client reads (RFC 8259 §4).
+#: The vend each door answers this rig with: the https store's address with no plaintext permit, each in the spelling a
+#: conflicting environment cannot override ([[LH-238]]), the vended key pair and session pinned to the static provider
+#: ([[LH-219]]), and none of the catalog's own connection. Compared as JSON values, since an object's key order is nothing
+#: a client reads (RFC 8259 §4).
 _OPTIONS = {
-    "endpoint": "https://s3.example.com",
+    "aws_endpoint": "https://s3.example.com",
     "aws_access_key_id": "AK",
     "aws_secret_access_key": "vended-secret-wJalrXUtnFEMI",
-    "region": "eu-north-1",
+    "aws_region": "eu-north-1",
     "allow_http": "false",
-    "virtual_hosted_style_request": "false",
+    "aws_virtual_hosted_style_request": "false",
     "aws_session_token": "vended-session-token-FwoGZXIvYXdz",
+    "aws_provider_scheme": "token",
 }
 
 

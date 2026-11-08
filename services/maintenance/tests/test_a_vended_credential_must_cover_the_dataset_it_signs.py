@@ -14,7 +14,7 @@ id at a THIRD location, `s3://lance-catalog/medallion/bronze`. The sweep sends t
 about the dataset the caller is holding, so the 200 is correct and the crossing is invisible to it.
 
 THE DISCRIMINATOR IS ALREADY IN THE VEND RESPONSE AND WAS BEING DISCARDED. `CredentialResponse`
-carries `location` — the catalog's own answer for where that table lives — and `_vend` read only
+carries `location` — the catalog's own answer for where that table lives — and the client read only
 `credentials.storage_options`. So the check costs no extra call: if the catalog's location does not
 cover the URI being maintained, the two disagree and the unit stops.
 
@@ -26,7 +26,11 @@ would refuse every one of them — a guard that fires on the healthy majority an
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
+import httpx
 import pytest
+import respx
 from pydantic import SecretStr
 
 from lakehouse.governed.store_credential import S3KeyPair
@@ -35,19 +39,28 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 
 
-AMBIENT = StorageOptions.from_flat({"aws_access_key_id": "rustfsadmin", "aws_secret_access_key": "rustfsadmin"})
+pytestmark = pytest.mark.usefixtures("catalog_identity_token")
+
+CATALOG = "http://catalog:2333"
 SCOPED = StorageOptions(key_pair=S3KeyPair(access_key_id="SCOPED", secret_access_key=SecretStr("scoped-secret")))
 
 
 def _settings() -> MaintenanceSettings:
-    return MaintenanceSettings(MAINTENANCE_S3_BUCKET="lance-catalog", MAINTENANCE_CATALOG_URL="http://catalog:2333")
+    return MaintenanceSettings(MAINTENANCE_S3_BUCKET="lance-catalog", MAINTENANCE_CATALOG_URL=CATALOG)
 
 
-def _vends(location: str | None) -> object:
-    def _vend(table_id: str, settings: MaintenanceSettings) -> credentials.Vended:
-        return credentials.Vended(storage_options=SCOPED, location=location)
+@pytest.fixture
+def door() -> Iterator[respx.MockRouter]:
+    """The catalog's side of the wire: a request no route matches fails the test."""
+    with respx.mock() as router:
+        yield router
 
-    return _vend
+
+def _vends(door: respx.MockRouter, table_id: str, location: str | None) -> None:
+    """The maintain-tier door answering ``table_id``'s vend with the scoped pair, at ``location``."""
+    flat = {"aws_access_key_id": "SCOPED", "aws_secret_access_key": "scoped-secret"}
+    answer = {"mode": "direct", "credentials": {"storage_options": flat}, **({"location": location} if location is not None else {})}
+    door.post(f"{CATALOG}/management/v1/table/{table_id}/credentials", params={"tier": "maintain"}).mock(return_value=httpx.Response(200, json=answer))
 
 
 @pytest.mark.parametrize(
@@ -62,15 +75,15 @@ def _vends(location: str | None) -> object:
         ),
     ],
 )
-def test_a_dataset_under_the_table_root_is_covered(monkeypatch: pytest.MonkeyPatch, answered: str, held: str) -> None:
-    monkeypatch.setattr(credentials, "_vend", _vends(answered))
+def test_a_dataset_under_the_table_root_is_covered(door: respx.MockRouter, answered: str, held: str) -> None:
+    _vends(door, "tracka$rd2_28877454", answered)
 
-    options = credentials.write_options_for(held, _settings(), table_id="tracka$rd2_28877454", fallback=AMBIENT)
+    options = credentials.write_options_for(held, _settings(), table_id="tracka$rd2_28877454")
 
     assert options == SCOPED, f"{held} was refused a credential vended for its own table root {answered}"
 
 
-def test_a_vend_that_names_no_location_proceeds_and_says_so(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_a_vend_that_names_no_location_proceeds_and_says_so(door: respx.MockRouter, caplog: pytest.LogCaptureFixture) -> None:
     """A missing location means the catalog did not tell us, NOT that there is a crossing.
 
     Refusing on absence would stop maintaining the whole estate the day the response shape changed —
@@ -78,10 +91,10 @@ def test_a_vend_that_names_no_location_proceeds_and_says_so(monkeypatch: pytest.
     silently stops maintenance. So it proceeds, loudly, and this test is what makes that a decision
     rather than an oversight.
     """
-    monkeypatch.setattr(credentials, "_vend", _vends(None))
+    _vends(door, "bronze$events", None)
 
     with caplog.at_level("WARNING"):
-        options = credentials.write_options_for("s3://bind86-wh/medallion/silver", _settings(), table_id="bronze$events", fallback=AMBIENT)
+        options = credentials.write_options_for("s3://bind86-wh/medallion/silver", _settings(), table_id="bronze$events")
 
     assert options == SCOPED
     assert any("location" in record.getMessage() for record in caplog.records), "an unverifiable vend passed silently"

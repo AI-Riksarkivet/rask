@@ -21,7 +21,7 @@ from lance import blob_array, blob_field
 from pydantic import BaseModel, SecretStr
 
 from catalog.api.dependencies import get_vendor
-from catalog.core.vending import Tier, VendedSession
+from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_FORMAT, AUDIT_LOGGER, AuditAction, AuditOutcome, configure_audit
 from lakehouse.governed.store_credential import S3KeyPair
@@ -187,7 +187,15 @@ class _StsVendor:
     """The store's STS exchange, the one collaborator a ``dir`` estate cannot run: it issues a credential for every vend."""
 
     def vend(
-        self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+        self,
+        *,
+        table_location: str,
+        tier: Tier,
+        session_name: str,
+        bases: Sequence[str] = (),
+        data_directories: Sequence[str] = (),
+        branch: str = "",
+        records: TableRecords | None = None,
     ) -> VendedSession | None:
         return VendedSession(
             key_pair=S3KeyPair(access_key_id=f"AK-{tier}", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1

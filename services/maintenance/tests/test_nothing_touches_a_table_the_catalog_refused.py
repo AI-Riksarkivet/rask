@@ -84,7 +84,8 @@ def _indexed(tmp_path: Path) -> str:
 
 def _vended_at(location: str | None) -> VendAnswer:
     """A direct write credential the catalog says covers `location`; ``None`` covers the dataset itself."""
-    return lambda uri: httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": {}}, "location": location or uri})
+    vended = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
+    return lambda uri: httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}, "location": location or uri})
 
 
 def _refused(status: int, body: dict[str, Any]) -> VendAnswer:

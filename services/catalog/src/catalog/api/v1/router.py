@@ -17,6 +17,7 @@ from catalog.api.v1.endpoints import (
     erasure,
     events,
     gates,
+    grant_reconcile,
     indices,
     maintenance,
     me,
@@ -29,6 +30,7 @@ from catalog.api.v1.endpoints import (
     tables,
     tags,
     transactions,
+    trash_reclaim,
     versions,
     views,
     warehouses,
@@ -66,6 +68,8 @@ for _module in (
     roles,
     publication,
     gates,
+    grant_reconcile,
+    trash_reclaim,
 ):
     api_router.include_router(_module.router)
     # A module may ALSO carry a `management_router`, mounted at `/management/v1/...`. That is the seam

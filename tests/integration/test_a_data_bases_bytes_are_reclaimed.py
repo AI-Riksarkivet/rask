@@ -56,6 +56,7 @@ from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import PlanContext
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors, described_by, maintain_tier_door
 
 
 def _ids(start: int, stop: int) -> pa.Table:
@@ -131,7 +132,8 @@ class _Estate:
             table_ids=TableIds(by_location={normalise(location): table}, namespace_uuids={"db": str(described.json()["properties"][UUID_PROPERTY])}),
             context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
         )
-        return sweep.maintain_dataset(location, sweep=tick, settings=self.maintenance(min_versions_to_expire=1))
+        with maintain_tier_door(described_by(self.client)):
+            return sweep.maintain_dataset(location, sweep=tick, settings=self.maintenance(min_versions_to_expire=1, catalog_url=CATALOG_URL))
 
 
 @pytest.fixture
@@ -226,15 +228,21 @@ def test_the_purge_deletes_a_trashed_tables_data_directory_with_its_root(estate:
         location_claims.release(claims, directory, table)
     markers = {key for key in estate.keys(estate.bucket, "") if key.endswith("/")}
 
-    out = asyncio.run(
-        purge_expired_trash(estate.maintenance(trash_purge_enabled=True), report=_clean_report(), control_root=estate.root, data_roots={estate.root})
-    )
+    with catalog_doors(estate.client):
+        out = asyncio.run(
+            purge_expired_trash(
+                estate.maintenance(trash_purge_enabled=True, catalog_url=CATALOG_URL),
+                report=_clean_report(),
+                control_root=estate.root,
+                data_roots={estate.root},
+            )
+        )
 
     assert out.refused == [], out.refused
     assert [(purged.id, purged.files_deleted, purged.bytes_deleted) for purged in out.purged] == [(table, len(held), sum(held.values()))]
     assert (estate.keys(estate.bucket, root_prefix), estate.files(directory)) == ({}, {}), "the purge left bytes of the table it reclaimed"
-    # Maintenance may not write under `_bases/` (the chart's ForgetABaseRecordNeverWriteOne), and a store that matches the
-    # Deny as AWS does refuses the marker a record delete would write, so the purge writes none ([[LH-535]]).
+    # The reclaim session gets and deletes the base record and puts nothing under `_bases/`, so a store that matches the
+    # session's grant as AWS does refuses the marker a record delete would write, and the purge writes none ([[LH-535]]).
     assert {key for key in estate.keys(estate.bucket, "") if key.endswith("/")} <= markers, "the purge wrote a directory marker"
     assert base_registry.read_base_record(estate.registry, location) is None, "the base record outlived the bytes it named"
     assert location_claims.holder(claims, directory) is None
@@ -251,9 +259,15 @@ def test_the_purge_leaves_a_directory_no_claim_names_its_table_on_and_still_purg
     on_the_base = estate.keys(estate.second, "data/")
     _expired(estate, table)
 
-    out = asyncio.run(
-        purge_expired_trash(estate.maintenance(trash_purge_enabled=True), report=_clean_report(), control_root=estate.root, data_roots={estate.root})
-    )
+    with catalog_doors(estate.client):
+        out = asyncio.run(
+            purge_expired_trash(
+                estate.maintenance(trash_purge_enabled=True, catalog_url=CATALOG_URL),
+                report=_clean_report(),
+                control_root=estate.root,
+                data_roots={estate.root},
+            )
+        )
 
     assert (out.refused, [purged.id for purged in out.purged]) == ([], [table]), out
     assert (estate.keys(estate.bucket, root_prefix), estate.keys(estate.second, "data/")) == ({}, on_the_base), "the purge reached the shared base"

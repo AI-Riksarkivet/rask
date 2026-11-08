@@ -112,7 +112,7 @@ def seed() -> S3Client:
 
 def scoped_user_and_read_session() -> bool:
     """Checks 1 and 2; False when the scoped user's AssumeRole is refused, which leaves nothing further to measure."""
-    # 1. A scoped user, the way rask's scoped-users hook makes one: a canned policy over the warehouse buckets, attached.
+    # 1. A scoped user: a canned policy over the warehouse buckets, attached.
     catalog_policy: Policy = {
         "Version": "2012-10-17",
         "Statement": [

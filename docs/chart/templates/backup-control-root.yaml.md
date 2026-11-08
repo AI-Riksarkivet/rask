@@ -15,14 +15,17 @@ The tool is baked into the catalog image (one file, not all of `scripts/`) so th
 service share one implementation — a shell reimplementation with an S3 CLI would be a second one to keep
 in step, and a ConfigMap copy would be a third place the same code lives.
 
-THE CREDENTIAL ARRIVES AS A FILE, never on the environment. The estate admits three secret paths and
-env is not among them; this pod carries no Dapr sidecar, so the one that fits is ESO writing a Secret
-the pod MOUNTS: `credentials.json` of `<release>-backup-s3`, the backups' scoped identity
-(`objectStore.backupAccessKey`), never the store's root, which on RustFS signs every STS session token (ADR 0168).
-The `rask-backup` policy (object-store-scoped-users.yaml) lets it read the control-root record prefixes it copies
-and write and prune under `_backups/` and `backups.controlRoot.dest`, and nothing else. `--credentials-file` refuses to fall back to the env chain when that file is
-unreadable, so a credential that moved fails the job loudly instead of silently signing as whatever
-the pod's own role happens to be.
+THE RUN HOLDS NO KEY ([[XC-084]], ADR 0170). The job runs as its own ServiceAccount,
+`<release>-sa-backup-control-root` (`lance.saComponents` renders it while `backups.controlRoot` is on), projects a token
+for `objectStore.identity.audience`, and exchanges it once per run at STS `AssumeRoleWithWebIdentity` for the session
+it signs the whole run with (`lakehouse.store_session.JobStoreIdentity`, `job_client`; env `RASK_S3_*` from
+`lance.objectStoreSessionEnv`, role `objectStore.identity.roleArns.backup-control-root`). The token file, the STS
+endpoint and the role are required, so a run missing one fails at its start rather than signing with whatever boto3's
+default chain finds, which on a cloud node is the node's own role. The session's reach is the canned policy written
+under the account's name (`lance.objectStorePolicy`, `<release>-object-store-identities`): read the control-root record
+prefixes it copies (`_projects`, `_warehouses`, `_trash`, `_protection`, `_policies`, `_gates`, `_bases`), and write and
+prune under `backups.controlRoot.dest` (default `<control bucket>/_backups/control`), and nothing else. It shares no
+account with the pg dump, so neither can write the other's backups.
 
 The component label is load-bearing under the prod default-deny NetworkPolicy, exactly as
 `backup-pg.yaml` records: an unlabelled pod matches no allow rule and its writes are dropped in

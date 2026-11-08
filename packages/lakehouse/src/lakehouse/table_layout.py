@@ -1,4 +1,5 @@
-"""The table objects a writer-tier credential may write, and the one it may never write ([[LH-202]], [[LH-229]], [[LH-490]]).
+"""The table objects a writer-tier credential may write, the one it may never write, and the refs no vended credential
+writes ([[LH-202]], [[LH-229]], [[LH-490]], [[XC-084]]).
 
 `lance_docs/lance/format/table/layout.md` fixes a dataset's layout: data files under ``data/``, manifests under
 ``_versions/``, transaction files under ``_transactions/``, deletion files under ``_deletions/``, indices
@@ -29,7 +30,7 @@ left the table unopenable, "multiple manifest naming schemes"), and ``tree/*`` m
 name (``rust/lance-table/src/io/commit.rs`` at v13.0.0), so the Deny covers every key whose name ends in
 ``.manifest``. ``_refs/`` and main's version hint are granted nothing.
 
-The catalog's vending door reads this module, so what a writer-tier credential may write is named in one place.
+The catalog's vending door reads this module, so what a vended credential may write is named in one place.
 """
 
 from __future__ import annotations
@@ -50,3 +51,9 @@ BRANCH_STAGING_GLOB: Final = f"{BRANCH_CONTAINER}/*"
 
 #: A final manifest at any depth, in both naming schemes, which only the catalog writes: putting one commits a version.
 FINAL_MANIFEST_GLOB: Final = "*.manifest"
+
+#: Every tag and branch pointer, ``_refs/tags/`` and ``_refs/branches/`` (``lance_docs/lance/format/table/branch_tag.md``),
+#: which no vended credential puts or deletes. A tag exempts its version from ``cleanup_old_versions`` and a branch keeps
+#: the files it references (``lance_docs/lance/guide/tags_and_branches.md``), so a credential that could write one could
+#: pin a version an erasure removes, and one that could delete one could unpin a version a hold keeps.
+REFS_GLOB: Final = "_refs/*"

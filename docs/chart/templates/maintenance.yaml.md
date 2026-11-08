@@ -37,21 +37,21 @@ verify the Dapr-stamped header on the cron route (forged-sweep guard)
 
 ## `- { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root)...`
 
-THE REWRITE IS SIGNED PER TABLE, not by the root key. A compaction is a WRITE, so this
-service was performing writes across every bucket in the estate with one long-lived
-credential — the posture the vending door exists to end. With this set, each rewrite is
-signed by a credential scoped to that one table prefix and expiring in 900s.
+THE REWRITE IS SIGNED PER TABLE ([[LH-219]]). A version expiry deletes files, so each one is signed by a `maintain`-tier
+credential the catalog vends for that one table prefix, expiring in 900 s; maintenance's own session never signs it
+(`maintenance.services.credentials`). The catalog refuses that tier 409 code 19 for a table whose maintenance policy
+keeps its whole history (`cleanup_enabled` false), and maintenance's probe asks no vend for such a table. The trash
+is the catalog's to end ([[XC-084]]): the purge asks it to release a record past its deadline
+(`POST /management/v1/trash/{kind}/{uuid}/release`), for a session that deletes that one table's bytes
+(`POST .../credentials`), and to end the record once its place holds nothing (`DELETE /management/v1/trash/{kind}/{uuid}`),
+which the tombstone sweep asks too.
 
-GATED, and off by default, because it needs BOTH halves to be true: the catalog must be
-reachable AND the maintenance subject must hold `can_write_data` on the tables it
-maintains (seeded by the bootstrap-admin hook — grep `maintenanceSubject`). Where either
-is missing the service degrades to the ambient credential and says so per dataset, which
-is correct but silent about WHY, so the flag makes the intent explicit rather than
-leaving a permanently-degraded deployment looking configured.
+GATED by `maintenance.vendWriteCredentials` (on by default). Off, the chart wires no door, the bootstrap-admin hook
+takes maintenance's maintainer grant back, and every rewrite is refused (`VendingNotDirect`): reclamation pauses while
+discovery, the due list and the drift report run, since maintenance's own session writes only its own records.
 
-What deliberately STAYS on the root key: discovery and the whole-estate protection
-pre-pass, which must open every manifest in every bucket and cannot be expressed by any
-per-table credential. Those are reads.
+What its own session signs: discovery and the whole-estate protection pre-pass, which must open every manifest in every
+bucket and cannot be expressed by any per-table credential. Those are reads.
 
 ## `- { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth...`
 
@@ -122,31 +122,28 @@ and this pass is what MAKES the report clean, so it has no such gate in front of
 
 ## `- { name: MAINTENANCE_TUPLE_REBUILD_ENABLED, value: {{ hasKey .Values.maintenance "tupleRebuild" | ternary ...`
 
-[[LH-061]]. The ADDITIVE tuple rebuild: re-assert authorization tuples the
-control-plane registries still justify, for objects the drift report found
-ungoverned. It WRITES AND NEVER DELETES, so it cannot widen access beyond what the
-control plane already recorded — which is what makes it safe against a live store.
-Off by default because it writes to the AUTHORIZATION store, and its dry run
-defaults TRUE so turning it on to SEE what it would grant does not grant it.
-The bound is real: project records carry `created_by` and warehouse records do not,
-so a tenant's admin seed and its warehouses' tenancy pointers come back, and every
-grant made after creation does not.
+[[LH-061]]. The ADDITIVE tuple rebuild: for each warehouse the drift report found ungoverned, maintenance asks the
+catalog to write the tenancy pointer the warehouse's registry record names (`POST /management/v1/grants/tenancy/rebuild`),
+and the catalog derives the edge from its own read of the record ([[XC-084]]: maintenance holds no OpenFGA credential).
+It writes and never deletes, and a structural edge grants nothing on its own, so it cannot widen access. A project
+holding no tuples is reported, not re-granted: its record's `created_by` names who created the tenant, not who may
+administer it now. Off by default because it writes to the AUTHORIZATION store, and its dry run defaults TRUE so turning
+it on to SEE what it would write does not write it.
 
 ## `- { name: MAINTENANCE_DRIFT_REPAIR_ENABLED, value: {{ hasKey .Values.maintenance "driftRepair" | ternary .V...`
 
-[[LH-061]]'s REPAIR half — revoking tuples whose OBJECT no longer exists (the ghost
-categories). Rendered unconditionally beside the rebuild, and DRY-RUN defaults TRUE
-here while the trash purge's defaults false: this one writes to the authorization
-store, where a wrong revoke is felt by a person holding a grant rather than by a
-reclaimer, so seeing what it would do must never be the same act as doing it.
+[[LH-061]]'s REPAIR half: maintenance asks the catalog to revoke the grants of each object the drift report found no
+registry naming (`POST /management/v1/grants/ghosts/revoke`), and the catalog judges each one again on its own reads,
+refusing one a project or warehouse record, a held location claim or a trash record names. Rendered unconditionally
+beside the rebuild, and DRY-RUN defaults TRUE here while the trash purge's defaults false: a wrong revoke is felt by a
+person holding a grant rather than by a reclaimer, so seeing what it would do must never be the same act as doing it.
 
 ## `- { name: MAINTENANCE_TOMBSTONE_SWEEP_ENABLED, value: {{ hasKey .Values.maintenance "tombstoneSweep" | tern...`
 
-[[LH-061]]'s STORAGE tier — removing a trash record once the bytes it names are
-PROVEN gone. It deletes no bytes: the pass probes the location and refuses anything
-that still holds objects, which is how it satisfies `repair.py`'s refusal of
-`orphaned_trash` rather than overturning it. Capped because the probe is one
-listing PER RECORD.
+[[LH-061]]'s STORAGE tier: ending a trash record once the bytes it names are gone. It deletes no bytes and writes no
+record: it asks the catalog to end each one (`DELETE /management/v1/trash/{kind}/{uuid}`), which refuses a record whose
+place or data directories still hold objects, so it satisfies `repair.py`'s refusal of `orphaned_trash` rather than
+overturning it. Capped because each end is one listing PER RECORD.
 
 ## `- { name: MAINTENANCE_ORPHAN_SCAN_ENABLED, value: {{ hasKey .Values.maintenance "orphanScan" | ternary .Val...`
 
@@ -160,45 +157,41 @@ from `kubectl describe`, and this one gates whether the purge can certify at all
 The purge announces each reclamation on the catalog's control topic, through maintenance's own
 component (dapr-component.yaml): one the sidecar is not scoped to refuses the publish SILENTLY.
 
-## `{{- $_ := required "objectStore.maintenanceAccessKey names maintenance's scoped store identity; …" .Values.objectStore.maintenanceAccessKey }}`
+## `{{- include "lance.objectStoreSessionEnv" (list $root "MAINTENANCE" "maintenance") | nindent 12 }}`
 
-THE SCOPED PAIR, BOTH HALVES, and `required`. Maintenance compacts — a write — so the store's root would
-also reach `_projects/`, `_protection/` and `_policies/`, the records that govern maintenance itself;
-it presents the scoped user `object-store-scoped-users` provisions instead, and a blank access key fails the
-render: no service presents the store's root, whose secret signs every STS session token on RustFS (ADR 0168), so
-there is no pair to fall back to. Naming BOTH halves is a measured lesson: setting one gives
-`SignatureDoesNotMatch` on every operation.
+MAINTENANCE'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-084]], ADR 0170). The pod projects a token for
+`objectStore.identity.audience` beside its `rask-catalog` one (the `lance.identityTokens` mount below), and maintenance
+exchanges it through STS `AssumeRoleWithWebIdentity` for the sessions its own reads and records sign with
+(`lakehouse.store_session`). It holds no key pair: with `MAINTENANCE_SECRETS_FROM_DAPR` on it refuses to boot without
+the token, and refuses a pair beside it (`lakehouse.store_session.require_one_store_identity`).
 
-The ACCESS KEY alone scopes the plane; the secret is derived in-cluster
-(`lance.scopedSecretFn`), so declaring the identity needs no secret anywhere.
+THE SESSION READS THE ESTATE AND WRITES ONLY ITS OWN RECORDS. Its canned policy (`lance.objectStorePolicy`, component
+`maintenance`, rendered into `<release>-object-store-identities`) allows `ListAllMyBuckets`; list, `GetBucketLocation`
+and get on every bucket and key; and put and delete only on `<control bucket>/_maintenance_due/*`,
+`<control bucket>/_policies/state/*` and `<control bucket>/_lineage_outbox/*`. Owner, 2026-11-03: a compromised
+maintenance pod must not be able to defeat an erasure or a hold. Every other write is signed by a catalog vend:
+
+- a rewrite (compaction, cleanup, index work) by the table's `maintain`-tier credential
+  (`POST /management/v1/table/{id}/credentials?tier=maintain`, [[LH-219]]), which reaches the table's prefix except its
+  `_refs/`, its history fence and its committed-file records, and which the catalog refuses for a table whose policy
+  keeps its whole history;
+- the trash purge's deletes by a reclaim session the catalog vends for one due table record
+  (`POST /management/v1/trash/{kind}/{uuid}/credentials`): list and delete over that record's place and its data
+  directories, and nothing on the control root. The record's release stamp and its end are the catalog's own writes
+  (`POST .../release`, `DELETE ...`). Every trash door asks `can_reclaim_trash`, which only the `reclaimer` estate role
+  `lance.fgaEstateRoles` declares for maintenance's ServiceAccount opens.
 
 ## `- { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }`
 
-The S3 key pair comes ONLY from the secret store, read at boot and again while the service runs
-([[XC-082]], ADR 0166); never in pod env (the audit's fix — maintenance is a real S3 consumer that
-GCs the lakehouse). Fails closed.
-
-## `- { name: MAINTENANCE_DAPR_SECRET_KEY, value: "maintenance-s3" }`
-
-Maintenance's own secret in the store, which only its Configuration allows and only its store login reads ([[XC-165]]).
-
-## `- { name: MAINTENANCE_DAPR_SECRET_S3_ID_FIELD, value: "access_key" }`
-
-The scoped identity's key id, read from the store with its secret: a rotation issues a new id, so the
-id cannot be configuration.
-
-## `- { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "secret_key" }`
-
-THE OTHER HALF OF THE PAIR, named beside the key id because a scoped key signed with any other
-secret fails `SignatureDoesNotMatch` on every operation (measured).
-`dapr_secret_s3_field` defaults to the same field, so a service run without the chart reads its own pair too.
+Maintenance's signing key comes ONLY from the secret store, read at boot and again while the service runs
+([[XC-082]], ADR 0166); never in pod env. With it on, its store identity must be the ServiceAccount token above, so no
+key pair can stand in for it. Fails closed.
 
 ## `{{- $extra := list }}`
 
-The #50 policy registry root defaults to this bucket, matching the catalog's
-LANCE_REST_ROOT (also .Values.objectStore.bucket, services.yaml). If LANCE_CONTROL_ROOT ever
-moves the catalog's registry, set MAINTENANCE_POLICY_ROOT to the same value — a wrong root
-lists cleanly as "no policies" (the sweep logs compaction_policies_loaded per tick).
+Maintenance reads the catalog's records, its policy records among them, at the catalog's own root: this bucket, as the
+catalog's `LANCE_REST_ROOT` names it (services.yaml), where maintenance's store policy grants its own writes
+(`lance.objectStorePolicy`). No value moves either, so the reads and the grant cannot point at different roots.
 
 EVERY bucket that can hold Lance data must be swept, or its tables accumulate superseded
 versions + small fragments FOREVER (audit 2026-07-14: the sweep saw exactly ONE bucket,
@@ -215,29 +208,14 @@ every tick forever, and a report whose contract is "clean certifies the estate" 
 then never be clean. Measured 2026-08-16: `rask-observability`, a platform bucket the
 estate made for GreptimeDB's object store, sat in that list.
 Sourced from `lance.maintenancePlatformBuckets`: `objectStore.buckets` (the set the
-scoped-users hook creates on the dev store) plus the multibase bases.
+provisioning hook, `object-store-provisioning.yaml`, creates on the dev store) plus the multibase bases.
 
 ## `- { name: MAINTENANCE_RECONCILE_BINDING_NAME, value: {{ .Values.maintenance.reconcileBindingName | quote }} }`
 
-The drift reconciler's inputs. It only ever READS: OpenFGA says who, the control-root
-registries say what exists, object storage holds the bytes. Every one of these mirrors a
-CATALOG setting and must match it — a divergent fga_root_object reports the estate root as
-a ghost forever, and a divergent warehouses_enabled reports every namespace as unbound.
-
-## `- { name: MAINTENANCE_POLICY_ROOT, value: {{ .Values.maintenance.policyRoot | default "" | quote }} }`
-
-The #50 POLICY registry root. Rendered nowhere until 2026-08-16, so an operator who
-followed values.yaml's "set both together" had no second key to set and moved only
-half the reads. A policy registry at the wrong root lists cleanly as EMPTY, so every
-retention override and legal-hold opt-out silently stops applying.
-
-## `{{- with .Values.auth.fgaStoreId }}`
-
-Store/model ids are PINNED, never provisioned here — the SAME auth.fgaStoreId the catalog
-reads and the bootstrap-admin Job grants into, so the store this reports on can never
-diverge from the store the catalog checks against. A maintenance job that provisioned its
-own store would read an EMPTY one and report every real tenant as a ghost; unset, the four
-authz categories report unavailable-with-a-reason, which is the honest answer.
+The drift reconciler's inputs. It only READS: the catalog's grant census says who
+(`GET /management/v1/grants/census`, which leaves out the objects the deployment keeps for itself), the control-root
+registries say what exists, object storage holds the bytes. `MAINTENANCE_WAREHOUSES_ENABLED` mirrors the catalog's
+setting and must match it: a divergent one reports every namespace as unbound.
 
 ## `args:`
 

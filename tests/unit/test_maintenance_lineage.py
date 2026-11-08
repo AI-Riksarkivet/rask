@@ -400,8 +400,8 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
     policy = ExpiryPolicy(older_than=None, retain_versions=1)
 
     results = [
-        expire_versions(ExpiryTarget(uri=named, storage_options={}, table_id="silver$plain"), policy),
-        expire_versions(ExpiryTarget(uri=unnamed, storage_options={}), policy),
+        expire_versions(ExpiryTarget(uri=named, storage_options={}, write_options={}, table_id="silver$plain"), policy),
+        expire_versions(ExpiryTarget(uri=unnamed, storage_options={}, write_options={}), policy),
     ]
     assert [(r.error, r.old_versions_removed) for r in results] == [(None, 1), (None, 1)], results
 

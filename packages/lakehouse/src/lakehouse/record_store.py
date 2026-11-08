@@ -37,30 +37,46 @@ import pyarrow.fs as pafs
 
 from lakehouse import stored_objects
 from lakehouse.objectfs import fs_and_base
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import split_s3_uri
+from lakehouse.storage_options import StorageOptions, object_client
 
 
 log = logging.getLogger(__name__)
 
 
-def record_key(prefix: str, kind: str, canonical_id: str) -> str:
-    """A collision-free record key: the id is user-shaped (contains ``$``), so hash it.
+def record_name(kind: str, canonical_id: str) -> str:
+    """The file name every registry keeps the object's record under, ``<kind>-<digest>.json``: the id is user-shaped
+    (contains ``$``), so it is hashed.
 
-    ``kind`` travels in BOTH the digest and the filename: in the digest so two kinds can share a
-    canonical id without colliding, in the filename so an operator reading the bucket can tell what a
-    record is about without decoding it.
+    ``kind`` travels in BOTH the digest and the name: in the digest so two kinds can share a canonical id without
+    colliding, in the name so an operator reading the bucket can tell what a record is about without decoding it.
     """
     digest = hashlib.sha256(f"{kind}:{canonical_id}".encode()).hexdigest()[:24]
-    return f"{prefix}/{kind}-{digest}.json"
+    return f"{kind}-{digest}.json"
+
+
+def record_key(prefix: str, kind: str, canonical_id: str) -> str:
+    """The collision-free key of the object's record under the registry ``prefix`` (:func:`record_name`)."""
+    return f"{prefix}/{record_name(kind, canonical_id)}"
 
 
 def put_record(control_root: str, storage_options: StorageOptions, key: str, record: dict[str, Any]) -> None:
-    """Write one record, creating its prefix — an overwrite, so every registry's set is idempotent."""
+    """Write one record — an overwrite, so every registry's set is idempotent.
+
+    On S3 by its key alone, through the object client: pyarrow's ``create_dir`` puts every parent of the key as a
+    directory marker (measured on pyarrow 25.0.0: ``_policies/``, ``_policies/state/`` and ``_policies/state/<uuid>/``
+    before a stamp), a write outside what a writer granted its own records' keys may make ([[XC-084]]).
+    """
+    body = json.dumps(record).encode()
+    if control_root.startswith("s3://"):
+        bucket, prefix = split_s3_uri(control_root.rstrip("/"))
+        object_client(storage_options).put_object(Bucket=bucket, Key=f"{prefix}/{key}" if prefix else key, Body=body)
+        return
     fs, base = fs_and_base(control_root, storage_options)
     path = f"{base}/{key}"
     fs.create_dir(path.rsplit("/", 1)[0], recursive=True)
     with fs.open_output_stream(path) as stream:
-        stream.write(json.dumps(record).encode())
+        stream.write(body)
 
 
 def get_record(control_root: str, storage_options: StorageOptions, key: str, *, event: str) -> dict[str, Any] | None:

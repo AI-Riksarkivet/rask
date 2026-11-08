@@ -147,7 +147,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     monkeypatch.setattr(base_refs, "sibling_base_refs", _listing)
     application = FastAPI()
     application.include_router(door.router)
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
+    settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: so

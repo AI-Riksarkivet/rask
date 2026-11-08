@@ -1,0 +1,77 @@
+{{- if .Values.objectStore.enabled }}
+{{- range $phase := ternary (list "install" "post-install") (list "pre-upgrade" "post-upgrade") .Release.IsInstall }}
+{{- $prune := hasPrefix "post-" $phase }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rask.fullname" $ }}-object-store-provisioning-{{ if $prune }}prune-{{ end }}{{ include "rask.bootstrapRev" $ }}
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+  annotations:
+    {{- if ne $phase "install" }}
+    "helm.sh/hook": {{ $phase }}
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
+    {{- end }}
+    {{- include "lance.reconciledJob" (ternary "PostSync" "Sync" $prune) | nindent 4 }}
+spec:
+  ttlSecondsAfterFinished: 3600
+  {{- include "lance.bootstrapJobDeadline" $ | nindent 2 }}
+  backoffLimit: 20
+  template:
+    metadata:
+      labels:
+        {{- include "rask.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: object-store-provisioning
+    spec:
+      restartPolicy: OnFailure
+      securityContext: { fsGroup: 10001 }
+      serviceAccountName: {{ include "lance.fullname" $ }}-sa-hooks
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- include "lance.tmpVolume" $ | nindent 8 }}
+        - name: store-root
+          secret: { secretName: {{ include "lance.fullname" $ }}-object-store-root, items: [{ key: object-store-secret-key, path: object-store-secret-key }], defaultMode: 0400 }
+      containers:
+        - name: provision
+          image: {{ include "lance.catalogImage" $ | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- include "lance.rootlessSecurityContext" 10001 | nindent 10 }}
+          volumeMounts:
+            {{- include "lance.tmpMount" $ | nindent 12 }}
+            - { name: store-root, mountPath: /store-root, readOnly: true }
+          resources:
+            requests: { cpu: "10m", memory: "64Mi" }
+            limits: { cpu: "200m", memory: "256Mi" }
+          args:
+            - python
+            - /srv/rustfs_admin.py
+            - --endpoint
+            - {{ include "lance.s3Endpoint" $ | quote }}
+            - --root-access-key
+            - {{ $.Values.objectStore.accessKey | quote }}
+            - --root-secret-file
+            - /store-root/object-store-secret-key
+            {{- $buckets := concat (list $.Values.objectStore.bucket) (splitList "," (include "lance.platformBuckets" $)) }}
+            {{- range $_, $zone := $.Values.medallion.buckets }}
+            {{- $buckets = append $buckets $zone }}
+            {{- end }}
+            {{- range $.Values.catalog.multibase.dataBases | default list }}
+            {{- $buckets = append $buckets (first (splitList "/" (trimPrefix "s3://" .))) }}
+            {{- end }}
+            {{- range compact $buckets | uniq }}
+            - --bucket
+            - {{ . | quote }}
+            {{- end }}
+            {{- range $component := include "lance.objectStoreIdentities" $ | fromJsonArray }}
+            - --policy
+            - {{ printf "%s=%s" (include "lance.saAccount" (list $ $component)) (include "lance.objectStorePolicy" (list $ $component) | fromJson | toJson) | quote }}
+            {{- end }}
+            {{- if $prune }}
+            - --prune
+            {{- end }}
+{{- end }}
+{{- end }}

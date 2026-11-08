@@ -63,9 +63,11 @@ func (m *Rask) SmokeRustfs(
 		Stdout(ctx)
 }
 
-// RustfsProvisioning proves the scoped-users hook's provisioning script against a RustFS service bound to this one
-// exec: tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py runs `scripts/rustfs_admin.py`
-// through the CLI the hook runs, and holds a policy the store refuses to failing the run before it binds anyone.
+// RustfsProvisioning proves the store's IAM against a RustFS service bound to this one exec:
+// tests/e2e-py/test_a_policy_the_store_refuses_fails_the_provisioning_hook.py runs `scripts/rustfs_admin.py` through the
+// CLI the hook runs, and holds a policy the store refuses to failing the run and leaving the stored one; and
+// tests/e2e-py/test_a_reclaim_session_deletes_one_tables_bytes_and_nothing_else.py runs maintenance's purge under a session minted
+// with the policy the catalog builds for one trash record, which moto cannot enforce ([[XC-084]]).
 //
 //	dagger call rustfs-provisioning
 //
@@ -100,7 +102,9 @@ func (m *Rask) RustfsProvisioning(
 		WithEnvVariable("RASK_RUSTFS_PROVISIONING_ROOT_SECRET_FILE", "/run/secrets/rustfs/secret_key").
 		// `--require-live`: a skip in a lane that stood its store up is a test that ran nowhere, so it fails the lane.
 		WithExec([]string{
-			"uv", "run", "--no-sync", "pytest", "tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py",
+			"uv", "run", "--no-sync", "pytest",
+			"tests/e2e-py/test_a_policy_the_store_refuses_fails_the_provisioning_hook.py",
+			"tests/e2e-py/test_a_reclaim_session_deletes_one_tables_bytes_and_nothing_else.py",
 			"-m", "rustfs_provisioning", "-v", "-rs", "-p", "no:cacheprovider", "--timeout=300", "--timeout-method=thread", "--require-live",
 		}).
 		Stdout(ctx)

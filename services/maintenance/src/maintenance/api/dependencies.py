@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import Depends, Request
 
@@ -20,25 +20,6 @@ def get_lineage_emitter(request: Request) -> MaintenanceEmitter:
 
 
 LineageEmitterDep = Annotated[MaintenanceEmitter, Depends(get_lineage_emitter)]
-
-
-def get_fga_client(request: Request) -> Any:  # noqa: ANN401 — OpenFgaClient | None; the SDK ships no protocol
-    """The OpenFGA client built in the lifespan, or ``None`` when FGA is off/unwired.
-
-    Two consumers, and they are not symmetric. The **reconciler** only READS tuples. The **#79 purge**
-    REVOKES them (``lifecycle_delete`` origin) as the first step of destroying an expired trash record —
-    grants must never outlive the bytes they were written for. It never GRANTS anything; this service
-    holds no ``write_tuples``/``seed_ownership`` path at all.
-
-    ``None`` is a legitimate value, not an error: the reconciler degrades its authz categories to
-    UNAVAILABLE with a reason rather than failing the whole report. A drift report that 500s because one
-    of three stores is unreachable tells you nothing about the other two. For the purge, FGA enabled with
-    no client here means it does NOT run — a delete it cannot pair with a revoke is one it must not make.
-    """
-    return getattr(request.app.state, "fga_client", None)
-
-
-FgaClientDep = Annotated[Any, Depends(get_fga_client)]
 
 
 def get_control_emitter(request: Request) -> ControlEmitter:

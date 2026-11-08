@@ -76,10 +76,7 @@ spec:
             - { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join "," | quote }} }
 
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            - { name: LANCE_S3_WEB_IDENTITY_TOKEN_FILE, value: "/var/run/secrets/rask/identity/{{ include "lance.objectStoreAudience" . }}/token" }
-            - { name: LANCE_S3_STS_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            - { name: LANCE_S3_ASSUME_ROLE_ARN, value: {{ .Values.vending.assumeRoleArn | quote }} }
-            - { name: LANCE_S3_SESSION_SECONDS, value: {{ .Values.objectStore.identity.sessionSeconds | quote }} }
+            {{- include "lance.objectStoreSessionEnv" (list $root "LANCE" "catalog") | nindent 12 }}
             - { name: LANCE_SECRETS_FROM_DAPR, value: "true" }
             {{- with include "lance.signingEnv" (list $root .Values.services.catalog.daprAppId) }}{{ . | nindent 12 }}{{- end }}
             - { name: LANCE_S3_REGION, value: "us-east-1" }
@@ -278,11 +275,7 @@ spec:
             - { name: LINEAGE_RELAY_BINDING_NAME, value: {{ .Values.services.lineage.relay.bindingName | quote }} }
             {{- end }}
             - { name: LINEAGE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-
-            {{- $_ := required "objectStore.lineageAccessKey names lineage's scoped store identity; no service presents the store's root, which signs every STS token (ADR 0168)" .Values.objectStore.lineageAccessKey }}
-            - { name: LINEAGE_DAPR_SECRET_KEY, value: "lineage-s3" }
-            - { name: LINEAGE_DAPR_SECRET_S3_ID_FIELD, value: "access_key" }
-            - { name: LINEAGE_DAPR_SECRET_S3_FIELD, value: "secret_key" }
+            {{- include "lance.objectStoreSessionEnv" (list $root "LINEAGE" "lineage") | nindent 12 }}
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
             {{- end }}
@@ -306,12 +299,12 @@ spec:
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
-            {{- include "lance.identityTokens" (list "mounts" "rask-catalog") | nindent 12 }}
+            {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "lineage") | nindent 12 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.services.lineage.daprAppId "volumes") | nindent 8 }}
-        {{- include "lance.identityTokens" (list "volumes" "rask-catalog") | nindent 8 }}
+        {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "lineage") | nindent 8 }}
 ---
 apiVersion: v1

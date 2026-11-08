@@ -14,8 +14,8 @@ cannot be made is a withheld event and never a failed pass; maintenance stages n
 later.
 
 The first two claims are driven through the real service lifespan, so the key reaches the emitters the way it does in the
-cluster: the secret store, the holder, the emitters and their author. The sidecar's secret API is answered by respx and
-its publish is a recording stand-in.
+cluster: the secret store, the holder, the emitters and their author. The sidecar's secret API is answered by respx,
+its publish is a recording stand-in, and the store session is exchanged at moto's STS.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import httpx
@@ -84,10 +85,18 @@ type Boot = Callable[[httpx.Response, httpx.Response], TestClient]
 
 
 @pytest.fixture
-def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> Iterator[Boot]:
-    """Boot the real maintenance service with signing configured: `boot(seed, keys)` answers the running client."""
+def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None, moto_url: str, tmp_path: Path) -> Iterator[Boot]:
+    """Boot the real maintenance service with signing configured: `boot(seed, keys)` answers the running client.
+
+    Its store identity is a projected token exchanged at moto's STS, as the deployed service's is: with the secret store
+    on, a service holds no key pair.
+    """
+    token = tmp_path / "projected-rask-object-store-token"
+    token.write_text("projected-for-rask-object-store")
     env = {
         "MAINTENANCE_SECRETS_FROM_DAPR": "true",
+        "MAINTENANCE_S3_WEB_IDENTITY_TOKEN_FILE": str(token),
+        "MAINTENANCE_S3_STS_ENDPOINT": moto_url,
         "RASK_SIGNING_IDENTITY": IDENTITY,
         "MAINTENANCE_CATALOG_SERVICE_IDENTITY": IDENTITY,
         "MAINTENANCE_LINEAGE_EMIT_ENABLED": "true",
@@ -106,7 +115,6 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None) -> I
 
         def _boot(seed: httpx.Response, keys: httpx.Response) -> TestClient:
             stack.enter_context(respx.mock)
-            respx.get(f"{SECRETS}/maintenance-s3").mock(return_value=httpx.Response(200, json={"access_key": "test", "secret_key": "the-s3-secret"}))
             respx.get(f"{SECRETS}/signing-key-{KEY_NAME}").mock(return_value=seed)
             respx.get(f"{SECRETS}/signing-public-{KEY_NAME}").mock(return_value=keys)
             return stack.enter_context(TestClient(service.app))

@@ -11,10 +11,11 @@ version of any ref still names it. No legitimate writer does either: every Lance
 deletes only what no retained version references. The store's object versions are what restores one
 (``.claude/skills/rask-rustfs`` § 8).
 
-A record is forgotten only once no retained version names any of its files and the store holds none of them: cleanup
-reclaimed them, or the commit lost its race and Lance reclaimed what it wrote. Absence alone forgets nothing, since a
+A record is reclaimed only once no retained version names any of its files and the store holds none of them: cleanup
+reclaimed them, or the commit lost its race and Lance reclaimed what it wrote. Absence alone reclaims nothing, since a
 file deleted and put again would otherwise read as reclaimed and then as new. A commit still in flight holds its files,
-so its record stays.
+so its record stays. The check only reads; forgetting a reclaimed record is a write, signed by the table's vend
+([[LH-219]], :func:`forget`).
 """
 
 from __future__ import annotations
@@ -43,8 +44,8 @@ class FileCheck(BaseModel):
     #: Each recorded file not as committed, by its path under the table: held with another ETag or size, or gone while a
     #: retained version names it.
     overwritten: list[str] = Field(default_factory=list)
-    #: The records forgotten because no retained version names their files and the store holds none of them.
-    forgotten: int = 0
+    #: The transaction uuids of the records no retained version needs: none names their files and the store holds none.
+    reclaimed: list[str] = Field(default_factory=list)
 
 
 def check(
@@ -56,14 +57,14 @@ def check(
     control_root: str,
     control_options: StorageOptions,
 ) -> FileCheck:
-    """Read every file the catalog recorded for the table at ``table_root`` (the store's own spelling of it) again.
+    """Read every file the catalog recorded for the table at ``table_root`` (the store's own spelling of it) again. Reads only.
 
     ``open_table`` opens the table's latest version, and is called only when a recorded file is gone: the retained
     versions say whether it was reclaimed.
 
     Raises:
         ValueError: A record is not one a commit wrote, so the files it names cannot be checked.
-        OSError: The store refused, or could not be reached for, a read or a delete.
+        OSError: The store refused, or could not be reached for, a read.
     """
     committed = file_identities.recorded(control_root, control_options, table_uuid)
     held = stored_objects.identities(table_root, data_options, sorted({file.path for commit in committed for file in commit.files}))
@@ -86,10 +87,18 @@ def check(
                     "found": None if now is None else now.model_dump(),
                 },
             )
-    reclaimed = [commit for commit in committed if all(file.path in absent and file.path not in named for file in commit.files)]
-    for commit in reclaimed:
-        file_identities.forget(control_root, control_options, table_uuid, commit.transaction_uuid)
-    return FileCheck(overwritten=sorted(overwritten), forgotten=len(reclaimed))
+    reclaimed = [commit.transaction_uuid for commit in committed if all(file.path in absent and file.path not in named for file in commit.files)]
+    return FileCheck(overwritten=sorted(overwritten), reclaimed=reclaimed)
+
+
+def forget(control_root: str, write_options: StorageOptions, *, table_uuid: str, reclaimed: Iterable[str]) -> None:
+    """Delete the records of the ``reclaimed`` commits of the table ``table_uuid``, under its maintain-tier vend.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, a delete.
+    """
+    for transaction_uuid in reclaimed:
+        file_identities.forget(control_root, write_options, table_uuid, transaction_uuid)
 
 
 def _named_by_a_retained_version(table: lance.LanceDataset, table_root: str, paths: Iterable[str]) -> set[str]:

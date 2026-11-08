@@ -43,8 +43,11 @@ log = logging.getLogger(__name__)
 #: A refusal is "we declined, before touching a byte" — never a skip ("not this tick") and never an error ("something
 #: failed"). The gate names which: a count that merges them is not actionable, because a clone's source stays refused
 #: forever, a manifest flag is a pylance upgrade away from being supported, and a bad branch name clears when somebody
-#: removes a directory. A closed set: it is a metric label.
-type Gate = Literal["protected_base", "manifest_flags", "invalid_ref", "nested_branch", "governed_elsewhere", "unauthenticated", "unnamed", "unidentified"]
+#: removes a directory, and ``vending_not_direct`` holds while the deployment vends no direct credential. A closed set:
+#: it is a metric label.
+type Gate = Literal[
+    "protected_base", "manifest_flags", "invalid_ref", "nested_branch", "governed_elsewhere", "unauthenticated", "vending_not_direct", "unnamed", "unidentified"
+]
 
 #: Whether the dataset's table needs compacting or reindexing, as this tick's due evaluation decided
 #: (:mod:`maintenance.services.due`): ``due`` wrote its record, ``clear`` deleted it, ``unnamed`` found no
@@ -137,8 +140,12 @@ class ExpiryTarget(BaseModel):
     """The dataset an expiry pass runs on, and what the sweep already knows about it."""
 
     uri: str
-    #: The credential the pass signs with: vended and table-scoped where the catalog offers one.
+    #: What the pass reads with: maintenance's own session, which reads every table's bytes and writes none of them.
     storage_options: StorageOptions
+    #: What the pass writes with, every commit, cleanup and delete: the table's maintain-tier vend ([[LH-219]]). ``None``
+    #: when the probe found nothing to write and so asked for none: the pass then writes nothing, and a write it finds
+    #: needed waits for the next pass rather than being signed by anything else.
+    write_options: StorageOptions | None = None
     #: The whole-estate base references this tick's pre-pass took.
     protected: BaseRefs = Field(default_factory=BaseRefs)
     #: The id the caller resolved, and vended the credential under.
@@ -147,8 +154,14 @@ class ExpiryTarget(BaseModel):
     data_directories: list[RecordedBase] = Field(default_factory=list)
     #: The tick's clock, which a file's age in a data directory is judged by.
     now: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    #: Where the table's history fence is kept, which the pass holds while it deletes ([[LH-308]]); ``None`` holds none.
+    #: Where the table's history fence is kept, under the vend, which the pass holds while it deletes ([[LH-308]]); ``None``
+    #: holds none.
     history: TableHistory | None = None
+
+    @property
+    def opened_with(self) -> StorageOptions:
+        """What the pass opens the dataset with: the vend where it writes, so every commit through the handle signs with it."""
+        return self.write_options or self.storage_options
 
 
 class DisarmOutcome(BaseModel):
@@ -180,7 +193,7 @@ class _Opened(BaseModel):
         return DatasetResult(uri=uri, data_storage_version=self.data_storage_version, mixed_data_file_versions=self.mixed)
 
 
-def _disarm_commit_path_cleanup(ds: lance.LanceDataset, *, uri: str) -> DisarmOutcome:
+def _disarm_commit_path_cleanup(ds: lance.LanceDataset, target: ExpiryTarget) -> DisarmOutcome:
     """Remove every ``lance.auto_cleanup.*`` key, the backstop for a table no door commits on ([[LH-245]]).
 
     Every catalog door that commits disarms the ref first (:mod:`lakehouse.auto_cleanup` records the
@@ -190,16 +203,21 @@ def _disarm_commit_path_cleanup(ds: lance.LanceDataset, *, uri: str) -> DisarmOu
     Called right after the open, BEFORE every refusal gate: the hold and the protected base are exactly the tables
     whose history the lane would delete. The write is a config-only commit, and only when a key is present. A failure
     is reported on the result, never raised: the dataset stays armed, which an operator must see, and the next tick
-    retries.
+    retries. A pass holding no vend commits nothing: a held table is vended none and keeps its keys until a door's
+    commit disarms it, and a key armed since its probe looked is the next pass's to remove.
     """
-    try:
-        armed = auto_cleanup.disarm(ds)
-    except Exception as exc:  # noqa: BLE001 — reported on the result; the pass continues
-        log.warning("auto_cleanup_disarm_failed", extra={"uri": uri, "error": str(exc)})
-        return DisarmOutcome(error=f"auto_cleanup: {exc}", error_type=type(exc).__name__)
-    if not armed:
+    if target.write_options is None:
+        if armed := auto_cleanup.armed_keys(ds.config()):
+            log.info("auto_cleanup_left_armed", extra={"uri": target.uri, "keys": armed})
         return DisarmOutcome()
-    log.warning("auto_cleanup_disarmed", extra={"uri": uri, "keys": armed})
+    try:
+        disarmed = auto_cleanup.disarm(ds)
+    except Exception as exc:  # noqa: BLE001 — reported on the result; the pass continues
+        log.warning("auto_cleanup_disarm_failed", extra={"uri": target.uri, "error": str(exc)})
+        return DisarmOutcome(error=f"auto_cleanup: {exc}", error_type=type(exc).__name__)
+    if not disarmed:
+        return DisarmOutcome()
+    log.warning("auto_cleanup_disarmed", extra={"uri": target.uri, "keys": disarmed})
     return DisarmOutcome(disarmed=True)
 
 
@@ -300,7 +318,7 @@ def _open(target: ExpiryTarget) -> _Opened | DatasetResult:
     and the lineage layer drops it.
     """
     try:
-        ds = lance.dataset(target.uri, storage_options=target.storage_options.in_clear(), session=shared_lance_session())
+        ds = lance.dataset(target.uri, storage_options=target.opened_with.in_clear(), session=shared_lance_session())
         reader_flags, writer_flags = manifest_feature_flags(ds)
         return _Opened(
             ds=ds,
@@ -350,7 +368,7 @@ def _staged_manifests(uri: str, storage_options: StorageOptions) -> list[tuple[s
     return staged
 
 
-def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> None:
+def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
     """Remove each manifest staged for a version the ref already holds, once past ``policy.staged_grace`` ([[LH-529]]).
 
     A commit that loses its version to another leaves the manifest it staged: Lance deletes a losing one with the
@@ -361,11 +379,25 @@ def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, 
     """
     cutoff = datetime.now(UTC) - policy.staged_grace
     lost = [path for path, version, modified in _staged_manifests(target.uri, target.storage_options) if version <= ds.version and modified <= cutoff]
-    delete_objects(target.uri, target.storage_options, lost)
+    delete_objects(target.uri, vend, lost)
     result.staged_manifests_removed = len(lost)
 
 
-def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> None:
+def _count(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> None:
+    """What the pass reads before it writes anything: the versions the policy would reclaim, and the fragments that keep a
+    deleted row's bytes in one of the table's data directories."""
+    if policy.cleanup_enabled:
+        result.reclaimable_versions = count_reclaimable(ds, policy)
+    if target.data_directories:
+        result.base_fragments_holding_deleted_rows = base_reclaim.fragments_holding_deleted_rows(ds, target.data_directories)
+
+
+def _versions_due(result: DatasetResult, policy: ExpiryPolicy) -> bool:
+    """Whether enough superseded versions are reclaimable for the pass to reclaim them."""
+    return policy.cleanup_enabled and (result.reclaimable_versions or 0) >= policy.min_reclaimable
+
+
+def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
     """Reclaim superseded versions once enough are reclaimable, then the manifests no version will take; tagged versions
     are EXEMPT.
 
@@ -373,38 +405,31 @@ def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: 
     long-lived ``published`` tag would then stall reclamation on that dataset forever. The staged manifests go in the same
     pass because only a pass that reclaims holds a write credential (``sweep._probe_before_vending``).
     """
-    if not policy.cleanup_enabled:
-        log.info("cleanup_disabled_by_policy", extra={"uri": result.uri})
-        return
-    if (result.reclaimable_versions or 0) < policy.min_reclaimable:
+    if not _versions_due(result, policy):
         log.debug("maintenance_expiry_below_threshold", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
         return
     stats: Any = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
     result.old_versions_removed = int(getattr(stats, "old_versions", 0))
     result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
-    _reclaim_staged_manifests(ds, result=result, target=target, policy=policy)
+    _reclaim_staged_manifests(ds, result=result, target=target, vend=vend, policy=policy)
 
 
-def _reclaim_data_directories(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> None:
-    """Reclaim what no retained version references in the table's own data directories, and count what a deleted row keeps.
+def _reclaim_data_directories(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions) -> None:
+    """Reclaim what no retained version references in the table's own data directories.
 
     After ``cleanup_old_versions``, which deletes the manifests and the root's files and leaves every base alone, so the
     versions it removed no longer hold a base file here ([[LH-286]]). Whatever the reclaimable-version count, because a
-    base file a past pass found too young waits for a later one. Never under a policy that disables cleanup: a table
-    whose whole history is kept keeps every file that history could name.
+    base file a past pass found too young waits for a later one.
     """
     if not target.data_directories:
         return
-    result.base_fragments_holding_deleted_rows = base_reclaim.fragments_holding_deleted_rows(ds, target.data_directories)
-    if not policy.cleanup_enabled:
-        return
-    reclaimed = base_reclaim.reclaim(ds, target.data_directories, target.storage_options, now=target.now)
+    reclaimed = base_reclaim.reclaim(ds, target.data_directories, vend, now=target.now)
     result.base_files_removed, result.base_bytes_removed = reclaimed.files, reclaimed.bytes
 
 
 def _deletes(result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> bool:
     """Whether this pass will delete: versions past the policy's threshold, or files in the table's data directories."""
-    return policy.cleanup_enabled and ((result.reclaimable_versions or 0) >= policy.min_reclaimable or bool(target.data_directories))
+    return _versions_due(result, policy) or (policy.cleanup_enabled and bool(target.data_directories))
 
 
 def _history_held(result: DatasetResult, target: ExpiryTarget, policy: ExpiryPolicy) -> AbstractContextManager[None]:
@@ -442,17 +467,26 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult
     opened = _open(target)
     if isinstance(opened, DatasetResult):
         return opened
-    disarm = _disarm_commit_path_cleanup(opened.ds, uri=target.uri)
+    disarm = _disarm_commit_path_cleanup(opened.ds, target)
     if (refused := _refusal(opened, target)) is not None:
         return disarm.onto(refused)
     result = disarm.onto(opened.result(target.uri))
     result.table_id = target.table_id
     try:
-        if policy.cleanup_enabled:
-            result.reclaimable_versions = count_reclaimable(opened.ds, policy)
+        _count(opened.ds, result=result, target=target, policy=policy)
+        if not policy.cleanup_enabled:
+            # A table whose whole history is kept keeps every file that history could name.
+            log.info("cleanup_disabled_by_policy", extra={"uri": result.uri})
+            return result
+        if (vend := target.write_options) is None:
+            # A pass holding no vend writes nothing: versions that crossed the threshold since its probe counted them are
+            # the next pass's.
+            if _versions_due(result, policy):
+                log.info("maintenance_reclaim_awaits_its_vend", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
+            return result
         with _history_held(result, target, policy):
-            _reclaim_versions(opened.ds, result=result, target=target, policy=policy)
-            _reclaim_data_directories(opened.ds, result=result, target=target, policy=policy)
+            _reclaim_versions(opened.ds, result=result, target=target, vend=vend, policy=policy)
+            _reclaim_data_directories(opened.ds, result=result, target=target, vend=vend)
     except HistoryFencedError as exc:
         log.info("maintenance_history_fenced", extra={"uri": result.uri, "table_id": result.table_id, "reason": str(exc)})
         result.skipped = HISTORY_FENCED

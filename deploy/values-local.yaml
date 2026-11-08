@@ -52,29 +52,15 @@ maintenance:
 docs:
   enabled: true
 
-# THE SCOPED STORAGE IDENTITIES this estate actually runs on.
-#
-# Declared here rather than left to a hand-set env: Helm only patches fields that CHANGED between
-# releases, so a hand-set env survives every upgrade and reverts to the store's ROOT the moment one values
-# edit touches the field, with nothing going red: the symptom is a credential quietly widening rather than a 500.
-#
-# Only the NAME is needed. Each secret is derived in-cluster from it plus the store's root secret
-# (`lance.scopedSecretFn`), so declaring the identities costs no secret anywhere, and the one
-# string reaches the OpenBao seed and the store's user creation together — a scoped access
-# key beside any other secret is `SignatureDoesNotMatch` on every call.
-#
-# `object-store-scoped-users` provisions each policy and user as a pre- and post-upgrade hook, and naming
-# an identity here is enough even when the user already exists: RustFS's `add-user` on an existing access
-# key sets its secret again (`scripts/rustfs_admin.py`).
-objectStore:
-  maintenanceAccessKey: rask-maintenance
-
-# THE CONTROL ROOT'S SCHEDULED BACKUP ([[LH-110]]), on here so the lane is exercised rather than only
-# rendered. `dest` is left empty deliberately for a dev estate: that writes `_backups/control/` inside
-# the control root itself, which survives a bad write and does NOT survive losing the bucket — the
-# failure a backup exists for. Any deployment that matters sets a separate bucket, which is what the
-# chart's own values say.
+# THE SCHEDULED BACKUPS ([[LH-110]], [[XC-084]]), on here so both lanes are exercised rather than only rendered, each run
+# signing with a session its own ServiceAccount's token is exchanged for. `dest` is left empty deliberately for a dev
+# estate: that writes `_backups/control/` inside the control root itself, which survives a bad write and does NOT
+# survive losing the bucket — the failure a backup exists for. Any deployment that matters sets a separate bucket,
+# which is what the chart's own values say.
 backups:
+  pgDump:
+    enabled: true
+    keep: 3
   controlRoot:
     enabled: true
     keep: 3
@@ -82,7 +68,7 @@ backups:
 # [[LH-067]] THE SECOND BUCKET'S BASE, ON THE ALLOWLIST, so the multi-base path runs on this estate: a create naming
 # `?data_base=` lays its fragments in its own directory under it ([[LH-252]]), and maintenance reclaims and purges that
 # directory ([[LH-286]]). A data base is its tables' storage on the estate's store, reached under the catalog's own
-# identity, so it names no credential; the scoped-users hook creates its bucket on this store.
+# identity, so it names no credential; the provisioning hook creates its bucket on this store.
 #
 # LOCAL ONLY. `chart/values.yaml` keeps `dataBases: []` so the feature stays off by default; an estate
 # opts a bucket in deliberately, and the allowlist is what makes "a caller can never point a base at an

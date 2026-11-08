@@ -50,11 +50,12 @@ grant rather than by a reclaimer.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse.governed import fga
+from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, revoke_ghosts
 
 
 if TYPE_CHECKING:
@@ -131,6 +132,8 @@ class RepairReport(BaseModel):
     #: Categories the report found and this pass declined, with why. Present even when empty-handed:
     #: "considered and refused" and "never looked" are different facts about a cleaner.
     refused: dict[str, str] = Field(default_factory=dict)
+    #: Objects the catalog judged again and found a registry still naming, with why: their grants stay ([[XC-084]]).
+    kept_by_the_catalog: dict[str, str] = Field(default_factory=dict)
     #: Eligible objects beyond `max_per_tick`, so a truncated pass cannot read as a complete one.
     capped: int = 0
     error: str | None = None
@@ -174,31 +177,30 @@ def plan_repair(report: ReconcileReport) -> tuple[list[RevokedObject], dict[str,
     return planned, refused
 
 
-async def repair_drift(settings: MaintenanceSettings, *, report: ReconcileReport, fga_client: Any) -> RepairReport:
-    """Revoke the tuples of every object the report found gone.
+async def repair_drift(settings: MaintenanceSettings, *, report: ReconcileReport) -> RepairReport:
+    """Have the catalog revoke the tuples of every object the report found gone ([[XC-084]]).
 
-    Degrades rather than fails, the same contract `rebuild.py` carries: a store that will not accept
-    the deletes leaves `error` set and the tick continues, because a reconcile tick that 500s over a
-    failed repair is worse than one reporting drift it could not clear — the report is what everything
-    else is gated on.
+    Maintenance holds no OpenFGA credential, so the revoke is the catalog's, which judges each object again on its own
+    registries and keeps the grants of one a registry still names. Degrades rather than fails, the same contract
+    `rebuild.py` carries: a door that refuses or cannot decide leaves `error` set and the tick continues, because a
+    reconcile tick that 500s over a failed repair is worse than one reporting drift it could not clear — the report is
+    what everything else is gated on.
     """
-    if not settings.drift_repair_enabled or fga_client is None:
-        return RepairReport(enabled=settings.drift_repair_enabled, dry_run=settings.drift_repair_dry_run)
+    if not settings.drift_repair_enabled:
+        return RepairReport(enabled=False, dry_run=settings.drift_repair_dry_run)
     planned, refused = plan_repair(report)
     out = RepairReport(enabled=True, dry_run=settings.drift_repair_dry_run, refused=refused)
     out.capped = max(0, len(planned) - settings.drift_repair_max_per_tick)
     planned = planned[: settings.drift_repair_max_per_tick]
-    if out.dry_run:
+    if out.dry_run or not planned:
         out.revoked = planned
         return out
-    done: list[RevokedObject] = []
-    for target in planned:
-        try:
-            await fga.revoke_object_tuples(fga_client, target.fga_object, actor=settings.catalog_service_identity, origin="drift_repair")  # noqa: TID251
-        except Exception as exc:  # noqa: BLE001 — see the docstring; one object must not fail the tick
-            log.warning("drift_repair_object_failed", extra={"object": target.fga_object, "error": str(exc)})
-            out.error = str(exc)
-            continue
-        done.append(target)
-    out.revoked = done
+    try:
+        answered = await run_in_threadpool(revoke_ghosts, settings, [target.fga_object for target in planned])
+    except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
+        log.warning("drift_repair_refused_by_the_catalog", extra={"objects": len(planned), "error": str(exc)})
+        out.error = str(exc)
+        return out
+    out.revoked = [target.model_copy(update={"tuples": answered.revoked[target.fga_object]}) for target in planned if target.fga_object in answered.revoked]
+    out.kept_by_the_catalog = answered.refused
     return out

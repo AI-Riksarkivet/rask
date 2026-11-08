@@ -145,6 +145,20 @@ def test_a_classified_table_stays_unvendable_raw_whatever_a_writer_does(
     assert (answers, _vends_raw(catalog), vendor.calls) == (refused, [], [])
 
 
+def test_the_maintenance_identity_is_vended_the_maintain_tier_of_a_classified_table(table: tuple[Any, _Vendor]) -> None:
+    """[[LH-219]] The maintain tier opens to the maintenance identity alone, whose own session reads every byte, and the
+    cleanup it signs is root-scoped. Answered server-mediated there, a classified table would never have a version
+    reclaimed, since maintenance signs a rewrite with this vend or not at all."""
+    catalog, vendor = table
+    _label(catalog, "secret")
+    catalog.store.write((catalog.person("sweep"), "maintenance", "warehouse:lance_catalog"))
+
+    vended = catalog.client.post("/management/v1/table/db$t/credentials", params={"tier": "maintain"}, headers=catalog.bearer("sweep"))
+
+    assert (vended.status_code, vended.json().get("mode")) == (200, "direct"), vended.text
+    assert [call["tier"] for call in vendor.calls] == ["maintain"]
+
+
 def test_a_writer_cannot_create_a_table_carrying_a_label(table: tuple[Any, _Vendor]) -> None:
     # A label decides how a table's bytes leave the store, so setting one at create asks what setting one later asks.
     catalog, _ = table

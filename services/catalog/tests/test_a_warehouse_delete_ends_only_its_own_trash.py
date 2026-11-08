@@ -19,7 +19,7 @@ from lakehouse import trash
 from lakehouse.storage_options import StorageOptions
 
 
-def _trash(control: str, canonical_id: str, location: str = "", *, kind: str = "table", warehouse: str | None = None) -> None:
+def _trash(control: str, canonical_id: str, location: str = "", *, kind: trash.TrashKind = "table", warehouse: str | None = None) -> None:
     binding = {"warehouse_id": warehouse, "root_uri": "s3://acme-bkt"} if warehouse else None
     trash.put(
         control,

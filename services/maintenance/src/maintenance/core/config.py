@@ -1,8 +1,8 @@
 """Maintenance service settings (pydantic-settings, ``MAINTENANCE_*`` env vars).
 
-The OpenFGA knobs are the estate's, not this service's: it mixes in ``FgaSettings`` and reads
-``RASK_FGA_*``. ``FgaSettings`` alone rather than ``GovernedAuthSettings`` because this service has no
-human door — its routes are gated by the Dapr app token and it only ever READS tuples, as itself.
+This service holds no OpenFGA settings: it holds no OpenFGA credential, since one could write any tuple ([[XC-084]]).
+Its drift report reads the store's grant census through the catalog, and every grant change the reconcile tick asks for
+is the catalog's (``maintenance.services.credentials``).
 
 The signature door's knobs are the estate's too ([[XC-078]]): ``SignatureDoorSettings`` reads
 ``RASK_SIGNATURE_DOORS``, ``RASK_EVENT_SIGNERS`` and ``RASK_EVENT_DELEGATORS``, which decide how
@@ -12,24 +12,24 @@ The signature door's knobs are the estate's too ([[XC-078]]): ``SignatureDoorSet
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING, Annotated, Self
 
-from pydantic import AfterValidator, AliasChoices, Field, SecretStr
+from pydantic import AfterValidator, AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.governed.settings import FgaSettings
-from lakehouse.governed.store_credential import S3KeyPair, store_key_pair
+from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.signature_doors import SignatureDoorSettings
 from lakehouse.storage_options import StorageOptions
+from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_a_token, require_one_store_identity
 
 
 if TYPE_CHECKING:
     import lance
 
 
-class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
+class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSettings):
     """Config for the maintenance service + its S3 access to the lakehouse buckets."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
@@ -38,7 +38,7 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     # namespace the aliases already declare; an explicit alias bypasses it, so the
     # deliberately-bare ones (DAPR_HTTP_PORT) still land.
     # See tests/unit/test_settings_env_namespace.py.
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="MAINTENANCE_", extra="ignore")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="MAINTENANCE_", alias_generator=env_alias("MAINTENANCE"), extra="ignore")
 
     # #102: the shared Lance session's cache caps. Defaults sized for the pod tier (512Mi limit —
     # Lance's own defaults are 1 GiB metadata + 6 GiB index PER OPEN, which is the defect).
@@ -126,14 +126,9 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
 
     # --- S3 access to the Lance lakehouse bucket ----------------------------------------------------
     s3_endpoint: str = Field(default="http://localhost:9000", alias="MAINTENANCE_S3_ENDPOINT")
-    # The key pair the sweep signs with when the secret store is OFF; with it on, the pair is the store's
-    # (`dapr_secret_s3_id_field` and `dapr_secret_s3_field`, ADR 0166) and these two are not read. NO DEFAULT
-    # key id: any default would be the store's root account, and a deployment that configured neither half
-    # would run the whole sweep as the tenant root, reaching every tenant's bytes and the records that govern
-    # maintenance itself. Empty so the boot check can refuse either half; a credential is a PAIR and half of
-    # one is not a lesser risk. SecretStr so the secret is redacted in repr/model_dump (parity with the catalog).
-    s3_access_key_id: str = Field(default="", alias="MAINTENANCE_S3_ACCESS_KEY_ID")
-    s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="MAINTENANCE_S3_SECRET_ACCESS_KEY")
+    # Maintenance's identity at the store is `StoreIdentitySettings`' (MAINTENANCE_S3_WEB_IDENTITY_TOKEN_FILE and the
+    # rest): its own reads and records sign with sessions its token is exchanged for, and a rewrite signs with its table's
+    # vend alone (`services/credentials.py`).
     s3_bucket: str = Field(default="lance-catalog", alias="MAINTENANCE_S3_BUCKET")
     # #50 maintenance policies: where the catalog's policy registry lives (`<root>/_policies/`). Defaults
     # to the primary bucket, which matches the catalog's LANCE_REST_ROOT default — override only when the
@@ -145,7 +140,6 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     # by the very features that create new buckets. The chart wires the medallion zone buckets + any
     # multibase data bases here; per-warehouse buckets are added as they are provisioned.
     s3_extra_buckets: str = Field(default="", alias="MAINTENANCE_S3_EXTRA_BUCKETS")
-    s3_region: str = Field(default="us-east-1", alias="MAINTENANCE_S3_REGION")
     # PLATFORM buckets — infrastructure the estate creates for itself, comma-separated. They hold no
     # governed tables, so no warehouse record will ever claim them, and `orphan_buckets` would otherwise
     # report each one as drift on every tick FOREVER — a finding no operator can ever action, on a report
@@ -176,27 +170,13 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
         declared = [b.strip().removeprefix("s3://").strip("/") for b in self.s3_platform_buckets.split(",")]
         return list(dict.fromkeys([*self.sweep_buckets, *[b for b in declared if b]]))
 
-    # --- OpenFGA (READ-ONLY, for the drift reconciler) -----------------------------------------------
-    # The reconciler compares three stores: OpenFGA says WHO, the control-root registries say WHAT
-    # EXISTS, object storage holds the BYTES. Without a client here, the categories that read tuples
-    # (ghost_projects, ghost_warehouses, ghost_tables, unreferenced_projects, ungoverned_tables) can only
-    # report UNAVAILABLE — including "today's seeded ghosts", which is the drift that motivated it.
-    #
-    # This service only ever READS tuples (`fga.read_tuples`); it holds no grant-writing path at all,
-    # which is why it needs no model id beyond what pins the store.
-    # The knobs themselves are `FgaSettings`' (`RASK_FGA_*`) — including `fga_root_object`, the estate
-    # root this service excludes from the ghost report BY DESIGN: it carries real tuples and has no
-    # registry record, so without the exclusion every run would name a known-good finding and train the
-    # reader to skip the category. It has to be the SAME object the catalog gates on, which is exactly
-    # what a per-service twin of that setting could not guarantee — which is why the 2026-08-30
-    # rename collapsed every spelling of it onto the single `RASK_FGA_ROOT_OBJECT`.
-
     # --- #79 expired-trash purge (RECLAMATION — the only mutation this service makes outside a dataset).
     #
     # OFF by default, and report-only stays the SHIPPED default. The estate's rule is that a reclaimer
     # earns its delete permission by first proving its report runs clean, and turning this on is what
-    # spends that permission: from here the tick DELETES the bytes a `_trash/` record names and REVOKES
-    # that object's FGA tuples. What it costs to turn on, stated plainly:
+    # spends that permission: from here the tick DELETES the bytes a `_trash/` record names, under a session the catalog
+    # vends for that record, and the catalog then ends the record and revokes its object's grants ([[XC-084]]). What it
+    # costs to turn on, stated plainly:
     #
     #   * the bytes of a `drop_table` past its deadline are DELETED. The drop was final at the deadline
     #     (ADR 0146: undrop refuses it, and the reconcile tick has already revoked its grants), so what
@@ -221,8 +201,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: operation this service performs.
     #:
     #: It runs the REAL pass: the same `due_records`, the same liveness and shallow-clone pre-passes,
-    #: the same `check`. Only the three mutations are skipped (the FGA revoke, the byte delete, the
-    #: record clear) plus the refusal annotation, which is a write onto the very records being
+    #: the same `check`. Only the mutations are skipped (the byte delete and the catalog's ending of the
+    #: record and its grants) plus the refusal annotation, which is a write onto the very records being
     #: previewed. A separate preview routine would be a second mechanism that drifts from the one it
     #: previews, and the drift would surface as deleting the wrong thing.
     #:
@@ -238,9 +218,9 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: OOMKilled against. Turning it on is a real workload, not an inspection.
     #:
     #: `would_purge` is an UPPER BOUND, never exact. Four of the seven refusal causes sit below the
-    #: preview cut: the FGA revoke, a location that is not a dataset, and a failing delete cannot be
-    #: evaluated without performing the act they guard. The fourth — the shallow-clone guard — IS
-    #: applied, because the pre-pass has already run and `is_protected` is an in-memory compare.
+    #: preview cut: the catalog's judgement, a location that is not a dataset, and a failing delete cannot be
+    #: evaluated without asking for or performing the act they guard. The fourth — the shallow-clone guard —
+    #: IS applied, because the pre-pass has already run and `is_protected` is an in-memory compare.
     trash_purge_dry_run: bool = Field(default=False, alias="MAINTENANCE_TRASH_PURGE_DRY_RUN")
 
     #: Write one metadata-only commit to a dataset whose orphans sit above its Lance listing floor, so
@@ -286,7 +266,7 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: operator turning it on to SEE what it would revoke must not thereby write to the authz store.
     #: The default here is the stricter of the two available defaults on purpose — this pass DELETES,
     #: and `trash_purge_dry_run` defaulting false is a choice made for a pass whose targets are already
-    #: expired records, not for one that writes to OpenFGA.
+    #: expired records, not for one that has the catalog revoke grants.
     drift_repair_enabled: bool = Field(default=False, alias="MAINTENANCE_DRIFT_REPAIR_ENABLED")
     drift_repair_dry_run: bool = Field(default=True, alias="MAINTENANCE_DRIFT_REPAIR_DRY_RUN")
     #: Capped per tick so a first armed run on an estate carrying [[LH-148]]'s 1,033 ghost tables
@@ -357,8 +337,8 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     warehouses_enabled: bool = Field(default=False, alias="MAINTENANCE_WAREHOUSES_ENABLED")
 
     # --- Secret consumption from the Dapr secret store (OpenBao) — symmetric with catalog + lineage.
-    # When on, the S3 key pair is the store's (NOT plaintext env), read at boot (failing closed if absent)
-    # and again while the service runs (`lakehouse.governed.store_credential`).
+    # When on, this service's signing key is read from the store, and its object-store identity is its ServiceAccount
+    # token, never a pair (`require_one_store_identity`).
     secrets_from_dapr: bool = Field(default=False, alias="MAINTENANCE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
@@ -366,13 +346,11 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: (the one every service reads); the per-service alias stays FIRST so a single service can
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("MAINTENANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
-    #: Maintenance's own secret in the store: its scoped pair, readable by maintenance alone ([[XC-165]]).
-    dapr_secret_key: str = Field(default="maintenance-s3", alias="MAINTENANCE_DAPR_SECRET_KEY")
 
-    # THE CATALOG'S CREDENTIAL DOOR. Unset (the default) = no vending, and every expiry pass is signed by
-    # the ambient credential; a deployment on `mode_b` vends nothing by design. Set, an expiry pass is signed by a
-    # `maintain`-tier credential scoped to that one table and expiring in 900s ([[LH-473]]). See `services/credentials.py` for what
-    # deliberately STAYS on the root key (the whole-estate protection pre-pass, which is a read).
+    #: THE CATALOG'S CREDENTIAL DOOR, the only source of a rewrite's credential ([[LH-219]]): each rewrite is signed by a
+    #: `maintain`-tier credential scoped to its one table and expiring in 900 s ([[LH-473]]). Unset, or a catalog on
+    #: `mode_b`, every rewrite is refused; maintenance's own session signs only its reads and its own records
+    #: (`services/credentials.py`).
     catalog_url: str = Field(default="", alias="MAINTENANCE_CATALOG_URL")
     #: The subject this service acts as: the author of the lineage it signs, the actor on the tuples it
     #: repairs, and the name its refusals report. It is never sent as a claim. The catalog derives the
@@ -386,10 +364,6 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: This pod's projected service-account token for the catalog's doors (audience `rask-catalog`),
     #: re-read on every call because the kubelet rotates it at ~515 s of its 600 s life.
     catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
-    #: Maintenance's own scoped pair (`objectStore.maintenanceAccessKey`), never the store's root (ADR 0168).
-    dapr_secret_s3_field: str = Field(default="secret_key", alias="MAINTENANCE_DAPR_SECRET_S3_FIELD")
-    #: The field of the same secret holding the key id the secret signs under, read with it.
-    dapr_secret_s3_id_field: str = Field(default="access_key", alias="MAINTENANCE_DAPR_SECRET_S3_ID_FIELD")
 
     @property
     def resolved_policy_root(self) -> str:
@@ -413,15 +387,21 @@ class MaintenanceSettings(SignatureDoorSettings, FgaSettings, BaseSettings):
     #: pinned exactly two bare lineage publishers and this is the second.
     lineage_outbox_uri: str = Field(default="", alias="MAINTENANCE_LINEAGE_OUTBOX_URI")
 
+    @model_validator(mode="after")
+    def _one_store_identity(self) -> Self:
+        """Refuse a pair beside the token, a token sent to the public AWS STS, and the secret store on without a token."""
+        if self.secrets_from_dapr:
+            require_a_token(self.web_identity, prefix="MAINTENANCE")
+        require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="MAINTENANCE")
+        return self
+
     def s3_key_pair(self) -> S3KeyPair:
-        """The key pair the sweep signs with: the store's, or the environment's when the store is off.
+        """What the sweep's own reads and records sign with: the session its token was exchanged for, or the environment's pair.
 
         Raises:
-            StoreCredentialUnavailableError: The store has not confirmed the pair within its TTL (503).
+            StoreCredentialUnavailableError: The service projects a token and holds no unexpired session (503).
         """
-        if self.secrets_from_dapr:
-            return store_key_pair(self)
-        return S3KeyPair(access_key_id=self.s3_access_key_id, secret_access_key=self.s3_secret_access_key)
+        return key_pair_in_force(self.web_identity, self.env_pair)
 
     def storage_options(self) -> StorageOptions:
         """The Lance ``storage_options`` for opening datasets on the (HTTP) S3 endpoint, under the key pair in force."""

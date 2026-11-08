@@ -4,7 +4,7 @@ metadata:
   name: {{ include "lance.fullname" . }}-bootstrap-inputs
   labels: {{- include "lance.labels" . | nindent 4 }}
 data:
-  {{- range $template := list "bootstrap-admin.yaml" "nats-stream-job.yaml" "object-store-scoped-users.yaml" "openfga-migrate.yaml" "openfga-model.yaml" }}
+  {{- range $template := list "bootstrap-admin.yaml" "nats-stream-job.yaml" "object-store-provisioning.yaml" "openfga-migrate.yaml" "openfga-model.yaml" }}
   {{- $specs := list }}
   {{- range $doc := splitList "\n---" (include (print $.Template.BasePath "/" $template) $) }}
   {{- $job := fromYaml $doc }}

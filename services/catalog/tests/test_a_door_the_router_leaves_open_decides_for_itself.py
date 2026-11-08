@@ -214,6 +214,15 @@ _DOORS: list[_Door] = [
     _Refusing(method="POST", route="/management/v1/warehouses/{warehouse_id}/validate", params={"warehouse_id": WAREHOUSE}, refused=_NOT_FOUND),
     _Refusing(method="GET", route="/management/v1/warehouses/{warehouse_id}/namespaces", params={"warehouse_id": WAREHOUSE}),
     _Refusing(method="GET", route="/management/v1/warehouses/{warehouse_id}/trash", params={"warehouse_id": WAREHOUSE}),
+    # Maintenance's reclaim of a trash record, every door asked before any record is read, so the uuid names none.
+    _Refusing(method="POST", route="/management/v1/trash/{kind}/{uuid}/credentials", params={"kind": "table", "uuid": ROLE}),
+    _Refusing(method="POST", route="/management/v1/trash/{kind}/{uuid}/release", params={"kind": "table", "uuid": ROLE}),
+    _Refusing(method="DELETE", route="/management/v1/trash/{kind}/{uuid}", params={"kind": "table", "uuid": ROLE}),
+    _Refusing(method="POST", route="/management/v1/trash/{kind}/{uuid}/refusals", params={"kind": "table", "uuid": ROLE}, body={"reason": "a stranger's"}),
+    # Maintenance's drift reconciler reads and repairs the estate's grants through these ([[XC-084]]).
+    _Refusing(method="GET", route="/management/v1/grants/census"),
+    _Refusing(method="POST", route="/management/v1/grants/ghosts/revoke", body={"objects": [f"project:{PROJECT}"]}),
+    _Refusing(method="POST", route="/management/v1/grants/tenancy/rebuild", body={"warehouses": [WAREHOUSE]}),
     # The same listing behind its gate: bob reads `side` alone, which opens the warehouse to him through its `child` edge,
     # and is shown that namespace and not its sibling.
     _Listing(

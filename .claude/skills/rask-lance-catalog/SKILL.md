@@ -682,7 +682,9 @@ governing their data. The project-scoped surface is the console's project page, 
   staged Allow also matches
   `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest, and `tree/*` reaches every branch's
   `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_maintain`) gets put/delete on the whole prefix for compaction and
-  cleanup, and get/delete on the table's own data directories, those of its declared bases its base record holds as
+  cleanup except an explicit Deny of put/delete on `<prefix>/_refs/*` (`lakehouse.table_layout.REFS_GLOB`), plus, on
+  the control root, the table's history fence (get/put) and its committed-file records `_file_identities/<uuid>/*`
+  (get/delete) (`vending.TableRecords`, [[LH-219]]), and get/delete on the table's own data directories, those of its declared bases its base record holds as
   `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. It is also the
   shape for the warehouse scope probe. The management vend door checks the one rung its
   tier names, never either. A put over an existing key is the residue no session policy can refuse, so it is DETECTED
@@ -722,7 +724,28 @@ governing their data. The project-scoped surface is the console's project page, 
   (`kubernetes~system:serviceaccount:<ns>:<release>-sa-maintenance`, `lance.saSubject`), each written as the user it is
   (`fga.user_object`); a bare name in it is refused when the catalog's settings are read ([[LH-063]]). An owner is a
   maintainer and keeps the maintainer doors, and is
-  not vended the tier.
+  not vended the tier. The management door refuses the tier 409 code 19 for a table whose maintenance policy keeps its
+  whole history (`cleanup_enabled` false, `lakehouse.maintenance_policies.keeps_whole_history`, gate
+  `require_reclaimable_history` in `api/v1/endpoints/credentials.py`), and maintenance's probe asks no vend for such a
+  table.
+  **The trash is the catalog's to end, and maintenance deletes only a due record's bytes** ([[XC-084]], ADR 0197).
+  Maintenance's own canned policy writes only its due list, policy state and lineage outbox, so it asks four doors
+  under `/management/v1/trash/{kind}/{uuid}` (`api/v1/endpoints/trash_reclaim.py`, judgement
+  `services/trash_reclaim.py`, client `maintenance.services.credentials`), each asking `can_reclaim_trash` on the
+  estate root, which only the `reclaimer` estate role opens (seeded for maintenance's ServiceAccount by the chart's
+  bootstrap-admin hook, `lance.fgaEstateRoles`): `POST .../release` revokes the object's grants once the record is past
+  its deadline by `trash.RELEASE_SETTLE`, announces a catalog-signed `grant_revoked` per person and stamps the record;
+  `POST .../credentials` vends a due table record's bytes session (`vending.ReclaimScope`: list and delete over its
+  location in both spellings and its data directories, nothing on the control root, a whole-bucket place refused);
+  `DELETE ...` ends the record once its place holds nothing (`lakehouse.trash.end`: the object's records, its claim,
+  its base record, then the record); `POST .../refusals` notes maintenance's own refusals. The catalog judges on reads no
+  session writes: the path's kind and uuid, the record it filed, and the location's claim, which must record that uuid;
+  a refusal is 409 code 19 and noted on the record (`trash.note_refusal`).
+  **Maintenance holds no OpenFGA credential** (ADR 0197): its drift reconciler reads the grant census and asks for its
+  repairs at `/management/v1/grants` (`GET /census`, `POST /ghosts/revoke`, `POST /tenancy/rebuild`;
+  `api/v1/endpoints/grant_reconcile.py`, judgement `services/grant_reconcile.py`), each asking `can_reconcile_grants`,
+  which only the `reconciler` estate role opens. The census leaves out the deployment's own objects, and the catalog
+  judges each candidate again on its own reads.
 - **A classified column is never vended raw** ([[LH-058]], [[LH-207]]). A label is field metadata `rask.classification`,
   set and cleared only through `update_field_metadata` under `can_classify` (plus `can_apply` on each value). Both vend
   doors (`/management/v1/table/{id}/credentials`, `DescribeTable(vend_credentials=true)`) answer server-mediated when
@@ -990,8 +1013,9 @@ governing their data. The project-scoped surface is the console's project page, 
   lane's, which converts its event's URL to the key it decodes to at its boundary
   (`arrival.resolve_written_table`), so its table id, policy, cadence stamp, trash gate and vend check are the
   sweep's own. A location the catalog recorded is a URL, read once as the key it decodes to. That covers:
-  - the purge (`purge.store_paths`), which reclaims a trashed table under the key its record decodes to and the
-    `.lance-reserved` marker pylance 13 writes under the spelling (measured over moto: `…$r%C3%A4…/.lance-reserved`
+  - the purge, which reclaims a trashed table under the key its record decodes to and the `.lance-reserved` marker
+    pylance 13 writes under the spelling, both from `lakehouse.table_paths.spellings`, deleting by key
+    (`lakehouse.stored_objects.list_under`/`delete_objects`, no directory marker written) with `_versions/` last (measured over moto: `…$r%C3%A4…/.lance-reserved`
     beside data at `…$räksmörgås/`);
   - the reconciler's trash set and the location the vend door answers (`credentials`); a table's policy is found by
     its uuid and its namespaces' uuids (`maintenance_policies.resolve_policy`, [[LH-523]]), never by a path;

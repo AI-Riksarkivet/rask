@@ -28,12 +28,11 @@ from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from lakehouse import trash
-from lakehouse.control_emit import ControlEmitter
 from lakehouse.governed.dapr_auth import require_dapr_token
 from lakehouse.governed.signing_key import retry_until_signed
-from maintenance.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, SettingsDep
+from maintenance.api.dependencies import ControlEmitterDep, LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
+from maintenance.services.credentials import end_trash, grant_census
 from maintenance.services.due import table_ids
 from maintenance.services.expiry import summarize_refusals
 from maintenance.services.floor import raise_listing_floors
@@ -102,7 +101,7 @@ async def ack_binding() -> dict[str, str]:
 _reconcile_lock = asyncio.Lock()
 
 
-async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control: ControlEmitterDep) -> dict[str, Any]:
+async def on_reconcile_cron(settings: SettingsDep, control: ControlEmitterDep) -> dict[str, Any]:
     """One cross-store drift REPORT, then the release of every drop past its deadline (ADR 0146), then — gated on the
     report — the #79 expired-trash purge.
 
@@ -129,11 +128,9 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
         read_sources: list[ReconcileSources] = []
         report = await reconcile(
             settings,
-            client,
+            partial(grant_census, settings),
             warehouses_enabled=settings.warehouses_enabled,
             control_root=settings.resolved_control_root,
-            fga_root_object=settings.fga_root_object,
-            default_warehouse_object=settings.fga_default_warehouse_object,
             into_sources=read_sources,
         )
         payload = report.model_dump(mode="json")
@@ -180,7 +177,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
         # rather than reclaims: a tenant this revives may own datasets the other two would otherwise
         # act on while nobody can administer them.
         if read_sources:
-            rebuilt = await rebuild_tuples(settings, report=report, sources=read_sources[0], fga_client=client)
+            rebuilt = await rebuild_tuples(settings, report=report, sources=read_sources[0])
             payload["tuple_rebuild"] = rebuilt.model_dump(mode="json")
             if rebuilt.written or rebuilt.unjustified or rebuilt.error:
                 # NAMED at WARNING: every entry is an authorization change (or a tenant that cannot be
@@ -200,9 +197,9 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
         # revokes authz for objects no record names. Running the revoke first would let one tick revoke
         # a pointer the next tick re-writes, and an operator reading the audit stream would see an
         # estate arguing with itself. Both read THIS tick's report, never a fresh scan.
-        repaired = await repair_drift(settings, report=report, fga_client=client)
+        repaired = await repair_drift(settings, report=report)
         payload["drift_repair"] = repaired.model_dump(mode="json")
-        if repaired.revoked or repaired.error:
+        if repaired.revoked or repaired.kept_by_the_catalog or repaired.error:
             # NAMED at WARNING for the rebuild's reason in the other direction: every entry removed a
             # grant surface, and "revoked 50 objects" tells an operator nothing they can check.
             log.warning(
@@ -211,6 +208,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
                     "dry_run": repaired.dry_run,
                     "revoked": [f"{r.fga_object} ({r.tuples} tuples) <- {r.justified_by}" for r in repaired.revoked],
                     "refused": repaired.refused,
+                    "kept_by_the_catalog": repaired.kept_by_the_catalog,
                     "capped": repaired.capped,
                     "error": repaired.error,
                 },
@@ -222,8 +220,10 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
         # rather than overturning it. AFTER the authz repair and BEFORE the purge, because the purge's
         # gate is the drift report as MEASURED and a record cleared here was never purgeable anyway —
         # its root is one no purge tick can reach.
+        # The record is ended by the catalog ([[XC-084]]): maintenance holds no write of its own, and the catalog ends a
+        # record only once its own listing finds the place empty, revoking what grants the object still holds.
         def _clear(record: Tombstone) -> None:
-            trash.clear(settings.resolved_control_root, settings.storage_options(), record.uuid, kind=record.kind)
+            end_trash(record.kind, record.uuid, settings)
 
         probe = partial(objects_held, storage_options=settings.storage_options())
         swept = await run_in_threadpool(sweep_tombstones, settings, report=report, probe=probe, delete=_clear)
@@ -243,7 +243,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
             )
         # ADR 0146: a drop past its deadline loses its grants on every tick, ungated by the report and by the purge's
         # opt-in, since it deletes no byte. Before the purge, which then finds nothing left to revoke.
-        payload["trash_release"] = await _release_expired_trash(settings, client=client, control=control)
+        payload["trash_release"] = await _release_expired_trash(settings)
         names = await run_in_threadpool(_swept_table_ids, settings)
         floors = await run_in_threadpool(
             partial(raise_listing_floors, settings, orphans=report.orphan_files, names=names, storage_options=settings.storage_options())
@@ -267,7 +267,6 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
         purged = await purge_expired_trash(
             settings,
             report=report,
-            fga_client=client,
             control=control,
             control_root=settings.resolved_control_root,
         )
@@ -295,10 +294,10 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, control
         return payload
 
 
-async def _release_expired_trash(settings: MaintenanceSettings, *, client: Any, control: ControlEmitter) -> dict[str, Any]:  # noqa: ANN401 — OpenFgaClient | None
+async def _release_expired_trash(settings: MaintenanceSettings) -> dict[str, Any]:
     """One tick's release of the drops past their deadline, logged NAMED at WARNING when it did or held anything: each
     entry removed every grant on an object, and a count names no one to check."""
-    released = await release_expired_trash(settings, fga_client=client, control=control, control_root=settings.resolved_control_root)
+    released = await release_expired_trash(settings, control_root=settings.resolved_control_root)
     if released.released or released.held or released.reason:
         log.warning(
             "trash_release_result",

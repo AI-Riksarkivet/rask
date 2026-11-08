@@ -25,7 +25,8 @@ admitted by their subchart's name label below). No daprd dials it, since the rel
 
 ## `name: {{ include "lance.fullname" . }}-object-store-ingress`
 
-THE STORE ADMITS ITS NAMED CLIENTS ONLY, by component label: the data-plane services, the scoped-users hook, which creates every platform bucket and every scoped user and so must reach
+THE STORE ADMITS ITS NAMED CLIENTS ONLY, by component label: the data-plane services, the provisioning hook (`object-store-provisioning`), which creates every platform bucket and
+every canned policy and so must reach
 the store before anything else can, and both backup CronJobs (`backup-pg`, `backup-control-root`), each writing under
 `_backups/`. A backup pod absent from the list is dropped in silence under default-deny and its CronJob stays green
 while nothing is copied. The rule cannot narrow the admin API, which RustFS serves on the S3 port: that plane is held
@@ -60,7 +61,7 @@ egress, and a compromised static server reaches nothing, not even DNS.
 ## `name: {{ include "lance.fullname" . }}-allow-openfga-egress`
 
 With `openfga.enabled` off, OpenFGA is the platform's (`auth.fgaApiUrl`, usually HTTPS outside the namespace) and the
-estate's authorization fails closed through it. The pods that dial it are the tuple writers (`lance.fgaWriters`), the
+estate's authorization fails closed through it. The pods that dial it are the tuple writers (`lance.fgaWriters`, the catalog alone), the
 model hook and the bootstrap-admin Job, the same list its in-namespace ingress admits, and only they reach the peers the
 platform states as `auth.fgaEgress`.
 

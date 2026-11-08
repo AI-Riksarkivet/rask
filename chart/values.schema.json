@@ -184,7 +184,7 @@
                     "type": "object",
                     "properties": {
                         "enabled": {
-                            "description": "Schedule a CronJob that pg_dumps the OpenFGA and Dapr state databases (gzip) to `_backups/pg/\u003cdate\u003e/` in the lakehouse bucket. Off by default.",
+                            "description": "Schedule a CronJob that pg_dumps the OpenFGA database (gzip) to `_backups/pg/\u003cdate\u003e/` in the lakehouse bucket. It signs with a session its own ServiceAccount's token is exchanged for, and pg_dump reads its password from a PGPASSFILE. Off by default.",
                             "type": "boolean"
                         },
                         "keep": {
@@ -683,10 +683,6 @@
                     "description": "Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default.",
                     "type": "boolean"
                 },
-                "controlRoot": {
-                    "description": "S3 root of the catalog's control registries (projects, warehouses, trash, `_bases/`). Empty uses the primary bucket; set together with the catalog's.",
-                    "type": "string"
-                },
                 "daprAppId": {
                     "description": "Dapr app-id of the maintenance service; also names its durable consumer.",
                     "type": "string"
@@ -738,10 +734,6 @@
                 "orphanScan": {
                     "description": "Run the reconciler's per-dataset unreferenced-file scan; read-only, and required for `trashPurge` to certify a clean report.",
                     "type": "boolean"
-                },
-                "policyRoot": {
-                    "description": "S3 root of maintenance policy records. Empty falls back to `controlRoot`, then the primary bucket.",
-                    "type": "string"
                 },
                 "port": {
                     "description": "HTTP port of the maintenance container.",
@@ -802,7 +794,7 @@
                     "type": "integer"
                 },
                 "vendWriteCredentials": {
-                    "description": "Sign maintenance's writes (version expiry) with a per-table credential vended by the catalog instead of the deployment's S3 key; falls back per dataset.",
+                    "description": "Wire maintenance to the catalog's vending door, the only credential its rewrites are signed with; off, maintenance holds no maintain rung and refuses every rewrite.",
                     "type": "boolean"
                 }
             }
@@ -1037,11 +1029,7 @@
             "type": "object",
             "properties": {
                 "accessKey": {
-                    "description": "Access key id of the store's root account (`rustfsadmin` is RustFS's built-in default id); its secret is `object-store-secret-key` in `\u003crelease\u003e-object-store-root`, which only the store and the scoped-users hook mount. No service presents it.",
-                    "type": "string"
-                },
-                "backupAccessKey": {
-                    "description": "Access key of the backups' identity (reads the control-root records, writes `_backups/`); secret derives in-cluster.",
+                    "description": "Access key id of the store's root account (`rustfsadmin` is RustFS's built-in default id); its secret is `object-store-secret-key` in `\u003crelease\u003e-object-store-root`, which only the store and the provisioning hook mount. No workload presents it.",
                     "type": "string"
                 },
                 "bucket": {
@@ -1049,11 +1037,11 @@
                     "type": "string"
                 },
                 "buckets": {
-                    "description": "Extra platform buckets the scoped-users hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.",
+                    "description": "Extra platform buckets the provisioning hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.",
                     "type": "array"
                 },
                 "enabled": {
-                    "description": "This estate uses the development object store (deploy/fixtures/rustfs, Service `\u003crelease\u003e-rustfs`): rask runs its scoped-users hook against it (the platform buckets and every scoped user), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server.",
+                    "description": "This estate uses the development object store (deploy/fixtures/rustfs, Service `\u003crelease\u003e-rustfs`): rask runs its provisioning hook against it (the platform buckets and every identity's policy), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server.",
                     "type": "boolean"
                 },
                 "externalEndpoint": {
@@ -1064,22 +1052,39 @@
                     "type": "object",
                     "properties": {
                         "audience": {
-                            "description": "The audience the catalog's ServiceAccount token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required.",
+                            "description": "The audience every lakehouse workload's store token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required.",
                             "type": "string"
                         },
+                        "roleArns": {
+                            "type": "object",
+                            "properties": {
+                                "backup-control-root": {
+                                    "description": "The role the control-root backup's token is exchanged for (`backups.controlRoot`).",
+                                    "type": "string"
+                                },
+                                "backup-pg": {
+                                    "description": "The role the pg dump's token is exchanged for (`backups.pgDump`).",
+                                    "type": "string"
+                                },
+                                "catalog": {
+                                    "description": "The role the catalog's token is exchanged for, for its own IO and every vend.",
+                                    "type": "string"
+                                },
+                                "lineage": {
+                                    "description": "The role lineage's token is exchanged for.",
+                                    "type": "string"
+                                },
+                                "maintenance": {
+                                    "description": "The role maintenance's token is exchanged for.",
+                                    "type": "string"
+                                }
+                            }
+                        },
                         "sessionSeconds": {
-                            "description": "How long a session for the catalog's own IO lasts (LANCE_S3_SESSION_SECONDS, 900 to 43200 s); it is renewed at half its life.",
+                            "description": "How long a workload's session lasts (`*_S3_SESSION_SECONDS`, 900 to 43200 s): a service renews its own at half its life, and a backup run asks for one.",
                             "type": "integer"
                         }
                     }
-                },
-                "lineageAccessKey": {
-                    "description": "Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. Required: no service presents the store's root.",
-                    "type": "string"
-                },
-                "maintenanceAccessKey": {
-                    "description": "Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. Required: no service presents the store's root.",
-                    "type": "string"
                 },
                 "port": {
                     "description": "S3 API port of the development store's Service.",
@@ -1743,10 +1748,6 @@
                 "allowExternalBlobs": {
                     "description": "Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`.",
                     "type": "boolean"
-                },
-                "assumeRoleArn": {
-                    "description": "The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one.",
-                    "type": "string"
                 },
                 "encryption": {
                     "description": "Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default.",

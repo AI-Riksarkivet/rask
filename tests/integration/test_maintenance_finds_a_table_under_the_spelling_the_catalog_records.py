@@ -48,6 +48,7 @@ from lakehouse.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import objects_held, purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 
 
 _ROWS = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
@@ -202,14 +203,16 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
             "policy_root": estate.root,
             "control_root": estate.root,
             "trash_purge_enabled": True,
+            "catalog_url": CATALOG_URL,
         }
     )
 
-    out = asyncio.run(purge_expired_trash(settings, report=report, control_root=estate.root, data_roots={estate.root}))
+    with catalog_doors(estate.client):
+        out = asyncio.run(purge_expired_trash(settings, report=report, control_root=estate.root, data_roots={estate.root}))
 
     assert out.refused == [], out.refused
     assert [(purged.id, purged.bytes_deleted, purged.files_deleted) for purged in out.purged] == [(table, sum(held.values()), len(held))]
-    # pyarrow's S3 `delete_dir` keeps the emptied parent as a zero-byte `spelled/` marker, which is no byte of the table.
+    # The purge deletes by key under the session vended for this record, so it writes no marker beside the table.
     assert [key for key in estate.objects() if key.startswith(f"spelled/{name}/")] == [], "the purge left bytes of the table it reclaimed"
     assert trash.named(estate.root, estate.key, table) == [], "the record outlived its purge"
     assert estate.reads(table) == (3, 3), "the purge reached the table created since under the name"

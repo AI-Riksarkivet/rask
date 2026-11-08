@@ -33,8 +33,8 @@ import pyarrow.fs as pafs
 
 from lakehouse import outbox_metrics
 from lakehouse.objectfs import fs_and_base
-from lakehouse.storage import S3Client, s3_client, split_s3_uri
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import split_s3_uri
+from lakehouse.storage_options import StorageOptions, object_client
 
 
 log = logging.getLogger(__name__)
@@ -64,24 +64,6 @@ def _object_key(run_id: str, event_json: str) -> str:
     return f"{run_id}@{event_type}" if event_type else run_id
 
 
-def _outbox_s3_client(storage_options: StorageOptions) -> S3Client:
-    """The storage seam's client for an outbox, signed by the options' whole key pair (``StorageOptions.credential_in_clear``).
-
-    The SESSION TOKEN is not optional to forward. A vended STS credential without it is not a weaker
-    credential, it is an invalid one, and dropping it falls back to whatever ambient chain boto3 finds —
-    broader rights than the vend scoped, not narrower. Shared by the stage and the drop so the pair
-    cannot drift.
-    """
-    access_key, secret_key, session_token = storage_options.credential_in_clear()
-    return s3_client(
-        storage_options.options.get("endpoint"),
-        access_key=access_key,
-        secret_key=secret_key,
-        session_token=session_token,
-        region=storage_options.options.get("region"),
-    )
-
-
 def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, event_json: str) -> None:
     """Persist the event JSON at ``<outbox_uri>/<key>.json``, where the key is :func:`_object_key` —
     the run id AND the event type, so a run's COMPLETE cannot truncate its own FAIL. A redelivery of
@@ -106,7 +88,7 @@ def stage_event(outbox_uri: str, storage_options: StorageOptions, run_id: str, e
     if storage_options.reaches_by_endpoint(outbox_uri):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
         key = f"{_object_key(run_id, event_json)}.json"
-        _outbox_s3_client(storage_options).put_object(
+        object_client(storage_options).put_object(
             Bucket=bucket,
             Key=f"{prefix.rstrip('/')}/{key}" if prefix else key,
             Body=event_json.encode("utf-8"),
@@ -125,7 +107,7 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     A DELETE MUST NEED ONLY DELETE PERMISSION, and through pyarrow it did not. `S3FileSystem.delete_file`
     re-creates the parent directory marker after removing the object, so this path issued a **PutObject**
     on the prefix — and the relay's identity is granted, deliberately and correctly, only
-    `s3:DeleteObject` on its own outbox (`chart/templates/object-store-scoped-users.yaml`, statement
+    `s3:DeleteObject` on its own outbox (`lance.objectStorePolicy.lineage` in `chart/templates/_helpers.tpl`, statement
     `DrainItsOwnOutboxAndNothingElse`; the policy grants lineage no `PutObject` anywhere). So the drain
     had never once succeeded:
 
@@ -143,10 +125,10 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     """
     if storage_options.reaches_by_endpoint(outbox_uri):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
-        # The stage's own client (:func:`_outbox_s3_client`): a delete signed with less than the whole key pair falls back
+        # The stage's own client (:func:`~lakehouse.storage_options.object_client`): a delete signed with less than the whole key pair falls back
         # to boto3's default chain, and the lineage pod carries no ambient `AWS_*` (measured 2026-09-10), so that would be
         # a delete with no credential at all; pinned in `test_the_outbox_drain_needs_no_write_permission.py`.
-        client = _outbox_s3_client(storage_options)
+        client = object_client(storage_options)
         # An absent object already satisfies the post-condition, and S3's DeleteObject is idempotent for
         # a missing key (204, no error) — so this suppression is for a NON-S3 double or backend that
         # raises instead, the same tolerance the filesystem path below spells the same way. Catching

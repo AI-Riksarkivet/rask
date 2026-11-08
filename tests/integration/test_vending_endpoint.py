@@ -17,7 +17,7 @@ from lance_namespace import DescribeTableResponse
 from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
-from catalog.core.vending import Tier, VendedSession
+from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.governed.store_credential import S3KeyPair
 
 
@@ -25,9 +25,10 @@ def _described(location: str | None) -> DescribeTableResponse:
     return DescribeTableResponse(location=location)
 
 
-def test_mode_b_returns_server_mediated(client: TestClient, fake_ns: MagicMock) -> None:
+def test_mode_b_returns_server_mediated(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> None:
     # The lifespan builds a ModeBVendor by default → vend() returns None → no direct credential.
     fake_ns.describe_table.return_value = _described("s3://lance-catalog/db$t")
+    claim_described("db$t")
     resp = client.post("/management/v1/table/db$t/credentials")
     assert resp.status_code == 200
     body = resp.json()
@@ -42,7 +43,15 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
 
     class _FakeVendor:
         def vend(
-            self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+            self,
+            *,
+            table_location: str,
+            tier: Tier,
+            session_name: str,
+            bases: Sequence[str] = (),
+            data_directories: Sequence[str] = (),
+            branch: str = "",
+            records: TableRecords | None = None,
         ) -> VendedSession:
             captured.update(table_location=table_location, tier=tier)
             key_pair = S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST"))
@@ -59,14 +68,23 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
     assert captured == {"table_location": "s3://lance-catalog/db$t", "tier": "write"}
 
 
-def test_an_exchange_the_store_refuses_answers_unavailable(client: TestClient, fake_ns: MagicMock) -> None:
+def test_an_exchange_the_store_refuses_answers_unavailable(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[str], str]) -> None:
     """The token the store refused is the catalog's own, so the caller is told to retry (503, code 17), never to sign
     in again: a 401 would send an authorized caller into a re-login loop that cannot succeed."""
     fake_ns.describe_table.return_value = _described("s3://lance-catalog/db$t")
+    claim_described("db$t")
 
     class _RefusedVendor:
         def vend(
-            self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+            self,
+            *,
+            table_location: str,
+            tier: Tier,
+            session_name: str,
+            bases: Sequence[str] = (),
+            data_directories: Sequence[str] = (),
+            branch: str = "",
+            records: TableRecords | None = None,
         ) -> VendedSession:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "token verification failed"}}, "AssumeRoleWithWebIdentity")
 

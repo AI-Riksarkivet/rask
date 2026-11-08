@@ -36,7 +36,8 @@ then writes it, treating a duplicate-write 400/409 as success.
 ## `"helm.sh/hook-weight": "10"`
 
 After every hook this Job waits on: `openfga-model` (0), whose model must hold the relations it writes, and
-`object-store-scoped-users` (5), whose S3 user the catalog it waits for cannot start without. On a first install the latter is
+`object-store-provisioning` (5), whose canned policy for the catalog's ServiceAccount the catalog it waits for cannot
+open a store session without. On a first install the latter is
 `post-install` only, and at one weight Helm runs the two by name, this Job first, so the install timed out on it
 (XC-133, CI run 38217921913). Pinned by `tests/unit/test_the_authorization_model_reaches_the_store.py`.
 
@@ -77,7 +78,9 @@ still gets the bootstrap grant in the right place.
 ## `estate_roles = json.loads(os.environ["FGA_ESTATE_ROLES"])`
 
 THE ESTATE ROLES THE RELEASE DECLARES, one JSON object from each account's subject to the machine roles it holds on the
-estate root (`lance.fgaEstateRoles`): lineage's `decider` and `governance_prober`, on the subject the door verifies its
+estate root (`lance.fgaEstateRoles`): lineage's `decider` and `governance_prober`, and, with `maintenance.enabled`,
+maintenance's `reclaimer` (`can_reclaim_trash`, the rung the catalog's reclaim door
+`POST /management/v1/trash/{kind}/{uuid}/credentials` checks, [[XC-084]]), each on the subject the door verifies its
 token as (`lance.saSubject`), so the two cannot drift. Every grant names the user its subject is
 (`lakehouse.governed.fga.user_object`, `:` written `%3A`). A client's roles are not here ([[LH-563]]): a client is
 granted them at the catalog's access doors as its own identity, `decider` scoped to the projects or warehouses it serves,
@@ -89,10 +92,11 @@ or on the estate root at the estate admin's tuple door for one serving every ten
 
 THE RELEASE'S OWN ACCOUNTS CONVERGE TO WHAT IT DECLARES, AND NO OTHER PRINCIPAL IS TOUCHED. The grant loop above only
 adds, so on its own a role taken from lineage's list, or the maintenance rung once `maintenance.vendWriteCredentials` or
-`maintenance.enabled` is off, would keep standing for as long as the store lives: a grant no file in git declares, which
+`maintenance.enabled` is off, or maintenance's `reclaimer` once `maintenance.enabled` is off, would keep standing for as long as the store lives: a grant no file in git declares, which
 an install from git would not reproduce (GitOps, [[XC-164]]). On each object the hook grants on (the estate root and the
 default warehouse), the machine relations are that type's relations only a user holds directly (`[user]`: the estate's
-`decider`, `event_reader`, `governance_prober`, `member_expander`; the warehouse's `decider` and `maintenance`), read off
+`decider`, `event_reader`, `governance_prober`, `member_expander`, `reclaimer`; the warehouse's `decider` and
+`maintenance`), read off
 the model this image carries (`lakehouse.governed.fga.machine_relations`), the rule the catalog's offboarding door asks
 too. The hook reads every tuple of each on that object, following OpenFGA's `continuation_token` page by page, and
 deletes each one naming one of the release's own ServiceAccounts that the release does not declare there. A tuple

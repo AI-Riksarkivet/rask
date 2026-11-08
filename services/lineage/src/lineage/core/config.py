@@ -11,16 +11,17 @@ config: enabling a layer without the inputs it needs raises at startup, never si
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Self
 
-from pydantic import AfterValidator, AliasChoices, Field, SecretStr
+from pydantic import AfterValidator, AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.settings import GovernedAuthSettings
-from lakehouse.governed.store_credential import S3KeyPair, store_key_pair
+from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.storage_options import StorageOptions
+from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_a_token, require_one_store_identity
 
 
 class Signing(BaseSettings):
@@ -49,7 +50,7 @@ class Signing(BaseSettings):
         return bool(self.signers)
 
 
-class LineageSettings(GovernedAuthSettings, BaseSettings):
+class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, BaseSettings):
     """Config for the lineage service, the catalog that keeps its tables, and its auth gate."""
 
     # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
@@ -58,7 +59,7 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # namespace the aliases already declare; an explicit alias bypasses it, so the
     # deliberately-bare ones (DAPR_HTTP_PORT) still land.
     # See tests/unit/test_settings_env_namespace.py.
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LINEAGE_", extra="ignore")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LINEAGE_", alias_generator=env_alias("LINEAGE"), extra="ignore")
 
     # --- The catalog that keeps the feed and the edge list (ADR 0158) ---------------------------------
     #: The catalog's base URL. The feed, the edge list and the outbox refusals are Lance tables it governs, and
@@ -132,12 +133,8 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
 
     # --- The outbox the relay drains: object storage the producers stage to and this service deletes from.
     s3_endpoint: str | None = Field(default=None, alias="LINEAGE_S3_ENDPOINT")
-    #: The key pair the outbox is reached with when the secret store is OFF; with it on, the pair is the store's
-    #: (`dapr_secret_s3_id_field` and `dapr_secret_s3_field`, ADR 0166) and these two are not read. SecretStr so
-    #: the secret is redacted in repr/model_dump (parity with the catalog).
-    s3_access_key_id: str | None = Field(default=None, alias="LINEAGE_S3_ACCESS_KEY_ID")
-    s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LINEAGE_S3_SECRET_ACCESS_KEY")
-    s3_region: str = Field(default="us-east-1", alias="LINEAGE_S3_REGION")
+    # Lineage's identity at the store is `StoreIdentitySettings`' (LINEAGE_S3_WEB_IDENTITY_TOKEN_FILE and the rest): the
+    # sessions its token is exchanged for sign its outbox drain, and it holds no key.
 
     # #4: the durable lineage-outbox prefix (shared with the producers that stage there). When set, the relay
     # tick DRAINS it — re-ingesting any event a producer staged but whose publish never got acked (a crash
@@ -150,9 +147,9 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # oldest-first means nothing starves behind a steady arrival rate. 0 = unbounded (not recommended).
     outbox_drain_limit: int = Field(default=500, alias="LINEAGE_OUTBOX_DRAIN_LIMIT")
 
-    # --- Secret consumption from the Dapr secret store (OpenBao), symmetric with the catalog. When on, the
-    # outbox's S3 key pair is the store's, NOT plaintext env: the chart renders neither half into pod env,
-    # and `lakehouse.governed.store_credential` reads it at boot (failing closed) and again while lineage runs.
+    # --- Secret consumption from the Dapr secret store (OpenBao), symmetric with the catalog. When on, lineage's
+    # forwarder key and signers' public keys are read from the store, and its object-store identity is its
+    # ServiceAccount token, never a pair (`require_one_store_identity`).
     secrets_from_dapr: bool = Field(default=False, alias="LINEAGE_SECRETS_FROM_DAPR")
     #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
     #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
@@ -160,12 +157,6 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     #: (the one every service reads); the per-service alias stays FIRST so a single service can
     #: still be moved on its own.
     dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LINEAGE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
-    #: Lineage's own secret in the store: its scoped pair (`objectStore.lineageAccessKey`), readable by lineage alone
-    #: ([[XC-165]]), never the store's root (ADR 0168).
-    dapr_secret_key: str = Field(default="lineage-s3", alias="LINEAGE_DAPR_SECRET_KEY")
-    dapr_secret_s3_field: str = Field(default="secret_key", alias="LINEAGE_DAPR_SECRET_S3_FIELD")
-    #: The field of the same secret holding the key id the secret signs under, read with it.
-    dapr_secret_s3_id_field: str = Field(default="access_key", alias="LINEAGE_DAPR_SECRET_S3_ID_FIELD")
 
     # --- Feed retention, in DAYS of arrival time (the estate's own `received_at`, never the
     # producer-supplied eventTime). 0 = unbounded. Pruned once per relay tick, never on the ingest path.
@@ -191,15 +182,26 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     #: one nobody disables. Turn it on per-environment (the chart's dev values do).
     docs_enabled: bool = Field(default=False, alias="LINEAGE_DOCS")
 
+    @model_validator(mode="after")
+    def _one_store_identity(self) -> Self:
+        """Refuse a store identity that is doubled, missing where the secret store is on, or sent to AWS's STS."""
+        if self.secrets_from_dapr:
+            require_a_token(self.web_identity, prefix="LINEAGE")
+        require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="LINEAGE")
+        return self
+
+    @property
+    def outbox_on_the_store(self) -> bool:
+        """Whether the outbox the relay drains is on the object store, the one thing lineage signs store requests for."""
+        return self.outbox_uri.startswith("s3://")
+
     def s3_key_pair(self) -> S3KeyPair:
-        """The key pair the outbox is reached with: the store's, or the environment's when the store is off.
+        """What the outbox is reached with: the session lineage's token was exchanged for, or the environment's pair.
 
         Raises:
-            StoreCredentialUnavailableError: The store has not confirmed the pair within its TTL (503).
+            StoreCredentialUnavailableError: Lineage projects a token and holds no unexpired session (503).
         """
-        if self.secrets_from_dapr:
-            return store_key_pair(self)
-        return S3KeyPair(access_key_id=self.s3_access_key_id or "", secret_access_key=self.s3_secret_access_key)
+        return key_pair_in_force(self.web_identity, self.env_pair)
 
 
 @lru_cache
@@ -209,10 +211,6 @@ def get_settings() -> LineageSettings:
 
 
 def storage_options(settings: LineageSettings) -> StorageOptions:
-    """Object-store options for the outbox the relay drains.
-
-    The same S3-compatible config the producers stage with, under the key pair in force. Empty strings let
-    the object-store client fall back to its default credential chain (e.g. real AWS) when the secret store
-    is off and the ``LINEAGE_S3_*`` env vars are unset.
-    """
+    """Object-store options for the outbox the relay drains: the S3-compatible config the producers stage with, under the
+    key pair in force (:meth:`LineageSettings.s3_key_pair`)."""
     return lance_storage_options(settings.s3_endpoint or "", settings.s3_key_pair(), settings.s3_region)

@@ -68,6 +68,7 @@ the issuer.
 
 The object store is S3-compatible: the RustFS fixture in development, the platform's S3 in production
 (`objectStore.externalEndpoint`). Services reach it through `lakehouse.storage` and the catalog's vended credentials; the
-store's root key is held by the store alone, and each service presents a scoped identity.
+store's root key is held by the store and its provisioning hook alone, and each service holds no key: it exchanges its
+ServiceAccount token at the store's STS for a session under its own canned policy.
 
 Changes to the environment are read once at service startup — restart the relevant service to pick them up.

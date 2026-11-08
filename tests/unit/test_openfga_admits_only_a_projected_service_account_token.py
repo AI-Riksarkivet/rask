@@ -42,7 +42,7 @@ def test_openfga_runs_oidc_against_the_mirrored_cluster_issuer_with_no_playgroun
 
 #: The accounts that write tuples ([[LH-442]]): the catalog and maintenance, plus the jobs that publish the model and seed the
 #: estate's grants, whatever else the release runs. Every other governed service decides through the catalog.
-_WRITERS = {"catalog", "maintenance", "jobs", "hooks"}
+_WRITERS = {"catalog", "jobs", "hooks"}
 
 
 def _projected(pod: dict, container: dict, path: str) -> set[tuple[str | None, str]]:
@@ -104,6 +104,11 @@ def test_only_a_tuple_writer_holds_an_openfga_token_and_every_other_governed_ser
     assert admitted == openfga_clients == writers, (
         f"OpenFGA admits {sorted(admitted)}; its clients are {sorted(openfga_clients)}; the writers are {sorted(writers)}"
     )
-    assert deciders and set(deciders) == set(seeded), f"deciders {sorted(deciders)} vs the roles bootstrap seeds {sorted(seeded)}"
-    assert all("decider" in roles for roles in seeded.values()), seeded
-    assert reachers == {"catalog", "maintenance", "bootstrap-admin", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"
+    deciding = {subject for subject, roles in seeded.items() if "decider" in roles}
+    assert deciders and set(deciders) == deciding, f"deciders {sorted(deciders)} vs the decision roles bootstrap seeds {sorted(deciding)}"
+    # The estate roles beside the decision roles are maintenance's, which reaches the store's grants only through the
+    # catalog: its reclaim of the trash and its drift reconciler ([[XC-084]]).
+    assert {subject: roles for subject, roles in seeded.items() if subject not in deciding} == {
+        "kubernetes~system:serviceaccount:default:rask-sa-maintenance": ["reclaimer", "reconciler"]
+    }, seeded
+    assert reachers == {"catalog", "bootstrap-admin", "openfga-model"}, f"OpenFGA's API is reachable from {sorted(reachers)}"

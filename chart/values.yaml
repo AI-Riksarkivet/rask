@@ -483,7 +483,8 @@ auth:
   fgaEgress: []
   # OpenFGA authorizes none of its callers, so only the services that write tuples hold a `rask-openfga` token
   # ([[LH-442]]); every other governed service asks the catalog's decision door (`/management/v1/decisions`) as its own
-  # ServiceAccount. Lineage's estate roles are this release's own (`lance.fgaEstateRoles`, seeded by bootstrap-admin). A
+  # ServiceAccount. Lineage's decision roles and maintenance's reclaim of the trash are this release's own estate roles
+  # (`lance.fgaEstateRoles`, seeded by bootstrap-admin). A
   # client of the lakehouse is granted its roles at the catalog's access doors as its own identity ([[LH-563]]), and
   # this chart names none. OpenFGA reads its own subject list (the writers) only at start, so a change to it needs an
   # OpenFGA restart.
@@ -536,8 +537,6 @@ vending:
   # it reaches the store at. In production the platform names the store's public address here (LH-489).
   # -- Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. https on a real deployment: the render refuses an http one.
   endpoint: ""
-  # -- The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one.
-  assumeRoleArn: "arn:aws:iam::000000000000:role/lance-vend"
   # ENCRYPTION AT REST for every DIRECT write, carried in the vended storage options (§ J5). A vended
   # client writes to object storage with the catalog out of the path, so this is the only channel that
   # reaches it.
@@ -617,7 +616,7 @@ catalog:
   # base under the dataset's own options (`lance_docs/lance/guide/object_store.md` § Per-Base Configuration), so no base holds a
   # credential of its own. Maintenance reclaims what no version references there and the purge deletes a dropped
   # table's directory, so the store must grant the catalog's and maintenance's identities on these buckets as on
-  # the estate's. On the development store the scoped-users hook creates each bucket; a platform store's operator
+  # the estate's. On the development store the provisioning hook creates each bucket; a platform store's operator
   # creates them.
   multibase:
     # -- Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates.
@@ -757,7 +756,7 @@ pubsub:
 # namespace doors, and the chart runs no stage, no producer and no engine of its own.
 medallion:
   # Storage ZONES. Maps a tier NAMESPACE to its S3 bucket; anything unset falls back to the shared `objectStore.bucket`,
-  # so the default is the single-bucket layout. Any bucket listed here is created by the scoped-users hook on the dev store, swept
+  # so the default is the single-bucket layout. Any bucket listed here is created by the provisioning hook on the dev store, swept
   # by maintenance, and appended to the catalog's LANCE_RESERVED_BUCKETS, so naming a bucket makes it platform
   # storage no tenant may later claim as a warehouse.
   #
@@ -812,47 +811,17 @@ maintenance:
   arrivalEnabled: true
   # -- Dead-letter topic of the write-event lane, for deliveries that exhaust their retries; set only with `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.
   arrivalDlqTopic: dlq.maintenance.arrival
-  # Sign each of maintenance's WRITES with a credential vended per table by the catalog, instead of the
-  # deployment's ambient root key. Version expiry IS a write — it deletes data files and commits a
-  # manifest — so with this off the service that expires versions in every bucket does so with one
-  # long-lived key, which is the posture the vending door exists to end.
+  # THE CATALOG'S VENDING DOOR IS THE ONLY CREDENTIAL MAINTENANCE'S REWRITES ARE SIGNED WITH ([[LH-219]]). Version
+  # expiry IS a write — it deletes data files and commits a manifest — and so is the listing-floor raise, so each pass
+  # asks the door for a `maintain`-tier credential scoped to its one table and expiring in 900 s, which
+  # `can_vend_maintain` opens to this identity alone: the `maintenance` rung the catalog writes on every warehouse and
+  # the bootstrap hook converges (`lance.fgaMaintainers`). Maintenance's own session reads the whole estate and signs
+  # no table's rewrite. The URL is rendered by this chart, so "catalog reachable" is a property of the deployment.
   #
-  # ON BY DEFAULT, and the default is the decision. It shipped `false` under the reasoning that it
-  # "needs the catalog reachable AND the subject holding `can_write_data`", so turning it on was the
-  # operator's statement that both were true. Measured on the live estate 2026-09-09, that produced the
-  # opposite of the intent: `catalog_url` was empty in the running pod, every compaction signed with the
-  # root key, and the only evidence was the ABSENCE of a `vend_credentials` audit stream. `values.yaml`
-  # already carries the general form of this ruling for `docs_enabled` — "a security default that every
-  # deployment must remember to turn off is one nobody turns off" — and a hardening every deployment
-  # must remember to turn ON is the same defect facing the other way.
-  #
-  # Both preconditions hold. The sweep vends `tier=maintain`, which `endpoints/credentials.py` opens to
-  # `can_maintain`, the rung the bootstrap grants the sweep (a `maintainer`, never a `writer`); and the
-  # URL is rendered by this chart, so "catalog reachable" is a property of the deployment rather than
-  # of the operator's memory.
-  #
-  # COVERAGE IS PER WAREHOUSE, not estate-wide: the bootstrap hook grants the maintainer rung on the
-  # default warehouse, so a tenant warehouse (and any warehouse minted after install) still compacts on
-  # the root key until its own grant exists. That fallback is correct, is logged per dataset, and — since
-  # 2026-09-09 — the whole-service form of it announces itself once per process instead of silently
-  # (`maintenance/services/credentials.py::_announce_vending_is_off`), which is what made the estate-wide
-  # case invisible. So this is a bounded improvement that reports its own bounds, not a switch that
-  # either works or fails. See `docs/adr/0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md`, "The lakehouse cloud-native cutover".
-  # -- Sign maintenance's writes (version expiry) with a per-table credential vended by the catalog instead of the deployment's S3 key; falls back per dataset.
+  # Off, the chart wires no door and declares no rung, and the bootstrap hook takes the rung back: every rewrite is
+  # refused (gate `vending_not_direct`), so reclamation pauses while discovery, the due list and the drift report run.
+  # -- Wire maintenance to the catalog's vending door, the only credential its rewrites are signed with; off, maintenance holds no maintain rung and refuses every rewrite.
   vendWriteCredentials: true
-  # The catalog's control root (project/warehouse/trash registries and the `_bases/` base records).
-  # Empty => the primary bucket, which is what the catalog itself defaults to; set both together if the
-  # catalog's root is moved. Lineage reads the base records from here too (LINEAGE_CONTROL_ROOT).
-  # -- S3 root of the catalog's control registries (projects, warehouses, trash, `_bases/`). Empty uses the primary bucket; set together with the catalog's.
-  controlRoot: ""
-  # …and "both" needs a second key to exist. `MAINTENANCE_POLICY_ROOT` was rendered NOWHERE until
-  # 2026-08-16, so an operator following the line above moved the trash/warehouse/project reads and
-  # left the #50 policy reads pointing at the old bucket. That failure is silent in the worst way: a
-  # policy registry at the wrong root lists cleanly as EMPTY, so every retention override and
-  # legal-hold opt-out simply stops applying while the sweep reports a healthy run.
-  # Empty => falls back to controlRoot, then to the primary bucket (config.py::resolved_policy_root).
-  # -- S3 root of maintenance policy records. Empty falls back to `controlRoot`, then the primary bucket.
-  policyRoot: ""
   # -- Days of version history kept by old-version GC.
   olderThanDays: 7 # version GC keeps this much history
   # -- Expiry runs on a table only once it has at least this many reclaimable versions.
@@ -1081,9 +1050,9 @@ maintenance:
 # and let the operators do backups (PITR + scheduled, better than this). These exist so a self-contained
 # in-cluster-prod deploy (in-cluster object-store PVC + AGE) isn't backup-less. ---------------------------------
 backups:
-  # pg_dump the lineage + OpenFGA DBs (gzip) → the lakehouse S3 under _backups/pg/<date>/.
+  # pg_dump the OpenFGA database (gzip) → the lakehouse S3 under _backups/pg/<date>/.
   pgDump:
-    # -- Schedule a CronJob that pg_dumps the OpenFGA and Dapr state databases (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. Off by default.
+    # -- Schedule a CronJob that pg_dumps the OpenFGA database (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. It signs with a session its own ServiceAccount's token is exchanged for, and pg_dump reads its password from a PGPASSFILE. Off by default.
     enabled: false
     # -- Cron schedule of the pg dump (default daily 02:00).
     schedule: "0 2 * * *" # daily 02:00
@@ -1158,8 +1127,8 @@ autoscaling:
 # === The object store ============================================================================
 # ONE object store per estate (docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md). The key is
 # vendor-neutral because in production it names the platform's S3; in development the server is the rustfs fixture
-# (deploy/fixtures/rustfs, Service `<release>-rustfs`). `enabled` gates the scoped-users hook
-# (templates/object-store-scoped-users.yaml), which makes the platform buckets and every scoped user, and the root's
+# (deploy/fixtures/rustfs, Service `<release>-rustfs`). `enabled` gates the provisioning hook
+# (templates/object-store-provisioning.yaml), which makes the platform buckets and every identity's policy, and the root's
 # Secret (`<release>-object-store-root`) — on objectStore.enabled ALONE, because every lakehouse consumer must resolve
 # the store. The ONE endpoint is `rask-rustfs:9000`
 # (`lance.objectStoreHost`/`lance.s3Endpoint`), or `externalEndpoint` when set.
@@ -1167,83 +1136,48 @@ autoscaling:
 # THE KEEP-PVC POSTURE holds in the fixture: a StatefulSet's `volumeClaimTemplates` claims survive pod rolls and
 # `helm uninstall`, because helm never owned them.
 objectStore:
-  # -- This estate uses the development object store (deploy/fixtures/rustfs, Service `<release>-rustfs`): rask runs its scoped-users hook against it (the platform buckets and every scoped user), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server.
+  # -- This estate uses the development object store (deploy/fixtures/rustfs, Service `<release>-rustfs`): rask runs its provisioning hook against it (the platform buckets and every identity's policy), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server.
   enabled: true
-  # The scoped-users hook runs rask's OWN image (the rest-catalog image: python, boto3, botocore, sh, sha256sum), so
-  # no third-party CLI image sits in the upgrade path. It makes the platform buckets and the scoped users through
+  # The provisioning hook runs rask's OWN image (the rest-catalog image: python, boto3, botocore), so no third-party CLI
+  # image sits in the upgrade path. It makes the platform buckets and writes each identity's canned policy through
   # RustFS's native admin API (`scripts/rustfs_admin.py`), measured on rustfs/rustfs 1.0.1 and 1.0.3 on 2026-10-18
   # (`scripts/rustfs_sts_measure.py`; the audit is in git history at 64ef118a9).
   # -- S3 API port of the development store's Service.
   port: 9000
-  # THE STORE'S ROOT ACCOUNT. Every scoped identity below exists so that nothing in the fleet presents
-  # THIS pair; it remains only because the store itself must boot with one, and the scoped-users hook is its
-  # only other holder. On RustFS it is a trust root, not only an admin login: the root secret signs every STS
-  # session token, so whoever reads it can forge any vended credential. Only the access key ID is a value:
-  # the secret half is `object-store-secret-key`, which the dev OpenBao generates and holds at `secret/object-store-root`.
-  # -- Access key id of the store's root account (`rustfsadmin` is RustFS's built-in default id); its secret is `object-store-secret-key` in `<release>-object-store-root`, which only the store and the scoped-users hook mount. No service presents it.
+  # THE STORE'S ROOT ACCOUNT. No workload presents this pair: each signs with sessions its own ServiceAccount token is
+  # exchanged for (`identity` below). It remains because the store itself must boot with one, and the provisioning hook
+  # is its only other holder. On RustFS it is a trust root, not only an admin login: the root secret signs every STS
+  # session token, so whoever reads it can forge any vended credential. Only the access key ID is a value: the secret
+  # half is `object-store-secret-key`, which the dev OpenBao generates and holds at `secret/object-store-root`.
+  # -- Access key id of the store's root account (`rustfsadmin` is RustFS's built-in default id); its secret is `object-store-secret-key` in `<release>-object-store-root`, which only the store and the provisioning hook mount. No workload presents it.
   accessKey: rustfsadmin
-  # THE MAINTENANCE PLANE'S OWN CREDENTIAL, scoped away from the tenant root above.
-  #
-  # REQUIRED: a blank value fails the render (`templates/maintenance.yaml`). The only other pair maintenance could present
-  # is the store's ROOT, and maintenance COMPACTS, which is a write: on root the service that rewrites every dataset in
-  # every bucket would also reach `_projects/`, `_protection/` and `_policies/`, the records that decide what
-  # maintenance itself is permitted to do. A compromise there can turn off the shallow-clone guard that stops a
-  # compaction destroying another dataset's source, or re-pace its own cadence.
-  #
-  # VENDING DOES NOT CLOSE THIS ALONE, measured rather than assumed. `warehouse.writer` (model.fga:97)
-  # has no `writer from parent`, unlike `namespace.writer` (:258) and `table.writer` (:330) — so a
-  # grant covers ONE warehouse, and `can_write_data` for the maintenance subject on a table under
-  # `warehouse:acme-bucket` (one of ~130) returns `allowed:false` with the grant in place. Every vend
-  # outside the default warehouse degrades, and what it degrades TO is this key. The fallback itself
-  # has to stop being root.
-  #
-  # THE ACCESS KEY ALONE IS THE WHOLE SETTING: the secret is derived from it in-cluster
-  # (`lance.scopedSecretFn`), so this identity can be declared in a values file — which is the
-  # point, since a hand-set env is drift Helm never corrects and one values edit reverts to root.
-  #
-  # DERIVED, NOT EMPTY. This shipped as `""` — the tenant ROOT credential — with the reasoning that a
-  # chart repointing a live service at a credential nobody created would take maintenance down on
-  # upgrade. That was true while the provisioning hook ran only `post-upgrade`; it now runs
-  # `pre-upgrade` too, so the user exists before the pods that present it roll, and root-by-default has
-  # nothing left defending it. `rask.isRealDeployment`'s own rule applies: a guard reachable only by
-  # remembering an opt-in protects the installs that did not need protecting. Set a value here to name
-  # a different user; the secret is still derived (`lance.scopedSecretFn`).
-  # -- Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. Required: no service presents the store's root.
-  maintenanceAccessKey: rask-maintenance
-  # THE CATALOG'S IDENTITY IS ITS SERVICEACCOUNT, and it holds no store key ([[XC-083]], ADR 0170). Its pod projects a
-  # token for `identity.audience`; the store trusts the cluster's ServiceAccount issuer for that audience and grants a
-  # token the canned policy its `sub` names, so the catalog's token (`system:serviceaccount:<ns>:<release>-sa-catalog`)
-  # maps to the policy the scoped-users hook writes under that name and every other account's maps to nothing. STS
-  # `AssumeRoleWithWebIdentity` exchanges it for the catalog's own sessions and for every vend's. The dev store's
-  # provider is the rustfs fixture's (`identityProvider`), and a platform store's is its owner's to configure for this
-  # audience and subject.
-  #
-  # The policy is WIDE on data and holds no admin rights — see `object-store-scoped-users.yaml`. Warehouse buckets are
-  # minted at runtime, so a bucket list there would be stale by construction; what the scoping removes is the ability
-  # to mint identities and rewrite the policies that govern every other plane.
+  # EVERY LAKEHOUSE WORKLOAD'S STORE IDENTITY IS ITS SERVICEACCOUNT, and none holds a store key ([[XC-083]], [[XC-084]],
+  # ADR 0170): the catalog, lineage, maintenance and each backup CronJob. Each pod projects a token for
+  # `identity.audience`; the store trusts the cluster's ServiceAccount issuer for that audience and grants a token the
+  # canned policy its `sub` names (`system:serviceaccount:<ns>:<release>-sa-<component>`), and STS
+  # `AssumeRoleWithWebIdentity` exchanges it for the workload's sessions, and the catalog's for every vend too. Any other
+  # account's token maps to no policy. The policies render in every mode, one per account, in the ConfigMap
+  # `<release>-object-store-identities` (`templates/object-store-identities.yaml`): the provisioning hook writes them on
+  # the dev store, and a platform store's operator creates them (on AWS, each as its role's permission policy, the role's
+  # trust policy naming the account). The dev store's provider is the rustfs fixture's (`identityProvider`).
   identity:
-    # -- The audience the catalog's ServiceAccount token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required.
+    # -- The audience every lakehouse workload's store token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required.
     audience: rask-object-store
-    # -- How long a session for the catalog's own IO lasts (LANCE_S3_SESSION_SECONDS, 900 to 43200 s); it is renewed at half its life.
+    # -- How long a workload's session lasts (`*_S3_SESSION_SECONDS`, 900 to 43200 s): a service renews its own at half its life, and a backup run asks for one.
     sessionSeconds: 3600
-  # THE LINEAGE SERVICE'S SCOPED IDENTITY, and its policy is the TIGHTEST of the three because its S3
-  # surface is the smallest — measured 2026-09-07 rather than assumed. Lineage opens datasets READ-ONLY
-  # to probe versions, schema and dangling blobs (`core/reconcile.py`, `demo.py`), and the only bytes it
-  # changes anywhere are DELETES of its own outbox objects once the relay has re-ingested them
-  # (`outbox.drop_event`). It calls `stage_event` nowhere — staging is the producers' half — so this
-  # identity needs NO PutObject at all, which no other plane can say.
-  # Provisioned by `object-store-scoped-users.yaml` as `rask-lineage`. Named here rather than left empty:
-  # measured on the running estate 2026-09-08, lineage was the one plane of the three whose identity
-  # was built, provisioned and never selected, so it presented `rustfsadmin` while holding the tightest
-  # policy in the estate.
-  # -- Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. Required: no service presents the store's root.
-  lineageAccessKey: rask-lineage
-  # THE BACKUPS: the control-root backup reads the registry prefixes it copies, and both backups write and prune under
-  # `_backups/` in `objectStore.bucket`, so this identity holds that and never the root, which on RustFS signs every
-  # STS session token (ADR 0168). It reaches the backup CronJobs as files ESO writes (`<release>-backup-s3`) from the
-  # secret `backup-s3`, which only ESO's store login reads.
-  # -- Access key of the backups' identity (reads the control-root records, writes `_backups/`); secret derives in-cluster.
-  backupAccessKey: rask-backup
+    # The role each workload's token is exchanged for (`*_S3_ASSUME_ROLE_ARN`), keyed by its ServiceAccount's component.
+    # AWS assumes it; a store that grants the policy the token's subject names (RustFS) ignores it, and boto3 requires one.
+    roleArns:
+      # -- The role the catalog's token is exchanged for, for its own IO and every vend.
+      catalog: "arn:aws:iam::000000000000:role/lance-vend"
+      # -- The role lineage's token is exchanged for.
+      lineage: "arn:aws:iam::000000000000:role/rask-lineage"
+      # -- The role maintenance's token is exchanged for.
+      maintenance: "arn:aws:iam::000000000000:role/rask-maintenance"
+      # -- The role the pg dump's token is exchanged for (`backups.pgDump`).
+      backup-pg: "arn:aws:iam::000000000000:role/rask-backup-pg"
+      # -- The role the control-root backup's token is exchanged for (`backups.controlRoot`).
+      backup-control-root: "arn:aws:iam::000000000000:role/rask-backup-control-root"
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   # -- The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox).
@@ -1252,7 +1186,7 @@ objectStore:
   # claims. The root is not listed, because it has its own key: the hook adds `objectStore.bucket` itself
   # (`lance.platformBuckets` in _helpers.tpl). A name listed here AND under its own key outlives a rename
   # of that key, as a bucket the hook makes and nothing uses.
-  # On the dev store the scoped-users hook (templates/object-store-scoped-users.yaml) CREATES that set, with
+  # On the dev store the provisioning hook (templates/object-store-provisioning.yaml) CREATES that set, with
   # objectStore.bucket and the medallion.buckets zones: the store is a plain StatefulSet that provisions none.
   # On a platform's S3 its operator creates them, since rask provisions nothing there. (Warehouse buckets are the
   # catalog's, made at runtime by `provision_bucket`.) The maintenance reconcile exempts the
@@ -1261,7 +1195,7 @@ objectStore:
   # GOVERNED tiers only. The raw buckets (images-batch*) are NOT here: raw is external (R23) and lives
   # on HCP. A local bucket sharing a name with an external one makes the browser report the empty
   # local one instead of 404ing.
-  # -- Extra platform buckets the scoped-users hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.
+  # -- Extra platform buckets the provisioning hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets.
   buckets: []
   # Externalize: when set, the apps (catalog/lineage/maintenance + vending STS) connect HERE instead of the
   # development store — pair with objectStore.enabled=false to use the platform's S3.

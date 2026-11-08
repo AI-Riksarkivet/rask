@@ -227,7 +227,7 @@ for zero trust."*
 | `env: valueFrom: secretKeyRef` marked ✅ "secrets from secretKeyRef" | **Not approved.** Whether an ESO-written Secret delivered this way satisfies the rule is backlog XC-002, awaiting a ruling. Default: a working secret never enters process env. |
 | `helm-secrets` / SOPS: encrypted secrets in a values file | **No.** A chart value never carries a secret, encrypted or not. A record NAMES a secret. |
 | `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from the secret store (the platform's Vault or OpenBao; the dev OpenBao fixture) via the Dapr secret store or ESO. |
-| a literal `value:` in a Job's env for a derived credential | **No** — readable by anyone with `get jobs`; `object-store-scoped-users.yaml` derives each one into a memory file in-cluster ([[XC-004]]). |
+| a literal `value:` in a Job's env for a credential | **No** — readable by anyone with `get jobs`; a pod mounts a secret as a file ([[XC-004]]), and a workload's object-store identity is no secret at all but its projected ServiceAccount token ([[XC-084]]). |
 | Docker-based chart tooling | **Dagger.** `dagger call charts` runs the chart gate. |
 
 ## 8. `default` is a shared identity, and a subchart can hand it every Secret
@@ -254,7 +254,7 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
 - **An identity is never a hook** ([[XC-126]]): no ServiceAccount, Role, ClusterRole or binding carries
   `helm.sh/hook`. A hook-shaped identity is deleted by `hook-succeeded` while a failed hook's pod still holds
   its token (every later hook on it 401s), and exists only during its own phases. `rask-sa-hooks`, the identity
-  of the pre-manifest hooks (`openfga-model`, `object-store-scoped-users`), is an ordinary SA, so a `pre-upgrade` hook
+  of the pre-manifest hooks (`openfga-model`, `object-store-provisioning`), is an ordinary SA, so a `pre-upgrade` hook
   finds it from the previous revision. The one upgrade that INTRODUCES an ordinary SA runs its `pre-upgrade`
   hooks before the manifest creates it (measured 2026-10-02 on rev 259: `serviceaccount "rask-sa-jobs" not
   found`, the release stuck `pending-upgrade`): create it by hand first and let `make k3s-up`'s
@@ -263,20 +263,25 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
   bucket, and a pre-upgrade hook may run only as an SA in its `_ESTABLISHED` set, so naming a new one is a
   deliberate edit there, which is the reminder to pre-create it.
 - **A hook that removes what git no longer declares runs post-upgrade** ([[XC-083]], ADR 0170).
-  `object-store-scoped-users.yaml` renders one Job per phase, `range $phase := ternary (list "install" "post-install")
+  `object-store-provisioning.yaml` renders one Job per phase, `range $phase := ternary (list "install" "post-install")
   (list "pre-upgrade" "post-upgrade") .Release.IsInstall`: the provisioning run (a plain object on an install, a
   `pre-upgrade` hook on an upgrade) provisions what the new revision's pods need before they roll and prunes nothing,
   because the previous release's pods still present what a prune would remove; the prune run
-  (`<release>-object-store-scoped-users-prune-<rev>`, `post-install`/`post-upgrade`) runs once the manifest has replaced
+  (`<release>-object-store-provisioning-prune-<rev>`, `post-install`/`post-upgrade`) runs once the manifest has replaced
   them and removes every store user and rask-owned policy the chart does not declare. Under Argo CD, which renders every
   sync as an install, they are a `Sync` and a `PostSync` hook ([[XC-164]], `lance.reconciledJob`). Helm's `ternary`
   evaluates both arms, so neither may fail on the other's input.
-- **The catalog's store identity is a projected token, named by one value** ([[XC-083]], ADR 0170):
-  `objectStore.identity.audience` (`lance.objectStoreAudience`, `required`) is both the token the catalog mounts
-  through `lance.identityTokens` and the client id the dev store's provider trusts (`deploy/fixtures/rustfs`
-  `identityProvider.clientId`); the hook writes the catalog's canned policy under `lance.saAccount` (`list . "catalog"`),
-  the token's `sub`, and binds no user to it. `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds
-  the two charts' halves equal.
+- **Every workload's store identity is a projected token, named by one value** ([[XC-083]], [[XC-084]], ADR 0170,
+  ADR 0197): `objectStore.identity.audience` (`lance.objectStoreAudience`, `required`) is both the token the catalog,
+  lineage, maintenance and each backup CronJob mount through `lance.identityTokens` and the client id the dev store's
+  provider trusts (`deploy/fixtures/rustfs` `identityProvider.clientId`). Each signs with sessions it exchanges that
+  token for (`lance.objectStoreSessionEnv`: `<PREFIX>_S3_WEB_IDENTITY_TOKEN_FILE`, `_STS_ENDPOINT`, `_ASSUME_ROLE_ARN`
+  from `objectStore.identity.roleArns.<component>`, `_SESSION_SECONDS`), and holds no key pair. The policies render in
+  every mode in the ConfigMap `<release>-object-store-identities`, one `<release>-sa-<component>.json` per identity
+  (`lance.objectStoreIdentities`, `lance.objectStorePolicy`); the hook writes each under its account
+  (`lance.saAccount`), the token's `sub`, and binds no user to any, and a platform store's operator creates them.
+  `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds each workload's token, its policy and the
+  store's provider equal.
 - **A tokenless daprd needs `dapr.io/disable-builtin-k8s-secret-store`.** daprd initialises its built-in
   Kubernetes secret store at boot from the pod's token and treats a failure as fatal, so dropping the
   annotation from `lance.daprSidecarResources` crash-loops every injected pod (live 2026-07-13).
@@ -370,7 +375,8 @@ catalog, lineage, maintenance, OpenBao and Dex, among others, ran as `default` w
 - **OpenFGA admits only a projected `rask-openfga` token from a listed ServiceAccount** ([[XC-077]]): OIDC
   against the cluster SA issuer, keys fetched through the issuer mirror in `templates/issuer-mirror.yaml`
   (OpenFGA fetches discovery with no bearer and k3s answers that 401; the dev object store reads the same mirror), the subject allow-list from
-  `lance.openfgaSubjects` (a ConfigMap OpenFGA reads at start, so a new client needs an OpenFGA restart),
+  `lance.openfgaSubjects` (a ConfigMap OpenFGA reads at start, so a new client needs an OpenFGA restart; maintenance
+  is not on it, since it holds no OpenFGA token and asks the catalog's grant doors, ADR 0197),
   playground off, CORS closed. A pod that names OpenFGA renders all three parts of `lance.fgaToken` (env,
   volume, mount) under the condition its URL has, and `lance.openfgaSubjects` must list its account under
   the same condition. A list-valued `OPENFGA_*` env is comma-joined (measured on v1.18.3). An operator tool

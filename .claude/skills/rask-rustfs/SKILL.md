@@ -1,6 +1,6 @@
 ---
 name: rask-rustfs
-description: "RustFS as rask's object store: the development and CI fixture (production S3 is the platform's), the zero-trust model rask depends on (the catalog's ServiceAccount token as its only store identity through AssumeRoleWithWebIdentity, a canned policy named by the token's subject, session policies, scoped users for the other planes, the provisioning hook that prunes what git does not declare), the S3 behaviours Lance and the catalog need and their measured status, how scoped users and policies are provisioned through RustFS's admin API, and the traps (uid 10001 volumes, path-style, a pre-GA image refusing pyarrow multipart, default root credentials, the console and update check on by default, file-only logs in the image). Use whenever you deploy, configure, secure, test, upgrade or debug RustFS; touch deploy/fixtures/<store>, the scoped-users hook, .dagger/storage.go or the kind lane's store; write a vending or CAS test against a real store; state what rask demands of a platform S3 store; or reach for a RustFS docs page or the official RustFS Helm chart."
+description: "RustFS as rask's object store: the development and CI fixture (production S3 is the platform's), the zero-trust model rask depends on (each workload's ServiceAccount token as its only store identity through AssumeRoleWithWebIdentity, a canned policy named by the token's subject, session policies, the provisioning hook that prunes what git does not declare), the S3 behaviours Lance and the catalog need and their measured status, how buckets and canned policies are provisioned through RustFS's admin API, and the traps (uid 10001 volumes, path-style, a pre-GA image refusing pyarrow multipart, default root credentials, the console and update check on by default, file-only logs in the image). Use whenever you deploy, configure, secure, test, upgrade or debug RustFS; touch deploy/fixtures/<store>, the provisioning hook, .dagger/storage.go or the kind lane's store; write a vending or CAS test against a real store; state what rask demands of a platform S3 store; or reach for a RustFS docs page or the official RustFS Helm chart."
 ---
 
 # rask × RustFS — the store fixture, its trust model, and what the docs get wrong
@@ -49,7 +49,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 | `If-None-Match: *` → 412 for the loser; 16 racing writers × 20 rounds, one winner each round (R9) | measured |
 | `If-Match` with a stale ETag → 412 (R10) | measured |
 | Lance creates and appends through a vended session credential; writing outside the prefix is refused (R15) | measured |
-| pyarrow 25 multipart (the record store, on a service's own scoped pair) (R12) | measured on 1.0.1 and 1.0.3; refused by 1.0.0-alpha.60 |
+| pyarrow 25 multipart (a service's own pyarrow writes, on its own session) (R12) | measured on 1.0.1 and 1.0.3; refused by 1.0.0-alpha.60 |
 | A prefix-scoped session is refused pyarrow's `HeadBucket` (an unprefixed `s3:ListBucket`) | measured (`rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960`) |
 | Conditional CompleteMultipartUpload (R11) | source only (`rustfs@1.0.3:crates/ecstore/src/set_disk/ops/multipart.rs:2702-2742`) |
 | Warehouse purge: DeleteObjects then DeleteBucket (R13) | not measured |
@@ -59,13 +59,17 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 
 ## 3. The zero-trust model rask relies on
 
-- **The catalog's store identity is its ServiceAccount token, and it holds no key** (ADR 0170). Its pod projects a token
+- **Every workload's store identity is its ServiceAccount token, and none holds a key** (ADR 0170, [[XC-084]]): the
+  catalog, lineage, maintenance and the two backup CronJobs (`<release>-sa-backup-pg`, `<release>-sa-backup-control-root`),
+  each with the env `lance.objectStoreSessionEnv` renders. The catalog's pod projects a token
   for `objectStore.identity.audience` (`rask-object-store`), and unsigned STS `AssumeRoleWithWebIdentity` exchanges it
   for every session the catalog signs with: its own IO's (an hour, renewed at half life,
   `lakehouse.store_session`) and each vend's (900 s, narrowed by the per-table session policy, named for the
   caller). The fixture's provider (§5) sets `CLAIM_NAME=sub` and no role policy, so a verified token is granted the
-  canned policy its `sub` names (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`), and the hook writes the
-  catalog's under `system:serviceaccount:<ns>:<release>-sa-catalog` with no user bound to it. A `sub` naming no
+  canned policy its `sub` names (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`), and the hook writes each
+  identity's under `system:serviceaccount:<ns>:<release>-sa-<component>` with no user bound to it. Lineage, maintenance
+  and the backups exchange the same way (the backups once per run, `lakehouse.store_session.job_client`); the policies
+  render in every mode in the ConfigMap `<release>-object-store-identities` (`lance.objectStorePolicy`). A `sub` naming no
   policy is refused 400 `InvalidRequest` (`rustfs@1.0.3:rustfs/src/admin/service/federated_identity.rs:322-440`), so
   another pod's token for the same audience gets nothing; a token failing verification is refused 403. A session is
   allowed only where its session policy and the claim-named policy both allow (`rustfs@1.0.3:crates/iam/src/sys.rs:1532-1665`),
@@ -80,8 +84,8 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   login: only the store pod, the dev secret store that seeds it and the provisioning hook read it. It sits at
   `secret/object-store-root`, which only ESO's store policy reads, and in a Secret of its own,
   `<release>-object-store-root`; `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows every
-  path the chart hands a secret through. Each plane presents a scoped identity instead, the backups
-  included, and a blank one fails the render. The dev OpenBao publishes no token: each app's sidecar logs in as
+  path the chart hands a secret through. Every plane presents its ServiceAccount token instead, the backups
+  included. The dev OpenBao publishes no token: each app's sidecar logs in as
   its own ServiceAccount and reads only its own secrets, and the store's administrator token is generated in-cluster and
   held by its seed (ADR 0169).
 - **An SSE-KMS vend names its key and grants its use** ([[LH-262]]): `vending.encryption.kmsKeyId` is the key ARN under
@@ -102,9 +106,19 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 - **`s3:*` does not grant force-delete.** `s3:ForceDeleteBucket`/`s3:ForceDeleteObject` must be named explicitly
   (`rustfs@1.0.3:crates/policy/src/policy/action.rs:184-198`). The catalog's purge works with `s3:DeleteBucket`
   alone; never name the force actions in a rask policy.
-- **Rotation is a second USER** (ADR 0166) for the planes that still hold a pair (lineage, maintenance). A multibase
-  data base holds none: it is its tables' storage, reached under the catalog's own identity ([[LH-286]]). AssumeRole refuses a service account (`sts.rs:219-221`), so a pair that signed AssumeRole
-  would rotate to another user under the same policy; no rask pair signs AssumeRole any more.
+- **No store identity needs rotating**: none is a key pair, and a session lasts at most its exchange's length. A
+  multibase data base holds none either: it is its tables' storage, reached under the catalog's own identity
+  ([[LH-286]]). Narrowing an identity is a policy change in git, which the next provisioning run converges on.
+- **Maintenance writes almost nothing under its own session.** Its canned policy reads the estate and writes only
+  `<control bucket>/_maintenance_due/*`, `_policies/state/*` and `_lineage_outbox/*` (owner, 2026-11-03: a compromised
+  maintenance pod must not be able to defeat an erasure or a hold). A rewrite signs with the table's `maintain`-tier
+  vend, and the trash purge deletes a due record's bytes with a reclaim session the catalog vends for that one record
+  (`POST /management/v1/trash/{kind}/{uuid}/credentials`, `catalog.core.vending.ReclaimScope`: list and delete over its
+  location and data directories, nothing on the control root); both are session policies under the catalog's own
+  identity. The trash records themselves, their release stamp and their end are the catalog's own writes (ADR 0197).
+  A write credential can still overwrite an object in place: RustFS 1.0.3 refuses a policy naming `s3:if-none-match`
+  (an unknown condition key, `rustfs@1.0.3:crates/policy/src/policy/function/key_name.rs:168-246`; measured 2026-11-08 on
+  a canned and a session policy), so no policy can require a conditional write.
 - **Never set `RUSTFS_IDENTITY_OPENID_ROLE_POLICY`.** With it, **every** valid token for the audience gets the whole
   role policy, and any pod may project a token for any audience as its own ServiceAccount
   (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`). Without it the token's `groups` claim is mapped to
@@ -117,9 +131,11 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   NetworkPolicy cannot split them by port, so the admin plane is protected by IAM alone: no `admin:*` on any rask
   identity, root out of every service.
 
-## 4. Provisioning users and policies
+## 4. Provisioning buckets and policies
 
-rask's runtime makes no admin call (R17). Users, policies and buckets are made once, by a hook, with the root pair.
+rask's runtime makes no admin call (R17). Buckets and canned policies are made by a hook (`chart/templates/object-store-provisioning.yaml`, `scripts/rustfs_admin.py`) with the root pair, and it makes no
+user. Each policy is passed inline (`--policy NAME=JSON`): a pre-upgrade hook runs before the manifest applies, so a mounted
+`<release>-object-store-identities` would be the previous revision's or absent.
 **Use RustFS's native admin API with SigV4 and plain JSON** — the 2026-10-18 measurement drove exactly these
 (the audit's § Measured, git history at `64ef118a9`):
 
@@ -135,12 +151,13 @@ rask's runtime makes no admin call (R17). Users, policies and buckets are made o
 | list / remove policy | `GET /rustfs/admin/v3/list-canned-policies`; `DELETE /rustfs/admin/v3/remove-canned-policy?name=<p>` | `policies.rs:59,77` |
 
 THE STORE'S IDENTITIES ARE WHAT GIT DECLARES (ADR 0170). The hook's install run and its post-upgrade run
-(`<release>-object-store-scoped-users-prune-<rev>`) pass `--prune`: every regular user the run does not declare is
-removed (the root aside), then every canned policy rask owns (`rask-*`, or named after a ServiceAccount,
+(`<release>-object-store-provisioning-prune-<rev>`) pass `--prune`: every regular user is removed (the root aside),
+since no workload signs as one, then every canned policy rask owns (`rask-*`, or named after a ServiceAccount,
 `scripts/rustfs_admin.py` `OWNED_POLICY_PREFIXES`) that it does not create; a policy rask does not own is never
 touched. The pre-upgrade run prunes nothing, because the previous release's pods still present what it would remove. A
 user or policy made by hand on the dev store is therefore gone at the next upgrade. Pinned against a real RustFS by
-`tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py`.
+`tests/e2e-py/test_a_policy_the_store_refuses_fails_the_provisioning_hook.py`. The user rows in the table above are
+the admin API as measured; the hook calls only list and remove on users.
 
 Rules: the policy before the binding; a user name must not equal the root access key; access keys alphanumeric (a `/`
 breaks SigV4 credential scope, `docs:operations/credentials.md`); bucket names match
@@ -196,7 +213,8 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
 - **pyarrow cannot write through a vended credential.** Before a write, pyarrow's `S3FileSystem` asks `HeadBucket`,
   which RustFS authorizes as an unprefixed `s3:ListBucket` (`rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960`), as
   AWS does; a session scoped to a table's prefix is refused it (measured on 1.0.1 and 1.0.3). rask writes its records
-  with a service's own scoped pair, and a vended credential writes through Lance's object_store, which never asks. Never
+  by key through the object client (`lakehouse.record_store.put_record`) and its other pyarrow writes on a service's own
+  session, and a vended credential writes through Lance's object_store, which never asks. Never
   widen a session policy to the bucket root to make pyarrow work.
 - **The image logs to files, not stdout.** It sets `RUSTFS_OBS_LOG_DIRECTORY=/logs` and
   `RUSTFS_OBS_ENVIRONMENT=production` (`rustfs@1.0.3:Dockerfile:115-119`), and in production the stdout mirror is off
@@ -246,12 +264,14 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
 
 Load `rask-testing` first. The proofs that matter run against a real RustFS, never moto: the CAS harness
 (`tests/e2e-py/test_object_store_cas_e2e.py`), the STS/session-policy checks (`scripts/rustfs_sts_measure.py`),
-a Lance write through a vended credential, and the provisioning hook's refusal path
-(`tests/e2e-py/test_a_policy_the_store_refuses_fails_the_scoped_users_hook.py`, `dagger call rustfs-provisioning`, whose
-store boots from files as the fixture's does). A Dagger lane brings RustFS up as a service bound to one exec
+a Lance write through a vended credential, and the `dagger call rustfs-provisioning` lane (`make rustfs-provisioning`),
+whose store boots from files as the fixture's does (`tests/e2e-py/throwaway_rustfs.py`, fixture `rustfs_store` in
+`tests/e2e-py/conftest.py`): the provisioning hook's refusal and pruning paths
+(`tests/e2e-py/test_a_policy_the_store_refuses_fails_the_provisioning_hook.py`) and a reclaim session ending one trash
+record and nothing else (`tests/e2e-py/test_a_reclaim_session_deletes_one_tables_bytes_and_nothing_else.py`). A Dagger lane brings RustFS up as a service bound to one exec
 (`.dagger/storage.go`); never `docker run` it (CLAUDE.md toolchain rule). A store-version bump re-runs the measurement
-script and every RustFS lane in the same commit; the provisioning test's last assert (a refused update leaves the bound
-user its old policy) can go red only on such a bump, since RustFS refuses a document before writing it and refuses
+script and every RustFS lane in the same commit; the provisioning test's refusal assert (a refused update leaves the
+stored policy) can go red only on such a bump, since RustFS refuses a document before writing it and refuses
 removing a bound policy (`rustfs@1.0.3:rustfs/src/admin/handlers/policies.rs:216-226`;
 `rustfs@1.0.3:crates/iam/src/manager.rs:555-557`).
 

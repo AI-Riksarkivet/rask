@@ -43,7 +43,7 @@ GitOps first: GitOps, cloud native, Lance-namespace/table-idiomatic, zero trust 
 - Service accounts need an explicit `admin:CreateServiceAccount` Allow, even for one's own account
   (`rustfs@1.0.3:rustfs/src/admin/handlers/service_account.rs:362-390`). The docs say self-creation needs no grant
   (contradiction: `docs:security-compliance/iam/sts.md`).
-- Bucket policies: none in the fixture; all access goes through IAM users and STS. With BlockPublicPolicy on, an Allow
+- Bucket policies: none in the fixture; all access but the root's goes through STS sessions. With BlockPublicPolicy on, an Allow
   with `Principal: "*"` is refused (`rustfs@1.0.3:rustfs/src/app/bucket_usecase.rs:2659-2670`); `IsPublic` judges only
   anonymous ListBucket and PutObject, so it is no proof that a bucket is private (`bucket_usecase.rs:2172-2224`).
 - An external OPA authorizer exists (`RUSTFS_POLICY_PLUGIN_URL`, `rustfs@1.0.3:crates/config/src/opa/mod.rs:16`);
@@ -64,7 +64,7 @@ GitOps first: GitOps, cloud native, Lance-namespace/table-idiomatic, zero trust 
   mapping, when the store loads it (`rustfs@1.0.3:crates/iam/src/store/object.rs:628-633`), and a full load walks every
   user (`object.rs:904-930`). A full load runs every 120 s unless `RUSTFS_SKIP_BACKGROUND_TASK` is set
   (`rustfs@1.0.3:crates/iam/src/manager.rs:209-224`), so the store holds about one identity for each vend of the last
-  900 + 120 s, plus the catalog's own hour-long sessions, one per half hour: bounded by the vend rate, since rask vends
+  900 + 120 s, plus each workload's own hour-long sessions, one per half hour, and one per backup run: bounded by the vend rate, since rask vends
   per request and caches nothing. A vend cache (Lakekeeper keeps one,
   single-flight per table and permission) would shrink that and hand one credential to several callers, which the
   store's audit cannot tell apart; rask does not cache.
@@ -89,8 +89,9 @@ GitOps first: GitOps, cloud native, Lance-namespace/table-idiomatic, zero trust 
 - **Hazard**: a role policy is granted to ANY token the issuer signs for that audience, and the token holder can call
   STS without a session policy. On a Kubernetes issuer any pod may project a token for any audience as its own
   ServiceAccount, so rask sets NO role policy: with `..._CLAIM_NAME=sub` a verified token is granted the canned policy
-  its `sub` names, which the hook writes only for the catalog's account (`system:serviceaccount:<ns>:<release>-sa-catalog`,
-  ADR 0170). Any other account's token maps to a policy that does not exist and is refused 400 `InvalidRequest`, "OIDC
+  its `sub` names, which the hook writes only for the accounts git declares
+  (`system:serviceaccount:<ns>:<release>-sa-<component>` for the catalog, lineage, maintenance and each backup that is on,
+  `lance.objectStoreIdentities`, ADR 0170). Any other account's token maps to a policy that does not exist and is refused 400 `InvalidRequest`, "OIDC
   policy mapping did not resolve to current policies" (`federated_identity.rs:322-440`). A policy name may hold `:`
   (`rustfs@1.0.3:crates/iam/src/sys.rs:1888-1897`).
 - A Kubernetes ServiceAccount issuer works as a "workload" provider when `..._HIDE_FROM_UI` is on and its discovery has
@@ -127,8 +128,8 @@ Native admin API under `/rustfs/admin/v3`, SigV4 (service `s3`) with the root pa
 The same routes answer under `/minio/admin` with madmin's body encryption
 (`rustfs@1.0.3:rustfs/src/admin/utils.rs:31-62`), which is what `mc admin` would hit; that is unmeasured, and `mc` is
 archived upstream. A Python script with botocore's SigV4 signer and boto3 for `CreateBucket` needs no new tool:
-`scripts/rustfs_admin.py`, whose `--prune` (the install and post-upgrade runs) removes every regular user the run does
-not declare and every rask-owned policy (`rask-*`, `system:serviceaccount:*`) it does not create, so the store's
+`scripts/rustfs_admin.py`, whose `--prune` (the install and post-upgrade runs) removes every regular user but the root,
+since no workload signs as one, and every rask-owned policy (`rask-*`, `system:serviceaccount:*`) it does not create, so the store's
 identities are what git declares. Admin
 request bodies are capped at 1 MiB (`rustfs@1.0.3:crates/config/src/constants/body_limits.rs:24`).
 
@@ -193,7 +194,7 @@ entry; an open design choice.
 - [ ] `RUSTFS_CHECK_UPDATE=false`, `RUSTFS_HEALTH_MINIMAL_RESPONSE_ENABLE=true`, notify/audit/gateways unset.
 - [ ] Pod uid/gid/fsGroup 10001, read-only root, drop ALL, no SA token.
 - [ ] NetworkPolicy admits only the components holding a store credential on 9000.
-- [ ] The scoped-users hook is the only root holder besides the store and its dev seeder (the root's own OpenBao
+- [ ] The provisioning hook (`chart/templates/object-store-provisioning.yaml`) is the only root holder besides the store and its dev seeder (the root's own OpenBao
       secret, denied to every Dapr app, and its own Kubernetes Secret); no `admin:*`, no `s3:ForceDelete*`, no table
       actions in any rask policy. In development the dev OpenBao reads the root to ESO's login alone: each app's
       sidecar logs in as its own ServiceAccount and reads only its own secrets, and no token is published (ADR 0169).
@@ -204,10 +205,11 @@ entry; an open design choice.
 What rask demands of a production store, beyond the 2026-10-18 audit's list (R1-R11, R13, R15; git history at `64ef118a9`):
 
 - No default root credential; root held by the platform only (STS tokens are signed with it).
-- STS `AssumeRoleWithWebIdentity` trusting the cluster's ServiceAccount issuer for the catalog's audience
+- STS `AssumeRoleWithWebIdentity` trusting the cluster's ServiceAccount issuer for the lakehouse's audience
   (`objectStore.identity.audience`), granting a token only what its subject is given (a canned policy named by `sub`,
-  or a role whose trust policy names the subject), never a role policy every token for the audience gets; the catalog
-  holds no store key (ADR 0170).
+  or a role whose trust policy names the subject), never a role policy every token for the audience gets; no lakehouse
+  workload holds a store key (ADR 0170). The policies to create are the ConfigMap `<release>-object-store-identities`,
+  which the chart renders in every mode.
 - An explicit `RUSTFS_RPC_SECRET` (or the equivalent) on multi-node.
 - TLS with a CA rask trusts; rask's vended endpoint is `https`.
 - Console and admin API unreachable from workload namespaces, or reachable only by identities without `admin:*`.

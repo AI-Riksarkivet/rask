@@ -50,38 +50,31 @@ def _router(**over: Any) -> APIRouter:
 # --------------------------------------------------------------------------- #
 
 
-def test_the_route_hands_the_app_state_clients_to_the_reconciler(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The wiring itself: the FGA client the lifespan put on `app.state` is what the pass reads OpenFGA
-    with. Asserted because the failure mode is silent — a route that quietly passes `None` produces a
-    report that is entirely 'unavailable' and still exits 200. The bucket-listing client is NOT handed
-    over: the pass builds it per tick with the key pair in force ([[XC-082]]), where one built at boot
-    would list with a key the store has since replaced."""
+def test_the_route_hands_the_reconciler_the_catalogs_grant_census(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The wiring itself: the pass reads OpenFGA through the catalog's grant census, maintenance holding no OpenFGA
+    credential ([[XC-084]]). Asserted because the failure mode is silent — a route that quietly passes no census
+    produces a report that is entirely 'unavailable' and still exits 200. The bucket-listing client is NOT handed
+    over: the pass builds it per tick with the key pair in force ([[XC-082]]), where one built at boot would list
+    with a key the store has since replaced."""
     seen: dict[str, Any] = {}
 
-    async def fake_reconcile(settings: Any, client: Any = None, **kw: Any) -> Any:
-        seen["client"] = client
+    async def fake_reconcile(settings: Any, grants: Any = None, **kw: Any) -> Any:
+        seen["grants"] = grants
         seen["bucket_client"] = kw.get("bucket_client")
         seen["warehouses_enabled"] = kw.get("warehouses_enabled")
         seen["control_root"] = kw.get("control_root")
-        seen["fga_root_object"] = kw.get("fga_root_object")
-
         return ReconcileReport(checked_at=_CHECKED_AT)
 
     monkeypatch.setattr(routes, "reconcile", fake_reconcile)
-    settings = _settings(warehouses_enabled=True, fga_root_object="warehouse:custom")
-    out = asyncio.run(routes.on_reconcile_cron(settings, "FGA-SENTINEL", NoopControlEmitter()))
+    settings = _settings(warehouses_enabled=True)
+    out = asyncio.run(routes.on_reconcile_cron(settings, NoopControlEmitter()))
 
     # The #79 purge key rides along on every tick; the reconcile half is unchanged.
-    assert out["total"] == 0
-    assert out["trash_purge"]["enabled"] is False and out["trash_purge"]["ran"] is False
-    assert seen["client"] == "FGA-SENTINEL"
-    assert seen["bucket_client"] is None
-    # These mirror CATALOG settings and are passed IN, never inferred: a divergent fga_root_object
-    # reports the estate root as a ghost forever, and a divergent warehouses_enabled reports every
+    assert (out["total"], out["trash_purge"]["enabled"], out["trash_purge"]["ran"]) == (0, False, False)
+    assert seen["grants"] is not None, "the route handed the reconciler no grant census"
+    # `warehouses_enabled` mirrors a CATALOG setting and is passed IN, never inferred: a divergent one reports every
     # namespace as unbound.
-    assert seen["warehouses_enabled"] is True
-    assert seen["fga_root_object"] == "warehouse:custom"
-    assert seen["control_root"] == settings.resolved_control_root
+    assert (seen["bucket_client"], seen["warehouses_enabled"], seen["control_root"]) == (None, True, settings.resolved_control_root)
 
 
 def test_an_overlapping_tick_skips_rather_than_stacking(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,90 +88,10 @@ def test_an_overlapping_tick_skips_rather_than_stacking(monkeypatch: pytest.Monk
     async def drive() -> dict[str, Any]:
         async with routes._reconcile_lock:
             monkeypatch.setattr(routes, "reconcile", never_called)
-            return await routes.on_reconcile_cron(_settings(), None, NoopControlEmitter())
+            return await routes.on_reconcile_cron(_settings(), NoopControlEmitter())
 
     out = asyncio.run(drive())
     assert out["status"] == "skipped"
-
-
-def test_the_service_never_provisions_an_fga_store(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A maintenance job that provisioned its own store would read an EMPTY one and then report every
-    real tenant as a ghost — a false report is worse than an absent one.
-
-    The guard is the absent CALL, not a None return. This test used to assert that unpinned yields
-    ``None`` and treated that as proof of not-provisioning, which conflated two different claims and
-    pinned a real bug in place: see the sibling test for what unpinned must actually do.
-    """
-    # Patched on `lakehouse.governed.fga`, not on `maintenance.service`: this service builds its
-    # client through the estate's ONE bootstrap (`auth_lifespan.build_fga_client`) rather than a
-    # private copy, so the transport seam is the shared module's. The claim under test is unchanged —
-    # `provision` must never be CALLED.
-    from lakehouse.governed import fga
-    from maintenance import service
-
-    async def _no_store(api_url: str, **_kw: Any) -> tuple[str, str]:
-        raise fga.OpenFgaModelAbsentError(f"OpenFGA at {api_url} holds no store named 'lance-catalog'")
-
-    provisioned: list[object] = []
-
-    async def _provision(*a: Any, **kw: Any) -> Any:
-        provisioned.append((a, kw))
-        return None
-
-    monkeypatch.setattr(fga, "resolve", _no_store)
-    monkeypatch.setattr(fga, "provision", _provision)
-    assert asyncio.run(service._make_fga_client(_settings(fga_enabled=False))) is None
-    assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None, "no store to resolve → still None, never a new one"
-    assert provisioned == [], "the maintenance service provisioned an FGA store"
-
-
-def test_an_UNPINNED_store_is_RESOLVED_by_name_rather_than_abandoned(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reading is not authoring.
-
-    The chart's DEFAULT posture is `auth.fgaStoreId: ""`, because a store id is a per-cluster ULID that
-    cannot be a committed default. Without a client, `ghost_projects`, `ghost_warehouses` and
-    `unreferenced_projects` report UNAVAILABLE on every tick, and because `report_is_clean` blocks on ANY
-    unavailable category, the expired-trash purge could never certify (measured live 2026-08-16).
-
-    `fga.resolve` is read-only: it cannot create a store or write a model, and raises when the estate is
-    not bootstrapped. So this fails closed against an estate that is not there, never against one that is.
-    """
-    from maintenance import service
-
-    seen: list[str] = []
-
-    async def _resolve(api_url: str, **_kw: Any) -> tuple[str, str]:
-        seen.append(api_url)
-        return ("store-01ABC", "model-01XYZ")
-
-    made: list[tuple[str, str, str]] = []
-    from lakehouse.governed import fga
-
-    monkeypatch.setattr(fga, "resolve", _resolve)
-    monkeypatch.setattr(fga, "make_client", lambda url, store, model, **_kw: made.append((url, store, model)) or "CLIENT")
-
-    client = asyncio.run(service._make_fga_client(_settings(fga_enabled=True)))
-
-    assert client == "CLIENT", "an unpinned service with a resolvable store must get a client, not None"
-    assert seen, "resolve was never attempted — unpinned fell straight through to None again"
-    assert made and made[0][1:] == ("store-01ABC", "model-01XYZ"), f"the client must be built from the RESOLVED ids, got {made}"
-
-
-def test_a_resolve_that_raises_degrades_rather_than_killing_the_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OpenFGA being slow to accept connections is an ordering blip, not a reason to CrashLoopBackOff.
-
-    The sweep is this service's primary job and needs no FGA at all, so an unreachable authz endpoint
-    must cost the authz CATEGORIES and nothing else.
-    """
-    from maintenance import service
-
-    async def _boom(*_a: Any, **_kw: Any) -> Any:
-        raise ConnectionRefusedError("openfga not up yet")
-
-    from lakehouse.governed import fga
-
-    monkeypatch.setattr(fga, "resolve", _boom)
-    assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None
 
 
 def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -199,7 +112,6 @@ def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: 
 
     async def fake_purge(_settings: Any, **kw: Any) -> Any:
         seen["report"] = kw["report"]
-        seen["fga_client"] = kw["fga_client"]
         seen["locked"] = routes._reconcile_lock.locked()
 
         # THE REAL REPORT, not a hand-rolled stand-in. A double that re-declares the model's fields
@@ -212,10 +124,9 @@ def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: 
 
     monkeypatch.setattr(routes, "reconcile", fake_reconcile)
     monkeypatch.setattr(routes, "purge_expired_trash", fake_purge)
-    out = asyncio.run(routes.on_reconcile_cron(_settings(), "FGA-SENTINEL", NoopControlEmitter()))
+    out = asyncio.run(routes.on_reconcile_cron(_settings(), NoopControlEmitter()))
 
     assert seen["report"] is produced["report"], "the purge read a report this tick did not produce"
-    assert seen["fga_client"] == "FGA-SENTINEL", "the purge got no FGA client — it could not revoke"
     assert seen["locked"] is True, "the purge ran outside the single-flight lock"
     # The purge key rides along on the tick's payload; its CONTENT is `test_trash_purge.py`'s subject,
     # so this asserts only that the real report reached the response un-run.

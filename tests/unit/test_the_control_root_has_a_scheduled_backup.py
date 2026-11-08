@@ -1,18 +1,10 @@
-"""The control root has a SCHEDULED backup, and its credential arrives as a mounted file.
+"""The control root has a SCHEDULED backup, which runs the shipped tool against the control root the catalog writes.
 
 [[LH-110]]. The control root is the registry holding every project, warehouse, namespace binding and
 bucket claim. Lose it and the Lance data survives while nothing can route to it — the one loss the
-lakehouse cannot reconstruct from storage. `scripts/control_root_backup.py` shipped backup, verify,
-restore and prune, and `docs/runbooks/RUNBOOK-restore.md` documented the drill; nothing ran it.
-
-THE CREDENTIAL IS THE PART THE ROW DID NOT SAY. It offered three ways to ship the script and none of
-them answered how the pod authenticates, and `main` called `s3_client()` bare — so all three land on
-credentials in the CronJob's environment, the one delivery path this estate forbids. A CronJob pod
-carries no Dapr sidecar, so ESO writing a Secret the pod MOUNTS is the path that fits it.
-
-THE REFUSAL IS ASSERTED TOO. With the operator off, the job would render a pod referencing a Secret
-nothing creates — `optional: false`, so it never starts, and a backup that never starts looks exactly
-like one with nothing to do. The chart fails the render instead.
+lakehouse cannot reconstruct from storage. `scripts/control_root_backup.py` ships backup, verify,
+restore and prune, and `docs/runbooks/RUNBOOK-restore.md` documents the drill; this CronJob runs it. How a run
+signs is `test_a_backup_run_signs_with_a_session_its_token_is_exchanged_for.py`'s ([[XC-084]]).
 """
 
 from __future__ import annotations
@@ -57,8 +49,7 @@ def _cronjob(docs: list[dict]) -> dict:
 def test_enabled_renders_a_cronjob_that_runs_the_shipped_tool() -> None:
     container = _cronjob(_render(*_ON))["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
 
-    assert container["command"] == ["python", "/srv/control_root_backup.py"], container["command"]
-    assert "backup" in container["args"], container["args"]
+    assert ("command" in container, container["args"][:3]) == (False, ["python", "/srv/control_root_backup.py", "backup"]), container
 
 
 def test_the_backup_root_is_the_SAME_expression_the_catalog_calls_its_control_root() -> None:

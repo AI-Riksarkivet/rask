@@ -130,8 +130,7 @@ two refused reconnects, which is the closed connection `lakehouse.bus_watchdog` 
 ## `G=$DEV_CREDENTIALS`
 
 EVERY GENERATED VALUE REACHES THE STORE AS `@file`, never argv, output or the render ([[XC-004]]):
-the dev credentials from the ESO-generated Secret, and what is derived from them from files
-written here. The two Dex values are the development IdP's own (deploy/fixtures/dex holds them, XC-025).
+the dev credentials from the ESO-generated Secret, and what is minted here from files written here. The two Dex values are the development IdP's own (deploy/fixtures/dex holds them, XC-025).
 
 ## `fingerprint() {`
 
@@ -152,29 +151,16 @@ THE APP-API TOKEN, so a pod can authenticate its Dapr doors without the value pa
 (`RASK_APP_TOKEN_FROM_STORE`). ESO writes the same field into the `dapr-app-token` Secret daprd stamps the header from,
 so the two agree by construction. One estate-wide token, read by the apps with a Dapr door and by ESO.
 
-## `{{- range $plane, $id := dict "maintenance" .Values.objectStore.maintenanceAccessKey "lineage" .Values.objectStore.lineageAccessKey }}`
-
-EACH PLANE'S SCOPED S3 PAIR, as its own secret `<plane>-s3` with the `access_key`/`secret_key` fields every scoped pair
-carries, readable by that app alone. The catalog has none: its store identity is its ServiceAccount token (ADR 0170).
-No secret holds a root pair: the store's root lives at `secret/object-store-root`, which only ESO reads (below). Seeded
-only when the access key is set, and a blank one fails the render
-(`tests/unit/test_a_blank_store_identity_fails_the_render.py`), so a field a service is told to read is always written.
-
 ## `bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \`
 
 THE DEVELOPMENT STORE'S ROOT PAIR, at a path of its own and only with `objectStore.enabled`. On RustFS the root
 secret signs every STS session token the store issues (GHSA-m77q-r63m-pj89, intentionally unfixed), so whoever reads it
 can forge any credential the catalog vends (ADR 0168). No Dapr app reads it: no role's policy but ESO's grants it, and
-ESO writes it into `<release>-object-store-root` for the store and the scoped-users hook alone. Both halves sit in one
-object, as the store's non-optional secret volume needs them.
+ESO writes it into `<release>-object-store-root` for the store and the provisioning hook alone. Both halves sit in one
+object, as the store's non-optional secret volume needs them. No other secret here holds an object-store key: every
+lakehouse workload's store identity is its ServiceAccount token ([[XC-084]], ADR 0170).
 `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows it through every path a pod reads a
 secret by.
-
-## `bao kv put secret/backup-s3 access_key={{ . }} secret_key=@"$HOME/seed/scoped-{{ . }}" >/dev/null`
-
-THE BACKUPS' IDENTITY (values.yaml `objectStore.backupAccessKey`), seeded when either backup CronJob is on
-(`lance.backupIdentity`) and derived in `derive()` like the other scoped identities. The CronJobs carry no sidecar, so ESO reads this
-path (its policy names it) and writes `<release>-backup-s3`; no app's policy names it.
 
 ## `c="$HOME/seed/otel-collector-export"`
 

@@ -15,14 +15,13 @@ import hashlib
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from typing import Any, Final
+from typing import Final
 
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.objectfs import fs_and_base
-from lakehouse.storage import s3_client
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, object_client
 
 
 #: The most keys one S3 DeleteObjects request takes.
@@ -46,22 +45,15 @@ class StoredObject(BaseModel):
     modified: datetime
 
 
-def _object_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — a boto3 S3 client
-    access_key, secret_key, session_token = storage_options.credential_in_clear()
-    return s3_client(
-        storage_options.options.get("endpoint"),
-        access_key=access_key,
-        secret_key=secret_key,
-        session_token=session_token,
-        region=storage_options.options.get("region"),
-    )
-
-
 def list_under(uri: str, storage_options: StorageOptions) -> list[StoredObject]:
-    """Every object beneath ``uri``, at any depth; ``[]`` when nothing is there."""
-    if storage_options.reaches_by_endpoint(uri):
+    """Every object beneath ``uri``, at any depth; ``[]`` when nothing is there.
+
+    Any ``s3://`` root is listed through the object client, endpoint or none, so the listing asks the store for
+    ``<key>/`` alone, what a session scoped to the location may list.
+    """
+    if uri.startswith("s3://"):
         bucket, _, key = uri.removeprefix("s3://").partition("/")
-        pages = _object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
+        pages = object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
         return [
             StoredObject(path=f"{bucket}/{entry['Key']}", size=int(entry.get("Size", 0)), modified=entry["LastModified"])
             for page in pages
@@ -108,7 +100,7 @@ def _s3_identity(uri: str, storage_options: StorageOptions) -> Callable[[str], O
     from botocore.exceptions import BotoCoreError, ClientError
 
     bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
-    client = _object_client(storage_options)
+    client = object_client(storage_options)
 
     def read(key: str) -> ObjectIdentity | None:
         full_key = f"{prefix}/{key}" if prefix else key
@@ -162,7 +154,7 @@ def delete_object(uri: str, storage_options: StorageOptions, key: str) -> bool:
 
     bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
     full_key = f"{prefix}/{key}" if prefix else key
-    client = _object_client(storage_options)
+    client = object_client(storage_options)
     try:
         client.head_object(Bucket=bucket, Key=full_key)
         client.delete_object(Bucket=bucket, Key=full_key)
@@ -176,19 +168,22 @@ def delete_object(uri: str, storage_options: StorageOptions, key: str) -> bool:
 
 
 def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) -> None:
-    """Delete the store ``paths``, every one beneath ``uri``'s bucket or root.
+    """Delete the store ``paths``, every one beneath ``uri``'s bucket or root, by key.
+
+    Any ``s3://`` root takes the object client, endpoint or none: pyarrow's delete puts the deleted object's parent back as
+    a directory marker (measured on pyarrow 25.0.0), a write outside what a session scoped to the location may make.
 
     Raises:
         OSError: The store refused a delete.
     """
     if not paths:
         return
-    if not storage_options.reaches_by_endpoint(uri):
+    if not uri.startswith("s3://"):
         fs, _ = fs_and_base(uri, storage_options)
         for path in paths:
             fs.delete_file(path)
         return
-    client = _object_client(storage_options)
+    client = object_client(storage_options)
     bucket = paths[0].partition("/")[0]
     keys = [path.partition("/")[2] for path in paths]
     for start in range(0, len(keys), _DELETE_BATCH):

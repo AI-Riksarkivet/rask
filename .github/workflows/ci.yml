@@ -532,8 +532,8 @@ jobs:
   #
   # FOUR PROOFS, one per seam: `smoke-rustfs` that `lakehouse.storage` works against a real S3
   # backend rather than moto, `rustfs-lifecycle` that the catalog is S3-AGNOSTIC (its lifecycle with
-  # the bytes on a RustFS service bound to one exec), `rustfs-provisioning` that the scoped-users hook
-  # fails on a policy the store refuses before it binds anyone, and `governance-chain` that authorization
+  # the bytes on a RustFS service bound to one exec), `rustfs-provisioning` that the provisioning hook
+  # fails on a policy the store refuses and leaves the stored one, and `governance-chain` that authorization
   # and catalog->lineage provenance hold together with real Dex tokens and no hand-written tuple. All
   # four are pure `dagger call`, so `make <lane>` and this job are the same code — the ms-gates
   # contract every other leg here holds.

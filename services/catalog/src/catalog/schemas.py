@@ -775,6 +775,71 @@ class CredentialResponse(BaseModel):
     read_version: int | None = None
 
 
+class TrashReleaseResponse(BaseModel):
+    """What releasing a trash record past its deadline did: the grants revoked, and whether the record was stamped."""
+
+    tuples_revoked: int
+    #: ``False`` when the record was gone by the stamp, purged or undropped meanwhile; the grants are revoked either way.
+    stamped: bool
+
+
+class TrashEndResponse(BaseModel):
+    """What ending a trash record did beside ending its records: the grants it still held, revoked."""
+
+    tuples_revoked: int
+
+
+class TrashRefusalRequest(BaseModel):
+    """Why maintenance declined to act on a trash record this tick, as its own report names it."""
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class TrashRefusalResponse(BaseModel):
+    """How many refusals the record now counts; ``None`` when the note could not be made (the record went meanwhile)."""
+
+    attempts: int | None = None
+
+
+class GrantCensusResponse(BaseModel):
+    """Every object's grant count, by type, as the store holds them now: what a drift report's authorization categories
+    read. The objects a deployment keeps for itself are left out, since no registry names them."""
+
+    #: ``False`` when authorization is off in the catalog: the store holds nothing to count, which is not an empty one.
+    enabled: bool
+    #: ``{object_type: {object_id: tuple_count}}``, bookkeeping relations excluded.
+    counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
+    #: Why the read stopped short of the store, when it did; a reader treats such a census as incomplete.
+    truncated: str | None = None
+
+
+class GhostRevokeRequest(BaseModel):
+    """The objects a drift report found holding grants that no registry names, each an OpenFGA object (``kind:id``)."""
+
+    objects: list[str] = Field(min_length=1, max_length=500)
+
+
+class GhostRevokeResponse(BaseModel):
+    """What the catalog revoked, each object's tuple count, and what it refused to, with why."""
+
+    revoked: dict[str, int] = Field(default_factory=dict)
+    refused: dict[str, str] = Field(default_factory=dict)
+
+
+class TenancyRebuildRequest(BaseModel):
+    """The warehouses whose tenancy edge a drift report found missing, by id."""
+
+    warehouses: list[str] = Field(min_length=1, max_length=500)
+
+
+class TenancyRebuildResponse(BaseModel):
+    """The tenancy edges the catalog wrote, each ``project:<p> project warehouse:<id>``, and the warehouses whose record
+    justifies none, with why."""
+
+    written: list[str] = Field(default_factory=list)
+    unjustified: dict[str, str] = Field(default_factory=dict)
+
+
 class PublishRequest(BaseModel):
     """Ask the catalog to gate a committed version and, if it passes, publish it.
 

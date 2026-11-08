@@ -36,6 +36,7 @@ from lakehouse.maintenance_due import CloneList, write_clone_list
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions
+from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
 
 
 TABLE = "db$räksmörgås"
@@ -102,6 +103,7 @@ def maintenance(moto_url: str, bucket: str, monkeypatch: pytest.MonkeyPatch) -> 
         "MAINTENANCE_ARRIVAL_ENABLED": "true",
         "MAINTENANCE_EVENT_MIN_VERSIONS": "1",
         "MAINTENANCE_MIN_VERSIONS_TO_EXPIRE": str(THRESHOLD),
+        "MAINTENANCE_CATALOG_URL": CATALOG_URL,
     }.items():
         monkeypatch.setenv(key, value)
     from maintenance.core.config import get_settings
@@ -139,7 +141,8 @@ def test_a_commit_expires_its_table_only_at_the_threshold(
 ) -> None:
     uri = _table_with(versions, bucket=bucket, options=store, clone_list_age=clone_list_age)
 
-    answered = maintenance.post("/maintenance-arrival", json=_written(uri, versions))
+    with maintain_tier_door(lambda _table: uri):
+        answered = maintenance.post("/maintenance-arrival", json=_written(uri, versions))
 
     assert answered.status_code == 200 and answered.json() == {"status": "SUCCESS"}, answered.text
     assert len(lance.dataset(uri, storage_options=store.in_clear()).versions()) == kept
@@ -174,7 +177,8 @@ def test_a_commits_expiry_removes_the_staged_manifests_no_version_will_take(
     lost = _staged(bucket, moto_url, LOCATION, 2)
     in_flight = _staged(bucket, moto_url, LOCATION, THRESHOLD + 2)
 
-    answered = maintenance.post("/maintenance-arrival", json=_written(uri, THRESHOLD + 1))
+    with maintain_tier_door(lambda _table: uri):
+        answered = maintenance.post("/maintenance-arrival", json=_written(uri, THRESHOLD + 1))
 
     assert answered.status_code == 200 and answered.json() == {"status": "SUCCESS"}, answered.text
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")

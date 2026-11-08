@@ -32,9 +32,10 @@ _VEND = VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=S
 _VENDED_OPTIONS = {
     "aws_access_key_id": "AK",
     "aws_secret_access_key": "SK",
-    "region": "us-east-1",
+    "aws_region": "us-east-1",
     "allow_http": "false",
-    "virtual_hosted_style_request": "false",
+    "aws_virtual_hosted_style_request": "false",
+    "aws_provider_scheme": "token",
     "expires_at_millis": "1",
 }
 

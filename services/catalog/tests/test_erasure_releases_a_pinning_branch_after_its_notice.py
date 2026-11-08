@@ -118,8 +118,8 @@ class _Clock:
 @contextmanager
 def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _Recorder, clock: _Clock) -> Generator[TestClient]:
     settings = Settings(
-        LANCE_S3_ACCESS_KEY_ID="k",
-        LANCE_S3_SECRET_ACCESS_KEY="s",
+        s3_access_key_id="k",
+        s3_secret_access_key="s",
         LANCE_CONTROL_ROOT=str(tmp_path / "control"),
         LANCE_ERASURE_RELEASE_GRACE_DAYS=grace_days,
         LANCE_ERASURE_RELEASE_BINDING_NAME=_BINDING,

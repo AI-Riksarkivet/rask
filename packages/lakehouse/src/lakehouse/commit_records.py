@@ -33,11 +33,9 @@ import uuid
 from datetime import UTC, datetime
 from typing import Final
 
-import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from lakehouse import records
-from lakehouse.objectfs import fs_and_base
+from lakehouse import records, stored_objects
 from lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
 from lakehouse.storage_options import StorageOptions
 
@@ -225,13 +223,12 @@ def forget_tag_move(control_root: str, storage_options: StorageOptions, table_uu
 
 
 def end_authors(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
-    """Delete every author record of the table ``table_uuid``; whether any existed."""
-    fs, base = fs_and_base(control_root, storage_options)
-    directory = f"{base}/{AUTHORS_PREFIX}/{table_uuid}"
-    if fs.get_file_info(directory).type == pafs.FileType.NotFound:
-        return False
-    fs.delete_dir(directory)
-    return True
+    """Delete every author record of the table ``table_uuid``; whether any existed. By key, as the table's other records
+    end (:func:`stored_objects.delete_objects`): the purge ends them under a session reaching the records' own keys alone,
+    which a probe of the bare directory key and the marker a directory delete puts back both fall outside ([[XC-084]])."""
+    listed = stored_objects.list_under(f"{control_root.rstrip('/')}/{AUTHORS_PREFIX}/{table_uuid}", storage_options)
+    stored_objects.delete_objects(control_root, storage_options, [stored.path for stored in listed])
+    return bool(listed)
 
 
 class CommitMarks(BaseModel):

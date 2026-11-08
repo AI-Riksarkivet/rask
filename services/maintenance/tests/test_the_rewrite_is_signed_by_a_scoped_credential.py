@@ -1,22 +1,21 @@
-"""An expiry pass's WRITE must be signed by a table-scoped credential, not the root object-store key.
+"""An expiry pass's WRITE is signed by the catalog's vend for its table, and by nothing else ([[LH-219]]).
 
 Version expiry deletes files and disarming commit-path cleanup commits a version, so a service doing both across
 every bucket with one long-lived key is the exact posture the catalog's vending door exists to end. Proven end-to-end
 for the ingest plane 2026-09-03 (a credential vended for one table read AND wrote it, and was refused on a sibling
 with 403 AccessDenied); this is the same door.
 
-WHAT MUST NOT CHANGE, and each has a test below because each would be a silent regression:
+WHAT EACH TEST BELOW HOLDS, because each would be a silent regression:
 
-* the whole-estate protection PRE-PASS keeps the ambient credential. It must open every manifest in
-  every bucket before any dataset is expired, and no per-table credential can express that. It is a
-  READ; the clause is about write paths;
-* an unvendable dataset still gets maintained. A location the flat-layout parser declines, a
-  deployment with no catalog URL, a door answering `server_mediated` — all fall back to the ambient
-  credential, because a hardening that can FAIL a maintenance run turns an optional improvement into a
-  new way to stop reclaiming disk;
-* the vend asks for the `maintain` tier. A read-tier credential returns 200 and a perfectly valid
-  credential, and the pass then dies at the object store as `403 AccessDenied` on a DELETE — reading as a
-  missing grant on the table rather than a request that asked for the wrong thing.
+* the vend asks for the `maintain` tier, which the door's route is matched on. A read-tier credential returns 200 and a
+  perfectly valid credential, and the pass then dies at the object store as `403 AccessDenied` on a DELETE — reading as
+  a missing grant on the table rather than a request that asked for the wrong thing;
+* an answer that is not a vend stops the dataset. The only other credential maintenance holds is its own session, which
+  reads the whole estate, so a deployment with no door, a door vending no direct credential, a door that could not
+  answer and a door that said no each leave the rewrite unsigned, and the sweep records which;
+* a pass holding no vend writes nothing, whatever it finds. The sweep asks for a vend only where its probe finds
+  something to write, and a table that changes between the probe and the pass would otherwise be written under the
+  session the pass reads with.
 """
 
 from __future__ import annotations
@@ -24,43 +23,43 @@ from __future__ import annotations
 import json
 import logging
 import traceback
-from typing import Any
+from collections.abc import Iterator
+from datetime import timedelta
+from pathlib import Path
 
 import httpx
+import lance
+import pyarrow as pa
 import pytest
+import respx
 
 from lakehouse.context import DiagnosticFormatter
-from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
-from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned
+from maintenance.services.credentials import MaintenanceDenied, MaintenanceUnauthenticated, TableNotGoverned, VendingNotDirect, VendUndecided
+from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 
 
 pytestmark = pytest.mark.usefixtures("catalog_identity_token")
 
 
+CATALOG = "http://catalog:2333"
+_TABLE = "acme-bronze$events"
+_URI = "s3://acme-bucket/4c49d010_acme-bronze$events"
+_DOOR = f"{CATALOG}/management/v1/table/{_TABLE}/credentials"
 #: Distinctive values on purpose. A one-character secret is a substring of ordinary prose, so the
 #: "never logged" assertion below would fail on any message containing that letter and prove nothing.
 _SCOPED = {
     "aws_access_key_id": "VENDEDKEY",
     "aws_secret_access_key": "vended-secret-9f3a",
     "aws_session_token": "vended-token-7c1e",
-    "endpoint": "https://s3.public.example",
+    "aws_endpoint": "https://s3.public.example",
     "allow_http": "false",
 }
-_AMBIENT = StorageOptions.from_flat({"aws_access_key_id": "rustfsadmin", "aws_secret_access_key": "rustfsadmin", "endpoint": "http://rustfs:9000"})
+_VEND = {"mode": "direct", "credentials": {"storage_options": _SCOPED}}
 
 
-class _Response:
-    def __init__(self, status_code: int, payload: dict[str, Any]) -> None:
-        self.status_code = status_code
-        self._payload = payload
-
-    def json(self) -> dict[str, Any]:
-        return self._payload
-
-
-def _settings(catalog_url: str = "http://catalog:2333") -> MaintenanceSettings:
+def _settings(catalog_url: str = CATALOG) -> MaintenanceSettings:
     """One explicit keyword rather than a `**overrides` splat: pydantic-settings' own constructor
     keywords (`_cli_settings_source`, `_case_sensitive`, …) are in the same namespace, so a splat of
     `str` values type-checks against every one of them and `ty` reports 36 diagnostics for one call."""
@@ -68,122 +67,152 @@ def _settings(catalog_url: str = "http://catalog:2333") -> MaintenanceSettings:
 
 
 @pytest.fixture
-def door(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-    """Records every vend request and answers with a direct credential."""
-    calls: list[dict[str, Any]] = []
-
-    def _post(url: str, **kwargs: Any) -> _Response:
-        calls.append({"url": url, **kwargs})
-        return _Response(200, {"mode": "direct", "credentials": {"storage_options": _SCOPED}})
-
-    monkeypatch.setattr(credentials.httpx, "post", _post)
-    return calls
+def router() -> Iterator[respx.MockRouter]:
+    """The catalog's side of the wire. A request no route matches fails the test, so one sent for another tier does."""
+    with respx.mock() as mock:
+        yield mock
 
 
-def test_the_pass_is_signed_by_the_vended_credential(door: list[dict[str, Any]]) -> None:
+def _door(router: respx.MockRouter) -> respx.Route:
+    """The vend door, matched only at the ``maintain`` tier."""
+    return router.post(_DOOR, params={"tier": "maintain"})
+
+
+def test_the_pass_is_signed_by_the_vended_credential_at_maintenances_own_store_address(router: respx.MockRouter) -> None:
     """[[LH-489]] At maintenance's own store address: the catalog vends the one a client off the cluster reaches."""
+    _door(router).mock(return_value=httpx.Response(200, json=_VEND))
     settings = _settings()
-    options = credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", settings, table_id="acme-bronze$events", fallback=_AMBIENT)
+
+    options = credentials.write_options_for(_URI, settings, table_id=_TABLE)
+
     assert settings.s3_endpoint.startswith("http://")
-    assert options.in_clear() == {**_SCOPED, "endpoint": settings.s3_endpoint, "allow_http": "true"}
-    assert options.in_clear()["aws_access_key_id"] != "rustfsadmin"
+    assert options.in_clear() == {**_SCOPED, "aws_endpoint": settings.s3_endpoint, "allow_http": "true", "aws_provider_scheme": "token"}
 
 
-def test_the_vend_maintenance_holds_renders_neither_its_secret_nor_its_session_token(door: list[dict[str, Any]], caplog: pytest.LogCaptureFixture) -> None:
+def test_the_credential_maintenance_holds_renders_neither_its_secret_nor_its_session_token(router: respx.MockRouter, caplog: pytest.LogCaptureFixture) -> None:
     """[[LH-072]] Maintenance holds the vend from the door's answer to the call that signs, and nothing that turns it into
     text in between shows its secret or session token."""
-    vend = credentials._vend("acme-bronze$events", _settings())  # noqa: SLF001 — the holder is the unit under test
-    assert vend is not None, "the door vended nothing, so nothing below was rendered"
-    refused = RuntimeError("the store refused the vend", vend)
+    _door(router).mock(return_value=httpx.Response(200, json=_VEND))
+    held = credentials.write_options_for(_URI, _settings(), table_id=_TABLE)
+
+    refused = RuntimeError("the store refused the vend", held)
     with caplog.at_level(logging.WARNING, logger=credentials.logger.name):
-        credentials.logger.warning("vend_refused %s %r", vend, vend, extra={"vended": vend}, exc_info=refused)
+        credentials.logger.warning("vend_refused %s %r", held, held, extra={"vended": held}, exc_info=refused)
 
     rendered = {
-        "repr": repr(vend),
-        "str": str(vend),
-        "format": f"{vend}",
-        "model_dump": repr(vend.model_dump()),
-        "model_dump json": json.dumps(vend.model_dump(mode="json")),
-        "model_dump_json": vend.model_dump_json(),
+        "repr": repr(held),
+        "str": str(held),
+        "format": f"{held}",
+        "model_dump": repr(held.model_dump()),
+        "model_dump json": json.dumps(held.model_dump(mode="json")),
+        "model_dump_json": held.model_dump_json(),
         "log": "\n".join(DiagnosticFormatter("%(message)s").format(record) for record in caplog.records),
         "error echo": "".join(traceback.format_exception(refused)),
     }
+    secrets = (_SCOPED["aws_secret_access_key"], _SCOPED["aws_session_token"])
+    assert [how for how, text in rendered.items() if any(secret in text for secret in secrets)] == []
 
-    held = (_SCOPED["aws_secret_access_key"], _SCOPED["aws_session_token"])
-    assert [how for how, text in rendered.items() if any(secret in text for secret in held)] == []
 
+def test_a_deployment_with_no_vending_door_refuses_every_rewrite_before_asking(router: respx.MockRouter) -> None:
+    with pytest.raises(VendingNotDirect, match="no catalog door is configured"):
+        credentials.write_options_for(_URI, _settings(catalog_url=""), table_id=_TABLE)
 
-def test_a_deployment_with_no_vending_door_is_still_maintained(door: list[dict[str, Any]]) -> None:
-    options = credentials.write_options_for(
-        "s3://acme-bucket/4c49d010_acme-bronze$events", _settings(catalog_url=""), table_id="acme-bronze$events", fallback=_AMBIENT
-    )
-
-    assert options == _AMBIENT, "no catalog configured"
+    assert router.calls.call_count == 0
 
 
 @pytest.mark.parametrize(
-    "answer",
+    ("answer", "stopped_by"),
     [
-        _Response(200, {"mode": "server_mediated"}),
-        _Response(200, {"mode": "direct", "credentials": {}}),
-        _Response(200, {"mode": "direct", "credentials": {"storage_options": {**_SCOPED, "aws_secret_access_key": ""}}}),
-        _Response(200, {"mode": "direct", "credentials": {"storage_options": {**_SCOPED, "access_key_id": "ANOTHERKEY"}}}),
-        httpx.Response(404, json={"code": 0, "detail": "Not Found"}),
-        httpx.Response(404, text="not found"),
+        pytest.param(httpx.Response(200, json={"mode": "server_mediated"}), VendingNotDirect, id="server-mediated"),
+        pytest.param(httpx.Response(404, json={"code": 0, "detail": "Not Found"}), VendingNotDirect, id="no-door-at-the-path"),
+        pytest.param(httpx.Response(200, json={"mode": "direct", "credentials": {}}), VendUndecided, id="no-options"),
+        pytest.param(
+            httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": {**_SCOPED, "aws_secret_access_key": ""}}}),
+            VendUndecided,
+            id="half-a-credential",
+        ),
+        pytest.param(
+            httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": {"aws_endpoint": "https://s3.public.example"}}}),
+            VendUndecided,
+            id="no-key-pair",
+        ),
+        pytest.param(httpx.Response(200, text="<html>"), VendUndecided, id="unparseable"),
+        pytest.param(httpx.Response(429, json={"code": 21, "detail": "shed"}), VendUndecided, id="throttled"),
+        pytest.param(httpx.Response(400, json={"code": 13, "detail": "bad tier"}), MaintenanceDenied, id="another-4xx"),
     ],
 )
-def test_a_door_that_could_not_ANSWER_degrades_rather_than_failing_the_run(monkeypatch: pytest.MonkeyPatch, answer: _Response | httpx.Response) -> None:
-    """Shapes of "no credential is on offer", and none of them is a refusal.
+def test_an_answer_that_is_not_a_vend_stops_the_dataset(router: respx.MockRouter, answer: httpx.Response, stopped_by: type[Exception]) -> None:
+    """Every shape of "no credential is on offer" leaves the rewrite unsigned, as its own refusal or failure.
 
-    `server_mediated` is a supported posture, and a `direct` answer carrying no options offered nothing, as does one
-    carrying half a credential or a key id under two spellings that name two identities: read as no credential, its
-    pass would sign with the pod's own chain while reported as scoped ([[LH-543]]). A 404 that names no absent table or namespace (code 0 is a path no door serves) is the door missing,
-    not an answer about the id. Reclaiming disk through any of these is why the ambient fallback exists.
-    A 5xx is not among them: the door was asked and could not decide, which stops the dataset ([[LH-279]]).
+    Read as no credential, any of these would leave the pass to sign with maintenance's own session, which reaches the
+    whole estate ([[LH-219]]). ``server_mediated`` and a 404 naming no absent object (code 0 is a path no door serves)
+    mean this deployment is vended nothing direct, so the sweep refuses without counting the table; a body naming no
+    whole credential, one that does not parse, and a throttled door decided nothing, so the next tick retries; any other
+    4xx is the door's refusal of this table.
     """
-    monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: answer)
-    assert (
-        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), table_id="acme-bronze$events", fallback=_AMBIENT) == _AMBIENT
-    )
+    _door(router).mock(return_value=answer)
+
+    with pytest.raises(stopped_by) as caught:
+        credentials.write_options_for(_URI, _settings(), table_id=_TABLE)
+
+    assert type(caught.value) is stopped_by
 
 
-@pytest.mark.parametrize(("status", "remedy"), [(401, "service credential"), (403, "can_maintain")])
-def test_a_door_that_said_NO_refuses_instead_of_reaching_for_the_ambient_key(monkeypatch: pytest.MonkeyPatch, status: int, remedy: str) -> None:
-    """A DENIAL sat in the degrading list above, and it is a different question from the three there.
+@pytest.mark.parametrize(
+    ("status", "refused_as", "remedy"),
+    [
+        pytest.param(401, MaintenanceUnauthenticated, "service credential", id="unauthenticated"),
+        pytest.param(403, MaintenanceDenied, "or no such table is registered", id="denied"),
+    ],
+)
+def test_a_door_that_said_NO_refuses_the_dataset_and_names_the_remedy(
+    router: respx.MockRouter, status: int, refused_as: type[MaintenanceDenied], remedy: str
+) -> None:
+    """ "You may not" refuses the DATASET, not the run: the sweep records a refusal and maintains everything else.
 
-    "We could not ask" permits a fallback; "you may not" cannot, because the fallback is the ambient
-    credential and it reaches every bucket in the estate — so the answer to being refused one table
-    would be to maintain it with a key that reaches all of them. Measured on the live estate 2026-09-10:
-    eight tables refused 403 and rewritten under the root key, visible only as an INFO line.
-
-    It refuses the DATASET, not the run: the sweep records a refusal and maintains everything else. The
-    remedy differs: a 403 is a grant on the table, a 401 is maintenance's own credential.
+    Measured on the live estate 2026-09-10, when a fallback still existed: eight tables refused 403 and rewritten under
+    the root key, visible only as an INFO line. A 401 is about this service's own credential, which the sweep never
+    counts under the table, and a 403 about the id; the catalog's gate runs before existence resolution, so the 403 names
+    both of its causes ([[LH-164]]).
     """
-    monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: _Response(status, {}))
+    _door(router).mock(return_value=httpx.Response(status, json={}))
+
     with pytest.raises(MaintenanceDenied) as caught:
-        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), table_id="acme-bronze$events", fallback=_AMBIENT)
-    assert remedy in str(caught.value), f"the refusal must name what would allow it: {caught.value}"
+        credentials.write_options_for(_URI, _settings(), table_id=_TABLE)
+
+    assert type(caught.value) is refused_as
+    assert remedy in str(caught.value) and _TABLE in str(caught.value), str(caught.value)
 
 
 @pytest.mark.parametrize(("code", "name"), [(4, "TABLE_NOT_FOUND"), (1, "NAMESPACE_NOT_FOUND")])
-def test_a_door_that_found_NO_SUCH_TABLE_refuses_instead_of_reaching_for_the_ambient_key(monkeypatch: pytest.MonkeyPatch, code: int, name: str) -> None:
+def test_a_door_that_found_NO_SUCH_TABLE_refuses_the_dataset(router: respx.MockRouter, code: int, name: str) -> None:
     """A 404 naming the table or namespace absent is an answer about the id, as a 403 is, not an outage.
 
-    Measured 2026-09-26: the ambient fallback cleaned a table the vend door had answered 404 TableNotFound
+    Measured 2026-09-26, when a fallback still existed: it cleaned a table the vend door had answered 404 TableNotFound
     (versions 7 to 1). A trashed table answers this way, and it is frozen until undrop or purge.
     """
-    answer = httpx.Response(404, json={"code": code, "detail": "absent"})
-    monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: answer)
+    _door(router).mock(return_value=httpx.Response(404, json={"code": code, "detail": "absent"}))
+
     with pytest.raises(TableNotGoverned) as caught:
-        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), table_id="acme-bronze$events", fallback=_AMBIENT)
-    assert name in str(caught.value) and "acme-bronze$events" in str(caught.value), str(caught.value)
+        credentials.write_options_for(_URI, _settings(), table_id=_TABLE)
+
+    assert name in str(caught.value) and _TABLE in str(caught.value), str(caught.value)
 
 
-def test_an_unreachable_catalog_degrades(monkeypatch: pytest.MonkeyPatch) -> None:
-    def _boom(url: str, **kwargs: Any) -> _Response:
-        raise credentials.httpx.ConnectError("no route to host")
+def test_an_unreachable_catalog_stops_the_dataset_for_the_next_tick(router: respx.MockRouter) -> None:
+    _door(router).mock(side_effect=httpx.ConnectError("no route to host"))
 
-    monkeypatch.setattr(credentials.httpx, "post", _boom)
-    assert (
-        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), table_id="acme-bronze$events", fallback=_AMBIENT) == _AMBIENT
-    )
+    with pytest.raises(VendUndecided, match="could not be asked"):
+        credentials.write_options_for(_URI, _settings(), table_id=_TABLE)
+
+
+def test_a_pass_holding_no_vend_writes_nothing_whatever_it_finds(tmp_path: Path) -> None:
+    uri = str(tmp_path / "t.lance")
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    lance.write_dataset(rows, uri)
+    for _ in range(3):
+        lance.write_dataset(rows, uri, mode="overwrite")
+
+    result = expire_versions(ExpiryTarget(uri=uri, storage_options={}), ExpiryPolicy(older_than=timedelta(0), retain_versions=1))
+
+    assert (result.reclaimable_versions, result.old_versions_removed, len(lance.dataset(uri).versions())) == (3, 0, 4)

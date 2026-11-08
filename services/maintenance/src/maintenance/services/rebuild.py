@@ -43,11 +43,12 @@ turning it on to SEE what it would write must not thereby write to the authoriza
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse.governed import fga
+from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, rebuild_tenancy
 
 
 if TYPE_CHECKING:
@@ -145,15 +146,16 @@ def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[Rebuil
     return planned, unjustified
 
 
-async def rebuild_tuples(settings: MaintenanceSettings, *, report: ReconcileReport, sources: Sources, fga_client: Any) -> RebuildReport:
-    """Write the tuples the registries justify for objects the report found ungoverned.
+async def rebuild_tuples(settings: MaintenanceSettings, *, report: ReconcileReport, sources: Sources) -> RebuildReport:
+    """Have the catalog write the tuples the registries justify for objects the report found ungoverned ([[XC-084]]).
 
-    Degrades rather than fails: a store that will not accept the writes leaves `error` set and the
-    tick continues. A reconcile tick that 500s because a repair failed is a worse outcome than one
-    that reports drift it could not fix — the report is the thing everything else is gated on.
+    Maintenance holds no OpenFGA credential, so the write is the catalog's, which derives each tenancy edge again from
+    the warehouse's own record and answers the ones it wrote. Degrades rather than fails: a door that refuses or cannot
+    decide leaves `error` set and the tick continues. A reconcile tick that 500s because a repair failed is a worse
+    outcome than one that reports drift it could not fix — the report is the thing everything else is gated on.
     """
     out = RebuildReport(enabled=settings.tuple_rebuild_enabled, dry_run=settings.tuple_rebuild_dry_run)
-    if not settings.tuple_rebuild_enabled or fga_client is None:
+    if not settings.tuple_rebuild_enabled:
         return out
     planned, out.unjustified = plan_rebuild(report, sources)
     out.capped = max(0, len(planned) - settings.tuple_rebuild_max_per_tick)
@@ -162,15 +164,11 @@ async def rebuild_tuples(settings: MaintenanceSettings, *, report: ReconcileRepo
         out.written = planned
         return out
     try:
-        await fga.write_tuples(  # noqa: TID251
-            fga_client,
-            [fga.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in planned],
-            actor=settings.catalog_service_identity,
-            origin="registry_rebuild",
-        )
-    except Exception as exc:  # noqa: BLE001 — a failed repair must not fail the report it is gated on
-        log.warning("tuple_rebuild_failed", extra={"error": str(exc), "planned": len(planned)})
+        answered = await run_in_threadpool(rebuild_tenancy, settings, [edge.object.removeprefix("warehouse:") for edge in planned])
+    except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
+        log.warning("tuple_rebuild_refused_by_the_catalog", extra={"error": str(exc), "planned": len(planned)})
         out.error = str(exc)
         return out
-    out.written = planned
+    out.written = [edge for edge in planned if f"{edge.user} {edge.relation} {edge.object}" in answered.written]
+    out.unjustified |= {f"warehouse:{warehouse}": why for warehouse, why in answered.unjustified.items()}
     return out

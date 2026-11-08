@@ -24,7 +24,7 @@ from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarge
 
 
 def _expire(uri: str, *, older_than: timedelta | None = None, retain_versions: int | None = None) -> DatasetResult:
-    return expire_versions(ExpiryTarget(uri=uri, storage_options={}), ExpiryPolicy(older_than=older_than, retain_versions=retain_versions))
+    return expire_versions(ExpiryTarget(uri=uri, storage_options={}, write_options={}), ExpiryPolicy(older_than=older_than, retain_versions=retain_versions))
 
 
 def _compaction_due(uri: str) -> CompactionDue | None:

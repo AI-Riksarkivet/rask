@@ -19,6 +19,7 @@ from __future__ import annotations
 import datetime as dt
 import os
 import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -40,13 +41,14 @@ from maintenance.services.floor import FLOOR_KEY, FloorReport, raise_listing_flo
 from maintenance.services.orphans import OrphanFile
 
 
-def _settings(control_root: Path, *, enabled: bool = True, dry_run: bool = False, max_per_tick: int = 10, catalog_url: str = "") -> MaintenanceSettings:
-    """The pass's settings, built for real, with the trash index under ``control_root``.
+CATALOG = "http://catalog.test"
 
-    `catalog_url` empty is the NO-VENDING-DOOR posture, which `write_options_for` handles by returning
-    the ambient fallback and saying so. The tests that care about vending patch that function outright,
-    or set `catalog_url` and answer its door through respx.
-    """
+type Door = Callable[[list[OrphanFile]], TableIds]
+
+
+def _settings(control_root: Path, *, enabled: bool = True, dry_run: bool = False, max_per_tick: int = 10, catalog_url: str = CATALOG) -> MaintenanceSettings:
+    """The pass's settings, built for real, with the trash index under ``control_root`` and the catalog's vending door at
+    ``catalog_url``, answered through respx (`door`): a floor commit signs with its table's vend and nothing else ([[LH-219]])."""
     return MaintenanceSettings(
         control_root=str(control_root),
         floor_raise_enabled=enabled,
@@ -83,7 +85,7 @@ def _stranded_dataset(root: Path) -> tuple[str, Path, float]:
     return uri, orphan, floor
 
 
-def test_lance_reclaims_a_stranded_file_only_after_the_floor_is_raised(tmp_path: Path) -> None:
+def test_lance_reclaims_a_stranded_file_only_after_the_floor_is_raised(door: Door, tmp_path: Path) -> None:
     """The mechanism, end to end, against pylance itself."""
     uri, orphan, floor = _stranded_dataset(tmp_path)
     assert orphan.stat().st_mtime > floor, "the fixture did not strand the file above the floor"
@@ -96,7 +98,7 @@ def test_lance_reclaims_a_stranded_file_only_after_the_floor_is_raised(tmp_path:
             dataset=uri, path="_transactions/9-dead.txn", kind="transactions", size_bytes=64, reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime
         )
     ]
-    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
+    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=door(orphans), storage_options=StorageOptions())
     assert [r.dataset for r in report.raised] == [uri], report
 
     lance.dataset(uri).cleanup_old_versions(older_than=dt.timedelta(seconds=0), delete_unverified=True)
@@ -106,6 +108,31 @@ def test_lance_reclaims_a_stranded_file_only_after_the_floor_is_raised(tmp_path:
 def _named(orphans: list[OrphanFile]) -> TableIds:
     """The tick's ``__manifest`` read, naming every orphan's dataset a table of its own."""
     return TableIds(by_location={normalise(orphan.dataset): f"db${index}" for index, orphan in enumerate(orphans)})
+
+
+def _vend_covering(location: str) -> httpx.Response:
+    """The door's maintain-tier vend for the table at ``location``: a scoped pair, and the table's own location."""
+    vended = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
+    return httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}, "location": location})
+
+
+@pytest.fixture
+def door(monkeypatch: pytest.MonkeyPatch) -> Iterator[Door]:
+    """The catalog's vending door: `door(orphans)` names each orphan's dataset a table of its own (`_named`) and answers
+    that table's maintain tier with a credential covering the dataset. A test takes it only when its pass vends."""
+    monkeypatch.setattr("maintenance.services.credentials.service_headers", lambda _settings: {})
+    locations: dict[str, str] = {}
+    with respx.mock() as router:
+        router.post(url__regex=rf"^{CATALOG}/management/v1/table/(?P<table>[^/]+)/credentials", params={"tier": "maintain"}).mock(
+            side_effect=lambda _request, table: _vend_covering(locations[table])
+        )
+
+        def _serve(orphans: list[OrphanFile]) -> TableIds:
+            names = _named(orphans)
+            locations.update({names.by_location[normalise(orphan.dataset)]: orphan.dataset for orphan in orphans})
+            return names
+
+        yield _serve
 
 
 def _orphan(dataset: str, reclaimable: bool | None, mtime: float = 2_000_000_000.0) -> OrphanFile:
@@ -124,8 +151,8 @@ def readable_floor(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("maintenance.services.floor._current_floor", lambda uri, storage_options: 1_000_000_000.0)
 
 
-def _plan(control_root: Path, orphans: list[OrphanFile], **kwargs: Any) -> FloorReport:
-    return raise_listing_floors(_settings(control_root, dry_run=True, **kwargs), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
+def _plan(control_root: Path, orphans: list[OrphanFile], names: TableIds, **kwargs: Any) -> FloorReport:
+    return raise_listing_floors(_settings(control_root, dry_run=True, **kwargs), orphans=orphans, names=names, storage_options=StorageOptions())
 
 
 def test_a_disabled_pass_selects_nothing(readable_floor: None, tmp_path: Path) -> None:
@@ -139,25 +166,27 @@ def test_a_disabled_pass_selects_nothing(readable_floor: None, tmp_path: Path) -
 def test_one_undecided_sibling_disqualifies_the_whole_dataset(readable_floor: None, tmp_path: Path) -> None:
     """All-or-nothing per dataset, because the commit is per dataset: raising the floor for one stranded
     file sweeps up its siblings whatever their class."""
-    assert _plan(tmp_path, [_orphan("s3://wh/a", False), _orphan("s3://wh/a", None)]).raised == []
+    orphans = [_orphan("s3://wh/a", False), _orphan("s3://wh/a", None)]
+    assert _plan(tmp_path, orphans, _named(orphans)).raised == []
 
 
-def test_a_dataset_with_stranded_orphans_is_selected_beside_ones_time_clears(readable_floor: None, tmp_path: Path) -> None:
+def test_a_dataset_with_stranded_orphans_is_selected_beside_ones_time_clears(door: Door, readable_floor: None, tmp_path: Path) -> None:
     """The control, in the estate's shape: a restore strands transaction files beside data files, and
     the data files are Lance's whatever the floor (lance #8944). They neither earn the commit nor block
     it, and the raise names only the stranded files it is for."""
     data_file = OrphanFile(dataset="s3://wh/a", path="data/x.lance", kind="data", reclaimable_by_lance=True, mtime_epoch=2_000_000_000.0)
-    plan = _plan(tmp_path, [_orphan("s3://wh/a", False), _orphan("s3://wh/a", False), data_file, _orphan("s3://wh/b", True)])
+    orphans = [_orphan("s3://wh/a", False), _orphan("s3://wh/a", False), data_file, _orphan("s3://wh/b", True)]
+    plan = _plan(tmp_path, orphans, door(orphans))
 
     assert [(r.dataset, r.orphan_files) for r in plan.raised] == [("s3://wh/a", 2)]
 
 
-def test_a_dry_run_writes_no_version(tmp_path: Path) -> None:
+def test_a_dry_run_writes_no_version(door: Door, tmp_path: Path) -> None:
     uri, orphan, _ = _stranded_dataset(tmp_path)
     before = lance.dataset(uri).version
 
     orphans = [OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
-    report = raise_listing_floors(_settings(tmp_path, dry_run=True), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
+    report = raise_listing_floors(_settings(tmp_path, dry_run=True), orphans=orphans, names=door(orphans), storage_options=StorageOptions())
 
     assert [r.dataset for r in report.raised] == [uri], "a dry run must still report the plan"
     assert report.raised[0].version is None
@@ -178,36 +207,37 @@ def test_a_floor_that_already_covers_its_orphans_is_refused(tmp_path: Path) -> N
     assert [r.refused for r in report.refused] == ["floor already covers these orphans"]
 
 
-def test_an_orphan_listed_in_the_floor_s_own_second_is_raised_not_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_an_orphan_listed_in_the_floor_s_own_second_is_raised_not_refused(door: Door, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A whole-second listing cannot place a file inside the floor's second, so the scan strands it and the raise
     must not call it covered: the pass and the scan ask one rule (`orphans.listed_at_or_below`), or the file is
     stranded and refused on every tick."""
     monkeypatch.setattr("maintenance.services.floor._current_floor", lambda uri, storage_options: 1_000_000_000.559)
 
-    plan = _plan(tmp_path, [_orphan("s3://wh/a", False, mtime=1_000_000_000.0)])
+    orphans = [_orphan("s3://wh/a", False, mtime=1_000_000_000.0)]
+    plan = _plan(tmp_path, orphans, door(orphans))
 
     assert ([r.dataset for r in plan.raised], plan.refused) == (["s3://wh/a"], [])
 
 
-def test_an_unreadable_dataset_is_refused_and_does_not_stop_the_others(tmp_path: Path) -> None:
+def test_an_unreadable_dataset_is_refused_and_does_not_stop_the_others(door: Door, tmp_path: Path) -> None:
     uri, orphan, _ = _stranded_dataset(tmp_path)
 
     orphans = [
         _orphan("s3://wh/does-not-exist", False),
         OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime),
     ]
-    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
+    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=door(orphans), storage_options=StorageOptions())
 
     assert [r.dataset for r in report.raised] == [uri]
     assert [r.refused for r in report.refused] == ["floor unreadable"]
 
 
-def test_the_remainder_beyond_the_cap_is_reported(readable_floor: None, tmp_path: Path) -> None:
+def test_the_remainder_beyond_the_cap_is_reported(door: Door, readable_floor: None, tmp_path: Path) -> None:
     """A store rebuild strands EVERY dataset at once, so a truncated pass that said nothing would look
     complete and the next tick's smaller number would read as progress nobody made."""
     orphans = [_orphan(f"s3://wh/{i}", False) for i in range(5)]
 
-    plan = _plan(tmp_path, orphans, max_per_tick=2)
+    plan = _plan(tmp_path, orphans, door(orphans), max_per_tick=2)
 
     assert len(plan.raised) == 2
     assert plan.capped == 3
@@ -216,22 +246,14 @@ def test_the_remainder_beyond_the_cap_is_reported(readable_floor: None, tmp_path
 # --- the two defects the live run found -------------------------------------------------------- #
 
 
-def test_the_commit_is_signed_by_the_vended_credential(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """A write to a governed table goes through the vending door, like every other write here.
+def test_the_commit_is_signed_by_the_vended_credential(door: Door, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A floor commit is a write to the table, so it signs with that table's vend and nothing else ([[LH-219]]).
 
-    A write signed by whatever opened the dataset is, on a denied table, signed by the deployment's ambient key: the
-    bypass `credentials.MaintenanceDenied` exists to stop. A config commit is a write to the table, so the rule binds it.
-    Found by deploying: the first version of this signed with the ambient options while the sweep, on
-    the very same dataset, refused for want of a vended credential.
+    The pass's own options reach the reads that judge the dataset, never the commit. Found by deploying: the first
+    version of this signed the commit with the options it was handed while the sweep, on the very same dataset, refused
+    for want of a vended credential.
     """
     uri, orphan, _ = _stranded_dataset(tmp_path)
-    seen: list[StorageOptions] = []
-
-    def _vended(dataset_uri: str, settings: Any, *, table_id: str, fallback: StorageOptions) -> StorageOptions:
-        seen.append(fallback)
-        return StorageOptions(options={"scoped": "yes"})
-
-    monkeypatch.setattr("maintenance.services.floor.write_options_for", _vended)
     opened: list[dict[str, str]] = []
     real = lance.dataset
 
@@ -240,12 +262,12 @@ def test_the_commit_is_signed_by_the_vended_credential(monkeypatch: pytest.Monke
         return real(dataset_uri, *args, **{**kwargs, "storage_options": {}})
 
     monkeypatch.setattr(lance, "dataset", _record)
+    own = StorageOptions.from_flat({"aws_access_key_id": "OWN", "aws_secret_access_key": "own-secret"})
 
     orphans = [OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
-    raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions(options={"ambient": "yes"}))
+    report = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=door(orphans), storage_options=own)
 
-    assert seen == [StorageOptions(options={"ambient": "yes"})], "the ambient options must be offered only as the vend's fallback"
-    assert {"scoped": "yes"} in opened, "the commit was opened with something other than the vended credential"
+    assert ([r.dataset for r in report.raised], "VENDED" in {options.get("aws_access_key_id") for options in opened}) == ([uri], True), opened
 
 
 def test_a_catalog_denial_refuses_the_raise(monkeypatch: pytest.MonkeyPatch, readable_floor: None, tmp_path: Path) -> None:
@@ -296,9 +318,7 @@ def test_a_location_the_catalog_governs_elsewhere_refuses_the_raise(monkeypatch:
     elsewhere = "s3://acme-bucket/medallion/bronze"
 
     with respx.mock() as router:
-        router.post("http://catalog.test/management/v1/table/acme-bronze$events/credentials").mock(
-            return_value=httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": {}}, "location": elsewhere})
-        )
+        router.post("http://catalog.test/management/v1/table/acme-bronze$events/credentials").mock(return_value=_vend_covering(elsewhere))
         orphans = [_orphan("s3://wh/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f", False)]
         names = TableIds(by_location={normalise(orphans[0].dataset): "acme-bronze$events"})
         report = raise_listing_floors(settings, orphans=orphans, names=names, storage_options=StorageOptions())
@@ -307,7 +327,7 @@ def test_a_location_the_catalog_governs_elsewhere_refuses_the_raise(monkeypatch:
     assert elsewhere in (report.refused[0].refused or ""), report.refused
 
 
-def test_a_dataset_already_raised_is_not_raised_again(tmp_path: Path) -> None:
+def test_a_dataset_already_raised_is_not_raised_again(door: Door, tmp_path: Path) -> None:
     """A COMMIT ALONE DOES NOT MOVE THE FLOOR — the manifests beneath it must then be cleaned.
 
     On a dataset the sweep may not maintain, nothing cleans them, so this pass would write a version per
@@ -318,9 +338,9 @@ def test_a_dataset_already_raised_is_not_raised_again(tmp_path: Path) -> None:
     uri, orphan, _ = _stranded_dataset(tmp_path)
     orphans = [OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
 
-    first = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
+    first = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=door(orphans), storage_options=StorageOptions())
     version_after_first = lance.dataset(uri).version
-    second = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
+    second = raise_listing_floors(_settings(tmp_path), orphans=orphans, names=door(orphans), storage_options=StorageOptions())
 
     assert [r.dataset for r in first.raised] == [uri]
     assert second.raised == []
@@ -329,12 +349,11 @@ def test_a_dataset_already_raised_is_not_raised_again(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("recorded", [pytest.param("a/ds", id="the-record-names-the-dataset"), pytest.param("a", id="the-record-names-a-location-holding-it")])
-def test_a_trashed_dataset_is_refused_before_the_cap_and_gains_no_version(tmp_path: Path, recorded: str) -> None:
+def test_a_trashed_dataset_is_refused_before_the_cap_and_gains_no_version(door: Door, tmp_path: Path, recorded: str) -> None:
     """A recoverable drop freezes its bytes until undrop or purge, and the trash record is what says so ([[LH-449]]).
 
-    THE NO-VENDING POSTURE, because it is the branch where nothing else stands between this pass and the commit:
-    `write_options_for` hands back the ambient options without asking the catalog anything. The trashed dataset sorts
-    first and the cap is one, so a refusal that spent the slot would leave its live twin unraised.
+    The refusal comes before the vend and before the cap: the trashed dataset sorts first and the cap is one, so a
+    refusal that spent the slot would leave its live twin unraised.
     """
     trashed, trashed_orphan, _ = _stranded_dataset(tmp_path / "a")
     live, live_orphan, _ = _stranded_dataset(tmp_path / "b")
@@ -346,7 +365,7 @@ def test_a_trashed_dataset_is_refused_before_the_cap_and_gains_no_version(tmp_pa
         OrphanFile(dataset=uri, path="_transactions/9-dead.txn", kind="transactions", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)
         for uri, orphan in ((trashed, trashed_orphan), (live, live_orphan))
     ]
-    report = raise_listing_floors(_settings(tmp_path, max_per_tick=1), orphans=orphans, names=_named(orphans), storage_options=StorageOptions())
+    report = raise_listing_floors(_settings(tmp_path, max_per_tick=1), orphans=orphans, names=door(orphans), storage_options=StorageOptions())
 
     assert [r.dataset for r in report.raised] == [live], "the trashed dataset was taken, or took the only slot"
     assert [(r.dataset, r.refused) for r in report.refused] == [(trashed, f"in trash as acme$frozen (expires_at={record['expires_at']})")]

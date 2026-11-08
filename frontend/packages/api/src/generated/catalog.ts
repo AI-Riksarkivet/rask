@@ -489,6 +489,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/grants/census": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Grant Census
+         * @description Every object's grant count, by type, read whole from the store; the deployment's own objects left out.
+         *
+         *     ``enabled`` is false when authorization is off in the catalog, which a drift report reads as nothing to check rather
+         *     than as an estate holding no grants.
+         */
+        get: operations["grant_census_management_v1_grants_census_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/grants/ghosts/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Ghost Grants
+         * @description Revoke every grant on each object no registry names, as a drift report found them.
+         *
+         *     Each object is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
+         *     record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop.
+         */
+        post: operations["revoke_ghost_grants_management_v1_grants_ghosts_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/grants/tenancy/rebuild": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rebuild Warehouse Tenancy
+         * @description Write each warehouse's tenancy edge, ``project:<p> project warehouse:<id>``, as its registry record names it.
+         *
+         *     A structural edge confers nothing on its own, so rebuilding it re-grants no one; a warehouse whose record names no
+         *     project, or no record at all, is answered unjustified.
+         */
+        post: operations["rebuild_warehouse_tenancy_management_v1_grants_tenancy_rebuild_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/maintenance/due": {
         parameters: {
             query?: never;
@@ -1619,7 +1688,8 @@ export interface paths {
          *     it is vended to; the caller's own token never leaves the catalog.
          *
          *     It is scoped to the location the door resolved, never to the name, and answered only while that location still
-         *     holds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]).
+         *     holds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]). The
+         *     maintain tier is refused 409 (code 19) for a table whose maintenance policy keeps its whole history.
          */
         post: operations["vend_credentials_management_v1_table__id__credentials_post"];
         delete?: never;
@@ -2044,6 +2114,101 @@ export interface paths {
          *     table holds the name the undrop answers 409: two tables cannot share it.
          */
         post: operations["undrop_table_management_v1_table__id__undrop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/trash/{kind}/{uuid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * End Trash
+         * @description End a trash record whose object holds no byte: revoke the grants it still holds, end the records it keeps under
+         *     its uuid, a table's claim and base record, and the record last.
+         *
+         *     Refused 409 (code 19) while its place, or a data directory its claim names, holds an object (the purge deletes them
+         *     first), while a record naming no bytes is short of its deadline, at a place whose claim records another table or
+         *     none, and while a live object holds the place or the name again.
+         */
+        delete: operations["end_trash_management_v1_trash__kind___uuid__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/trash/{kind}/{uuid}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Vend Reclaim Credentials
+         * @description Vend the session that deletes one trashed table's bytes: every object at its location, in both spellings, and in
+         *     its own data directories, and nothing on the control root.
+         *
+         *     Vended for a table record past its deadline, at a place whose claim records the record's uuid, crossing no control
+         *     prefix and held by no live table; anything else is refused 409 (code 19). The record and what it keeps are ended at
+         *     ``DELETE /management/v1/trash/{kind}/{uuid}`` once the bytes are gone.
+         */
+        post: operations["vend_reclaim_credentials_management_v1_trash__kind___uuid__credentials_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/trash/{kind}/{uuid}/refusals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Note Trash Refusal
+         * @description Note maintenance's own refusal of a trash record, so a record refused tick after tick sorts behind the ones that
+         *     move. Bookkeeping the catalog never judges on.
+         */
+        post: operations["note_trash_refusal_management_v1_trash__kind___uuid__refusals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/trash/{kind}/{uuid}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Trash
+         * @description Release a drop past its deadline (ADR 0146): revoke every grant on its object, tell each person who lost one, and
+         *     stamp the record released; its bytes wait for the purge.
+         *
+         *     Refused 409 (code 19) until the deadline has settled (``lakehouse.trash.RELEASE_SETTLE``), and while a live object
+         *     holds the record's place or name again: an undrop registers before it clears its record.
+         */
+        post: operations["release_trash_management_v1_trash__kind___uuid__release_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7278,6 +7443,45 @@ export interface components {
              */
             version: number;
         };
+        /**
+         * GhostRevokeRequest
+         * @description The objects a drift report found holding grants that no registry names, each an OpenFGA object (``kind:id``).
+         */
+        GhostRevokeRequest: {
+            /** Objects */
+            objects: string[];
+        };
+        /**
+         * GhostRevokeResponse
+         * @description What the catalog revoked, each object's tuple count, and what it refused to, with why.
+         */
+        GhostRevokeResponse: {
+            /** Refused */
+            refused?: {
+                [key: string]: string;
+            };
+            /** Revoked */
+            revoked?: {
+                [key: string]: number;
+            };
+        };
+        /**
+         * GrantCensusResponse
+         * @description Every object's grant count, by type, as the store holds them now: what a drift report's authorization categories
+         *     read. The objects a deployment keeps for itself are left out, since no registry names them.
+         */
+        GrantCensusResponse: {
+            /** Counts By Type */
+            counts_by_type?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Enabled */
+            enabled: boolean;
+            /** Truncated */
+            truncated?: string | null;
+        };
         /** GrantRequest */
         GrantRequest: {
             /**
@@ -9071,6 +9275,35 @@ export interface components {
             version: number;
         };
         /**
+         * TenancyRebuildRequest
+         * @description The warehouses whose tenancy edge a drift report found missing, by id.
+         */
+        TenancyRebuildRequest: {
+            /** Warehouses */
+            warehouses: string[];
+        };
+        /**
+         * TenancyRebuildResponse
+         * @description The tenancy edges the catalog wrote, each ``project:<p> project warehouse:<id>``, and the warehouses whose record
+         *     justifies none, with why.
+         */
+        TenancyRebuildResponse: {
+            /** Unjustified */
+            unjustified?: {
+                [key: string]: string;
+            };
+            /** Written */
+            written?: string[];
+        };
+        /**
+         * TrashEndResponse
+         * @description What ending a trash record did beside ending its records: the grants it still held, revoked.
+         */
+        TrashEndResponse: {
+            /** Tuples Revoked */
+            tuples_revoked: number;
+        };
+        /**
          * TrashEntry
          * @description One recoverable drop — what the owner needs to decide whether to undrop before the deadline.
          */
@@ -9107,6 +9340,32 @@ export interface components {
             objects: components["schemas"]["TrashEntry"][];
             /** Page Token */
             page_token?: string | null;
+        };
+        /**
+         * TrashRefusalRequest
+         * @description Why maintenance declined to act on a trash record this tick, as its own report names it.
+         */
+        TrashRefusalRequest: {
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * TrashRefusalResponse
+         * @description How many refusals the record now counts; ``None`` when the note could not be made (the record went meanwhile).
+         */
+        TrashRefusalResponse: {
+            /** Attempts */
+            attempts?: number | null;
+        };
+        /**
+         * TrashReleaseResponse
+         * @description What releasing a trash record past its deadline did: the grants revoked, and whether the record was stamped.
+         */
+        TrashReleaseResponse: {
+            /** Stamped */
+            stamped: boolean;
+            /** Tuples Revoked */
+            tuples_revoked: number;
         };
         /**
          * TupleCondition
@@ -10177,6 +10436,110 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EventsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_census_management_v1_grants_census_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantCensusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_ghost_grants_management_v1_grants_ghosts_revoke_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GhostRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GhostRevokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    rebuild_warehouse_tenancy_management_v1_grants_tenancy_rebuild_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TenancyRebuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenancyRebuildResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12027,7 +12390,7 @@ export interface operations {
     vend_credentials_management_v1_table__id__credentials_post: {
         parameters: {
             query?: {
-                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix). */
+                /** @description `read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix but its refs, and the table's history fence and committed-file records on the control root). */
                 tier?: "read" | "write" | "maintain";
                 /** @description The branch this credential is for. Naming one NARROWS the grant: writes land under that branch's own `<table>/tree/<branch>/` (`data/` at the write tier; `_versions`, `_transactions`, `_deletions`, `_indices` and `data` at the maintain tier) and main drops to read-only. Omit for main. */
                 branch?: string;
@@ -12621,6 +12984,150 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RegisterTableResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    end_trash_management_v1_trash__kind___uuid__delete: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                kind: "table" | "namespace";
+                uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrashEndResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vend_reclaim_credentials_management_v1_trash__kind___uuid__credentials_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                kind: "table" | "namespace";
+                uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    note_trash_refusal_management_v1_trash__kind___uuid__refusals_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                kind: "table" | "namespace";
+                uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrashRefusalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrashRefusalResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_trash_management_v1_trash__kind___uuid__release_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                kind: "table" | "namespace";
+                uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrashReleaseResponse"];
                 };
             };
             /** @description Validation Error */

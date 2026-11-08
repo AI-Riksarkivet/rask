@@ -54,8 +54,10 @@ age:
   enabled: false
 
 # The lakehouse's bytes live on the platform's S3: rask names it and provisions nothing on it (no buckets, no users).
-# The platform's operator creates rask's buckets and one scoped identity per plane in the store's secret store, the
-# layout the dev seed writes (docs/chart/templates/openbao-seed.yaml.md). The development store is refused on a real
+# The platform's operator creates rask's buckets, trusts the cluster's ServiceAccount issuer for
+# `objectStore.identity.audience`, and creates each workload's canned policy from the ConfigMap
+# `<release>-object-store-identities` (docs/chart/templates/object-store-identities.yaml.md); no workload holds a store
+# key. The development store is refused on a real
 # deployment (templates/prod-credentials.yaml), and the render refuses an empty or http endpoint; the NetworkPolicy reaches it
 # through `networkPolicy.extraEgress`.
 objectStore:

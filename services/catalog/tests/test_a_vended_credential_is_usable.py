@@ -66,15 +66,15 @@ def test_a_vended_credential_carries_what_a_lance_client_needs_to_build() -> Non
     """
     opts = _vend("http://rustfs:9000")
     assert opts["allow_http"] == "true"
-    assert opts["virtual_hosted_style_request"] == "false"
+    assert opts["aws_virtual_hosted_style_request"] == "false"
 
 
 def test_a_vend_against_aws_proper_permits_no_plaintext() -> None:
     """No configured endpoint means botocore's regional AWS endpoint, which is `https://`.
 
-    The `endpoint` key is REMOVED for that case, so the scheme the permit follows is AWS's own — and a
-    permit derived from an empty endpoint must read as "no plaintext", since the store it names is TLS.
+    No endpoint is named for that case, so the scheme the permit follows is AWS's own — and a permit derived from an
+    empty endpoint must read as "no plaintext", since the store it names is TLS.
     """
     opts = _vend(None)
-    assert "endpoint" not in opts
+    assert "aws_endpoint" not in opts
     assert opts["allow_http"] == "false", "a credential for AWS proper permits plaintext"

@@ -232,9 +232,8 @@ spec:
 {{- if .Values.openfga.enabled }}
 ---
 # (3b') openfga:8080/8081 — the authorization store, which authorizes none of its callers ([[LH-442]]): any token it
-# admits may write any tuple. Only the tuple writers reach its API (the catalog, maintenance and the jobs that publish
-# the model and seed the estate's grants, `lance.fgaWriters`); every other service asks the catalog's
-# decision door. The Collector reaches the metrics port alone.
+# admits may write any tuple. Only the tuple writers reach its API (the catalog and the jobs that publish the model and
+# seed the estate's grants, `lance.fgaWriters`); every other service asks the catalog's doors. The Collector reaches the metrics port alone.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -302,7 +301,7 @@ spec:
 # The development store (the rustfs fixture) stamps this component label on its pods; a managed S3 runs outside the
 # namespace and needs no rule. RustFS serves S3, its admin API and internode RPC on this one port, so the rule
 # cannot split them: the admin plane is guarded by IAM (no `admin:*` on any rask identity, root held only by the
-# scoped-users hook), not by the port.
+# provisioning hook), not by the port.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -325,7 +324,7 @@ spec:
                   - object-store-backup
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
                   - backup-control-root # the control-root backup copies the registries to _backups/control/
-                  - object-store-scoped-users # the identity-provisioning hook — blocked, every scoped user is absent
+                  - object-store-provisioning # the provisioning hook — blocked, no identity's policy is written
                   # A client reading a governed table on the credential the catalog vends it (a client's release, an
                   # engine's workers, a user's pipeline) is admitted by
                   # `networkPolicy.objectStoreExtraFrom`, by a selector its deployment states.

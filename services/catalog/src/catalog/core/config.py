@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import re
 from functools import lru_cache
-from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Self
 
-from pydantic import AfterValidator, AliasChoices, Field, SecretStr, model_validator
+from pydantic import AfterValidator, AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.principal import PrincipalKey
@@ -25,7 +24,7 @@ from lakehouse.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_
 from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.signature_doors import SignatureDoorSettings
 from lakehouse.storage_options import StorageOptions
-from lakehouse.store_session import WebIdentity, held_session
+from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_a_token, require_one_store_identity
 
 
 if TYPE_CHECKING:
@@ -78,7 +77,7 @@ class LanceSessionCaps(BaseSettings):
     lance_index_cache_mb: int = Field(default=256, ge=8, alias="LANCE_INDEX_CACHE_MB")
 
 
-class CatalogStorageSettings(BaseSettings):
+class CatalogStorageSettings(StoreIdentitySettings):
     """The object store this catalog reads and writes through.
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
@@ -92,22 +91,9 @@ class CatalogStorageSettings(BaseSettings):
     #: endpoint keep permission to fall back to plaintext — silent, because object_store consults
     #: the flag only when a request would otherwise be refused. One fact, so the two cannot disagree.
     s3_endpoint: str = Field(default="http://rask-rustfs:9000", alias="LANCE_S3_ENDPOINT")
-    #: THE CATALOG'S IDENTITY AT THE OBJECT STORE ([[XC-083]], ADR 0170): the ServiceAccount token its pod projects for
-    #: the store's audience. Set, the catalog's own IO and every vend sign with sessions STS exchanges it for
-    #: (`AssumeRoleWithWebIdentity` at `s3_sts_endpoint`), and the catalog reads no key pair from anywhere.
-    s3_web_identity_token_file: Path | None = Field(default=None, alias="LANCE_S3_WEB_IDENTITY_TOKEN_FILE")
-    #: How long a session for the catalog's own IO lasts. It is renewed at half its life, so a request that took the
-    #: old one still has half of it to finish. RustFS takes 900 to 43,200 s (`rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:64-83`).
-    s3_session_seconds: int = Field(default=3600, ge=900, le=43200, alias="LANCE_S3_SESSION_SECONDS")
-    #: The key pair the catalog signs with when it holds no token: the offline and Dagger lanes' fixture, with the secret
-    #: store off. A missing id is refused here and a missing secret by the lifespan.
-    s3_access_key_id: str = Field(default="", alias="LANCE_S3_ACCESS_KEY_ID")
-    s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LANCE_S3_SECRET_ACCESS_KEY")
-    s3_region: str = Field(default="us-east-1", alias="LANCE_S3_REGION")
+    # The catalog's identity at the store is `StoreIdentitySettings`' (LANCE_S3_WEB_IDENTITY_TOKEN_FILE and the rest): its
+    # own IO and every vend sign with sessions its token is exchanged for, and it reads no key pair from anywhere.
     s3_virtual_hosted: bool = Field(default=False, alias="LANCE_S3_VIRTUAL_HOSTED")
-    #: The role the token is exchanged for. AWS assumes it; a store that grants the policy the token's subject names
-    #: (RustFS, measured 2026-10-18 by `scripts/rustfs_web_identity_measure.py`) ignores it, and boto3 requires one.
-    s3_assume_role_arn: str = Field(default="arn:aws:iam::000000000000:role/lance-vend", alias="LANCE_S3_ASSUME_ROLE_ARN")
     #: ENCRYPTION AT REST, carried INTO the vended credential (§ J5). A client vended credentials writes
     #: straight to object storage with the catalog out of the path, so whatever the estate intends must
     #: travel in the storage options or it does not happen.
@@ -121,7 +107,6 @@ class CatalogStorageSettings(BaseSettings):
     s3_server_side_encryption: str | None = Field(default=None, alias="LANCE_S3_SERVER_SIDE_ENCRYPTION")
     s3_sse_kms_key_id: str | None = Field(default=None, alias="LANCE_S3_SSE_KMS_KEY_ID")
     s3_sse_bucket_key_enabled: bool | None = Field(default=None, alias="LANCE_S3_SSE_BUCKET_KEY_ENABLED")
-    s3_sts_endpoint: str | None = Field(default=None, alias="LANCE_S3_STS_ENDPOINT")
     #: The object-store endpoint every vended credential names, for a client reaching the store from where it
     #: runs ([[LH-489]]). The catalog's own `s3_endpoint` may be an address only the cluster resolves
     #: (`rask-rustfs:9000`), and pylance applies a vended `endpoint` over the client's own (measured on pylance
@@ -134,13 +119,6 @@ class CatalogStorageSettings(BaseSettings):
     def vended_store_endpoint(self) -> str:
         """The endpoint a vended credential names: `s3_vended_endpoint`, else the catalog's own."""
         return self.s3_vended_endpoint or self.s3_endpoint
-
-    @property
-    def web_identity(self) -> WebIdentity | None:
-        """The catalog's identity at the store, or ``None`` when it signs with the environment's pair."""
-        if self.s3_web_identity_token_file is None:
-            return None
-        return WebIdentity(token_file=self.s3_web_identity_token_file, endpoint=self.s3_sts_endpoint, region=self.s3_region, role_arn=self.s3_assume_role_arn)
 
 
 class CatalogReadBounds(BaseSettings):
@@ -494,7 +472,7 @@ class Settings(
     # namespace the aliases already declare; an explicit alias bypasses it, so the
     # deliberately-bare ones (RASK_SECRET_STORE) still land.
     # See tests/unit/test_settings_env_namespace.py.
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", extra="ignore")
+    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", alias_generator=env_alias("LANCE"), extra="ignore")
 
     # Catalog
     impl: str = Field(default="dir", alias="LANCE_REST_IMPL")
@@ -652,29 +630,15 @@ class Settings(
     def _validate_store_identity(self) -> Self:
         """Fail closed on a store identity that is absent, doubled, or would send the token to the public AWS STS.
 
-        Without ``LANCE_S3_STS_ENDPOINT`` boto3 resolves the PUBLIC AWS STS endpoint and would POST the catalog's token
-        there (audit 2026-07-14), so the endpoint is named, never defaulted. A key pair beside the token is a second
-        identity, and one with the secret store on would be a secret in the environment, which the store exists to keep
-        out; a deployment reading its secrets from the store signs with its ServiceAccount's sessions alone.
+        The three refusals every lakehouse service shares are `require_one_store_identity`'s. A web-identity vend
+        exchanges the catalog's own token, so it needs one. With no token, the lifespan refuses a half pair
+        (`lakehouse.store_session.require_env_pair`).
         """
         if self.vending_mode == "web_identity" and self.s3_web_identity_token_file is None:
             raise ValueError("LANCE_VENDING_MODE=web_identity exchanges the catalog's own token: set LANCE_S3_WEB_IDENTITY_TOKEN_FILE")
-        if self.s3_web_identity_token_file is not None:
-            if not self.s3_sts_endpoint:
-                raise ValueError(
-                    "LANCE_S3_STS_ENDPOINT is required with LANCE_S3_WEB_IDENTITY_TOKEN_FILE (else the token would be sent to the public AWS STS endpoint)"
-                )
-            if self.s3_access_key_id or self.s3_secret_access_key.get_secret_value():
-                raise ValueError(
-                    "a key pair beside LANCE_S3_WEB_IDENTITY_TOKEN_FILE is a second identity: the catalog signs only with sessions its token is exchanged for"
-                )
-            return self
         if self.secrets_from_dapr:
-            raise ValueError(
-                "with LANCE_SECRETS_FROM_DAPR the catalog's object-store identity is its ServiceAccount token: set LANCE_S3_WEB_IDENTITY_TOKEN_FILE"
-            )
-        if not self.s3_access_key_id:
-            raise ValueError("LANCE_S3_ACCESS_KEY_ID is required when the catalog holds no projected token (LANCE_S3_WEB_IDENTITY_TOKEN_FILE)")
+            require_a_token(self.web_identity, prefix="LANCE")
+        require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="LANCE")
         return self
 
     def s3_key_pair(self) -> S3KeyPair:
@@ -683,9 +647,7 @@ class Settings(
         Raises:
             StoreCredentialUnavailableError: No unexpired session is held (503).
         """
-        if (identity := self.web_identity) is not None:
-            return held_session(identity)
-        return S3KeyPair(access_key_id=self.s3_access_key_id, secret_access_key=self.s3_secret_access_key)
+        return key_pair_in_force(self.web_identity, self.env_pair)
 
     def namespace_properties(self, *, root: str | None = None, plane: StorePlane = "metadata") -> dict[str, str]:
         """Return properties for ``lance_namespace.connect(impl, properties)``, bounded for ``plane``.

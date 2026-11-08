@@ -65,7 +65,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | backups.controlRoot.enabled | bool | `false` | Schedule a CronJob that backs up the control root (project, warehouse, binding and bucket-claim registries). Off by default. |
 | backups.controlRoot.keep | int | `14` | Number of newest control-root backups kept after each successful copy; 0 keeps every run. |
 | backups.controlRoot.schedule | string | `"0 1 * * *"` | Cron schedule of the control-root backup (default daily 01:00, ahead of the pg dump). |
-| backups.pgDump.enabled | bool | `false` | Schedule a CronJob that pg_dumps the OpenFGA and Dapr state databases (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. Off by default. |
+| backups.pgDump.enabled | bool | `false` | Schedule a CronJob that pg_dumps the OpenFGA database (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. It signs with a session its own ServiceAccount's token is exchanged for, and pg_dump reads its password from a PGPASSFILE. Off by default. |
 | backups.pgDump.keep | int | `7` | Number of newest daily pg dumps kept; older ones are pruned on each run. |
 | backups.pgDump.schedule | string | `"0 2 * * *"` | Cron schedule of the pg dump (default daily 02:00). |
 | backups.volumeSnapshot.enabled | bool | `false` | Schedule a CronJob that creates a CSI VolumeSnapshot of the lakehouse PVC; needs a CSI snapshotter and a VolumeSnapshotClass. Off by default. |
@@ -148,7 +148,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.bindingName | string | `"maintenance-cron"` | Name of the Dapr cron binding that fires the sweep tick (`MAINTENANCE_BINDING_NAME`). |
 | maintenance.cloneListMaxAgeSeconds | int | `3600` | Oldest clone list, in seconds, the catalog judges a compaction against and the write-event lane expires against. |
 | maintenance.controlEmit | bool | `false` | Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default. |
-| maintenance.controlRoot | string | `""` | S3 root of the catalog's control registries (projects, warehouses, trash, `_bases/`). Empty uses the primary bucket; set together with the catalog's. |
 | maintenance.daprAppId | string | `"maintenance"` | Dapr app-id of the maintenance service; also names its durable consumer. |
 | maintenance.discoveryMaxDepth | int | `3` | How deep the bucket walk descends looking for a dataset's `_versions/`; a subtree it stops inside is an IncompleteScan that blocks the purge. |
 | maintenance.driftRepair | bool | `false` | Revoke OpenFGA tuples whose object no registry names (ghost projects/warehouses/tables); deletes tuples only. Off by default. |
@@ -162,7 +161,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.minVersionsToExpire | int | `20` | Expiry runs on a table only once it has at least this many reclaimable versions. |
 | maintenance.olderThanDays | int | `7` | Days of version history kept by old-version GC. |
 | maintenance.orphanScan | bool | `true` | Run the reconciler's per-dataset unreferenced-file scan; read-only, and required for `trashPurge` to certify a clean report. |
-| maintenance.policyRoot | string | `""` | S3 root of maintenance policy records. Empty falls back to `controlRoot`, then the primary bucket. |
 | maintenance.port | int | `8000` | HTTP port of the maintenance container. |
 | maintenance.reconcileBindingName | string | `"maintenance-reconcile-cron"` | Name of the Dapr cron binding that fires the drift reconciler (`MAINTENANCE_RECONCILE_BINDING_NAME`). |
 | maintenance.reconcileSchedule | string | `"0 */5 * * * *"` | Cadence of the drift reconciler, a wall-clock cron like `schedule`: it only reads OpenFGA, the control-root registries and the bucket listing. |
@@ -177,7 +175,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.tupleRebuild | bool | `false` | Recreate OpenFGA tuples the control-plane registries still justify (project admin seed, warehouse tenancy); additive only. Off by default. |
 | maintenance.tupleRebuildDryRun | bool | `true` | Plan and report the tuple rebuild without writing. Defaults true. |
 | maintenance.tupleRebuildMaxPerTick | int | `50` | Maximum tuples the rebuild writes per tick; the remainder is reported as capped. |
-| maintenance.vendWriteCredentials | bool | `true` | Sign maintenance's writes (version expiry) with a per-table credential vended by the catalog instead of the deployment's S3 key; falls back per dataset. |
+| maintenance.vendWriteCredentials | bool | `true` | Wire maintenance to the catalog's vending door, the only credential its rewrites are signed with; off, maintenance holds no maintain rung and refuses every rewrite. |
 | medallion.buckets | object | `{}` | Map of tier namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `objectStore.bucket`. Listed buckets are auto-created, swept by maintenance and reserved from warehouses. |
 | nameOverride | string | `""` | Overrides the chart name used in `rask.name` labels when `fullnameOverride` is empty. Empty uses the chart name. |
 | nats.auth.flagged | object | `{"catalog.controlEmit,dapr.resiliency.enabled":{"catalog":{"publish":["dlq.catalog.control"]}},"maintenance.arrivalEnabled":{"maintenance":{"publish":["$JS.API.CONSUMER.INFO.LINEAGE.maintenance-durable","$JS.API.CONSUMER.CREATE.LINEAGE.maintenance-durable.>","$JS.ACK.LINEAGE.maintenance-durable.>"]}},"maintenance.arrivalEnabled,dapr.resiliency.enabled":{"maintenance":{"publish":["dlq.maintenance.arrival"]}},"maintenance.controlEmit":{"maintenance":{"publish":["catalog.control.v1"]}}}` | Extra user grants keyed by a values flag path, or several joined by `,` that must all be true, merged into `nats.auth.users` only while the key holds (lance.natsTable). |
@@ -191,16 +189,18 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for external backends (off-cluster S3, managed NATS, Postgres, the IdP). Each rule names its `to` peers; the render refuses one that admits every destination. |
 | networkPolicy.objectStoreExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the object store. |
 | networkPolicy.openbaoExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the development store (`openbao.enabled`; e.g. the external-secrets namespace). |
-| objectStore.accessKey | string | `"rustfsadmin"` | Access key id of the store's root account (`rustfsadmin` is RustFS's built-in default id); its secret is `object-store-secret-key` in `<release>-object-store-root`, which only the store and the scoped-users hook mount. No service presents it. |
-| objectStore.backupAccessKey | string | `"rask-backup"` | Access key of the backups' identity (reads the control-root records, writes `_backups/`); secret derives in-cluster. |
+| objectStore.accessKey | string | `"rustfsadmin"` | Access key id of the store's root account (`rustfsadmin` is RustFS's built-in default id); its secret is `object-store-secret-key` in `<release>-object-store-root`, which only the store and the provisioning hook mount. No workload presents it. |
 | objectStore.bucket | string | `"lance-catalog"` | The lakehouse root bucket (catalog `LANCE_REST_ROOT`, warehouse registry, lineage outbox). |
-| objectStore.buckets | list | `[]` | Extra platform buckets the scoped-users hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets. |
-| objectStore.enabled | bool | `true` | This estate uses the development object store (deploy/fixtures/rustfs, Service `<release>-rustfs`): rask runs its scoped-users hook against it (the platform buckets and every scoped user), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server. |
+| objectStore.buckets | list | `[]` | Extra platform buckets the provisioning hook creates on the dev store and the reconcile exempts from orphan_buckets; governed tiers only, not the root or feature buckets. |
+| objectStore.enabled | bool | `true` | This estate uses the development object store (deploy/fixtures/rustfs, Service `<release>-rustfs`): rask runs its provisioning hook against it (the platform buckets and every identity's policy), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server. |
 | objectStore.externalEndpoint | string | `""` | S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store. https on a real deployment: the render refuses an http one. |
-| objectStore.identity.audience | string | `"rask-object-store"` | The audience the catalog's ServiceAccount token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required. |
-| objectStore.identity.sessionSeconds | int | `3600` | How long a session for the catalog's own IO lasts (LANCE_S3_SESSION_SECONDS, 900 to 43200 s); it is renewed at half its life. |
-| objectStore.lineageAccessKey | string | `"rask-lineage"` | Access key of the lineage service's scoped store identity (read-only plus deletes of its own outbox); secret derives in-cluster. Required: no service presents the store's root. |
-| objectStore.maintenanceAccessKey | string | `"rask-maintenance"` | Access key of maintenance's scoped store identity, the fallback when vending degrades; secret derives in-cluster. Required: no service presents the store's root. |
+| objectStore.identity.audience | string | `"rask-object-store"` | The audience every lakehouse workload's store token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required. |
+| objectStore.identity.roleArns.backup-control-root | string | `"arn:aws:iam::000000000000:role/rask-backup-control-root"` | The role the control-root backup's token is exchanged for (`backups.controlRoot`). |
+| objectStore.identity.roleArns.backup-pg | string | `"arn:aws:iam::000000000000:role/rask-backup-pg"` | The role the pg dump's token is exchanged for (`backups.pgDump`). |
+| objectStore.identity.roleArns.catalog | string | `"arn:aws:iam::000000000000:role/lance-vend"` | The role the catalog's token is exchanged for, for its own IO and every vend. |
+| objectStore.identity.roleArns.lineage | string | `"arn:aws:iam::000000000000:role/rask-lineage"` | The role lineage's token is exchanged for. |
+| objectStore.identity.roleArns.maintenance | string | `"arn:aws:iam::000000000000:role/rask-maintenance"` | The role maintenance's token is exchanged for. |
+| objectStore.identity.sessionSeconds | int | `3600` | How long a workload's session lasts (`*_S3_SESSION_SECONDS`, 900 to 43200 s): a service renews its own at half its life, and a backup run asks for one. |
 | objectStore.port | int | `9000` | S3 API port of the development store's Service. |
 | observability.enabled | bool | `false` | Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services, Dapr and OpenFGA to it; needs `export.endpoint`. |
 | observability.environment | string | `"rask"` | Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace. |
@@ -272,7 +272,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | signing.enforce | bool | `true` | Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing. |
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there. |
 | vending.allowExternalBlobs | bool | `false` | Allow blob-v2 columns to reference arbitrary external objects (Blob.from_uri) on create. Off by default: an SSRF and dangling-pointer risk; prefer `externalBlobBases`. |
-| vending.assumeRoleArn | string | `"arn:aws:iam::000000000000:role/lance-vend"` | The role the catalog's token is exchanged for (LANCE_S3_ASSUME_ROLE_ARN), for its own IO and every vend: AWS assumes it; a store granting the policy the token's subject names (RustFS) ignores it, and boto3 requires one. |
 | vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default. |
 | vending.endpoint | string | `""` | Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. https on a real deployment: the render refuses an http one. |
 | vending.externalBlobBases | string | `""` | Comma-separated allowlist of base URIs external blob pointers may live under (LANCE_EXTERNAL_BLOB_BASES). Empty approves no base. |

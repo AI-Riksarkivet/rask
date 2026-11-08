@@ -51,6 +51,12 @@ log = logging.getLogger(__name__)
 
 PREFIX: Final = "_history_fences"
 
+
+def fence_key(table_uuid: str) -> str:
+    """The key of the table ``table_uuid``'s fence record on the control root."""
+    return record_key(PREFIX, "table", table_uuid)
+
+
 #: How long one take holds the fence. Longer than any one table's reclaim the estate runs, and short enough that a
 #: holder that crashed does not keep a table's refs, or its reclaim, waiting long.
 HOLD: Final = timedelta(minutes=15)
@@ -115,7 +121,7 @@ class TableHistory(BaseModel):
     @property
     def key(self) -> str:
         """The fence record's key on the control root."""
-        return record_key(PREFIX, "table", self.table_uuid)
+        return fence_key(self.table_uuid)
 
     def take(self, work: HistoryWork) -> str:
         """Hold the table's history for ``work``; the token :meth:`release` ends the hold with.

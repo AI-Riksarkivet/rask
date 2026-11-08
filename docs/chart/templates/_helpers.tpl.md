@@ -45,8 +45,8 @@ Component labels: pass (list . "<component>")
 ## `{{- define "rask.daprPodLabels" -}}`
 
 The ONE store's root identity is objectStore.accessKey (a value) and the store's `object-store-secret-key`
-(never a value), held together in `<release>-object-store-root`: the dev store and the scoped-users hook are its
-only readers, since on RustFS the root secret signs every STS session token (ADR 0168).
+(never a value), held together in `<release>-object-store-root`: the dev store and the provisioning hook
+(`object-store-provisioning.yaml`) are its only readers, since on RustFS the root secret signs every STS session token (ADR 0168).
 
 Dapr sidecar pod annotations (no-op unless dapr.enabled) — the ONE annotation surface for the whole
 estate: the lance planes (services.yaml catalog/lineage,
@@ -171,7 +171,7 @@ rendered this pod", not "which build emitted this span".
 lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
 
 Every one of these is referenced by a grafted lance template (services.yaml, maintenance.yaml,
-object-store-scoped-users.yaml, openbao-seed.yaml, age-postgres.yaml,
+object-store-provisioning.yaml, object-store-identities.yaml, openbao-seed.yaml, age-postgres.yaml,
 otel-collector.yaml, network-policy.yaml, ha.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
@@ -715,6 +715,43 @@ The first-party services each given a ServiceAccount of their own, `<release>-sa
 one list, so the accounts the chart renders and the accounts an external store reader may not bind
 (`lance.serviceAccounts`) cannot drift apart.
 
+## `{{- define "lance.objectStoreIdentities" -}}`
+
+THE WORKLOADS THAT REACH THE STORE, each by its own ServiceAccount token ([[XC-083]], [[XC-084]], ADR 0170): the
+catalog and lineage always, maintenance with `maintenance.enabled`, and each backup CronJob while it is on. Read off
+`lance.saComponents`, so whether a backup runs is decided in one place, and limited to the components with a store
+policy. One list names both what `object-store-identities.yaml` renders a policy for and what the provisioning hook
+creates at the store, so a workload cannot reach the store under a policy git does not declare. No workload on it holds
+a key pair.
+
+## `{{- define "lance.objectStorePolicy" -}}`
+
+ONE IDENTITY'S CANNED POLICY, as IAM JSON, which the store grants every session a token naming
+`<release>-sa-<component>` is exchanged for. Call: include "lance.objectStorePolicy" (list $root <component>). Each
+component's statements are a define of their own, `lance.objectStorePolicy.<component>`, chosen by name, so a component
+with none fails the render as an undefined template.
+
+- `catalog`: the whole data plane it governs, buckets included, since every vend is a session policy narrowed from it.
+- `lineage`: list, get and delete under `<control bucket>/_lineage_outbox/` and nothing else: the one outbox it drains.
+- `maintenance`: `ListAllMyBuckets`; list, `GetBucketLocation` and get on every bucket and key; put and delete only on
+  `<control bucket>/_maintenance_due/*`, `<control bucket>/_policies/state/*` and `<control bucket>/_lineage_outbox/*`.
+  Owner, 2026-11-03: a compromised maintenance pod must not be able to defeat an erasure or a hold, so every other
+  maintenance write is signed by a catalog vend (the table's `maintain` tier, or a session deleting one due trash
+  record's bytes), and the trash records themselves are the catalog's to write (ADR 0197).
+- `backup-pg`: list, write and prune under `<control bucket>/_backups/pg/`.
+- `backup-control-root`: read the control-root record prefixes it copies, and write and prune under
+  `backups.controlRoot.dest`.
+
+## `{{- define "lance.objectStoreSessionEnv" -}}`
+
+THE FOUR VARIABLES EVERY STORE-REACHING POD GETS, under its own prefix (`LANCE`, `LINEAGE`, `MAINTENANCE`, `RASK` for a
+backup): `<PREFIX>_S3_WEB_IDENTITY_TOKEN_FILE` (its token for `objectStore.identity.audience`), `_STS_ENDPOINT` (the
+store's own, so boto3 never posts the token to the public AWS STS), `_ASSUME_ROLE_ARN`
+(`objectStore.identity.roleArns.<component>`, `required`; AWS assumes it, a store granting the policy the token's
+subject names ignores it) and `_SESSION_SECONDS` (`required`, since each reads it as a typed int). One include, so the services (`lakehouse.store_session`) and the
+backups (`JobStoreIdentity`, `job_client`) cannot read the identity under different names. Call: include
+"lance.objectStoreSessionEnv" (list $root <PREFIX> <component>).
+
 ## `{{- define "lance.serviceAccounts" -}}`
 
 Every ServiceAccount the product chart renders: the `lance.saComponents` accounts, the three a template renders
@@ -729,8 +766,8 @@ no account ([[XC-165]]).
 The ServiceAccount username one of the release's services runs as, `system:serviceaccount:<release namespace>:<release>-sa-<name>`
 (`lance.accountOf` of `lance.saName`): the `sub` the cluster's issuer puts in its tokens, and `lance.saSubject` without
 the issuer prefix. The object store's
-identity provider maps a token to the canned policy its `sub` names, so the scoped-users hook writes the catalog's
-policy under this name (ADR 0170).
+identity provider maps a token to the canned policy its `sub` names, so the provisioning hook writes each store
+identity's policy under this name (`lance.objectStoreIdentities`, ADR 0170).
 Call: include "lance.saAccount" (list $root <name>).
 
 ## `{{- define "lance.saVerifier" -}}`
@@ -798,19 +835,31 @@ What an OpenFGA client presents ([[XC-077]]): its projected token for the audien
 `openfga:`). Every pod that names OpenFGA renders all three parts under the condition its URL has. Call:
 include "lance.fgaToken" (list "env"|"volumes"|"mounts").
 
+## `{{- define "lance.fgaWriters" -}}`
+
+THE SERVICES THAT WRITE OPENFGA TUPLES, space-joined: the catalog alone (ADR 0197). OpenFGA authorizes none of its
+callers, so a client able to write one tuple writes any; every other service asks the catalog's doors. The network policy
+admits exactly these, beside the model hook and bootstrap-admin, to OpenFGA's API.
+
 ## `{{- define "lance.openfgaSubjects" -}}`
 
 The ServiceAccounts OpenFGA admits (`authn.oidc.subjects`), comma-joined: exactly the pods that render
-`lance.fgaToken`, under the same conditions, qualified by the release namespace.
+`lance.fgaToken`, under the same conditions, qualified by the release namespace. Maintenance is not one: OpenFGA has no
+per-tuple access control, so a token able to write one tuple writes any, and maintenance asks the catalog's grant doors
+instead (ADR 0197).
 
 ## `{{- define "lance.fgaEstateRoles" -}}`
 
 THE MACHINE ROLES ON THE ESTATE ROOT THE RELEASE DECLARES, one JSON object from each account's subject to the roles it
 holds there, which bootstrap-admin reads as `FGA_ESTATE_ROLES`, grants, and converges the release's own accounts to
-([[LH-442]], [[LH-563]]; bootstrap-admin.yaml.md). Empty with auth off. They are lineage's alone: `decider` (the catalog
+([[LH-442]], [[LH-563]]; bootstrap-admin.yaml.md). Empty with auth off. Lineage holds `decider` (the catalog
 decision door's `check`, estate-wide, since lineage records every tenant's runs) and `governance_prober` (its `governed`
 and `locate`), on its in-release subject (`lance.saSubject`). A client of the lakehouse, none of which this chart
 renders, is granted its roles at the catalog's access doors as its own identity, and this chart declares none.
+With `maintenance.enabled`, maintenance's subject holds `reclaimer` (`can_reclaim_trash`, [[XC-084]]), the rung every
+trash door under `/management/v1/trash/{kind}/{uuid}` checks, since maintenance's own session writes nothing of the
+trash, and `reconciler` (`can_reconcile_grants`), the rung every grant door under `/management/v1/grants` checks, since
+maintenance holds no OpenFGA token (ADR 0197).
 
 ## `{{- define "lance.ownAccounts" -}}`
 
@@ -838,7 +887,7 @@ WHY EVERY WAITING JOB NEEDS ONE, measured rather than argued. `backoffLimit` cou
 these Jobs wait on a dependency with a loop. If the dependency never answers and the loop is unbounded, it never exits, so the container never exits, so the pod
 never fails, so `backoffLimit` never counts and `ttlSecondsAfterFinished` never fires (a TTL applies
 only after completion). The Job runs forever. Observed on the live estate 2026-09-24:
-the scoped-users Job of revision r229 Running 27h, its pod still printing its wait line, provisioning nothing.
+the store-provisioning Job of revision r229 Running 27h, its pod still printing its wait line, provisioning nothing.
 
 `activeDeadlineSeconds` is the only one of the three that bounds a pod that is HEALTHY and stuck, so it
 is the backstop the other two cannot be. Thirty minutes is deliberately generous — a bootstrap that has
@@ -851,30 +900,11 @@ one bound that applies actually fires here.
 
 ## `{{- define "lance.objectStoreAudience" -}}`
 
-The audience the catalog's store token is projected for, `objectStore.identity.audience` (ADR 0170). One value names
-both halves: the token the catalog's pod mounts (`lance.identityTokens`) and the client id the store trusts as its
+The audience every lakehouse workload's store token is projected for, `objectStore.identity.audience` (ADR 0170). One
+value names both halves: the token each store-reaching pod mounts (`lance.identityTokens`) and the client id the store trusts as its
 identity provider's (`deploy/fixtures/rustfs` `identityProvider.clientId`, which
 `tests/unit/test_a_provisioned_identity_is_one_the_service_uses.py` holds equal). `required`: a blank audience would
-leave the catalog no identity at the store, and there is no key pair to fall back to.
-
-## `{{- define "lance.backupIdentity" -}}`
-
-The backups' access key, `objectStore.backupAccessKey`, when either backup CronJob is on
-(`backups.pgDump.enabled` or `backups.controlRoot.enabled`), else empty. One value gates the `rask-backup` user and
-policy, the seed's `secret/backup-s3`, ESO's read of it, the `<release>-backup-s3` Secret and both CronJobs'
-`AWS_ACCESS_KEY_ID`. `required` while a backup is on, so a backup never presents the store's root.
-
-## `{{- define "lance.scopedSecretFn" -}}`
-
-The secret half of a SCOPED STORAGE IDENTITY, derived in the
-cluster: `scoped_secret <identity> <file>` writes sha256("<identity>-s3-<root>")[:40] to <file> from the
-store's root secret in `$root`, never to output, argv or the render.
-
-WHY DERIVED. The two halves of a scoped pair are made by two pods, the dev OpenBao's seed (the field a
-service reads) and `object-store-scoped-users` (RustFS `add-user`), and they agree only by computing the same
-function of the same inputs. Both read the root from a file, so naming an identity in a values file is
-the whole setting and no secret is a value ([[XC-004]]). Deterministic, so a re-run is not a rotation;
-rotating the root rotates every derived secret with it.
+leave every workload no identity at the store, and no workload holds a key pair to fall back to.
 
 ## `{{- define "lance.storeReads" -}}`
 
@@ -1194,8 +1224,8 @@ The shape checks the mint and seed scripts share: an NKEY user seed is SU + 56 a
 
 ## `{{- define "lance.platformBuckets" -}}`
 
-The PLATFORM buckets, comma-joined: `objectStore.buckets`. The scoped-users hook
-creates them on the dev store and `orphan_buckets` exempts them, both from here.
+The PLATFORM buckets, comma-joined: `objectStore.buckets`. The provisioning hook
+(`object-store-provisioning.yaml`) creates them on the dev store and `orphan_buckets` exempts them, both from here.
 
 ## `{{- define "lance.maintenancePlatformBuckets" -}}`
 

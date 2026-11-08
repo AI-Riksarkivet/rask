@@ -50,7 +50,7 @@ class _RecordingS3:
 def test_dropping_an_s3_event_issues_ONLY_a_delete(monkeypatch: pytest.MonkeyPatch) -> None:
     """The whole contract: one DeleteObject, addressed at the event, and no write of any kind."""
     client = _RecordingS3()
-    monkeypatch.setattr(outbox, "s3_client", lambda *_a, **_kw: client)
+    monkeypatch.setattr("lakehouse.storage.s3_client", lambda *_a, **_kw: client)
 
     outbox.drop_event("s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "run-1@COMPLETE")
 
@@ -73,7 +73,7 @@ def test_an_absent_object_is_idempotent_success(monkeypatch: pytest.MonkeyPatch)
             self.calls.append(("delete_object", kw))
             raise FileNotFoundError("NoSuchKey")
 
-    monkeypatch.setattr(outbox, "s3_client", lambda *_a, **_kw: _Missing())
+    monkeypatch.setattr("lakehouse.storage.s3_client", lambda *_a, **_kw: _Missing())
     outbox.drop_event("s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "gone@COMPLETE")
 
 
@@ -97,7 +97,7 @@ def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) 
     need for, to keep a mechanism that writes an object nobody reads.
     """
     client = _RecordingS3()
-    monkeypatch.setattr(outbox, "s3_client", lambda *_a, **_kw: client)
+    monkeypatch.setattr("lakehouse.storage.s3_client", lambda *_a, **_kw: client)
 
     outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "run-9", '{"eventType": "COMPLETE"}')
 
@@ -129,7 +129,7 @@ def test_the_stage_signs_with_the_whole_key_pair_in_either_spelling(monkeypatch:
         seen.update(kw)
         return _RecordingS3()
 
-    monkeypatch.setattr(outbox, "s3_client", _factory)
+    monkeypatch.setattr("lakehouse.storage.s3_client", _factory)
     outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(options), "run-8", '{"eventType": "FAIL"}')
 
     assert seen.get("access_key") == "K", f"the {spelling} access key never reached the client: {seen}"

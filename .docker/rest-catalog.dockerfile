@@ -107,11 +107,9 @@ COPY --from=builder --link /opt/venv /opt/venv
 # file staged there ships nowhere.
 #
 #   control_root_backup.py — the backup CronJob (`backups.controlRoot`).
-#   pg_dump_upload.py      — the `backups.pgDump` CronJob. What it uploads is the lineage graph and
-#                            the authorization store.
-#   rustfs_admin.py        — the scoped-users hook (`object-store-scoped-users`): RustFS's native
+#   pg_dump_upload.py      — the `backups.pgDump` CronJob. What it uploads is the authorization store.
+#   rustfs_admin.py        — the provisioning hook (`object-store-provisioning`): RustFS's native
 #                            admin API, SigV4-signed with the root pair read from a mounted file.
-#                            Its `derive` init container also runs in this image (sh + sha256sum).
 COPY --link scripts/control_root_backup.py /srv/control_root_backup.py
 COPY --link scripts/pg_dump_upload.py /srv/pg_dump_upload.py
 COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py

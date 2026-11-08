@@ -50,16 +50,15 @@ login and never served to the app.
 
 THE SECRETS THE STORE MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
 unprovisioned secret is a fail-closed outage at first use, not a fallback. Each secret has exactly the readers it is for:
-- `lineage-s3`, `maintenance-s3` (fields `access_key`, `secret_key`): the scoped key pair of the identity values.yaml
-  `objectStore` names for that plane, read by that app alone. On the dev store the secret half is
-  sha256("<identity>-s3-<root secret>")[:40] (`lance.scopedSecretFn`, which `object-store-scoped-users` derives too).
-  Both halves are read from the store and read again every few minutes (ADR 0166), so a rotation writes them together.
-  The catalog has no such secret (ADR 0170): the object store trusts the cluster's ServiceAccount issuer for
-  `objectStore.identity.audience` and grants the catalog's subject, `system:serviceaccount:<namespace>:<release>-sa-catalog`,
-  the catalog's policy, and the catalog exchanges its projected token for sessions through STS
-  `AssumeRoleWithWebIdentity`. A platform store's owner provisions that trust; on AWS it is an IAM OIDC provider and
-  the role `vending.assumeRoleArn` names, whose trust policy names the subject.
-- `backup-s3` (ESO, for the backups, when one is on), fields `access_key`, `secret_key`.
+- No object-store credential is a secret ([[XC-083]], [[XC-084]], ADR 0170, ADR 0197). Every lakehouse workload that
+  reaches the store (the catalog, lineage, maintenance and each backup CronJob) projects a token for
+  `objectStore.identity.audience` and exchanges it through STS `AssumeRoleWithWebIdentity`; the object store trusts the
+  cluster's ServiceAccount issuer for that audience and grants each account's subject,
+  `system:serviceaccount:<namespace>:<release>-sa-<component>`, the policy the ConfigMap
+  `<release>-object-store-identities` declares under `<release>-sa-<component>.json`. A platform store's owner provisions
+  that trust and those policies; on AWS it is an IAM OIDC provider and one role per account
+  (`objectStore.identity.roleArns.<component>`), its trust policy naming the subject and its permission policy the
+  ConfigMap's document.
 - `dapr-app-token` (fields `token` and, during a rotation, `previous`; docs/OPERATORS.md § 8): the app-API token, read by
   the apps with a Dapr door (catalog, lineage, maintenance) and by ESO, which writes it into the
   `<release>-dapr-app-token` Secret daprd stamps the header from.
@@ -150,8 +149,9 @@ backups belong to the platform, so production runs no `pg_dump` CronJob.
 
 A real deployment brings its own identity provider, object store and secret store, and the chart takes them by
 reference (`auth.oidc.issuer`, https, and the lakehouse's own `auth.oidc.audience`, which the IdP
-issues to the clients it trusts; `objectStore.externalEndpoint`, https, and the scoped
-credentials; `openbao.externalAddr`, https).
+issues to the clients it trusts; `objectStore.externalEndpoint`, https, with the store trusting the cluster's
+ServiceAccount issuer for `objectStore.identity.audience` and holding each workload's canned policy from
+`<release>-object-store-identities`; `openbao.externalAddr`, https).
 A real deployment's render also refuses authentication off, the Dapr dashboard, and every other platform address it
 names over http (`vending.endpoint`, `observability.export.endpoint`, `services.lineage.forward.url`), each with what
 would cross it (`chart/templates/prod-credentials.yaml`, [[XC-184]]).
@@ -165,10 +165,11 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
   `rustfs/rustfs` image pinned by digest. `objectStore.enabled` says the estate uses it: rask's dev store issues its
   root pair (`object-store-access-key`/`object-store-secret-key` in `rask-object-store-root`, through ESO from
   `secret/object-store-root`, which no Dapr app may read), which the server reads as files, never env; rask's
-  scoped-users hook (`object-store-scoped-users`, on rask's own image) provisions its buckets, policies and scoped
-  users through RustFS's admin API. Its server starts once
+  provisioning hook (`object-store-provisioning`, on rask's own image) creates its buckets and writes each identity's
+  policy (`<release>-object-store-identities`) through RustFS's admin API, and its pruning run removes every user and
+  rask policy git does not declare. Its server starts once
   rask is installed, so the fixture install does not wait for it. The root secret signs every STS session token, so
-  the chart hands it only to the store pod and the scoped-users hook (`rask-rustfs` § 3), and in the dev store only ESO's
+  the chart hands it only to the store pod and the provisioning hook (`rask-rustfs` § 3), and in the dev store only ESO's
   login reads it (ADR 0168, ADR 0169).
 - **OpenBao** (`deploy/fixtures/openbao`, release `openbao`, Deployment and Service `rask-openbao`): the in-memory secret
   store. `openbao.enabled` says the estate uses it, and a real deployment's render refuses it. Its server starts

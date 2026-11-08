@@ -75,7 +75,7 @@ from openfga_sdk.models.read_request_tuple_key import ReadRequestTupleKey
 from openfga_sdk.models.relationship_condition import RelationshipCondition as RelationshipCondition
 from openfga_sdk.models.user_type_filter import UserTypeFilter
 from openfga_sdk.models.write_authorization_model_request import WriteAuthorizationModelRequest
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from tenacity import (
     RetryCallState,
     retry,
@@ -2279,6 +2279,49 @@ async def revoke_undeclared(
 #: leaves them out.
 ADMIN_REVISION: Final = "admin_revision"
 BOOKKEEPING_RELATIONS: Final = frozenset({ADMIN_REVISION})
+
+#: One census reads at most this many pages of this many tuples: governance tuples are written at admin frequency, so
+#: the ceiling is unreachable on a real estate and exists so a continuation-token bug cannot spin a read forever.
+CENSUS_MAX_PAGES: Final = 200
+CENSUS_PAGE_SIZE: Final = 100
+
+
+class GrantCensus(BaseModel):
+    """Every object's grant count, bucketed by its type: what a drift report's authorization categories read."""
+
+    #: ``{object_type: {object_id: tuple_count}}``, bookkeeping relations excluded: a project holding only its admin
+    #: revision is as stranded as one holding nothing.
+    counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
+    #: Why the read stopped short of the store, when it did: a short census would invent ghosts on the registry side and
+    #: hide them on the grant side in the same report, so a reader treats it as incomplete.
+    truncated: str | None = None
+
+
+async def census(client: OpenFgaClient, *, exclude: Collection[str] = ()) -> GrantCensus:
+    """Read the WHOLE store once, paged to the end, and count every object's tuples by its type, but those ``exclude``
+    names (the objects a deployment keeps for itself, which no registry names).
+
+    **One unfiltered read, not one bare-type read per type, and that is a correctness fix rather than an optimization.**
+    OpenFGA rejects a Read whose ``tuple_key`` is present but carries neither an object id nor a user: ``the 'tuple_key'
+    field was provided but the object type field is required and both the object id and user cannot be empty`` (HTTP
+    400). A bare-type filter (``obj="project:"``) is exactly that shape, so every reader built on one failed against a
+    real server while passing against a double that accepted the filter (measured live 2026-08-04), and the wrapper
+    reported that 400 as ``ServiceUnavailableError``, a permanent outage on a healthy server.
+    """
+    counted = GrantCensus()
+    token: str | None = None
+    for _ in range(CENSUS_MAX_PAGES):
+        page, token = await read_tuples(client, page_size=CENSUS_PAGE_SIZE, continuation_token=token)
+        for item in page:
+            obj_type, _, obj_id = str(item.object).partition(":")
+            if not obj_id or item.relation in BOOKKEEPING_RELATIONS or str(item.object) in exclude:
+                continue
+            bucket = counted.counts_by_type.setdefault(obj_type, {})
+            bucket[obj_id] = bucket.get(obj_id, 0) + 1
+        if not token:
+            return counted
+    counted.truncated = f"the tuple read hit its {CENSUS_MAX_PAGES}-page ceiling with a cursor outstanding"
+    return counted
 
 
 async def commit_unless_changed(

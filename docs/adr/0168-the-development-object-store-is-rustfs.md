@@ -4,7 +4,10 @@
 Decision 2 is amended by [ADR 0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md): the development store
 trusts the cluster's ServiceAccount issuer, and the catalog's store identity is its token. Its consequence on the
 store's hook is superseded by [ADR 0196](0196-an-install-from-git-converges-under-argo-cd.md): the hook converges
-under Argo CD.
+under Argo CD. Decision 3 and the consequences on the planes' identities are superseded by
+[ADR 0197](0197-maintenance-writes-only-under-a-vend-and-no-workload-holds-a-store-key.md): no workload holds a store user
+or key, and the hook makes no user. The consequence on the dev secret store's reach is closed by
+[ADR 0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md).
 Source: owner, 2026-10-18, ruling on XC-163 (#657): "migrate completely to RustFS and remove all MinIO stuff
 everywhere", and "Bump to newest" (1.0.3). Evidence: `docs/audits/2026-10-18/rustfs-zero-trust.md` (requirements
 R1-R20 and a live measurement on RustFS 1.0.1 and 1.0.3).
@@ -53,11 +56,12 @@ Four facts have changed since:
    `object-store-secret-key`. `minio.oidc` has no successor: the RustFS fixture does not trust rask's issuer, since
    web identity is unmeasured against it (R18), so `vending.mode: web_identity` needs a platform store configured
    for the issuer by its owner.
-3. **One hook drives RustFS's native admin API from rask's own image.** `object-store-scoped-users` runs the
-   rest-catalog image (python, boto3, botocore), makes the platform buckets, and calls
-   `/rustfs/admin/v3/add-canned-policy`, `add-user` and `set-user-or-group-policy` with SigV4 and plain JSON bodies,
-   the shape the 2026-10-18 measurement drove. It creates every policy before it binds anyone and exits non-zero on a
-   policy the store refuses. No MinIO server or `mc` image is built, pinned, pushed or scanned.
+3. **One hook drives RustFS's native admin API from rask's own image.** `object-store-provisioning` runs the
+   rest-catalog image (python, boto3, botocore), makes the platform buckets, and writes with
+   `/rustfs/admin/v3/add-canned-policy` the policy each ServiceAccount's token is granted by its `sub` (ADR 0170,
+   ADR 0197), with SigV4 and plain JSON bodies, the shape the 2026-10-18 measurement drove. It binds no user, its pruning
+   runs remove every regular user but the root and every rask policy the chart no longer declares, and it exits non-zero
+   on a policy the store refuses. No MinIO server or `mc` image is built, pinned, pushed or scanned.
 4. **Every CI lane runs RustFS**: the Dagger lanes as a service bound to one exec, and the kind lane through the
    fixture.
 
@@ -78,35 +82,33 @@ Four facts have changed since:
 
 - **The root secret signs STS tokens.** On RustFS anyone holding the root secret can forge any session token
   (GHSA-m77q-r63m-pj89, intentionally unfixed), and rotating root invalidates every outstanding STS credential. The
-  root pair is a trust root, so it reaches the store pod, the dev secret store that seeds it, and the scoped-users hook,
-  never a service: the dev store holds it at `secret/object-store-root`, which ESO's policy names and every Dapr app's
-  Configuration denies, ESO writes it into a Secret of its own (`<release>-object-store-root`), and no other workload
-  mounts that Secret (`tests/unit/test_the_root_storage_secret_reaches_only_its_users.py` follows every path a secret
-  takes, the Dapr store included). Every plane presents its own scoped identity: the catalog signs `AssumeRole` with
-  its own user, annotator and search read the media corpus as `objectStore.mediaAccessKey` (read-only on
-  `explorer.corpusS3Root`), the backups write `_backups/` as `objectStore.backupAccessKey`, and the hook makes the
-  platform buckets itself. A blank plane identity fails the render, so no plane falls back to the root.
-- **The dev secret store bounds that reach.** The dev OpenBao runs `server -dev` with a published root token, which the
-  Dapr secret store presents, and the dev estate runs without NetworkPolicies, so a pod that calls OpenBao directly
-  reads every secret it holds, the store's root included: the Configurations' deny lists bind daprd, not the app
-  container beside it, and Dapr's Vault store authenticates only by token. Per-app secret-store identities (one Vault
-  Component per app with its own OpenBao token and policy) and a generated dev root token are XC-165 (#659), by the
-  owner's ruling of 2026-10-18. Production is outside it: a real deployment refuses the dev store, so rask's secret
-  store holds no store root there.
+  root pair is a trust root, so it reaches the store pod, the dev secret store that seeds it, and the provisioning hook,
+  never a service: the dev store holds it at `secret/object-store-root`, which only ESO's store policy reads, ESO writes
+  it into a Secret of its own (`<release>-object-store-root`), and no other workload mounts that Secret
+  (`tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows every path a secret takes, the
+  Dapr store included). Every plane presents its ServiceAccount token instead, exchanged at STS for a session under the
+  policy its `sub` names (ADR 0170, ADR 0197), the two backup jobs included, and the hook makes the platform buckets
+  itself, so no plane falls back to the root.
+- **The dev secret store bounds that reach.** Each app's sidecar logs in to the dev OpenBao as its own ServiceAccount
+  and reads only its own secrets, and the store's administrator token is generated in-cluster and held by its seed
+  (ADR 0169). Production is outside it: a real deployment refuses the dev store, so rask's secret store holds no store
+  root there.
 - **Production names the platform's S3.** A real deployment refuses `objectStore.enabled` (the dev store), and the
   render refuses an empty `objectStore.externalEndpoint`; rask provisions nothing on the platform's store, whose
   operator holds the root and creates rask's buckets and identities.
-- **Rotation is unchanged.** RustFS also refuses `AssumeRole` from a service account, so ADR 0166's rotated catalog
-  credential stays a second user under the same policy.
+- **No store identity needs rotating.** None is a key pair, and a session lasts at most its exchange's length; narrowing
+  an identity is a policy change in git that the next provisioning run converges on (ADR 0170).
 - **The estate needs a from-empty rebuild.** The store's bytes, Service name, claim, labels and Secret keys all
   change, and the estate is pre-production, so nothing is migrated: the dev estate is reinstalled from empty.
 - **Open measurements.** Conditional `CompleteMultipartUpload` (R11) is read in source only; the catalog's warehouse
-  purge, `DeleteObjects` then `DeleteBucket` (R13), is not measured; `AssumeRoleWithWebIdentity` (R18) is read in
-  source only, and whether a Kubernetes projected ServiceAccount token serves as the web identity is open. The
-  2,048-byte session-policy boundary (R5) and conditional writes across nodes on a multi-node store are unmeasured.
-- **The store's hook converges under Helm and Flux, not yet under Argo CD.** `object-store-scoped-users` is named by
-  the release revision, so a `helm template` render runs it once; continuous reconciliation of the store's users and
-  policies is the planned operator's (XC-164, #658, parked).
+  purge, `DeleteObjects` then `DeleteBucket` (R13), is not measured. `AssumeRoleWithWebIdentity` (R18) for a
+  Kubernetes-shaped token was measured on 1.0.3 with a stand-in issuer, 20 of 20 (`scripts/rustfs_web_identity_measure.py`).
+  The 2,048-byte session-policy boundary (R5) and conditional writes across nodes on a multi-node store are unmeasured.
+  A policy cannot require a conditional write: RustFS 1.0.3 refuses a canned or session policy naming `s3:if-none-match`
+  as an unknown key (measured 2026-11-08), so a write credential can overwrite an object in place.
+- **The store's hook converges under Helm and Argo CD** (ADR 0196). `object-store-provisioning` runs as a Helm hook on
+  each install and upgrade and as an Argo CD `Sync` hook, its pruning run as a `PostSync` one, so every sync re-applies
+  the buckets and policies git declares and removes what it no longer declares.
 - **The platform store is named by requirement, not product.** The audit's list (§ "What rask must demand of ANY
   platform store") and `rask-rustfs` § 8 are what a production store must meet; RustFS is the fixture that proves the
   list in development and CI.

@@ -37,12 +37,9 @@ from the store behind the Service, else minted, so a surge keeps the credential 
 
 [[XC-004]] makes every other credential of the store a generated one: ESO's Password generator fills one Secret per
 credential once (`<release>-dev-credential-<key>`, [[XC-164]]), the pod mounts them as one directory, and the seed writes
-each field from its file, deriving
-each scoped storage secret from the root there, so no credential is in the render, an argument list or an
-output stream. The `object-store-scoped-users` Job derives the same scoped secrets for the store users it creates, and a
-service reads its field by name: the field each service is told to read must hold the secret the Job gives
-the user named by that service's access key, or every S3 call is `SignatureDoesNotMatch`. A store missing a
-generated credential is never Ready. A rotated key of the mounted Secret reaches the
+each field from its file, so no credential is in the render, an argument list or an output stream. No workload's object-store
+identity is a secret at all: each signs with sessions its own ServiceAccount token is exchanged for ([[XC-084]]). A store
+missing a generated credential is never Ready. A rotated key of the mounted Secret reaches the
 store through the seed's loop, keeping the signing pairs and the bus root, because replacing the pod to re-seed
 would re-mint them.
 
@@ -557,45 +554,6 @@ def test_the_dev_store_is_seeded_by_its_own_pod_and_keeps_its_signing_keys(  # n
         for p in held.iterdir()
     }
     assert documents and applied == documents, f"the store holds {sorted(applied)}, not the policies and roles rask renders: {sorted(documents)}"
-    [job] = [d for d in docs if d.get("kind") == "Job" and d["metadata"]["name"].startswith("rask-object-store-scoped-users-r")]
-    pod_spec = job["spec"]["template"]["spec"]
-    [derive] = pod_spec["initContainers"]
-    [provision] = pod_spec["containers"]
-    keys_dir = tmp_path / "scoped-keys"
-    keys_dir.mkdir()
-    root_path = Path(chart_render.env_of(derive)["ROOT_FILE"])
-    [root_volume] = [m["name"] for m in derive["volumeMounts"] if Path(m["mountPath"]) == root_path.parent]
-    root_file = _as_mounted(pod_spec, derive, root_volume, generated_dir, tmp_path / "store-root") / root_path.name
-    derived = subprocess.run(
-        ["sh", "-c", derive["command"][-1]],  # noqa: S607
-        env={**os.environ, "KEYS": str(keys_dir), "ROOT_FILE": str(root_file)},
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
-    )
-    assert derived.returncode == 0, f"the Job's derive step failed: {derived.stderr[-500:]}"
-    [provision_keys] = [m["mountPath"] for m in provision["volumeMounts"] if m["name"] == "keys"]
-    assert f"--keys-dir {provision_keys}" in provision["command"][-1], (
-        "the Job's provisioning step reads its users' secrets from somewhere the derive step did not write"
-    )
-    # (the secret holding a service's pair, its key id field, its secret field): the pair is the store's (ADR 0166).
-    pairs = {
-        (env[name.replace("_DAPR_SECRET_S3_FIELD", "_DAPR_SECRET_KEY")], env[name.replace("_DAPR_SECRET_S3_FIELD", "_DAPR_SECRET_S3_ID_FIELD")], field)
-        for env in (chart_render.env_of(c) for _, _, c in chart_render.containers(docs))
-        for name, field in env.items()
-        if name.endswith("_DAPR_SECRET_S3_FIELD")
-        and {name.replace("_DAPR_SECRET_S3_FIELD", suffix) for suffix in ("_DAPR_SECRET_KEY", "_DAPR_SECRET_S3_ID_FIELD")} <= set(env)
-    }
-    assert pairs, "no service reads a scoped storage pair, so this pairing would pass vacuously"
-    for secret, id_field, field in sorted(pairs):
-        held = _store(stores, "local", f"secret/{secret}")
-        identity = held.get(id_field, "")
-        assert identity, f"secret/{secret} holds no {id_field}, the key id {field} signs under"
-        minted = (keys_dir / identity).read_text()
-        assert held.get(field) == minted, f"{field} of secret/{secret} is not the secret the Job gives {identity}: every S3 call signs with a mismatched pair"
-        assert minted != generated["object-store-secret-key"], f"{identity} is published with the store's ROOT secret"
-        assert f'--user "{identity}=' in provision["command"][-1], f"the Job does not create {identity}, so the secret it derived for it reaches no store user"
     assert len(seeded) == (2 if local in {"restart", "rotate", "change"} else 1), f"seeds that completed: {len(seeded)}"
 
     root = _store(stores, "local", "secret/nats-server")

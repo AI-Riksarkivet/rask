@@ -7478,6 +7478,81 @@
         "title": "GetTableTagVersionResponse",
         "type": "object"
       },
+      "GhostRevokeRequest": {
+        "description": "The objects a drift report found holding grants that no registry names, each an OpenFGA object (``kind:id``).",
+        "properties": {
+          "objects": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Objects",
+            "type": "array"
+          }
+        },
+        "required": [
+          "objects"
+        ],
+        "title": "GhostRevokeRequest",
+        "type": "object"
+      },
+      "GhostRevokeResponse": {
+        "description": "What the catalog revoked, each object's tuple count, and what it refused to, with why.",
+        "properties": {
+          "refused": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Refused",
+            "type": "object"
+          },
+          "revoked": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Revoked",
+            "type": "object"
+          }
+        },
+        "title": "GhostRevokeResponse",
+        "type": "object"
+      },
+      "GrantCensusResponse": {
+        "description": "Every object's grant count, by type, as the store holds them now: what a drift report's authorization categories\nread. The objects a deployment keeps for itself are left out, since no registry names them.",
+        "properties": {
+          "counts_by_type": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            "title": "Counts By Type",
+            "type": "object"
+          },
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "truncated": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Truncated"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "GrantCensusResponse",
+        "type": "object"
+      },
       "GrantRequest": {
         "properties": {
           "relation": {
@@ -11492,6 +11567,60 @@
         "title": "TagContents",
         "type": "object"
       },
+      "TenancyRebuildRequest": {
+        "description": "The warehouses whose tenancy edge a drift report found missing, by id.",
+        "properties": {
+          "warehouses": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Warehouses",
+            "type": "array"
+          }
+        },
+        "required": [
+          "warehouses"
+        ],
+        "title": "TenancyRebuildRequest",
+        "type": "object"
+      },
+      "TenancyRebuildResponse": {
+        "description": "The tenancy edges the catalog wrote, each ``project:<p> project warehouse:<id>``, and the warehouses whose record\njustifies none, with why.",
+        "properties": {
+          "unjustified": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Unjustified",
+            "type": "object"
+          },
+          "written": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Written",
+            "type": "array"
+          }
+        },
+        "title": "TenancyRebuildResponse",
+        "type": "object"
+      },
+      "TrashEndResponse": {
+        "description": "What ending a trash record did beside ending its records: the grants it still held, revoked.",
+        "properties": {
+          "tuples_revoked": {
+            "title": "Tuples Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tuples_revoked"
+        ],
+        "title": "TrashEndResponse",
+        "type": "object"
+      },
       "TrashEntry": {
         "description": "One recoverable drop \u2014 what the owner needs to decide whether to undrop before the deadline.",
         "properties": {
@@ -11571,6 +11700,59 @@
           "objects"
         ],
         "title": "TrashListing",
+        "type": "object"
+      },
+      "TrashRefusalRequest": {
+        "description": "Why maintenance declined to act on a trash record this tick, as its own report names it.",
+        "properties": {
+          "reason": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason"
+        ],
+        "title": "TrashRefusalRequest",
+        "type": "object"
+      },
+      "TrashRefusalResponse": {
+        "description": "How many refusals the record now counts; ``None`` when the note could not be made (the record went meanwhile).",
+        "properties": {
+          "attempts": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Attempts"
+          }
+        },
+        "title": "TrashRefusalResponse",
+        "type": "object"
+      },
+      "TrashReleaseResponse": {
+        "description": "What releasing a trash record past its deadline did: the grants revoked, and whether the record was stamped.",
+        "properties": {
+          "stamped": {
+            "title": "Stamped",
+            "type": "boolean"
+          },
+          "tuples_revoked": {
+            "title": "Tuples Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tuples_revoked",
+          "stamped"
+        ],
+        "title": "TrashReleaseResponse",
         "type": "object"
       },
       "TupleCondition": {
@@ -13782,6 +13964,197 @@
         "summary": "Poll Control Events",
         "tags": [
           "events"
+        ]
+      }
+    },
+    "/management/v1/grants/census": {
+      "get": {
+        "description": "Every object's grant count, by type, read whole from the store; the deployment's own objects left out.\n\n``enabled`` is false when authorization is off in the catalog, which a drift report reads as nothing to check rather\nthan as an estate holding no grants.",
+        "operationId": "grant_census_management_v1_grants_census_get",
+        "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantCensusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Grant Census",
+        "tags": [
+          "grant-reconcile"
+        ]
+      }
+    },
+    "/management/v1/grants/ghosts/revoke": {
+      "post": {
+        "description": "Revoke every grant on each object no registry names, as a drift report found them.\n\nEach object is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash\nrecord) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop.",
+        "operationId": "revoke_ghost_grants_management_v1_grants_ghosts_revoke_post",
+        "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GhostRevokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GhostRevokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Ghost Grants",
+        "tags": [
+          "grant-reconcile"
+        ]
+      }
+    },
+    "/management/v1/grants/tenancy/rebuild": {
+      "post": {
+        "description": "Write each warehouse's tenancy edge, ``project:<p> project warehouse:<id>``, as its registry record names it.\n\nA structural edge confers nothing on its own, so rebuilding it re-grants no one; a warehouse whose record names no\nproject, or no record at all, is answered unjustified.",
+        "operationId": "rebuild_warehouse_tenancy_management_v1_grants_tenancy_rebuild_post",
+        "parameters": [
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenancyRebuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenancyRebuildResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Rebuild Warehouse Tenancy",
+        "tags": [
+          "grant-reconcile"
         ]
       }
     },
@@ -17598,7 +17971,7 @@
     },
     "/management/v1/table/{id}/credentials": {
       "post": {
-        "description": "Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.\n\nThe credential is a session the catalog's own token is exchanged for, named at the store for the verified caller\nit is vended to; the caller's own token never leaves the catalog.\n\nIt is scoped to the location the door resolved, never to the name, and answered only while that location still\nholds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]).",
+        "description": "Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.\n\nThe credential is a session the catalog's own token is exchanged for, named at the store for the verified caller\nit is vended to; the caller's own token never leaves the catalog.\n\nIt is scoped to the location the door resolved, never to the name, and answered only while that location still\nholds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]). The\nmaintain tier is refused 409 (code 19) for a table whose maintenance policy keeps its whole history.",
         "operationId": "vend_credentials_management_v1_table__id__credentials_post",
         "parameters": [
           {
@@ -17611,13 +17984,13 @@
             }
           },
           {
-            "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix).",
+            "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix but its refs, and the table's history fence and committed-file records on the control root).",
             "in": "query",
             "name": "tier",
             "required": false,
             "schema": {
               "default": "read",
-              "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix).",
+              "description": "`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix but its refs, and the table's history fence and committed-file records on the control root).",
               "enum": [
                 "read",
                 "write",
@@ -19011,6 +19384,332 @@
         "summary": "Undrop Table",
         "tags": [
           "table-management"
+        ]
+      }
+    },
+    "/management/v1/trash/{kind}/{uuid}": {
+      "delete": {
+        "description": "End a trash record whose object holds no byte: revoke the grants it still holds, end the records it keeps under\nits uuid, a table's claim and base record, and the record last.\n\nRefused 409 (code 19) while its place, or a data directory its claim names, holds an object (the purge deletes them\nfirst), while a record naming no bytes is short of its deadline, at a place whose claim records another table or\nnone, and while a live object holds the place or the name again.",
+        "operationId": "end_trash_management_v1_trash__kind___uuid__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "table",
+                "namespace"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "uuid",
+            "required": true,
+            "schema": {
+              "title": "Uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrashEndResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "End Trash",
+        "tags": [
+          "trash-reclaim"
+        ]
+      }
+    },
+    "/management/v1/trash/{kind}/{uuid}/credentials": {
+      "post": {
+        "description": "Vend the session that deletes one trashed table's bytes: every object at its location, in both spellings, and in\nits own data directories, and nothing on the control root.\n\nVended for a table record past its deadline, at a place whose claim records the record's uuid, crossing no control\nprefix and held by no live table; anything else is refused 409 (code 19). The record and what it keeps are ended at\n``DELETE /management/v1/trash/{kind}/{uuid}`` once the bytes are gone.",
+        "operationId": "vend_reclaim_credentials_management_v1_trash__kind___uuid__credentials_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "table",
+                "namespace"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "uuid",
+            "required": true,
+            "schema": {
+              "title": "Uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Vend Reclaim Credentials",
+        "tags": [
+          "trash-reclaim"
+        ]
+      }
+    },
+    "/management/v1/trash/{kind}/{uuid}/refusals": {
+      "post": {
+        "description": "Note maintenance's own refusal of a trash record, so a record refused tick after tick sorts behind the ones that\nmove. Bookkeeping the catalog never judges on.",
+        "operationId": "note_trash_refusal_management_v1_trash__kind___uuid__refusals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "table",
+                "namespace"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "uuid",
+            "required": true,
+            "schema": {
+              "title": "Uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TrashRefusalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrashRefusalResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Note Trash Refusal",
+        "tags": [
+          "trash-reclaim"
+        ]
+      }
+    },
+    "/management/v1/trash/{kind}/{uuid}/release": {
+      "post": {
+        "description": "Release a drop past its deadline (ADR 0146): revoke every grant on its object, tell each person who lost one, and\nstamp the record released; its bytes wait for the purge.\n\nRefused 409 (code 19) until the deadline has settled (``lakehouse.trash.RELEASE_SETTLE``), and while a live object\nholds the record's place or name again: an undrop registers before it clears its record.",
+        "operationId": "release_trash_management_v1_trash__kind___uuid__release_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "enum": [
+                "table",
+                "namespace"
+              ],
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "uuid",
+            "required": true,
+            "schema": {
+              "title": "Uuid",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrashReleaseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Release Trash",
+        "tags": [
+          "trash-reclaim"
         ]
       }
     },

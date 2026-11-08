@@ -32,7 +32,12 @@ because an input was partial, rather than conclude the estate is clean.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
+import httpx
 import pytest
+import respx
 
 from maintenance.services import repair
 from maintenance.services.reconcile import GhostObject, IncompleteScan, ReconcileReport
@@ -87,27 +92,22 @@ def test_an_UNRELATED_partial_read_refuses_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_ARMED_pass_honours_the_refusal_too(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_the_ARMED_pass_honours_the_refusal_too(catalog_identity_token: Path) -> None:
     """`plan_repair` is not the only door — `repair_drift`, the coroutine the reconcile route awaits,
-    re-plans, and a guard that lived only in the planner would be bypassed by the path that deletes."""
+    re-plans, and a guard that lived only in the planner would be bypassed by the path that asks the catalog to revoke."""
     from maintenance.core.config import MaintenanceSettings
 
-    settings = MaintenanceSettings.model_validate({"MAINTENANCE_DRIFT_REPAIR_ENABLED": True, "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": False})
-    seen: list[str] = []
-
-    async def _revoke(client: object, obj: str, *, actor: str, origin: str) -> list[object]:
-        del client, actor, origin
-        seen.append(obj)
-        return []
-
-    monkeypatch.setattr(repair.fga, "revoke_object_tuples", _revoke)
-
-    out = await repair.repair_drift(
-        settings,
-        report=_report(IncompleteScan(source="catalog:tables:s3://acme-wh", reason="manifest unreadable: 503")),
-        fga_client=object(),
+    del catalog_identity_token
+    settings = MaintenanceSettings.model_validate(
+        {"MAINTENANCE_DRIFT_REPAIR_ENABLED": True, "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": False, "MAINTENANCE_CATALOG_URL": "http://catalog.test"}
     )
+    with respx.mock() as door:
+        asked = door.post("http://catalog.test/management/v1/grants/ghosts/revoke").mock(
+            side_effect=lambda request: httpx.Response(200, json={"revoked": dict.fromkeys(json.loads(request.content)["objects"], 1), "refused": {}})
+        )
+        out = await repair.repair_drift(settings, report=_report(IncompleteScan(source="catalog:tables:s3://acme-wh", reason="manifest unreadable: 503")))
 
-    assert seen, "the armed pass revoked nothing at all, so the assertion below could not fail"
-    assert "table:ns$t1" not in seen, f"the armed path revoked a table its record listing never read: {seen}"
+    revoked = json.loads(asked.calls.last.request.content)["objects"]
+    assert revoked, "the armed pass asked for no revoke at all, so the assertion below could not fail"
+    assert "table:ns$t1" not in revoked, f"the armed path asked to revoke a table its record listing never read: {revoked}"
     assert "ghost_tables" in out.refused

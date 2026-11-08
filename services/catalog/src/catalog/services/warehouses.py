@@ -39,7 +39,7 @@ from lakehouse import trash
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
 
 
 log = logging.getLogger(__name__)
@@ -84,31 +84,6 @@ def grace_days_under(control_root: str, storage_options: StorageOptions, segment
     return grace_days(get_warehouse(control_root, storage_options, str(binding["warehouse_id"])), estate=estate)
 
 
-def _bucket_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """The S3 client the bucket lifecycle ops share, built from the catalog's own credential, its session token included.
-
-    Kept in ONE place so provisioning and purging can never address different endpoints — creating a
-    bucket on one backend and deleting it on another is a failure mode that reports success. The catalog's
-    credential is a session (ADR 0170), and a session's key signed without its token is an identity the
-    store does not hold.
-
-    Via ``lakehouse.storage.s3_client``, the estate's canonical S3 seam, never a raw ``boto3.client``: path-style
-    addressing, s3v4 signing, retries and timeouts live there once, and a hand-rolled client silently
-    forfeits all of them (against RustFS, virtual-hosted addressing resolves a DNS name that does
-    not exist). The region rides on ``create_bucket``'s ``LocationConstraint`` where it matters — see
-    :func:`provision_bucket` — so it is not threaded through here.
-    """
-    from lakehouse.storage import s3_client
-
-    _access_key, _secret_key, _session_token = storage_options.credential_in_clear()
-    return s3_client(
-        storage_options.options.get("endpoint"),
-        access_key=_access_key,
-        secret_key=_secret_key,
-        session_token=_session_token,
-    )
-
-
 def provision_bucket(bucket: str, storage_options: StorageOptions) -> None:
     """Create the physical S3 bucket, idempotently: one the catalog already owns is a no-op.
 
@@ -117,8 +92,8 @@ def provision_bucket(bucket: str, storage_options: StorageOptions) -> None:
     """
     from botocore.exceptions import ClientError
 
-    region = storage_options.options.get("region") or "us-east-1"
-    client = _bucket_client(storage_options)
+    region = storage_options.region or DEFAULT_REGION
+    client = object_client(storage_options)
     # Real AWS S3 REJECTS create_bucket without a LocationConstraint outside us-east-1; RustFS ignores
     # it. Sending it only when region != us-east-1 keeps RustFS working and a real-S3 backend correct.
     # dict[str, object] makes the **splat mismatch every typed create_bucket parameter
@@ -712,7 +687,7 @@ def purge_bucket(bucket: str, storage_options: StorageOptions) -> int:
     """
     from botocore.exceptions import ClientError
 
-    client = _bucket_client(storage_options)
+    client = object_client(storage_options)
     removed = 0
     try:
         paginator = client.get_paginator("list_objects_v2")

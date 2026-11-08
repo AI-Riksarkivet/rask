@@ -19,8 +19,10 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pyarrow as pa
 import pytest
+import respx
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, CreateTableRequest, DeregisterTableRequest, DescribeTableRequest, RegisterTableRequest, connect
 from pydantic import SecretStr
@@ -30,6 +32,9 @@ from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
+
+
+CATALOG = "http://catalog.test"
 
 
 def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_path: Path) -> None:
@@ -57,9 +62,14 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
         total=0,
         skipped=[CategorySkipped(category="orphan_files", reason="deliberately off in this configuration")],
     )
-    settings = MaintenanceSettings(s3_bucket="lance-catalog", s3_secret_access_key=SecretStr("unit"), control_root=control_root, trash_purge_enabled=True)
+    settings = MaintenanceSettings(
+        s3_bucket="lance-catalog", s3_secret_access_key=SecretStr("unit"), control_root=control_root, trash_purge_enabled=True, catalog_url=CATALOG
+    )
 
-    out = asyncio.run(purge_expired_trash(settings, report=report, control_root=control_root, data_roots={f"file://{data}"}))
+    # The refusal under test is maintenance's own, which the catalog notes on the record ([[XC-084]]): no session is asked.
+    with respx.mock() as door:
+        door.post(url__regex=rf"^{CATALOG}/management/v1/trash/table/[^/]+/refusals").mock(return_value=httpx.Response(200, json={"attempts": 1}))
+        out = asyncio.run(purge_expired_trash(settings, report=report, control_root=control_root, data_roots={f"file://{data}"}))
 
     assert out.purged == [], f"the purge deleted bytes table team$renamed resolves to: {out.purged}"
     assert [(refused.id, "still registered" in refused.reason) for refused in out.refused] == [("team$orders", True)], out.refused

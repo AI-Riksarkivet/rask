@@ -12,18 +12,18 @@ documented false-positive classes (branches, multi-base clones, MemWAL shards, d
 sidecars) whose first live run called 29 MB of real page images reclaimable. That half stays REPORT-ONLY.
 
 What the purge does per record, in this order, each step idempotent so a crash mid-record re-runs the
-whole record cleanly on the next tick:
+whole record cleanly on the next tick ([[XC-084]]: maintenance holds no write of its own on the store and no client that
+writes grants, so every write is one the catalog makes or vends for this record alone):
 
-1. **revoke the FGA tuples FIRST.** A revoke that fails REFUSES the record with the bytes untouched.
-   Grants must never outlive the bytes they were written for: if the id is later reused, stale tuples
-   silently re-grant the old subjects on the new object. The reverse order would mean a delete that
-   succeeded followed by a revoke that failed — bytes gone, grants live, and nothing left to retry
-   against.
-2. **delete the recorded table's bytes**, under the key its location decodes to and the reservation marker
-   under its spelling (:func:`store_paths`). The file listings that sum the reclaimed bytes double as the
-   existence probes; an already-absent path is idempotent success.
-3. **clear the trash record LAST**, so any failure above leaves the record and the next tick retries.
-4. **announce it** on the control stream (best-effort).
+1. **delete the recorded table's bytes**, under the session the catalog vends for this record once its own reads find it
+   past its deadline, at a place whose claim records the record's uuid and no live table holds. By key, under the key
+   its location decodes to and the reservation marker under its spelling (:func:`lakehouse.table_paths.spellings`), and
+   in the table's own data directories. The listings that sum the reclaimed bytes double as the existence probes; an
+   already-absent path is idempotent success. A namespace and a declared-only table name no bytes and skip this.
+2. **have the catalog end the record** (``DELETE /management/v1/trash/{kind}/{uuid}``): it revokes the grants the object
+   still holds, ends the records it keeps under its uuid, a table's claim and base record, and the trash record last,
+   once its own listing finds the place empty. Any failure before it leaves the record and the next tick retries.
+3. **announce it** on the control stream (best-effort).
 
 Four refusals stand in front of all of that, in order, and each exists because of a specific way this
 could destroy live data:
@@ -40,8 +40,8 @@ could destroy live data:
   exactly that window. Either read failing refuses EVERY record rather than degrading to "purge
   anyway".
 * **namespace / empty location.** A ``kind="namespace"`` record (#96) and a declared-only table both
-  carry ``location=""`` — there are no bytes, so the path checks do not apply and the record is revoked
-  and cleared without a delete.
+  carry ``location=""`` — there are no bytes, so the path checks do not apply and the catalog ends the record
+  without a delete.
 * **outside the maintained estate.** A record's ``location`` is DATA; nothing constrains it. It must
   resolve under a bucket this service maintains (the configured sweep buckets plus every registered,
   non-deactivated warehouse) or it is refused. A deactivated warehouse is outside that set on purpose:
@@ -74,18 +74,20 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from lakehouse import location_claims, object_records, trash, warehouse_records
-from lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, normalise, store_of
-from lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError, forget_base_record
+from lakehouse import trash, warehouse_records
+from lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, store_of
+from lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError
 from lakehouse.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from lakehouse.control_events import ControlAction, ControlObjectType, ControlUuids
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.data_directories import delete_directories, directories_to_end, directory_uri
-from lakehouse.governed import fga
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
+from lakehouse.stored_objects import StoredObject, delete_objects, list_under
+from lakehouse.table_paths import objects_at, spellings
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
+from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, end_trash, note_trash_refusal, reclaim_options_for
 from maintenance.services.naming import manifest_uuid
 from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, ReconcileReport
 
@@ -105,7 +107,6 @@ _PURGE_OFF = (
     "MAINTENANCE_TRASH_PURGE_ENABLED is off — reclamation is opt-in and report-only is the shipped default "
     "(an expired drop's grants are already released; turning it on deletes its bytes); set MAINTENANCE_TRASH_PURGE_DRY_RUN to see what it would reclaim first"
 )
-_FGA_UNWIRED = "FGA is enabled but no client is wired into this process — grants cannot die with the bytes, so nothing is purged"
 
 
 # --------------------------------------------------------------------------- #
@@ -435,9 +436,8 @@ def still_registered(record: dict[str, Any], live: Liveness) -> bool:
     uuid, or keeps none; a table recorded with no location when a live object holds its name, since nothing else tells
     it from another.
     """
-    obj_id = str(record.get("id") or "")
-    location = str(record.get("location") or "").rstrip("/")
-    if str(record.get("kind") or "table") == "namespace":
+    obj_id, location = trash.name_of(record), trash.location_of(record)
+    if trash.kind_of(record) == "namespace":
         return obj_id in live.ids and live.namespace_uuids.get(obj_id) in (trash.object_uuid(record), None)
     if not location:
         return obj_id in live.ids
@@ -460,8 +460,7 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
     registered when a live table resolves to its location, a namespace when a live namespace of its name keeps its uuid.
     Only a table recorded with no location is judged by its name, since nothing else tells it from another.
     """
-    obj_id = str(record.get("id") or "")
-    if not obj_id:
+    if not trash.name_of(record):
         return "the record names no object id"
     uuid = trash.object_uuid(record)
     if uuid is None:
@@ -470,9 +469,8 @@ def check(record: dict[str, Any], *, roots: set[str], live: Liveness | None) -> 
         return _MANIFEST_UNREADABLE
     if still_registered(record, live):
         return _STILL_REGISTERED
-    kind = str(record.get("kind") or "table")
-    location = str(record.get("location") or "").rstrip("/")
-    if kind == "namespace" or not location:
+    location = trash.location_of(record)
+    if trash.kind_of(record) == "namespace" or not location:
         # A namespace is a manifest ROW and a declared-only table never had bytes: nothing to path-check.
         return None
     if not names_a_location(location):
@@ -523,66 +521,56 @@ class NotADatasetRootError(RuntimeError):
     """
 
 
-def store_paths(location: str, storage_options: StorageOptions) -> tuple[pafs.FileSystem, str, str]:
-    """``location``'s filesystem and the two paths a table recorded there holds bytes under: the one it opens and the one
-    it is spelled as.
-
-    A recorded location is the URL ``describe_table`` answered, which percent-encodes the table's name. pylance opens
-    it at each segment decoded once (:func:`base_refs.decoded_path`), and its ``dir`` namespace writes the reservation
-    marker under the location as spelled. Measured on pylance 13.0.0 through the catalog's create door over moto
-    ([[LH-319]]): ``räksmörgås`` keeps its versions, data and branches under ``…$räksmörgås/`` and the marker under
-    ``…$r%C3%A4ksm%C3%B6rg%C3%A5s/``; ``sp ace`` keeps both under ``…$sp ace/``. ``lance_docs/ns_catalog/catalog/dir``
-    keeps both in one table directory, so the split is pylance's. The two paths are equal for a name that needs no
-    escape. A ``file://`` location is a local absolute path.
-    """
-    fs, _ = fs_and_base(location, storage_options)
-    anchor = "/" if store_of(location) == "file" else ""
-    return fs, f"{anchor}{decoded_path(location)}", f"{anchor}{normalise(location)}"
-
-
-def _listed(fs: pafs.FileSystem, path: str) -> list[pafs.FileInfo]:
-    """Everything under ``path``, recursively; ``[]`` when it is absent."""
-    return fs.get_file_info(pafs.FileSelector(path, recursive=True, allow_not_found=True))
-
-
 def objects_held(location: str, storage_options: StorageOptions) -> int:
-    """How many objects the table recorded at ``location`` still holds, under both of its :func:`store_paths`.
+    """How many objects the table recorded at ``location`` still holds, under both of its spellings
+    (:func:`lakehouse.table_paths.spellings`).
 
     The tombstone sweep's proof that a record's bytes are gone ([[LH-061]]): counted as spelled alone, a table whose
     name holds a space reads as empty while every byte sits under the decoded key ([[LH-319]]).
     """
-    fs, dataset, spelled = store_paths(location, storage_options)
-    return sum(1 for path in {dataset, spelled} for info in _listed(fs, path) if info.type == pafs.FileType.File)
+    return len(objects_at(location, storage_options))
 
 
-def _require_a_dataset(location: str, path: str, held: list[pafs.FileInfo]) -> None:
+def _store_path(place: str) -> str:
+    """A listed place as the store paths beneath it are written: ``bucket/key`` on S3, the absolute path on a local root."""
+    return place.removeprefix(f"{store_of(place)}://")
+
+
+def _require_a_dataset(location: str, path: str, held: list[StoredObject]) -> None:
     """Refuse ``path`` when it holds something with no ``_versions/`` beside it: whatever it is, it is no Lance dataset.
 
     AN EMPTY OR ABSENT PATH PASSES, and that is the contract rather than an oversight: a crash between the delete and the
-    record clear re-runs the whole record, so a half-completed purge must be able to finish.
+    record clear re-runs the whole record, and the delete takes ``_versions/`` last (:func:`delete_location`), so a
+    half-completed purge leaves a path this still recognises and can finish.
     """
-    prefix = f"{path.rstrip('/')}/"
-    if held and not any(info.path.rstrip("/").removeprefix(prefix).split("/")[0] == _VERSIONS_MARKER for info in held):
-        files = sum(1 for info in held if info.type == pafs.FileType.File)
+    prefix = f"{_store_path(path).rstrip('/')}/"
+    if held and not any(stored.path.removeprefix(prefix).split("/")[0] == _VERSIONS_MARKER for stored in held):
         raise NotADatasetRootError(
-            f"refusing to delete {location}: it holds {files} file(s) but no {_VERSIONS_MARKER}/ marker, "
+            f"refusing to delete {location}: it holds {len(held)} file(s) but no {_VERSIONS_MARKER}/ marker, "
             f"so it is not a Lance dataset — a recursive delete here would destroy whatever it really is"
         )
 
 
-def _require_only_the_marker(location: str, spelled: str, stray: list[pafs.FileInfo]) -> None:
+def _require_only_the_marker(location: str, spelled: str, stray: list[StoredObject]) -> None:
     """Refuse when the location's spelling holds any object but the reservation marker: it is not this table's.
 
     Every such object is NAMED, a bounded sample with the count, never skipped: a purge that deleted what it could map
     and left the rest in silence would report a clean reclaim over bytes it never looked at.
     """
-    marker = f"{spelled.rstrip('/')}/{_RESERVATION_MARKER}"
-    foreign = sorted(info.path for info in stray if info.type == pafs.FileType.File and info.path != marker)
+    marker = f"{_store_path(spelled).rstrip('/')}/{_RESERVATION_MARKER}"
+    foreign = sorted(stored.path for stored in stray if stored.path != marker)
     if foreign:
         raise NotADatasetRootError(
             f"refusing to delete {location}: as spelled it names {spelled}, which holds {len(foreign)} object(s) beside the "
             f"table's reservation marker ({', '.join(foreign[:3])}) — they are not this table's, so neither path is deleted"
         )
+
+
+def _versions_last(path: str, objects: list[StoredObject]) -> list[str]:
+    """The store paths of ``objects``, those under ``path``'s ``_versions/`` last, so a delete that stops part-way leaves a
+    path :func:`_require_a_dataset` still recognises."""
+    versions = f"{_store_path(path).rstrip('/')}/{_VERSIONS_MARKER}/"
+    return sorted((stored.path for stored in objects), key=lambda stored_path: stored_path.startswith(versions))
 
 
 def _protected_base_reason(location: str, *, referrer: str) -> str:
@@ -607,15 +595,17 @@ class ProtectedBaseError(RuntimeError):
 
 
 def delete_location(location: str, storage_options: StorageOptions, *, protected: BaseRefs | None = None) -> tuple[int, int]:
-    """Delete the recorded table's bytes, under both of its :func:`store_paths`; return ``(bytes_deleted, files_deleted)``.
+    """Delete the recorded table's bytes, under both of its spellings (:func:`lakehouse.table_paths.spellings`); return
+    ``(bytes_deleted, files_deleted)``.
 
     Both paths are judged before either is touched, so a refusal deletes nothing: the one the location opens must be a
     Lance dataset (its ``_versions/`` marker, the one ``discover_datasets`` decides a dataset by) or empty, and the one
-    it is spelled as may hold the reservation marker and nothing else. The recursive listings that sum the bytes double
-    as the existence probes. ``delete_dir`` on an already-absent path is idempotent success (a crash between the delete
-    and the record clear re-runs the whole record); ANY other ``OSError`` propagates, because ``pyarrow`` raises
-    ``ArrowIOError`` (an ``OSError``) for a RustFS/S3 5xx and swallowing that would report a purge over bytes that are
-    still there.
+    it is spelled as may hold the reservation marker and nothing else. The listings that sum the bytes double as the
+    existence probes, and an already-empty path deletes nothing (a crash between the delete and the record clear re-runs
+    the whole record). Every object goes BY KEY, ``_versions/`` last, as the catalog's destructive drop deletes
+    (``catalog.services.dataplane._delete_everything_under``): the reclaim session reaches the location alone, and
+    pyarrow's directory delete puts the location's parent back as a marker outside it (measured on pyarrow 25.0.0). A
+    store's refusal propagates as ``OSError``, so a purge is never reported over bytes that are still there.
 
     ``protected`` is the #128d guard: the estate's foreign ``base_paths`` collected by
     :func:`lakehouse.base_refs.protected_roots`. When a dataset that outlives this delete resolves its
@@ -629,33 +619,25 @@ def delete_location(location: str, storage_options: StorageOptions, *, protected
     """
     if protected is not None and (root := protected.protects_from_deletion(location)) is not None:
         raise ProtectedBaseError(_protected_base_reason(location, referrer=root))
-    fs, dataset, spelled = store_paths(location, storage_options)
-    held = _listed(fs, dataset)
-    stray = _listed(fs, spelled) if spelled != dataset else []
+    dataset, spelled = spellings(location)
+    held = list_under(dataset, storage_options)
+    stray = list_under(spelled, storage_options) if spelled != dataset else []
     _require_a_dataset(location, dataset, held)
     _require_only_the_marker(location, spelled, stray)
-    with suppress(FileNotFoundError):
-        fs.delete_dir(dataset)
-    if stray:
-        fs.delete_dir(spelled)
-    files = [info for info in (*held, *stray) if info.type == pafs.FileType.File]
-    return sum(int(info.size or 0) for info in files), len(files)
+    objects = [*held, *stray]
+    delete_objects(location, storage_options, _versions_last(dataset, objects))
+    if store_of(location) == "file":
+        _remove_emptied_directories(location, storage_options, dataset, spelled)
+    return sum(stored.size for stored in objects), len(objects)
 
 
-async def _revoke(fga_client: Any, *, kind: str, uuid: str, fga_enabled: bool) -> int:  # noqa: ANN401 — OpenFgaClient, no protocol
-    """Revoke every tuple on the object its uuid names (``table:<uuid>``, ``namespace:<uuid>``, [[LH-524]]), returning
-    the count. ``0`` when FGA is off estate-wide.
-
-    ``lifecycle_delete`` is the origin an audit row needs to say this was a retirement rather than an
-    admin's choice. With FGA disabled there are no tuples to revoke and skipping is correct — the
-    misconfigured case (enabled but unwired) is refused before any record is touched.
-    """
-    if not fga_enabled:
-        return 0
-    obj = fga.object_of(kind, uuid)
-    # `len(...)`: the helper hands back WHICH tuples it revoked so a caller can name the affected
-    # principals; this one only reports a count in its sweep summary.
-    return len(await fga.revoke_object_tuples(fga_client, obj, actor=ACTOR, origin="lifecycle_delete"))  # noqa: TID251
+def _remove_emptied_directories(location: str, storage_options: StorageOptions, *places: str) -> None:
+    """A local root keeps the directories its objects were deleted from, which an object store holds none of: they go too,
+    as the catalog's destructive drop removes them (``catalog.services.dataplane._delete_everything_under``)."""
+    fs, _ = fs_and_base(location, storage_options)
+    for place in dict.fromkeys(places):
+        with suppress(FileNotFoundError):
+            fs.delete_dir(place)
 
 
 #: The control-plane vocabulary for a purge — its OWN verbs since diff2 F10 item 6.
@@ -680,18 +662,8 @@ async def _revoke(fga_client: Any, *, kind: str, uuid: str, fga_enabled: bool) -
 _PURGE_ACTION: dict[str, ControlAction] = {"table": "table_purged", "namespace": "namespace_purged"}
 
 
-async def _refuse(
-    out: TrashPurgeReport,
-    *,
-    kind: str,
-    obj_id: str,
-    uuid: str | None,
-    reason: str,
-    control_root: str,
-    storage_options: StorageOptions,
-    dry_run: bool = False,
-) -> None:
-    """Report a refusal AND remember it on the record — the one place both halves happen.
+async def _refuse(out: TrashPurgeReport, record: dict[str, Any], *, reason: str, settings: MaintenanceSettings) -> None:
+    """Report a refusal AND have the catalog remember it on the record — the one place both halves happen.
 
     ONE HELPER RATHER THAN FIVE CALL SITES, because reporting the tick and remembering the history are
     not separable concerns: a refusal arm that appends without persisting produces a record whose
@@ -699,21 +671,18 @@ async def _refuse(
     exclusion with authority. Routing every arm through here means a NEW refusal cause cannot opt out
     of the memory by omission.
 
-    The persist is best-effort by construction (:func:`trash.note_refusal` never raises), and the
-    `except` here covers the store itself being unreachable. ``_purge_one`` promises "never raises;
-    every failure is a refusal", and an annotation that could break that promise would trade a correctly
-    reported refusal for an unhandled error on the reclamation path. A record that keeps no ``uuid`` is not one any
+    The note is the catalog's to write (``POST /management/v1/trash/{kind}/{uuid}/refusals``, [[XC-084]]), and it is
+    best-effort: a door that refuses or fails it leaves ``attempts`` unknown and the refusal reported, because
+    ``_purge_one`` promises "never raises; every failure is a refusal". A record that keeps no ``uuid`` is not one any
     door files, and its refusal is reported, not remembered: there is no key to remember it under.
     """
+    kind, obj_id, uuid = trash.kind_of(record), trash.name_of(record), trash.object_uuid(record)
     attempts: int | None = None
-    try:
-        # THE REFUSAL IS REPORTED EITHER WAY; only its MEMORY is withheld on a preview. Persisting
-        # `attempts` is a write onto the very records an operator is inspecting, and it lands on the
-        # stuck ones — so a preview that annotated would inflate the evidence it exists to show.
-        if not dry_run and uuid is not None:
-            attempts = await run_in_threadpool(trash.note_refusal, control_root, storage_options, uuid, kind=kind, reason=reason)
-    except Exception as exc:  # noqa: BLE001 — bookkeeping about a refusal must never outrank the refusal
-        log.warning("trash_refusal_not_recorded", extra={"kind": kind, "id": obj_id, "error": f"{type(exc).__name__}: {exc}"})
+    if uuid is not None:
+        try:
+            attempts = await run_in_threadpool(partial(note_trash_refusal, kind, uuid, settings, reason=reason))
+        except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
+            log.warning("trash_refusal_not_recorded", extra={"kind": kind, "id": obj_id, "error": f"{type(exc).__name__}: {exc}"})
     out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason, attempts=attempts))
 
 
@@ -722,25 +691,17 @@ def refusal_log_entry(record: RefusedRecord) -> dict[str, object]:
 
     `attempts` is what `_drain_order` sorts on, so a refusal reported without it leaves the operator
     asking the one question the line exists to answer: is this record being demoted, or refused afresh
-    every tick? `None` is a DRY RUN answering honestly — a preview withholds `note_refusal` so it
+    every tick? `None` is a DRY RUN answering honestly — a preview notes no refusal so it
     cannot inflate the evidence it exists to show.
     """
     return {"id": f"{record.kind}:{record.id}", "reason": record.reason, "attempts": record.attempts}
 
 
 async def _delete_bytes_or_refuse(
-    out: TrashPurgeReport,
-    *,
-    kind: str,
-    obj_id: str,
-    uuid: str | None,
-    location: str,
-    control_root: str,
-    storage_options: StorageOptions,
-    protected: BaseRefs | None,
+    out: TrashPurgeReport, record: dict[str, Any], *, session: StorageOptions, settings: MaintenanceSettings, control_root: str, protected: BaseRefs | None
 ) -> tuple[int, int] | None:
-    """Delete the bytes this record names, its root and its data directories, and the table's base record with them, or
-    record a refusal and answer ``None``.
+    """Delete the bytes this record names, its root and its data directories, under its reclaim session, or record a
+    refusal and answer ``None``.
 
     THREE ARMS RATHER THAN ONE, because they say different things to an operator and only one of them
     means the record itself is wrong: ``NotADatasetRootError`` means this record points at something
@@ -749,57 +710,28 @@ async def _delete_bytes_or_refuse(
     next tick reclaim them legitimately; an ``OSError``, or a base record that could not be
     read, is transient and the next tick simply retries.
 
-    A namespace record owns no bytes (it is a ``__manifest`` row), so it reclaims ``(0, 0)`` without
-    touching the store.
-
-    NEVER REACHED ON A DRY RUN — ``_purge_one`` returns above this — which is why it does not thread
-    ``dry_run`` into its refusals: below the preview cut, a refusal always persists.
+    The base record and the claims that say which data directories are the table's are READ with maintenance's own
+    session, which reads the estate; only the deletes are the session's, which reaches the bytes and nothing else.
     """
-    if not location or kind == "namespace":
-        return (0, 0)
-    registry = BaseRegistry(control_root=control_root, storage_options=storage_options)
+    location, obj_id = trash.location_of(record), trash.name_of(record)
+    registry = BaseRegistry(control_root=control_root, storage_options=settings.storage_options())
     try:
-        reclaimed = await run_in_threadpool(partial(_delete_guarded, location, storage_options, protected, registry=registry, table=obj_id))
+        return await run_in_threadpool(partial(_delete_guarded, location, session, protected, registry=registry, table=obj_id))
     except NotADatasetRootError as exc:
-        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=str(exc), control_root=control_root, storage_options=storage_options)
-        log.warning("trash_purge_refused_not_a_dataset", extra={"kind": kind, "id": obj_id, "location": location})
-        return None
+        await _refuse(out, record, reason=str(exc), settings=settings)
+        log.warning("trash_purge_refused_not_a_dataset", extra={"kind": trash.kind_of(record), "id": obj_id, "location": location})
     except ProtectedBaseError as exc:
-        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=str(exc), control_root=control_root, storage_options=storage_options)
-        log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
-        return None
+        await _refuse(out, record, reason=str(exc), settings=settings)
+        log.warning("trash_purge_refused_protected_base", extra={"kind": trash.kind_of(record), "id": obj_id, "location": location})
     except (OSError, UnreadableBaseRecordError, ClientError, BotoCoreError) as exc:
         reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
-        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options)
-        log.error("trash_purge_delete_failed", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
-        return None
-    # [[LH-279]] The base record goes with the bytes, before the trash record is cleared: left behind, it would
-    # sanction its bases for the next table registered at this location, and this is the last step that still
-    # knows the location. Both deletes are idempotent, so a failure here is finished by the next tick.
-    # [[LH-204]] The trashed id's claim on the location goes with them too, so the location is free again.
-    try:
-        await run_in_threadpool(partial(forget_base_record, registry, location, table=obj_id))
-        await run_in_threadpool(
-            location_claims.release, location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location, obj_id
-        )
-    except Exception as exc:  # noqa: BLE001 — the bytes ARE gone; say so, and keep the trash record for the retry
-        reason = (
-            f"deleting {location!r} left its base record or location claim ({type(exc).__name__}: {exc}) — the trash record survives and the next tick retries"
-        )
-        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options)
-        log.error("trash_purge_base_record_not_forgotten", extra={"kind": kind, "id": obj_id, "location": location, "error": str(exc)})
-        return None
-    return reclaimed
+        await _refuse(out, record, reason=reason, settings=settings)
+        log.error("trash_purge_delete_failed", extra={"kind": trash.kind_of(record), "id": obj_id, "location": location, "error": str(exc)})
+    return None
 
 
 async def _recovered_since_the_snapshot(
-    record: dict[str, Any],
-    out: TrashPurgeReport,
-    *,
-    roots: set[str],
-    recheck_live: Callable[[], Liveness | None],
-    control_root: str,
-    storage_options: StorageOptions,
+    record: dict[str, Any], out: TrashPurgeReport, *, roots: set[str], recheck_live: Callable[[], Liveness | None], settings: MaintenanceSettings
 ) -> bool:
     """Re-read liveness at the last instant before the first mutation. ``True`` when the record was refused.
 
@@ -819,14 +751,11 @@ async def _recovered_since_the_snapshot(
     snapshot and the loop) rather than by timing — and which measured, before this existed, a live
     table losing 867 bytes across 4 files to a purge that answered success.
     """
-    kind = str(record.get("kind") or "table")
-    obj_id = str(record.get("id") or "")
-    uuid = trash.object_uuid(record)
     reason = check(record, roots=roots, live=await run_in_threadpool(recheck_live))
     if reason is None:
         return False
-    await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=False)
-    log.warning("trash_purge_refused_on_recheck", extra={"kind": kind, "id": obj_id, "reason": reason})
+    await _refuse(out, record, reason=reason, settings=settings)
+    log.warning("trash_purge_refused_on_recheck", extra={"kind": trash.kind_of(record), "id": trash.name_of(record), "reason": reason})
     return True
 
 
@@ -840,87 +769,90 @@ def _purged_uuids(record: dict[str, Any]) -> ControlUuids:
     return ControlUuids(object_uuid=trash.object_uuid(record), namespace_uuid=namespace_uuid if isinstance(namespace_uuid, str) else None)
 
 
+async def _asked_of_the_catalog[T](record: dict[str, Any], out: TrashPurgeReport, ask: Callable[[], T], *, asked: str) -> T | None:
+    """What the catalog answers ``ask`` for this record, or ``None`` with its refusal reported ([[XC-084]]).
+
+    A refusal the catalog judged (409) it has noted on the record itself, so a record refused tick after tick sorts
+    behind the ones that move; a 403 or an undecided door is reported here and remembered nowhere, since the catalog
+    decided nothing it could note.
+    """
+    try:
+        return await run_in_threadpool(ask)
+    except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
+        out.refused.append(RefusedRecord(kind=trash.kind_of(record), id=trash.name_of(record), reason=str(exc)))
+        log.warning(
+            "trash_purge_refused_by_the_catalog", extra={"kind": trash.kind_of(record), "id": trash.name_of(record), "asked": asked, "reason": str(exc)}
+        )
+        return None
+
+
+async def _preview_one(record: dict[str, Any], out: TrashPurgeReport, *, roots: set[str], live: Liveness | None, protected: BaseRefs | None) -> None:
+    """Plan ONE record, or report why the purge would refuse it; writes nothing and asks for no session.
+
+    The cut is placed after the REFUSAL CHECK deliberately: everything above it is a read, everything after it mutates,
+    and the check is precisely the part an operator needs previewed — a plan that omitted the refusals would promise
+    reclamation the real pass declines to perform. Its refusals are reported and never noted on the record: noting is a
+    write onto the very records an operator is inspecting.
+    """
+    kind, obj_id, location = trash.kind_of(record), trash.name_of(record), trash.location_of(record)
+    if (reason := check(record, roots=roots, live=live)) is not None:
+        out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason))
+        log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
+        return
+    # THE SHALLOW-CLONE GUARD IS APPLIED HERE, not left to the delete it never reaches. The estate pre-pass has already
+    # run in full on this tick and `is_protected` is a pure in-memory prefix compare, so reading its answer is free — and
+    # NOT reading it made the preview overstate in the one direction that costs most: naming a record whose bytes a live
+    # dataset resolves through.
+    if protected is not None and (referrer := protected.protects_from_deletion(location)) is not None:
+        out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=_protected_base_reason(location, referrer=referrer)))
+        log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
+        return
+    # PAST EVERY REFUSAL THIS PASS CAN EVALUATE WITHOUT MUTATING. `would_purge` remains an UPPER BOUND: the catalog's own
+    # judgement, a non-dataset location and a failing delete can each still refuse a planned record, and none of them
+    # can be evaluated without asking for or performing the act it guards.
+    out.would_purge.append(PlannedRecord(kind=kind, id=obj_id, location=location, expires_at=str(record.get("expires_at") or "")))
+    log.info("trash_purge_planned", extra={"kind": kind, "id": obj_id, "location": location})
+
+
 async def _purge_one(
     record: dict[str, Any],
     out: TrashPurgeReport,
     *,
     settings: MaintenanceSettings,
-    storage_options: StorageOptions,
     control_root: str,
     roots: set[str],
     live: Liveness | None,
     recheck_live: Callable[[], Liveness | None],
-    fga_client: Any,  # noqa: ANN401 — OpenFgaClient | None
     control: ControlEmitter,
     protected: BaseRefs | None = None,
-    dry_run: bool = False,
 ) -> None:
-    """Revoke → delete → clear → announce, for ONE record. Never raises; every failure is a refusal.
+    """Delete → end → announce, for ONE record. Never raises; every failure is a refusal.
 
-    ``dry_run`` stops after the REFUSAL CHECK and records the record as planned rather than reclaimed.
-    The cut is placed there deliberately: everything above it is a read, everything below it mutates,
-    and the check is precisely the part an operator needs previewed — a plan that omitted the refusals
-    would promise reclamation the real pass declines to perform.
+    NOTHING HERE IS SIGNED BY MAINTENANCE'S OWN SESSION ([[XC-084]]): a table's bytes go under the session the catalog
+    vends for this record, and the record, what it keeps and its grants are the catalog's to end once its own listing
+    finds the place empty.
     """
-    kind = str(record.get("kind") or "table")
-    obj_id = str(record.get("id") or "")
-    uuid = trash.object_uuid(record)
-    location = str(record.get("location") or "").rstrip("/")
-
+    kind, obj_id, location = trash.kind_of(record), trash.name_of(record), trash.location_of(record)
+    if (uuid := trash.object_uuid(record)) is None:
+        out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason="the record keeps no uuid, so the catalog reclaims nothing of it"))
+        return
     if (reason := check(record, roots=roots, live=live)) is not None:
-        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
+        await _refuse(out, record, reason=reason, settings=settings)
         log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
         return
-
-    if dry_run:
-        # THE SHALLOW-CLONE GUARD IS APPLIED HERE, not left to the delete it never reaches. The estate
-        # pre-pass has already run in full on this tick and `is_protected` is a pure in-memory prefix
-        # compare, so reading its answer is free — and NOT reading it made the preview overstate in the
-        # one direction that costs most: naming a record whose bytes a live dataset resolves through.
-        if protected is not None and (referrer := protected.protects_from_deletion(location)) is not None:
-            reason = _protected_base_reason(location, referrer=referrer)
-            await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
-            log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
+    if await _recovered_since_the_snapshot(record, out, roots=roots, recheck_live=recheck_live, settings=settings):
+        return
+    deleted = (0, 0)
+    if kind == "table" and location:
+        if (session := await _asked_of_the_catalog(record, out, partial(reclaim_options_for, kind, uuid, settings), asked="reclaim session")) is None:
             return
-        # PAST EVERY REFUSAL THIS PASS CAN EVALUATE WITHOUT MUTATING. Nothing below runs, so no tuple is
-        # revoked, no byte deleted, no record cleared. `would_purge` remains an UPPER BOUND: the FGA
-        # revoke, a non-dataset location and a failing delete can each still refuse a planned record,
-        # and none of the three can be evaluated without performing the act it guards.
-        out.would_purge.append(PlannedRecord(kind=kind, id=obj_id, location=location, expires_at=str(record.get("expires_at") or "")))
-        log.info("trash_purge_planned", extra={"kind": kind, "id": obj_id, "location": location})
+        reclaimed = await _delete_bytes_or_refuse(out, record, session=session, settings=settings, control_root=control_root, protected=protected)
+        if reclaimed is None:
+            return
+        deleted = reclaimed
+    if (revoked := await _asked_of_the_catalog(record, out, partial(end_trash, kind, uuid, settings), asked="end")) is None:
         return
-
-    if await _recovered_since_the_snapshot(record, out, roots=roots, recheck_live=recheck_live, control_root=control_root, storage_options=storage_options):
-        return
-    uuids = _purged_uuids(record)
-
-    try:
-        revoked = await _revoke(fga_client, kind=kind, uuid=uuids.object_uuid or "", fga_enabled=settings.fga_enabled)
-    except Exception as exc:  # noqa: BLE001 — a revoke we could not perform is a reason not to delete
-        reason = f"the FGA revoke failed ({type(exc).__name__}: {exc}) — grants must never outlive the bytes, so nothing was deleted"
-        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
-        log.error("trash_purge_revoke_failed", extra={"kind": kind, "id": obj_id, "error": str(exc)})
-        return
-
-    reclaimed = await _delete_bytes_or_refuse(
-        out, kind=kind, obj_id=obj_id, uuid=uuid, location=location, control_root=control_root, storage_options=storage_options, protected=protected
-    )
-    if reclaimed is None:
-        return
-    deleted_bytes, deleted_files = reclaimed
-
-    try:
-        # What the drop kept for an undrop ends with the bytes, before the trash record that names it: the records under
-        # the object's uuid ([[LH-523]]), read before the delete released the claim that records a table's.
-        if uuid is not None:
-            await run_in_threadpool(object_records.end_object_records, control_root, storage_options, kind, uuid)
-            await run_in_threadpool(trash.clear, control_root, storage_options, uuid, kind=kind)
-    except Exception as exc:  # noqa: BLE001 — the bytes ARE gone; say so rather than claiming a clean purge
-        reason = f"the bytes were deleted and the grants revoked, but the trash record could not be cleared ({type(exc).__name__}: {exc}) — the next tick retries idempotently"
-        await _refuse(out, kind=kind, obj_id=obj_id, uuid=uuid, reason=reason, control_root=control_root, storage_options=storage_options, dry_run=dry_run)
-        log.error("trash_purge_record_not_cleared", extra={"kind": kind, "id": obj_id, "error": str(exc)})
-        return
-
+    deleted_bytes, deleted_files = deleted
     out.purged.append(
         PurgedRecord(
             kind=kind,
@@ -936,12 +868,13 @@ async def _purge_one(
         "trash_purged",
         extra={"kind": kind, "id": obj_id, "location": location, "bytes": deleted_bytes, "files": deleted_files, "tuples_revoked": revoked},
     )
+    uuids = _purged_uuids(record)
     object_type: ControlObjectType = "namespace" if kind == "namespace" else "table"
     await emit_control(
         control,
-        action=_PURGE_ACTION.get(kind, "table_purged"),
+        action=_PURGE_ACTION[kind],
         object_type=object_type,
-        object_id=f"{kind}:{uuids.object_uuid or obj_id}",
+        object_id=f"{kind}:{uuid}",
         object_name=obj_id,
         object_uuid=uuids.object_uuid,
         namespace_uuid=uuids.namespace_uuid,
@@ -959,7 +892,6 @@ async def purge_expired_trash(
     settings: MaintenanceSettings,
     *,
     report: ReconcileReport,
-    fga_client: Any = None,  # noqa: ANN401 — OpenFgaClient | None
     control: ControlEmitter | None = None,
     control_root: str | None = None,
     data_roots: set[str] | None = None,
@@ -993,14 +925,6 @@ async def purge_expired_trash(
         out.reason = blocker
         log.warning("trash_purge_blocked", extra={"reason": blocker})
         return out
-    # The upstream report already degrades all four authz categories to UNAVAILABLE when FGA is enabled
-    # without a client, so this is unreachable through the cron route — kept because `purge_expired_trash`
-    # is callable on its own and the consequence (bytes gone, grants live) is not one to leave to layering.
-    if settings.fga_enabled and fga_client is None:
-        out.reason = _FGA_UNWIRED
-        log.error("trash_purge_blocked", extra={"reason": out.reason})
-        return out
-
     storage_options = settings.storage_options()
     resolved_control_root = control_root or settings.resolved_control_root
     try:
@@ -1033,19 +957,19 @@ async def purge_expired_trash(
         log.error("trash_purge_blocked", extra={"reason": out.reason})
         return out
     for record in due:
+        if dry_run:
+            await _preview_one(record, out, roots=roots, live=live, protected=protected)
+            continue
         await _purge_one(
             record,
             out,
             settings=settings,
-            storage_options=storage_options,
             control_root=resolved_control_root,
             roots=roots,
             live=live,
             recheck_live=lambda: liveness_across(roots, storage_options),
-            fga_client=fga_client,
             control=control,
             protected=protected,
-            dry_run=dry_run,
         )
 
     _record_metrics(out)

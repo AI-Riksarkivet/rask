@@ -2245,6 +2245,43 @@ async def revoke_removed_object(client: OpenFgaClient | None, settings: Settings
     return len(removed)
 
 
+async def revoke_ghost_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> int:
+    """Delete every tuple on ``obj``, an object no registry names ([[LH-061]]'s repair half), and return how many went.
+
+    The origin is ``drift_repair``: nothing was destroyed, the object was already gone, and the revoke is justified only
+    by the drift finding the catalog judged again on its own reads. 0 when FGA is off or unwired.
+    """
+    if not (settings.fga_enabled and client is not None):
+        return 0
+    actor = token.subject if token is not None else "system:catalog"
+    return len(await fga.revoke_object_tuples(client, obj, actor=actor, origin="drift_repair"))  # noqa: TID251
+
+
+async def write_registry_edges(client: OpenFgaClient | None, settings: Settings, edges: list[fga.ClientTuple], *, token: Caller | None) -> None:
+    """Write ``edges``, structural tuples a registry record justifies, under the ``registry_rebuild`` origin ([[LH-061]]):
+    no person granted them, they were reconstructed from the record. A no-op when FGA is off or unwired."""
+    if not (settings.fga_enabled and client is not None) or not edges:
+        return
+    actor = token.subject if token is not None else "system:catalog"
+    await fga.write_tuples(client, edges, actor=actor, origin="registry_rebuild")  # noqa: TID251
+
+
+async def revoke_expired_object(client: OpenFgaClient | None, settings: Settings, obj: str, *, token: Caller | None) -> list[fga.ClientTuple]:
+    """Delete every tuple on ``obj``, a trashed object whose deadline has passed, and return what the server removed.
+
+    The origin is ``trash_expired`` (ADR 0146): nobody revoked them and nothing was destroyed, the grace period ended
+    and the bytes wait for the purge. The tuples come back so the door can tell each person who lost one. Empty when
+    FGA is off or unwired. An outage part-way raises :class:`fga.RevokeInterrupted` naming what went.
+    """
+    if not (settings.fga_enabled and client is not None):
+        return []
+    actor = token.subject if token is not None else "system:catalog"
+    removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="trash_expired")  # noqa: TID251
+    if removed:
+        log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
+    return removed
+
+
 async def end_removed_subtree(
     client: OpenFgaClient | None,
     settings: Settings,

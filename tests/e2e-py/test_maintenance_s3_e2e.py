@@ -248,7 +248,6 @@ def _settings_for(estate: Estate) -> MaintenanceSettings:
         s3_region="us-east-1",
         older_than_days=1,
         orphan_scan_enabled=True,
-        fga_enabled=False,
         warehouses_enabled=True,
     )
 

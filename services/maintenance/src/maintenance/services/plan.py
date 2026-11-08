@@ -130,7 +130,7 @@ def plan_from_policy(policy: dict[str, Any] | None, *, older_than: timedelta) ->
         policy=policy,
         older_than=_age_bound(policy, default=older_than),
         retain_versions=_int_field(policy, "retain_versions"),
-        cleanup_enabled=bool(policy.get("cleanup_enabled", True)),
+        cleanup_enabled=not maintenance_policies.keeps_whole_history(policy),
         compact_enabled=bool(policy.get("compact_enabled", True)),
         optimize_indices_enabled=bool(policy.get("optimize_indices_enabled", True)),
         target_rows_per_fragment=_int_field(policy, "target_rows_per_fragment"),

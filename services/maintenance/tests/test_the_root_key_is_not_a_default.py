@@ -6,8 +6,8 @@ what makes it dangerous: nothing would catch its removal and nothing announces i
 forgets the key silently pairs a scoped secret with the root key id; one that configures neither runs
 the whole sweep as tenant root.
 
-The secret half already fails closed at boot (`service.py`: "MAINTENANCE_S3_SECRET_ACCESS_KEY is
-required"). The key half did not, and a credential is a PAIR — half a pair was measured giving
+The secret half fails closed at boot (`lakehouse.store_session.require_env_pair`: "MAINTENANCE_S3_SECRET_ACCESS_KEY is
+required"), and so does the key half: a credential is a PAIR — half a pair was measured giving
 `SignatureDoesNotMatch` on every operation, which is the *better* outcome here.
 The worse one is a complete, working, root-privileged pair nobody chose.
 
@@ -23,7 +23,7 @@ from maintenance.core.config import MaintenanceSettings
 
 
 def test_an_explicit_key_is_still_honoured() -> None:
-    settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="b", MAINTENANCE_S3_ACCESS_KEY_ID="rask-maintenance")
+    settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="b", s3_access_key_id="rask-maintenance")
     assert settings.s3_access_key_id == "rask-maintenance"
 
 
@@ -34,12 +34,12 @@ async def test_boot_refuses_a_missing_key_the_way_it_refuses_a_missing_secret(mo
 
     from maintenance import service
 
-    settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="b", MAINTENANCE_S3_SECRET_ACCESS_KEY="scoped-secret")
+    settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="b", s3_secret_access_key="scoped-secret")
     monkeypatch.setattr(service, "get_settings", lambda: settings)
     # The refusal raises before the lifespan's teardown, so a drain armed here would stay armed for the
     # rest of the process and refuse the next lifespan that arms it.
     monkeypatch.setattr(service, "arm_drain_on_sigterm", lambda _app: lambda: None)
 
-    with pytest.raises(RuntimeError, match="MAINTENANCE_S3_ACCESS_KEY_ID is required"):
+    with pytest.raises(ValueError, match="MAINTENANCE_S3_ACCESS_KEY_ID is required"):
         async with service.lifespan(FastAPI()):
             pass

@@ -35,6 +35,9 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
+from lakehouse.trash import TrashKind
+from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned
+
 
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
@@ -55,7 +58,7 @@ class Tombstone(BaseModel):
     id: str
     #: The uuid the record is filed under ([[LH-525]]): what the sweep clears it by.
     uuid: str
-    kind: str
+    kind: TrashKind
     location: str
     #: What the probe actually found — the evidence, carried so a reader can check the claim rather
     #: than take "it was empty" on trust. Always 0 for a swept record; that is the whole condition.
@@ -129,6 +132,10 @@ def sweep_tombstones(
     for target in planned:
         try:
             delete(target)
+        except (MaintenanceDenied, TableNotGoverned) as exc:
+            # The catalog's answer, not a failure: it judges the record on its own reads and refused to end it.
+            out.refused[target.id] = str(exc)
+            continue
         except Exception as exc:  # noqa: BLE001 — see the docstring; one record must not fail the tick
             log.warning("tombstone_sweep_failed", extra={"record": target.id, "location": target.location, "error": str(exc)})
             out.error = str(exc)

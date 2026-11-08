@@ -142,8 +142,8 @@ from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.schema import SchemaFields, facet_fields
 from lakehouse.stage_stamp import declare_dataset_id
-from lakehouse.storage import s3_client, split_s3_uri
-from lakehouse.storage_options import StorageOptions, s3_filesystem
+from lakehouse.storage import split_s3_uri
+from lakehouse.storage_options import StorageOptions, object_client, s3_filesystem
 from lakehouse.version_retention import MAIN_BRANCH, recorded_branch
 
 
@@ -584,7 +584,7 @@ def _reserve(location: str, so: StorageOptions) -> None:
     """Write the `.lance-reserved` marker at ``location``, as :func:`delete_table_object` deletes: no directory object beside it."""
     if so.reaches_by_endpoint(location):
         bucket, prefix = split_s3_uri(location.rstrip("/"))
-        _object_client(so).put_object(Bucket=bucket, Key=f"{prefix}/{RESERVED_MARKER}", Body=b"")
+        object_client(so).put_object(Bucket=bucket, Key=f"{prefix}/{RESERVED_MARKER}", Body=b"")
         return
     fs, path = dataset_fs(location, so)
     fs.create_dir(path, recursive=True)
@@ -1211,7 +1211,7 @@ def verify_fragment_data_files(location: str, so: StorageOptions, fragments: lis
 
 def object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]:
     """Each object's size, ``None`` for one that is absent: one batched lookup per filesystem, as :func:`verify_fragment_data_files` does."""
-    if so.options.get("endpoint") and all(uri.startswith("s3://") for uri in uris):
+    if so.endpoint is not None and all(uri.startswith("s3://") for uri in uris):
         infos = s3_filesystem(so).get_file_info([uri.removeprefix("s3://") for uri in uris])
     else:
         infos = [fs.get_file_info(path) for fs, path in (dataset_fs(uri, so) for uri in uris)]
@@ -1784,18 +1784,12 @@ def delete_table_object(location: str, so: StorageOptions, relative: str) -> Non
     try:
         if so.reaches_by_endpoint(location):
             bucket, prefix = split_s3_uri(location.rstrip("/"))
-            _object_client(so).delete_object(Bucket=bucket, Key=f"{prefix}/{relative}")
+            object_client(so).delete_object(Bucket=bucket, Key=f"{prefix}/{relative}")
         else:
             fs, base = dataset_fs(location, so)
             fs.delete_file(f"{base.rstrip('/')}/{relative}")
     except Exception:
         log.warning("catalog_table_object_left", extra={"location": location, "object": relative}, exc_info=True)
-
-
-def _object_client(so: StorageOptions) -> Any:  # noqa: ANN401 — a boto3 S3 client
-    """The storage seam's S3 client on the catalog's own options, for an object no Lance write puts or deletes."""
-    access_key, secret_key, session_token = so.credential_in_clear()
-    return s3_client(so.options["endpoint"], access_key=access_key, secret_key=secret_key, session_token=session_token, region=so.options.get("region"))
 
 
 #: The Lance table-layout directory a dataset holds; a location holding objects and none under it is no dataset.
@@ -1973,7 +1967,7 @@ def _objects_under(location: str, so: StorageOptions, path: str) -> list[str]:
     """Every object under ``path/``, as a store path; on S3 a directory marker is one."""
     if so.reaches_by_endpoint(location):
         bucket, _, key = path.partition("/")
-        pages = _object_client(so).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
+        pages = object_client(so).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
         return [f"{bucket}/{entry['Key']}" for page in pages for entry in page.get("Contents", [])]
     fs, _ = dataset_fs(location, so)
     listed = fs.get_file_info(pafs.FileSelector(path, recursive=True, allow_not_found=True))
@@ -2058,7 +2052,7 @@ def _delete_objects(so: StorageOptions, objects: Sequence[str]) -> None:
     Raises:
         OSError: The store refused a key.
     """
-    client = _object_client(so)
+    client = object_client(so)
     by_bucket: dict[str, list[str]] = {}
     for obj in objects:
         bucket, _, key = obj.partition("/")

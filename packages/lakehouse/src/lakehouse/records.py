@@ -48,7 +48,7 @@ from typing import Any
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, object_client
 
 
 log = logging.getLogger(__name__)
@@ -56,36 +56,6 @@ log = logging.getLogger(__name__)
 
 class RecordExistsError(Exception):
     """Create refused: the key already exists — the STORE said so, not a possibly-stale read."""
-
-
-def _s3_client(storage_options: StorageOptions) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """The S3 client the three conditional branches share, built through ``lakehouse.storage.s3_client``.
-
-    ``lakehouse.storage`` is the estate's canonical S3 seam and owns, in one place, everything a
-    hand-rolled client silently forfeits: path-style addressing (matching
-    ``lance_storage_options(virtual_hosted=False)`` — RustFS rejects virtual-hosted signing with
-    403 SignatureDoesNotMatch), s3v4, adaptive retries, and connect/read timeouts. The timeouts matter
-    most here: these doors are on the synchronous path of every warehouse and project mint, and
-    botocore's default is to wait forever.
-
-    The registry's ``storage_options`` carry a per-warehouse ``region`` and, when the caller holds
-    vended credentials, a ``session_token``; both are forwarded. A dropped region pins the warehouse
-    to ``AWS_REGION``, and a dropped token makes a scoped credential sign as an unknown identity.
-
-    ``lakehouse.storage`` is imported at call time so a test can replace the SEAM rather than this wrapper —
-    patching the wrapper would let a regression back to a raw client pass unnoticed — and so the
-    local-root branch below needs no S3 stack at all.
-    """
-    from lakehouse.storage import s3_client
-
-    _access_key, _secret_key, _session_token = storage_options.credential_in_clear()
-    return s3_client(
-        storage_options.options.get("endpoint"),
-        access_key=_access_key,
-        secret_key=_secret_key,
-        session_token=_session_token,
-        region=storage_options.options.get("region") or "us-east-1",
-    )
 
 
 def create_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any]) -> None:
@@ -104,7 +74,7 @@ def create_json(root_uri: str, storage_options: StorageOptions, key: str, record
         bucket, _, prefix = base.partition("/")
         full_key = f"{prefix}/{key}" if prefix else key
         try:
-            _s3_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfNoneMatch="*")
+            object_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfNoneMatch="*")
         except ClientError as exc:
             status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
             code = str(exc.response.get("Error", {}).get("Code", ""))
@@ -199,7 +169,7 @@ def read_json_at(root_uri: str, storage_options: StorageOptions, key: str) -> St
 
         bucket, full_key = _s3_parts(root_uri, key)
         try:
-            got = _s3_client(storage_options).get_object(Bucket=bucket, Key=full_key)
+            got = object_client(storage_options).get_object(Bucket=bucket, Key=full_key)
         except ClientError as exc:
             if str(exc.response.get("Error", {}).get("Code", "")) in {"NoSuchKey", "404"}:
                 return StoreRead(stored=None, at=_store_clock(exc.response))
@@ -329,7 +299,7 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, reco
 
         bucket, full_key = _s3_parts(root_uri, key)
         try:
-            _s3_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfMatch=etag)
+            object_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfMatch=etag)
         except ClientError as exc:
             status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
             code = str(exc.response.get("Error", {}).get("Code", ""))

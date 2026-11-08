@@ -25,13 +25,17 @@ import pytest
 
 pytestmark = pytest.mark.e2e
 
-#: app -> (a secret its own sidecar serves its code, a field of it, a secret it may not read through its sidecar). The
-#: catalog holds no store pair (ADR 0170), so its own read is the app token its door checks.
+#: app -> (a secret its own sidecar serves its code, a field of it, a secret it may not read through its sidecar). No app
+#: holds a store pair (ADR 0170): a signer's own read is its signing key, and lineage, which signs nothing, reads the key
+#: it verifies the catalog by and is refused the catalog's private one.
 SIDECAR_READS: Final[dict[str, tuple[str, str, str]]] = {
-    "catalog": ("dapr-app-token", "token", "lineage-s3"),
-    "lineage": ("lineage-s3", "access_key", "maintenance-s3"),
-    "maintenance": ("maintenance-s3", "access_key", "lineage-s3"),
+    "catalog": ("signing-key-rask-sa-catalog", "seed", "signing-key-rask-sa-maintenance"),
+    "lineage": ("signing-public-rask-sa-catalog", "keys", "signing-key-rask-sa-catalog"),
+    "maintenance": ("signing-key-rask-sa-maintenance", "seed", "signing-key-rask-sa-catalog"),
 }
+
+#: The apps that sign, each the only reader of its own signing key in the store.
+SIGNERS: Final = ("catalog", "maintenance")
 
 #: Asks the pod's own sidecar for each named secret and prints, per secret, the status and the FIELD NAMES it answered.
 _ASK_THE_SIDECAR: Final = """\
@@ -117,13 +121,14 @@ def test_the_store_refuses_each_app_s_token_another_app_s_secret_and_role() -> N
     assert meta.get("vaultAuthMethod") == "kubernetes", f"lance-secrets logs in by {meta.get('vaultAuthMethod')!r}, not as each app's own account"
     mount, role = meta["vaultKubernetesMountPath"], meta["vaultKubernetesRole"]
     pod = _store_pod()
+    specs = {app: json.loads(chaos.kubectl("get", f"deployment/{chaos.RELEASE}-{app}", "-o", "json"))["spec"]["template"]["spec"] for app in SIGNERS}
+    keys = {app: f"signing-key-{spec['serviceAccountName']}" for app, spec in specs.items()}
     found: dict[str, object] = {}
-    for app, foreign in (("lineage", "maintenance"), ("maintenance", "lineage")):
-        deployment = json.loads(chaos.kubectl("get", f"deployment/{chaos.RELEASE}-{app}", "-o", "json"))["spec"]["template"]["spec"]
-        account = deployment["serviceAccountName"]
+    for app, foreign in (SIGNERS, SIGNERS[::-1]):
+        account = specs[app]["serviceAccountName"]
         [audience] = [
             source["serviceAccountToken"]["audience"]
-            for volume in deployment["volumes"]
+            for volume in specs[app]["volumes"]
             if volume["name"] == "openbao-identity"
             for source in volume["projected"]["sources"]
         ]
@@ -131,13 +136,13 @@ def test_the_store_refuses_each_app_s_token_another_app_s_secret_and_role() -> N
         if code != 0:
             found[f"{app} logging in as itself"] = code
             continue
-        if (own := _read_as(pod, token, f"{app}-s3"))[0] != 0:
-            found[f"{app} reading {app}-s3"] = own
-        if (other := _read_as(pod, token, f"{foreign}-s3"))[0] == 0 or "permission denied" not in other[1]:
-            found[f"{app} reading {foreign}-s3"] = other
+        if (own := _read_as(pod, token, keys[app]))[0] != 0:
+            found[f"{app} reading {keys[app]}"] = own
+        if (other := _read_as(pod, token, keys[foreign]))[0] == 0 or "permission denied" not in other[1]:
+            found[f"{app} reading {keys[foreign]}"] = other
         if _login(pod, mount, role.replace("{appID}", foreign), account, audience)[0] == 0:
             found[f"{app}'s account logging in as {foreign}"] = "admitted"
-    published = _read_as(pod, "root", "lineage-s3")
+    published = _read_as(pod, "root", keys["catalog"])
     if published[0] == 0 or "permission denied" not in published[1]:
         found["the once-published root token"] = published
     assert not found, f"the store admitted a token to a secret or a role it was not granted: {found}"

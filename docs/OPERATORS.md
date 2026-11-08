@@ -230,9 +230,8 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   Password generator creates each once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`), so a credential
   the chart adds later is generated on the next reconcile and the others never again. The OpenBao
   pod mounts them as one directory, and its seed writes the root to `secret/object-store-root` and each other generated field to its own
-  secret (`postgres`, `dapr-app-token`) as `@file`, deriving the scoped storage
-  secrets from the root (`lance.scopedSecretFn`, which
-  `object-store-scoped-users` runs too). The Secret outlives an
+  secret (`postgres`, `dapr-app-token`) as `@file`. No workload's object-store identity is a secret: each signs with
+  sessions its own ServiceAccount token is exchanged for (ADR 0197). The Secret outlives an
   OpenBao replacement, so the AGE database and the object store, which keep what they were initialised with, see
   the same values after a re-seed. The seed re-reads the mounted Secret every 5 s and re-seeds when it changes,
   so a rotation never needs the OpenBao pod replaced. The lakehouse uses no third-party credential; one a client
@@ -254,49 +253,31 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
      `dapr-app-token`, delete its Secret instead and reconcile (`make k3s-up`): the chart's Password generator mints the
      new value in the cluster, so no person sees it.
   2. Force-sync every ExternalSecret that reads the store (`infra-credentials`, `object-store-root`, `observability-s3`,
-     `backup-s3`, `dapr-app-token`) with the `force-sync`
+     `dapr-app-token`) with the `force-sync`
      annotation, and wait for Ready. Their refresh is otherwise `externalSecrets.refreshInterval`, and a pod
      restarted before it takes the old value.
   3. Tell the server, when one holds the credential: `ALTER ROLE` inside AGE from stdin for `postgres-password`;
-     restart `rask-rustfs`, then run `make k3s-up` again so `object-store-scoped-users` re-derives every scoped user,
-     for `object-store-secret-key`. RustFS signs every STS session token with the root secret, so rotating root
-     invalidates every outstanding vended credential at once: clients re-vend, and a long write in flight fails.
+     restart `rask-rustfs` for `object-store-secret-key`. RustFS signs every STS session token with the root secret, so
+     rotating root invalidates every outstanding session at once: every workload's own and every vended one. Clients
+     re-vend, and a long write in flight fails.
   4. Restart the consumers at once: a `secretKeyRef` env and the injector's app token are read at pod creation,
      so nothing rolls on its own. AGE: OpenFGA (its migrate Job and the backup CronJob read it at their next run).
-     The root: the catalog, whose store sessions the old root signed, and lineage and maintenance, whose scoped pairs
-     it derives. The app token: the sidecar Deployments (an app token rotated as below refuses no delivery in between).
+     The root: the catalog, lineage and maintenance, whose store sessions the old root signed and which exchange a new
+     one at boot rather than at half a session's life. The app token: the sidecar Deployments (an app token rotated as
+     below refuses no delivery in between).
   5. Read it back by refusal: one `ListBuckets` signed with the old root answers 403 `SignatureDoesNotMatch`, and the
      AGE role refuses the old password over the pod's own IP (`password authentication failed`). The image trusts
      loopback, so a login from 127.0.0.1 succeeds with any password and proves nothing. Measured 2026-11-07, rotating
      the three values XC-164's read-back exposed.
-- **The catalog's store identity needs no rotation (ADR 0170).** It holds no key pair: its pod projects a token for
-  `objectStore.identity.audience`, which the kubelet replaces before it expires, and the catalog exchanges it through
-  STS `AssumeRoleWithWebIdentity` for an hour's session, again once half of it is used. A catalog whose session cannot
-  be renewed logs `store_session_renewal_failed`, then `store_session_expired` once the session runs out, and answers
-  503 (code 17) until an exchange succeeds. What the store grants it is the canned policy named by its ServiceAccount's
-  subject, `system:serviceaccount:<namespace>:<release>-sa-catalog`, which the scoped-users hook writes on the dev store
-  and a platform store's owner provisions.
-- **Rotating a service's S3 key pair, with no restart (ADR 0166).** Lineage and maintenance read their pair from their
-  own secret (`lineage-s3`, `maintenance-s3`) and read it again every few minutes, and the catalog reads a data base's
-  credential reference again within ten minutes, so a rotation needs no restart:
-  1. Issue a second credential for the identity, beside the one it holds: a second access key for the IAM user on AWS
-     (each allows two). On RustFS a second user under the same policy, made through RustFS's admin API with the root
-     pair, SigV4 and plain JSON: `PUT /rustfs/admin/v3/add-user?accessKey=<id>`, then
-     `PUT /rustfs/admin/v3/set-user-or-group-policy?policyName=<the identity's policy>&userOrGroup=<id>&isGroup=false`
-     (`rask-rustfs` § 4).
-  2. Check the new pair before writing it: list the bucket with it (any S3 client, e.g. boto3 `list_objects_v2`).
-     Nothing probes it after the write, and a wrong pair would be what every pod signs with.
-  3. Write both halves at once: `bao kv put secret/lineage-s3 access_key=<id> secret_key=<secret>` (a data base's
-     reference: its own secret's `aws_access_key_id` and `secret_key`). On the dev store run it in the seed container,
-     whose `bao` reads the store's administrator token (`kubectl exec deploy/rask-openbao -c seed -- bao kv put ...`).
-  4. Wait ten minutes. Each pod logs `store_credential_rotated`, naming the old and new key ids, when it switches.
-  5. Revoke the old credential: remove the user that held it (`DELETE /rustfs/admin/v3/remove-user?accessKey=<old id>`)
-     or delete the IAM access key on AWS. No restart.
-
-  On the dev store a hand-made user is drift from git, and the next reconcile removes it: the scoped-users hook's
-  post-upgrade run deletes every user the chart does not declare, and the dev seed writes each service's secret from
-  its own list whenever it re-seeds (a change to the seed, or to a dev credential). Put the declared user's pair back
-  before the next `helm upgrade`, or the pods sign with a user the store no longer holds.
+- **No workload's store identity needs rotation (ADR 0170, ADR 0197).** None holds a key pair: the catalog, lineage,
+  maintenance and each backup CronJob project a token for `objectStore.identity.audience`, which the kubelet replaces
+  before it expires, and exchange it through STS `AssumeRoleWithWebIdentity` for a session. A service holds an hour's
+  session and exchanges again once half of it is used; a backup run asks for one at its start. A service whose session
+  cannot be renewed logs `store_session_renewal_failed`, then `store_session_expired` once the session runs out, and
+  answers 503 (code 17) until an exchange succeeds. What the store grants each is the canned policy named by its
+  ServiceAccount's subject, `system:serviceaccount:<namespace>:<release>-sa-<component>`, as
+  `<release>-object-store-identities` declares it: the provisioning hook writes it on the dev store, and a platform
+  store's owner provisions it.
 - **Rotating the Dapr app token, with no refused delivery (ADR 0166).** A door accepts the `token` and the `previous`
   field of the secret `dapr-app-token`, and daprd keeps the token its pod started with.
   1. `bao kv put secret/dapr-app-token previous=<the current token> token=<the new token>`, then

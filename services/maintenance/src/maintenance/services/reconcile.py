@@ -9,7 +9,9 @@ Three stores must agree about the hierarchy (project > warehouse > namespace > t
 checks that they do:
 
 * **OpenFGA** says WHO. It can hold tuples for a tenant the catalog has never heard of (the live estate
-  held three such projects), and it can hold none at all for one that exists.
+  held three such projects), and it can hold none at all for one that exists. Maintenance holds no OpenFGA credential,
+  since one could write any tuple ([[XC-084]]): it reads the store's grant census through the catalog
+  (``GET /management/v1/grants/census``).
 * **The registries** — JSON records on the control root (``_projects/``, ``_warehouses/``,
   ``_warehouses/bindings/``) — say WHAT EXISTS. Since Decision 1 this is the definition of existence.
 * **Object storage** holds the BYTES. A warehouse delete removes the record; the bucket survives unless
@@ -50,6 +52,7 @@ from lakehouse.governed import fga
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
+from lakehouse.trash import TrashKind
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.discovery import discover_datasets
@@ -67,24 +70,6 @@ _WAREHOUSES_PREFIX = "_warehouses"
 _BINDINGS_PREFIX = "_warehouses/bindings"
 #: Trash records are keyed `<kind>/<id>` UNDER this prefix, so the listing is recursive by nature.
 _TRASH_PREFIX = "_trash"
-
-#: The platform's own default WAREHOUSE (`Settings.fga_default_warehouse_object`'s default) — the
-#: warehouse a namespace with no warehouse of its own hangs off. It is the platform's, NOT a tenant's,
-#: so it has no registry record BY DESIGN: without this exclusion every run would report it as a ghost
-#: warehouse forever, and a report that always contains a known-good finding is a report nobody reads.
-#:
-#: EXCLUDED BY ITS OWN NAME, never by matching the estate root's type ([[LH-055]]). `fga_root_object`
-#: and `fga_default_warehouse_object` are two settings that may or may not name the same object, so a
-#: `root_type == "warehouse"` test excludes this one only by coincidence: point the estate coordinate
-#: at an `estate:` and the default warehouse becomes a permanent false ghost on every tick — a silent
-#: regression in the one report whose job is to surface drift.
-DEFAULT_FGA_WAREHOUSE_OBJECT = "warehouse:lance_catalog"
-
-#: Page ceiling for one object-type tuple scan. An estate's project/warehouse tuple count is small, so
-#: this is unreachable in practice; it exists so a continuation-token bug cannot spin the report
-#: forever. Hitting it is REPORTED as an incomplete scan, never silently truncated.
-_MAX_TUPLE_PAGES = 200
-_TUPLE_PAGE_SIZE = 100
 
 #: The namespace spec's own object index, one per root: ``object_id``/``object_type`` rows recording
 #: every namespace and table. It is the ONLY place a namespace exists — namespaces are not directories
@@ -258,7 +243,7 @@ class OrphanedTrash(BaseModel):
     id: str
     #: The uuid the record is filed under ([[LH-525]]): what a sweep clears it by.
     uuid: str
-    kind: str
+    kind: TrashKind
     location: str
 
 
@@ -575,56 +560,19 @@ class TupleScan(BaseModel):
     counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
-async def _scan_tuples(client: Any) -> tuple[TupleScan, str | None]:
-    """Read the WHOLE store once, paged to the end, and bucket every tuple by its object type.
-
-    **One unfiltered read, not one bare-type read per category, and that is a correctness fix rather
-    than an optimization.** OpenFGA rejects a Read whose ``tuple_key`` is present but carries neither
-    an object id nor a user: ``the 'tuple_key' field was provided but the object type field is
-    required and both the object id and user cannot be empty`` (HTTP 400). A bare-type filter
-    (``obj="project:"``) is exactly that shape, so every authz category built on one failed against a
-    real server while passing against a double that accepted the filter. Measured live 2026-08-04.
-
-    The wrapper reports that 400 as ``ServiceUnavailableError``, so the failure presented as "the
-    authorization service is down" — permanently, on a healthy server. That is why the fix is here and
-    not a retry.
-
-    Reading everything is affordable BY THE SHAPE OF THIS DATA: these are governance tuples, written
-    at admin frequency, and one page covers a real estate (the live cluster returned 22 in a single
-    page). It is also strictly fewer round-trips than the four scans it replaces.
-
-    Returns a truncation reason — never a silently short answer — if the page ceiling is reached with
-    a cursor outstanding: a short scan would invent ghosts on the registry side and hide them on the
-    FGA side, in the same run.
-    """
-    scan = TupleScan()
-    token: str | None = None
-    for _ in range(_MAX_TUPLE_PAGES):
-        page, token = await fga.read_tuples(client, page_size=_TUPLE_PAGE_SIZE, continuation_token=token)
-        for item in page:
-            obj_type, _, obj_id = str(item.object).partition(":")
-            # A bookkeeping tuple is no grant: a project holding only its admin revision is as stranded as one
-            # holding nothing.
-            if not obj_id or item.relation in fga.BOOKKEEPING_RELATIONS:
-                continue
-            bucket = scan.counts_by_type.setdefault(obj_type, {})
-            bucket[obj_id] = bucket.get(obj_id, 0) + 1
-        if not token:
-            return scan, None
-    return scan, f"the tuple scan hit its {_MAX_TUPLE_PAGES}-page ceiling with a cursor outstanding"
-
-
 # --------------------------------------------------------------------------- #
 # The detectors — pure, one per category
 # --------------------------------------------------------------------------- #
 
 
-def _ghosts(kind: str, tuple_counts: Mapping[str, int], *, record_ids: set[str], exclude: set[str]) -> list[GhostObject]:
-    """FGA objects of ``kind`` holding tuples that no registry record names."""
+def _ghosts(kind: str, tuple_counts: Mapping[str, int], *, record_ids: set[str], exclude: set[str] | None = None) -> list[GhostObject]:
+    """FGA objects of ``kind`` holding tuples that no registry record names, but those ``exclude`` names. The objects a
+    deployment keeps for itself are not in the census, which the catalog reads without them."""
+    left_out = exclude or set()
     return [
         GhostObject(kind=kind, id=obj_id, fga_object=f"{kind}:{obj_id}", tuples=count)
         for obj_id, count in sorted(tuple_counts.items())
-        if obj_id not in record_ids and obj_id not in exclude
+        if obj_id not in record_ids and obj_id not in left_out
     ]
 
 
@@ -743,7 +691,7 @@ def _orphaned_trash(records: list[dict[str, Any]], *, claimed: set[str]) -> list
             continue
         bucket = location[len("s3://") :].split("/", 1)[0]
         if bucket and bucket not in claimed and (uuid := trash.object_uuid(record)) is not None:
-            out.append(OrphanedTrash(id=str(record.get("id") or ""), uuid=uuid, kind=str(record.get("kind") or "table"), location=location))
+            out.append(OrphanedTrash(id=trash.name_of(record), uuid=uuid, kind=trash.kind_of(record), location=location))
     return sorted(out, key=lambda o: (o.location, o.id))
 
 
@@ -806,9 +754,15 @@ class Sources(BaseModel):
     incomplete: list[IncompleteScan] = Field(default_factory=list)
 
 
-#: Said when FGA is not wired into the process at all — distinct from an outage, and the distinction
-#: matters: with no client there is nothing wrong with the estate, only with the scan.
-_FGA_ABSENT = "no OpenFGA client is wired into this process, so authz-vs-registry drift cannot be checked"
+#: Said when no census is asked for at all — distinct from an outage, and the distinction matters: with no reader
+#: there is nothing wrong with the estate, only with the scan.
+_FGA_ABSENT = "no grant census is wired into this process, so authz-vs-registry drift cannot be checked"
+#: Said when the catalog answers that authorization is off: the store holds nothing to count, which is not an empty one.
+_FGA_OFF = "authorization is off in the catalog, so authz-vs-registry drift cannot be checked"
+
+#: What the drift report reads OpenFGA through: the catalog's census of the store's grants, or ``None`` when the catalog
+#: answers that authorization is off. Raises when the census cannot be had.
+type GrantCensusReader = Callable[[], fga.GrantCensus | None]
 
 #: Said when the warehouse feature is off. With warehouses disabled an unbound namespace is CORRECT —
 #: reporting it would train the reader to ignore the category before it ever means anything.
@@ -822,22 +776,22 @@ def _bucket_of(root_uri: str) -> str | None:
     return root_uri[len("s3://") :].strip("/").split("/")[0] or None
 
 
-async def _fga_source(sources: Sources, client: Any) -> tuple[TupleScan | None, str | None]:
-    """ONE whole-store tuple scan feeding all four authz categories.
+async def _fga_source(sources: Sources, grants: GrantCensusReader | None) -> tuple[TupleScan | None, str | None]:
+    """ONE census of the store's grants feeding all four authz categories, so they cannot disagree about its contents.
 
-    Previously four separate bare-type scans, one per category — a request shape OpenFGA rejects with
-    a 400 (see :func:`_scan_tuples`). Folding them into one read also means the four categories can no
-    longer disagree about the store's contents, because they now read the same snapshot.
+    A census the catalog stopped short of the store is an incomplete scan, never a silently short answer: it would invent
+    ghosts on the registry side and hide them on the grant side in the same run.
     """
-    if client is None:
+    if grants is None:
         return None, _FGA_ABSENT
-    result, error = await _read_async("fga:tuples", _scan_tuples(client))
-    if result is None:
+    census, error = await _read_blocking("fga:tuples", grants)
+    if error is not None:
         return None, error
-    scan, truncation = result
-    if truncation:
-        sources.incomplete.append(IncompleteScan(source="fga:tuples", reason=truncation))
-    return scan, None
+    if census is None:
+        return None, _FGA_OFF
+    if census.truncated:
+        sources.incomplete.append(IncompleteScan(source="fga:tuples", reason=census.truncated))
+    return TupleScan(counts_by_type=census.counts_by_type), None
 
 
 async def _registry_source(
@@ -882,7 +836,7 @@ async def _bucket_source(sources: Sources, bucket_client: Any) -> tuple[list[str
 
 async def load_sources(
     *,
-    client: Any,
+    grants: GrantCensusReader | None,
     control_root: str,
     namespace_root: str,
     storage_options: StorageOptions,
@@ -904,7 +858,7 @@ async def load_sources(
         (sources.buckets, sources.buckets_error),
         (sources.trash, sources.trash_error),
     ) = await asyncio.gather(
-        _fga_source(sources, client),
+        _fga_source(sources, grants),
         _registry_source(
             sources, source_name="registry:projects", control_root=control_root, storage_options=storage_options, prefix=_PROJECTS_PREFIX, required=("id",)
         ),
@@ -1031,15 +985,11 @@ def build_report(
     *,
     warehouses_enabled: bool,
     platform_buckets: set[str],
-    fga_root_object: str,
-    default_warehouse_object: str = DEFAULT_FGA_WAREHOUSE_OBJECT,
 ) -> ReconcileReport:
     """Run every detector whose inputs are present; record the rest as unavailable or skipped."""
     report = ReconcileReport(checked_at=datetime.now(UTC).isoformat(), incomplete=list(sources.incomplete))
     project_ids = {str(r["id"]) for r in sources.project_records or []}
     warehouse_ids = {str(r["id"]) for r in sources.warehouse_records or []}
-    root_type, _, root_id = fga_root_object.partition(":")
-    _, _, default_warehouse_id = default_warehouse_object.partition(":")
     # The shared input orders, named once. Three categories read the tuple scan and the project
     # registry; two read the binding index and the warehouse registry. Naming them is what stops a
     # fourth category from quietly introducing a fourth opinion about which outage to report.
@@ -1051,19 +1001,13 @@ def build_report(
         report,
         "ghost_projects",
         inputs=tuples_and_projects,
-        detect=lambda: _ghosts("project", _by_type(sources, "project"), record_ids=project_ids, exclude={root_id} if root_type == "project" else set()),
+        detect=lambda: _ghosts("project", _by_type(sources, "project"), record_ids=project_ids),
     )
     report.ghost_warehouses = _run_category(
         report,
         "ghost_warehouses",
         inputs=tuples_and_warehouses,
-        detect=lambda: _ghosts(
-            "warehouse",
-            _by_type(sources, "warehouse"),
-            record_ids=warehouse_ids,
-            # BOTH platform objects, because they are two settings and either may be a `warehouse:`.
-            exclude={default_warehouse_id} | ({root_id} if root_type == "warehouse" else set()),
-        ),
+        detect=lambda: _ghosts("warehouse", _by_type(sources, "warehouse"), record_ids=warehouse_ids),
     )
     report.unreferenced_projects = _run_category(
         report,
@@ -1328,7 +1272,7 @@ def _roll_up(by_dataset: dict[str, int]) -> dict[str, int]:
 
 async def reconcile(
     settings: MaintenanceSettings,
-    client: Any = None,
+    grants: GrantCensusReader | None = None,
     *,
     warehouses_enabled: bool,
     control_root: str | None = None,
@@ -1341,14 +1285,12 @@ async def reconcile(
     # live control root can disagree and the difference would surface as an unexplained grant.
     into_sources: list[Sources] | None = None,
     platform_buckets: Iterable[str] | None = None,
-    fga_root_object: str = DEFAULT_FGA_WAREHOUSE_OBJECT,
-    default_warehouse_object: str = DEFAULT_FGA_WAREHOUSE_OBJECT,
     bucket_client: Any = None,
 ) -> ReconcileReport:
     """Scan the three stores and REPORT their disagreements. Deletes nothing; mutates nothing.
 
-    ``client`` is an OpenFGA client (``None`` → the two ghost categories and ``unreferenced_projects``
-    report unavailable rather than silently empty). ``bucket_client`` is an S3 client (``None`` → same,
+    ``grants`` reads the store's grant census through the catalog (``None`` → the two ghost categories and
+    ``unreferenced_projects`` report unavailable rather than silently empty). ``bucket_client`` is an S3 client (``None`` → same,
     for ``orphan_buckets``); when omitted one is built from the sweep's own credentials.
 
     ``control_root`` defaults to the root the sweep already reads the maintenance-policy registry from
@@ -1389,7 +1331,7 @@ async def reconcile(
             platform.add(bucket)
 
     sources = await load_sources(
-        client=client,
+        grants=grants,
         control_root=resolved_control_root,
         namespace_root=resolved_namespace_root,
         storage_options=storage_options,
@@ -1401,8 +1343,6 @@ async def reconcile(
         sources,
         warehouses_enabled=warehouses_enabled,
         platform_buckets=platform,
-        fga_root_object=fga_root_object,
-        default_warehouse_object=default_warehouse_object,
     )
     # The unreferenced-FILE pass runs after the store comparison and is separately gated: it opens
     # every dataset rather than comparing three stores, so it is a different order of work. Blocking

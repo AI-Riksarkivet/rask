@@ -20,10 +20,10 @@ from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.dapr_auth import assert_app_token_configured
 from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.settings import assert_authentication_configured
-from lakehouse.governed.store_credential import make_store_credential
 from lakehouse.lance_app import build_lance_service_app
 from lakehouse.obs import configure_app_logging
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.store_session import require_env_pair, start_store_session
 from lineage.api.dapr import register_dapr
 from lineage.api.v1.router import api_router
 from lineage.core.config import get_settings
@@ -83,13 +83,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         oidc_enabled=settings.oidc_enabled,
         insecure_allow_unauthenticated=settings.insecure_allow_unauthenticated,
     )
-    # The outbox's S3 key pair from the Dapr secret store (OpenBao), never plaintext pod env: read now, failing
-    # the boot closed if the store never answers, then again while lineage runs, so a pair rotated in the store
-    # is the one the relay signs with within its TTL ([[XC-082]], ADR 0166). None when secrets_from_dapr is off.
-    store_credential = make_store_credential(settings)
-    if store_credential is not None:
-        await store_credential.start()
-    app.state.store_credential = store_credential
+    # LINEAGE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its outbox drain signs with a session its ServiceAccount token is
+    # exchanged for, here at boot, failing the boot closed if none is issued, then again once half the session's life is
+    # used. With no token (the offline and Dagger lanes) an outbox on the store is drained under the environment's pair,
+    # refused here when either half is missing: the drain's boto3 would otherwise sign with whatever its default chain finds.
+    store_session = await start_store_session(settings.web_identity, session_name="lineage", duration_seconds=settings.s3_session_seconds)
+    if store_session is None and settings.outbox_on_the_store:
+        require_env_pair(settings.env_pair, prefix="LINEAGE")
+    app.state.store_session = store_session
     # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
     # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
     bus_watchdog = await start_bus_watchdog()
@@ -149,8 +150,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         if forward_client is not None:
             with suppress(Exception):
                 await forward_client.aclose()
-        if store_credential is not None:
-            await store_credential.stop()
+        if store_session is not None:
+            await store_session.stop()
 
 
 async def _feed_ready(request: Request) -> Readiness:

@@ -30,7 +30,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Generator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any, Final, Literal, Protocol, assert_never, runtime_checkable
 from urllib.parse import urlsplit
 
@@ -40,8 +41,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
-from lakehouse import store_session
-from lakehouse.base_refs import decoded_path, location_within
+from lakehouse import file_identities, history_fences, store_session
+from lakehouse.base_refs import decoded_path, location_within, normalise
 from lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from lakehouse.features import BasePathRef
@@ -50,7 +51,7 @@ from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions
 from lakehouse.store_session import IssuedSession, WebIdentity
-from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, WRITER_PUT_GLOBS
+from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 
 
 log = logging.getLogger(__name__)
@@ -61,9 +62,10 @@ log = logging.getLogger(__name__)
 #: * ``write`` — a ``can_write_data`` managed-versioning writer: read the table, put what a commit needs
 #:   (data, transaction, deletion and index files, and a staged manifest), never a final manifest, a ref or
 #:   a delete. The catalog commits the version.
-#: * ``maintain`` — the maintenance identity's rewrite and reclaim (``can_vend_maintain``): get, put and delete anywhere in the prefix,
-#:   because compaction commits versions and cleanup deletes them. Also the shape for a prefix with no
-#:   Lance layout to narrow by (the warehouse scope probe).
+#: * ``maintain`` — the maintenance identity's reclaim (``can_vend_maintain``): get, put and delete anywhere in the prefix
+#:   but its refs, because a disarm commits a version and cleanup deletes them, and the table's own records a reclaim
+#:   writes on the control root (:class:`TableRecords`). Also the shape for a prefix with no Lance layout to narrow by
+#:   (the warehouse scope probe).
 Tier = Literal["read", "write", "maintain"]
 
 
@@ -132,12 +134,14 @@ class VendedSession(BaseModel):
         do not displace a pod's ambient AWS_* environment — object_store blends the two and signs as neither identity
         (`403 SignatureDoesNotMatch`, measured in-cluster 2026-09-03) — and omitted `allow_http` and
         `virtual_hosted_style_request`, without which Lance builds no client for an `http://` endpoint and RustFS refuses
-        virtual-hosted signing.
+        virtual-hosted signing. The builder spells the endpoint and region as Lance reads the environment into them, so a
+        client process with its own `AWS_ENDPOINT_URL` still reaches the store vended here ([[LH-238]]), and names no
+        endpoint for AWS proper, whose regional one botocore resolves.
 
         Raises:
             ValueError: The encryption names a combination the store would ignore (`lance_storage_options`).
         """
-        options = lance_storage_options(
+        return lance_storage_options(
             self.endpoint or "",
             self.key_pair,
             self.region,
@@ -145,11 +149,104 @@ class VendedSession(BaseModel):
             sse_kms_key_id=self.encryption.kms_key_id,
             sse_bucket_key_enabled=self.encryption.bucket_key_enabled,
         )
-        if self.endpoint:
-            return options
-        # AWS proper: botocore resolves the regional endpoint, and an empty string would pin the client to nothing. The
-        # builder always emits the key, so it is removed rather than skipped.
-        return StorageOptions(key_pair=options.key_pair, options={key: value for key, value in options.options.items() if key != "endpoint"})
+
+
+class TableRecords(BaseModel):
+    """Where one table's records are kept on the control root, which its maintain-tier vend may write ([[LH-219]]).
+
+    Maintenance signs every write of a reclaim with the table's vend, so the vend reaches the table's history fence, to
+    get and put (:mod:`lakehouse.history_fences`), and the records of its committed files, to get and delete
+    (:mod:`lakehouse.file_identities`). It never puts one of those: a holder that could would record a replaced file as
+    the one committed. No other record on the control root, and none of another table.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: The catalog's control root, ``s3://<bucket>[/<prefix>]``.
+    control_root: str
+    #: The uuid the catalog minted for the table, which keys every record kept for it (ADR 0173 §8).
+    table_uuid: str
+
+    def maintain_statements(self) -> list[dict[str, object]]:
+        """The policy statements granting what a maintain-tier vend writes of these records.
+
+        Raises:
+            ValueError: The control root is no S3 location, or it or the uuid holds IAM policy syntax.
+        """
+        _reject_iam_policy_syntax("table uuid", self.table_uuid)
+        root = _policy_path(self.control_root, "control root")
+        return [
+            {
+                "Sid": "HistoryFence",
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:PutObject"],
+                "Resource": f"arn:aws:s3:::{root}/{history_fences.fence_key(self.table_uuid)}",
+            },
+            {
+                "Sid": "CommittedFileRecords",
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:DeleteObject"],
+                "Resource": f"arn:aws:s3:::{root}/{file_identities.records_of(self.table_uuid)}/*",
+            },
+        ]
+
+
+def _policy_path(uri: str, what: str) -> str:
+    """``uri`` as the ``<bucket>[/<key>]`` a policy names it by, decoded once as the store keeps it.
+
+    Raises:
+        ValueError: ``uri`` is no S3 location, or its key holds IAM policy syntax.
+    """
+    bucket, key = split_s3_location(uri)
+    _reject_iam_policy_syntax(what, key)
+    key = key.strip("/")
+    return f"{bucket}/{key}" if key else bucket
+
+
+class ReclaimScope(BaseModel):
+    """What the reclaim of one trash record deletes: its table's bytes, and nothing else ([[XC-084]]).
+
+    Maintenance holds no write of its own, so the purge deletes a dropped table's bytes only under this session, which
+    the catalog vends for a record its own reads find past its deadline, at a location whose claim records the record's
+    uuid and no live table holds (``catalog.services.trash_reclaim``). The session lists and deletes every object at the
+    location, in both its spellings, and in the table's own data directories, and reaches no record on the control
+    root: what the trash keeps there (its record, the object's records, the location's claim and base record) is the
+    catalog's to end once the bytes are gone, under its own identity (``DELETE /management/v1/trash/{kind}/{uuid}``).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: The table's recorded location, as the record names it.
+    location: str
+    #: The table's own data directories, which its purge deletes with its root ([[LH-286]]).
+    data_directories: tuple[str, ...] = ()
+
+    def policy(self) -> dict[str, object]:
+        """The inline session policy granting the reclaim exactly this.
+
+        Raises:
+            ValueError: A place is no S3 location, names a whole bucket, or holds IAM policy syntax.
+        """
+        places = [self.location, *self.data_directories]
+        paths = sorted({path for place in places for path in (_policy_path(place, "location"), normalise(place).rstrip("/"))})
+        listings: dict[str, list[str]] = {}
+        for path in paths:
+            bucket, _, key = path.partition("/")
+            if not key:
+                raise ValueError(f"the place {path!r} names a whole bucket, so a reclaim session would delete every table in it")
+            listings.setdefault(bucket, []).extend([f"{key}/", f"{key}/*"])
+        statements: list[dict[str, object]] = [
+            {
+                "Sid": f"ListPlaces{n}",
+                "Effect": "Allow",
+                "Action": ["s3:ListBucket"],
+                "Resource": f"arn:aws:s3:::{bucket}",
+                "Condition": {"StringLike": {"s3:prefix": prefixes}},
+            }
+            for n, (bucket, prefixes) in enumerate(sorted(listings.items()))
+        ]
+        statements.append({"Sid": "DeletePlaces", "Effect": "Allow", "Action": ["s3:DeleteObject"], "Resource": [f"arn:aws:s3:::{path}/*" for path in paths]})
+        return {"Version": "2012-10-17", "Statement": statements}
 
 
 @runtime_checkable
@@ -157,14 +254,27 @@ class CredentialVendor(Protocol):
     """Vend scoped storage credentials for one table prefix at one tier."""
 
     def vend(
-        self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+        self,
+        *,
+        table_location: str,
+        tier: Tier,
+        session_name: str,
+        bases: Sequence[str] = (),
+        data_directories: Sequence[str] = (),
+        branch: str = "",
+        records: TableRecords | None = None,
     ) -> VendedSession | None:
         """Return creds for ``table_location`` at ``tier``, named ``session_name`` at the store (:func:`role_session_name`).
 
         ``data_directories`` are those of ``bases`` the table's record holds as its own data directories
-        (:class:`VendableBases`). ``None`` means "no direct credential" — the caller falls back to the server-mediated
-        (Mode B) data path.
+        (:class:`VendableBases`), and ``records`` are where its records are kept, ``None`` for a prefix that is no table.
+        ``None`` means "no direct credential" — the caller falls back to the server-mediated (Mode B) data path.
         """
+        ...
+
+    def vend_reclaim(self, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
+        """Return creds that delete the bytes ``scope`` names, named ``session_name`` at the store; ``None`` when this
+        deployment vends no direct credential."""
         ...
 
 
@@ -644,6 +754,7 @@ def build_session_policy(
     data_directories: Sequence[str] = (),
     branch: str = "",
     kms_key: str | None = None,
+    records: TableRecords | None = None,
 ) -> dict[str, object]:
     """Build an STS inline session policy scoping access to one table prefix + tier.
 
@@ -669,8 +780,12 @@ def build_session_policy(
       ``tree/`` grant costs 20 characters of the table prefix a write credential fits within a 2,048-byte
       session policy, the limit RustFS and AWS both enforce (109 to 89 at a 63-character bucket, counted on
       the compact policy :class:`WebIdentityVendor` sends; a KMS key's grant costs 25 more, to 64, [[LH-262]]).
-    * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get, put, delete and abort-upload on ``<prefix>/*``: compaction
-      commits versions and cleanup deletes them, and an object store cannot tell a rewrite from a write.
+    * ``maintain`` (``can_vend_maintain``, the maintenance identity alone): get, put, delete and abort-upload on ``<prefix>/*``: a
+      disarm commits a version and cleanup deletes versions, and an object store cannot tell a rewrite from a write. An
+      explicit Deny keeps every put and delete off ``_refs/`` (``table_layout.REFS_GLOB``), which no reclaim writes: a
+      maintainer that could put a tag could pin a version an erasure removes, and one that could delete a tag could
+      unpin a version a hold keeps ([[XC-084]]). For main, ``records`` adds the table's own records on the control root
+      that a reclaim writes under this vend and no other credential (:class:`TableRecords`, [[LH-219]]).
 
     WHAT A SESSION POLICY CANNOT REFUSE: a ``PutObject`` over an existing key. A writer's ``data/*`` grant
     can therefore overwrite a committed data file's bytes in place; Lance's own commit is put-if-not-exists
@@ -713,7 +828,8 @@ def build_session_policy(
         ValueError: if ``prefix`` holds IAM policy syntax (:data:`IAM_POLICY_SYNTAX`) — see
             :func:`_reject_iam_policy_syntax` — or if a base names a bucket root rather than a location
             inside one, which would widen the credential to that whole bucket
-            (:func:`_reject_a_base_that_is_not_a_location`).
+            (:func:`_reject_a_base_that_is_not_a_location`), or if ``records`` cannot be named in a policy
+            (:meth:`TableRecords.maintain_statements`).
     """
     _reject_iam_policy_syntax("prefix", prefix)
     prefix = prefix.rstrip("/")
@@ -795,6 +911,10 @@ def build_session_policy(
                 "Resource": [f"arn:aws:s3:::{ref_root}/{directory}/*" for directory in BRANCH_FILE_DIRS],
             }
         )
+    elif tier == "maintain":
+        statements.append({"Sid": "NeverARef", "Effect": "Deny", "Action": ["s3:PutObject", "s3:DeleteObject"], "Resource": f"arn:aws:s3:::{root}/{REFS_GLOB}"})
+        if records is not None:
+            statements.extend(records.maintain_statements())
     if kms_key:
         statements.append(
             {
@@ -867,6 +987,7 @@ def vend_or_refuse(
     bases: Sequence[str],
     data_directories: Sequence[str] = (),
     branch: str = "",
+    records: TableRecords | None = None,
 ) -> VendedSession | None:
     """``vendor.vend``, with a failed exchange answered as the spec's typed error rather than a bare 500.
 
@@ -878,12 +999,37 @@ def vend_or_refuse(
         ServiceUnavailableError: The catalog's token could not be read, the store refused the exchange, or the store
             could not be reached.
     """
+    with _exchange_failures_as_unavailable(table_location):
+        return vendor.vend(
+            table_location=table_location, tier=tier, session_name=session_name, bases=bases, data_directories=data_directories, branch=branch, records=records
+        )
+
+
+def reclaim_or_refuse(vendor: CredentialVendor, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
+    """``vendor.vend_reclaim``, with a failed exchange answered as :func:`vend_or_refuse` answers one.
+
+    Raises:
+        ServiceUnavailableError: The catalog's token could not be read, the store refused the exchange, or the store
+            could not be reached.
+    """
+    with _exchange_failures_as_unavailable(scope.location):
+        return vendor.vend_reclaim(scope, session_name=session_name)
+
+
+@contextmanager
+def _exchange_failures_as_unavailable(vended_for: str) -> Generator[None]:
+    """A failed exchange as the spec's 503: the token is the catalog's own, so a refusal is never the caller's fault.
+
+    Raises:
+        ServiceUnavailableError: The catalog's token could not be read, the store refused the exchange, or the store
+            could not be reached.
+    """
     try:
-        return vendor.vend(table_location=table_location, tier=tier, session_name=session_name, bases=bases, data_directories=data_directories, branch=branch)
+        yield
     except IdentityTokenUnavailableError as exc:
         raise ServiceUnavailableError("the catalog's projected token could not be read, so no credential was vended") from exc
     except ClientError as exc:
-        log.warning("vend_exchange_refused", extra={"code": exc.response.get("Error", {}).get("Code"), "location": table_location})
+        log.warning("vend_exchange_refused", extra={"code": exc.response.get("Error", {}).get("Code"), "location": vended_for})
         raise ServiceUnavailableError("the object store refused the catalog's credential exchange") from exc
     except BotoCoreError as exc:
         raise ServiceUnavailableError("credential vending backend unavailable") from exc
@@ -892,8 +1038,20 @@ def vend_or_refuse(
 class ModeBVendor:
     """No vending: data flows through the catalog's server-mediated endpoints."""
 
+    def vend_reclaim(self, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
+        """No direct credential: under ``mode_b`` maintenance's purge has nothing to delete a table's bytes with."""
+        return None
+
     def vend(
-        self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+        self,
+        *,
+        table_location: str,
+        tier: Tier,
+        session_name: str,
+        bases: Sequence[str] = (),
+        data_directories: Sequence[str] = (),
+        branch: str = "",
+        records: TableRecords | None = None,
     ) -> VendedSession | None:
         return None
 
@@ -934,7 +1092,15 @@ class WebIdentityVendor:
         self._exchange = exchange
 
     def vend(
-        self, *, table_location: str, tier: Tier, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+        self,
+        *,
+        table_location: str,
+        tier: Tier,
+        session_name: str,
+        bases: Sequence[str] = (),
+        data_directories: Sequence[str] = (),
+        branch: str = "",
+        records: TableRecords | None = None,
     ) -> VendedSession | None:
         bucket, prefix = split_s3_location(table_location)
         policy = build_session_policy(
@@ -946,14 +1112,33 @@ class WebIdentityVendor:
             data_directories=data_directories,
             branch=branch,
             kms_key=self._encryption.kms_key_id,
+            records=records,
         )
+        return self._session(policy, session_name=session_name, policy_of=f"the {tier} session policy for {table_location}")
+
+    def vend_reclaim(self, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
+        """The session the catalog's token is exchanged for under the policy ``scope`` writes: one trashed table's bytes.
+
+        Raises:
+            SessionPolicyTooLong: The policy is past what STS takes.
+            IdentityTokenUnavailableError: The catalog's projected token cannot be read.
+            botocore.exceptions.ClientError: The store refused the exchange.
+        """
+        return self._session(scope.policy(), session_name=session_name, policy_of=f"the reclaim session policy for {scope.location}")
+
+    def _session(self, policy: dict[str, object], *, session_name: str, policy_of: str) -> VendedSession:
+        """The session the catalog's token is exchanged for under ``policy``.
+
+        Raises:
+            SessionPolicyTooLong: ``policy`` is past what STS takes.
+        """
         text = json.dumps(policy, separators=(",", ":"))
         if len(text) > SESSION_POLICY_LIMIT:
             # Refused here, naming the cause: past the limit the store refuses the exchange, which the caller would read as
-            # an outage to retry, when no retry can shorten the table's location or its bases ([[LH-262]]).
+            # an outage to retry, when no retry can shorten the locations, bases or key the policy names ([[LH-262]]).
             raise SessionPolicyTooLong(
-                f"the {tier} session policy for {table_location} is {len(text)} characters, past the {SESSION_POLICY_LIMIT:,} STS accepts: "
-                "its location, bases or KMS key are too long for a direct credential",
+                f"{policy_of} is {len(text)} characters, past the {SESSION_POLICY_LIMIT:,} STS accepts: "
+                "the locations, bases or KMS key it names are too long for a direct credential",
                 characters=len(text),
             )
         issued = self._exchange(self._identity, session_name=session_name, duration_seconds=self._ttl, policy=text)

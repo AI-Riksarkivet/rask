@@ -21,7 +21,6 @@ from __future__ import annotations
 import functools
 import json
 import re
-import shlex
 import subprocess
 import urllib.parse
 from pathlib import Path
@@ -61,33 +60,6 @@ def _helm_template(*set_values: str) -> str:
     for value in set_values:
         argv += ["--set", value]
     return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-
-
-def test_no_SCOPED_storage_identity_is_published_with_the_ROOT_secret() -> None:
-    """CONTRACT (security, standing rule): a scoped storage identity's secret is DERIVED, never the root.
-
-    The estate mints scoped users and publishes each one's secret into OpenBao for ESO to sync. Four
-    derived it from the root; the fifth read `<its own key> | default objectStore.secretKey` — and its own
-    key ships empty, so the published value WAS the RustFS root credential.
-
-    MEASURED on the live estate 2026-09-11, by hash so nothing was disclosed: that identity's published
-    secret key and access key and `object-store-secret-key` in `rask-infra-credentials` were byte-identical,
-    all three 11 bytes. The chart CREATED the user with the derived secret (`object-store-scoped-users.yaml`)
-    and PUBLISHED the root one under its name, so the pair can never match: a consumer either signs as
-    root — defeating the scoping entirely — or fails `SignatureDoesNotMatch`.
-
-    ASSERTED ON THE RENDER: the root is never in it ([[XC-004]]), so the dev OpenBao's seed writes each
-    field from a file, and a scoped field must name a file `scoped_secret` derived (for an identity, or for
-    a data base's credential reference), never the root's (`$G/object-store-secret-key`). Generic over every
-    scoped field the seed writes, under either spelling (`secret_key`, `<x>-secret-key`).
-    """
-    rendered = _helm_template("auth.bootstrapAdmin=dex~gate-probe")
-
-    fields = re.findall(r"\b((?:[a-z]+-)*secret[-_]key)=@\"([^\"]+)\"", rendered)
-    fields = [(field, source) for field, source in fields if field != "object-store-secret-key"]
-    assert fields, "the seed writes no scoped secret field, so this gate would pass vacuously"
-    offenders = [f"{field}={source}" for field, source in fields if not source.startswith(("$HOME/seed/scoped-", "$HOME/seed/base-"))]
-    assert offenders == [], "a SCOPED identity is published with the ROOT storage secret:\n  " + "\n  ".join(offenders)
 
 
 def test_every_first_party_deployment_is_hardened() -> None:
@@ -148,15 +120,14 @@ def _job_by_component(rendered: str, component: str) -> str | None:
 
 
 def _hook_buckets(rendered: str) -> list[str]:
-    """The buckets the scoped-users hook's provisioning step is told to create, in order (`rustfs_admin.py --bucket`).
+    """The buckets the provisioning hook is told to create, in order (`rustfs_admin.py --bucket`).
 
     The step makes each one on the store it provisions (the `rustfs-provisioning` lane runs it against a real RustFS),
     so what is left to hold offline is the render: which names reach it.
     """
-    job = _job_by_component(rendered, "object-store-scoped-users")
-    assert job is not None, "the scoped-users hook does not render"
-    script = yaml.safe_load(job)["spec"]["template"]["spec"]["containers"][0]["command"][-1]
-    argv = shlex.split(script[script.index("exec python /srv/rustfs_admin.py") :].replace("\\\n", " "))
+    job = _job_by_component(rendered, "object-store-provisioning")
+    assert job is not None, "the provisioning hook does not render"
+    argv = yaml.safe_load(job)["spec"]["template"]["spec"]["containers"][0]["args"]
     return [argv[i + 1] for i, arg in enumerate(argv) if arg == "--bucket"]
 
 

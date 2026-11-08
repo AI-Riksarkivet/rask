@@ -63,7 +63,9 @@ def test_a_branch_of_a_protected_root_is_NOT_refused(tmp_path: Path) -> None:
     protected = BaseRefs(protected={src.lstrip("/")})
     assert containment_of(branch_uri, src) == "branch", "the fixture stopped being the case under test"
 
-    result = expire_versions(ExpiryTarget(uri=branch_uri, storage_options={}, protected=protected), ExpiryPolicy(older_than=timedelta(seconds=0)))
+    result = expire_versions(
+        ExpiryTarget(uri=branch_uri, storage_options={}, write_options={}, protected=protected), ExpiryPolicy(older_than=timedelta(seconds=0))
+    )
 
     assert result.old_versions_removed > 0, "the branch's own versions were not reclaimed"
     assert result.bytes_removed > 0
@@ -75,7 +77,7 @@ def test_the_root_ITSELF_is_still_refused(tmp_path: Path) -> None:
     """
     src, _branch = _parent_with_branch(tmp_path)
 
-    target = ExpiryTarget(uri=src, storage_options={}, protected=BaseRefs(protected={src.lstrip("/")}))
+    target = ExpiryTarget(uri=src, storage_options={}, write_options={}, protected=BaseRefs(protected={src.lstrip("/")}))
     result = expire_versions(target, ExpiryPolicy(older_than=timedelta(seconds=0)))
 
     assert result.refused is not None

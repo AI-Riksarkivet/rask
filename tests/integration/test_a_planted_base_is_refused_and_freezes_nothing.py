@@ -63,6 +63,7 @@ from maintenance.services import purge, sweep
 from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
 from maintenance.services.plan import PlanContext
+from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 
 
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -418,7 +419,7 @@ def test_a_recorded_clone_source_is_still_protected(estate: _Estate) -> None:
 
 
 def _expire(*, estate: _Estate, uri: str, older_than: timedelta, refs: BaseRefs) -> DatasetResult:
-    return expire_versions(ExpiryTarget(uri=uri, storage_options=estate.key, protected=refs), ExpiryPolicy(older_than=older_than))
+    return expire_versions(ExpiryTarget(uri=uri, storage_options=estate.key, write_options=estate.key, protected=refs), ExpiryPolicy(older_than=older_than))
 
 
 def _registered(estate: _Estate, table: str, location: str) -> str:
@@ -455,8 +456,9 @@ def _purge_expired(estate: _Estate, table: str, location: str) -> None:
         total=0,
         skipped=[CategorySkipped(category="orphan_files", reason="off")],
     )
-    settings = estate.maintenance(trash_purge_enabled=True)
-    out = asyncio.run(purge.purge_expired_trash(settings, report=report, control_root=estate.root, data_roots={estate.root}))
+    settings = estate.maintenance(trash_purge_enabled=True, catalog_url=CATALOG_URL)
+    with catalog_doors(estate.client):
+        out = asyncio.run(purge.purge_expired_trash(settings, report=report, control_root=estate.root, data_roots={estate.root}))
     assert [record.id for record in out.purged] == [table], f"precondition: the purge reclaimed {table}: {out}"
 
 

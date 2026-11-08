@@ -1,17 +1,20 @@
-"""A service's own object-store credential as a session its ServiceAccount token is exchanged for ([[XC-083]], ADR 0170).
+"""A service's own object-store credential as a session its ServiceAccount token is exchanged for ([[XC-083]], [[XC-084]], ADR 0170).
 
 THE SERVICE HOLDS NO KEY. Its pod projects a token for the object store's audience, the store trusts the cluster's
 ServiceAccount issuer and grants the token the policy its subject names, and STS `AssumeRoleWithWebIdentity` exchanges
 the token for a temporary credential under that policy (measured 2026-10-18 on RustFS 1.0.3,
 `scripts/rustfs_web_identity_measure.py`). The exchange carries no signature, because the token is the
-credential. The kubelet replaces the projected token before it expires, so the file is read at every exchange.
+credential. The kubelet replaces the projected token before it expires, so the file is read at every exchange. The
+catalog, lineage, maintenance and each backup job hold their own, under their own ServiceAccount's policy.
 
-READS NEVER TOUCH THE STORE, as with a store-held pair (`lakehouse.governed.store_credential`): `storage_options()` is
-built at every request, so `held_session` only peeks at what `SESSIONS` holds, and raises
-`StoreCredentialUnavailableError` (503) once the session is within `EXPIRY_MARGIN_SECONDS` of its expiry. `StoreSession`
-does the exchanging: once at boot, failing the boot closed, then in a background loop that exchanges again once half the
-session's life is used. A request that took the old session then still has half a session to finish, and an STS outage
-shorter than that half serves nobody a 503.
+READS NEVER TOUCH THE STORE: `storage_options()` is built at every request, so `held_session` only peeks at what
+`SESSIONS` holds, and raises `StoreCredentialUnavailableError` (503) once the session is within `EXPIRY_MARGIN_SECONDS`
+of its expiry. `StoreSession` does the exchanging: once at boot, failing the boot closed, then in a background loop that
+exchanges again once half the session's life is used. A request that took the old session then still has half a session
+to finish, and an STS outage shorter than that half serves nobody a 503.
+
+A ONE-SHOT JOB EXCHANGES ONCE: `job_client` asks for one session at the run's start and signs the whole run with it
+(`JobStoreIdentity`), so a run never outlives `session_seconds`.
 """
 
 from __future__ import annotations
@@ -25,13 +28,19 @@ from contextlib import suppress
 from datetime import datetime
 from functools import cache
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 from botocore.exceptions import BotoCoreError, ClientError
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, read_identity_token
 from lakehouse.governed.store_credential import S3KeyPair, StoreCredentialUnavailableError
+from lakehouse.storage_options import DEFAULT_REGION, REGION, StorageOptions, object_client
+
+
+if TYPE_CHECKING:
+    from lakehouse.storage import S3Client
 
 
 log = logging.getLogger(__name__)
@@ -46,6 +55,9 @@ _BOOT_ATTEMPTS: Final = 20
 _BOOT_DELAY_SECONDS: Final = 3.0
 #: What an exchange can fail with: the token could not be read, STS refused it, or STS did not answer.
 EXCHANGE_FAILURES: Final = (IdentityTokenUnavailableError, ClientError, BotoCoreError)
+
+#: How long a session lasts; RustFS takes 900 to 43,200 s (`rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:64-83`).
+type SessionSeconds = Annotated[int, Field(ge=900, le=43200)]
 
 
 class WebIdentity(BaseModel):
@@ -171,6 +183,112 @@ def held_session(identity: WebIdentity) -> S3KeyPair:
     return key_pair
 
 
+def key_pair_in_force(identity: WebIdentity | None, env_pair: S3KeyPair) -> S3KeyPair:
+    """What a service signs with: the session its token was exchanged for, or ``env_pair`` when it projects no token.
+
+    Raises:
+        StoreCredentialUnavailableError: The service projects a token and holds no unexpired session (503).
+    """
+    return env_pair if identity is None else held_session(identity)
+
+
+def require_one_store_identity(identity: WebIdentity | None, *, env_pair: S3KeyPair, prefix: str) -> None:
+    """Refuse a projected token that would be sent to AWS's STS, or that has a key pair beside it.
+
+    A service signs with the sessions its ServiceAccount token is exchanged for, or, with no token (the offline and Dagger
+    lanes), with the environment's pair, never both: a pair beside the token is a second identity. Without an STS
+    endpoint boto3 resolves the PUBLIC AWS STS endpoint and would POST the token there (audit 2026-07-14), so the endpoint
+    is named, never defaulted (ADR 0170).
+
+    Args:
+        identity: The service's token and STS, ``None`` when it projects no token.
+        env_pair: The pair its environment names, empty halves where it names none.
+        prefix: The service's variable prefix (``LANCE``, ``LINEAGE``, ``MAINTENANCE``), which each refusal names.
+
+    Raises:
+        ValueError: The token names no STS endpoint, or a key pair stands beside it.
+    """
+    if identity is None:
+        return
+    token = f"{prefix}_S3_WEB_IDENTITY_TOKEN_FILE"
+    if identity.endpoint is None:
+        raise ValueError(f"{prefix}_S3_STS_ENDPOINT is required with {token} (else the token would be sent to the public AWS STS endpoint)")
+    if env_pair.access_key_id or env_pair.secret_access_key.get_secret_value():
+        raise ValueError(f"a key pair beside {token} is a second identity: this service signs only with sessions its token is exchanged for")
+
+
+def require_a_token(identity: WebIdentity | None, *, prefix: str) -> None:
+    """Refuse a service that reads its secrets from the secret store yet projects no token: its pair would be a secret in
+    the environment, so its store identity must be its ServiceAccount token.
+
+    Raises:
+        ValueError: The service projects no token.
+    """
+    if identity is None:
+        raise ValueError(f"with {prefix}_SECRETS_FROM_DAPR the object-store identity is the ServiceAccount token: set {prefix}_S3_WEB_IDENTITY_TOKEN_FILE")
+
+
+def require_env_pair(env_pair: S3KeyPair, *, prefix: str) -> None:
+    """Refuse to boot a service that projects no token without both halves of its environment's pair.
+
+    An empty secret would fail every request with a `SignatureDoesNotMatch` rather than a startup error. The key id is
+    refused too: any default for it would be the store's root account, whose credential reaches every tenant's bytes
+    and the records that govern the services themselves. A credential is a pair, and refusing one half leaves the other
+    unguarded.
+
+    Raises:
+        ValueError: A half of the pair is missing.
+    """
+    if not env_pair.access_key_id:
+        raise ValueError(f"{prefix}_S3_ACCESS_KEY_ID is required when the service projects no token ({prefix}_S3_WEB_IDENTITY_TOKEN_FILE)")
+    if not env_pair.secret_access_key.get_secret_value():
+        raise ValueError(f"{prefix}_S3_SECRET_ACCESS_KEY is required when the service projects no token ({prefix}_S3_WEB_IDENTITY_TOKEN_FILE)")
+
+
+def env_alias(prefix: str) -> Callable[[str], str]:
+    """A settings class's ``alias_generator`` that names each field it gives no alias of its own ``<PREFIX>_<FIELD>``: the
+    variable its ``env_prefix`` reads it from, so a service mixing in `StoreIdentitySettings` reads and validates those
+    fields under the names it reads its own."""
+    return lambda field: f"{prefix}_{field.upper()}"
+
+
+class StoreIdentitySettings(BaseSettings):
+    """A service's identity at the object store ([[XC-083]], [[XC-084]], ADR 0170), mixed into its settings and read under
+    its own prefix (`env_alias`): ``<PREFIX>_S3_WEB_IDENTITY_TOKEN_FILE`` and the rest.
+
+    Its ServiceAccount token, projected for the store's audience, is exchanged at ``s3_sts_endpoint`` for the sessions it
+    signs with, and it then holds no key. A service that projects none (the offline and Dagger lanes, the secret store
+    off) signs with the environment's pair. The service's own validator refuses the identities the module's `require_*`
+    functions refuse.
+    """
+
+    #: The ServiceAccount token the pod projects for the store's audience; unset in a lane that projects none.
+    s3_web_identity_token_file: Path | None = None
+    #: The STS the token is exchanged at; named whenever a token is, never defaulted (`require_one_store_identity`).
+    s3_sts_endpoint: str | None = None
+    #: The role the token is exchanged for. AWS assumes it; a store that grants the policy the token's subject names
+    #: (RustFS, measured 2026-10-18 by `scripts/rustfs_web_identity_measure.py`) ignores it, and boto3 requires one.
+    s3_assume_role_arn: str = "arn:aws:iam::000000000000:role/rask"
+    #: How long a session lasts. It is renewed at half its life, so a request that took the old one still has half to finish.
+    s3_session_seconds: SessionSeconds = 3600
+    #: The pair the service signs with when it projects no token: the offline and Dagger lanes' fixture.
+    s3_access_key_id: str = ""
+    s3_secret_access_key: SecretStr = SecretStr("")
+    s3_region: str = DEFAULT_REGION
+
+    @property
+    def web_identity(self) -> WebIdentity | None:
+        """The service's identity at the store, or ``None`` when it signs with the environment's pair."""
+        if self.s3_web_identity_token_file is None:
+            return None
+        return WebIdentity(token_file=self.s3_web_identity_token_file, endpoint=self.s3_sts_endpoint, region=self.s3_region, role_arn=self.s3_assume_role_arn)
+
+    @property
+    def env_pair(self) -> S3KeyPair:
+        """The pair the environment names, the offline and Dagger lanes' alone."""
+        return S3KeyPair(access_key_id=self.s3_access_key_id, secret_access_key=self.s3_secret_access_key)
+
+
 class StoreSession:
     """Keeps a service's object-store session unexpired: exchanged at boot, exchanged again once half its life is used."""
 
@@ -258,3 +376,55 @@ class StoreSession:
             except Exception:
                 # A fault in one pass must not end the loop: the next pass is the only way the session is renewed.
                 log.exception("store_session_pass_failed")
+
+
+async def start_store_session(identity: WebIdentity | None, *, session_name: str, duration_seconds: int) -> StoreSession | None:
+    """Exchange ``identity``'s token at boot and keep its session renewed, or ``None`` for a service that projects no token.
+
+    The caller stops what this returns when its lifespan ends.
+
+    Raises:
+        RuntimeError: The boot exchange failed; see `StoreSession.exchange_at_boot`.
+    """
+    if identity is None:
+        return None
+    session = StoreSession(identity, session_name=session_name, duration_seconds=duration_seconds)
+    await session.start()
+    return session
+
+
+class JobStoreIdentity(BaseSettings):
+    """A one-shot job's identity at the store, from its pod's environment (`RASK_S3_*`): the token it projects and its STS.
+
+    A job holds no key ([[XC-084]]). The token file, the STS and the role are required, so a job missing one fails at its
+    start: a job that fell back to boto3's default chain would sign with whatever that finds, which on a cloud node is
+    the node's own role.
+    """
+
+    model_config = SettingsConfigDict(env_prefix="RASK_S3_", extra="ignore", frozen=True)
+
+    web_identity_token_file: Path
+    sts_endpoint: str
+    #: The role the token is exchanged for: AWS assumes it; a store granting the policy the token's subject names ignores it.
+    assume_role_arn: str
+    #: How long the run's session lasts.
+    session_seconds: SessionSeconds = 3600
+    region: str = DEFAULT_REGION
+
+    @property
+    def web_identity(self) -> WebIdentity:
+        """The token and the STS it is exchanged at, as the exchange takes them."""
+        return WebIdentity(token_file=self.web_identity_token_file, endpoint=self.sts_endpoint, region=self.region, role_arn=self.assume_role_arn)
+
+
+def job_client(identity: JobStoreIdentity, *, session_name: str) -> S3Client:
+    """The S3 client a one-shot job signs its whole run with: one session ``identity``'s token is exchanged for. Blocking.
+
+    Raises:
+        RuntimeError: The token could not be read, or STS issued no session.
+    """
+    try:
+        issued = exchange(identity.web_identity, session_name=session_name, duration_seconds=identity.session_seconds)
+    except EXCHANGE_FAILURES as exc:
+        raise RuntimeError(f"the object store exchanged no session for the token at {identity.web_identity_token_file}: {exc}") from exc
+    return object_client(StorageOptions(key_pair=issued.key_pair, options={REGION: identity.region}))

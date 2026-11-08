@@ -20,17 +20,26 @@ import logging
 from functools import partial
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import (
-    TableBranchNotFoundError,
-)
+from lance_namespace import InvalidTableStateError, ServiceUnavailableError, TableBranchNotFoundError
 
-from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, VendorDep
+from catalog.api.dependencies import DoorTableDep, FgaClientDep, Resolver, ResolverDep, SettingsDep, VendorDep
 from catalog.api.security import CurrentSubject, CurrentToken
 from catalog.core.base_judge import BaseJudge
-from catalog.core.vending import Tier, dataset_facts, require_vendable_bases, role_session_name, table_has_branch, unsanctioned_bases, vend_or_refuse
+from catalog.core.vending import (
+    TableRecords,
+    Tier,
+    dataset_facts,
+    requested_tier,
+    require_vendable_bases,
+    role_session_name,
+    table_has_branch,
+    unsanctioned_bases,
+    vend_or_refuse,
+)
 from catalog.schemas import CredentialResponse, VendedCredentials
+from lakehouse import maintenance_policies
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.version_retention import recorded_branch
@@ -45,7 +54,42 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
 
 
-@router.post("/{id}/credentials", response_model_exclude_none=True)
+async def _ancestor_uuids(resolver: Resolver, segments: list[str]) -> list[str]:
+    """The uuids of the namespaces the table ``segments`` names lies in, outermost first."""
+    uuids: list[str] = []
+    for depth in range(1, len(segments)):
+        if (namespace_uuid := await resolver.namespace_uuid(segments[:depth])) is not None:
+            uuids.append(namespace_uuid)
+    return uuids
+
+
+async def require_reclaimable_history(request: Request, table: DoorTableDep, resolver: ResolverDep, settings: SettingsDep) -> None:
+    """Refuse the maintain tier for a table whose maintenance policy keeps its whole history ([[XC-084]]).
+
+    That tier deletes and puts anywhere in the table, and a session policy cannot refuse a put over an existing manifest,
+    so its holder could delete or rewrite the history the policy keeps. The pass has nothing to write there: it reclaims
+    nothing on a held table, and the commit-path cleanup a held table may be armed with fires only inside a commit, which
+    every catalog door disarms before it makes (``lakehouse.auto_cleanup``). The policy is resolved as maintenance
+    resolves it: the table's own record, else its nearest namespace's, else its project's
+    (``maintenance_policies.resolve_policy``).
+
+    Raises:
+        InvalidTableStateError: The table's policy keeps its whole history (code 19).
+        ServiceUnavailableError: The policies could not be read, so whether the table is held is unknown.
+    """
+    if requested_tier(request.query_params) != "maintain":
+        return
+    namespace_uuids = await _ancestor_uuids(resolver, table.resolved.segments)
+    try:
+        records = await run_in_threadpool(maintenance_policies.list_policies, settings.registry_root, settings.storage_options())
+    except OSError as exc:
+        raise ServiceUnavailableError("the maintenance policies could not be read, so no maintain-tier credential was vended") from exc
+    policy = maintenance_policies.resolve_policy(records, table.location, table_uuid=table.resolved.require_uuid(), namespace_uuids=namespace_uuids)
+    if maintenance_policies.keeps_whole_history(policy):
+        raise InvalidTableStateError("the table's maintenance policy keeps its whole history, so no credential that could delete or rewrite it is vended")
+
+
+@router.post("/{id}/credentials", response_model_exclude_none=True, dependencies=[Depends(require_reclaimable_history)])
 async def vend_credentials(
     id: str,
     table: DoorTableDep,
@@ -57,7 +101,7 @@ async def vend_credentials(
     tier: Annotated[
         Tier,
         Query(
-            description="`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix)."
+            description="`read` (can_read_data), `write` (can_write_data: read the table, put data, transaction and deletion files and a staged manifest for CreateTableVersion to finalize) or `maintain` (can_vend_maintain, the maintenance identity's alone: get, put and delete the whole prefix but its refs, and the table's history fence and committed-file records on the control root)."
         ),
     ] = "read",
     # [[LH-055]] WHICH branch this credential is for. Naming one narrows the grant rather than widening
@@ -79,7 +123,8 @@ async def vend_credentials(
     it is vended to; the caller's own token never leaves the catalog.
 
     It is scoped to the location the door resolved, never to the name, and answered only while that location still
-    holds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]).
+    holds the table authorized: a credential for a location is a grant on whatever table holds it ([[LH-530]]). The
+    maintain tier is refused 409 (code 19) for a table whose maintenance policy keeps its whole history.
     """
     location = table.location
     # `main` is the table itself, which no branch list names; the credential for it is main's.
@@ -104,6 +149,11 @@ async def vend_credentials(
         await run_in_threadpool(table.require_held)
         raise
     await run_in_threadpool(table.require_held)
+    # THE MAINTAIN TIER IS ANSWERED DIRECT WHATEVER THE TABLE HOLDS ([[LH-219]]). It opens to the maintenance identity
+    # alone (`can_vend_maintain`), whose own session reads every byte of the estate, and the cleanup it signs is
+    # root-scoped, so neither server-mediated answer below guards anything there; and maintenance signs a rewrite with this
+    # vend or not at all, so a classified table answered server-mediated would never have a version reclaimed.
+    to_a_client = tier != "maintain"
     # [[LH-058]] A CLASSIFIED COLUMN MAKES A TABLE UNVENDABLE RAW, and it is a property of the TABLE
     # rather than of the caller — the same shape as the unsanctioned base below, for a reason that was
     # measured rather than chosen.
@@ -123,7 +173,7 @@ async def vend_credentials(
     # WHAT THIS DOES NOT YET DO, stated so it is not mistaken for more: the server-mediated path does
     # not mask either. This stops the raw bytes leaving under a 900 s credential the caller holds,
     # which is the precondition for masking rather than masking itself.
-    if facts.classified:
+    if to_a_client and facts.classified:
         log.info("vend_server_mediated_classified_columns", extra={"location": location, "columns": list(facts.classified)})
         return CredentialResponse(mode="server_mediated")
     # #3-B ⊥ #2, NARROWED to the bases the policy would actually miss ([[LH-057]]). Every base here is
@@ -131,9 +181,12 @@ async def vend_credentials(
     # it — `build_session_policy` grants each allowlisted base a `ListBase<n>`/`BaseObjects<n>` pair, so the
     # client reaches its own bytes. A sanctioned base the policy cannot grant is reachable only through
     # the catalog's own credential, which is what the server-mediated answer routes the caller to.
-    if missed := unsanctioned_bases(location, bases.bases, settings.multibase_data_base_list):
+    if to_a_client and (missed := unsanctioned_bases(location, bases.bases, settings.multibase_data_base_list)):
         log.info("vend_server_mediated_unreachable_bases", extra={"location": location, "bases": list(missed)})
         return CredentialResponse(mode="server_mediated")
+    # A vend is a grant on the table its uuid identifies, so a table no uuid identifies is refused before anything is
+    # minted ([[LH-534]]); the uuid also keys the records a maintain-tier vend reaches on the control root.
+    table_uuid = table.resolved.require_uuid()
     # The blocking STS exchange runs in the threadpool; a refused or unreachable exchange answers 503
     # (`vend_or_refuse`), never a bare 500.
     vended = await run_in_threadpool(
@@ -146,6 +199,7 @@ async def vend_credentials(
             bases=bases.bases,
             data_directories=bases.data_directories,
             branch=branch,
+            records=TableRecords(control_root=settings.registry_root, table_uuid=table_uuid),
         )
     )
     # The secret and the session token leave the catalog in this body and nowhere else ([[LH-072]]), built before the
@@ -153,7 +207,7 @@ async def vend_credentials(
     creds = None if vended is None else VendedCredentials(storage_options=vended.as_storage_options().in_clear(), expires_at_millis=vended.expires_at_millis)
     mode = "server_mediated" if creds is None else "direct"
     if mode == "direct":  # #41 audit the actual issuance of direct object-store credentials (who, what, tier)
-        obj = fga.table_object(table.resolved.require_uuid())
+        obj = fga.table_object(table_uuid)
         audit(
             AuditAction.VEND_CREDENTIALS,
             AuditOutcome.SUCCESS,

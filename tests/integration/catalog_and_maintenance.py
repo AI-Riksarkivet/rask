@@ -1,8 +1,8 @@
 """The real catalog and the real maintenance service over one control root on moto, asking one in-memory OpenFGA.
 
 For a test whose claim crosses the two services: the catalog writes what a door leaves (a trash record, a grant) and a
-maintenance tick acts on it. The catalog runs with OIDC and FGA on once its lifespan has run, acting as alice, and the
-``TupleStore`` behind both holds what the doors write (``openfga_grants``).
+maintenance tick acts on it, through the catalog's own doors. The catalog runs with OIDC and FGA on once its lifespan has
+run, acting as alice, and the ``TupleStore`` behind it holds what the doors write (``openfga_grants``).
 """
 
 from __future__ import annotations
@@ -41,13 +41,13 @@ def catalog_and_maintenance(
     monkeypatch: pytest.MonkeyPatch,
     *,
     env: dict[str, str],
-    maintenance_fga: bool = False,
     control: Any = None,  # noqa: ANN401 — the maintenance app's ControlEmitter, as the test captures it
+    catalog_control: Any = None,  # noqa: ANN401 — the catalog app's ControlEmitter, as the test captures it
 ) -> Generator[TwoServices]:
     """Both apps over a fresh control bucket, with ``env`` over the shared settings and project-less.
 
-    ``maintenance_fga`` turns FGA on in maintenance's settings, as the chart does; ``control`` replaces its control
-    emitter.
+    ``control`` and ``catalog_control`` replace the two apps' control emitters. Maintenance holds no OpenFGA client: it
+    asks the catalog's doors, which a test routes to this catalog (`maintenance_vend_doors.catalog_doors`).
     """
     bucket = f"two-{uuid.uuid4().hex[:10]}"
     s3: S3Client = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
@@ -98,12 +98,10 @@ def catalog_and_maintenance(
             act_as(catalog, "alice")
             monkeypatch.setattr(catalog_app.state, "fga", store)
             monkeypatch.setattr(catalog_app.state, "lineage_emitter", lineage, raising=False)
-            monkeypatch.setattr(maintenance_app.state, "fga_client", store)
-            if maintenance_fga:
-                maintained = maintenance_settings().model_copy(update={"fga_enabled": True})
-                maintenance_app.dependency_overrides[maintenance_settings] = lambda: maintained
             if control is not None:
                 monkeypatch.setattr(maintenance_app.state, "control_emitter", control, raising=False)
+            if catalog_control is not None:
+                monkeypatch.setattr(catalog_app.state, "control_emitter", catalog_control, raising=False)
             yield TwoServices(catalog, maintenance, store, s3)
     finally:
         catalog_app.dependency_overrides.clear()

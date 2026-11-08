@@ -39,7 +39,7 @@ from lance_namespace import TableBranchNotFoundError
 from pydantic import SecretStr
 
 from catalog.api.v1.endpoints.credentials import vend_credentials
-from catalog.core.vending import VendedSession
+from catalog.core.vending import ReclaimScope, VendedSession
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import location_claims
 from lakehouse.governed.store_credential import S3KeyPair
@@ -69,6 +69,9 @@ class _Vendor:
     def vend(self, **kwargs: Any) -> VendedSession:
         self.calls.append(kwargs)
         return VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
+
+    def vend_reclaim(self, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
+        raise AssertionError("the table vend door vends no reclaim")
 
 
 def _settings() -> SimpleNamespace:

@@ -1,13 +1,9 @@
 """No store identity may be blank: the render refuses it.
 
-Lineage and maintenance are each handed the NAMES of their scoped S3 key pair (`LINEAGE_…`, `MAINTENANCE_…`) and fetch
-both halves from the Dapr secret store (ADR 0166), while the dev store's seed writes a plane's pair only when its identity
-is named. The catalog holds no pair: its store identity is the token its pod projects for `objectStore.identity.audience`
-(ADR 0170), which the store trusts as its identity provider's client, so a blank audience is refused like a blank pair.
-The two can disagree only where an identity is blank, and the only other pair a plane could present is the store's root,
-which on RustFS signs every STS session token (ADR 0168), so a blank identity is refused at render. That every pair a
-service is told to read is the one the seed writes is read by running the seed
-(`test_the_dev_openbao_is_seeded_by_its_own_pod.py`).
+Every lakehouse workload's store identity is the token its pod projects for `objectStore.identity.audience`, which the
+store trusts as its identity provider's client, exchanged for the role `objectStore.identity.roleArns.<component>` names
+(ADR 0170, [[XC-084]]). A blank audience projects a token the store refuses, and a blank role is refused by STS at the
+first exchange, so either is refused at render rather than at a pod's boot.
 
 A sidecar logs in to the secret store with a token projected for one audience, which every app's role is bound to
 ([[XC-165]]): a role with no audience admits any token of its ServiceAccount, so a blank audience is refused too.
@@ -22,9 +18,9 @@ import pytest
 from tests.unit.chart_render import REPO, render_chart_text
 
 
-#: Each identity the render refuses blank, by the value that names it: the planes' scoped pairs, each refused by the
-#: template that tells a plane its field names, and the audience every sidecar's store login is bound to.
-_IDENTITIES = ("objectStore.identity.audience", "objectStore.lineageAccessKey", "objectStore.maintenanceAccessKey", "openbao.identity.audience")
+#: Each identity the render refuses blank, by the value that names it: the store audience every workload's token is
+#: projected for, a workload's role, and the audience every sidecar's secret-store login is bound to.
+_IDENTITIES = ("objectStore.identity.audience", "objectStore.identity.roleArns.maintenance", "openbao.identity.audience")
 
 _BASE = ("--set", "image.localImages=true")
 

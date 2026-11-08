@@ -60,21 +60,21 @@ def _weight(job: dict) -> int:
 @pytest.mark.parametrize("phase", ["install", "upgrade"])
 def test_bootstrap_admin_runs_AFTER_the_jobs_it_waits_on(phase: str) -> None:
     """`bootstrap-admin` writes `warehouse:...#maintainer`, which the store accepts only once the model defining that
-    relation is in it, and it waits for the catalog, which cannot start until `object-store-scoped-users` has created its S3
-    user. On an INSTALL the scoped-users Job is part of the manifest, never a hook: Helm runs post-install hooks only once
-    every resource passes `--wait`, so a post-install scoped-users left the catalog unable to pass it and a fresh
-    `helm install --wait` deadlocked ([[XC-152]]). On an UPGRADE it stays a hook weighted before bootstrap-admin, so a
-    new identity's user exists before pods that use it roll ([[XC-133]], CI run 38217921913)."""
+    relation is in it, and it waits for the catalog, which cannot start until `object-store-provisioning` has written the
+    policy its token is granted. On an INSTALL the provisioning Job is part of the manifest, never a hook: Helm runs
+    post-install hooks only once every resource passes `--wait`, so a post-install provisioning left the catalog unable to
+    pass it and a fresh `helm install --wait` deadlocked ([[XC-152]]). On an UPGRADE it stays a hook weighted before
+    bootstrap-admin, so a new identity's policy exists before pods that use it roll ([[XC-133]], CI run 38217921913)."""
     jobs = _jobs(_render(*(["--is-upgrade"] if phase == "upgrade" else [])))
     bootstrap = next((j for name, j in jobs.items() if "bootstrap-admin" in name), None)
     if bootstrap is None:
         pytest.skip("bootstrap-admin does not render here; the ordering it must beat is not present")
-    [scoped] = [j for name, j in jobs.items() if "-object-store-scoped-users" in name and "-object-store-scoped-users-prune" not in name]
-    hook = (scoped["metadata"].get("annotations") or {}).get("helm.sh/hook")
+    [provisioning] = [j for name, j in jobs.items() if "-object-store-provisioning" in name and "-object-store-provisioning-prune" not in name]
+    hook = (provisioning["metadata"].get("annotations") or {}).get("helm.sh/hook")
     if phase == "install":
-        assert hook is None, f"on install the scoped-users Job is a {hook!r} hook; the catalog waits on it, so --wait deadlocks"
+        assert hook is None, f"on install the provisioning Job is a {hook!r} hook; the catalog waits on it, so --wait deadlocks"
         return
     assert hook is not None and "pre-upgrade" in hook, hook
-    before = {name: j for name, j in jobs.items() if ("model" in name and "openfga" in name) or "-object-store-scoped-users" in name}
+    before = {name: j for name, j in jobs.items() if ("model" in name and "openfga" in name) or "-object-store-provisioning" in name}
     late = {name: _weight(j) for name, j in before.items() if _weight(j) >= _weight(bootstrap)}
     assert not late, f"these run at or after bootstrap-admin (weight {_weight(bootstrap)}), which waits on them: {late}"

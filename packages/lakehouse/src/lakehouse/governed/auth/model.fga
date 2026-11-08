@@ -208,6 +208,21 @@ type estate
         define can_decide_access: decider
         define can_expand_members: member_expander
         define can_probe_governance: governance_prober
+        # MAINTENANCE'S RECLAIM OF THE TRASH ([[XC-084]]). Maintenance holds no write of its own on the store, so the
+        # catalog vends it a session for one trash record at a time (`POST /management/v1/trash/{kind}/{uuid}/credentials`),
+        # judged on the record. Estate-wide because the trash is: a record keeps its object's location, and a warehouse
+        # rung would find a record's warehouse only through a binding its drop may have outlived. `[user]` alone and
+        # reached from no tier, like the decision roles: the holder is the one maintenance identity, whose role the
+        # chart's bootstrap hook writes (`lance.fgaEstateRoles`).
+        define reclaimer: [user]
+        define can_reclaim_trash: reclaimer
+        # MAINTENANCE'S DRIFT RECONCILER ([[LH-061]], [[XC-084]]). Maintenance holds no OpenFGA credential, since one could
+        # write any tuple: its drift report reads the store's grant census through the catalog, and its repair and rebuild
+        # ask the catalog to revoke the grants of an object no registry names or to write a warehouse's tenancy edge, each
+        # judged again on the catalog's own registries. `[user]` alone and reached from no tier, like `reclaimer`: the
+        # holder is the one maintenance identity, whose role the chart's bootstrap hook writes (`lance.fgaEstateRoles`).
+        define reconciler: [user]
+        define can_reconcile_grants: reconciler
 
 type warehouse
   relations

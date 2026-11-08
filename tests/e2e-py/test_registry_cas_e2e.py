@@ -22,7 +22,7 @@ import pytest
 from botocore.exceptions import BotoCoreError, ClientError
 
 from lakehouse import records
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage_options import StorageOptions, object_client
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
@@ -48,7 +48,7 @@ def live_root() -> str:
     if not ENDPOINT:
         pytest.skip("set LANCE_E2E_S3_ENDPOINT (see module docstring)")
     try:
-        records._s3_client(_SO).head_bucket(Bucket=BUCKET)
+        object_client(_SO).head_bucket(Bucket=BUCKET)
     except (ClientError, BotoCoreError) as exc:
         pytest.skip(f"bucket {BUCKET!r} unreachable at {ENDPOINT}: {exc}")
     return f"s3://{BUCKET}"

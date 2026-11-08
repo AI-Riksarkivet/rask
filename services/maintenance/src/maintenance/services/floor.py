@@ -42,11 +42,11 @@ Both guards below exist for that measurement.
 THE COMMIT IS SIGNED BY A VENDED, TABLE-SCOPED CREDENTIAL, and a catalog denial REFUSES the raise.
 A config commit on a table the catalog refused, signed by whatever opened the dataset, is signed by the
 deployment's ambient key: the bypass `credentials.MaintenanceDenied` exists to stop, and version expiry
-refuses for the same reason. `write_options_for` returns a scoped credential where the door vends one, raises
-`MaintenanceDenied` on a 401/403, `TableNotGoverned` on a 404 naming no table and `VendUndecided` on a 5xx,
-and falls back to the ambient options only when vending is unconfigured or unreachable, which is the
-deployment posture it already counts. It is asked only about the table the catalog's ``__manifest`` names the dataset
-as: a dataset no row names is refused unvended and unwritten ([[LH-520]]).
+refuses for the same reason. `write_options_for` returns the scoped credential the door vends and nothing else
+([[LH-219]]): it raises `MaintenanceDenied` on a 401/403 and, as its `VendingNotDirect`, where the deployment vends no
+direct credential, `TableNotGoverned` on a 404 naming no table and `VendUndecided` when the door cannot be asked or
+decides nothing, and each refuses the raise. It is asked only about the table the catalog's ``__manifest`` names the
+dataset as: a dataset no row names is refused unvended and unwritten ([[LH-520]]).
 
 THE LINEAGE PLANE ALREADY ANTICIPATES THIS SHAPE. Lance records the operation as `UpdateConfig`, which
 `lineage.core.reconcile.MAINTENANCE_OPERATIONS` lists — so the sweep neither reports the version as a
@@ -216,7 +216,7 @@ def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: Maint
     # would hit rather than a plan it could never carry out. A dry run that lists a table the
     # catalog will refuse is the preview telling an operator the opposite of what happens.
     try:
-        write_options = write_options_for(uri, settings, table_id=table, fallback=storage_options)
+        write_options = write_options_for(uri, settings, table_id=table)
     except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
         return outcome.model_copy(update={"refused": str(exc)})
     if settings.floor_raise_dry_run:

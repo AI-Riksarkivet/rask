@@ -21,7 +21,7 @@ import pytest
 from pydantic import SecretStr
 
 from catalog.api.v1.endpoints import warehouses as endpoint
-from catalog.core.vending import VendedSession
+from catalog.core.vending import ReclaimScope, TableRecords, VendedSession
 from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, ProbeCheck
 from lakehouse.governed.store_credential import S3KeyPair
 
@@ -41,12 +41,23 @@ class _Vendor:
         self.asked: list[tuple[str, str]] = []
 
     def vend(
-        self, *, table_location: str, tier: str, session_name: str, bases: Sequence[str] = (), data_directories: Sequence[str] = (), branch: str = ""
+        self,
+        *,
+        table_location: str,
+        tier: str,
+        session_name: str,
+        bases: Sequence[str] = (),
+        data_directories: Sequence[str] = (),
+        branch: str = "",
+        records: TableRecords | None = None,
     ) -> VendedSession | None:
         self.asked.append((table_location, tier))
         if self._error is not None:
             raise self._error
         return self._credentials
+
+    def vend_reclaim(self, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
+        raise AssertionError("the scope probe vends no reclaim")
 
 
 class _Store:
@@ -294,7 +305,7 @@ class TestTheDoorGatesBeforeItWrites:
     def _settings() -> Any:
         from catalog.core.config import Settings
 
-        return Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_WAREHOUSES_ENABLED=True)
+        return Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_WAREHOUSES_ENABLED=True)
 
     @pytest.mark.anyio
     async def test_a_DENIED_caller_gets_the_same_answer_as_a_missing_warehouse(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,7 +340,7 @@ class TestTheDoorGatesBeforeItWrites:
 
         read: list[str] = []
         monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: read.append("read") or None)
-        off = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_WAREHOUSES_ENABLED=False)
+        off = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_WAREHOUSES_ENABLED=False)
 
         with pytest.raises(UnsupportedOperationError):
             await endpoint.validate_warehouse_credentials("wh", off, _token(), None, _Vendor(credentials=None))

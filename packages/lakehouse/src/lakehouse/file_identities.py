@@ -52,8 +52,13 @@ class CommittedFiles(BaseModel):
     files: list[CommittedFile]
 
 
+def records_of(table_uuid: str) -> str:
+    """Where the table ``table_uuid``'s records are kept on the control root, one object per commit beneath it."""
+    return f"{PREFIX}/{table_uuid}"
+
+
 def _key(table_uuid: str, transaction_uuid: str) -> str:
-    return f"{PREFIX}/{table_uuid}/{transaction_uuid}.json"
+    return f"{records_of(table_uuid)}/{transaction_uuid}.json"
 
 
 def as_stored(table_root: str, storage_options: StorageOptions, transaction_uuid: str, paths: Sequence[str]) -> CommittedFiles:
@@ -85,7 +90,7 @@ def recorded(control_root: str, storage_options: StorageOptions, table_uuid: str
     """
     return [
         CommittedFiles.model_validate(loaded)
-        for loaded in list_records(control_root, storage_options, f"{PREFIX}/{table_uuid}", event="file_identities", strict=True)
+        for loaded in list_records(control_root, storage_options, records_of(table_uuid), event="file_identities", strict=True)
     ]
 
 
@@ -98,6 +103,6 @@ def forget(control_root: str, storage_options: StorageOptions, table_uuid: str, 
 def end(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
     """Delete every record of the table ``table_uuid``; whether any existed. Writes no directory marker
     (:func:`stored_objects.delete_objects`), since maintenance, which ends a purged table's records, may put none here."""
-    listed = stored_objects.list_under(f"{control_root.rstrip('/')}/{PREFIX}/{table_uuid}", storage_options)
+    listed = stored_objects.list_under(f"{control_root.rstrip('/')}/{records_of(table_uuid)}", storage_options)
     stored_objects.delete_objects(control_root, storage_options, [stored.path for stored in listed])
     return bool(listed)

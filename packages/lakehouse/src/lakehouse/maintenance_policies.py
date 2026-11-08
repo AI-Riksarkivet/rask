@@ -132,6 +132,12 @@ def resolve_policy(records: list[dict[str, Any]], uri: str, *, table_uuid: str, 
     return _project_policy(records, uri)
 
 
+def keeps_whole_history(policy: dict[str, Any] | None) -> bool:
+    """Whether the resolved ``policy`` keeps the whole version history of what it governs (``cleanup_enabled`` false: a
+    legal hold, or a time-travel window that is the product), so nothing of that history is reclaimed."""
+    return policy is not None and not bool(policy.get("cleanup_enabled", True))
+
+
 def _by_uuid(records: list[dict[str, Any]], kind: str) -> dict[str, dict[str, Any]]:
     return {str(record["uuid"]): record for record in records if record.get("kind") == kind and record.get("uuid")}
 

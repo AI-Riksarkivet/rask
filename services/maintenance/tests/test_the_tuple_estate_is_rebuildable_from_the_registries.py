@@ -20,24 +20,27 @@ that matters here; a structural edge cannot confer access, and a grant can.
 
 from __future__ import annotations
 
-from typing import Any, cast
+import json
+from collections.abc import Iterator
+from pathlib import Path
 
+import httpx
 import pytest
+import respx
 
+from maintenance.core.config import MaintenanceSettings
 from maintenance.services.rebuild import RebuildReport, plan_rebuild, rebuild_tuples
 from maintenance.services.reconcile import ReconcileReport, Sources, UnreferencedProject
 
 
-class _Settings:
-    def __init__(self, *, enabled: bool = True, dry_run: bool = False, max_per_tick: int = 50) -> None:
-        self.tuple_rebuild_enabled = enabled
-        self.tuple_rebuild_dry_run = dry_run
-        self.tuple_rebuild_max_per_tick = max_per_tick
-        self.catalog_service_identity = "service-maintenance"
+CATALOG = "http://catalog.test"
+_DOOR = f"{CATALOG}/management/v1/grants/tenancy/rebuild"
 
 
-def _settings(**kwargs: Any) -> Any:
-    return cast(Any, _Settings(**kwargs))
+def _settings(**over: object) -> MaintenanceSettings:
+    """Built through `model_validate`, so the aliases an operator sets are the ones exercised."""
+    base: dict[str, object] = {"MAINTENANCE_TUPLE_REBUILD_ENABLED": True, "MAINTENANCE_TUPLE_REBUILD_DRY_RUN": False, "MAINTENANCE_CATALOG_URL": CATALOG}
+    return MaintenanceSettings.model_validate({**base, **over})
 
 
 def _report(*unreferenced: str) -> ReconcileReport:
@@ -101,87 +104,71 @@ def test_a_warehouse_under_a_healthy_tenant_is_left_alone() -> None:
 # --- the write path --------------------------------------------------------------------------- #
 
 
-class _Fga:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.writes: list[Any] = []
-        self.origins: list[str] = []
-        self.fail = fail
-
-    async def write_tuples(self, client: Any, tuples: list[Any], *, actor: str, origin: str) -> None:
-        if self.fail:
-            raise RuntimeError("store unreachable")
-        self.writes.extend(tuples)
-        self.origins.append(origin)
-
-
 @pytest.fixture
-def fga(monkeypatch: pytest.MonkeyPatch) -> _Fga:
-    spy = _Fga()
-    monkeypatch.setattr("maintenance.services.rebuild.fga.write_tuples", spy.write_tuples)
-    return spy
+def door(catalog_identity_token: Path) -> Iterator[respx.MockRouter]:
+    """The catalog's side of the wire ([[XC-084]]): maintenance holds no OpenFGA credential, so the write is the
+    catalog's. A request no route matches fails the test, so a pass that asks when it must not fails here."""
+    del catalog_identity_token
+    with respx.mock() as router:
+        yield router
 
 
-#: A stand-in for a wired OpenFGA client. Only its NON-NONE-ness is read here — the write itself is
-#: spied at `fga.write_tuples`, which is the seam the module actually calls.
-_WIRED = object()
+def _writing(door: respx.MockRouter) -> respx.Route:
+    """The tenancy door, writing each edge a warehouse it is asked about names, and answering the rest unjustified."""
+
+    def _answer(request: httpx.Request) -> httpx.Response:
+        asked = json.loads(request.content)["warehouses"]
+        return httpx.Response(200, json={"written": [f"project:acme project warehouse:{w}" for w in asked if w != "acme-second"], "unjustified": {}})
+
+    return door.post(_DOOR).mock(side_effect=_answer)
 
 
-async def _run(settings: Any, fga_client: Any = _WIRED, warehouses: list[dict[str, str]] | None = None) -> RebuildReport:
+async def _run(settings: MaintenanceSettings, warehouses: list[dict[str, str]] | None = None) -> RebuildReport:
     sources = _sources(projects=[_ACME], warehouses=warehouses or [_ACME_WH])
-    return await rebuild_tuples(settings, report=_report("acme"), sources=sources, fga_client=fga_client)
+    return await rebuild_tuples(settings, report=_report("acme"), sources=sources)
 
 
 @pytest.mark.asyncio
-async def test_a_disabled_pass_writes_nothing(fga: _Fga) -> None:
-    report = await _run(_settings(enabled=False))
+async def test_a_disabled_pass_asks_nothing(door: respx.MockRouter) -> None:
+    report = await _run(_settings(MAINTENANCE_TUPLE_REBUILD_ENABLED=False))
 
-    assert report.enabled is False
-    assert fga.writes == []
-
-
-@pytest.mark.asyncio
-async def test_a_dry_run_reports_the_plan_and_writes_nothing(fga: _Fga) -> None:
-    report = await _run(_settings(dry_run=True))
-
-    assert len(report.written) == 1, "a dry run must still say what it would write"
-    assert fga.writes == []
+    assert (report.enabled, report.written) == (False, [])
 
 
 @pytest.mark.asyncio
-async def test_the_write_carries_its_own_origin(fga: _Fga) -> None:
-    """`registry_rebuild`, not `project_create`. An audit row claiming a tuple was minted with its
-    project — when it was reconstructed from a record months later — destroys the one property the
-    origin field exists for, which is the reason `cascade_backfill` is also its own value."""
-    await _run(_settings())
+async def test_a_dry_run_reports_the_plan_and_asks_nothing(door: respx.MockRouter) -> None:
+    report = await _run(_settings(MAINTENANCE_TUPLE_REBUILD_DRY_RUN=True))
 
-    assert fga.origins == ["registry_rebuild"]
+    assert [(t.user, t.relation, t.object) for t in report.written] == [("project:acme", "project", "warehouse:acme-bucket")]
 
 
 @pytest.mark.asyncio
-async def test_an_unreachable_store_degrades_rather_than_failing_the_tick() -> None:
+async def test_the_catalog_writes_the_planned_edges_and_the_pass_reports_what_it_wrote(door: respx.MockRouter) -> None:
+    asked = _writing(door)
+
+    report = await _run(_settings())
+
+    assert json.loads(asked.calls.last.request.content) == {"warehouses": ["acme-bucket"]}
+    assert [(t.user, t.relation, t.object) for t in report.written] == [("project:acme", "project", "warehouse:acme-bucket")]
+
+
+@pytest.mark.asyncio
+async def test_a_door_that_cannot_decide_degrades_rather_than_failing_the_tick(door: respx.MockRouter) -> None:
     """The reconcile report is what everything else is gated on. A tick that 500s because a repair
     failed is worse than one that reports drift it could not fix."""
-    spy = _Fga(fail=True)
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr("maintenance.services.rebuild.fga.write_tuples", spy.write_tuples)
-        report = await _run(_settings())
+    door.post(_DOOR).mock(return_value=httpx.Response(503, json={"code": 17, "detail": "the store did not answer"}))
 
-    assert report.error == "store unreachable"
-    assert report.written == []
+    report = await _run(_settings())
+
+    assert (report.written, "could not decide" in (report.error or "")) == ([], True), report.model_dump()
 
 
 @pytest.mark.asyncio
-async def test_no_fga_client_writes_nothing(fga: _Fga) -> None:
-    report = await _run(_settings(), fga_client=None)
-
-    assert report.written == [] and fga.writes == []
-
-
-@pytest.mark.asyncio
-async def test_the_remainder_beyond_the_cap_is_reported(fga: _Fga) -> None:
+async def test_the_remainder_beyond_the_cap_is_reported(door: respx.MockRouter) -> None:
     """A wholesale tuple loss makes every tenant eligible at once, so an uncapped pass would turn one
     cron fire into an estate-wide authorization write."""
-    report = await _run(_settings(max_per_tick=1), warehouses=[_ACME_WH, {"id": "acme-second", "project": "acme"}])
+    asked = _writing(door)
 
-    assert len(report.written) == 1
-    assert report.capped == 1
+    report = await _run(_settings(MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK=1), warehouses=[_ACME_WH, {"id": "acme-second", "project": "acme"}])
+
+    assert (len(report.written), report.capped, json.loads(asked.calls.last.request.content)) == (1, 1, {"warehouses": ["acme-bucket"]})

@@ -13,13 +13,18 @@ credential build both through here, so neither failure can come back in a copy.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
-from lakehouse.endpoint_scheme import endpoint_scheme
+from lakehouse.endpoint_scheme import allow_http_for, endpoint_scheme
 from lakehouse.governed.store_credential import S3KeyPair
+
+
+if TYPE_CHECKING:
+    from lakehouse.storage import S3Client
 
 
 #: The two spellings of each credential field. :meth:`StorageOptions.in_clear` emits the ``aws_``-prefixed form (it says
@@ -37,6 +42,33 @@ _CREDENTIAL_ALIASES: tuple[tuple[str, str], ...] = (
 #: spelling, so options carrying ``access_key_id`` beside a key pair would name two identities, and which one signs is
 #: not defined.
 CREDENTIAL_KEYS: frozenset[str] = frozenset(alias for aliases in _CREDENTIAL_ALIASES for alias in aliases)
+
+#: Where the store is, the region it signs for and its addressing, each under every spelling object_store reads, the
+#: canonical one first. The canonical spelling is the name Lance reads an ``AWS_*`` variable into, and it reads one only
+#: where the options do not hold that name, so options under it are never joined by the environment's; under a bare
+#: spelling both land and the one applied last wins, in hash order ([[LH-238]]). Measured 2026-11-08 on pylance 13.0.0,
+#: ten fresh processes under ``AWS_ENDPOINT_URL``, ``AWS_REGION`` and ``AWS_VIRTUAL_HOSTED_STYLE_REQUEST``: the bare
+#: spellings sent 5 of 10 to the ambient endpoint, half the requests signed for the ambient region or addressed
+#: virtual-hosted; the canonical ones held in 10 of 10 (`test_explicit_credentials_beat_the_ambient_environment.py`).
+_OPTION_ALIASES: Final[tuple[tuple[str, ...], ...]] = (
+    ("aws_endpoint", "endpoint", "aws_endpoint_url", "endpoint_url"),
+    ("aws_region", "region"),
+    ("aws_virtual_hosted_style_request", "virtual_hosted_style_request"),
+)
+_ALIASED_KEYS: Final = frozenset(key for aliases in _OPTION_ALIASES for key in aliases)
+ENDPOINT: Final = _OPTION_ALIASES[0][0]
+REGION: Final = _OPTION_ALIASES[1][0]
+VIRTUAL_HOSTED: Final = _OPTION_ALIASES[2][0]
+#: The region a client signs for when the options name none: never the ambient ``AWS_REGION``, which is another value in
+#: another process. It is the region RustFS serves (`rustfs@1.0.3:crates/config/src/constants/app.rs:289-292`).
+DEFAULT_REGION: Final = "us-east-1"
+
+#: Pins the credential Lance signs with to the key pair the options carry ([[LH-219]]): measured on pylance 13.0.0, with
+#: it a map that holds no key pair is refused at once ("aws_provider_scheme=token requires aws_access_key_id and
+#: aws_secret_access_key to be set"), where without it Lance walks the default chain to instance metadata, which on a
+#: cloud node signs as the node's role. It does not stop an ambient ``AWS_ACCESS_KEY_ID`` standing in for a missing pair,
+#: so it is derived from the key pair, set wherever one signs, and never read from a map.
+_PROVIDER_SCHEME: Final = "aws_provider_scheme"
 
 
 class StorageOptions(BaseModel):
@@ -85,7 +117,7 @@ class StorageOptions(BaseModel):
     def _holds_no_credential(cls, options: dict[str, str]) -> dict[str, str]:
         if held := sorted(CREDENTIAL_KEYS & options.keys()):
             raise ValueError(f"{', '.join(held)}: a credential is one whole key pair, and only the key pair holds it")
-        return options
+        return _canonical({key: value for key, value in options.items() if key != _PROVIDER_SCHEME})
 
     @classmethod
     def from_flat(cls, flat: Mapping[str, str]) -> StorageOptions:
@@ -97,14 +129,36 @@ class StorageOptions(BaseModel):
         key_pair, options = _split(flat)
         return cls(key_pair=key_pair, options=options)
 
+    @property
+    def endpoint(self) -> str | None:
+        """The store address these options name; ``None`` for AWS proper, whose regional endpoint the client resolves."""
+        return self.options.get(ENDPOINT) or None
+
+    @property
+    def region(self) -> str | None:
+        """The region these options sign for; ``None`` leaves it to the client building them."""
+        return self.options.get(REGION) or None
+
     def reaches_by_endpoint(self, uri: str) -> bool:
         """Whether ``uri`` is an ``s3://`` location these options name an endpoint for, reached through an S3 client there;
         any other location resolves through pyarrow's own filesystem for its scheme."""
-        return uri.startswith("s3://") and bool(self.options.get("endpoint"))
+        return uri.startswith("s3://") and self.endpoint is not None
 
     def with_options(self, extra: Mapping[str, str]) -> StorageOptions:
-        """These options with ``extra``'s keys set over them, under the same key pair."""
-        return StorageOptions(key_pair=self.key_pair, options={**self.options, **extra})
+        """These options with ``extra``'s keys set over them, under the same key pair, each under its canonical spelling.
+
+        Raises:
+            ValueError: ``extra`` names one setting under two spellings that disagree.
+        """
+        return StorageOptions(key_pair=self.key_pair, options={**self.options, **_canonical(extra)})
+
+    def with_endpoint(self, endpoint: str) -> StorageOptions:
+        """These options at ``endpoint``, with the plaintext permit its scheme implies and nothing else can grant.
+
+        ``allow_http`` is derived here and nowhere else (``endpoint_scheme.allow_http_for``): ``"true"`` exactly for an
+        ``http`` scheme, so a TLS store never holds the permit and a plaintext one never lacks it.
+        """
+        return self.with_options({ENDPOINT: endpoint, "allow_http": allow_http_for(endpoint)})
 
     def in_clear(self) -> dict[str, str]:
         """The flat ``storage_options`` map Lance takes, the key pair in clear at the ``aws_`` spelling.
@@ -122,10 +176,16 @@ class StorageOptions(BaseModel):
         ``aws_``-prefixed form read it successfully with them still set. The failure is doubly hidden: it reads as an
         expired or broken credential rather than a precedence bug, and no test process has an ambient AWS_*
         environment, so the spelling that fails in every pod passes every unit test.
+
+        A key pair is pinned as the only credential Lance may sign with (``aws_provider_scheme``, :data:`_PROVIDER_SCHEME`).
         """
         if (pair := self.key_pair) is None:
             return dict(self.options)
-        credential = {"aws_access_key_id": pair.access_key_id, "aws_secret_access_key": pair.secret_access_key.get_secret_value()}
+        credential = {
+            "aws_access_key_id": pair.access_key_id,
+            "aws_secret_access_key": pair.secret_access_key.get_secret_value(),
+            _PROVIDER_SCHEME: "token",
+        }
         if pair.session_token is not None and (token := pair.session_token.get_secret_value()):
             credential["aws_session_token"] = token
         return {**self.options, **credential}
@@ -179,6 +239,40 @@ def _masked(options: Mapping[str, str]) -> dict[str, str]:
     return {key: "**********" if key in CREDENTIAL_KEYS else value for key, value in options.items()}
 
 
+def _canonical(options: Mapping[str, str]) -> dict[str, str]:
+    """``options`` with each setting of :data:`_OPTION_ALIASES` under its canonical spelling.
+
+    Raises:
+        ValueError: Two spellings of one setting name different values: which one Lance applies is decided by hash order.
+    """
+    canonical = {key: value for key, value in options.items() if key not in _ALIASED_KEYS}
+    for aliases in _OPTION_ALIASES:
+        values = {options[key] for key in aliases if key in options}
+        if len(values) > 1:
+            raise ValueError(f"{' and '.join(aliases)} name different values: which one Lance applies is decided by hash order")
+        if values:
+            canonical[aliases[0]] = values.pop()
+    return canonical
+
+
+def object_client(storage_options: StorageOptions) -> S3Client:
+    """The storage seam's S3 client for these options, signed by their whole key pair, at their endpoint and region.
+
+    ``lakehouse.storage.s3_client`` owns, in one place, what a hand-rolled client forfeits: path-style addressing (RustFS
+    refuses virtual-hosted signing with 403 ``SignatureDoesNotMatch``), s3v4, adaptive retries, and connect and read
+    timeouts, which matter on the synchronous path of every registry write, where botocore's default waits forever. The
+    region is the options' own or :data:`DEFAULT_REGION`, never the ambient ``AWS_REGION``. The session token is forwarded
+    whenever the options carry one: a vended credential without it is not a weaker credential but an invalid one, and boto3
+    would fall back to whatever ambient chain it finds, broader rights than the vend scoped. ``lakehouse.storage`` is imported at
+    call time so a test replaces the seam rather than this wrapper, and a local root needs no S3 stack at all.
+    """
+    from lakehouse.storage import s3_client
+
+    access_key, secret_key, session_token = storage_options.credential_in_clear()
+    region = storage_options.region or DEFAULT_REGION
+    return s3_client(storage_options.endpoint, access_key=access_key, secret_key=secret_key, session_token=session_token, region=region)
+
+
 def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: bool = False) -> pafs.S3FileSystem:
     """An ``S3FileSystem`` from lance-style storage options, reaching the endpoint over the scheme
     ``endpoint_scheme`` reads — the rule ``allow_http`` follows too, so pyarrow and Lance agree on
@@ -190,12 +284,12 @@ def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: boo
     (measured on pylance 12.0.0 and pyarrow 25.0.0 against a local listener). A host-only override
     reaches ``/<bucket>/<key>``, a different root of the same store.
 
-    The ``session_token`` is forwarded for the same reason ``records._s3_client`` forwards it, and the
+    The ``session_token`` and the region are forwarded for the same reasons :func:`object_client` forwards them, and the
     stakes are higher here: pyarrow falls back to the default credential chain for anything it was not
     given, so a half-forwarded vended credential can sign with the POD's own role — broader rights than
     the catalog scoped, not narrower. Dropping it fails open.
     """
-    endpoint = storage_options.options["endpoint"]
+    endpoint = storage_options.endpoint or ""
     parts = urlsplit(endpoint)
     access_key, secret_key, session_token = storage_options.credential_in_clear()
     return pafs.S3FileSystem(
@@ -204,6 +298,6 @@ def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: boo
         session_token=session_token,
         endpoint_override=(parts.netloc + parts.path).rstrip("/"),
         scheme=endpoint_scheme(endpoint),
-        region=storage_options.options.get("region", ""),
+        region=storage_options.region or DEFAULT_REGION,
         allow_bucket_creation=allow_bucket_creation,
     )

@@ -793,36 +793,6 @@ tests:
         alertname: HttpServerLatencyHigh
         exp_alerts: []
 
-  # The measured failure: every pass ambient, and NO `tier="scoped"` series at all. The absent-series
-  # case is the one that matters — a rule comparing two vectors would match nothing here and never fire.
-  - interval: 1m
-    input_series:
-      - series: 'compaction_credential_tier_total{tier="ambient"}'
-        values: "0+5x69"
-    alert_rule_test:
-      - eval_time: 65m
-        alertname: CompactionSigningWithAmbientCredential
-        exp_alerts:
-          - exp_labels:
-              severity: "warning"
-              service: "maintenance"
-            exp_annotations:
-              summary: "Most expiry passes are signed by the ambient credential, not a vended one"
-              description: "Credential vending is failing, so maintenance is reclaiming versions under its process credential instead of a per-table 900-second vended one. The blast radius of every pass becomes the maintenance identity's whole scope rather than one table prefix, and the STS machinery the estate's storage rule is built on is doing nothing. Check the vend refusals in `maintenance.services.credentials` — a 401 there is an identity that cannot present its own token, a 403 is one that may not maintain the table."
-
-  # The healthy estate must NOT page. LH-078's measured posture was 8 ambient against 277 scoped; an
-  # alert firing on that is one nobody reads by the second week.
-  - interval: 1m
-    input_series:
-      - series: 'compaction_credential_tier_total{tier="ambient"}'
-        values: "0+1x69"
-      - series: 'compaction_credential_tier_total{tier="scoped"}'
-        values: "0+35x69"
-    alert_rule_test:
-      - eval_time: 65m
-        alertname: CompactionSigningWithAmbientCredential
-        exp_alerts: []
-
   # A failing stage publishes WITHOUT a durable copy, which no other outbox signal can see: depth and
   # oldest-age describe objects that exist, and publish_failed is gated on having staged.
   - interval: 1m

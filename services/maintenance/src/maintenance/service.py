@@ -6,8 +6,9 @@ to ``/<binding-name>`` every interval. Two bindings, two jobs:
 * the **sweep** discovers every Lance dataset across the swept buckets, expires each one's superseded versions
   (``cleanup_old_versions`` behind the refusal ladder that guards reclamation), and writes a due record for each table
   a bring-your-own job should compact or reindex;
-* the **reconcile** pass reads OpenFGA, the control-root registries and object storage and REPORTS where they
-  disagree — then, ONLY if that report ran clean, purges expired trash records (#79). Off by default.
+* the **reconcile** pass reads OpenFGA's grant census (through the catalog), the control-root registries and object
+  storage and REPORTS where they disagree — then, ONLY if that report ran clean, purges expired trash records (#79).
+  Off by default.
 
 With ``MAINTENANCE_ARRIVAL_ENABLED``, ``/maintenance-arrival`` refreshes a written table's due record between ticks.
 Blocking Lance/S3 IO runs in the threadpool so the event loop stays free. Run: ``uvicorn maintenance.service:app``.
@@ -18,7 +19,6 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
-from typing import Any
 
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
@@ -26,75 +26,22 @@ from fastapi import FastAPI
 from lakehouse.bus_watchdog import start_bus_watchdog
 from lakehouse.control_emit import ControlSign, make_control_emitter
 from lakehouse.draining import arm_drain_on_sigterm
-from lakehouse.governed.auth_lifespan import build_fga_client
 from lakehouse.governed.dapr_auth import assert_app_token_configured
-from lakehouse.governed.fga import OpenFgaCredentialRefusedError
-from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, signing_ready_check
-from lakehouse.governed.store_credential import make_store_credential
 from lakehouse.lance_app import build_lance_service_app
 from lakehouse.lance_metrics import instrument_lance_if_available
 from lakehouse.lineage import SigningKey, attach_control_signature, parse_published_keys
 from lakehouse.obs import configure_app_logging
+from lakehouse.store_session import require_env_pair, start_store_session
 from maintenance.api.arrival import register_arrival_route
 from maintenance.api.routes import build_router
-from maintenance.core.config import MaintenanceSettings, get_settings
+from maintenance.core.config import get_settings
 from maintenance.core.lineage_emit import make_emitter
 
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
 
 log = logging.getLogger(__name__)
-
-
-async def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN401 — OpenFgaClient, no protocol
-    """The OpenFGA client this service reads with — and, since #79, REVOKES with. Or ``None``.
-
-    Two consumers with different rights, and the difference is the whole point:
-
-    * the **drift reconciler** only READS tuples (`fga.read_tuples`);
-    * the **expired-trash purge** REVOKES an object's tuples (`fga.revoke_object_tuples`, origin
-      ``lifecycle_delete``) as the FIRST step of destroying it — a grant that outlives the bytes would
-      silently re-grant the old subjects if the id is ever reused. (`lifecycle_delete` is the real
-      origin, on the governed allowlist at `lakehouse.governed.fga`; `purge.py` passes it. An
-      earlier prose pass invented `trash-purge`, which is on no allowlist and matches nothing.)
-
-    Neither may AUTHOR the estate's model, so this passes ``provision=False`` — the estate-wide
-    default since 2026-09-09, stated here because the sweep runs outside a lifespan: the shared bootstrap
-    then takes `fga.resolve`, which is read-only, can never create a store or write a model, and
-    returns ``None`` when there is no store, or no model this image carries, by its deadline. That principle once covered the LOOKUP too,
-    and the cost is recorded in `fga.resolve`'s own docstring — on the chart's DEFAULT posture
-    (`auth.fgaStoreId: ""`, a per-cluster ULID that cannot be a committed default) refusing to look up
-    meant reporting every authz category unavailable against an estate that was right there. Reading
-    which store exists is not authoring one.
-
-    NEVER RAISES, which is why ``fatal`` stays at its default. A misconfigured or unreachable authz
-    endpoint degrades the authz categories; it must not stop the sweep, which is this service's
-    primary job and needs no FGA at all. It also returns the client rather than assigning it: the
-    sweep runs from a cron route and holds it as ``app.state.fga_client``. That holds for a refused
-    credential too, which `build_fga_client` raises for every other service ([[XC-077]]): here it is logged
-    as an error and the authz categories report unavailable while the sweep runs on.
-    """
-    try:
-        return await build_fga_client(settings, service="maintenance", provision=False)
-    except OpenFgaCredentialRefusedError:
-        log.exception("openfga_credential_refused", extra={"service": "maintenance"})
-        return None
-
-
-def require_env_pair(settings: MaintenanceSettings) -> None:
-    """With the secret store off, refuse to boot without both halves of the environment's key pair.
-
-    The sweep is a real S3 consumer, so an empty secret would fail every pass with a cryptic
-    `SignatureDoesNotMatch` instead of a clear startup error. The key half is refused because any default for
-    it would be the store's root account, whose credential reaches every tenant's bytes and the
-    `_projects/`/`_protection/` records that govern maintenance itself. A credential is a pair; refusing only the
-    secret half leaves the dangerous half unguarded.
-    """
-    if not settings.s3_secret_access_key.get_secret_value():
-        raise RuntimeError("MAINTENANCE_S3_SECRET_ACCESS_KEY is required (set it, or enable MAINTENANCE_SECRETS_FROM_DAPR)")
-    if not settings.s3_access_key_id:
-        raise RuntimeError("MAINTENANCE_S3_ACCESS_KEY_ID is required (set it, or enable MAINTENANCE_SECRETS_FROM_DAPR): no key id defaults to the store's root")
 
 
 def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
@@ -115,17 +62,15 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Fail closed if behind a Dapr sidecar but the app-token is unset — the cron route would otherwise be an
     # open forged-sweep path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
     assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
-    # The S3 key pair from the Dapr secret store (OpenBao) before the first cron sweep, so the sweep signs with a
-    # store-held pair and the plaintext secret never ships in pod env: read now, failing the boot closed if the
-    # store never answers with both halves, then again while the service runs, so a pair rotated in the store is
-    # the one the sweep signs with within its TTL ([[XC-082]], ADR 0166). With the store off, the environment's
-    # pair is refused here when either half is missing.
-    store_credential = make_store_credential(settings)
-    if store_credential is None:
-        require_env_pair(settings)
-    else:
-        await store_credential.start()
-    app.state.store_credential = store_credential
+    # MAINTENANCE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its identity at the store is the ServiceAccount token its pod
+    # projects for the store's audience, exchanged here for a session before the first sweep, failing the boot closed if
+    # none is issued, then exchanged again once half the session's life is used. Its own reads and records sign with that
+    # session; every rewrite signs with its table's vend. With no token (the offline and Dagger lanes) the environment's
+    # pair signs, and is refused here when either half is missing.
+    store_session = await start_store_session(settings.web_identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds)
+    if store_session is None:
+        require_env_pair(settings.env_pair, prefix="MAINTENANCE")
+    app.state.store_session = store_session
     # ONE sidecar client for both emitters — lineage (data) and control (governance). Built when either is on; the
     # sidecar is local, so construction is cheap and needs no broker reachability at boot.
     dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled) else None
@@ -168,12 +113,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         # withheld and counted, never published unsigned.
         sign=_control_sign(signing) if signing is not None else None,
     )
-    # The reconciler's read-only FGA client. OPTIONAL by design: a missing one degrades its categories to
-    # UNAVAILABLE-with-a-reason, and the others still report. Boot must NOT fail on it — the sweep is this
-    # service's primary job and does not need it. Its bucket-listing client is built per tick, with the pair
-    # in force (`services.reconcile`).
+    # Maintenance holds no OpenFGA credential, since one could write any tuple ([[XC-084]]): its drift report reads the
+    # grant census through the catalog, and the catalog makes every grant change the reconcile tick asks for.
     app.state.dapr_client = dapr_client
-    app.state.fga_client = await _make_fga_client(settings)
     # RESOLVED LAST, so the probes and the retry answers are served from the moment the app boots whether or not the
     # key resolved: a service that is waiting for its key takes no delivery (`retry_until_signed` on its routes),
     # reports itself not ready, and heals in place when the key is published.
@@ -192,11 +134,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             await bus_watchdog.stop()
         if signing is not None:
             await signing.stop()
-        if store_credential is not None:
-            await store_credential.stop()
-        # Same disposal as every sibling. Maintenance stores it as `app.state.fga_client` rather than
-        # `fga`; the shared disposer covers both names so the difference stops mattering.
-        await fga_dispose(app)
+        if store_session is not None:
+            await store_session.stop()
         if dapr_client is not None:
             with suppress(Exception):
                 await dapr_client.close()

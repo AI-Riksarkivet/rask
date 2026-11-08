@@ -406,9 +406,9 @@ smoke-rustfs: ## Storage smoke vs a REAL rustfs S3 backend (round-trip + a pylan
 rustfs-lifecycle: ## Catalog lifecycle e2e with the bytes on RustFS (proves S3-agnosticism)
 	$(DAGGER) call rustfs-lifecycle
 
-# The scoped-users hook's provisioning script against a throwaway RustFS that boots as the fixture does (root pair
-# from files): a policy the store refuses fails the run before it binds anyone (XC-163).
-rustfs-provisioning: ## Scoped-users provisioning vs a REAL RustFS (a refused policy fails the hook, binds nobody)
+# The provisioning hook's script against a throwaway RustFS that boots as the fixture does (root pair from files): a
+# policy the store refuses fails the run and leaves the stored one (XC-163).
+rustfs-provisioning: ## Store IAM vs a REAL RustFS (a refused policy fails the hook; a reclaim session ends one record and nothing else)
 	$(DAGGER) call rustfs-provisioning
 
 # The dataops loop: authorization + provenance AUTHORSHIP + medallion lineage, with real Dex tokens

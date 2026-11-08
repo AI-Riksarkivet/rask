@@ -2,7 +2,7 @@
 
 The Dagger lanes bootstrap their throwaway store with this file, through `lakehouse.storage`'s `s3_client`, the S3 seam
 the fleet uses, so no lane depends on a third-party CLI image a registry can withdraw ([[XC-075]]). In a cluster the
-scoped-users hook makes the platform buckets with the same two calls (`scripts/rustfs_admin.py`).
+provisioning hook makes the platform buckets with the same two calls (`scripts/rustfs_admin.py`).
 
 THE WAIT IS HALF THE JOB. A Dagger service binding resolves as soon as the container starts, which is before the
 store is listening. Without a bounded retry here the create races the boot and fails on the first run of a cold lane.

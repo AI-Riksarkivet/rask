@@ -97,7 +97,7 @@ class _ControlLane:
 @contextmanager
 def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: _ControlLane | None = None) -> Generator[TestClient]:
     """The erasure doors, the owner ``dex~olivia`` signed in, authorization off; ``lane`` takes the control events."""
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_CONTROL_ROOT=str(control))
+    settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(control))
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.router)

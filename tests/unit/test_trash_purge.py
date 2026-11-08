@@ -12,9 +12,11 @@ backend and then ``deregister_table``-d, which is exactly what the catalog does 
 configured — the manifest row goes away, the bytes stay. A trash record over those bytes is therefore the
 real thing, not a fixture shaped like one.
 
-OpenFGA is the one seam that is faked, and only at ``fga.revoke_object_tuples``: there is no in-process
-OpenFGA server, and the alternative (asserting nothing about revocation) would leave the load-bearing
-ordering rule — revoke BEFORE delete — unproven.
+The catalog's trash doors are the one seam that is faked ([[XC-084]]), by ``trash_doors``, which acts with the same
+``lakehouse.trash`` calls the doors make: the purge deletes a table's bytes under the session the catalog vends and then
+asks the catalog to end the record, which revokes the grants it still holds. What the catalog judges before it acts is
+its own tests' claim; these hold what the purge does around it, the load-bearing ordering rule included: the record is
+ended only once its bytes are gone.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ import asyncio
 import hashlib
 import io
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,8 +33,10 @@ from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
+import httpx
 import pyarrow as pa
 import pytest
+import respx
 from lance_namespace import (
     CreateNamespaceRequest,
     CreateTableRequest,
@@ -40,7 +44,6 @@ from lance_namespace import (
     DescribeTableRequest,
     DropNamespaceRequest,
     RegisterTableRequest,
-    ServiceUnavailableError,
     connect,
 )
 from pydantic import SecretStr
@@ -48,11 +51,11 @@ from pydantic import SecretStr
 from lakehouse import location_claims, trash
 from lakehouse.base_refs import BaseRefs, normalise
 from lakehouse.control_events import CatalogControlEvent
-from lakehouse.governed import fga as fga_module
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge as mod
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, CategoryUnavailable, IncompleteScan, ReconcileReport
+from tests.integration.maintenance_vend_doors import CATALOG_URL, end_door, trash_doors
 
 
 _NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
@@ -75,8 +78,17 @@ def _settings(tmp_path: Path, **over: Any) -> MaintenanceSettings:
         "s3_secret_access_key": SecretStr("unit"),
         "control_root": f"file://{tmp_path / 'control'}",
         "trash_purge_enabled": True,
+        "catalog_url": CATALOG_URL,
     }
     return MaintenanceSettings(**{**base, **over})
+
+
+@pytest.fixture(autouse=True)
+def doors(tmp_path: Path) -> Iterator[respx.MockRouter]:
+    """The catalog's trash doors over this test's control root, vending a session for every record and ending a record
+    as the catalog ends it ([[XC-084]]): which records it acts on is the catalog's own tests' claim."""
+    with trash_doors(f"file://{tmp_path / 'control'}", StorageOptions()) as router:
+        yield router
 
 
 def _clean_report(skipped: Iterable[str] = ("orphan_files",)) -> ReconcileReport:
@@ -151,7 +163,7 @@ class _Estate:
         uuid: str | None = None,
         grace_days: int = 7,
         dropped_at: datetime | None = None,
-        kind: str = "table",
+        kind: trash.TrashKind = "table",
         properties: dict[str, str] | None = None,
         namespace_uuid: str | None = None,
     ) -> dict[str, Any]:
@@ -169,35 +181,11 @@ class _Estate:
         trash.put(self.control_root, StorageOptions(), record)
         return record
 
-    def record(self, canonical: str, *, kind: str = "table") -> dict[str, Any] | None:
+    def record(self, canonical: str, *, kind: trash.TrashKind = "table") -> dict[str, Any] | None:
         """The one trash record dropped under ``canonical``, or ``None``: each test drops a name once."""
         held = trash.named(self.control_root, StorageOptions(), canonical, kind=kind)
         assert len(held) <= 1, held
         return held[0] if held else None
-
-
-class _Revoker:
-    """The FGA revoke seam. Records every call and, crucially, what was ON DISK when it was made."""
-
-    def __init__(self, *, error: Exception | None = None, count: int = 2, probe: Callable[[], bool] | None = None) -> None:
-        self.calls: list[tuple[str, str, str]] = []
-        self.bytes_present_at_call: list[bool] = []
-        self.error = error
-        self.count = count
-        self.probe = probe
-
-    async def __call__(self, _client: object, obj: str, *, actor: str, origin: str, **_kw: object) -> list[SimpleNamespace]:
-        """Hands back WHAT it revoked, mirroring the helper — `count` still sets how many, since these
-        tests are about ORDERING (revoke before delete), not about who held the grants."""
-        self.calls.append((obj, actor, origin))
-        if self.probe is not None:
-            self.bytes_present_at_call.append(self.probe())
-        if self.error is not None:
-            raise self.error
-        return [SimpleNamespace(user=f"user:u{i}", relation="owner", object=obj) for i in range(self.count)]
-
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(fga_module, "revoke_object_tuples", self)
 
 
 class _RecordingControl:
@@ -220,7 +208,6 @@ def _run(
     *,
     settings: MaintenanceSettings | None = None,
     report: ReconcileReport | None = None,
-    fga_client: object | None = None,
     control: _RecordingControl | None = None,
     data_roots: set[str] | None = None,
 ) -> mod.TrashPurgeReport:
@@ -228,7 +215,6 @@ def _run(
         mod.purge_expired_trash(
             settings or _settings(estate.tmp_path),
             report=report or _clean_report(),
-            fga_client=fga_client,
             control=cast(Any, control) if control is not None else None,
             control_root=estate.control_root,
             data_roots=data_roots if data_roots is not None else {estate.data_root},
@@ -319,27 +305,24 @@ def test_an_unexpired_record_survives(tmp_path: Path) -> None:
     assert estate.record(canonical) is not None
 
 
-def test_a_namespace_record_clears_and_revokes_but_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_namespace_record_is_ended_and_deletes_nothing(tmp_path: Path, doors: respx.MockRouter) -> None:
     """#96: a recoverable CASCADE trashes namespaces too, and a namespace owns no bytes.
 
-    Its record carries ``location=""`` — a manifest ROW is all there ever was — so the purge revokes and
-    clears and touches the data root not at all. ``trash.clear`` must be called with ``kind="namespace"``
-    or it hashes the wrong key, silently no-ops, and the record re-purges every tick forever.
+    Its record carries ``location=""`` — a manifest ROW is all there ever was — so the purge asks no session, touches
+    the data root not at all, and has the catalog end the record under its own kind: a record ended under the wrong kind
+    hashes the wrong key, silently no-ops, and re-purges every tick forever.
     """
     estate = _Estate(tmp_path)
     estate.create_table("team", "orders")  # a live sibling, so "nothing deleted" is a real claim
-    revoker = _Revoker()
-    revoker.install(monkeypatch)
     estate.put_record("archive", uuid=_ARCHIVE_UUID, location="", kind="namespace", properties={"rask.uuid": _ARCHIVE_UUID})
     before = _fingerprint(estate.data)
 
-    out = _run(estate, settings=_settings(tmp_path, fga_enabled=True), fga_client=object())
+    out = _run(estate)
 
-    assert [(p.kind, p.id, p.location) for p in out.purged] == [("namespace", "archive", "")]
-    assert out.purged[0].bytes_deleted == 0
+    assert [(p.kind, p.id, p.location, p.bytes_deleted) for p in out.purged] == [("namespace", "archive", "", 0)]
     assert _fingerprint(estate.data) == before, "a namespace purge touched the data root"
     assert estate.record("archive", kind="namespace") is None
-    assert revoker.calls == [(f"namespace:{_ARCHIVE_UUID}", "service:maintenance", "lifecycle_delete")]
+    assert (doors.routes["credentials"].call_count, doors.routes["end"].call_count) == (0, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -474,87 +457,53 @@ def test_a_deactivated_warehouses_bucket_is_outside_the_maintained_estate(tmp_pa
 
 
 # --------------------------------------------------------------------------- #
-# ordering: grants must never outlive the bytes
+# ordering: the record is ended only once its bytes are gone
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.parametrize(
     ("uuid", "needle"),
     [
-        pytest.param(_ORDERS_UUID, "revoke failed", id="openfga-refuses-the-revoke"),
-        # Its grants are held on `table:<uuid>` ([[LH-524]]), so a record that keeps no uuid names no grant to revoke.
+        pytest.param(_ORDERS_UUID, "could not decide", id="the-catalog-cannot-end-it"),
+        # The record is filed under the uuid it keeps ([[LH-525]]), so one that keeps none is one no door can end.
         pytest.param("", "keeps no uuid", id="the-objects-uuid-cannot-be-read"),
     ],
 )
-def test_a_failed_revoke_leaves_the_bytes_and_the_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, uuid: str, needle: str) -> None:
-    """A revoke we could not perform is a reason NOT to delete.
+def test_a_record_the_catalog_does_not_end_keeps_its_record(tmp_path: Path, doors: respx.MockRouter, uuid: str, needle: str) -> None:
+    """An end the catalog does not make leaves the record, and the purge reports why rather than claiming a purge.
 
-    If the delete ran first, this test finds an empty directory: the bytes would be gone and the grants
-    would still be live, with nothing left to retry against. Because the revoke runs first, the failure
-    is fully recoverable — the record survives and the next tick tries the whole thing again.
+    The record is all that names what the object kept (its records, its claim, its base record), so it must survive for
+    the next tick to end, whatever happened to the bytes before.
     """
     estate = _Estate(tmp_path)
-    canonical, location = estate.drop_recoverably("team", "orders", uuid=uuid)
-    path = Path(location.removeprefix("file://"))
-    _Revoker(error=ServiceUnavailableError("openfga down")).install(monkeypatch)
+    canonical, _ = estate.drop_recoverably("team", "orders", uuid=uuid)
+    doors.routes["end"].mock(return_value=httpx.Response(503, json={"code": 17, "detail": "the store did not answer"}))
 
-    out = _run(estate, settings=_settings(tmp_path, fga_enabled=True), fga_client=object())
+    out = _run(estate)
 
-    assert out.purged == []
-    assert [(r.kind, r.id) for r in out.refused] == [("table", canonical)]
+    assert (out.purged, [(r.kind, r.id) for r in out.refused]) == ([], [("table", canonical)])
     assert needle in out.refused[0].reason
-    assert path.is_dir(), "the bytes were deleted despite a failed revoke — grants now outlive them"
     assert estate.record(canonical) is not None
 
 
-def test_the_revoke_happens_while_the_bytes_are_still_there(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The ordering stated positively, so a swap fails even on the SUCCESS path.
-
-    The revoke seam probes the recorded path at the moment it is called. Revoke-then-delete means it sees
-    the bytes; delete-then-revoke means it does not.
-    """
+def test_the_record_is_ended_only_once_its_bytes_are_gone(tmp_path: Path, doors: respx.MockRouter) -> None:
+    """The ordering stated positively, so a swap fails even on the SUCCESS path: the end door probes the recorded path
+    at the moment it is asked, and delete-then-end means it finds nothing there."""
     estate = _Estate(tmp_path)
     _, location = estate.drop_recoverably("team", "orders", uuid=_ORDERS_UUID)
     path = Path(location.removeprefix("file://"))
-    revoker = _Revoker(count=3, probe=path.is_dir)
-    revoker.install(monkeypatch)
+    bytes_at_the_end: list[bool] = []
+    ended = end_door(estate.control_root, StorageOptions())
 
-    out = _run(estate, settings=_settings(tmp_path, fga_enabled=True), fga_client=object())
+    def _probing(request: httpx.Request, kind: str, uuid: str) -> httpx.Response:
+        bytes_at_the_end.append(path.exists())
+        return ended(request, kind, uuid)
 
-    assert revoker.calls == [(f"table:{_ORDERS_UUID}", "service:maintenance", "lifecycle_delete")]
-    assert revoker.bytes_present_at_call == [True], "the revoke ran AFTER the delete — grants outlived the bytes"
-    assert out.purged[0].tuples_revoked == 3
-    assert not path.exists()
+    doors.routes["end"].mock(side_effect=_probing)
 
+    out = _run(estate)
 
-def test_fga_enabled_without_a_client_purges_nothing(tmp_path: Path) -> None:
-    """Enabled-but-unwired is a misconfiguration, and the safe answer is to do nothing at all.
-
-    Running would mean deleting bytes while their grants stay live — the exact state the revoke-first
-    rule exists to prevent, arrived at by omission instead of by failure.
-    """
-    estate = _Estate(tmp_path)
-    canonical, location = estate.drop_recoverably("team", "orders")
-
-    out = _run(estate, settings=_settings(tmp_path, fga_enabled=True), fga_client=None)
-
-    assert out.ran is False
-    assert "no client is wired" in (out.reason or "")
-    assert Path(location.removeprefix("file://")).is_dir()
-    assert estate.record(canonical) is not None
-
-
-def test_fga_disabled_skips_revocation_cleanly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """With FGA off estate-wide there are no tuples to revoke — skip, and say zero rather than pretend."""
-    estate = _Estate(tmp_path)
-    canonical, _ = estate.drop_recoverably("team", "orders")
-    revoker = _Revoker()
-    revoker.install(monkeypatch)
-
-    out = _run(estate, settings=_settings(tmp_path, fga_enabled=False))
-
-    assert revoker.calls == [], "the purge called OpenFGA with FGA disabled"
-    assert [(p.id, p.tuples_revoked) for p in out.purged] == [(canonical, 0)]
+    assert ([p.id for p in out.purged], bytes_at_the_end) == (["team$orders"], [False]), "the record was ended while its bytes were still there"
 
 
 # --------------------------------------------------------------------------- #
@@ -659,7 +608,7 @@ def test_a_SECOND_refusal_counts_up_rather_than_looking_like_the_first(tmp_path:
     assert [r.attempts for r in out.refused] == [2], "the report does not carry the accumulated count"
 
 
-def test_persisting_a_refusal_NEVER_turns_a_refusal_into_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_persisting_a_refusal_NEVER_turns_a_refusal_into_a_failure(tmp_path: Path, doors: respx.MockRouter) -> None:
     """`_purge_one` is documented "never raises; every failure is a refusal", and this must not break it.
 
     The annotation is bookkeeping ABOUT a refusal, strictly less important than the refusal itself. A
@@ -668,10 +617,7 @@ def test_persisting_a_refusal_NEVER_turns_a_refusal_into_a_failure(tmp_path: Pat
     unhandled error on the reclamation path.
     """
 
-    def _boom(*_a: object, **_kw: object) -> None:
-        raise OSError("the control root is unreachable")
-
-    monkeypatch.setattr(trash, "note_refusal", _boom)
+    doors.routes["refusals"].mock(return_value=httpx.Response(503, json={"code": 17, "detail": "the control root is unreachable"}))
     estate = _Estate(tmp_path)
     canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
     estate.reregister("team", "orders", location=location)

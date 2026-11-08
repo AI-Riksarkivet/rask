@@ -12,7 +12,11 @@ the version under its own credential. So the writer tier never reaches a final `
 version hint or `_refs/`, and that refusal is an explicit Deny: an Allow on `_versions/*.manifest-*` alone
 also matches `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest. Measured with stock
 pylance 13.0.0 on a throwaway store and on the deployed one (LH-469, #594); RustFS lets an explicit Deny win
-(R3, measured 2026-10-18, git history at 64ef118a9). Whole-prefix write and delete belong to `can_maintain`.
+(R3, measured 2026-10-18, git history at 64ef118a9). Whole-prefix write and delete belong to `can_maintain`, all but
+`_refs/`: a tag exempts its version from cleanup and a branch keeps its files
+(`lance_docs/lance/guide/tags_and_branches.md`), so a maintainer that could write a ref could keep a version an erasure
+removes or free one a hold keeps ([[XC-084]]). Its reclaim's own records on the control root, the table's history fence and
+the records of its committed files, are the maintain vend's too, and only its own table's ([[LH-219]]).
 
 DRIVEN THROUGH THE REAL DOOR AND THE REAL VENDOR. The catalog runs on a moto server, the vendor is the one its
 lifespan builds, and its token exchange goes to moto's STS, which records the session policy each session carries.
@@ -27,7 +31,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, Literal
 
@@ -38,10 +42,13 @@ import lance_namespace
 import pyarrow as pa
 import pytest
 import uvicorn
+from lance_namespace import ErrorCode
 from moto.iam.access_control import IAMPolicy, PermissionResult
 from moto.sts.models import sts_backends
 
+from lakehouse import file_identities, history_fences, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.record_store import record_key
 
 
 _SCHEMA = pa.schema([("id", pa.int64()), lance.blob_field("payload")])
@@ -58,11 +65,11 @@ class _Estate:
     def __init__(self, client: httpx.Client, s3: Any, bucket: str) -> None:  # noqa: ANN401 — a boto3 S3 client
         self.client, self.s3, self.bucket = client, s3, bucket
         assert client.post("/v1/namespace/db/create", json={}).status_code == 200
-        self.location = self._create(_TABLE)
+        self.location = self.create(_TABLE)
         created = client.post(f"/v1/table/{_TABLE}/branches/create", json={"name": "b1"})
         assert created.status_code == 200, created.text
 
-    def _create(self, table: str) -> str:
+    def create(self, table: str) -> str:
         created = self.client.post(f"/v1/table/{table}/create", content=encode_arrow_stream(_rows([0])), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert created.status_code == 200, created.text
         return str(created.json()["location"])
@@ -79,6 +86,11 @@ class _Estate:
 
     def keys(self) -> set[str]:
         return {o["Key"] for page in self.s3.get_paginator("list_objects_v2").paginate(Bucket=self.bucket) for o in page.get("Contents", [])}
+
+    def table_uuid(self) -> str:
+        described = self.client.post(f"/v1/table/{_TABLE}/describe", json={})
+        assert described.status_code == 200, described.text
+        return str(described.json()["properties"]["rask.uuid"])
 
 
 @pytest.fixture
@@ -173,6 +185,8 @@ _Tier = Literal["read", "write", "maintain"]
         pytest.param("maintain", "", "s3:PutObject", "data/f.lance", True, id="maintain-rewrites"),
         pytest.param("maintain", "", "s3:DeleteObject", "_versions/1.manifest", True, id="maintain-cleans-up-versions"),
         pytest.param("maintain", "", "s3:DeleteObject", "tree/b1/data/f.lance", True, id="maintain-cleans-up-branches"),
+        pytest.param("maintain", "", "s3:PutObject", "_refs/branches/b2.json", False, id="maintain-cannot-pin-a-version"),
+        pytest.param("maintain", "", "s3:DeleteObject", "_refs/tags/t.json", False, id="maintain-cannot-unpin-a-version"),
     ],
 )
 def test_a_vend_permits_only_what_its_tier_may_change(estate: _Estate, tier: _Tier, branch: str, action: str, relative: str, allowed: bool) -> None:
@@ -183,6 +197,174 @@ def test_a_vend_permits_only_what_its_tier_may_change(estate: _Estate, tier: _Ti
     # table's trailing delimiter would reach every key that merely starts with the table's directory name.
     sibling = f"{_within(estate.location, estate.bucket)}_secret/{relative}"
     assert not _permits(policy, action, estate.bucket, sibling), "a prefix sibling of the table is never reached"
+
+
+def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(estate: _Estate) -> None:
+    """The reclaim holds its table's history fence and forgets the records of its committed files under the vend
+    (`lakehouse.history_fences`, `lakehouse.file_identities`), so the vend reaches those two of its own table; it puts no
+    committed-file record, since one it could put would record a replaced file as committed, and reaches no other table's.
+    The control root here is the table's bucket."""
+    mine, other = estate.table_uuid(), uuid.uuid4().hex
+
+    _, policy = estate.vend("maintain")
+
+    asked = {
+        "holds-its-fence": ("s3:PutObject", history_fences.fence_key(mine)),
+        "forgets-its-records": ("s3:DeleteObject", f"{file_identities.records_of(mine)}/txn.json"),
+        "records-no-file": ("s3:PutObject", f"{file_identities.records_of(mine)}/txn.json"),
+        "holds-no-other-fence": ("s3:PutObject", history_fences.fence_key(other)),
+        "forgets-no-other-records": ("s3:DeleteObject", f"{file_identities.records_of(other)}/txn.json"),
+    }
+    granted = {name: _permits(policy, action, estate.bucket, key) for name, (action, key) in asked.items()}
+    assert granted == {
+        "holds-its-fence": True,
+        "forgets-its-records": True,
+        "records-no-file": False,
+        "holds-no-other-fence": False,
+        "forgets-no-other-records": False,
+    }, policy
+
+
+@pytest.mark.parametrize(
+    ("tier", "answer"),
+    [
+        pytest.param("maintain", (409, "application/problem+json", ErrorCode.INVALID_TABLE_STATE), id="maintain-refused"),
+        pytest.param("write", (200, "application/json", None), id="write-still-vended"),
+    ],
+)
+def test_a_held_table_is_vended_no_maintain_tier(estate: _Estate, tier: _Tier, answer: tuple[int, str, int | None]) -> None:
+    """[[XC-084]] A table whose maintenance policy keeps its whole history is vended no credential that could delete or
+    rewrite it: the maintain tier reaches every version the hold keeps, and maintenance writes nothing on a held table.
+    The other tiers are the table's readers' and writers', which the hold does not change."""
+    held = estate.client.post(f"/management/v1/table/{_TABLE}/policy/set", json={"cleanup_enabled": False})
+    assert held.status_code == 200, held.text
+
+    vended = estate.client.post(f"/management/v1/table/{_TABLE}/credentials", params={"tier": tier})
+
+    assert (vended.status_code, vended.headers["content-type"], vended.json().get("code")) == answer, vended.text
+
+
+def _dropped(estate: _Estate, monkeypatch: pytest.MonkeyPatch, *, grace_days: str, name: str = "gone") -> tuple[str, str]:
+    """A table dropped into the trash for ``grace_days``, by its uuid and location."""
+    from catalog.core.config import get_settings
+
+    monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", grace_days)
+    get_settings.cache_clear()
+    location = estate.create(f"db${name}")
+    described = estate.client.post(f"/v1/table/db${name}/describe", json={})
+    assert described.status_code == 200, described.text
+    dropped = estate.client.post(f"/v1/table/db${name}/drop")
+    assert dropped.status_code == 200, dropped.text
+    return str(described.json()["properties"]["rask.uuid"]), location
+
+
+def _record(estate: _Estate, uuid: str) -> dict[str, Any]:
+    return json.loads(estate.s3.get_object(Bucket=estate.bucket, Key=trash.key(uuid))["Body"].read())
+
+
+def _due(estate: _Estate, monkeypatch: pytest.MonkeyPatch, *, name: str = "gone") -> tuple[str, str]:
+    """A table dropped into the trash and past its deadline, by its uuid and location."""
+    uuid, location = _dropped(estate, monkeypatch, grace_days="0.00001", name=name)
+    deadline = time.monotonic() + 10
+    while not trash.past_deadline(_record(estate, uuid)):
+        assert time.monotonic() < deadline, "the drop's deadline never passed"
+        time.sleep(0.05)
+    return uuid, location
+
+
+def _filed_at(estate: _Estate, uuid: str, location: str) -> None:
+    """Rewrite the record ``uuid`` keeps to name ``location``, as any writer of the record could."""
+    estate.s3.put_object(Bucket=estate.bucket, Key=trash.key(uuid), Body=json.dumps({**_record(estate, uuid), "location": location}).encode())
+
+
+def _short_of_its_deadline(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> str:
+    return _dropped(estate, monkeypatch, grace_days="1")[0]
+
+
+def _at_a_place_another_table_claims(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> str:
+    uuid, _ = _due(estate, monkeypatch)
+    _, kept = _dropped(estate, monkeypatch, grace_days="1", name="kept")
+    _filed_at(estate, uuid, kept)
+    return uuid
+
+
+def _at_a_place_no_table_claims(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> str:
+    uuid, _ = _due(estate, monkeypatch)
+    _filed_at(estate, uuid, f"s3://{estate.bucket}/db-unclaimed")
+    return uuid
+
+
+@pytest.mark.parametrize(
+    ("door", "arrange"),
+    [
+        pytest.param("POST /credentials", _short_of_its_deadline, id="session-short-of-its-deadline"),
+        pytest.param("POST /credentials", _at_a_place_another_table_claims, id="session-at-another-tables-place"),
+        pytest.param("POST /credentials", _at_a_place_no_table_claims, id="session-at-an-unclaimed-place"),
+        pytest.param("POST /release", _short_of_its_deadline, id="release-short-of-its-deadline"),
+        pytest.param("DELETE ", _short_of_its_deadline, id="end-with-its-bytes"),
+    ],
+)
+def test_a_trash_door_refuses_what_is_not_the_trashs_to_end(
+    estate: _Estate, monkeypatch: pytest.MonkeyPatch, door: str, arrange: Callable[[_Estate, pytest.MonkeyPatch], str]
+) -> None:
+    """[[XC-084]] Maintenance ends the trash only through the catalog's doors, which judge each record on what no session
+    can write: a drop still recoverable is released and vended nothing, a record's place must be the one its claim keeps
+    for the record's own uuid (so no record names its way to another table's bytes, trashed or held), and a record is
+    ended only once its place holds nothing. Each refusal is noted on the record, as maintenance's own are."""
+    uuid = arrange(estate, monkeypatch)
+    method, _, act = door.partition(" ")
+
+    refused = estate.client.request(method, f"/management/v1/trash/table/{uuid}{act}")
+
+    assert (refused.status_code, refused.headers["content-type"], refused.json()["code"], _record(estate, uuid)["attempts"]) == (
+        409,
+        "application/problem+json",
+        ErrorCode.INVALID_TABLE_STATE,
+        1,
+    ), refused.text
+
+
+def test_a_reclaim_session_deletes_its_tables_bytes_and_nothing_else(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[[XC-084]] A record past its deadline is vended a session that deletes its table's bytes, and reaches nothing on
+    the control root (neither its own record, which the catalog alone writes and judges on, nor a record kept under its
+    uuid, such as the inputs an erasure walks to the tables derived from it), no put over its own table's bytes and no
+    other table's: maintenance holds no other write."""
+    uuid, location = _due(estate, monkeypatch)
+
+    vended = estate.client.post(f"/management/v1/trash/table/{uuid}/credentials")
+
+    assert vended.status_code == 200, vended.text
+    options = vended.json()["credentials"]["storage_options"]
+    policy = json.loads(next(role.policy for role in sts_backends["123456789012"]["aws"].assumed_roles if role.access_key_id == options["aws_access_key_id"]))
+    asked = {
+        "deletes-its-bytes": ("s3:DeleteObject", f"{_within(location, estate.bucket)}/data/f.lance"),
+        "puts-none-of-its-bytes": ("s3:PutObject", f"{_within(location, estate.bucket)}/data/f.lance"),
+        "writes-no-trash-record": ("s3:PutObject", trash.key(uuid)),
+        "ends-no-erasure-input": ("s3:DeleteObject", record_key("_table_inputs", "table", uuid)),
+        "deletes-no-other-table": ("s3:DeleteObject", f"{_within(estate.location, estate.bucket)}/data/f.lance"),
+    }
+    granted = {name: _permits(policy, action, estate.bucket, key) for name, (action, key) in asked.items()}
+    assert granted == {
+        "deletes-its-bytes": True,
+        "puts-none-of-its-bytes": False,
+        "writes-no-trash-record": False,
+        "ends-no-erasure-input": False,
+        "deletes-no-other-table": False,
+    }, policy
+
+
+def test_the_catalog_ends_a_trash_record_whose_place_holds_nothing(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """[[XC-084]] Once nothing the record names holds a byte, the catalog ends it under its own identity: the record goes,
+    and the claim it kept on its place is released, so the place is free again."""
+    uuid, location = _dropped(estate, monkeypatch, grace_days="1")
+    for key in [o["Key"] for o in estate.s3.list_objects_v2(Bucket=estate.bucket, Prefix=f"{_within(location, estate.bucket)}/").get("Contents", [])]:
+        estate.s3.delete_object(Bucket=estate.bucket, Key=key)
+
+    ended = estate.client.delete(f"/management/v1/trash/table/{uuid}")
+
+    kept = estate.s3.list_objects_v2(Bucket=estate.bucket, Prefix=trash.key(uuid)).get("KeyCount", 0)
+    claim = json.loads(estate.s3.get_object(Bucket=estate.bucket, Key=location_claims.claim_key(location))["Body"].read())
+    assert (ended.status_code, kept, claim["uuid"], claim["released_at"] is not None) == (200, 0, uuid, True), ended.text
 
 
 #: A final manifest, in either naming scheme: what only the catalog's finalize may write.

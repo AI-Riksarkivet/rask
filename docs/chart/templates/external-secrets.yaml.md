@@ -48,29 +48,18 @@ that signs an STS token.
 
 THE DEVELOPMENT STORE'S ROOT PAIR, `<release>-object-store-root`, rendered only with the dev store. On RustFS the root
 secret signs every STS session token (GHSA-m77q-r63m-pj89, ADR 0168), so the Secret has exactly two readers, the
-store (the rustfs fixture's `rootCredentials`) and the scoped-users hook, and ESO fetches it from
+store (the rustfs fixture's `rootCredentials`) and the provisioning hook (`object-store-provisioning.yaml`), and ESO
+fetches it from
 `secret/object-store-root`, a path only ESO's store policy grants. BOTH HALVES come from
 ONE object: the store mounts both as files from a non-optional secret volume, so a pair split across two sources is a
-pod that cannot start rather than one that signs wrongly. A platform's S3 has no such Secret here: its operator holds
-its root and provisions rask's identities. `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`
+pod that cannot start rather than one that signs wrongly. No lakehouse workload reads a store key from this file or any
+other: each one's store identity is its ServiceAccount token ([[XC-084]]). A platform's S3 has no such Secret here: its
+operator holds its root and provisions rask's identities. `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`
 gates who reads it.
 
 ## `apiVersion: external-secrets.io/v1`
 
 The in-chart Collector's credential for the audit store, mounted as files (otel-collector.yaml).
-
-## `{{- if include "lance.backupIdentity" . }}`
-
-THE BACKUPS' IDENTITY, `<release>-backup-s3`, one Secret for both backup CronJobs and rendered when either is on. It
-holds the scoped pair `objectStore.backupAccessKey` names (the `rask-backup` policy in object-store-scoped-users.yaml),
-fetched from `secret/backup-s3`, and never the store's root.
-
-A CronJob pod carries no Dapr sidecar, so the secret-store path is unavailable to it and ESO is the
-one the estate admits. Both consumers MOUNT it as a file rather than taking a `secretKeyRef` env row, and each
-reads the shape its tool takes: `secret-key` for the pg dump's uploader (`RASK_S3_SECRET_KEY_FILE`, the access key
-id is config), and `credentials.json`, the pair as one JSON file, for `control_root_backup.py`, whose
-`--credentials-file` is the only way it accepts a credential without falling back to the environment chain. One
-file holding both halves means a partial write never looks like a valid credential.
 
 ## `{{- if hasKey (include "lance.natsFiles" . | fromJson) "nats-admin-creds" }}`
 

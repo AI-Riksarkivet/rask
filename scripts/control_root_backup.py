@@ -5,8 +5,8 @@ the warehouse registry and its namespace bindings, deletion protection, maintena
 gates, transform declarations, the task registry, and the trash records that make a drop recoverable.
 Lose them and the Lance data survives while every statement about who may touch it does not.
 
-WHAT THE CHART OFFERS DOES NOT COVER THIS, measured 2026-09-14. `backups.pgDump` dumps the OpenFGA and
-Dapr state databases; `backups.volumeSnapshot` takes a CSI VolumeSnapshot of the object store's PVCs. Both default
+WHAT THE CHART OFFERS DOES NOT COVER THIS, measured 2026-09-14. `backups.pgDump` dumps the OpenFGA
+database; `backups.volumeSnapshot` takes a CSI VolumeSnapshot of the object store's PVCs. Both default
 OFF, neither is enabled in the live release, and this cluster has no `volumesnapshotclass` resource
 type at all — the snapshot path could not run here even if it were switched on. So the control root's
 recoverability was untested because nothing was capable of testing it.
@@ -25,6 +25,11 @@ which protects against the failure that actually happens — a bad write, an acc
 migration that went wrong — and NOT against losing the bucket. Point `--dest` at another bucket (or
 another store) for that, and the tool will say which of the two you got.
 
+EVERY RUN HOLDS NO KEY ([[XC-084]]): it signs with one session the ServiceAccount token at
+`RASK_S3_WEB_IDENTITY_TOKEN_FILE` is exchanged for (`lakehouse.store_session.job_client`). The scheduled backup
+presents its own account's token; a run by hand presents one minted for an account the store lets do what the run
+does (`docs/runbooks/RUNBOOK-restore.md`).
+
     uv run python scripts/control_root_backup.py backup  --root s3://lance-catalog
     uv run python scripts/control_root_backup.py verify  --from s3://lance-catalog/_backups/control/<stamp>
     uv run python scripts/control_root_backup.py restore --from s3://lance-catalog/_backups/control/<stamp> \\
@@ -35,12 +40,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import pathlib
 import sys
 from datetime import UTC, datetime
 from typing import Any
 
-from lakehouse.storage import s3_client
+from pydantic import ValidationError
+
+from lakehouse.store_session import JobStoreIdentity, job_client
 
 
 #: The record prefixes a restore must bring back. Named explicitly rather than globbed on a leading
@@ -258,65 +264,29 @@ def do_restore(client: Any, *, backup: str, into: str, force: bool) -> dict[str,
     return {"restored_to": f"s3://{dst_bucket}/{dst_prefix}", "objects": restored, "mismatched": mismatched, "verified": not mismatched}
 
 
-def _credentials_from(path: str | None) -> dict[str, str]:
-    """The S3 triple this run signs with, read from a MOUNTED FILE rather than the environment.
-
-    The estate admits exactly three secret paths and the environment is not one of them; a CronJob pod
-    carries no Dapr sidecar, so the one that fits it is ESO writing a Secret the pod MOUNTS. `s3_client`
-    already takes these per call and its docstring records that they "override the env for THIS client",
-    so this only has to hand them in.
-
-    AN UNREADABLE FILE IS AN ERROR. Falling back to the env chain here would satisfy every render test
-    and quietly restore the delivery path the flag exists to remove — and it would do so at 03:00, in a
-    CronJob nobody is watching, which is the worst possible place to learn that a credential moved.
-
-    Absent flag → an empty mapping → `s3_client()` resolves as it always did, so a developer running
-    this by hand against a dev store is unaffected. `session_token` is carried when present: a vended
-    triple missing it signs as the POD's own role, which is broader than what was vended, never
-    narrower — dropping it fails OPEN.
-    """
-    if not path:
-        return {}
-    payload = json.loads(pathlib.Path(path).read_text(encoding="utf-8"))
-    creds = {key: str(payload[key]) for key in ("access_key", "secret_key") if payload.get(key)}
-    if len(creds) != 2:
-        raise ValueError(f"{path} carries no usable access_key/secret_key pair; refusing to fall back to the environment")
-    if payload.get("session_token"):
-        creds["session_token"] = str(payload["session_token"])
-    return creds
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    # Attached to every subcommand rather than to the root, so it may follow the verb: that is the order
-    # a CronJob's `args` list reads in, and a flag that only worked before the verb would be a trap
-    # discovered in a scheduled pod rather than here.
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--credentials-file", default=None, help="JSON {access_key, secret_key, session_token?} — an ESO-written Secret, MOUNTED (never env)")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    b = sub.add_parser("backup", parents=[common], help="copy the control records to a timestamped backup")
+    b = sub.add_parser("backup", help="copy the control records to a timestamped backup")
     b.add_argument("--root", default="s3://lance-catalog", help="the control root (LANCE_REST_ROOT)")
     b.add_argument("--dest", default=None, help="where the backup lands; ANOTHER BUCKET for real DR")
     b.add_argument("--keep", type=int, default=0, help="prune to the newest N backups after copying; 0 (default) keeps every run")
 
-    v = sub.add_parser("verify", parents=[common], help="check a backup against its own manifest")
+    v = sub.add_parser("verify", help="check a backup against its own manifest")
     v.add_argument("--from", dest="backup", required=True)
 
-    r = sub.add_parser("restore", parents=[common], help="copy a backup's records to a target prefix")
+    r = sub.add_parser("restore", help="copy a backup's records to a target prefix")
     r.add_argument("--from", dest="backup", required=True)
     r.add_argument("--into", required=True, help="target prefix; a scratch prefix rehearses safely")
     r.add_argument("--force", action="store_true", help="permit writing over the live control root")
 
     args = parser.parse_args(argv)
-    # Named explicitly rather than `**mapping`: each field is keyword-only on `s3_client` and
-    # `.get()` gives exactly the `str | None` it declares, so the call type-checks without a cast.
-    creds = _credentials_from(args.credentials_file)
-    client = s3_client(
-        access_key=creds.get("access_key"),
-        secret_key=creds.get("secret_key"),
-        session_token=creds.get("session_token"),
-    )
+    try:
+        client = job_client(JobStoreIdentity(), session_name=f"control-root-{args.command}")
+    except (ValidationError, RuntimeError) as exc:
+        print(f"!! no store session for this run: {exc}", file=sys.stderr)
+        return 1
 
     if args.command == "backup":
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
