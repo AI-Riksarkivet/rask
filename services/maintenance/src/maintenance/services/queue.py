@@ -106,6 +106,9 @@ _VOUCH_RETRY: Final = 1.0
 #: reconnects to a live node and its heartbeats are answered again (nats-py's default, 120 s x 2, outlasts the lease).
 _PING_INTERVAL: Final = 10.0
 _MAX_OUTSTANDING_PINGS: Final = 2
+#: What nats-server answers a connect whose credential it refuses (revoked, unknown, or past its expiry); nats-py hands it
+#: to the error callback while it reconnects. A session the server ends for its credential closes the client instead.
+_REFUSED: Final = "authorization violation"
 
 type TaskKind = Literal["table", "trash", "audit", "scan"]
 type Area = Literal["task", "schedule", "due"]
@@ -221,15 +224,33 @@ class _Lease(BaseModel):
 class TaskQueue:
     """The worker's one connection to the bus, as its own user, and the publishes the passes make on it."""
 
-    def __init__(self, client: Client) -> None:
+    def __init__(self, client: Client, closing: asyncio.Event) -> None:
         self._client = client
+        self._closing = closing
         self._js: JetStreamContext = client.jetstream()
         self._claims: KeyValue | None = None
 
     @classmethod
-    async def connect(cls, url: str, credentials: str, *, name: str) -> TaskQueue:
+    async def connect(cls, url: str, credentials: str, *, name: str, end_process: Callable[..., NoReturn] = end_replica) -> TaskQueue:
         """Connect as the user ``credentials`` names (a NATS creds document, held in memory), reconnecting for ever: a bus
-        outage must leave the worker waiting on the bus, never closed for good."""
+        outage must leave the worker waiting on the bus, never closed for good.
+
+        A bus that refuses the credential, or ends the connection for good, ends the process (``end_process``). The
+        store's seed issues a user a new credential when its grants change and revokes the old one, and nats-py keeps the
+        credential it was given: it closes for good on a session the server ends, and retries a credential the server
+        refuses for ever (nats-py 2.16 ``Client._process_err`` and ``_attempt_reconnect``). Started again, the replica
+        reads the credential the store holds now."""
+        closing = asyncio.Event()
+
+        async def errored(exc: Exception) -> None:
+            if _REFUSED in str(exc).lower():
+                end_process("maintenance_bus_refused", error=str(exc)[:300])
+            log.warning("maintenance_bus_error", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
+
+        async def closed() -> None:
+            if not closing.is_set():
+                end_process("maintenance_bus_closed")
+
         client = await nats.connect(
             servers=[url],
             user_credentials=RawCredentials(credentials),
@@ -239,8 +260,10 @@ class TaskQueue:
             ping_interval=_PING_INTERVAL,
             max_outstanding_pings=_MAX_OUTSTANDING_PINGS,
             inbox_prefix=INBOX_PREFIX,
+            error_cb=errored,
+            closed_cb=closed,
         )
-        return cls(client)
+        return cls(client, closing)
 
     async def enqueue(self, task: Task) -> bool:
         """Put ``task`` on the queue; ``False`` when its table already has one queued or in flight, which covers it. The
@@ -423,6 +446,7 @@ class TaskQueue:
 
     async def close(self) -> None:
         """Drain, so the acknowledgements and publishes in flight are sent before the connection goes."""
+        self._closing.set()
         await self._client.drain()
 
 

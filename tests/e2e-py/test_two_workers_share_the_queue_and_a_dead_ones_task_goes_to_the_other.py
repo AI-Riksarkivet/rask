@@ -44,6 +44,10 @@ stand-in of the store's secrets API) keeps its loops and its schedules:
 * The audit's and the scan's schedules, which a purged or recreated schedules stream loses, are put back on the cadence
   the replica asserts them on.
 
+A worker whose credential the bus takes no longer ends its process (exit 70), whether the bus ends the session holding it
+or refuses it at a reconnect: the store issues a new credential when a user's grants change and revokes the old one, and
+the worker, started again, reads the new one.
+
 Run by `dagger call nats-auth` (`make nats-auth`), beside the bus's permission proof, whose rig it shares.
 """
 
@@ -66,7 +70,7 @@ import httpx
 import pytest
 import respx
 from nats.aio.msg import Msg
-from nats_auth_rig import VALUES_ENV, Broker, Client, Credential, Link, Mint, Permissions, Tools, Violation, mint, run_stream_job, violations
+from nats_auth_rig import VALUES_ENV, Broker, Client, Credential, Link, Mint, Permissions, Tools, Violation, issue, mint, run_stream_job, violations
 from pydantic import SecretStr
 
 from lakehouse import store_session
@@ -107,6 +111,10 @@ _DOOMED_DRAIN = 1.0
 _LATE_IN_PULL = 4.0
 #: Long enough for a pull a stopped replica left open to expire (`maintenance.services.queue` pulls for 5 s).
 _PULL_EXPIRY = 6.0
+#: A credential with the worker's grants that runs out a minute after it is issued (nsc's least expiry). From then on the
+#: bus takes it no longer, as it takes a revoked one no longer: it ends a session holding it, and refuses it at a connect.
+_EXPIRING = "maintenance-worker-expiring"
+_EXPIRY = 60.0
 #: A worker in a process of its own, its pass bound the third argument: it says which task it runs, then holds it until
 #: it is killed, its bound ends the process, `finish` on its stdin ends the pass, or `stop` there drains the worker.
 _DOOMED = f"""
@@ -137,6 +145,19 @@ async def main(url: str, creds: str, max_pass: float) -> None:
     await worker.drain([pulling], {_DOOMED_DRAIN})
 
 asyncio.run(main(sys.argv[1], sys.argv[2], float(sys.argv[3])))
+"""
+#: A process of its own that connects to the bus as a worker does, says so, and holds the connection.
+_HOLDING = """
+import asyncio, sys
+from pathlib import Path
+from maintenance.services.queue import TaskQueue
+
+async def main(url: str, creds: str) -> None:
+    await TaskQueue.connect(url, Path(creds).read_text(), name="holding")
+    print("connected", flush=True)
+    await asyncio.sleep(3600)
+
+asyncio.run(main(sys.argv[1], sys.argv[2]))
 """
 
 
@@ -216,6 +237,14 @@ async def _doomed(url: str, credential: Credential, max_pass_seconds: float) -> 
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
     )
+
+
+async def _holding(url: str, credential: Credential, log: Path) -> asyncio.subprocess.Process:
+    """A connection to the bus as a worker makes it, held in a process of its own that writes what it logs to ``log``."""
+    with log.open("wb") as logged:
+        return await asyncio.create_subprocess_exec(
+            *(sys.executable, "-c", _HOLDING, url, str(credential.creds_file)), cwd=REPO, stdout=asyncio.subprocess.PIPE, stderr=logged
+        )
 
 
 async def _said(process: asyncio.subprocess.Process) -> list[str]:
@@ -598,3 +627,42 @@ async def test_a_replica_runs_a_failed_loop_again_and_puts_back_schedules_the_bu
         finally:
             broker.stop()
     assert failures == ["run_due"], "the loop moving fired schedules never failed, so its running again proves nothing"
+
+
+@pytest.mark.asyncio
+async def test_a_worker_whose_credential_the_bus_takes_no_longer_ends_itself(tmp_path: Path) -> None:
+    """nats-py keeps the credential a worker read at start: it closes for good on a session the server ends, and retries a
+    credential the server refuses for ever. So a worker the bus takes its credential from no longer ends its process, and
+    its pod, started again, reads the credential the store then holds. One connection is held while its credential runs
+    out, which the server ends; another is cut through a `Link` until the credential has run out, and refused when it
+    reconnects."""
+    tools, docs, _, broker = _the_bus(tmp_path)
+    publish, subscribe = nats_users(docs)[_WORKER]
+    grants = Permissions(publish=tuple(sorted(publish)), subscribe=tuple(sorted(subscribe)), expiry="1m")
+    link = Link(broker.port)
+    await link.start()
+    holding: list[asyncio.subprocess.Process] = []
+    logs = (tmp_path / "held.log", tmp_path / "cut.log")
+    try:
+        credential = issue(tools.nsc, tmp_path / "nsc", _EXPIRING, grants)
+        holding += [await _holding(broker.url, credential, logs[0]), await _holding(link.url, credential, logs[1])]
+        held, cut = holding
+        assert [await _said(held), await _said(cut)] == [["connected"], ["connected"]], "a worker could not connect with its own credential"
+
+        outage = asyncio.create_task(link.cut(_EXPIRY + 15))
+        session_ended = await _until(lambda: held.returncode is not None, _EXPIRY + 30)
+        assert session_ended and held.returncode == _HUNG_EXIT, (
+            f"a worker whose session the bus ended kept its process (exit {held.returncode}): {logs[0].read_text()[-600:]}"
+        )
+        await outage
+        refused = await _until(lambda: cut.returncode is not None, 30)
+        assert refused and cut.returncode == _HUNG_EXIT, (
+            f"a worker the bus refused at a reconnect kept reconnecting (exit {cut.returncode}): {logs[1].read_text()[-600:]}"
+        )
+    finally:
+        for process in holding:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+        await link.stop()
+        broker.stop()

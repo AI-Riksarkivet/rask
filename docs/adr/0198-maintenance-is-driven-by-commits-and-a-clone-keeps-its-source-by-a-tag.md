@@ -102,7 +102,12 @@ The four rows were built as one (owner, 2026-11-08), and building them settled w
    publish sets no header but the message id, so it cannot put a schedule (components-contrib e90662b02d70,
    `pubsub/jetstream/jetstream.go:115-145`). nats-py is the client and the worker is a plain pull worker; FastStream and
    taskiq-nats were weighed and do neither the bind-only consumer nor the in-progress heartbeat. Its replies arrive on an
-   inbox of its own. The streams and consumers are the chart's stream Job's; the worker creates none.
+   inbox of its own. The streams and consumers are the chart's stream Job's; the worker creates none. Its credential is
+   the one the store held when it started, and the store's seed issues a new one when the user's grants change and
+   revokes the old, which nats-py never gets past: it closes for good on a session the server ends, and retries a
+   credential the server refuses for ever (nats-py 2.16). So a worker whose credential the bus takes no longer ends its
+   process (`TaskQueue.connect`), and starts again on the store's current one, as `lakehouse.bus_watchdog` restarts a
+   sidecar.
 6. **The times are NATS message schedules** (ADR-51, MAINTENANCE_SCHEDULES): each table's next pass, a commit's follow-up,
    the hourly audit and the daily scan. The bus was upgraded to nats-server 2.15.2 for them (an estate on 2.14.2 steps
    through 2.14.9, as the upgrade guide asks); the worker asserts the audit's and the scan's schedules at its start and

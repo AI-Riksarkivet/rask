@@ -106,6 +106,8 @@ class Permissions(BaseModel):
 
     publish: tuple[str, ...] = ()
     subscribe: tuple[str, ...] = ()
+    #: How long the user's credential is good for, as nsc's `--expiry` takes it (`1m` is its least); empty, for ever.
+    expiry: str = ""
 
     @property
     def inbox(self) -> str:
@@ -168,24 +170,32 @@ def mint(nsc: Path, table: dict[str, Permissions], home: Path) -> Mint:
         RuntimeError: an nsc command failed; its stderr carries no seed.
     """
 
-    def run(*args: str) -> str:
-        done = subprocess.run([str(nsc), "-H", str(home), *args], capture_output=True, text=True, check=False)  # noqa: S603
-        if done.returncode:
-            raise RuntimeError(f"nsc {' '.join(args[:2])} failed: {done.stderr.strip()[-400:]}")
-        return done.stdout
+    _nsc(nsc, home, "add", "operator", "--name", _OPERATOR, "--sys")
+    _nsc(nsc, home, "add", "account", "--name", _ACCOUNT)
+    _nsc(nsc, home, "edit", "account", "--name", _ACCOUNT, "--js-disk-storage", "512M", "--js-mem-storage", "64M")
+    credentials = {user: issue(nsc, home, user, permissions) for user, permissions in table.items()}
+    return Mint(resolver_conf=_nsc(nsc, home, "generate", "config", "--mem-resolver", "--sys-account", "SYS"), credentials=credentials)
 
-    run("add", "operator", "--name", _OPERATOR, "--sys")
-    run("add", "account", "--name", _ACCOUNT)
-    run("edit", "account", "--name", _ACCOUNT, "--js-disk-storage", "512M", "--js-mem-storage", "64M")
-    for user, permissions in table.items():
-        rows = [arg for subject in permissions.publish for arg in ("--allow-pub", subject)]
-        rows += [arg for subject in permissions.subscribe for arg in ("--allow-sub", subject)]
-        run("add", "user", "--account", _ACCOUNT, "--name", user, *rows)
-    creds = home / "creds" / _OPERATOR / _ACCOUNT
-    return Mint(
-        resolver_conf=run("generate", "config", "--mem-resolver", "--sys-account", "SYS"),
-        credentials={user: Credential.from_creds(user, creds / f"{user}.creds") for user in table},
-    )
+
+def issue(nsc: Path, home: Path, user: str, permissions: Permissions) -> Credential:
+    """One more user of the account :func:`mint` made in ``home``. A running bus takes it at once: the server resolves the
+    account that signed it, never its users.
+
+    Raises:
+        RuntimeError: nsc refused the user; its stderr carries no seed.
+    """
+    rows = [arg for subject in permissions.publish for arg in ("--allow-pub", subject)]
+    rows += [arg for subject in permissions.subscribe for arg in ("--allow-sub", subject)]
+    rows += ["--expiry", permissions.expiry] if permissions.expiry else []
+    _nsc(nsc, home, "add", "user", "--account", _ACCOUNT, "--name", user, *rows)
+    return Credential.from_creds(user, home / "creds" / _OPERATOR / _ACCOUNT / f"{user}.creds")
+
+
+def _nsc(nsc: Path, home: Path, *args: str) -> str:
+    done = subprocess.run([str(nsc), "-H", str(home), *args], capture_output=True, text=True, check=False)  # noqa: S603
+    if done.returncode:
+        raise RuntimeError(f"nsc {' '.join(args[:2])} failed: {done.stderr.strip()[-400:]}")
+    return done.stdout
 
 
 def free_port() -> int:

@@ -580,7 +580,8 @@ governing their data. The project-scoped surface is the console's project page, 
   whose heartbeats the bus stops answering ends itself before that ack wait runs out (`Worker._tell`), one whose drain
   ends with a pass still running ends there (`Worker.drain`), each pull has a subscription of its own, and a pass
   holds a claim on its table in the MAINTENANCE_CLAIMS bucket that another pass waits out (`Worker._claim`), so two
-  passes of one table never overlap; a pass
+  passes of one table never overlap; a replica whose credential the bus takes no longer (revoked when its grants changed,
+  or expired) ends itself and starts again on the store's current one (`TaskQueue.connect`); a pass
   past twice `maxPassSeconds` ends its replica, and a task that outlived its worker on all `maxDeliver` deliveries is
   ended unrun on the one more the consumer allows. A commit's announcement on `lineage.events.v1` (`/maintenance-arrival`,
   `maintenance.services.arrival.lane_task`) holds one follow-up pass `commitPassDelaySeconds` (300) out unless one is
