@@ -200,3 +200,4 @@ with its client to that client's own repository.
 | [0196](0196-an-install-from-git-converges-under-argo-cd.md) | XC-164 | An install from git converges under Argo CD, and a changed input converges on the next sync (2026-11-07) |
 | [0197](0197-maintenance-writes-only-under-a-vend-and-no-workload-holds-a-store-key.md) | XC-084, LH-219, LH-238 | Maintenance writes only under a vend, and no workload holds a store key (2026-11-08) |
 | [0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) | owner | Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08) |
+| [0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) | owner | NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09) |

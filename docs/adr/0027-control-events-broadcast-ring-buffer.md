@@ -1,5 +1,7 @@
 # 0027. control-events — broadcast + ring buffer
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the per-replica ring buffer loses to cloud native; the poll is to read the durable stream by sequence, decided in the row that implements it.
+
 **Decision.** The control-plane change-event feed (shipped + live-proven 2026-07-23,
 `scripts/verify_control_events.sh`) rides a **dedicated** Dapr pub/sub component
 (`catalog-control-pubsub`, topic `catalog.control.v1`) that the catalog subscribes to **without a

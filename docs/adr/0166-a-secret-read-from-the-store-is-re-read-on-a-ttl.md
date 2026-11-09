@@ -1,5 +1,7 @@
 # 0166. A secret read from the store is re-read on a TTL; a service's own S3 key pair is held in the store (2026-10-16)
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the bus seed and the shared app token this serves never expire; their replacement follows the move off Dapr.
+
 **Status:** accepted; amended by [ADR 0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md), under which the
 catalog holds no key pair: its store identity is its ServiceAccount token. Source: owner, 2026-10-16, two decisions on
 XC-082 (#215) through the multi-question tool: where a service's own S3 key id lives (in the store with its secret,

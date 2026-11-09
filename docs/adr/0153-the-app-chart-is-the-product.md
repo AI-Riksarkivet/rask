@@ -1,5 +1,7 @@
 # 0153. The app chart is the product; operators, compute and observability are prerequisites (2026-10-11)
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the record stands, and the production render is to be brought to it: it still ships a one-replica Collector.
+
 **Status:** accepted, amended by [ADR 0189](0189-the-product-chart-carries-no-engine-seam.md) (the lakehouse names no
 engine endpoint or token; an engine is a client of the namespace). Source: owner, 2026-10-11, in a `/grill-with-docs`
 session over XC-085 (#216) with XC-049 (#198) folded in. Supersedes the no-split half of ADR 0038.

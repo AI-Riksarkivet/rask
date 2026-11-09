@@ -1,5 +1,7 @@
 # 0198. Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08)
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): decision 5 (maintenance on the bus directly, the other services through Dapr) is two bus paths in one product; it becomes the one path with the move off Dapr.
+
 **Status:** accepted. Owner, 2026-11-08, through the multi-question tool: "Registered, by tag" for how a clone keeps its
 source, and "Ship it, then redesign" for the order (XC-084 shipped first, ADR 0197). Supersedes the discovery decision
 of [ADR 0045](0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md) ("maintenance discovers work by listing
@@ -137,3 +139,50 @@ Lance's count"): an idle table costs about one request an hour (the audit) and o
 for a lost commit or store event and for the versions a deleted tag releases), and nothing walks the estate's files; a
 commit's pass costs a fixed handful plus Lance's own cleanup accounting. A task a worker ends holds its next try
 `maintenance.queue.recheckHours` out, so the audit does not hand a task that kills its worker straight back.
+
+## Amendment, 2026-11-09: what a second audit of the row found ([[LH-494]])
+
+A fresh audit of the design and the code, with the first audit's fixes in the tree, found decision 1 incomplete in three
+places and two defects in the fixes themselves. Each is fixed with the first audit's HIGH findings, in one change.
+
+- **Decision 1 tags every table a clone reads through, not only the one its transaction names.** A clone of a clone
+  declares both roots and reads the first source's files where they are (measured on pylance 13.0.0), while its `Clone`
+  names only the clone between them. Tagged on that one alone, it was broken by the first source's cleanup once the clone
+  between them was deregistered, which releases only that clone's tag. Its registration now tags each root, at the
+  version its own source's record pins, and asks `can_create_tag` on each.
+- **The base record keeps the version and branch each `derived_from` entry pins.** A clone's own version expiry removes
+  its first version, and with it the only transaction that names its source. Registered again after that, it was admitted
+  on its record alone with no tag. A registration now tags from the record when the transaction is gone, and refuses a
+  recorded root that carries no pin.
+- **A clone of a source branch is registered.** Its `Clone` names the branch's directory (`<source>/tree/<branch>`) and
+  the branch in `ref_name`; `branch_name` is the branch an operation creates, and is unset for a clone into a dataset of
+  its own. The door read the wrong field and found no claim at the branch's directory, so it refused every such clone.
+- **A task that finds its claim held on every delivery is given up uncounted.** The audit and the scan share one claim
+  (the first audit's fix), so an audit fired behind a long scan spent its deliveries waiting and was then ended and
+  counted as a task that failed. It is now terminated without the count on its last delivery; its next firing brings it
+  back.
+- **uvicorn's graceful bound in the maintenance pod is cut by the worker's drain.** The drain runs after uvicorn's wait,
+  so the render's guard, which held the drain alone inside the grace, allowed preStop, a slow request and a full drain to
+  outlast it.
+- `CommittedFileOverwritten` reads a 25 h window, since a pass counts an overwritten file once and the table's next pass
+  is a day out; the queue's schedule values admit no `@every` interval, which the worker's reassertion of a cadence every
+  15 minutes might restart (not measured).
+
+- **Every end of a clone deletes its tags before it frees the clone's location, the trash's end included.** The first
+  audit put the deregister door and the warehouse cascade in that order; `trash.end` still released the claim first. With
+  all three in that order the claim is the ender's own while its tags go, which is what makes comparing the location's
+  holder by name sound.
+- **The maintenance pod's sidecar blocks its shutdown for the grace less the teardown**, so it outlives preStop, uvicorn's
+  bound and the worker's whole drain; at the fleet's 20 s it stopped about 15 s into a 90 s drain. Not measured: whether
+  daprd, with no app health check configured, holds the pod in Terminating for that whole time once the app has exited.
+- A task that names a table at a location another table holds no longer deletes that table's due record, and the
+  worker's bus credential is named as `nats.auth.users` issues it, whatever maintenance's Dapr app id.
+- The register door's check that a location is free, which the first audit's fix added ahead of the backend call,
+  answered a table registered again at its own location 400; it reaches the backend's `TableAlreadyExists` (409) and the
+  converge path again.
+
+Not fixed here, and stated: the hourly audit and each pass's listing still grow with the estate and the table; store
+events in production rest on an attestation nothing checks; the queue has no operator-visible task history, dead letter
+or cancel; and four of the worker's recovery paths (a refused enqueue of a fired schedule, a refused hold of an ended
+task's next try, a fetch and a settle the bus fails) have no test, since each needs one request to fail on a real bus
+and the lane's link can only cut a whole connection. Each is the second and third change's.

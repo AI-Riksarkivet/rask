@@ -1,5 +1,7 @@
 # 0195. The three kits fold into one lakehouse library (2026-11-07)
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the one package stands; "organised by module" becomes subpackages under a layers contract, and "swapped by Dapr component" is retired, since NATS is the one bus.
+
 **Status:** accepted. Source: the owner's questions of 2026-11-07 ("all this _kit package? Any reason?", then "Should
 they be folded into one? How does Lakekeeper structure its code?"), answered with the evidence below and started as the
 first step of the XC-196 (#780) / XC-198 (#782) bundle on the owner's `/implement`. Builds on the owner's ruling of

@@ -1,5 +1,7 @@
 # 0028. control-events — per-replica cursor boundary
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the per-replica cursor loses to cloud native (a cursor read on another replica answers an empty page); decided with ADR 0027's reopening.
+
 **Decision.** The ring buffer **and** its monotonic cursor are **per-replica** (each broadcast subscriber
 buffers independently, in process memory). This is correct at the default `services.catalog.replicas: 1`.
 Scaling the catalog past one replica requires **session affinity** (a client's polls stick to one

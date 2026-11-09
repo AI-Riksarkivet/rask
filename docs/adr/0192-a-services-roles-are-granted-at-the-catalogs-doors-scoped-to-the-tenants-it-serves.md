@@ -1,5 +1,7 @@
 # 0192. A service's roles are granted at the catalog's doors, scoped to the tenants it serves (2026-11-06)
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): grants made only at the doors lose to GitOps; this record stands until the planned operator is designed.
+
 **Status:** accepted. Source: LH-563 (#771). The owner ruled "Grants via doors" on 2026-11-06, after the client-move audit
 and the parity audit against Lakekeeper `9124ea8`, and chose the two open points through the multi-question tool the same
 day: "Refused, as absent" (how the decision door answers an object outside its caller's scope) and "Revoke, re-grant

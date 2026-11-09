@@ -1,5 +1,7 @@
 # 0185. The catalog reclaims each root's namespace index, and holds no connection past it (2026-10-30)
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the reclaim runs in the serving process on every replica; a catalog worker role is to own it, decided after one tick is timed.
+
 **Status:** accepted. Source: LH-251 (#165): nothing reclaimed `__manifest`, every namespace operation kept a version,
 and a dropped id stayed readable in its history.
 

@@ -1,5 +1,7 @@
 # 0188. A lost publication is announced from its tag; a table's lifecycle markers stay best-effort (2026-11-01)
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): best-effort lifecycle markers lose to cloud native; they are to ride the outbox, decided after the store requests per door are counted.
+
 **Status:** accepted. Source: LH-552 (#743), admitted by the owner on 2026-11-01 from that day's design audit. The owner
 chose its scope the same day through the multi-question tool ("Publication only"), after the research below.
 
