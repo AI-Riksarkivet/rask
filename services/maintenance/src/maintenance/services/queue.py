@@ -78,11 +78,12 @@ _RETRY_CEILING: Final = 900.0
 #: table before it asks again.
 _FOLLOW_UP: Final = "followup"
 _FOLLOW_UP_RETRY: Final = 60.0
-#: JetStream's answer to a publish that expects a subject to hold nothing (`Nats-Expected-Last-Subject-Sequence: 0`) while
-#: it holds a message. Measured on nats-server 2.15.2 (2026-11-09): on a held `@at` follow-up, `wrong last sequence: 1
-#: (10071)`, the held one kept unreplaced, and once it fired the next one was stored; on the work queue, refused while a
-#: task was queued and while it was in flight, and stored once it was acknowledged.
-_HELD_ALREADY: Final = 10071
+#: JetStream's answers to a publish that expects a subject to hold nothing (`Nats-Expected-Last-Subject-Sequence: 0`) while
+#: it holds a message, both "wrong last sequence". Measured on nats-server 2.15.2 (2026-11-09): one server answers 10071
+#: (on a held `@at` follow-up, the held one kept unreplaced and the next stored once it fired; on the work queue, refused
+#: while a task was queued and while it was in flight, stored once it was acknowledged), and the dev estate's three-node
+#: cluster, whose streams are R3, answers 10164.
+_HELD_ALREADY: Final = frozenset({10071, 10164})
 _EXPECT_NOTHING: Final = {"Nats-Expected-Last-Subject-Sequence": "0"}
 #: How long a JetStream API request is waited for.
 _API_TIMEOUT: Final = 10.0
@@ -172,7 +173,7 @@ class TaskQueue:
 
     async def enqueue(self, task: Task) -> bool:
         """Put ``task`` on the queue; ``False`` when its table already has one queued or in flight, which covers it. The
-        publish expects the task's subject to hold nothing, so JetStream answers 10071 while a task holds it; the stream's
+        publish expects the task's subject to hold nothing, so JetStream refuses it while a task holds it; the stream's
         one-message-per-subject limit stands behind that.
 
         Raises:
@@ -181,7 +182,7 @@ class TaskQueue:
         try:
             await self._js.publish(task.subject("task"), task.model_dump_json().encode(), stream=TASKS_STREAM, headers=_EXPECT_NOTHING)
         except APIError as exc:
-            if exc.err_code == _HELD_ALREADY:
+            if exc.err_code in _HELD_ALREADY:
                 return False
             raise QueueUnavailableError(f"the queue refused {task.subject('task')}: {exc}") from exc
         except (NatsError, TimeoutError) as exc:
@@ -210,7 +211,7 @@ class TaskQueue:
         try:
             await self._hold(task, _at(at), held=held, fires=task.follow_up_subject("due"), expect_nothing=True)
         except APIError as exc:
-            if exc.err_code == _HELD_ALREADY:
+            if exc.err_code in _HELD_ALREADY:
                 return False
             raise QueueUnavailableError(f"the queue refused {held}: {exc}") from exc
         return True
