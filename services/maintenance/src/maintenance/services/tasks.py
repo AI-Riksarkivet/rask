@@ -78,10 +78,10 @@ async def running_worker(
     if not settings.nats_url:
         yield None
         return
-    secret = await run_in_threadpool(fetch_required_secrets, settings.dapr_secret_store, settings.nats_credentials_secret, require="seedKey")
+    secret = await run_in_threadpool(fetch_required_secrets, settings.dapr_secret_store, settings.nats_credentials_secret, require="seed")
     if not secret.get("jwt"):
         raise RuntimeError(f"secret 'jwt' unavailable from Dapr store {settings.dapr_secret_store!r}/{settings.nats_credentials_secret!r} — failing closed")
-    queue = await TaskQueue.connect(settings.nats_url, creds_document(jwt=secret["jwt"], seed=secret["seedKey"]), name="maintenance")
+    queue = await TaskQueue.connect(settings.nats_url, creds_document(jwt=secret["jwt"], seed=secret["seed"]), name="maintenance")
     await _assert_cadences(queue, settings)
     emit_zero_baselines()
     create_task_series(get_args(TaskKind.__value__))

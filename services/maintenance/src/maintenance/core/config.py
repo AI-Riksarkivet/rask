@@ -93,7 +93,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # (`chart/templates/nats-stream-job.yaml`), so the worker binds to them and creates nothing.
     #: The bus the worker connects to; empty runs no worker, which leaves a stack with no NATS to the doors and the tests.
     nats_url: str = Field(default="", alias="MAINTENANCE_NATS_URL")
-    #: The store secret holding the worker's own bus user (`jwt`, `seedKey`), read once at start and never from env. Its
+    #: The store secret holding the worker's own bus user (`jwt`, `seed`), read once at start and never from env. Its
     #: permissions are the chart's `nats.auth.users` row: pull and ack on the two consumers, publish tasks and schedules.
     nats_credentials_secret: str = Field(default="nats-user-maintenance-worker", alias="MAINTENANCE_NATS_CREDENTIALS_SECRET")
     #: How often a running task tells JetStream it is still being worked on, well inside the consumer's ack wait (the
