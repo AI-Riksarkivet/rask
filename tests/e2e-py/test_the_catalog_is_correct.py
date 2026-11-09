@@ -85,6 +85,8 @@ from lance_namespace_urllib3_client.exceptions import ApiException
 from pydantic import BaseModel, ConfigDict, Field
 from refusals import body_of, names_in, problem_code
 
+from lakehouse.storage_options import ENDPOINT
+
 
 #: The spec the catalog serves: the doors this module drives, and the oracle for each one's request and answer.
 SPEC = Path(__file__).resolve().parents[2] / "lance_docs" / "ns_catalog" / "spec.yaml"
@@ -657,7 +659,7 @@ def _vend(tier: str) -> Callable[[Scene, Role, Target], requests.Response]:
 
 def _vended(scene: Scene, role: Role, target: Target, value: Any, before: Any) -> tuple[object, object]:
     options = (value.get("credentials") or value).get("storage_options") or {}
-    return {"aws_access_key_id", "aws_secret_access_key", "aws_session_token", "endpoint"} <= set(options), True
+    return {"aws_access_key_id", "aws_secret_access_key", "aws_session_token", ENDPOINT} <= set(options), True
 
 
 def _access_door(verb: str, relation: str) -> Callable[[Scene, Role, Target], requests.Response]:

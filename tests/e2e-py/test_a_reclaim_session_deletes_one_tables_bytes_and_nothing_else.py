@@ -65,7 +65,7 @@ _DATA_PLANE = {
 
 
 class _Reclaim(BaseModel):
-    """One expired trash record on the store, the session vended for it, and what lies beside it."""
+    """One expired and released trash record on the store, the session vended for it, and what lies beside it."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -133,7 +133,9 @@ def reclaim(rustfs_store: ThrowawayStore) -> _Reclaim:
     s3_client(rustfs_store, parent, secret).put_object(Bucket=data, Key=f"ns/{quote(name)}/.lance-reserved", Body=b"")
     control_root, table_uuid, other_uuid = f"s3://{control}", str(uuid.uuid4()), str(uuid.uuid4())
     past = datetime.now(UTC) - timedelta(days=2)
-    trash.put(control_root, own, trash.make_record(f"ns${name}", uuid=table_uuid, location=location, dropped_by=None, grace_days=1, now=past))
+    # Released, as the catalog's release door leaves a record: the purge takes only released records (`purge.due_from`).
+    record = trash.make_record(f"ns${name}", uuid=table_uuid, location=location, dropped_by=None, grace_days=1, now=past)
+    trash.put(control_root, own, {**record, trash.RELEASED_AT: (datetime.now(UTC) - timedelta(minutes=1)).isoformat()})
     for key in (
         record_key("_protection", "table", table_uuid),
         f"_file_identities/{table_uuid}/txn.json",

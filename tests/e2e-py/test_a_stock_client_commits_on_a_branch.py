@@ -27,6 +27,8 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from scratch_tenant import CATALOG, DEX, Identity, Tenant, provisioned
 
+from lakehouse.storage_options import ENDPOINT
+
 
 pytestmark = [
     pytest.mark.e2e,
@@ -65,7 +67,7 @@ def _vended_store(identity: Identity, table_id: list[str]) -> tuple[Any, str, st
     bucket, _, prefix = str(described.location).removeprefix("s3://").partition("/")
     store = boto3.client(
         "s3",
-        endpoint_url=vended["endpoint"],
+        endpoint_url=vended[ENDPOINT],
         aws_access_key_id=vended["aws_access_key_id"],
         aws_secret_access_key=vended["aws_secret_access_key"],
         aws_session_token=vended["aws_session_token"],

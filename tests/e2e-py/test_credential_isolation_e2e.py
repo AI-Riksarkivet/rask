@@ -33,6 +33,7 @@ from botocore.client import Config
 from botocore.exceptions import ClientError
 
 from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.storage_options import ENDPOINT
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -145,7 +146,7 @@ def _client(creds: dict[str, str]) -> Any:
     the route therefore takes nothing away from what the leg proves; swapping the credential would, and
     this does not.
     """
-    endpoint = creds.get("endpoint") or S3
+    endpoint = creds.get(ENDPOINT) or S3
     if S3 and endpoint:
         # Host swap only: keep scheme, port and path from the vended value, take the reachable host.
         vended = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")

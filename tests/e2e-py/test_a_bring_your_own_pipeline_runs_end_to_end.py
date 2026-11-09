@@ -31,6 +31,8 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from byo_scenario import ScenarioRun, Tenant
 
+from lakehouse.storage_options import ENDPOINT
+
 
 pytestmark = [pytest.mark.e2e, pytest.mark.byo_pipeline, pytest.mark.phase1, pytest.mark.skipif(not scenario.LIVE, reason=scenario.REQUIRES)]
 
@@ -68,7 +70,7 @@ def test_the_write_tier_credential_cannot_forge_the_published_tag(byo_tenant: Te
     bucket, _, prefix = str(described.location).removeprefix("s3://").partition("/")
     store = boto3.client(
         "s3",
-        endpoint_url=vended["endpoint"],
+        endpoint_url=vended[ENDPOINT],
         aws_access_key_id=vended["aws_access_key_id"],
         aws_secret_access_key=vended["aws_secret_access_key"],
         aws_session_token=vended["aws_session_token"],

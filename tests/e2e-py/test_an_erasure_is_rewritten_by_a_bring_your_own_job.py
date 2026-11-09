@@ -32,6 +32,8 @@ from botocore.config import Config
 from lance.optimize import Compaction
 from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
 
+from lakehouse.storage_options import ENDPOINT
+
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
 #: How long a committed write may take to reach lineage's feed.
@@ -97,7 +99,7 @@ def _objects_holding(identity: Identity, table_id: list[str], needle: bytes) -> 
     bucket, _, prefix = str(described.location).removeprefix("s3://").partition("/")
     store = boto3.client(
         "s3",
-        endpoint_url=vended["endpoint"],
+        endpoint_url=vended[ENDPOINT],
         aws_access_key_id=vended["aws_access_key_id"],
         aws_secret_access_key=vended["aws_secret_access_key"],
         aws_session_token=vended["aws_session_token"],
