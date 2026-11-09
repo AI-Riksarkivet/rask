@@ -14,14 +14,26 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from lakehouse import location_claims
-from lakehouse.base_refs import normalise
+from lakehouse.base_refs import key_uri, normalise, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.governed import fga
 from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
+from maintenance.core.config import MaintenanceSettings
 
 
 log = logging.getLogger(__name__)
+
+
+def claim_store(settings: MaintenanceSettings) -> location_claims.ClaimStore:
+    """The location claims on the control root, read under maintenance's own session."""
+    return location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
+
+
+def claimed_location(control_root: str, claim: location_claims.LocationClaim) -> str:
+    """Where a claim's table is, as its announcement names it. A claim keeps the decoded key its location names, not the
+    store: every table the catalog makes is in the store its control root is in, so the location is named there."""
+    return key_uri(store_of(control_root), claim.location)
 
 
 class TableIds(BaseModel):

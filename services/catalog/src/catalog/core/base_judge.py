@@ -28,9 +28,7 @@ from lance_namespace import InvalidTableStateError, ServiceUnavailableError
 from pydantic import BaseModel
 
 from lakehouse import base_refs, base_registry
-from lakehouse.base_refs import BaseRefs
 from lakehouse.features import BasePathRef
-from lakehouse.storage_options import StorageOptions
 
 
 if TYPE_CHECKING:
@@ -102,14 +100,6 @@ class BaseJudge(BaseModel):
         except (ClientError, BotoCoreError, OSError) as exc:
             log.error("table_base_record_store_unavailable", extra={"location": location, "error": f"{type(exc).__name__}: {exc}"[:300]})
             raise ServiceUnavailableError("the store holding a table's base record did not answer, so its declared bases were not judged") from exc
-
-    def sibling_base_refs(self, location: str, storage_options: StorageOptions) -> BaseRefs:
-        """:func:`lakehouse.base_refs.sibling_base_refs`, judged against this catalog's record and configured bases.
-
-        The on-demand compaction, reclamation, version-delete and erasure doors ask this, so a planted base
-        freezes no table at those doors either ([[LH-279]]).
-        """
-        return base_refs.sibling_base_refs(location, storage_options, configured=self.configured, record_of=self.read_record)
 
     @classmethod
     def from_settings(cls, settings: Settings) -> BaseJudge:

@@ -26,7 +26,9 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # commit: the gate never reached the script that would have reported it. values-prod.yaml deliberately
 # does NOT pin a registry (the deployer supplies theirs), so the check must. signing.provisioned is the operator's attestation that the event-signing
 # keys exist in the platform's store (templates/signing-provisioned.yaml refuses it without that), and
-# nats.auth.provisioned the same for the NATS users (templates/nats-provisioned.yaml). nats.url is the platform's NATS
+# nats.auth.provisioned the same for the NATS users (templates/nats-provisioned.yaml), and
+# objectStore.events.provisioned that the platform's store delivers its change events to the bus
+# (templates/object-store-events-provisioned.yaml). nats.url is the platform's NATS
 # bus, a prerequisite values-prod leaves for the deployer to name.
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name, and
 # auth.oidc.connectors the idp id of each of the platform's Dex connectors ([[LH-063]]),
@@ -43,6 +45,7 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret --api-versions dapr
         --set-string image.tags.web-console=1.2.3
         --set signing.provisioned=true
         --set nats.auth.provisioned=true
+        --set objectStore.events.provisioned=true
         --set-string nats.url=nats://nats.example.com:4222
         --set-string observability.export.endpoint=https://otlp.example.com:4318/v1/otlp
         --set-string auth.fgaApiUrl=https://fga.example.com

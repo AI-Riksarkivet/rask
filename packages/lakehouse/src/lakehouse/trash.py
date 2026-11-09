@@ -324,6 +324,27 @@ def list_all(control_root: str, storage_options: StorageOptions) -> list[dict[st
     return list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT)
 
 
+def deadline_of(record: dict[str, Any]) -> datetime | None:
+    """``record``'s deadline, or ``None`` when its ``expires_at`` is missing or does not parse, which is logged: an undated
+    record is a bug in whatever wrote it, and "we do not know when this expires" reads as "not yet"."""
+    raw = record.get("expires_at")
+    if not isinstance(raw, str):
+        log.warning("trash_record_undated", extra={"id": record.get("id")})
+        return None
+    try:
+        deadline = datetime.fromisoformat(raw)
+    except ValueError:
+        log.warning("trash_record_bad_deadline", extra={"id": record.get("id"), "expires_at": raw})
+        return None
+    return deadline if deadline.tzinfo is not None else deadline.replace(tzinfo=UTC)
+
+
+def release_at(record: dict[str, Any]) -> datetime | None:
+    """When ``record``'s grants may go (:func:`releasable`): :data:`RELEASE_SETTLE` past its deadline."""
+    deadline = deadline_of(record)
+    return deadline + RELEASE_SETTLE if deadline is not None else None
+
+
 def expired(records: list[dict[str, Any]], *, now: datetime | None = None) -> list[dict[str, Any]]:
     """Which records are past their deadline — a SELECTION, never a deletion (#75 report-only).
 
@@ -335,17 +356,9 @@ def expired(records: list[dict[str, Any]], *, now: datetime | None = None) -> li
     at = now or datetime.now(UTC)
     due: list[dict[str, Any]] = []
     for record in records:
-        raw = record.get("expires_at")
-        if not isinstance(raw, str):
-            log.warning("trash_record_undated", extra={"id": record.get("id")})
+        deadline = deadline_of(record)
+        if deadline is None:
             continue
-        try:
-            deadline = datetime.fromisoformat(raw)
-        except ValueError:
-            log.warning("trash_record_bad_deadline", extra={"id": record.get("id"), "expires_at": raw})
-            continue
-        if deadline.tzinfo is None:
-            deadline = deadline.replace(tzinfo=UTC)
         if deadline <= at:
             due.append(record)
     return due

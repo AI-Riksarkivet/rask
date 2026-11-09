@@ -48,7 +48,7 @@ class DatasetPlan(BaseModel):
             staged_grace=staged_grace,
         )
 
-    def due_question(self, *, table: str, uuid: str, location: str, clones: list[str]) -> DueQuestion:
+    def due_question(self, *, table: str, uuid: str, location: str) -> DueQuestion:
         return DueQuestion(
             table=table,
             uuid=uuid,
@@ -57,7 +57,6 @@ class DatasetPlan(BaseModel):
             compact_enabled=self.compact_enabled,
             optimize_indices_enabled=self.optimize_indices_enabled,
             target_rows_per_fragment=self.target_rows_per_fragment,
-            clones=clones,
         )
 
     def _winner(self, table: str) -> str | None:

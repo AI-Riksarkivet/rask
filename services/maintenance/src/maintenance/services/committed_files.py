@@ -4,7 +4,9 @@ A writer's vend may put over any file a commit adds under its table (``table_lay
 vend may also delete one. Lance checks no file's content: measured on pylance 13.0.0, a same-size overwrite of a data
 file is served silently, while Lance requires a published payload to stay immutable while a protected snapshot references
 it (``lance_docs/lance/format/table/blob.md:254-257``). The catalog records every file a commit adds, with its ETag and
-size, before the version lands (``lakehouse.file_identities``), and the sweep reads each one again.
+size, before the version lands (``lakehouse.file_identities``), and each pass of the table reads them all again, off one
+listing of its root (:func:`lakehouse.stored_objects.listed_identities`): a request per thousand objects, not one per file.
+The store's own event of a write under the table holds that pass early (:mod:`maintenance.services.store_events`).
 
 A recorded file is named when the store holds it with another ETag or size, or no longer holds it while a retained
 version of any ref still names it. No legitimate writer does either: every Lance file name is minted once, and cleanup
@@ -48,7 +50,7 @@ class FileCheck(BaseModel):
     reclaimed: list[str] = Field(default_factory=list)
 
 
-def check(
+def check_and_copy(
     table_root: str,
     table_uuid: str,
     *,
@@ -57,7 +59,8 @@ def check(
     control_root: str,
     control_options: StorageOptions,
 ) -> FileCheck:
-    """Read every file the catalog recorded for the table at ``table_root`` (the store's own spelling of it) again. Reads only.
+    """Read every file the catalog recorded for the table at ``table_root`` (the store's own spelling of it) again. Writes
+    only maintenance's copy of the records (:func:`lakehouse.file_identities.recorded_and_copied`).
 
     ``open_table`` opens the table's latest version, and is called only when a recorded file is gone: the retained
     versions say whether it was reclaimed.
@@ -66,8 +69,8 @@ def check(
         ValueError: A record is not one a commit wrote, so the files it names cannot be checked.
         OSError: The store refused, or could not be reached for, a read.
     """
-    committed = file_identities.recorded(control_root, control_options, table_uuid)
-    held = stored_objects.identities(table_root, data_options, sorted({file.path for commit in committed for file in commit.files}))
+    committed = file_identities.recorded_and_copied(control_root, control_options, table_uuid)
+    held = stored_objects.listed_identities(table_root, data_options, sorted({file.path for commit in committed for file in commit.files}))
     absent = {file.path for commit in committed for file in commit.files if file.path not in held}
     named = _named_by_a_retained_version(open_table(), table_root, absent) if absent else set()
     overwritten: list[str] = []

@@ -959,8 +959,11 @@ async def _detach(ns: LanceNamespace, settings: Settings, table: ResolvedTable, 
     except Exception:
         await run_in_threadpool(table_claims.lift_fence, claims, fenced)
         raise
-    # The detached bytes are nobody's now, so the id's claim on them goes ([[LH-204]]).
+    # The detached bytes are nobody's now, so the id's claim on them goes ([[LH-204]]), and so does the version a clone
+    # among them was promised on its sources (ADR 0198 §1): the base record stays, for the bytes it describes.
     await run_in_threadpool(location_claims.release, claims, fenced.location, canonical)
+    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+    await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location))
     return response
 
 
@@ -1223,6 +1226,12 @@ async def register_table(
             log.warning("register_refused_held_location", extra={"table": id, "location": held.claim.location, "holder": held.claim.table})
             raise table_bases.occupied_location_refusal(body.location) from None
         verdict = await run_in_threadpool(table_bases.judge_registered_table, ns, so, segments, body.location, context)
+        # A clone reads its sources' rows through their files, so registering one asks what reading each source asks.
+        for source in verdict.sources:
+            await fga_deps.require_relation(client, settings, token, relation="can_read_data", obj=fga.table_object(source.table_uuid), label=source.table)
+        admitted = await run_in_threadpool(
+            partial(table_bases.admit_registered_table, ns, so, segments=segments, verdict=verdict, clone_uuid=table_uuid, context=context)
+        )
     except Exception as refusal:
         try:
             await _detach()
@@ -1242,11 +1251,9 @@ async def register_table(
 
     async def _undo_register() -> None:
         # Detach first: while the table is attached its record must stay, because its manifest still
-        # declares those bases. Then the entries this registration claimed go with it.
+        # declares those bases. Then the entries, directories and clone tags this registration took go with it.
         await _detach()
-        if verdict.claim is not None:
-            await run_in_threadpool(base_registry.release_claim, context.registry, verdict.claim)
-        await run_in_threadpool(base_registry.release_data_directories, context.registry, verdict.directories, context.holder)
+        await run_in_threadpool(partial(table_bases.release_admitted, admitted, clone_location=location, so=so, context=context))
 
     await fga_deps.seed_ownership_or_compensate(client, settings, token, resolver, resource="table", segments=segments, uuid=table_uuid, undo=_undo_register)
     # RESOLVED, not echoed — `response.location` is the caller's own relative path, which names nothing a

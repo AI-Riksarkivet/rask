@@ -189,7 +189,9 @@ func (m *Rask) Charts(
 // (`auth.oidc.connectors`), which a person's principal key carries and the render refuses to go without ([[LH-063]]).
 // `signing.provisioned` is the operator's attestation that the event-signing keys exist, without which
 // `templates/signing-provisioned.yaml` refuses the platform's store;
-// `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`).
+// `nats.auth.provisioned` attests every bus client's NATS user the same way (`templates/nats-provisioned.yaml`), and
+// `objectStore.events.provisioned` that the platform's store delivers its change events to the bus
+// (`templates/object-store-events-provisioned.yaml`).
 // `nats.url` names the platform's NATS bus: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
 // the routes attach to and the hostnames it routes to this release, which a real deployment refuses to go without
 // ([[XC-146]], ADR 0165). `networkPolicy.apiServerEgress` and `openbao.egress` state the peers the isolation layer admits
@@ -214,6 +216,7 @@ const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set openbao.egress[0].ports[0].port=8200 " +
 	"--set signing.provisioned=true " +
 	"--set nats.auth.provisioned=true " +
+	"--set objectStore.events.provisioned=true " +
 	"--set objectStore.enabled=false " +
 	"--set-string objectStore.externalEndpoint=https://s3.example.com " +
 	"--set dex.enabled=false"

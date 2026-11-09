@@ -17,7 +17,7 @@ not tell", and reporting it as "Lance will take it" is the same conflation `chec
 
 from __future__ import annotations
 
-from maintenance.api.routes import _orphans_by_reclaimability
+from maintenance.services.audit import _orphans_by_reclaimability
 from maintenance.services.orphans import OrphanFile
 from maintenance.services.reconcile import ReconcileReport
 

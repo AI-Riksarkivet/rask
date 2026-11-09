@@ -19,18 +19,17 @@ Not one dataset hides below the bound. The 59 stopped prefixes of the primary bu
 entries — `_lineage_outbox` being the only one of the five control prefixes the walk did not skip.
 
 Walking the outbox also RACED ITS DRAIN: it is emptied continuously, so a directory named by one
-listing was gone before the descent, and a depth-4 walk died `FileNotFoundError`. Both callers catch
-per BUCKET, so that one vanished sub-prefix cost a whole bucket its maintenance for the tick.
+listing was gone before the descent, and a depth-4 walk died `FileNotFoundError`. The scan catches per BUCKET, so
+that one vanished sub-prefix cost a whole bucket its scan.
 
 The depth bound stays a POLICY LEVER rather than a rescue — it reveals no hidden data, and its default
-is unchanged. It is bounded at both ends because the walk is the sweep's dominant cost:
-`sweep.py::_protected_roots` opens every discovered dataset in every bucket before one is compacted.
+is unchanged. It is bounded at both ends because the walk is the orphan scan's dominant cost: the scan opens every
+dataset it discovers in every bucket.
 """
 
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -45,7 +44,6 @@ import pytest
 from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import sweep as sweep_mod
 from maintenance.services.discovery import Discovery, discover_datasets
 
 
@@ -88,8 +86,8 @@ def test_the_walk_reaches_exactly_as_deep_as_it_is_told(tmp_path: Path, depth: i
 
 
 def test_the_setting_exists_and_is_bounded() -> None:
-    """A depth of 0 maintains nothing and an unbounded one opens every dataset in the estate on a walk
-    that is already the sweep's dominant cost. Both ends are refused."""
+    """A depth of 0 scans nothing and an unbounded one opens every dataset in the estate on a walk that is already the
+    orphan scan's dominant cost. Both ends are refused."""
     assert MaintenanceSettings(discovery_max_depth=7).discovery_max_depth == 7
     for refused in (0, 17):
         with pytest.raises(ValueError):
@@ -105,24 +103,6 @@ def _capture_depth(monkeypatch: pytest.MonkeyPatch, module: Any) -> list[int | N
 
     monkeypatch.setattr(module, "discover_datasets", _spy)
     return seen
-
-
-def test_the_sweep_reports_the_bound_it_actually_used(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """The truncation warning stated `max_depth: 3` as a LITERAL beside a call that passed nothing, so
-    the log would have kept saying 3 while the walk used something else. A number a reader cannot trust
-    is worse than no number."""
-
-    def _truncating(_fs: Any, _bucket: str, *, max_depth: int | None = None) -> Discovery:
-        return Discovery(truncated=["s3://b/deep/"])
-
-    monkeypatch.setattr(sweep_mod, "discover_datasets", _truncating)
-
-    with caplog.at_level(logging.WARNING):
-        sweep_mod._discover_all(pafs.LocalFileSystem(), ["b"], max_depth=6)
-
-    truncation = [r for r in caplog.records if r.message == "maintenance_discovery_truncated"]
-    assert truncation, "the truncation warning stopped firing"
-    assert getattr(truncation[0], "max_depth", None) == 6
 
 
 def test_the_reconciler_walks_the_configured_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

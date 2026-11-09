@@ -1,0 +1,93 @@
+{{- if .Values.events.busAddress }}
+{{- $labels := dict "app.kubernetes.io/name" "rustfs" "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "bucket-events" }}
+{{- $image := .Values.events.image }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.name }}-bucket-events
+  labels: {{- toYaml $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}-bucket-events
+  labels: {{- toYaml $labels | nindent 4 }}
+data:
+  config: |
+    [default]
+    credential_process = /etc/bucket-events/credentials.sh
+  credentials.sh: |
+    #!/bin/sh
+    printf '{"Version":1,"AccessKeyId":"%s","SecretAccessKey":"%s"}' "$(cat /run/secrets/rustfs/access_key)" "$(cat /run/secrets/rustfs/secret_key)"
+  configure.sh: |
+    set -eu
+    config='{"QueueConfigurations":[{"Id":"store-events","QueueArn":"arn:rustfs:sqs::primary:nats","Events":["s3:ObjectCreated:*"]}]}'
+    buckets=$(aws s3api list-buckets --query 'Buckets[].Name' --output text)
+    for bucket in $buckets; do
+      aws s3api put-bucket-notification-configuration --bucket "$bucket" --notification-configuration "$config"
+    done
+    echo "bucket events configured on: $buckets"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.name }}-bucket-events
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  schedule: {{ .Values.events.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 600
+      template:
+        metadata:
+          labels: {{- toYaml $labels | nindent 12 }}
+        spec:
+          serviceAccountName: {{ .Values.name }}-bucket-events
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            runAsNonRoot: true
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: configure
+              image: "{{ $image.repository }}:{{ $image.tag }}{{ with $image.digest }}@{{ . }}{{ end }}"
+              command: ["/bin/sh", "/etc/bucket-events/configure.sh"]
+              env:
+                - { name: HOME, value: /tmp }
+                - { name: AWS_CONFIG_FILE, value: /etc/bucket-events/config }
+                - { name: AWS_ENDPOINT_URL, value: "http://{{ .Values.name }}:{{ .Values.port }}" }
+                - { name: AWS_REGION, value: {{ .Values.region | quote }} }
+              resources:
+                requests: { cpu: 10m, memory: 64Mi }
+                limits: { memory: 256Mi }
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                capabilities: { drop: ["ALL"] }
+              volumeMounts:
+                - { name: script, mountPath: /etc/bucket-events, readOnly: true }
+                - { name: root-credentials, mountPath: /run/secrets/rustfs, readOnly: true }
+                - { name: tmp, mountPath: /tmp }
+          volumes:
+            - name: script
+              configMap:
+                name: {{ .Values.name }}-bucket-events
+                defaultMode: 0555
+            - name: root-credentials
+              secret:
+                secretName: {{ .Values.rootCredentials }}
+                optional: false
+                defaultMode: 0400
+                items:
+                  - { key: object-store-access-key, path: access_key }
+                  - { key: object-store-secret-key, path: secret_key }
+            - { name: tmp, emptyDir: { sizeLimit: "64Mi" } }
+{{- end }}

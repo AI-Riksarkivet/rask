@@ -18,8 +18,7 @@ The clauses (design.md §3), each one test:
 (2) ``/credentials``, ``describe(vend)`` and ``query_table`` refuse the planting table 409;
 (3) the victim is compacted by the sweep and at the catalog's compact door, and deletable by the purge;
 (4) the maintenance pass names the plant: the tip's base is reported as unrecorded;
-(5) the LH-097 relation — silver shallow-cloned from bronze at a tag, recorded as ``derived_from`` —
-    still keeps bronze from deletion, permits compaction while the tag holds, and refuses it without;
+(5) a shallow clone registered through the door keeps the source version it reads by a tag (ADR 0198 §1);
 and, from the row's How, register location-exclusivity.
 """
 
@@ -49,19 +48,18 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 import lakehouse.storage as storage
-from lakehouse import base_registry
+from lakehouse import base_registry, clone_sources
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.base_refs import BaseRefs, normalise
+from lakehouse.base_refs import normalise
 from lakehouse.features import manifest_base_path_refs
 from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.maintenance_due import CloneList
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage import S3Client
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import purge, sweep
+from maintenance.services import purge, table_pass
 from maintenance.services.due import TableIds
-from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
+from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import PlanContext
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 
@@ -113,6 +111,11 @@ class _Estate:
 
     def namespace_uuid(self, namespace: str) -> str:
         resp = self.client.post(f"/v1/namespace/{namespace}/describe", json={})
+        assert resp.status_code == 200, resp.text
+        return str(resp.json()["properties"][UUID_PROPERTY])
+
+    def table_uuid(self, table: str) -> str:
+        resp = self.client.post(f"/v1/table/{quote(table, safe='$')}/describe", json={})
         assert resp.status_code == 200, resp.text
         return str(resp.json()["properties"][UUID_PROPERTY])
 
@@ -198,6 +201,7 @@ def _splice(estate: _Estate, base: str) -> None:
 
 def _refused(resp: Any, code: int) -> None:  # noqa: ANN401 — an httpx.Response from the TestClient
     assert resp.status_code == (409 if code == _INVALID_TABLE_STATE else 400), f"{resp.status_code}: {resp.text}"
+    assert resp.headers["content-type"] == "application/problem+json", resp.headers
     assert resp.json()["code"] == code, resp.text
 
 
@@ -230,17 +234,16 @@ def _maintained_through(client: TestClient, estate: _Estate, token_file: Path) -
     # Every version but the current one reclaimable, and one enough to expire: the pass asks for a credential.
     settings = estate.maintenance(catalog_url="http://catalog.test", catalog_identity_token_file=str(token_file), min_versions_to_expire=1)
     now = datetime.now(UTC)
-    tick = sweep.SweepPlan(
-        uris=[estate.attacker],
-        clones=CloneList(taken_at=now),
+    readings = table_pass.PassReadings(
         # The namespace's uuid as its `__manifest` row holds it, read here through the catalog's describe door; the
         # table's is in the claim its create took (ADR 0173 §8).
         table_ids=TableIds(by_location={normalise(estate.attacker): "db$attacker"}, namespace_uuids={"db": estate.namespace_uuid("db")}),
         context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
     )
-    with respx.mock(base_url="http://catalog.test") as catalog:
+    # Asked only when the pass finds something to write; a refusal's `vend_denied` is the door's own answer.
+    with respx.mock(base_url="http://catalog.test", assert_all_called=False) as catalog:
         catalog.post("/management/v1/table/db$attacker/credentials").mock(side_effect=_forward)
-        return sweep.maintain_dataset(estate.attacker, sweep=tick, settings=settings)
+        return table_pass.maintain_dataset(estate.attacker, readings=readings, settings=settings)
 
 
 def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, planted: str, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -312,31 +315,36 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
 
 
 def test_the_victim_is_maintained_and_deletable_under_the_plant(estate: _Estate, planted: str) -> None:
-    """Closes-when (3), at each consumer of the protection verdict: the sweep and the purge."""
+    """Closes-when (3), at each consumer of a table's bytes: its own pass and the purge. A table's pass reads no other
+    table's manifest, so another table's plant cannot freeze it, and the purge deletes what its record names."""
     settings = estate.maintenance()
 
-    swept = {result.uri: result for result in sweep.run_sweep(settings)}
-    for table in (estate.victim, estate.bystander):
-        assert swept[table].refused_by != "protected_base", f"{table} is frozen by the plant: {swept[table].refused}"
-        assert swept[table].due == "due", f"precondition: {table} had fragments to merge, so the sweep lists it for compaction"
+    for table, location in (("db$victim", estate.victim), ("db$bystander", estate.bystander)):
+        (result,) = table_pass.run_table_pass(table_pass.TableTask(uuid=estate.table_uuid(table), location=location), settings).results
+        assert result.refused is None, f"{table} is frozen by the plant: {result.refused}"
+        assert result.due == "due", f"precondition: {table} had fragments to merge, so its pass lists it for compaction"
 
-    deleted, files = purge.delete_location(estate.victim, estate.key, protected=purge._estate_base_refs({estate.root}, estate.key, settings=settings))
+    deleted, files = purge.delete_location(estate.victim, estate.key)
 
     assert deleted > 0 and files > 0, "the victim's bytes were kept for a relation nobody sanctioned"
 
 
-def test_the_maintenance_pass_names_the_plant(estate: _Estate, planted: str) -> None:
-    """Closes-when (4), on the pass that reads every manifest: the planted base is reported as unrecorded.
+def test_the_maintenance_pass_names_the_plant(estate: _Estate, planted: str, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Closes-when (4), on the planting table's own pass: the planted base is reported as unrecorded.
 
     A state compare against the table's base record, not a version count: after an append and
     ``cleanup_old_versions(older_than=0)`` the planting version is gone while the tip still declares the base
     (lh279 p2), and the base is still named.
     """
-    settings = estate.maintenance()
+    catalog = TestClient(estate.client.app, raise_server_exceptions=False)
     plant_version = estate.open(estate.attacker).version
 
     def unrecorded() -> set[tuple[str, str]]:
-        return {(normalise(finding.referrer), normalise(finding.base)) for finding in sweep.plan_sweep(settings).protected.findings}
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="maintenance.services.table_pass"):
+            _maintained_through(catalog, estate, tmp_path / "rask-catalog-token")
+        found = [record for record in caplog.records if record.message == "maintenance_unrecorded_base"]
+        return {(normalise(str(getattr(record, "referrer", ""))), normalise(base)) for record in found for base in getattr(record, "bases", [])}
 
     assert (normalise(estate.attacker), normalise(planted)) in unrecorded(), "the planted base was not reported"
 
@@ -360,66 +368,58 @@ def _reads_cold(uri: str, key: dict[str, str]) -> list[int]:
     return json.loads(done.stdout.strip())
 
 
-def test_a_recorded_clone_source_is_still_protected(estate: _Estate) -> None:
-    """Closes-when (5): the LH-097 relation protects bronze per verb, and only while its pin tag holds.
+#: What the registered clone reads: its source's three fragments of ``_ROWS``.
+_CLONED_IDS = sorted([1, 2, 3] * 3)
 
-    Deletion is always refused. Compaction AND version reclamation with ``older_than=0`` are permitted while
-    the tag is on bronze — reclamation keeps a tagged version's files, and silver reads through exactly that
-    version (lh279 p4) — so silver must still read cold afterwards. Without the tag, reclamation is refused.
-    A branch is the relation that needs no record: its base is its parent's root, in the parent's store, so
-    the parent is not reclaimed beside it. A delete of the parent takes the branch with it, so the branch
-    alone refuses no delete ([[LH-319]]); the purge's liveness check is what keeps a live parent's bytes.
 
-    A name the catalog percent-encodes into its location (``bronze tier`` -> ``bronze%20tier``, ``räksmörgås``
-    -> ``r%C3%A4ksm%C3%B6rg%C3%A5s``, ``a b`` -> ``a%20b``) is protected exactly as ``bystander`` is. The
-    record, the pin and a branch's base carry that spelling while discovery lists the decoded directory the
-    store holds (lh279 r6 spellings), so a verdict that compares spellings rather than places reclaims a
-    branched parent's versions under its live branch (lh279 rvw finding1).
+def _registered_clone(estate: _Estate) -> tuple[str, str]:
+    """A source made through the catalog and a shallow clone of its latest version registered as ``db$silver``: the
+    source's location and the clone's.
+
+    The source's name is one the catalog percent-encodes into its location (``bronze tier``), as the claim, the tag and
+    the clone's base all spell it while the store keeps the decoded directory (lh279 r6 spellings).
     """
     bronze = estate.create("db$bronze tier", fragments=3)
+    clone = f"{estate.root}/silver"
     source = estate.open(bronze)
-    source.tags.create("silver-src", source.version)
-    silver = f"{estate.root}/4e5f6a7b_db$silver%20tier"
-    source.shallow_clone(silver, "silver-src", storage_options=estate.key.in_clear())
-    base_registry.claim_bases(
-        estate.registry,
-        silver,
-        [
-            base_registry.RecordedBase(
-                path=bronze,
-                role=base_registry.BaseRole.DERIVED_FROM,
-                is_dataset_root=True,
-                origin=base_registry.BaseOrigin.SILVER,
-                source_table=bronze,
-                tag="silver-src",
-            )
-        ],
-    )
-    parents = [estate.bystander, estate.create("db$räksmörgås", fragments=3), estate.create("db$a b", fragments=3)]
-    for parent in parents:
-        estate.open(parent).create_branch("work")
-    settings = estate.maintenance()
-    refs = purge._estate_base_refs({estate.root}, estate.key, settings=settings)
-
-    for parent in parents:
-        assert _expire(estate=estate, uri=parent, older_than=timedelta(0), refs=refs).refused_by == "protected_base", (
-            f"{parent} was reclaimed under its live branch"
-        )
-    with pytest.raises(purge.ProtectedBaseError):
-        purge.delete_location(bronze, estate.key, protected=refs)
-    expired = _expire(estate=estate, uri=bronze, older_than=timedelta(0), refs=refs)
-    assert expired.refused_by is None, expired.refused
-    assert expired.old_versions_removed > 0, "precondition: bronze was reclaimed"
-    assert _reads_cold(silver, estate.key.in_clear()) == sorted([1, 2, 3] * 3), "the pinned relation did not keep silver readable"
-
-    estate.open(bronze).tags.delete("silver-src")
-
-    unpinned = _expire(estate=estate, uri=bronze, older_than=timedelta(days=7), refs=purge._estate_base_refs({estate.root}, estate.key, settings=settings))
-    assert unpinned.refused_by == "protected_base", "a pin with no tag must not permit reclaiming the source"
+    source.shallow_clone(clone, source.version, storage_options=estate.key.in_clear())
+    registered = estate.client.post("/v1/table/db$silver/register", json={"location": "silver"})
+    assert registered.status_code == 200, registered.text
+    return bronze, clone
 
 
-def _expire(*, estate: _Estate, uri: str, older_than: timedelta, refs: BaseRefs) -> DatasetResult:
-    return expire_versions(ExpiryTarget(uri=uri, storage_options=estate.key, write_options=estate.key, protected=refs), ExpiryPolicy(older_than=older_than))
+def test_a_registered_clone_reads_after_its_source_is_cleaned(estate: _Estate) -> None:
+    """Closes-when (c) of ADR 0198 §1: the register door tags the source version a shallow clone reads, so the clone
+    reads cold after its source is overwritten, compacted and cleaned at age 0."""
+    bronze, clone = _registered_clone(estate)
+    lance.write_dataset(_MINE, bronze, mode="overwrite", storage_options=estate.key.in_clear())
+    estate.open(bronze).optimize.compact_files()
+
+    estate.open(bronze).cleanup_old_versions(older_than=timedelta(0), delete_unverified=True, error_if_tagged_old_versions=False)
+
+    assert _reads_cold(clone, estate.key.in_clear()) == _CLONED_IDS, "the tag did not keep the version the clone reads"
+
+
+def test_a_source_a_registered_clone_reads_is_not_destroyed(estate: _Estate) -> None:
+    """A drop destroying a table's bytes is refused while a registered clone reads through them."""
+    _, clone = _registered_clone(estate)
+
+    refused = estate.client.post("/v1/table/db$bronze%20tier/drop", params={"purge": "true"}, json={})
+
+    _refused(refused, _INVALID_TABLE_STATE)
+    assert _reads_cold(clone, estate.key.in_clear()) == _CLONED_IDS, "the refused drop changed what the clone reads"
+
+
+@pytest.mark.parametrize(("purge", "tags"), [pytest.param("true", 0, id="a-destroyed-clone-frees-it"), pytest.param("false", 1, id="a-trashed-clone-keeps-it")])
+def test_a_clones_end_frees_its_source(estate: _Estate, purge: str, tags: int) -> None:
+    """The clone's own end deletes the tag it holds, so its source keeps no version for it. A clone in the trash can be
+    undropped, so its source keeps the version it reads until the trash ends the clone."""
+    bronze, _ = _registered_clone(estate)
+
+    dropped = estate.client.post("/v1/table/db$silver/drop", params={"purge": purge}, json={})
+
+    assert dropped.status_code == 200, dropped.text
+    assert len([tag for tag in estate.open(bronze).tags.list() if tag.startswith(clone_sources.TAG_PREFIX)]) == tags
 
 
 def _registered(estate: _Estate, table: str, location: str) -> str:

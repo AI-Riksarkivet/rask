@@ -1,6 +1,6 @@
 ---
 name: rask-lance-catalog
-description: "The Lance catalog and the governance layer above it — the Lance Namespace spec (54 ops, the 24-code problem+json error model, the `POST /v1/<object>/{id}/<action>` route grammar) and rask's own `project > warehouse > namespace > table` hierarchy: the guards, the registries, protection/trash, and `services/maintenance`. Use when adding or changing a catalog endpoint; raising an error from the catalog; touching the hierarchy guards, the project/warehouse registries or `seed_ownership`; designing create/drop/undrop/cascade or protection semantics; working on compaction, the sweep, the orphan scan or the reconciler; or answering \"is this spec-conformant\"."
+description: "The Lance catalog and the governance layer above it — the Lance Namespace spec (54 ops, the 24-code problem+json error model, the `POST /v1/<object>/{id}/<action>` route grammar) and rask's own `project > warehouse > namespace > table` hierarchy: the guards, the registries, protection/trash, and `services/maintenance`. Use when adding or changing a catalog endpoint; raising an error from the catalog; touching the hierarchy guards, the project/warehouse registries or `seed_ownership`; designing create/drop/undrop/cascade or protection semantics; working on compaction, maintenance's work queue and a table's pass, the hourly audit or the daily scan, the orphan scan or the reconciler; or answering \"is this spec-conformant\"."
 ---
 
 # rask lance catalog — the spec and the estate's layer above it
@@ -379,7 +379,7 @@ ADR 0160, LH-470). `catalog/core/tier_policy.py` holds it:
 | table data + versions | Lance datasets on object storage (rustfs) |
 | project registry (`_projects/<id>.json`), warehouse registry + namespace bindings | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `lakehouse.records.create_json`): project mint, warehouse mint and the write-once bindings are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. `put_warehouse` / `put_project` remain as SEEDING primitives with no production caller, pinned by `tests/unit/test_registry_writes_are_conditional.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
 | authz | OpenFGA on its chart-managed Postgres |
-| lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `provenance`): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer`, revokes a `writer` the settings no longer name from one of the release's own accounts (`LANCE_OWN_ACCOUNTS`, the chart's `lance.ownAccounts`, the list the bootstrap hook converges), and leaves every other grant there to the doors: a bring-your-own compaction job's account is granted `reader` and `maintainer` at the namespace's access door, and no boot revokes it, nor a `writer` granted there to an account outside the release ([[LH-563]]). It writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane expires the table (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
+| lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `provenance`): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer`, revokes a `writer` the settings no longer name from one of the release's own accounts (`LANCE_OWN_ACCOUNTS`, the chart's `lance.ownAccounts`, the list the bootstrap hook converges), and leaves every other grant there to the doors: a bring-your-own compaction job's account is granted `reader` and `maintainer` at the namespace's access door, and no boot revokes it, nor a `writer` granted there to an account outside the release ([[LH-563]]). It writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane holds the table's pass, which expires it (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
 
 A relational app-DB was removed at P7a and must not creep back for the catalog: registry writes are
 admin-frequency, the conditional creates arbitrate the id-mint races, and deletes are bottom-up
@@ -392,12 +392,13 @@ suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
 ## Lifecycle
 
 Reclamation, scheduling and the GC design live in `services/maintenance` itself — read
-`services/maintenance/src/maintenance/services/{sweep,expiry,arrival,due,plan,purge,reconcile,index_health}.py` — plus
-`packages/lakehouse/src/lakehouse/base_refs.py`, the shallow-clone-source pre-pass, which
-lives in the `lakehouse` library rather than the service because the catalog (`maintenance/run` and the `version/create`
-judge, `catalog/services/maintenance.py`) must apply the same refusal and cannot import the sweep. Read
-them before changing anything the sweep, the reconciler or the orphan scan touches. The
-per-table/namespace/project POLICY that governs a sweep is
+`services/maintenance/src/maintenance/services/{queue,tasks,table_pass,expiry,arrival,store_events,committed_files,due,plan,trash_task,audit,purge,reconcile,index_health}.py`
+and ADR 0198 with its 2026-11-09 amendment — plus `packages/lakehouse/src/lakehouse/clone_sources.py`, the tag a
+registered shallow clone holds on the source version it reads (ADR 0198 §1), which lives in the `lakehouse` library
+beside `base_registry`, whose `forget_base_record` releases that tag wherever a clone's base record is forgotten
+(`trash.end` included), and `base_refs.py`, the one spelling rule every reader comparing two locations asks. Read them
+before changing anything a table's pass, the audit, the scan, the reconciler or the orphan scan touches. The
+per-table/namespace/project POLICY that governs a table's pass is
 `catalog.schemas.PolicyRequest` (retention, retain_versions, compact_enabled, interval, target rows),
 resolved **winner-takes-all** — the table's own record shadows the nearest namespace's which shadows the
 project record, and the winner supplies EVERY field. Maintenance matches a table and its ancestor namespaces by the
@@ -443,11 +444,14 @@ governing their data. The project-scoped surface is the console's project page, 
   the table's FGA tuples**: the owner is the one person who needs to undrop it, and revoking made
   undrop unreachable for exactly that caller (found by driving the deployed catalog — the unit tests
   run FGA off). **The deadline ends the recovery** ([[LH-228]], ADR 0146): past `expires_at` both undrops refuse
-  409, and every maintenance reconcile tick (`maintenance.services.trash_release`, ungated by the drift report and by
-  `trashPurge`) revokes the object's tuples, announces a `grant_revoked` per principal (origin `trash_expired`) and
-  stamps the record `released_at`, 15 minutes after the deadline so an undrop admitted at it can finish; a record whose
-  object stands again (`purge.still_registered`) or whose location lies under no warehouse bucket keeps its grants. The
-  bytes wait for the purge. A recoverable drop answers `DropTableResponse.transaction_id` as `<table id>$<its uuid>`, and a
+  409, and maintenance asks the catalog's release door for the record (`POST /management/v1/trash/{kind}/{uuid}/release`,
+  `maintenance.services.trash_release`, ungated by the drift report and by `trashPurge`), which revokes the object's
+  tuples, announces a `grant_revoked` per principal (origin `trash_expired`) and stamps the record `released_at`, 15
+  minutes after the deadline (`trash.RELEASE_SETTLE`) so an undrop admitted at it can finish. The trashed object's own
+  task asks it, held by a schedule until then (`maintenance.services.trash_task`, queued by the drop's announcement), and
+  every audit and scan asks it for any record its task has not released; a record whose object stands again
+  (`purge.still_registered`) or whose location lies under no root that step read keeps its grants. The bytes wait for
+  the purge. A recoverable drop answers `DropTableResponse.transaction_id` as `<table id>$<its uuid>`, and a
   recoverable cascade `DropNamespaceResponse.transaction_id` with one such id per table it detached; DescribeTransaction
   answers one from the trash record (`Queued` inside the window, `Running` past it), asked on the trashed table's own
   grants (`Resolver.trashed_as_transaction`). **The grace period is per warehouse**: `POST /management/v1/warehouses`'
@@ -474,8 +478,11 @@ governing their data. The project-scoped surface is the console's project page, 
   (`table_claims.kept_in_trash`). The purge judges a table record live by its location and a namespace record by its
   uuid, never by its name, so it reclaims a trashed table while a table created since under the name stands. Pinned
   by `services/catalog/tests/test_an_undrop_restores_the_trashed_table_its_caller_names.py` and
-  `tests/integration/test_maintenance_finds_a_table_under_the_spelling_the_catalog_records.py`. The sweep REPORTS
-  expired trash and deletes nothing. COVERAGE.md's old "soft-delete is N/A, time-travel replaces it"
+  `tests/integration/test_maintenance_finds_a_table_under_the_spelling_the_catalog_records.py`. A table's pass never
+  touches a trashed table (`table_pass.run_table_pass` ends on `trash.keeps`); within maintenance only the daily scan's
+  purge deletes its bytes, opt-in (`trashPurge`, off in the chart) and gated on that scan's own drift report (`purge.report_is_clean`),
+  and `trashPurgeDryRun` reports what it would purge (`would_purge`).
+  COVERAGE.md's old "soft-delete is N/A, time-travel replaces it"
   entry was WRONG and is corrected: time-travel does not survive `drop_table`.
   **The CASCADE is recoverable too (#96)**: with a grace period, `drop_namespace(cascade)` never
   issues the destructive native call — a trash record pointing at bytes that call deleted would be
@@ -519,7 +526,8 @@ governing their data. The project-scoped surface is the console's project page, 
   on one that has none. **Every control-root record kept for a table or namespace is keyed by its uuid** ([[LH-523]],
   ADR 0173 §8): protection and maintenance policy (`lakehouse.object_records.OBJECT_RECORD_PREFIXES`), a
   promotion hold, maintenance's due record, an erasure obligation and its release (each naming `uuid`/`table_uuid`),
-  and the cadence and debounce stamps. A door resolves the uuid from the name it is addressed by
+  maintenance's policy cadence stamps and its copy of the table's commit records (`_maintenance_files/`, which
+  `file_identities.end` deletes with the records). A door resolves the uuid from the name it is addressed by
   (`ResolvedTable.require_uuid`, `fga_deps.identify`) and refuses `InternalError` for an object that records none,
   never reading it as unprotected. A rename moves no record and no grant, only its data directories' claims (and, into
   another namespace, its parent edge); a table created later under a dropped name holds a new uuid and inherits nothing,
@@ -559,12 +567,28 @@ governing their data. The project-scoped surface is the console's project page, 
 - Maintenance lives in **`services/maintenance`** and DECIDES; it rewrites no data (ADR 0162, [[LH-467]]). It runs
   version expiry (`cleanup_old_versions`, tags EXEMPT), trash purge, the orphan scan and cross-store reconcile, and
   writes the DUE LIST: one record per table that needs compacting or an index optimize, under `_maintenance_due/` on
-  the control root, with the estate's clone list (`_maintenance_due/state/clones.json`) beside it
-  (`lakehouse.maintenance_due`). The catalog lists the records on `GET /management/v1/maintenance/due` to
-  a caller holding `can_maintain`; the list is advisory. **Expiry is commit-driven**: the write-event lane
-  (`/maintenance-arrival`) expires the table just written once it has `minVersionsToExpire` (20) reclaimable
-  versions, and the sweep, every 30 minutes, is the backstop that also writes the clone list and the due records. The same pass deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
-  Both count what a pass would reclaim with Lance's own `explain_cleanup_old_versions`, under the arguments the pass's `cleanup_old_versions` takes ([[LH-562]]); the catalog's GC preview names the versions by `lakehouse.version_retention`, since Lance's explanation counts them only.
+  the control root (`lakehouse.maintenance_due`). The catalog lists the records on `GET /management/v1/maintenance/due` to
+  a caller holding `can_maintain`; the list is advisory. **Maintenance is driven by commits** (ADR 0198 and its
+  2026-11-09 amendment): a table is passed when it changes or its time comes, never on a whole-estate clock. Its work is tasks on a NATS JetStream
+  work queue (`maintenance.services.queue`): one per subject on `MAINTENANCE_TASKS` (`maintenance.task.<kind>.<uuid>`; a
+  guarded publish, `Nats-Expected-Last-Subject-Sequence: 0`, refuses a second while one is queued or in flight), and its
+  times are NATS message schedules on `MAINTENANCE_SCHEDULES`. Every replica (two, RollingUpdate,
+  `chart/templates/maintenance.yaml`) runs a pull worker on the chart's durable consumers, as its own bus user
+  (`maintenance-worker`) through nats-py rather than Dapr, whose JetStream subscription sends no in-progress ack and whose
+  publish cannot set a schedule header (`maintenance.services.tasks`). It takes one task at a time and heartbeats it
+  every `maintenance.queue.heartbeatSeconds`, so a killed replica's task goes to another after `ackWaitSeconds`; a pass
+  past twice `maxPassSeconds` ends its replica, and a task that outlived its worker on all `maxDeliver` deliveries is
+  ended unrun on the one more the consumer allows. A commit's announcement on `lineage.events.v1` (`/maintenance-arrival`,
+  `maintenance.services.arrival.lane_task`) holds one follow-up pass `commitPassDelaySeconds` (300) out unless one is
+  held already, so a burst of commits makes one pass; a table's drop (`drop_table`) queues its trash task instead. A table's pass
+  (`maintenance.services.table_pass.run_table_pass`) expires the table and each branch once it has
+  `minVersionsToExpire` (20) reclaimable versions, refreshes its due record, reads its committed files (below), and
+  schedules its next pass (`next_due`: the earliest a version or a staged manifest comes due, held to the policy's
+  cadence, never later than `recheckHours` (24) and never sooner than 60 s; a pass that could not decide, or found the
+  table's history fenced, is tried again after `retrySeconds`). The hourly audit opens no table and queues each table
+  and trash record that holds neither a schedule nor a queued task, which bounds a lost announcement or schedule to one
+  firing (`maintenance.services.audit.run_audit`). A table's pass also deletes each `_versions/<n>.manifest-<uuid>` a stock writer staged for a version the table already holds, once past `MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS` (600): a commit that lost its version leaves one, Lance's listing drops the name so `cleanup_old_versions` never does, and the write tier grants no delete ([[LH-529]]).
+  The pass's pre-vend probe and its next-pass time count what a pass would reclaim with Lance's own `explain_cleanup_old_versions`, under the arguments the pass's `cleanup_old_versions` takes, the time asking with the age a version will then have (`table_pass.versions_due_at`, [[LH-562]]); the catalog's GC preview names the versions by `lakehouse.version_retention`, since Lance's explanation counts them only.
   Compaction, index builds and index optimize are a bring-your-own job's, committed through `version/create` (below);
   `CreateTableIndex` answers 406 naming that path. An erasure's rewrite is a bring-your-own job's too (ADR 0163,
   [[LH-493]], below). The maintain vend tier goes to the maintenance identity only (LH-473, #599).
@@ -583,9 +607,14 @@ governing their data. The project-scoped surface is the console's project page, 
   `target_rows_per_fragment`, else Lance's own sizing. There are no per-tier defaults: a tier is the
   namespace's `rask.tier` property, which a dataset path does not carry, and a size guessed from a path is
   applied silently forever (ADR 0160).
-- The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
-  its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
-  drift report answers a different question than the expiry backstop, on its own cadence.
+- The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs as two tasks of
+  its own (`maintenance.services.audit`), each a NATS message schedule the worker asserts at its start and every 15
+  minutes, so a purged schedules stream heals: the hourly AUDIT (`maintenance.queue.auditSchedule`, `@hourly`) leaves
+  the file layer unscanned, so it opens no table, and the daily SCAN (`scanSchedule`, `@daily`) adds the orphan scan
+  (about 20 store requests a table, owner 2026-11-09), then the floor raise and the trash purge that report certifies.
+  Each runs once per firing, on one replica whatever the replica count: its schedule fires on a subject of its own,
+  and the queue holds one task per subject. Maintenance has no Dapr cron binding; the chart's six are the catalog's
+  and lineage's relay (`chart/templates/dapr-component.yaml`).
 - **OpenFGA rejects a bare-type Read.** `read_tuples(obj="project:")` with no user is HTTP 400
   (*"the object id and user cannot be empty"*), and the wrapper reports it as
   `ServiceUnavailableError` — so it presents as a permanent outage on a healthy server. To enumerate
@@ -694,8 +723,14 @@ governing their data. The project-scoped surface is the console's project page, 
   uuid>/<transaction uuid>.json`, written by `version/create` before it judges a stock commit's files, by
   `commit_stamped` before its finalize, and by the create door and an unkeyed `/insert`, which Lance commits itself,
   just after it lands, logging `committed_files_unrecorded` at ERROR and counting `catalog.committed_files.unrecorded`,
-  which warns, when that write fails), and the sweep reads each recorded file again (`maintenance.services.committed_files`):
-  one held with another ETag or size, or gone while a retained version names it, is named in `overwritten_files`, logged
+  which warns, when that write fails), and each pass of the table reads every recorded file again against one listing
+  of the table's root (`maintenance.services.committed_files`, `lakehouse.stored_objects.listed_identities`: a request per
+  thousand objects rather than a HEAD per file), reading only the records written since its last through maintenance's
+  own copy (`file_identities.recorded_and_copied`, `_maintenance_files/<table uuid>.json`). The store's event of a write
+  under the table (on `store.events`, which the store's operator configures per bucket, `objectStore.events`) holds
+  that pass `commitPassDelaySeconds` out (`maintenance.services.store_events`, ADR 0198 decision 3); a delete is not
+  acted on, and the table's daily recheck backs up an event that never arrives. A recorded file
+  held with another ETag or size, or gone while a retained version names it, is named in `overwritten_files`, logged
   `committed_file_overwritten` and counted `maintenance.files.overwritten`, which pages (`CommittedFileOverwritten`). A
   record is forgotten only once no retained version names its files and the store holds none of them. The platform store keeps object versions to restore it (`rask-rustfs` § 8). Prevention
   waits on upstream: stock pylance sends `If-None-Match` only on manifests, and object_store has no conditional
@@ -729,19 +764,22 @@ governing their data. The project-scoped surface is the console's project page, 
   `require_reclaimable_history` in `api/v1/endpoints/credentials.py`), and maintenance's probe asks no vend for such a
   table.
   **The trash is the catalog's to end, and maintenance deletes only a due record's bytes** ([[XC-084]], ADR 0197).
-  Maintenance's own canned policy writes only its due list, policy state and lineage outbox, so it asks four doors
+  Maintenance's own canned policy writes only its due list, its copy of the commit records (`_maintenance_files/`),
+  policy state and lineage outbox (`lance.objectStorePolicy.maintenance`, `chart/templates/_helpers.tpl`), so it asks four doors
   under `/management/v1/trash/{kind}/{uuid}` (`api/v1/endpoints/trash_reclaim.py`, judgement
   `services/trash_reclaim.py`, client `maintenance.services.credentials`), each asking `can_reclaim_trash` on the
   estate root, which only the `reclaimer` estate role opens (seeded for maintenance's ServiceAccount by the chart's
   bootstrap-admin hook, `lance.fgaEstateRoles`): `POST .../release` revokes the object's grants once the record is past
   its deadline by `trash.RELEASE_SETTLE`, announces a catalog-signed `grant_revoked` per person and stamps the record;
   `POST .../credentials` vends a released table record's bytes session (`vending.ReclaimScope`: list and delete over its
-  location in both spellings and its data directories, nothing on the control root, a whole-bucket place refused);
+  location in both spellings and its data directories, nothing on the control root, a whole-bucket place refused, and
+  none while a registered clone's tag stands on the table, `trash_reclaim.clone_refusal`, ADR 0198 §1);
   `DELETE ...` ends a released record once its place holds nothing (`lakehouse.trash.end`: the object's records, its
   claim, its base record, then the record); `POST .../refusals` notes maintenance's own refusals. The release comes
   first, so the settle an undrop admitted at the deadline needs and the telling of each person who loses access
-  precede any delete; maintenance's purge selects released records only (`purge.due_from`), so the tick that releases a
-  record purges and ends it (measured on helm rev 25: without the order the purge deleted a drop's bytes and revoked its
+  precede any delete; maintenance's purge selects released records only (`purge.due_from`), and the daily scan releases
+  before it purges (`audit.run_scan`), so a record the scan releases is purged and ended in the same run (measured on
+  helm rev 25: without the order the purge deleted a drop's bytes and revoked its
   grants unannounced three minutes after its deadline). The catalog judges on reads no session writes: the path's kind
   and uuid, the record it filed, and the location's claim, which must record that uuid; a refusal is 409 code 19 and
   noted on the record (`trash.note_refusal`).
@@ -812,9 +850,17 @@ governing their data. The project-scoped surface is the console's project page, 
   `pass_grants`), with `reader` to read what it rewrites; a service account is never an owner (LH-433). The
   bring-your-own compaction job compacts each table the due list names it this way. A `CreateIndex` (a build or
   an `optimize_indices`) needs the writer rung, changes no data, and each new segment lives under the table's own
-  `_indices/<uuid>/` with its declared files present and the index opening. A compaction is refused 503 while the
-  sweep's clone list is missing or older than `cloneListMaxAgeSeconds` (an hour), and 406 when the table is a
-  clone's source. Measured on pylance 13.0.0, Lance itself commits a rewrite that loses or duplicates rows and an
+  `_indices/<uuid>/` with its declared files present and the index opening. A compaction of a table a registered clone
+  reads is judged as any other: the clone's tag keeps the version it reads, whatever the compaction and the cleanup
+  after it remove (ADR 0198 §1, `lakehouse.clone_sources`). The register door takes that tag,
+  `rask.clone.<sha256 of the clone's location>`, on the source version the clone's first transaction (a shallow
+  `Clone`) names, under the source's history fence (`table_bases.admit_clone`, `clone_sources.take`): 400 when the
+  source is no table the catalog governs or no longer keeps that version, 409 code 14 while a reclaim holds its history.
+  Every door that forgets the clone's base record releases the tag (`base_registry.forget_base_record`). While one
+  stands, a destructive drop of the source refuses 409 code 19 (`dataplane.require_no_clone_reading`), a destroying
+  cascade removes each source after the clones it removes with it and refuses 409 code 19 while a clone outside it
+  reads one of its tables (`clone_sources.destroy_order`), and the trash credentials door vends no session to delete a
+  trashed source's bytes. Measured on pylance 13.0.0, Lance itself commits a rewrite that loses or duplicates rows and an
   index naming a base or an empty directory, so the judge is what refuses them.
   **Provenance travels in the spec Context** ([[LH-225]]): the staged manifest's `rask.*` transaction properties name
   the run, `version/create` refuses a silver or gold commit adding data without a run and inputs, and the finalize's
@@ -832,11 +878,11 @@ governing their data. The project-scoped surface is the console's project page, 
   removes every manifest on `{0, -1}` (describe 200, the table unopenable), and a range ending at latest
   rolls the table back so the next append mints that number again. The door refuses any range
   that reaches the current version (400; ranges are end-exclusive), refuses a version a tag or a child
-  branch pins (409, naming it), judges every range before deleting any, and asks `maintenance/run`'s
-  #114 base-reference gate, because the reclaim also removes data files only those versions referenced. A base inside a
-  table's own root is its own storage and protects nothing (`base_refs.protected_roots`, [[LH-414]]); a refusal for a
-  referring clone names each clone (as its claim names it now, with its uuid) only to a caller holding `can_get_metadata`
-  on it and counts the rest (`fga_deps.referring_datasets`, at the GC run, `version/delete` and the erasure report).
+  branch pins (409, naming it), and judges every range before deleting any. The reclaim also removes data files only
+  those versions referenced, so a version a registered clone reads is kept by the clone's tag (ADR 0198 §1): this door
+  refuses it as it refuses any tagged version, `maintenance/run` exempts it as every cleanup exempts a tagged version,
+  and the erasure's verification reports the tag as a `held` surface it never drops, which the clone's own end
+  releases (`erasure._HELD_BY_A_CLONE`).
   **A ref written during a reclaim is held off by the table's history fence** ([[LH-308]], ADR 0176,
   `lakehouse.history_fences`). Lance reads tags and branches once per `cleanup_old_versions`
   (`cleanup.rs:472-511` at v13.0.0); measured on pylance 13.0.0, a tag created mid-cleanup named a deleted version in
@@ -844,7 +890,8 @@ governing their data. The project-scoped surface is the console's project page, 
   erasure verification's step 3, maintenance's expiry pass while it deletes) and every ref write (`tags/create`,
   `tags/update`, `branches/create`, publication's tag move, the erasure release's branch re-creation) holds the fence,
   one record per table uuid under `_history_fences/`; holders of one kind share it, the other kind is refused 409 code
-  14 (`DoorTable.history_held`), and a fenced sweep pass is `skipped="history_fenced"`. A branch create (the create door,
+  14 (`DoorTable.history_held`), and a fenced expiry is `skipped="history_fenced"`, its table's pass tried again after
+  `retrySeconds` (`table_pass._dataset_due_at`). A branch create (the create door,
   the erasure release's re-creation) holds the kind `branch`, which also excludes another branch create, so two creates
   of nesting names on one table take turns and each judges a listing no other create changes (ADR 0179, [[LH-413]]). A
   hold lapses after 15 minutes on the store's clock.
@@ -906,7 +953,8 @@ governing their data. The project-scoped surface is the console's project page, 
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance
   orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.
   `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED` — it opens
-  every dataset, unlike the rest of the drift report which compares three stores). **It is ON in the
+  every dataset, unlike the rest of the drift report which compares three stores, so it runs in the daily scan alone
+  and the hourly audit runs the report with it off, `audit.run_audit`). **It is ON in the
   deployed estate**: `maintenance/core/config.py` defaults it `False`, but `chart/values.yaml` ships
   `orphanScan: true`, and the chart is the single deploy artefact. Read the chart for what an estate
   does; read `config.py` only for what an unconfigured process does.
@@ -922,7 +970,7 @@ governing their data. The project-scoped surface is the console's project page, 
   index file is Lance's own to reclaim once it is 7 days old; `orphans._LISTED_PAST_THE_FLOOR_KINDS`
   classifies by that, and the floor raise (`floor.py`, [[LH-094]]) acts only for the floor-bound kinds.
   The cost of #8944: a vended-credential writer that stages fragments and commits more than 7 days later
-  loses them to the sweep's cleanup.
+  loses them to the `cleanup_old_versions` a table's pass runs.
 - The FGA-only live seed (`fga_seed_demo.py`) writes projects no registry knows — the origin of
   "ghost projects". The replacement SHIPPED: `scripts/seed_estate.py` drives the real doors in
   hierarchy order — `POST /management/v1/projects` → `POST /management/v1/warehouses` → `POST /management/v1/warehouses/{id}/namespaces`
@@ -935,9 +983,11 @@ governing their data. The project-scoped surface is the console's project page, 
   without `make openapi` + `bun --cwd=frontend run gen:types:catalog` leaves the TS client unable to
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
   (`lakehouse/governed/fga.py`) — an origin string not in the Literal is a `ty` error, not a runtime one.
-- The sweep covers EVERY warehouse bucket, not a static list (#81): `run_sweep` unions `s3_bucket`
-  + `MAINTENANCE_S3_EXTRA_BUCKETS` with `warehouse_records.maintainable_buckets(registry)` and calls
-  `discover_datasets` once per bucket — a bucket is created by an API CALL at runtime, so a
+- Maintenance covers EVERY warehouse bucket, not a static list (#81): a table's pass runs only on a table in a bucket
+  it governs, read per task (`table_pass.governs`: `s3_bucket` + `MAINTENANCE_S3_EXTRA_BUCKETS`, or a bucket
+  `warehouse_records.maintainable_buckets(registry)` names, so not a deactivated warehouse's; an unreadable registry
+  decides nothing and the pass is tried again after `retrySeconds`), and the scan's floor raise names tables across
+  the same set (`plan.buckets_to_sweep`) — a bucket is created by an API CALL at runtime, so a
   config-time list goes stale by construction. The orphan scan reads the same registry
   (`_scannable_buckets`), reporting an `IncompleteScan` rather than silently narrowing when it is
   unreadable. Residual: no multi-warehouse run against REAL object storage yet (#80).
@@ -958,7 +1008,7 @@ governing their data. The project-scoped surface is the console's project page, 
   bytes stay in its base fragment behind a deletion vector; the pass reports such fragments
   (`compaction.base_fragments.holding_deleted_rows`) and the compaction gate keeps refusing the table, since
   `CompactionOptions` has no `target_bases` and a rewrite would move the rows into the root (owner, 2026-10-24). The
-  trash purge deletes a dropped table's data directories after its root and before it forgets its base record, and
+  trash purge deletes a dropped table's data directories after its root and before the catalog forgets its base record, and
   so does every catalog door that ends a table with its bytes (`lakehouse.data_directories`, one rule for
   which directories: a `data` entry on a plain base whose claim names the table, held or released by it): a destructive
   drop and namespace cascade (`dataplane.destroy_table`, after the root, inside its residue record), a purging
@@ -966,8 +1016,8 @@ governing their data. The project-scoped surface is the console's project page, 
   `_forget_trashed` before the record) and a create's undo. A cascade keeping its bucket keeps the directories. Pinned by
   `tests/integration/test_a_data_bases_bytes_are_reclaimed.py`.
 - **A JSON index has NO stats, and Lance says so with a PANIC — upstream, already contained.** On
-  pylance 10.0.0 every maintenance sweep prints `thread '<unnamed>' panicked at
-  lance-index/src/scalar/json.rs:95:9: not yet implemented`, twice, once per Json index. The
+  pylance 10.0.0 a maintenance pass over such a table prints `thread '<unnamed>' panicked at
+  lance-index/src/scalar/json.rs:95:9: not yet implemented` once per Json index it reads (twice on the measured estate). The
   reproducing call is `ds.stats.index_stats("lineage_run_id_idx")` against a table carrying a JSON
   index built as `IndexConfig(index_type="json", parameters={"target_index_type": "btree", "path": ...})`
   — such as a provenance index on `lineage -> run_id`, which lets a governed row be filtered back to
@@ -975,7 +1025,8 @@ governing their data. The project-scoped surface is the console's project page, 
   index simply do not exist yet — so there is nothing to fix on our side and nothing to file beyond
   upstream. It is CONTAINED, and deliberately: `index_health._stats` catches **`BaseException`**, not
   `Exception`, because a Rust panic surfaces as pyo3's `PanicException`, which derives from
-  BaseException and would otherwise sail straight through the sweep's error handling and kill the tick.
+  BaseException and would otherwise sail straight through the pass's and the worker's error handling, which catch
+  `Exception`.
   It logs `index_stats_unreadable` and the finding reports *"its statistics could not be read, so its
   health is UNKNOWN — not the same as healthy"*, which is the honest answer: those two indices are
   UNMONITORED, not proven fine. Do not "fix" the noise by narrowing that except clause. Note also that a
@@ -992,31 +1043,32 @@ governing their data. The project-scoped surface is the console's project page, 
   storage_options, ...)`), so it is not misuse either. The upgrade study of 2026-10-12 reports the same result on lance-ray 0.5.0 + pylance
   13.0.0. Nothing tracks the upstream fix, and the lakehouse runs no Ray job of its own (ADR 0155), so
   no rask suite exercises it.
-- **CHECK THE TRASH RECORD BEFORE TOUCHING BYTES — including when you are "only looking".** The sweep
-  reports `versions_removed: 0` on datasets holding versions far older than the retention, and the
-  reason is almost always the F6(d) exclusion: a recoverably-dropped dataset (`_trash/` record) is
-  frozen until undrop or purge, because the sweep may not rewrite bytes someone can still restore.
-  Diagnosing that count by hand-running `cleanup_old_versions(older_than=7d)` on one of them (done
+- **CHECK THE TRASH RECORD BEFORE TOUCHING BYTES — including when you are "only looking".** A table
+  holding versions far older than the retention that no pass reclaims is almost always the F6(d)
+  exclusion: a recoverably-dropped table (`_trash/` record) is frozen until undrop or purge, because
+  maintenance may not rewrite bytes someone can still restore, so its pass ends unrun
+  (`maintenance_task_table_trashed`). Diagnosing that by hand-running `cleanup_old_versions(older_than=7d)` on one of them (done
   2026-08-16, on `bind86-bronze$converge-proof`) IS the destructive call the exclusion exists to
   prevent: it removed 5 versions / 7,567 bytes and destroyed time-travel to v1–v4 on an object that
   was still restorable. The latest version, row count, `published` tag and undrop all survived, so
-  cleanup was working correctly — the sweep was right to decline and the operator was wrong to
+  cleanup was working correctly — maintenance was right to decline and the operator was wrong to
   override it. Tags are not the check; the trash record is.
-  **Every maintenance writer reads the record itself, and one rule answers it** ([[LH-449]]):
-  `sweep.why_in_trash` holds a record to cover its table and every dataset under it, so a branch
-  discovery lists at `<table>/tree/<branch>` is frozen with its table. The sweep's exclusion asks it,
-  and so does the listing-floor pass, before its per-tick cap and before any open, vend or commit; an
-  unreadable trash index stops the floor pass for the tick. The vend door's describe is not this gate:
+  **Every maintenance writer reads the record itself** ([[LH-449]]). A table's pass asks `trash.keeps` by the task's
+  uuid before it opens anything, and a table the trash keeps gets no pass and no next time, its branches with it
+  (`table_pass.run_table_pass`, ended `trashed`), its own trash task deciding what follows. The listing-floor pass asks
+  `floor.why_in_trash` before its cap (`floorRaiseMaxPerTick`) and before any open, vend or commit: it holds a record to
+  cover its table and every dataset under it, so a branch the scan lists at `<table>/tree/<branch>` is frozen with its
+  table, and an unreadable trash index stops the floor pass for that scan. The vend door's describe is not this gate:
   a Lance commit is a put-if-not-exists on the store, so a writer holding any credential could commit.
-  The arrival lane asks it too. The rule compares every location as the path it decodes to
+  `why_in_trash` compares every location as the path it decodes to
   (`base_refs.decoded_path`, [[LH-318]]): a record holds the location `describe_table` answered, which
   percent-encodes a registered location (`…/r%C3%A4ksm%C3%B6rg%C3%A5s`), while discovery lists the decoded
   directory the store keeps (`…/räksmörgås`) and an event names the encoded one.
   **Every other maintenance reader of a location the catalog records reads it the same way** ([[LH-319]]). A
-  location maintenance holds is a store key, compared as listed: discovery's, the `__manifest`'s, and the write-event
-  lane's, which converts its event's URL to the key it decodes to at its boundary
-  (`arrival.resolve_written_table`), so its table id, policy, cadence stamp, trash gate and vend check are the
-  sweep's own. A location the catalog recorded is a URL, read once as the key it decodes to. That covers:
+  location maintenance holds is a store key, compared as listed: discovery's, the `__manifest`'s, and a table task's,
+  whose pass finds the table's claim at the task's location (the claim's own, or a write event's `dataSource` URL) and
+  then reads that location as the key it decodes to (`table_pass._held_location`), so its table id, policy, cadence
+  stamp and vend check are every reader's own. A location the catalog recorded is a URL, read once as the key it decodes to. That covers:
   - the purge, which reclaims a trashed table under the key its record decodes to and the `.lance-reserved` marker
     pylance 13 writes under the spelling, both from `lakehouse.table_paths.spellings`, deleting by key
     (`lakehouse.stored_objects.list_under`/`delete_objects`, no directory marker written) with `_versions/` last (measured over moto: `…$r%C3%A4…/.lance-reserved`
@@ -1025,21 +1077,22 @@ governing their data. The project-scoped surface is the console's project page, 
     its uuid and its namespaces' uuids (`maintenance_policies.resolve_policy`, [[LH-523]]), never by a path;
   - the tombstone probe (`purge.objects_held`), and the compaction gate's root probe.
 
-  A table's own branch protects nothing from the purge (`BaseRefs.protects_from_deletion`): the delete takes it along,
-  while expiry keeps a branch protecting its parent (`is_protected`). On a local `file://` root pyarrow decodes the
+  The purge deletes everything under the table's root by key, its own branches' `tree/` with it; a trashed table a
+  registered clone reads keeps its bytes, since the catalog vends no session to delete them while the clone's tag
+  stands on it (`trash_reclaim.clone_refusal`, ADR 0198 §1). On a local `file://` root pyarrow decodes the
   URL itself, so only an S3 store shows a reader that compares spellings.
 - **A governed tier's maintenance run is emitted only when expiry does MATERIAL work.**
-  `sweep.py::_did_material_work` gates the `expire_versions` emit on `old_versions_removed`, so a
-  correctly-idle estate records nothing — deliberately, since every write and every backstop tick would
-  otherwise flood the graph with no-op runs. Consequence for verification: a stamped tier dataset does NOT
-  produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and swept; a pass whose result is
-  `versions_removed: 0` emits nothing, which is the gate behaving correctly, not a defect.
+  `table_pass.py::_did_material_work` gates the `expire_versions` emit, and its `lance.audit` record, on
+  `old_versions_removed` or `base_files_removed`, so a correctly-idle estate records nothing — deliberately, since a
+  pass after every commit would otherwise flood the graph with no-op runs. Consequence for verification: a stamped tier
+  dataset does NOT produce a `(:Run)-[:WROTE]->(:Dataset)` node just by being written and passed; a pass that removed
+  no version and no base file emits nothing, which is the gate behaving correctly, not a defect.
 
   **MAINTENANCE NAMES A DATASET BY `__manifest` ALONE** ([[LH-520]], `maintenance.services.naming.TableIds.table_of`):
   the row whose location it is, or whose table it is a branch of. It parses no name out of a path and reads no
-  `lineage.dataset_id` stamp. A dataset no row names is refused `unnamed` by the sweep (reported by its location, never
-  opened, expired or vended), refused by the floor pass, and reported by the reconciler as an `UnregisteredDataset` by
-  location.
+  `lineage.dataset_id` stamp. A dataset no row names is refused `unnamed` by its table's pass (`table_pass._unnamed`:
+  reported by its location, never expired or vended), refused by the floor pass, and reported by the reconciler as an
+  `UnregisteredDataset` by location.
 
   **A DERIVED TIER INHERITS ITS UPSTREAM'S `lineage.dataset_id` UNLESS THE STAMP DROPS IT.** No maintenance reader
   names a dataset by it, and `lineage.dataset_id` is schema METADATA, which survives `set_column` / `append_column` /
@@ -1110,9 +1163,9 @@ governing their data. The project-scoped surface is the console's project page, 
   and a branch-write vend only what a commit stages under `tree/<b>/` (`table_layout.WRITER_PUT_GLOBS`);
   delete goes through nested branches deepest first, announcing each it removes as `table_branch_deleted` with its
   incarnation ([[LH-413]]), refused whole (409) when a branch outside them is
-  forked from one; every reclaim (the sweep's `nested_branch` gate,
-  `maintenance/run`, `version/delete`) refuses a branch with another inside it; and the sweep lists
-  branches from `_refs/branches`, never by walking `tree/`.
+  forked from one; every reclaim (expiry's `nested_branch` gate,
+  `maintenance/run`, `version/delete`) refuses a branch with another inside it; and a table's pass lists its
+  branches from its refs (`table_pass._datasets_of`, `branches.list()`), never by walking `tree/`.
 - **A tag names a version within ONE branch's history, so no reader takes its version alone** ([[LH-284]]). A tag
   file records `branch` beside `version` (`lance_docs/lance/format/table/branch_tag.md` § Tag File Format), branch
   histories are numbered independently, and pylance's `tags.get_version` answers the version alone (measured on pylance
@@ -1133,20 +1186,21 @@ governing their data. The project-scoped surface is the console's project page, 
   `LanceOperation.DataOverlay` sets 64.
   **TWO GATES, NOT ONE, each asked per verb.** `describe_gc_unsupported_flags` against
   **`SUPPORTED_FOR_GC` (= `SUPPORTED` | 16)** gates version reclamation: maintenance's expiry pass and the catalog's
-  `maintenance/run` (`require_reclaimable`, plus the `base_refs` guard). `describe_compaction_unsupported_flags` gates
+  `maintenance/run` (`require_reclaimable`; a version a registered clone reads is kept by the clone's tag, ADR 0198
+  §1). `describe_compaction_unsupported_flags` gates
   compaction alone: the due list will not list a table it refuses, and `version/create` refuses a client's `Rewrite`
   through `require_compactable` (the evidence gate). So flag 16 is NOT refused outright: such a dataset is still
   expired, because root-scoped operations are safe on a shallow clone while compacting one silently materialises the
   base into it. The ORPHAN scan keeps the narrow flags-only `describe_unsupported_flags`/`SUPPORTED` mask, where the
   refusal is genuinely required. The cost of a blanket flag-16 refusal was measured: 17 of the estate's datasets were
-  refused, exactly the ones with fragments and version history, so a sweep did no work on them at all.
+  refused, exactly the ones with fragments and version history, so maintenance did no work on them at all.
   **The COMPACTION gate asks about the BASES, not about the flag — it is the one gate here that is not
   flags-only.** Refusing every flag-16 dataset was still over-broad by exactly the shape of a table with
   one external blob prefix: `initial_bases` registers ONE external
   blob prefix via `initial_bases`, which sets 16 while every data file stays under the dataset's own
   root — measured on pylance 10.0.0, compacting that is a merge and nothing more (4 fragments -> 1,
   9,445 -> 14,366 bytes locally, base byte-identical, 20/20 payloads still resolving). Refused anyway,
-  the estate's most-fragmented tiers accumulated fragments forever while the sweep reported clean
+  the estate's most-fragmented tiers accumulated fragments forever while maintenance reported clean
   passes (`fragments_removed_total=0` over 785 ticks). `features.gather_compaction_bases` therefore
   takes THREE readings and `describe_compaction_unsupported_flags` weighs them; it permits only when
   all three say no, and **every unknown refuses**:
@@ -1163,18 +1217,23 @@ governing their data. The project-scoped surface is the console's project page, 
   A registered-but-unused bare prefix may be compacted (`add_bases` at an empty prefix); the "the next
   write may land under that base" worry is answered by reading (3) again at the next commit, not by
   refusing today.
-  The sweep reports refusals as their own
-  `summarize()` line + `compaction.datasets.refused` counter — never inside `errors` or `skipped`.
+  A table the compaction gate refuses is left off the due list, logged `maintenance_compaction_not_due_refused_layout`
+  at DEBUG (`due.compaction_due`). A pass reports each refusal of its own on the dataset's `maintenance_dataset_outcome`
+  line and counts it on `compaction.datasets.refused` by `refused_by` (`table_pass._record_dataset_metrics`) — never
+  inside `error` or `skipped`.
   **The ORPHAN scan stays flags-only, and that is not an oversight.** Its own consequence check cannot
   stand in for the flag: `add_bases` registers a base no `DataFile` resolves through yet, every
   `base_id` stays `None`, and the scan passed such a dataset as `checked=True` with orphans named. A
   scan that names live data as garbage is a different and worse failure than a rewrite it declined.
   Flag 64 was only ACCIDENTALLY safe: pylance refuses that open itself, and the untyped `open:` error it produced is exactly what
-  the sweep's lineage layer drops as noise. Widening `SUPPORTED` is a deliberate edit — it is a
+  a pass's lineage layer drops as noise (`table_pass._lane_of`). Widening `SUPPORTED` is a deliberate edit — it is a
   whitelist, so a pylance upgrade adding a legitimate flag silently stops maintaining every dataset
-  that sets it, which is why the refusal counter has to be loud. **Residual: the source-side mirror
-  hazard is NOT closed** — compacting a clone's SOURCE deletes files only the clone references
-  (reproduced), and the source's own manifest carries no flag, so no per-dataset check can see it.
+  that sets it, which is why the refusal counter has to be loud. **A clone's SOURCE is held by a tag, not a flag**
+  (ADR 0198 §1): compacting the source and cleaning up after it deletes files only the clone references (reproduced),
+  and the source's own manifest carries no flag, so no per-dataset check can see it. The tag a registered clone holds
+  on the version it reads keeps those files, since cleanup exempts a tagged version (measured on pylance 13.0.0,
+  `lakehouse.clone_sources`); a clone never registered keeps its own tag through the tag door, as Lance's contract
+  asks.
 - **A namespace is a `__manifest` ROW, not a directory** (the `dir` impl the chart runs —
   `LANCE_REST_IMPL=dir`). Only a TABLE materialises a directory. Any scan that enumerates namespaces
   by listing directories silently returns `[]` on every real estate — which reads as "checked and
@@ -1184,7 +1243,7 @@ governing their data. The project-scoped surface is the console's project page, 
   nothing but `catalog-manifest-reclaim-cron` (`catalog.api.manifest_reclaim`) bounds it: Lance's own
   `cleanup_old_versions(older_than=catalog.manifestReclaim.retainSeconds)` on the catalog's root and every registered
   warehouse's. A root it keeps failing on pages (`CatalogManifestReclaimFailing`, counted on
-  `catalog.manifest_reclaim.failed` by root). The maintenance sweep never touches it (`discovery` skips `__` directories). A `dir` connection reloads by
+  `catalog.manifest_reclaim.failed` by root). Maintenance never touches it: a pass runs on a table a claim names, and `discovery` skips `__` directories. A `dir` connection reloads by
   probing only the version after the one it holds (lance v13.0.0 `DatasetConsistencyWrapper::reload`), so a reclaim
   that removed that successor would leave the connection answering `InternalError` for good (measured); that is why
   `NamespaceConnections` builds a connection again once it is a quarter of the retention old. Never run a cleanup on an

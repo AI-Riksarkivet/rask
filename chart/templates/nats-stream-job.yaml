@@ -26,7 +26,7 @@ spec:
         {{- end }}
       containers:
         - name: nats
-          image: natsio/nats-box:0.14.5
+          image: natsio/nats-box:0.20.2
           {{- include "lance.rootSecurityContext" . | nindent 10 }}
           env:
             - { name: HOME, value: /tmp }
@@ -54,7 +54,7 @@ spec:
               # absent, edited to it in place when present, so a changed value reaches a stream that already exists. What
               # JetStream refuses to change in place (storage, mirror, retention to or from workqueue, lifting deny_delete
               # or deny_purge) fails the Job with the server's own reason rather than leaving a stream the chart does not
-              # describe. Measured on natscli v0.1.5 against nats-server 2.14.2: an edit to an unchanged config exits 0, a
+              # describe. Measured on natscli 0.5.1 (nats-box 0.20.2) against nats-server 2.15.2: an edit to an unchanged config exits 0, a
               # refused one exits 1 and names the reason (`... can not change retention policy to/from workqueue (10052)`).
               #
               # RETENTION IS A FAN-OUT CORRECTNESS INVARIANT, and `limits` on every stream is what the edit restores:
@@ -77,6 +77,19 @@ spec:
               # `allow_direct: true`, as `nats stream add --defaults` sets it, so a stream created that way edits to no change.
               declare_stream() {
                 printf '%s' '{"name":"'"$1"'","subjects":["'"$2"'"],"retention":"limits","max_consumers":-1,"max_msgs":-1,"max_bytes":-1,"max_msgs_per_subject":-1,"max_msg_size":-1,"max_age":{{ mul (int (required "nats.streamMaxAgeSeconds is required" .Values.nats.streamMaxAgeSeconds)) 1000000000 }},"storage":"file","discard":"old","num_replicas":{{ $replicas }},"duplicate_window":120000000000,"deny_delete":true,"deny_purge":true,"allow_rollup_hdrs":false,"allow_direct":true}' > "$HOME/$1.json"
+              }
+
+              # A durable consumer converges to its declared config as a stream does, created when absent.
+              converge_consumer() {
+                if nats --server "$S" consumer info "$1" "$2" >/dev/null 2>&1; then
+                  out=$(nats --server "$S" consumer edit "$1" "$2" --config "$HOME/$1-$2.json" -f 2>&1) \
+                    || { echo "!! consumer $1/$2 cannot be edited to the declared config in place: $(echo "$out" | grep -i error)"; exit 1; }
+                  echo "consumer $1/$2: converged to the declared config"
+                else
+                  nats --server "$S" consumer add "$1" "$2" --config "$HOME/$1-$2.json" >/dev/null \
+                    || { echo "!! FAILED to create consumer $1/$2 — no worker could take a task"; exit 1; }
+                  echo "consumer $1/$2: created"
+                fi
               }
 
               consumer_of() {
@@ -103,6 +116,24 @@ spec:
               # because the two live on different streams.
               declare_stream DLQ "dlq.>"
               converge_stream DLQ
+              {{- if .Values.maintenance.enabled }}
+              printf '%s' '{"name":"MAINTENANCE_TASKS","subjects":["maintenance.task.>"],"retention":"workqueue","max_consumers":-1,"max_msgs":-1,"max_bytes":-1,"max_msgs_per_subject":1,"max_msg_size":-1,"max_age":86400000000000,"storage":"file","discard":"new","discard_new_per_subject":true,"num_replicas":{{ $replicas }},"duplicate_window":120000000000,"deny_delete":true,"deny_purge":true,"allow_rollup_hdrs":false,"allow_direct":true}' > "$HOME/MAINTENANCE_TASKS.json"
+              converge_stream MAINTENANCE_TASKS
+              printf '%s' '{"name":"MAINTENANCE_SCHEDULES","subjects":["maintenance.schedule.>","maintenance.due.>"],"retention":"workqueue","max_consumers":-1,"max_msgs":-1,"max_bytes":-1,"max_msgs_per_subject":-1,"max_msg_size":-1,"max_age":0,"storage":"file","discard":"old","num_replicas":{{ $replicas }},"duplicate_window":120000000000,"allow_msg_schedules":true,"allow_rollup_hdrs":true,"allow_direct":true}' > "$HOME/MAINTENANCE_SCHEDULES.json"
+              converge_stream MAINTENANCE_SCHEDULES
+              {{- $queue := required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue }}
+              {{- if gt (mul 2 (int $queue.heartbeatSeconds)) (int $queue.ackWaitSeconds) }}
+              {{- fail (printf "maintenance.queue.heartbeatSeconds (%d) is past half of ackWaitSeconds (%d): a heartbeat late once hands a running task to another replica" (int $queue.heartbeatSeconds) (int $queue.ackWaitSeconds)) }}
+              {{- end }}
+              printf '%s' '{"durable_name":"maintenance-worker","ack_policy":"explicit","ack_wait":{{ mul (int $queue.ackWaitSeconds) 1000000000 }},"max_deliver":{{ add1 (int $queue.maxDeliver) }},"filter_subject":"maintenance.task.>","deliver_policy":"all","replay_policy":"instant","max_ack_pending":1000,"max_waiting":512}' > "$HOME/MAINTENANCE_TASKS-maintenance-worker.json"
+              converge_consumer MAINTENANCE_TASKS maintenance-worker
+              printf '%s' '{"durable_name":"maintenance-due","ack_policy":"explicit","ack_wait":30000000000,"max_deliver":-1,"filter_subject":"maintenance.due.>","deliver_policy":"all","replay_policy":"instant","max_ack_pending":1000,"max_waiting":512}' > "$HOME/MAINTENANCE_SCHEDULES-maintenance-due.json"
+              converge_consumer MAINTENANCE_SCHEDULES maintenance-due
+              printf '%s' '{"name":"STORE_EVENTS","subjects":["store.events"],"retention":"workqueue","max_consumers":-1,"max_msgs":-1,"max_bytes":{{ int64 (required "maintenance.queue.storeEventsMaxBytes is required" $queue.storeEventsMaxBytes) }},"max_msgs_per_subject":-1,"max_msg_size":-1,"max_age":604800000000000,"storage":"file","discard":"old","num_replicas":{{ $replicas }},"duplicate_window":600000000000,"deny_delete":true,"deny_purge":true,"allow_rollup_hdrs":false,"allow_direct":true}' > "$HOME/STORE_EVENTS.json"
+              converge_stream STORE_EVENTS
+              printf '%s' '{"durable_name":"maintenance-store-events","ack_policy":"explicit","ack_wait":30000000000,"max_deliver":-1,"filter_subject":"store.events","deliver_policy":"all","replay_policy":"instant","max_ack_pending":1000,"max_waiting":512}' > "$HOME/STORE_EVENTS-maintenance-store-events.json"
+              converge_consumer STORE_EVENTS maintenance-store-events
+              {{- end }}
               {{- if .Values.catalog.controlEmit }}
               # Control-plane change-events (grants/warehouses/policies/tables) broadcast to EVERY catalog
               # replica's ring buffer (GET /management/v1/events). Its own stream so a parking-free broadcast publish

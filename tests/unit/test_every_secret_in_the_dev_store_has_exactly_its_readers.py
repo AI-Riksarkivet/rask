@@ -67,14 +67,28 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     "nats-user-catalog": {"store": frozenset({"catalog"})},
     "nats-user-lineage": {"store": frozenset({"lineage"})},
     "nats-user-maintenance": {"store": frozenset({"maintenance"})},
+    # The work queue's own bus user (ADR 0198 decision 5): the app reads it through its sidecar's secret API, as it reads
+    # its signing key, where a component's user is read by the component alone.
+    "nats-user-maintenance-worker": {"store": frozenset({"maintenance"}), "dapr": frozenset({"maintenance"})},
     "nats-user-admin": {"store": frozenset({"eso"}), "pods": frozenset({"Job/rask-nats-stream-r1"})},
     "nats-user-monitor": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-nats-box"})},
+    # The development store's own bus user: it publishes each write and delete of a rask bucket on store.events.
+    "nats-user-object-store": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-rustfs"})},
     "nats-server": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},
     "nats-route": {"store": frozenset({"eso"}), "pods": frozenset({"StatefulSet/rask-nats"})},
     "postgres": {"store": frozenset({"eso"}), "pods": _POSTGRES_CLIENTS},
     "object-store-root": {
         "store": frozenset({"eso"}),
-        "pods": frozenset({"StatefulSet/rask-rustfs", "Job/rask-object-store-provisioning-r1", "Job/rask-object-store-provisioning-prune-r1"}),
+        # The store itself, rask's provisioning hook, and the dev store's own operator stand-in that puts the event
+        # configuration on every bucket (deploy/fixtures/rustfs, owner 2026-11-09).
+        "pods": frozenset(
+            {
+                "StatefulSet/rask-rustfs",
+                "CronJob/rask-rustfs-bucket-events",
+                "Job/rask-object-store-provisioning-r1",
+                "Job/rask-object-store-provisioning-prune-r1",
+            }
+        ),
     },
     "otel-collector-export": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-otel-collector"})},
 }

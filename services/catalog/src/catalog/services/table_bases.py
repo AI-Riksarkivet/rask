@@ -20,18 +20,28 @@ from collections.abc import Sequence
 import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
-from lance_namespace import DescribeTableRequest, DescribeTableResponse, InvalidInputError, LanceNamespace, ServiceUnavailableError, TableNotFoundError
+from lance_namespace import (
+    ConcurrentModificationError,
+    DescribeTableRequest,
+    DescribeTableResponse,
+    InvalidInputError,
+    LanceNamespace,
+    ServiceUnavailableError,
+    TableNotFoundError,
+)
 from pydantic import BaseModel, Field
 
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.core.namespace import registered_dataset_facts
+from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
-from catalog.services import native, table_claims
-from lakehouse import base_registry, blobs, location_claims
-from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise
+from catalog.services import native, table_claims, table_inputs
+from lakehouse import base_registry, blobs, clone_sources, location_claims
+from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
+from lakehouse.history_fences import HistoryFencedError
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 
@@ -238,6 +248,82 @@ def require_exclusive_location(root: str, relative: str, storage_options: Storag
         raise occupied_location_refusal(relative)
 
 
+class CloneAdmission(BaseModel):
+    """What a registered shallow clone is admitted with: the sources to tag, and the record entries its roots earn."""
+
+    #: The source the clone's first transaction names, which its tag pins (:mod:`lakehouse.clone_sources`).
+    sources: list[clone_sources.CloneSource] = Field(default_factory=list)
+    #: A ``derived_from`` entry per source root the clone reads through: the source it names, and each one that source's
+    #: own record holds as ``derived_from``, which the source's own tag on it keeps (a clone of a clone).
+    entries: list[base_registry.RecordedBase] = Field(default_factory=list)
+
+    def admits(self, ref: BasePathRef) -> base_registry.RecordedBase | None:
+        """The entry admitting the declared base ``ref``, or ``None`` when this admission does not cover it."""
+        key = (normalise(ref.path), store_of(ref.path), ref.is_dataset_root)
+        return next((entry for entry in self.entries if (entry.path, entry.store, entry.is_dataset_root) == key), None)
+
+
+def admit_clone(reference: clone_sources.CloneReference | None, bases: Sequence[BasePathRef], *, location: str, context: RegistrationContext) -> CloneAdmission:
+    """The sources a dataset reads through as a shallow clone of tables the catalog governs (ADR 0198 §1).
+
+    A clone's source is a dataset-root base outside its own root (`lance_docs/lance/format/table/layout.md` § Shallow
+    Clone), and it is admitted only where the dataset's own first transaction is a shallow ``Clone`` naming that root
+    (:func:`clone_sources.clone_reference`): ``add_bases`` writes the same base without one, which is a plant
+    ([[LH-279]]). The source must be a table the catalog holds a claim for, so the version is tagged on a table whose
+    history fence the catalog keeps. A clone of a clone also declares its source's own sources, each admitted only where
+    that source's record holds it as ``derived_from``. A dataset-root base this admits nothing for is left to the base
+    judge, which refuses it.
+
+    Raises:
+        InvalidInputError: The clone's source is no table the catalog governs.
+        ServiceUnavailableError: A claim or a record could not be read.
+    """
+    foreign = [ref for ref in bases if ref.is_dataset_root and not base_registry.is_own(location, ref)]
+    if not foreign or reference is None:
+        return CloneAdmission()
+    source = next((ref for ref in foreign if location_in_store(ref.path, reference.path) and location_in_store(reference.path, ref.path)), None)
+    if source is None:
+        return CloneAdmission()
+    claims = location_claims.ClaimStore(control_root=context.registry.control_root, storage_options=context.registry.storage_options)
+    try:
+        held = location_claims.holder(claims, source.path)
+    except (ValueError, OSError) as exc:
+        raise ServiceUnavailableError("the claim of a clone's source could not be read, so the clone was not judged") from exc
+    if held is None or held.uuid is None:
+        raise InvalidInputError(
+            f"the dataset is a shallow clone of {reference.path!r}, which is no table the catalog governs: register the source first, or clone a "
+            "table registered here"
+        )
+    tagged = clone_sources.CloneSource(
+        location=source.path, table_uuid=held.uuid, table=held.table, segments=held.segments, version=reference.version, branch=reference.branch
+    )
+    derived = [_derived_from(source)]
+    inherited = [ref for ref in foreign if ref is not source]
+    if inherited:
+        source_record = BaseJudge(registry=context.registry, configured=list(context.configured), governed=context.governed).read_record(source.path)
+        derived.extend(_derived_from(ref) for ref in inherited if _source_derives_from(source_record, ref))
+    return CloneAdmission(sources=[tagged], entries=derived)
+
+
+def _derived_from(ref: BasePathRef) -> base_registry.RecordedBase:
+    return base_registry.RecordedBase(
+        path=ref.path,
+        role=base_registry.BaseRole.DERIVED_FROM,
+        is_dataset_root=True,
+        name=ref.name,
+        origin=base_registry.BaseOrigin.REGISTER,
+        source_table=ref.path,
+    )
+
+
+def _source_derives_from(record: base_registry.BaseRecord | None, ref: BasePathRef) -> bool:
+    """Whether the source's record holds ``ref`` as a root it reads through, which keeps it while the source stands."""
+    if record is None:
+        return False
+    key = (normalise(ref.path), store_of(ref.path))
+    return any(entry.role is base_registry.BaseRole.DERIVED_FROM and (entry.path, entry.store) == key for entry in record.entries)
+
+
 def entries_for_registration(
     location: str,
     bases: Sequence[BasePathRef],
@@ -246,6 +332,7 @@ def entries_for_registration(
     configured: Sequence[str],
     data_allowlist: Sequence[str],
     governed: GovernedStorage | None = None,
+    clone: CloneAdmission | None = None,
 ) -> list[base_registry.RecordedBase]:
     """The record entries a registered dataset's bases earn — or a refusal naming the ones nothing sanctions.
 
@@ -257,7 +344,8 @@ def entries_for_registration(
     once written the record is the authority — an allowlisted base appearing later is a plant. The approved
     base itself is refused ([[LH-252]]): it is every table's prefix, and a table declaring it reads every
     sibling's fragments. So is a directory deeper than one level beneath it, and a directory another table
-    holds is refused when its claim is taken (:func:`judge_registered_table`).
+    holds is refused when its claim is taken (:func:`admit_registered_table`). A source root ``clone`` admits is recorded
+    as ``derived_from`` (:func:`admit_clone`).
 
     Raises:
         InvalidInputError: A declared base is sanctioned by none of those.
@@ -276,7 +364,9 @@ def entries_for_registration(
     refused: list[str] = []
     for judgement in judged:
         ref = judgement.ref
-        if judgement.standing is base_registry.BaseStanding.CONFIGURED:
+        if clone is not None and (derived := clone.admits(ref)) is not None:
+            entries.append(derived)
+        elif judgement.standing is base_registry.BaseStanding.CONFIGURED:
             entries.append(
                 base_registry.RecordedBase(path=ref.path, role=base_registry.BaseRole.EXTERNAL_BLOB, name=ref.name, origin=base_registry.BaseOrigin.REGISTER)
             )
@@ -332,24 +422,39 @@ class RegistrationContext(BaseModel):
 
 
 class RegistrationVerdict(BaseModel):
-    """A registration the door admitted: where it resolved, and the record entries it claimed."""
+    """A registration the door judged: where it resolved, the record entries it earns, and the sources a clone reads."""
 
     location: str
-    #: ``None`` when no dataset is at the location — there were no bases to judge or record.
+    #: The record entries the dataset's bases earn, claimed by :func:`admit_registered_table`; empty when no dataset is
+    #: at the location, which has no bases to judge or record.
+    entries: list[base_registry.RecordedBase] = Field(default_factory=list)
+    #: The sources the dataset reads through as a shallow clone, each tagged before the record is claimed.
+    sources: list[clone_sources.CloneSource] = Field(default_factory=list)
+    #: Whether a dataset is at the location: only one that is gets a base record, its entries or none.
+    holds_dataset: bool = False
+
+
+class Admitted(BaseModel):
+    """What :func:`admit_registered_table` wrote, which the door's undo releases."""
+
+    #: ``None`` when the dataset had no bases to record.
     claim: base_registry.BaseClaim | None = None
-    #: The data directories claimed for the table ([[LH-252]]), released by the door's undo.
+    #: The data directories claimed for the table ([[LH-252]]).
     directories: list[str] = Field(default_factory=list)
+    #: The source locations the table's clone tag was taken on.
+    tagged: list[str] = Field(default_factory=list)
 
 
 def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], relative: str, context: RegistrationContext) -> RegistrationVerdict:
-    """Judge the dataset a registration just attached, and record the bases it is admitted with ([[LH-279]]).
+    """Judge the dataset a registration just attached ([[LH-279]]); it writes nothing.
 
     In order: the location the backend RESOLVED, which is right for a warehouse-bound table too; no other
     registered table may overlap it (:func:`require_exclusive_location`, asked after the
     registration so a concurrent overlap is caught by whichever lands second); the dataset must not carry
-    reader flag 256, must have stable row ids and must carry no ``lance.compaction.*`` config ([[LH-538]]); and every base it declares must be its own, configured, approved or already recorded
-    (:func:`entries_for_registration`). Only then is the record claimed, so a refused dataset
-    leaves no entry behind.
+    reader flag 256, must have stable row ids and must carry no ``lance.compaction.*`` config ([[LH-538]]); and every base it declares must be its own, configured, approved, already recorded,
+    or a source it reads through as a shallow clone (:func:`entries_for_registration`, :func:`admit_clone`). The door
+    then asks the caller's read on each clone source and admits it (:func:`admit_registered_table`), so a refused
+    dataset leaves no entry behind.
 
     Only bit 256 is read: flag 16 is what an externally based ingest dataset carries, and it is no reason
     to refuse one. A location holding no dataset has no data files or bases to judge, and registers as the
@@ -404,16 +509,68 @@ def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: lis
             f"the dataset at {location!r} carries {facts.compaction_config} in its manifest config, which Lance would plan a compaction "
             "from in place of the table's maintenance policy. Delete those keys (delete_config_keys), then register it."
         )
+    clone = admit_clone(facts.clone, facts.bases, location=location, context=context)
     entries = entries_for_registration(
-        location, facts.bases, registry=context.registry, configured=context.configured, data_allowlist=context.data_allowlist, governed=context.governed
+        location,
+        facts.bases,
+        registry=context.registry,
+        configured=context.configured,
+        data_allowlist=context.data_allowlist,
+        governed=context.governed,
+        clone=clone,
     )
-    directories = claim_registered_directories(ns, context.registry, entries, context.holder, segments)
+    return RegistrationVerdict(location=location, entries=entries, sources=clone.sources, holds_dataset=True)
+
+
+def admit_registered_table(
+    ns: LanceNamespace, so: StorageOptions, *, segments: list[str], verdict: RegistrationVerdict, clone_uuid: str, context: RegistrationContext
+) -> Admitted:
+    """Write what a judged registration is admitted with: each clone source's tag, the data directories, the record.
+
+    The tags first, so the record never names a source whose version nothing keeps; the record last, since it is
+    what names the directories. Whatever this wrote is undone when a later step fails, and :func:`release_admitted`
+    undoes it for the door's own undo.
+
+    Raises:
+        InvalidInputError: A source no longer holds the version the clone reads, or another table holds one of the
+            data directories.
+        ConcurrentModificationError: A reclaim holds a source's history; nothing was written for it.
+    """
+    admitted = Admitted()
     try:
-        claim = base_registry.claim_bases(context.registry, location, entries)
+        for source in verdict.sources:
+            _tag(source, clone_location=verdict.location, so=so, context=context)
+            admitted.tagged.append(source.location)
+        admitted.directories = claim_registered_directories(ns, context.registry, verdict.entries, context.holder, segments)
+        admitted.claim = base_registry.claim_bases(context.registry, verdict.location, verdict.entries) if verdict.holds_dataset else None
+        if verdict.sources:
+            # A clone holds its sources' rows, so an erasure on a source is held until the clone follows it (ADR 0178).
+            declared = {source.table_uuid: RunInput(table=source.segments, version=source.version, branch=source.branch) for source in verdict.sources}
+            table_inputs.record(context.registry.control_root, context.registry.storage_options, clone_uuid, name=context.holder, declared=declared)
     except Exception:
-        base_registry.release_data_directories(context.registry, directories, context.holder)
+        release_admitted(admitted, clone_location=verdict.location, so=so, context=context)
         raise
-    return RegistrationVerdict(location=location, claim=claim, directories=directories)
+    return admitted
+
+
+def _tag(source: clone_sources.CloneSource, *, clone_location: str, so: StorageOptions, context: RegistrationContext) -> None:
+    try:
+        clone_sources.take(source, clone_location=clone_location, control_root=context.registry.control_root, storage_options=so)
+    except clone_sources.CloneSourceGoneError as exc:
+        raise InvalidInputError(
+            f"the clone reads version {source.version} of {source.table}, which the source no longer keeps; clone a version it still holds, "
+            "or tag it before cloning"
+        ) from exc
+    except HistoryFencedError as exc:
+        raise ConcurrentModificationError(f"a reclaim holds the history of {source.table}; retry the register") from exc
+
+
+def release_admitted(admitted: Admitted, *, clone_location: str, so: StorageOptions, context: RegistrationContext) -> None:
+    """Undo :func:`admit_registered_table`: the record's entries, the directories' claims, then each source's tag."""
+    if admitted.claim is not None:
+        base_registry.release_claim(context.registry, admitted.claim)
+    base_registry.release_data_directories(context.registry, admitted.directories, context.holder)
+    clone_sources.release_all(admitted.tagged, clone_location=clone_location, storage_options=so)
 
 
 def claim_registered_directories(

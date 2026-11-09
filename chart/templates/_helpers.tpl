@@ -325,6 +325,7 @@ scopes:
 {{- if include "lance.natsMints" . }}
 {{- $_ := set $files "nats-box-creds" (list "nats-user-monitor") }}
 {{- $_ := set $files "nats-auth" (list "nats-server" "nats-route") }}
+{{- if .Values.objectStore.enabled }}{{- $_ := set $files "object-store-bus-creds" (list "nats-user-object-store") }}{{- end }}
 {{- end -}}
 {{- toJson $files -}}
 {{- end -}}
@@ -568,7 +569,7 @@ securityContext:
 
 {{- define "lance.objectStorePolicy.maintenance" -}}
 {{- $control := .Values.objectStore.bucket -}}
-{{- $own := list (printf "arn:aws:s3:::%s/_maintenance_due/*" $control) (printf "arn:aws:s3:::%s/_policies/state/*" $control) (printf "arn:aws:s3:::%s/_lineage_outbox/*" $control) -}}
+{{- $own := list (printf "arn:aws:s3:::%s/_maintenance_due/*" $control) (printf "arn:aws:s3:::%s/_maintenance_files/*" $control) (printf "arn:aws:s3:::%s/_policies/state/*" $control) (printf "arn:aws:s3:::%s/_lineage_outbox/*" $control) -}}
 {{- toJson (list
   (dict "Sid" "ListAccountForReconcileDriftReport" "Effect" "Allow" "Action" (list "s3:ListAllMyBuckets") "Resource" (list "arn:aws:s3:::*"))
   (dict "Sid" "ReadTheEstateItSweeps" "Effect" "Allow" "Action" (list "s3:ListBucket" "s3:GetBucketLocation" "s3:GetObject") "Resource" (list "arn:aws:s3:::*" "arn:aws:s3:::*/*"))
@@ -809,7 +810,7 @@ activeDeadlineSeconds: 1800
   (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token" "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" true)
   (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
 {{- if $v.maintenance.enabled -}}
-{{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "dapr-app-token") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
+{{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "dapr-app-token" (printf "nats-user-%s-worker" $v.maintenance.daprAppId)) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
 {{- end -}}
 {{- range $apps -}}
 {{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}

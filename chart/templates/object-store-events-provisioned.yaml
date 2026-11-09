@@ -1,0 +1,3 @@
+{{- if and .Values.maintenance.enabled (not .Values.objectStore.enabled) (not (.Values.objectStore.events).provisioned) }}
+{{- fail "OBJECT STORE EVENTS NOT PROVISIONED: the platform's store (objectStore.enabled=false) is configured by its operator, not by this chart, and without the store's event of each write maintenance reports a committed file overwritten in place only at the table's daily recheck. Configure every rask bucket, including each warehouse bucket the catalog creates, to deliver each object write (s3:ObjectCreated:*) to the bus subject store.events, kept through a bus outage, then --set objectStore.events.provisioned=true." }}
+{{- end }}

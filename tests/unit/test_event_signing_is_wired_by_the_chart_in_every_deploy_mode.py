@@ -117,27 +117,40 @@ def _identities_running(docs: tuple[dict, ...], app: str) -> list[str]:
     )
 
 
-def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing_keys_and_bus_users() -> None:
+#: What a deployer attests of the platform's services, one refusal each: the signing keys, the bus users, and the object
+#: store's change events.
+_ATTESTED = {"signing": "signing.provisioned=true", "nats": "nats.auth.provisioned=true", "events": "objectStore.events.provisioned=true"}
+
+
+def _refusal_without(attestation: str) -> str:
+    """The render's refusal when every attestation but ``attestation`` is given, so only its own guard can fire."""
+    others = [arg for name, value in _ATTESTED.items() if name != attestation for arg in ("--set", value)]
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        chart_render.render(*DEFAULT_ARGS, *_PLATFORM_STORE, *others)
+    return refused.value.stderr
+
+
+def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing_keys_bus_users_and_store_events() -> None:
     default = chart_render.render(*DEFAULT_ARGS)
     identities, users = _signers(default), chart_render.nats_users(default)
     assert identities and users, "the default render has no signer or no bus user, so the refusals below would name nothing"
 
-    with pytest.raises(subprocess.CalledProcessError) as refused:
-        chart_render.render(*DEFAULT_ARGS, *_PLATFORM_STORE)
-    message = refused.value.stderr
+    message = _refusal_without("signing")
     # The names each signer reads its pair under (`signing_key_secret`), so the chart and the signer agree on them.
     missing = [name for identity in identities for name in (signing_public_secret(identity), signing_key_secret(identity)) if name not in message]
     assert not missing, f"the refusal does not name {missing}, so the operator cannot tell which secrets to create"
 
     # The users a store nothing seeds must already hold; the bus's own config is the bus's, not rask's to attest.
-    with pytest.raises(subprocess.CalledProcessError) as refused:
-        chart_render.render(*DEFAULT_ARGS, *_PLATFORM_STORE, "--set", "signing.provisioned=true")
-    message = refused.value.stderr
+    message = _refusal_without("nats")
     names = {f"nats-user-{user}" for user in users}
     assert not [name for name in names if name not in message], f"the refusal does not name {sorted(n for n in names if n not in message)}"
     assert "nats-route" not in message and "nats-server" not in message, "the refusal asks the operator to attest the bus's own config"
 
-    docs = chart_render.render(*DEFAULT_ARGS, *_PLATFORM_STORE, "--set", "signing.provisioned=true", "--set", "nats.auth.provisioned=true")
+    # The platform's store is configured by its operator: the refusal names the subject and the events it must deliver.
+    message = _refusal_without("events")
+    assert ("store.events" in message, "s3:ObjectCreated:*" in message, "objectStore.events.provisioned" in message) == (True, True, True), message
+
+    docs = chart_render.render(*DEFAULT_ARGS, *_PLATFORM_STORE, *(arg for value in _ATTESTED.values() for arg in ("--set", value)))
     assert _signers(docs) == identities, "an attested store must still render every signer's identity"
     assert not [name for _, name, _ in chart_render.containers(docs) if name == "mint"], "only the dev store has a mint step to run"
     assert not chart_render.nats_users(docs), "the dev seed issues users for a bus or a store it does not provision"

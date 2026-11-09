@@ -49,7 +49,7 @@ from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
 from catalog.services import dataplane, table_claims
-from lakehouse import base_refs, commit_records, commit_turns, maintenance_due, records
+from lakehouse import commit_records, commit_turns, records
 from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -230,18 +230,6 @@ def _opened(stock: lance_namespace.LanceNamespace, storage_options: dict[str, st
     return lance.dataset(namespace_client=stock, table_id=_TABLE, storage_options=storage_options or None)
 
 
-def _sweep_wrote_a_clone_list(stock: lance_namespace.LanceNamespace, *, clones_of_the_table: list[str], ago: timedelta = timedelta(0)) -> None:
-    """Write the clone list as a maintenance sweep tick does ``ago``, naming the datasets that resolve through ``db$t``."""
-    from catalog.core.config import get_settings
-
-    refs = base_refs.BaseRefs()
-    if clones_of_the_table:
-        root = base_refs.decoded_path(stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).location or "")
-        refs = base_refs.BaseRefs(protected={root}, referrers={root: set(clones_of_the_table)})
-    settings = get_settings()
-    maintenance_due.write_clone_list(settings.registry_root, settings.storage_options(), maintenance_due.CloneList.taken(refs, at=datetime.now(UTC) - ago))
-
-
 def _rows(dataset: lance.LanceDataset) -> list[tuple[int, str]]:
     table = dataset.to_table().sort_by("id")
     return list(zip(table["id"].to_pylist(), table["v"].to_pylist(), strict=True))
@@ -303,11 +291,11 @@ def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_c
     commit the rewrite; measured on pylance 13.0.0, ``compact_files`` makes the same two commits as the distributed
     protocol. Both are commits a stock client stages, so both are judged here, the rewrite row by row on its values
     ([[LH-561]]), and the job that stages them holds no writer rung: a maintainer rewrites how a table is stored and
-    never what it says (``model.fga``)."""
+    never what it says (``model.fga``). No list maintenance writes is read: a compaction is judged with maintenance
+    stopped (ADR 0198 §1)."""
     stock = _created(served_on_s3)
     for row, value in ((4, "d"), (5, "e"), (6, "f")):
         lance.write_dataset(_keyed([row], [value]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=served_on_s3.storage_options)
-    _sweep_wrote_a_clone_list(stock, clones_of_the_table=[])
     served_on_s3.granted = _READER_AND_MAINTAINER
     caplog.clear()
 
@@ -358,7 +346,6 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
     lance.write_dataset(_keyed([4, 5], ["d", "e"]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=options)
     _opened(stock, options).create_scalar_index("v", index_type="BTREE", name="v_idx")
     stock.create_table_branch(lance_namespace.CreateTableBranchRequest(id=_TABLE, name="work"))
-    _sweep_wrote_a_clone_list(stock, clones_of_the_table=[])
     served_on_s3.granted = frozenset({*_WRITER_AND_MAINTAINER, "can_drop"})
     recorded = httpx.post(f"{served_on_s3.url}/management/v1/table/db$t/erasure", json={"predicate": "id = 2"}, headers=_TOKEN)
     assert recorded.status_code == 202, recorded.text
@@ -415,7 +402,6 @@ def test_a_stock_client_commits_on_a_branch_through_version_create_and_main_is_u
     stock = _created(served_on_s3)
     options = served_on_s3.storage_options
     stock.create_table_branch(lance_namespace.CreateTableBranchRequest(id=_TABLE, name="work"))
-    _sweep_wrote_a_clone_list(stock, clones_of_the_table=[])
     served_on_s3.granted = _WRITER_AND_MAINTAINER
     caplog.clear()
 
@@ -537,17 +523,6 @@ def _compact(stock: lance_namespace.LanceNamespace) -> None:
     dataset = _opened(stock)
     plan = Compaction.plan(dataset, {"target_rows_per_fragment": 1024})
     Compaction.commit(dataset, [task.execute(dataset) for task in plan.tasks])
-
-
-def _compact_on_a_clone_list_past_its_age(stock: lance_namespace.LanceNamespace) -> None:
-    """The sweep wrote the list two hours ago, past the default hour (``LANCE_CLONE_LIST_MAX_AGE_SECONDS``)."""
-    _sweep_wrote_a_clone_list(stock, clones_of_the_table=[], ago=timedelta(hours=2))
-    _compact(stock)
-
-
-def _compact_a_table_a_clone_reads_through(stock: lance_namespace.LanceNamespace) -> None:
-    _sweep_wrote_a_clone_list(stock, clones_of_the_table=["s3://elsewhere/clone"])
-    _compact(stock)
 
 
 _UNKEYED = ["db", "u"]
@@ -723,9 +698,6 @@ def _data_staged_under_an_index_label(stock: lance_namespace.LanceNamespace) -> 
         pytest.param(_append_a_new_key, {"can_write_data"}, False, 403, 15, ("db$t", 4), id="a-maintainer-cannot-stage-an-append"),
         pytest.param(_create_a_table, {"can_write_data"}, False, 403, 15, ("db$u", 1), id="a-maintainer-cannot-commit-a-tables-first-version"),
         pytest.param(_create_a_labelled_table, {"can_classify"}, False, 403, 15, ("db$u", 1), id="a-first-version-labels-a-field-only-for-a-classifier"),
-        pytest.param(_compact, set(), False, 503, 17, ("db$t", 4), id="a-compaction-waits-for-the-sweeps-clone-list"),
-        pytest.param(_compact_on_a_clone_list_past_its_age, set(), False, 503, 17, ("db$t", 4), id="a-compaction-waits-for-a-fresh-clone-list"),
-        pytest.param(_compact_a_table_a_clone_reads_through, set(), False, 406, 0, ("db$t", 4), id="a-table-a-clone-reads-through-is-not-compacted"),
         pytest.param(_rewrite_losing_a_replaced_fragments_rows, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-loses-no-row"),
         pytest.param(_rewrite_duplicating_a_carried_fragments_rows, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-duplicates-no-row"),
         pytest.param(_rewrite_changing_a_carried_rows_value, set(), False, 400, 13, ("db$u", 4), id="a-rewrite-changes-no-value"),

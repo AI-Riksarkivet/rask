@@ -1,81 +1,66 @@
-"""End-to-end test for the maintenance sweep against REAL Lance datasets.
+"""A commit on the deployed release is followed by its table's pass, which lists the compaction it does not run.
 
-The offline suite drives the sweep over moto; this proves what only the deployed release can: the service lists the
-lakehouse bucket, opens the real Lance datasets the catalog wrote, expires their versions and evaluates their due
-records without error (it compacts nothing, ADR 0155). This is the only signal that the Dapr-cron maintenance path
-works against real storage. (The cron route is invoked directly here; the Dapr binding fires the same route on
-schedule.)
+The offline suites drive each half over moto: the commit lane's queueing
+(`services/maintenance/tests/test_an_announced_event_queues_the_task_it_asks_for.py`) and the pass
+(`tests/integration/test_a_tables_pass_lists_what_is_due_and_rewrites_nothing.py`). This proves what only a deployed
+release can: the catalog's announcement of a commit reaches maintenance's commit lane over the bus, the lane's task
+reaches a worker through JetStream, and the worker's pass opens the real table and writes its due record, which the
+catalog's due door answers to the table's owner (ADR 0198 §2, §3). The pass compacts nothing (ADR 0155).
 
-What the sweep's metric does once it leaves the service is not asserted here, or by any test: OpenTelemetry is rask's
-boundary, and the store behind the Collector is the platform's (ADR 0167). `test_observability_e2e.py` proves that a
-service's metric crosses rask's Collector, with lineage's.
+Four commits through the stock client leave four small fragments, which Lance's own planner would merge, so the record
+names a compaction, at the last commit's version: the first commit holds the table's pass the commit delay out
+(`maintenance.queue.commitPassDelaySeconds`), and that pass reads the table after every commit of the burst. The wait is
+bounded by the chart's default delay and what a busy queue may add to it.
 
 The e2e-stack lane runs it on every push. Against a deployed release, `bash scripts/e2e_live.sh
-tests/e2e-py/test_maintenance_e2e.py` discovers the address and the token, or by hand:
-
-    kubectl port-forward svc/rask-maintenance 8000:8000 &
-    LANCE_E2E_MAINTENANCE_URL=http://localhost:8000 LANCE_E2E_DAPR_TOKEN=<the app token> \
-    uv run pytest tests/e2e-py/test_maintenance_e2e.py -v
-
-The chart renders every object as `{{ include "lance.fullname" . }}-…` (= `rask-…`, the release name). A port-forward
-against a Service that does not exist fails with `services … not found`, which reads as "the release is broken"
-rather than "this instruction is old".
+tests/e2e-py/test_maintenance_e2e.py` discovers the addresses.
 """
 
 from __future__ import annotations
 
-import os
 import time
+import uuid
 from typing import Any
 
+import byo_scenario as scenario
+import lance
 import pytest
-import requests
+from byo_scenario import CATALOG, Tenant, ok, rows_of
 
 
-MAINTENANCE = os.environ.get("LANCE_E2E_MAINTENANCE_URL", "")
-BINDING = os.environ.get("LANCE_E2E_MAINTENANCE_BINDING", "maintenance-cron")
-# The cron route is sidecar-only (§1 fail-closed): a direct POST must present the same `dapr-api-token` the sidecar
-# stamps. scripts/e2e_stack.sh and scripts/e2e_live.sh read it from the app-token secret.
-DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
-_TOKEN_HEADER = {"dapr-api-token": DAPR_TOKEN} if DAPR_TOKEN else {}
+pytestmark = [pytest.mark.e2e, pytest.mark.compaction, pytest.mark.skipif(not scenario.LIVE, reason=scenario.REQUIRES)]
 
-pytestmark = [pytest.mark.e2e, pytest.mark.compaction]
+#: How long the due record may take to appear: the commit delay (five minutes by default), the queue and one pass.
+_WAIT_SECONDS = 600
 
 
-@pytest.fixture(scope="module")
-def maintenance() -> str:
-    if not MAINTENANCE:
-        pytest.skip("set LANCE_E2E_MAINTENANCE_URL (see module docstring)")
-    try:
-        requests.get(f"{MAINTENANCE.rstrip('/')}/livez", timeout=5).raise_for_status()
-    except requests.RequestException:
-        pytest.skip("maintenance not reachable")
-    return MAINTENANCE.rstrip("/")
+def _due_record(tenant: Tenant, table_uuid: str) -> dict[str, Any] | None:
+    """The due door's record of the table ``table_uuid`` names, as its owner reads it, walking every page."""
+    token: str | None = None
+    while True:
+        page = ok(tenant.pipeline.http.get(f"{CATALOG}/management/v1/maintenance/due", params={"page_token": token} if token else {}, timeout=60))
+        if (found := next((due for due in page["tables"] if due["uuid"] == table_uuid), None)) is not None:
+            return found
+        if not (token := page.get("page_token")):
+            return None
 
 
-def test_the_sweep_expires_real_datasets(maintenance: str) -> None:
-    # Trigger one sweep (the same route the Dapr cron binding POSTs on schedule),
-    # authenticating exactly like the sidecar does (dapr-api-token header).
-    # The tick opens one manifest per dataset, so it costs what the estate is worth:
-    # measured 288 datasets at ~12 s, and 30 s left no headroom on a busier one.
-    # RETRY WHILE THE CRON HOLDS THE LOCK, which a single blind trigger cannot survive on a live
-    # estate. The sweep is single-flight: a tick that finds one in progress answers 200 `skipped` and
-    # does no work — the documented contract ("the next tick retries"), not a failure. What that costs a
-    # one-shot caller, measured: "one sweep checks 347 datasets in 158 s against an `@every 300s` cron,
-    # so a single blind trigger lands on a busy lock about half the time". A leg that fires once and
-    # asserts on the answer reports a healthy estate as an overlapping sweep roughly every other drive.
-    body: dict[str, Any] = {}
-    deadline = time.monotonic() + 900
-    while time.monotonic() < deadline:
-        resp = requests.post(f"{maintenance}/{BINDING}", headers=_TOKEN_HEADER, timeout=600)
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        if body.get("status") != "skipped":
-            break
-        time.sleep(10)
+def test_a_commit_is_followed_by_its_tables_pass(byo_tenant: Tenant) -> None:
+    table_id = [byo_tenant.bronze, f"maintained-{uuid.uuid4().hex[:6]}"]
+    table = "$".join(table_id)
+    stock = byo_tenant.pipeline.namespace()
+    lance.write_dataset(rows_of(range(10)), namespace_client=stock, table_id=table_id, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    byo_tenant.tables.append(table)
+    for start in (10, 20, 30):
+        lance.write_dataset(rows_of(range(start, start + 10)), namespace_client=stock, table_id=table_id, mode="append")
+    table_uuid = str(ok(byo_tenant.pipeline.http.post(f"{CATALOG}/v1/table/{table}/describe", json={}, timeout=60))["properties"]["rask.uuid"])
 
-    assert body.get("status") != "skipped", f"an overlapping sweep was still running: {body}"
-    assert body["datasets"] >= 1, f"no datasets discovered in the bucket: {body}"
-    assert body["errors"] == {}, f"a dataset failed its pass: {body['errors']}"
-    assert "versions_removed" in body and "due" in body, f"the tick reports neither its reclamation nor its due decisions: {body}"
-    assert "failed" not in body["due"], f"a due evaluation could not decide: {body['due']}"
+    deadline = time.monotonic() + _WAIT_SECONDS
+    record = _due_record(byo_tenant, table_uuid)
+    while (record is None or record["version"] < 4) and time.monotonic() < deadline:
+        time.sleep(5)
+        record = _due_record(byo_tenant, table_uuid)
+
+    assert record is not None, f"no pass followed the commits on {table} within {_WAIT_SECONDS} s: its due record never appeared"
+    assert (record["table"], record["version"]) == (table, 4), f"no pass followed the last commit on {table}: {record}"
+    assert record["compaction"] is not None and record["compaction"]["candidate_fragments"] >= 2, f"the pass listed no compaction: {record}"

@@ -58,3 +58,59 @@ list is also written under maintenance's own identity and trusted by the catalog
   event and task throughput at estate scale. Each row that builds a part measures it with the same harness.
 - The rows, in order: clone tags at register and the clone list's removal; commit-time due records and the due-record
   backstop; the overwrite check from store notifications; maintenance's work queue and scale-out.
+
+## Amendment, 2026-11-09: as built ([[LH-494]], one row)
+
+The four rows were built as one (owner, 2026-11-08), and building them settled what the decisions above left open.
+
+- **Decision 2, the queue.** A commit's announcement holds one follow-up for its table, `maintenance.queue.commitPassDelaySeconds`
+  out, so a burst makes one pass; each pass schedules the table's own next one. Tasks sit on MAINTENANCE_TASKS, one per
+  subject: a guarded publish (`Nats-Expected-Last-Subject-Sequence: 0`) refuses a second while one is queued or in flight.
+  A running worker keeps its task by heartbeat; a pass past twice `maxPassSeconds` ends its replica, and a task that
+  outlives its worker on every one of `maxDeliver` deliveries is ended unrun on one more, which the consumer allows. The
+  backstop is the hourly audit, which opens no table and queues each table whose schedule was lost; the orphan scan and the
+  trash purge run once a day (owner, 2026-11-09).
+- **Decision 3, the store's events.** Only writes are acted on: a write under a table holds that table's follow-up, and
+  the pass checks every file its commits recorded against one listing of the table's root, rather than a HEAD per file.
+  A delete is not acted on: a recorded file deleted while a retained version names it breaks every read at once, and the
+  table's daily pass names it. STORE_EVENTS is capped (`maintenance.queue.storeEventsMaxBytes`, discard old), since each
+  event is a hint the daily pass backs up. Maintenance keeps its own copy of the commit records it has read
+  (`_maintenance_files/`, `lakehouse.file_identities`), so a pass reads only the record of the commit it follows.
+4. **The store's operator configures its bucket events** (owner, 2026-11-09, through the multi-question tool: "Store's
+   operator"), as it configures versioning; a production install attests it (`objectStore.events.provisioned`), and the
+   development store's fixture does it for its own buckets.
+5. **Maintenance talks to the bus itself**, as its own bus user (`maintenance-worker`). Dapr's JetStream subscription sends
+   no in-progress acknowledgement, so a pass longer than its ack wait would be delivered again beneath itself, and its
+   publish sets no header but the message id, so it cannot put a schedule (components-contrib e90662b02d70,
+   `pubsub/jetstream/jetstream.go:115-145`). nats-py is the client and the worker is a plain pull worker; FastStream and
+   taskiq-nats were weighed and do neither the bind-only consumer nor the in-progress heartbeat. Its replies arrive on an
+   inbox of its own. The streams and consumers are the chart's stream Job's; the worker creates none.
+6. **The times are NATS message schedules** (ADR-51, MAINTENANCE_SCHEDULES): each table's next pass, a commit's follow-up,
+   the hourly audit and the daily scan. The bus was upgraded to nats-server 2.15.2 for them (an estate on 2.14.2 steps
+   through 2.14.9, as the upgrade guide asks); the worker asserts the audit's and the scan's schedules at its start and
+   every 15 minutes, so a purged schedules stream heals.
+
+Measured 2026-11-09:
+
+- On nats-server 2.15.2: a second task on a held subject is refused (10077), and so is a guarded publish while a task is
+  queued or in flight (10071). A fired `@at` schedule leaves no message; a replaced one fires once with the newer body.
+  A work-queue message whose deliveries ran out stays in the stream; a term removes it.
+- RustFS 1.0.3 publishes one event per write, overwrite in place and delete. Two writes made while NATS was down queued
+  in its `QUEUE_DIR` and arrived about 5 s after NATS returned. It refuses a stream whose duplicate window is shorter than
+  its retry lifetime (274 s at a 30 s ack timeout).
+- Costs, on the wire over moto: a commit's pass is 58 requests at 4 tables and at 12, and a table of 13 commits reads one
+  commit record. The hourly audit costs about one request per table; an idle table costs about 106 requests a day
+  against about 7,200 under the sweep.
+- On the bus lane, two replicas shared a burst with no pass in flight twice, and a killed replica's task went to the
+  other after the ack wait.
+
+What still grows with a table is Lance's own cleanup accounting: a pass reads each retained version's manifest
+(`explain_cleanup_old_versions` and `versions`, [[LH-562]]), three reads a version, bounded by the table's retention.
+Deriving the counts from a listing of `_versions/` instead would replace Lance's own answer, which LH-562 chose so that
+the threshold counts exactly what cleanup deletes.
+
+Closes-when (a) as the owner amended it, 2026-11-09, through the multi-question tool ("Amend clause to built", "Keep
+Lance's count"): an idle table costs about one request an hour (the audit) and one pass a day (the recheck, the backstop
+for a lost commit or store event and for the versions a deleted tag releases), and nothing walks the estate's files; a
+commit's pass costs a fixed handful plus Lance's own cleanup accounting. A task a worker ends holds its next try
+`maintenance.queue.recheckHours` out, so the audit does not hand a task that kills its worker straight back.

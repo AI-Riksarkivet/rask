@@ -114,7 +114,8 @@ jobs:
   #             that any series exists.
   #   nats-auth the chart's NATS permission table (`nats.auth.users`) on the chart's own nats-server in
   #             operator mode with test-only keys, and the real daprd the Dapr fixture injects, running the chart's
-  #             Components against it: each bus client reaches exactly its own subjects. Hermetic,
+  #             Components against it: each bus client reaches exactly its own subjects; maintenance's worker
+  #             shares the work queue, and a killed replica's task goes to another. Hermetic,
   #             public images only. `dagger call nats-auth` == `make nats-auth`.
   ms-gates:
     name: ms-${{ matrix.gate }}

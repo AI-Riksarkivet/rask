@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 from lance_namespace import InvalidInputError, InvalidTableStateError, UnsupportedOperationError
 
 from lakehouse import branch_layout
-from lakehouse.base_refs import BaseRefs
 from lakehouse.compaction_gate import compaction_refusal
 from lakehouse.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
 from lakehouse.version_retention import ExplainedDataset, fork_versions, reclaimable_versions, recorded_branch, tag_versions
@@ -41,10 +40,6 @@ log = logging.getLogger(__name__)
 # both are unit-testable with a fake ``ds``", and a nominal type would make that promise unkeepable.
 # Split per verb, mirroring `lakehouse.features`' ManifestCarrier/FragmentCarrier: a door
 # that only previews must not claim it can reclaim.
-#
-# `uri` is deliberately ABSENT from all of them and still read through `getattr(ds, "uri", "")`. A
-# handle that cannot say where it lives is a case `refuse_a_referring_datasets_source` REFUSES on
-# purpose; declaring the attribute would type that branch out of existence.
 # --------------------------------------------------------------------------- #
 
 
@@ -115,8 +110,8 @@ def require_compactable(ds: FragmentCarrier, table_location: str, storage_option
         raise UnsupportedOperationError(f"compaction refused: {reason}. Compacting here could rewrite bytes this dataset does not own.")
 
 
-def require_reclaimable(ds: ManifestCarrier, protected: BaseRefs | None = None) -> None:
-    """#121 + #114 for the GC door: refuse a dataset whose versions this button must not reclaim.
+def require_reclaimable(ds: ManifestCarrier) -> None:
+    """#121 for the GC door: refuse a dataset whose versions this button must not reclaim.
 
     **THE GATE IS THE SWEEP'S, per verb** — :func:`~lakehouse.features.describe_gc_unsupported_flags`,
     which is what ``maintenance.services.expiry`` asks before its own ``cleanup_old_versions``.
@@ -126,61 +121,14 @@ def require_reclaimable(ds: ManifestCarrier, protected: BaseRefs | None = None) 
     files, left all 4 base-owned ones, and the base still read in a fresh process. Everything else —
     flag 64, anything unknown — refuses exactly as before.
 
-    This door used to ask the flags-only gate and therefore refused a clone the cron reclaims on a
-    120 s timer; the refusal preserved nothing and claimed the sweep agreed with it.
+    A registered clone of this table needs no refusal here: its tag keeps the version it reads, and every cleanup
+    exempts a tagged version (ADR 0198 §1, :mod:`lakehouse.clone_sources`).
     """
     reader, writer = manifest_feature_flags(ds)
     if (reason := describe_gc_unsupported_flags(reader, writer)) is not None:
         raise UnsupportedOperationError(
             f"maintenance refused: {reason}. Reclaiming versions here would act on a layout this pass cannot correctly rewrite — "
             "the sweep's version-reclamation gate refuses it too."
-        )
-    refuse_a_referring_datasets_source(ds, protected)
-
-
-class ReferredSourceError(UnsupportedOperationError):
-    """A rewrite or reclaim refused because other datasets resolve their files through this one (#114).
-
-    Carries their locations, which the refusal itself does not name: a referrer may be a table the caller holds no grant on
-    ([[LH-436]]), so each door names them to whoever may see them (``fga_deps.referring_datasets``, [[LH-414]]).
-    """
-
-    def __init__(self, message: str, *, referrers: Sequence[str]) -> None:
-        super().__init__(message)
-        self.referrers = tuple(referrers)
-
-
-def refuse_a_referring_datasets_source(ds: object, protected: BaseRefs | None) -> None:
-    """#114: refuse a dataset ANOTHER one resolves its files through — the half no flag check can see.
-
-    Flag 16 marks the dataset that SPANS bases — the CLONE. The dataset in danger here is the SOURCE,
-    and it carries no flag and no ``base_paths`` of its own; measured, source ``(0, 0)`` with no
-    base_paths against clone ``(16, 16)`` naming the source. Its data files are the only copy the
-    clone resolves through, so this door's verbs destroy them: ``compact_files`` ADDS the merged file
-    (4 -> 5, the clone still opens) and ``cleanup_old_versions`` then removes the obsoleted originals
-    (-> 1), after which the clone will not open in a fresh process. The evidence lives only on the
-    referring side, so it has to be collected across the estate first — :func:`sibling_base_refs`.
-
-    The sweep got that guard at #114 and this door did not, which is not a smaller version of the
-    same defect: it is the same irreversible deletion, one click away instead of one cron tick away.
-
-    ``protected`` is the collected map, or ``None`` when the caller collected none. A map that IS
-    supplied is checked against this dataset's ``uri``, and a dataset that cannot say where it lives
-    is REFUSED rather than waved through — "we could not tell" reads as the refusal here for the same
-    reason it does everywhere else in this gate: what it guards is unrecoverable.
-    """
-    if protected is None:
-        return
-    location = str(getattr(ds, "uri", "") or "")
-    if not location:
-        raise UnsupportedOperationError(
-            "maintenance refused: the estate's base references were collected but this dataset reports no location to check them against."
-        )
-    if (root := protected.is_protected(location)) is not None:
-        raise ReferredSourceError(
-            f"maintenance refused: another dataset resolves its files through {root} (shallow clone / multi-base) — "
-            "compacting or reclaiming here would break it (the sweep's base-reference guard refuses it for the same reason).",
-            referrers=sorted(protected.referrers.get(root, ())),
         )
 
 
@@ -254,18 +202,14 @@ def _age_bound(retention_days: int | None) -> timedelta:
     return timedelta(days=retention_days) if retention_days else timedelta(0)
 
 
-def run_gc(
-    ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, protected: BaseRefs | None = None, branch: str | None = None
-) -> GcRunData:
-    """Reclaim old versions (DESTRUCTIVE). Tagged versions are exempt, exactly like the compaction sweep.
+def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, branch: str | None = None) -> GcRunData:
+    """Reclaim old versions (DESTRUCTIVE). Tagged versions are exempt, as in maintenance's own expiry.
 
-    THE STEP THAT ACTUALLY DELETES, which is why ``protected`` matters most here: measured, compaction
-    adds the merged file and removes nothing, and it is this call that then removes the obsoleted
-    originals a shallow clone still resolves through. See :func:`require_reclaimable`, which gates
-    this door on the sweep's own root-scoped gate — the same one the cron applies to the same dataset
-    every tick. ``branch`` is the ref ``ds`` opens, for :func:`refuse_a_reclaim_over_nested_branches`.
+    Tagged versions are what keeps a registered clone readable: its tag on this table pins the version it reads
+    (ADR 0198 §1). See :func:`require_reclaimable`, which gates this door on maintenance's own root-scoped gate.
+    ``branch`` is the ref ``ds`` opens, for :func:`refuse_a_reclaim_over_nested_branches`.
     """
-    require_reclaimable(ds, protected)
+    require_reclaimable(ds)
     refuse_a_reclaim_over_nested_branches(ds, branch)
     stats: Any = ds.cleanup_old_versions(older_than=_age_bound(retention_days), retain_versions=retain_versions, error_if_tagged_old_versions=False)
     return {
@@ -310,7 +254,7 @@ def _refuse_pinned_versions(ds: VersionedDataset, branch: str | None, targets: S
         raise InvalidTableStateError(f"refused: {', '.join(sorted(pins))} pins a version in the range; delete the pin first. Nothing was deleted")
 
 
-def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, int]], branch: str | None, protected: BaseRefs | None) -> int:
+def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, int]], branch: str | None) -> int:
     """Delete the versions ``ranges`` name on ``ds``'s ref (DESTRUCTIVE); return how many were removed.
 
     ``cleanup_old_versions(versions=...)``, measured on pylance 12.0.0: the current version is never
@@ -319,11 +263,11 @@ def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, 
     before the call so the caller learns which one; a tag that lands between that check and the call is
     refused by the call and named from a second read. A tag or branch created while the call runs is
     not seen: Lance reads the refs once, and nothing serializes ref creation with a reclaim (measured
-    with 60 concurrent races: a tag named a deleted version in 31, and ``run_gc`` loses the same race).
-    ``protected`` is the #114 base-reference map, as for ``run_gc``.
+    with 60 concurrent races: a tag named a deleted version in 31, and ``run_gc`` loses the same race). A version a
+    registered clone reads is pinned by the clone's tag, so it is refused like any tagged one (ADR 0198 §1).
     """
     targets = versions_in_ranges(ranges, current=int(ds.version))
-    require_reclaimable(ds, protected)
+    require_reclaimable(ds)
     refuse_a_reclaim_over_nested_branches(ds, branch)
     _refuse_pinned_versions(ds, branch, targets)
     try:

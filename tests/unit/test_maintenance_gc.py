@@ -133,53 +133,6 @@ def test_run_gc_REFUSES_an_unknown_flag() -> None:
 # ---------------------------------------------------------------- the on-demand doors and the SHALLOW-CLONE SOURCE
 
 
-def test_a_protected_map_with_NO_LOCATION_to_check_it_against_refuses() -> None:
-    """ "We could not tell" reads as the refusal, the same direction every other gate here runs in.
-    A caller that collected the estate's base references and then hands over a dataset whose location
-    cannot be read has not shown that this dataset is safe — and the failure this guards is
-    irreversible deletion of another dataset's only copy."""
-    from lance_namespace import UnsupportedOperationError
-
-    from lakehouse.base_refs import BaseRefs
-
-    ds = _FakeDs(version=1, versions=[], tags={})  # no `uri`
-    with pytest.raises(UnsupportedOperationError, match="location"):
-        maintenance.run_gc(ds, retention_days=7, retain_versions=2, protected=BaseRefs(protected={"wh/src.lance"}))
-    assert ds.cleaned is None, "the delete ran anyway — the refusal came too late"
-
-
-def test_sibling_base_refs_FINDS_a_real_clone_reference(tmp_path: Any) -> None:
-    """The enumeration, against real Lance datasets — because a guard wired to an empty map is
-    indistinguishable from no guard at all.
-
-    That is not hypothetical here: `protected_roots` shipped with `storage_options` accepted and
-    DROPPED, so every `s3://` open failed, `protected` came back empty on every tick, and both guards
-    built on it were inert against the exact data-loss path they exist to close. So this asserts the
-    map is NON-EMPTY and names the source, not merely that a call was made.
-    """
-    import lance
-    import pyarrow as pa
-
-    from lakehouse import base_refs, base_registry
-
-    source = str(tmp_path / "aa11_ns$src.lance")
-    clone = str(tmp_path / "bb22_ns$clone.lance")
-    src = lance.write_dataset(pa.table({"id": pa.array(range(9), pa.int64())}), source)
-    src.shallow_clone(clone, reference=src.version)
-    # Recorded, as the catalog records a clone it made: only a sanctioned base protects ([[LH-279]]).
-    registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"))
-    entry = base_registry.RecordedBase(path=source, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER)
-    base_registry.claim_bases(registry, clone, [entry])
-
-    refs = base_refs.sibling_base_refs(source, StorageOptions(), configured=[], record_of=lambda location: base_registry.read_base_record(registry, location))
-
-    assert refs.is_protected(source) is not None, f"the clone's reference to its source was not found: {refs}"
-    assert refs.is_protected(str(tmp_path / "cc33_ns$unrelated.lance")) is None
-
-
-# --------------------------------------------- row 13: the BUTTON and the CRON, against real pylance datasets
-
-
 def _rows(n: int = 20) -> Any:
     import pyarrow as pa
 

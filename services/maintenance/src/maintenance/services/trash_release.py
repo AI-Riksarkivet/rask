@@ -124,9 +124,11 @@ async def _release_one(record: dict[str, Any], *, roots: set[str], live: Livenes
     )
 
 
-async def release_expired_trash(settings: MaintenanceSettings, *, control_root: str | None = None, now: datetime | None = None) -> TrashReleaseReport:
-    """Release every drop :data:`lakehouse.trash.RELEASE_SETTLE` past its deadline that this tick may release. Never
-    raises."""
+async def release_expired_trash(
+    settings: MaintenanceSettings, *, control_root: str | None = None, now: datetime | None = None, only: str | None = None
+) -> TrashReleaseReport:
+    """Release every drop :data:`lakehouse.trash.RELEASE_SETTLE` past its deadline that this step may release, or only
+    the one whose object's uuid is ``only``: a trash task's release at its own deadline. Never raises."""
     at = now or datetime.now(UTC)
     out = TrashReleaseReport()
     storage_options = settings.storage_options()
@@ -139,7 +141,7 @@ async def release_expired_trash(settings: MaintenanceSettings, *, control_root: 
         log.error("trash_release_blocked", extra={"reason": out.reason})
         return out
     out.ran = True
-    due = [record for record in records if trash.releasable(record, now=at) and not trash.is_released(record)]
+    due = [record for record in records if trash.releasable(record, now=at) and not trash.is_released(record) and only in (None, trash.object_uuid(record))]
     if not due:
         return out
     live = await run_in_threadpool(liveness_across, roots, storage_options)

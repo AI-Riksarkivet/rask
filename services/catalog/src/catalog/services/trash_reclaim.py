@@ -38,7 +38,7 @@ from lance_namespace import NamespaceNotFoundError, TableNotFoundError
 from catalog.core.config import Settings
 from catalog.core.vending import ReclaimScope
 from catalog.services import table_claims
-from lakehouse import location_claims, trash
+from lakehouse import clone_sources, location_claims, trash
 from lakehouse.base_refs import decoded_segments, store_of
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.control_prefixes import CONTROL_PREFIXES
@@ -96,6 +96,21 @@ def vend_refusal(record: dict[str, Any], claim: LocationClaim | None, *, kind: T
         return "the record is short of its deadline, so its bytes are still an undrop's to restore"
     if not trash.is_released(record):
         return _UNRELEASED
+    return None
+
+
+def clone_refusal(settings: Settings, record: dict[str, Any]) -> str | None:
+    """Why a released table's bytes are kept, or ``None``: a registered clone reads its files (ADR 0198 §1).
+
+    The clone's tag is what says so (:mod:`lakehouse.clone_sources`), and the clone's own end releases it, so the purge
+    reclaims the bytes on a later attempt. The refusal is noted on the record like any other.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the listing of the table's tags.
+        botocore.exceptions.ClientError: The store refused the listing.
+    """
+    if readers := clone_sources.clones_reading(trash.location_of(record), settings.storage_options()):
+        return f"{len(readers)} registered clone(s) read the table's files; its bytes go once those clones are dropped or deregistered"
     return None
 
 

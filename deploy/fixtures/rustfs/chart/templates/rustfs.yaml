@@ -68,6 +68,18 @@ spec:
             - { name: RUSTFS_HEALTH_MINIMAL_RESPONSE_ENABLE, value: "true" }
             - { name: RUSTFS_OBS_LOG_DIRECTORY, value: "" }
             - { name: RUSTFS_OBS_PROFILING_EXPORT_ENABLED, value: "false" }
+            {{- with .Values.events }}
+            {{- if .busAddress }}
+            - { name: RUSTFS_NOTIFY_ENABLE, value: "true" }
+            - { name: RUSTFS_NOTIFY_NATS_ENABLE_PRIMARY, value: "on" }
+            - { name: RUSTFS_NOTIFY_NATS_ADDRESS_PRIMARY, value: {{ .busAddress | quote }} }
+            - { name: RUSTFS_NOTIFY_NATS_SUBJECT_PRIMARY, value: store.events }
+            - { name: RUSTFS_NOTIFY_NATS_CREDENTIALS_FILE_PRIMARY, value: /run/secrets/rustfs-bus/nats.creds }
+            - { name: RUSTFS_NOTIFY_NATS_QUEUE_DIR_PRIMARY, value: /queue }
+            - { name: RUSTFS_NOTIFY_NATS_JETSTREAM_ENABLE_PRIMARY, value: "on" }
+            - { name: RUSTFS_NOTIFY_NATS_JETSTREAM_STREAM_NAME_PRIMARY, value: STORE_EVENTS }
+            {{- end }}
+            {{- end }}
             {{- with .Values.identityProvider }}
             {{- if .configUrl }}
             {{- $discovery := urlParse .configUrl }}
@@ -98,6 +110,10 @@ spec:
             - { name: data, mountPath: /data }
             - { name: root-credentials, mountPath: /run/secrets/rustfs, readOnly: true }
             - { name: tmp, mountPath: /tmp }
+            {{- if .Values.events.busAddress }}
+            - { name: bus-credentials, mountPath: /run/secrets/rustfs-bus, readOnly: true }
+            - { name: event-queue, mountPath: /queue }
+            {{- end }}
       volumes:
         - name: root-credentials
           secret:
@@ -108,6 +124,16 @@ spec:
               - { key: object-store-access-key, path: access_key }
               - { key: object-store-secret-key, path: secret_key }
         - { name: tmp, emptyDir: { sizeLimit: "2Gi" } }
+        {{- if .Values.events.busAddress }}
+        - name: bus-credentials
+          secret:
+            secretName: {{ required "events.busCredentials names the Secret holding the store's bus credential" .Values.events.busCredentials }}
+            optional: false
+            defaultMode: 0400
+            items:
+              - { key: nats.creds, path: nats.creds }
+        - { name: event-queue, emptyDir: { sizeLimit: "1Gi" } }
+        {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data

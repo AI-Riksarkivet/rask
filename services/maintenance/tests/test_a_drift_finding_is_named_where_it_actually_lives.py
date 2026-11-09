@@ -21,7 +21,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from maintenance.api.routes import _drift_names
+from maintenance.services.audit import _drift_names
 from maintenance.services.orphans import OrphanFile
 from maintenance.services.reconcile import OrphanedTrash, ReconcileReport, UnregisteredDataset
 

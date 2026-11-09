@@ -1,17 +1,19 @@
-"""Table maintenance service — a FastAPI app driven by Dapr cron **input bindings** and one write-event subscription.
+"""Table maintenance service — a FastAPI app whose worker runs the tasks on a NATS JetStream work queue (ADR 0198).
 
-Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4 and C6, ADR 0162). ``bindings.cron`` components POST
-to ``/<binding-name>`` every interval. Two bindings, two jobs:
+Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4 and C6, ADR 0162). Every replica runs a worker
+(:mod:`maintenance.services.tasks`) that takes one task at a time off the queue, so no table is passed twice at once:
 
-* the **sweep** discovers every Lance dataset across the swept buckets, expires each one's superseded versions
-  (``cleanup_old_versions`` behind the refusal ladder that guards reclamation), and writes a due record for each table
-  a bring-your-own job should compact or reindex;
-* the **reconcile** pass reads OpenFGA's grant census (through the catalog), the control-root registries and object
-  storage and REPORTS where they disagree — then, ONLY if that report ran clean, purges expired trash records (#79).
-  Off by default.
+* a **table's pass** expires its superseded versions (``cleanup_old_versions`` behind the refusal ladder that guards
+  reclamation), writes its due record when a bring-your-own job should compact or reindex it, and schedules its next
+  pass; the catalog queues one when it makes a table, a commit when it lands, and the schedule when it comes due;
+* a **trash record's release** at its deadline;
+* the **audit**, once an hour on one replica: it reads OpenFGA's grant census (through the catalog), the control-root
+  registries and object storage, REPORTS where they disagree, and queues each table and trash record nothing holds;
+* the **scan**, once a day: the audit with the orphan scan, which opens every table, then, ONLY if that report ran
+  clean, the purge of expired trash records (#79), off by default.
 
-With ``MAINTENANCE_ARRIVAL_ENABLED``, ``/maintenance-arrival`` refreshes a written table's due record between ticks.
-Blocking Lance/S3 IO runs in the threadpool so the event loop stays free. Run: ``uvicorn maintenance.service:app``.
+With ``MAINTENANCE_ARRIVAL_ENABLED``, ``/maintenance-arrival`` queues a written table's pass. Blocking Lance/S3 IO runs
+in the threadpool so the event loop stays free. Run: ``uvicorn maintenance.service:app``.
 """
 
 from __future__ import annotations
@@ -34,9 +36,9 @@ from lakehouse.lineage import SigningKey, attach_control_signature, parse_publis
 from lakehouse.obs import configure_app_logging
 from lakehouse.store_session import require_env_pair, start_store_session
 from maintenance.api.arrival import register_arrival_route
-from maintenance.api.routes import build_router
 from maintenance.core.config import get_settings
 from maintenance.core.lineage_emit import make_emitter
+from maintenance.services.tasks import running_worker
 
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
@@ -59,8 +61,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     _disarm_drain = arm_drain_on_sigterm(app)
     settings = get_settings()
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
-    # Fail closed if behind a Dapr sidecar but the app-token is unset — the cron route would otherwise be an
-    # open forged-sweep path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
+    # Fail closed if behind a Dapr sidecar but the app-token is unset — the write-event route would otherwise be an
+    # open forged-commit path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
     assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
     # MAINTENANCE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its identity at the store is the ServiceAccount token its pod
     # projects for the store's audience, exchanged here for a session before the first sweep, failing the boot closed if
@@ -124,12 +126,22 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
     # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
     bus_watchdog = await start_bus_watchdog()
-    app.state.startup_complete = True
+    # The worker is the service's whole job: it starts once the emitters and the signing key it uses exist, and takes no
+    # task while that key is unresolved, since what a pass emits could not be signed.
+    # The worker drains inside its own context, after the probes report the pod as stopping and before what it uses
+    # stops; a worker that cannot start leaves those stopped all the same.
     try:
-        yield
+        async with running_worker(
+            settings, ready=lambda: signing is None or signing.ready, emitter=app.state.lineage_emitter, control=app.state.control_emitter
+        ) as task_queue:
+            app.state.task_queue = task_queue
+            app.state.startup_complete = True
+            try:
+                yield
+            finally:
+                _disarm_drain()
+                app.state.shutting_down = True
     finally:
-        _disarm_drain()
-        app.state.shutting_down = True
         if bus_watchdog is not None:
             await bus_watchdog.stop()
         if signing is not None:
@@ -152,10 +164,6 @@ app = build_lance_service_app(
     log=log,
     ready_check=signing_ready_check(),
 )
-
-# The Dapr cron route (POST /<binding-name>) + its OPTIONS discovery ack, with the require_dapr_token gate.
-# BUILT from the settings this app was assembled with, not stamped into the routes module at import.
-app.include_router(build_router(get_settings()))
 
 # The write-event subscription (POST /maintenance-arrival), registered only when the lane is enabled.
 register_arrival_route(app, get_settings())

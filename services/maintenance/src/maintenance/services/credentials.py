@@ -6,18 +6,17 @@ reference, and disarming commit-path cleanup commits a config change. Both are w
 (`vend_credentials` records who asked, for what table, at what tier). That tier opens to this service's identity alone
 (``can_vend_maintain``, ADR 0156 C4).
 
-**NO CACHE, deliberately.** Maintenance vends once per dataset per tick, and only for a dataset that has something to
-expire (``sweep._probe_before_vending``); a cache would hold credentials for datasets this tick has finished with.
+**NO CACHE, deliberately.** Maintenance vends once per dataset per pass, and only for a dataset that has something to
+expire (``table_pass._probe_before_vending``); a cache would hold credentials for datasets a pass has finished with.
 
-**WHAT MAINTENANCE'S OWN SESSION SIGNS, stated rather than glossed:** discovery, the protection pre-pass and the due
-evaluation. `sweep._protected_roots` must open every manifest in every bucket, because a shallow clone in bucket B is the
-only thing that knows bucket A's dataset is referenced — no per-table credential can express a whole-estate read. Those
-are READS. A rewrite is never signed by anything but the vend for its table ([[LH-219]]).
+**WHAT MAINTENANCE'S OWN SESSION SIGNS, stated rather than glossed:** the reads a pass makes before it writes (the
+table's claim, its bucket's ``__manifest``, the policies, its datasets and its due evaluation) and the audit's scans.
+Those are READS. A rewrite is never signed by anything but the vend for its table ([[LH-219]]).
 
 EVERY ANSWER THAT IS NOT A VEND STOPS THE DATASET, because the only other credential is maintenance's own, whose reach
 is the whole estate. A deployment with no vending door, or a door that vends no direct credential (``mode_b``), refuses
 every rewrite (`VendingNotDirect`), by design. A door that could not be asked, answered a body that names nothing to
-sign with, throttled, or answered 5xx could not decide (`VendUndecided`): the dataset is retried next tick, because the
+sign with, throttled, or answered 5xx could not decide (`VendUndecided`): the dataset is retried at its next pass, because the
 catalog's own fail-closed refusals are 5xx too ([[LH-279]]). An answer refuses: a 401 about this service's own credential
 (`MaintenanceUnauthenticated`), and three about the id — a 403 or any other 4xx (`MaintenanceDenied`), a 404 naming no
 table or namespace (`TableNotGoverned`), or a location that does not cover the dataset (`GovernedElsewhere`).

@@ -34,11 +34,10 @@ reclamation LAST is not tidiness — run it before the branches' rewrites and it
 erasure that reclaimed nothing — and the refs are reclaimed DEEPEST FIRST, main last, so each parent is
 reclaimed after the branches standing on it have let go.
 
-**A TABLE ANOTHER DATASET RESOLVES ITS FILES THROUGH IS NOT RECLAIMED** (#114, the gate `version/create` and the
-GC door ask): its reclaim would delete the only copy a shallow clone reads, and the clone's own copy of the subject
+**A TABLE ANOTHER DATASET RESOLVES ITS FILES THROUGH IS NOT RECLAIMED** (#114, the GC door asks): its reclaim would delete the only copy a shallow clone reads, and the clone's own copy of the subject
 is its own surface ([[LH-263]]). Every ref's `history:` surface then fails, and the residuals are reported as not
-reclaimed rather than attributed to a ref whose deletion could not finish the erasure. `version/create` refuses the
-job's compaction of such a table on the same evidence (ADR 0162).
+reclaimed rather than attributed to a ref whose deletion could not finish the erasure. A compaction of such a table
+is not refused: the tag the catalog takes when it registers the clone keeps the version the clone reads (ADR 0198).
 
 **THE GC FLAG GATE RUNS PER REF** before its reclaim, and a refusal fails that ref's `history:` surface: a flag no
 reclaim here has been checked against is not cleaned.
@@ -116,12 +115,12 @@ from enum import StrEnum
 from typing import Any, Final, Protocol, cast
 
 import pyarrow.fs as pafs
-from lance_namespace import InvalidInputError, ServiceUnavailableError, UnsupportedOperationError
-from pydantic import BaseModel, Field, PrivateAttr
+from lance_namespace import InvalidInputError, ServiceUnavailableError
+from pydantic import BaseModel, Field
 
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
-from catalog.services.maintenance import ReferredSourceError, refuse_a_referring_datasets_source
-from lakehouse.base_refs import BaseRefs, normalise
+from lakehouse import clone_sources
+from lakehouse.base_refs import normalise
 from lakehouse.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
 from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
@@ -142,6 +141,11 @@ DERIVED: Final = "derived"
 #: The prefix of one derived table's surface, ``derived:<key>``: a governed table's uuid, or the name an outside producer's
 #: event keyed it by on the edge list.
 _DERIVED_PREFIX: Final = f"{DERIVED}:"
+#: What keeps a version a registered clone's tag pins (ADR 0198 §1).
+_HELD_BY_A_CLONE: Final = (
+    "are registered clones' tags: a clone reads these versions through this table's files, so each tag goes when its clone is dropped "
+    "or deregistered, and the erasure finishes after that"
+)
 
 
 class SurfaceResult(BaseModel):
@@ -170,21 +174,6 @@ class SurfaceResult(BaseModel):
         )
     )
     detail: str = Field(default="", description="Why, in words: the error, what the job still owes, what a residual needs.")
-    #: The datasets resolving their files through the table that kept this surface from being reclaimed (#114). Never
-    #: serialized, so never stored: the door names them only to a reader who may see them ([[LH-414]]).
-    _referrers: tuple[str, ...] = PrivateAttr(default=())
-
-    @property
-    def referrers(self) -> tuple[str, ...]:
-        """The datasets resolving their files through the table, which kept this surface from being reclaimed."""
-        return self._referrers
-
-    @classmethod
-    def unreclaimed(cls, surface: str, refused: UnsupportedOperationError) -> SurfaceResult:
-        """The ``surface`` a #114 refusal kept from being reclaimed, with the referrers a ``ReferredSourceError`` names."""
-        result = cls(surface=surface, outcome="failed", detail=f"{refused} Not reclaimed.")
-        result._referrers = refused.referrers if isinstance(refused, ReferredSourceError) else ()
-        return result
 
 
 class Pin(BaseModel):
@@ -380,7 +369,6 @@ def verify(
     *,
     reopen: Callable[[], _Dataset],
     storage_options: StorageOptions,
-    protected: BaseRefs | None,
     table: str,
     predicate: str,
     retention: timedelta,
@@ -392,9 +380,7 @@ def verify(
     version of every ref, and name every table derived from this one.
 
     ``dataset`` is a handle on main; every branch is reached through it. ``storage_options`` binds the `_mem_wal/`
-    listing to the store the table lives in, which is why it has no default. ``protected`` is the #114 pre-pass's map
-    of roots other datasets resolve their files through (``base_refs.sibling_base_refs``), or None when the caller
-    collected none; it has no default so every caller says which. ``reopen`` opens main again on a Lance session
+    listing to the store the table lives in, which is why it has no default. ``reopen`` opens main again on a Lance session
     nothing has read through, for the verification: a session that has read a version keeps answering it after cleanup
     deletes its files (measured on pylance 12.0.0: a count through the door's shared session returned the subject from
     a version whose only copy was gone, and a new session raised "Not found"). An open that fails is a failed ``verify``
@@ -442,10 +428,7 @@ def verify(
     #    the earlier one, and a version newer than it was inside that cleanup's window. A ref absent from `cutoffs` was
     #    not reclaimed, so nothing but that keeps its versions. A ref whose head still holds the subject is not
     #    reclaimed: its history would go while the subject's bytes stay in its live data files ([[LH-210]]).
-    referred = _referred(dataset, protected)
-    if referred is not None:
-        log.warning("erasure_refused_referred_source", extra={"table": table, "reason": str(referred)})
-    cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, referred=referred, retention=retention, history=history)
+    cutoffs = _reclaim(report, dataset, deepest_first, clean=clean, retention=retention, history=history)
 
     # 4. VERIFY EVERY REF, because every step above is an ATTEMPT and only this is evidence. Every head can be clean and
     #    the row still readable at a version a branch or a tag stands on, which is the one outcome an erasure must never
@@ -510,6 +493,11 @@ def _drop_subject_tags(report: ErasureReport, dataset: _Dataset, *, every_head_c
     a clean one.
     """
     for name, reference in _tags(dataset).items():
+        if name.startswith(clone_sources.TAG_PREFIX):
+            # A registered clone reads this version through the table's files (ADR 0198 §1): dropping the tag would let a
+            # cleanup take files the clone has no other copy of, so the clone's own end releases it.
+            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="held", detail=_HELD_BY_A_CLONE))
+            continue
         if not every_head_clean:
             detail = "kept: not every head is clean, so dropping it could destroy a reproducibility pointer while the subject stays"
             report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="skipped", detail=detail))
@@ -575,7 +563,6 @@ def _reclaim(
     deepest_first: Sequence[str | None],
     *,
     clean: Collection[str | None],
-    referred: UnsupportedOperationError | None,
     retention: timedelta,
     history: TableHistory | None,
 ) -> dict[str | None, datetime]:
@@ -586,10 +573,10 @@ def _reclaim(
     reclaimed and each says so, so the obligation stays open for the next verification.
     """
     if history is None:
-        return _reclaim_refs(report, dataset, deepest_first, clean=clean, referred=referred, retention=retention)
+        return _reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention)
     try:
         with history.held(HistoryWork.RECLAIM):
-            return _reclaim_refs(report, dataset, deepest_first, clean=clean, referred=referred, retention=retention)
+            return _reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention)
     except HistoryFencedError as exc:
         log.info("erasure_history_fenced", extra={"table": report.table, "reason": str(exc)})
         report.surfaces += [SurfaceResult(surface=f"history:{_label(ref)}", outcome="failed", detail=f"{exc} Not reclaimed.") for ref in deepest_first]
@@ -602,16 +589,16 @@ def _reclaim_refs(
     deepest_first: Sequence[str | None],
     *,
     clean: Collection[str | None],
-    referred: UnsupportedOperationError | None,
     retention: timedelta,
 ) -> dict[str | None, datetime]:
-    """Each clean ref's cleanup, deepest first; each reclaimed ref's cutoff."""
+    """Each clean ref's cleanup, deepest first; each reclaimed ref's cutoff.
+
+    A registered clone of this table needs no refusal here: its tag keeps the version it reads, which every cleanup
+    exempts and :func:`_drop_subject_tags` never drops (ADR 0198 §1).
+    """
     cutoffs: dict[str | None, datetime] = {}
     for ref in deepest_first:
         surface = f"history:{_label(ref)}"
-        if referred is not None:
-            report.surfaces.append(SurfaceResult.unreclaimed(surface, referred))
-            continue
         if ref not in clean:
             detail = "not reclaimed: this ref's head still holds the subject, so its history would go while the subject's bytes stay in its live files"
             report.surfaces.append(SurfaceResult(surface=surface, outcome="skipped", detail=detail))
@@ -1099,12 +1086,21 @@ class _Account(BaseModel):
     unexplained: list[str] = Field(default_factory=list)
     #: Branches whose fork point could not be read, so a holder may be missing from the fields above.
     unforked: list[str] = Field(default_factory=list)
+    #: Registered clones' tags holding a residual, which only each clone's own end releases (ADR 0198 §1).
+    held_by_clones: list[str] = Field(default_factory=list)
 
     @property
     def unsettled(self) -> bool:
         """Something keeps a residual that no scheduled release of `pins` lets go of."""
         return bool(
-            self.heads or self.unrewritten_heads or self.unindexed_heads or self.held_by_retention or self.unreclaimed or self.unexplained or self.unforked
+            self.heads
+            or self.unrewritten_heads
+            or self.unindexed_heads
+            or self.held_by_retention
+            or self.unreclaimed
+            or self.unexplained
+            or self.unforked
+            or self.held_by_clones
         )
 
 
@@ -1152,7 +1148,9 @@ def _account(
     # still named as a descendant of a branch that must go, since Lance refuses to delete a parent before it.
     unreached = {_parse(name)[0] for name in account.heads}
     doomed = _with_descendants(doomed - unreached, forks)
-    tag_pins = [Pin(ref=f"tag:{tag}", holds=_name(ref)) for tag, ref in sorted(tags.items()) if ref is not None and (tag in named or ref[0] in doomed)]
+    pinning = {tag: ref for tag, ref in sorted(tags.items()) if ref is not None and (tag in named or ref[0] in doomed)}
+    account.held_by_clones = [tag for tag in pinning if tag.startswith(clone_sources.TAG_PREFIX)]
+    tag_pins = [Pin(ref=f"tag:{tag}", holds=_name(ref)) for tag, ref in pinning.items() if not tag.startswith(clone_sources.TAG_PREFIX)]
     deepest_first = sorted(doomed, key=lambda branch: (-_depth(branch, forks), branch))
     account.pins = [*tag_pins, *(Pin(ref=f"branch:{branch}", holds=_name(forks[branch])) for branch in deepest_first)]
     return account
@@ -1200,6 +1198,8 @@ def _verify_detail(found: _Verification, account: _Account) -> str:
         parts.append(f"nothing this could read accounts for {account.unexplained}")
     if account.unforked:
         parts.append(f"the fork point of {account.unforked} could not be read, so a ref keeping these may be missing from pinned_by")
+    if account.held_by_clones:
+        parts.append(f"{account.held_by_clones} {_HELD_BY_A_CLONE}")
     return "; ".join(parts)
 
 
@@ -1243,15 +1243,6 @@ def _instant(stamp: object) -> datetime | None:
     """A `versions()` timestamp as UTC. pylance 12.0.0 answers a NAIVE host-local datetime, which
     `astimezone` reads as local; anything else is unknown."""
     return stamp.astimezone(UTC) if isinstance(stamp, datetime) else None
-
-
-def _referred(dataset: _Dataset, protected: BaseRefs | None) -> UnsupportedOperationError | None:
-    """Why this table's files may not be rewritten or reclaimed (#114), or None when they may."""
-    try:
-        refuse_a_referring_datasets_source(dataset, protected)
-    except UnsupportedOperationError as exc:
-        return exc
-    return None
 
 
 def _inside(path: str, root: str) -> bool:

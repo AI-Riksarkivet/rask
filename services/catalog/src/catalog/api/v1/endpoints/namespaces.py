@@ -73,7 +73,7 @@ from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.store_endpoint import require_estate_store
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, table_claims, trash_doors, warehouses
-from lakehouse import base_registry, location_claims, protection, trash
+from lakehouse import base_registry, clone_sources, location_claims, protection, trash
 from lakehouse.control_emit import emit_control
 from lakehouse.control_events import ControlUuids
 from lakehouse.governed import fga
@@ -701,12 +701,30 @@ async def _destroy_subtree(
     # Concurrency buys latency on a path nobody is waiting on and costs both of those.
     #
     # [[LH-204]] BEFORE ANYTHING IS DESTROYED, every table's location is checked against its claim: a
-    # location another live table holds refuses the whole cascade, as a protected descendant does.
+    # location another live table holds refuses the whole cascade, as a protected descendant does. So is every table a
+    # registered clone outside the subtree reads (ADR 0198 §1), and the clones inside it go before their sources.
+    located: dict[tuple[str, ...], str] = {}
     for item in tables:
         with suppress(TableNotFoundError):
             doomed: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=item.segments))
             if doomed.location:
                 await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, fga.canonical_object_id(item.segments))
+                located[tuple(item.segments)] = doomed.location
+    carried = {
+        key: await run_in_threadpool(partial(dataplane.clone_readers, location, storage_options, table=fga.canonical_object_id(list(key))))
+        for key, location in located.items()
+    }
+    try:
+        order = clone_sources.destroy_order({key: clone_sources.tag_of(location) for key, location in located.items()}, carried)
+    except clone_sources.ReadFromOutsideError as exc:
+        log.warning(
+            "cascade_refused_clone_sources", extra={"namespace": segments, "read": {fga.canonical_object_id(list(k)): sorted(v) for k, v in exc.read.items()}}
+        )
+        raise InvalidTableStateError(
+            f"namespace {fga.canonical_object_id(segments)} cannot be destroyed: {len(exc.read)} table(s) in it are read by registered clones outside "
+            "it; drop or deregister those clones first, or drop the namespace recoverably"
+        ) from exc
+    tables = sorted(tables, key=lambda item: order.index(tuple(item.segments)) if tuple(item.segments) in located else len(order))
     for item in tables:
         child = item.segments
         with suppress(TableNotFoundError):

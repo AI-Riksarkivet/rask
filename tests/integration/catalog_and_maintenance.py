@@ -1,7 +1,7 @@
 """The real catalog and the real maintenance service over one control root on moto, asking one in-memory OpenFGA.
 
 For a test whose claim crosses the two services: the catalog writes what a door leaves (a trash record, a grant) and a
-maintenance tick acts on it, through the catalog's own doors. The catalog runs with OIDC and FGA on once its lifespan has
+maintenance audit acts on it, through the catalog's own doors (`audited`). The catalog runs with OIDC and FGA on once its lifespan has
 run, acting as alice, and the ``TupleStore`` behind it holds what the doors write (``openfga_grants``).
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
+from functools import partial
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -108,3 +109,13 @@ def catalog_and_maintenance(
         maintenance_app.dependency_overrides.clear()
         catalog_settings.cache_clear()
         maintenance_settings.cache_clear()
+
+
+def audited(maintenance: TestClient) -> dict[str, Any]:
+    """One hourly audit on the maintenance app's own loop, under its settings, as the worker runs the audit's task
+    (`maintenance.services.tasks.run_task`); the payload it logs."""
+    from maintenance.services.audit import run_audit
+
+    portal = maintenance.portal
+    assert portal is not None, "the client was never entered, so the service's lifespan did not run"
+    return portal.call(partial(run_audit, maintenance_settings(), queue=None))

@@ -30,6 +30,7 @@ from catalog.core.base_judge import require_sanctioned_bases
 from catalog.core.config import Settings, StorePlane, shared_lance_session
 from catalog.core.store_endpoint import require_estate_store
 from lakehouse import auto_cleanup
+from lakehouse.clone_sources import CloneReference, clone_reference
 from lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lancekit.absence import reads_as_absent
@@ -325,6 +326,9 @@ class RegisteredDataset(BaseModel):
     #: The ``lance.compaction.*`` keys its manifest config carries ([[LH-538]]). Empty when the open was refused over flag
     #: 256, which the door refuses first.
     compaction_config: list[str] = Field(default_factory=list)
+    #: What the dataset's first transaction says it is a shallow clone of, read only when it declares a dataset-root
+    #: base (ADR 0198 §1); ``None`` otherwise.
+    clone: CloneReference | None = None
 
 
 def registered_dataset_facts(location: str, storage_options: StorageOptions) -> RegisteredDataset | None:
@@ -344,11 +348,13 @@ def registered_dataset_facts(location: str, storage_options: StorageOptions) -> 
             return None
         raise
     reader, _writer = manifest_feature_flags(dataset)
+    bases = manifest_base_path_refs(dataset)
     return RegisteredDataset(
         mixed=mixes_data_file_versions(reader),
         stable_row_ids=dataset.has_stable_row_ids,
-        bases=manifest_base_path_refs(dataset),
+        bases=bases,
         compaction_config=formats.compaction_config_keys(dataset.config()),
+        clone=clone_reference(dataset) if any(ref.is_dataset_root for ref in bases) else None,
     )
 
 

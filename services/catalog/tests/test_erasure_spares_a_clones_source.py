@@ -1,20 +1,17 @@
-"""An erasure's verification does not reclaim a table another dataset resolves its files through (#114).
+"""An erasure never drops a registered clone's tag on its source, and stays open while the tag holds the subject.
 
-A shallow clone's manifest names the source in ``base_paths`` and its data files resolve through the
-source's (``lance_docs/lance/format/table/layout.md`` "Shallow Clone"), so the source's files are the clone's only
-copy. The GC door refuses to reclaim such a source (``require_reclaimable`` runs
-``refuse_a_referring_datasets_source``) because reclaiming it after a rewrite breaks the clone, and
-``version/create`` refuses the job's compaction of it on the sweep's clone list (ADR 0162). The verification
-reclaims and must refuse the same way: the clone still holds the subject, which is its own surface
-([[LH-263]]), and a broken clone erases nothing. The job here rewrites anyway (the conftest's ``ErasureJob``),
-which a deployed job's commit could not, so the claim is the reclaim's alone.
+A shallow clone reads its source's data files where they are (``lance_docs/lance/format/table/layout.md`` "Shallow
+Clone"), and the catalog keeps the version a registered clone reads by a tag it takes on the source (ADR 0198 §1,
+:mod:`lakehouse.clone_sources`). Dropping that tag would let a cleanup take files the clone has no other copy of, so the
+verification keeps it, names it ``held``, and the obligation stays open until the clone ends: the clone holds the
+subject too, which is its own surface ([[LH-263]]). The job here rewrites the source (the conftest's ``ErasureJob``); the
+tag keeps the version the clone reads while the source's own history is reclaimed.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterator
-from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -31,11 +28,8 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
-from catalog.services import table_claims
 from catalog.services.dataplane import create_table, read_arrow_body
-from catalog.services.erasure import ErasureReport, ref_heads, verify
-from lakehouse import base_registry, location_claims
-from lakehouse.base_refs import BaseRefs, normalise
+from lakehouse import base_registry, clone_sources
 from lakehouse.ns_errors import install_problem_handlers
 from lakehouse.storage_options import StorageOptions
 
@@ -50,43 +44,6 @@ _PREDICATE = "pii = 'alice'"
 
 def _rows(*names: str) -> pa.Table:
     return pa.table({"pii": pa.array(list(names))})
-
-
-def _holding(uri: str) -> list[str]:
-    return [p.name for p in (Path(uri) / "data").rglob("*.lance") if _SUBJECT.encode() in p.read_bytes()]
-
-
-def _erase_protected(tmp_path: Path, erasure_job: Any) -> tuple[str, ErasureReport]:  # noqa: ANN401 — conftest.ErasureJob
-    """main v1 holds the subject, v2 adds carol; ``work`` is cut from v2; the table's root is protected."""
-    uri = str(tmp_path / "source")
-    lance.write_dataset(_rows(_SUBJECT, "bob"), uri)
-    lance.write_dataset(_rows("carol"), uri, mode="append")
-    lance.dataset(uri).create_branch("work", 2)
-    recorded = ref_heads(lance.dataset(uri))
-    erasure_job(uri, _PREDICATE).run()
-    report = verify(
-        lance.dataset(uri),
-        reopen=lambda: lance.dataset(uri),
-        storage_options=StorageOptions(),
-        protected=BaseRefs(protected={normalise(uri)}),
-        table="t",
-        predicate=_PREDICATE,
-        retention=timedelta(0),
-        trusted=recorded,
-        history=None,
-        derived=list,
-    )
-    return uri, report
-
-
-def test_a_protected_table_is_not_reclaimed(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
-    uri, report = _erase_protected(tmp_path, erasure_job)
-
-    refused = {s.surface: s.outcome for s in report.surfaces if s.surface.startswith("history:")}
-    assert refused == {"history:main": "failed", "history:work": "failed"}
-    assert all("another dataset resolves its files through" in s.detail for s in report.surfaces if s.surface in refused)
-    assert _holding(uri), "the source's data files are the clone's only copy, so none may be reclaimed"
-    assert (report.complete, report.settled) == (False, False)
 
 
 @pytest.fixture
@@ -111,17 +68,8 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     source = open_by_name(ns, StorageOptions(), ["db", "subjects"])
     clone = str(tmp_path / "data" / "clone.lance")
     source.shallow_clone(clone, (None, None))
-    # RECORDED, as the catalog records a clone it made ([[LH-279]]): an unrecorded clone's base is a claim
-    # nothing sanctioned, which protects nothing — the erasure would then reclaim through it, correctly.
-    base_registry.claim_bases(
-        base_registry.BaseRegistry(control_root=str(tmp_path / "control")),
-        clone,
-        [
-            base_registry.RecordedBase(
-                path=source.uri, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER, source_table=source.uri
-            )
-        ],
-    )
+    # The tag the register door takes on the source for the clone, at the version the clone reads.
+    source.tags.create(clone_sources.tag_of(clone), source.version)
     return ns
 
 
@@ -147,42 +95,9 @@ def test_the_door_leaves_a_clones_source_readable_through_the_clone(client: Test
 
     assert response.status_code == 200, response.text
     verification = response.json()
-    assert {s["surface"]: s["outcome"] for s in verification["report"]["surfaces"] if s["surface"] in ("compact:main", "history:main")} == {
-        "compact:main": "clean",
-        "history:main": "failed",
-    }
-    assert sorted(lance.dataset(str(tmp_path / "data" / "clone.lance")).to_table().column("pii").to_pylist()) == ["alice", "bob", "carol"]
+    clone = str(tmp_path / "data" / "clone.lance")
+    outcomes = {s["surface"]: s["outcome"] for s in verification["report"]["surfaces"]}
+    assert outcomes[f"tag:{clone_sources.tag_of(clone)}"] == "held"
+    assert (outcomes["compact:main"], outcomes["history:main"]) == ("clean", "reclaimed")
+    assert sorted(lance.dataset(clone).to_table().column("pii").to_pylist()) == ["alice", "bob", "carol"]
     assert verification["obligation"]["state"] == "open"
-
-
-@pytest.mark.parametrize("granted", [pytest.param(True, id="a-caller-who-may-see-it"), pytest.param(False, id="a-caller-who-may-not")])
-def test_a_refused_reclaim_names_the_clone_only_to_a_caller_who_may_see_it(governed_catalog: Any, granted: bool) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """[[LH-414]] The GC door refuses alice's table while a clone resolves its files through it, and names that clone,
-    as its claim names it now and by uuid, only when she holds ``can_get_metadata`` on it ([[LH-436]]): another tenant's
-    clone is counted, never named."""
-    alice, client = governed_catalog.bearer("alice"), governed_catalog.client
-    assert client.post("/v1/namespace/db/create", json={}, headers=alice).status_code == 200
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, _rows(_SUBJECT, "bob").schema) as writer:
-        writer.write_table(_rows(_SUBJECT, "bob"))
-    created = client.post(
-        "/v1/table/db$subjects/create", content=sink.getvalue().to_pybytes(), headers={**alice, "Content-Type": "application/vnd.apache.arrow.stream"}
-    )
-    assert created.status_code == 200, created.text
-    source = str(client.post("/v1/table/db$subjects/describe", json={}, headers=alice).json()["location"]).removeprefix("file://")
-    clone = str(Path(source).parent / "clone")
-    lance.dataset(source).shallow_clone(clone, reference=1)
-    settings = get_settings()
-    recorded = base_registry.RecordedBase(
-        path=source, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER, source_table=source
-    )
-    base_registry.claim_bases(base_registry.BaseRegistry(control_root=settings.registry_root), clone, [recorded])
-    clone_uuid = "0f5c6a52-6b1e-4c8e-9a43-3c1c2e0d9b11"
-    location_claims.take(table_claims.claim_store(settings), clone, "db$clone", ["db", "clone"], is_gone=lambda _claim: False, uuid=clone_uuid)
-    if granted:
-        governed_catalog.store.write((governed_catalog.person("alice"), "reader", f"table:{clone_uuid}"))
-
-    refused = client.post("/management/v1/table/db$subjects/maintenance/run", json={"retain_versions": 1}, headers=alice)
-
-    assert (refused.status_code, refused.json()["code"]) == (406, 0), refused.text
-    assert refused.json()["detail"].endswith(f" Resolving through it: db$clone ({clone_uuid})." if granted else " Resolving through it: 1 you may not see.")

@@ -734,7 +734,9 @@ with none fails the render as an undefined template.
 - `catalog`: the whole data plane it governs, buckets included, since every vend is a session policy narrowed from it.
 - `lineage`: list, get and delete under `<control bucket>/_lineage_outbox/` and nothing else: the one outbox it drains.
 - `maintenance`: `ListAllMyBuckets`; list, `GetBucketLocation` and get on every bucket and key; put and delete only on
-  `<control bucket>/_maintenance_due/*`, `<control bucket>/_policies/state/*` and `<control bucket>/_lineage_outbox/*`.
+  `<control bucket>/_maintenance_due/*`, `<control bucket>/_maintenance_files/*` (its copy of the commit records it has
+  read, `lakehouse.file_identities`, which no erasure or hold reads), `<control bucket>/_policies/state/*` and
+  `<control bucket>/_lineage_outbox/*`.
   Owner, 2026-11-03: a compromised maintenance pod must not be able to defeat an erasure or a hold, so every other
   maintenance write is signed by a catalog vend (the table's `maintain` tier, or a session deleting one due trash
   record's bytes), and the trash records themselves are the catalog's to write (ADR 0197).

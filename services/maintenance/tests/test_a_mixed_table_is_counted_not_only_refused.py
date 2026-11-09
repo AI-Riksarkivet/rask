@@ -24,7 +24,7 @@ import pytest
 from lakehouse.features import manifest_feature_flags, mixes_data_file_versions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import credentials, expiry, sweep
+from maintenance.services import credentials, expiry, table_pass
 from maintenance.services.expiry import DatasetResult, ExpiryPolicy, ExpiryTarget, expire_versions
 
 
@@ -110,8 +110,8 @@ def test_a_pod_that_cannot_open_the_table_counts_the_mix_on_the_vend_denied_path
     def _deny(*_a: object, **_k: object) -> dict[str, str]:
         raise credentials.MaintenanceDenied("no write grant on this table")
 
-    monkeypatch.setattr(sweep.lance, "dataset", _refuse)
-    monkeypatch.setattr(sweep.credentials, "write_options_for", _deny)
+    monkeypatch.setattr(table_pass.lance, "dataset", _refuse)
+    monkeypatch.setattr(table_pass.credentials, "write_options_for", _deny)
 
     maintain_one("/nowhere/t.lance", _settings())
 
@@ -120,7 +120,7 @@ def test_a_pod_that_cannot_open_the_table_counts_the_mix_on_the_vend_denied_path
 
 def test_the_outcome_record_carries_the_census_fields(mixed_table: str, maintain_one: Callable[..., DatasetResult], caplog: pytest.LogCaptureFixture) -> None:
     """The per-dataset line is the census: it names each table's version and whether it mixes."""
-    with caplog.at_level(logging.INFO, logger="maintenance.services.sweep"):
+    with caplog.at_level(logging.INFO, logger="maintenance.services.table_pass"):
         maintain_one(mixed_table, _settings())
 
     outcome = next((r for r in caplog.records if r.message == "maintenance_dataset_outcome"), None)

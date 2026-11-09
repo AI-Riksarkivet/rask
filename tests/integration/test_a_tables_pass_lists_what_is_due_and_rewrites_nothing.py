@@ -1,26 +1,27 @@
-"""A sweep tick expires versions and lists what needs compacting, and rewrites nothing (ADR 0155, ADR 0162).
+"""A table's pass expires versions and lists what needs compacting, and rewrites nothing (ADR 0155, ADR 0162).
 
-Maintenance decides and does not rewrite: the tick reclaims the superseded versions its policy allows and writes a due
+Maintenance decides and does not rewrite: the pass reclaims the superseded versions its policy allows and writes a due
 record for a table Lance's own compaction planner has work for, which a bring-your-own job then compacts through the
-catalog. Driven through the real app's cron route over a moto store, on a table laid out as the catalog makes one, at
-`<root>/<table uuid>` with its row in a real `dir` namespace's `__manifest` (ADR 0173 §5), so the record can only carry
-the table's name by reading the manifest.
+catalog. Driven through the worker's own task runner (`maintenance.services.tasks.run_task`) on the real app's loop,
+over a moto store, on a table laid out as the catalog makes one, at `<root>/<table uuid>` with its row in a real `dir`
+namespace's `__manifest` (ADR 0173 §5), so the record can only carry the table's name by reading the manifest.
 
-Maintenance names a dataset only through `__manifest` ([[LH-520]]): the table, and its branch through the table's row. A
-dataset no row names is reported by its location, and is neither expired nor vended, though a project policy covering
-its bucket would reclaim its versions. The catalog's vend door is a double here, and only the named table is asked.
+Maintenance names a dataset only through `__manifest` ([[LH-520]]): the table, and its branch through the table's row.
+The catalog's vend door is a double here, and only the named table is asked. A table whose claim no longer names its
+uuid gets no pass, and its due record goes with it.
 
 The lineage event for the expiry names the table's uuid, from the claim the catalog took on its location, and its
 namespace's, from the namespace's own `__manifest` row (ADR 0173 §6, §10). The sidecar it publishes to is a recording
-stand-in.
+stand-in, and so is the queue the pass schedules its next pass on, which has `TaskQueue`'s own signatures.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from datetime import UTC, datetime
-from typing import Any, ClassVar
+from datetime import UTC, datetime, timedelta
+from functools import partial
+from typing import Any, ClassVar, cast
 
 import boto3
 import httpx
@@ -40,7 +41,10 @@ from lakehouse.lineage_events import DatasetUuids, dataset_uuids
 from lakehouse.maintenance_due import DueRecord, read_due, write_due
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions
-from maintenance.services import sweep
+from maintenance.core.config import get_settings
+from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.table_pass import TableTask, run_table_pass
+from maintenance.services.tasks import run_task
 
 
 BUCKET = "lake"
@@ -55,13 +59,11 @@ NAMESPACE_UUID = "3f2e1d0c-4b5a-4968-8776-a5b4c3d2e1f0"
 BRANCHED_UUID = "7a1f0e2d-3c4b-4a59-8e6f-b7c8d9e0f1a2"
 BRANCHED = f"{ROOT}/{BRANCHED_UUID}"
 BRANCH = f"{BRANCHED}/tree/work"
-#: A dataset in the catalog's layout that no `__manifest` row names.
-UNNAMED = f"{ROOT}/5e3b2a1c-9d8f-4e7a-b6c5-d4e3f2a1b0c9"
 CATALOG = "http://catalog.test"
-#: A table dropped before the tick, whose due record the tick's clean-up clears.
+#: A table dropped since its last pass: its location's claim names it no longer.
 DROPPED_UUID = "9b8a7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
-#: A table created during the tick, whose due record the write-event lane writes after the tick read the manifests.
-CREATED_UUID = "2c3d4e5f-6a7b-4c8d-9e0f-1a2b3c4d5e6f"
+#: A table declared and not yet written: its claim is taken, and no dataset stands at its location.
+DECLARED_UUID = "4d5e6f7a-8b9c-4d0e-a1f2-b3c4d5e6f7a8"
 
 
 @pytest.fixture(scope="module")
@@ -76,11 +78,12 @@ def moto_url() -> Iterator[str]:
 
 
 @pytest.fixture
-def estate(moto_url: str) -> StorageOptions:
-    """Four small fragments in four versions registered as `db$t`, under its own policy keeping two versions; `db$b` with a
-    branch; and three versions nothing names, under the bucket's project policy keeping one."""
+def estate(moto_url: str) -> Iterator[StorageOptions]:
+    """Four small fragments in four versions registered as `db$t`, under its own policy keeping two versions, and `db$b`
+    with a branch, under the bucket's project policy keeping one. The bucket is emptied after the test, since moto's
+    backend outlives each server in the process."""
     options = lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
-    for uri, versions in ((URI, 4), (BRANCHED, 1), (UNNAMED, 3)):
+    for uri, versions in ((URI, 4), (BRANCHED, 1)):
         for i in range(versions):
             rows = pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())})
             lance.write_dataset(
@@ -97,7 +100,11 @@ def estate(moto_url: str) -> StorageOptions:
     policy = {"kind": "table", "id": TABLE, "uuid": LOCATION, "compact_enabled": True, "retain_versions": 2, "target_rows_per_fragment": 1000}
     maintenance_policies.put_policy(ROOT, options, policy)
     maintenance_policies.put_policy(ROOT, options, {"kind": "project", "id": "acme", "buckets": [BUCKET], "retain_versions": 1})
-    return options
+    yield options
+    s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET):
+        for entry in page.get("Contents", []):
+            s3.delete_object(Bucket=BUCKET, Key=entry["Key"])
 
 
 class _Sidecar:
@@ -155,36 +162,43 @@ def _due(table: str, table_uuid: str) -> DueRecord:
     return DueRecord(table=table, uuid=table_uuid, location=f"{ROOT}/{table_uuid}", version=1, evaluated_at=datetime.now(UTC))
 
 
-def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(
-    estate: StorageOptions, maintenance: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The tick's clean-up clears the record of a table dropped before it and keeps the one the write-event lane writes
-    meanwhile for a table created since, which no manifest the tick read could name ([[LH-562]])."""
-    write_due(ROOT, estate, _due("db$dropped", DROPPED_UUID))
-    writes_the_clone_list = sweep.write_clone_list
+class _RecordingQueue:
+    """The schedule a pass ends with, with `TaskQueue`'s signature, recorded."""
 
-    def _the_lane_writes_meanwhile(*args: Any) -> None:
-        writes_the_clone_list(*args)
-        write_due(ROOT, estate, _due("db$created", CREATED_UUID))
+    def __init__(self) -> None:
+        self.held: list[tuple[Task, datetime]] = []
 
-    monkeypatch.setattr(sweep, "write_clone_list", _the_lane_writes_meanwhile)
+    async def schedule_at(self, task: Task, at: datetime) -> None:
+        self.held.append((task, at))
+
+
+def test_a_tables_task_expires_versions_lists_the_compaction_it_does_not_run_and_holds_its_next(estate: StorageOptions, maintenance: TestClient) -> None:
     before = lance.dataset(URI, storage_options=estate.in_clear())
     fragments = [fragment.fragment_id for fragment in before.get_fragments()]
     asked: list[str] = []
+    queue = _RecordingQueue()
+    portal = maintenance.portal
+    assert portal is not None, "the client was never entered, so the service's lifespan did not run"
+    task = Task(kind="table", uuid=LOCATION, location=URI)
 
     with _vends_for(asked, estate.in_clear()):
-        answered = maintenance.post("/maintenance-cron")
+        portal.call(
+            partial(
+                run_task,
+                task,
+                settings=get_settings(),
+                queue=cast(TaskQueue, queue),
+                emitter=maintenance.app.state.lineage_emitter,
+                control=maintenance.app.state.control_emitter,
+            )
+        )
 
     after = lance.dataset(URI, storage_options=estate.in_clear())
-    assert answered.status_code == 200, answered.text
-    assert (after.version, [fragment.fragment_id for fragment in after.get_fragments()]) == (before.version, fragments), "the tick rewrote the table"
-    assert [version["version"] for version in after.versions()] == [before.version - 1, before.version], answered.text
-    refusals = answered.json()["refusals"]
-    assert (answered.json()["refused_by"].get("unnamed"), UNNAMED in refusals, BRANCH in refusals) == (1, True, False), json.dumps(answered.json())
-    assert len(lance.dataset(UNNAMED, storage_options=estate.in_clear()).versions()) == 3, "a dataset no manifest names was expired"
-    assert set(asked) <= {TABLE, "db$b"} and TABLE in asked, f"the vend door was asked about {asked}"
+    assert (after.version, [fragment.fragment_id for fragment in after.get_fragments()]) == (before.version, fragments), "the pass rewrote the table"
+    assert [version["version"] for version in after.versions()] == [before.version - 1, before.version]
+    assert asked == [TABLE], f"the vend door was asked about {asked}"
     record = read_due(ROOT, estate, LOCATION)
-    assert record is not None, f"no due record for {TABLE}: {answered.json()}"
+    assert record is not None, f"no due record for {TABLE}"
     assert (record.table, record.uuid, record.location, record.version, record.policy) == (TABLE, LOCATION, URI, before.version, TABLE)
     assert record.compaction is not None and record.compaction.model_dump() == {
         "fragments": 4,
@@ -192,6 +206,39 @@ def test_a_tick_expires_versions_and_lists_the_compaction_it_does_not_run(
         "tasks": 1,
         "target_rows_per_fragment": 1000,
     }
-    assert (read_due(ROOT, estate, DROPPED_UUID), read_due(ROOT, estate, CREATED_UUID) is not None) == (None, True)
     named = [dataset_uuids(output) for event in _Sidecar.published for output in event["outputs"] if output["name"] == TABLE]
     assert named == [DatasetUuids(table_uuid=LOCATION, namespace_uuid=NAMESPACE_UUID)], json.dumps(_Sidecar.published)
+    assert [held for held, _ in queue.held] == [task], "the pass did not hold the table's next one"
+
+
+def test_a_branch_is_passed_through_its_tables_row(estate: StorageOptions, maintenance: TestClient) -> None:
+    """The table's pass reads its branches from its refs and names each by the table's ``__manifest`` row."""
+    with _vends_for([], estate.in_clear()):
+        outcome = run_table_pass(TableTask(uuid=BRANCHED_UUID, location=BRANCHED), get_settings())
+
+    assert [(result.uri, result.table_id, result.refused) for result in outcome.results] == [(BRANCHED, "db$b", None), (BRANCH, "db$b", None)]
+
+
+def test_a_declared_table_waits_for_its_first_commit_and_asks_no_vend(estate: StorageOptions, maintenance: TestClient) -> None:
+    """A declaration takes its location's claim before any data lands there, so the pass finds no dataset: it reads
+    nothing more and asks for no credential, and waits for the recheck, since the first commit's event queues its pass."""
+    declared = f"{ROOT}/{DECLARED_UUID}"
+    claims = location_claims.ClaimStore(control_root=ROOT, storage_options=estate)
+    location_claims.take(claims, declared, "db$declared", ["db", "declared"], is_gone=lambda _claim: False, uuid=DECLARED_UUID)
+    asked: list[str] = []
+    before = datetime.now(UTC)
+
+    with _vends_for(asked, estate.in_clear()):
+        outcome = run_table_pass(TableTask(uuid=DECLARED_UUID, location=declared), get_settings())
+
+    recheck = timedelta(hours=get_settings().recheck_hours)
+    assert (outcome.results, outcome.ended, asked) == ([], None, [])
+    assert outcome.next_due is not None and before + recheck <= outcome.next_due <= datetime.now(UTC) + recheck
+
+
+def test_a_table_its_claim_no_longer_names_gets_no_pass_and_its_due_record_goes(estate: StorageOptions, maintenance: TestClient) -> None:
+    write_due(ROOT, estate, _due("db$dropped", DROPPED_UUID))
+
+    outcome = run_table_pass(TableTask(uuid=DROPPED_UUID, location=f"{ROOT}/{DROPPED_UUID}"), get_settings())
+
+    assert (outcome.ended, outcome.next_due, read_due(ROOT, estate, DROPPED_UUID)) == ("gone", None, None)

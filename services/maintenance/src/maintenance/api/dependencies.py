@@ -9,6 +9,7 @@ from fastapi import Depends, Request
 from lakehouse.control_emit import ControlEmitter, NoopControlEmitter
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import MaintenanceEmitter
+from maintenance.services.queue import TaskQueue
 
 
 SettingsDep = Annotated[MaintenanceSettings, Depends(get_settings)]
@@ -32,3 +33,11 @@ def get_control_emitter(request: Request) -> ControlEmitter:
 
 
 ControlEmitterDep = Annotated[ControlEmitter, Depends(get_control_emitter)]
+
+
+def get_task_queue(request: Request) -> TaskQueue | None:
+    """The work queue the lifespan connected, or ``None`` on a stack that runs no worker (no bus configured)."""
+    return getattr(request.app.state, "task_queue", None)
+
+
+TaskQueueDep = Annotated[TaskQueue | None, Depends(get_task_queue)]

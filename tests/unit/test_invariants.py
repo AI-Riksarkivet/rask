@@ -214,6 +214,7 @@ _REAL_REGISTRY = (
     "auth.oidc.connectors.ldap=corp",
     "signing.provisioned=true",
     "nats.auth.provisioned=true",
+    "objectStore.events.provisioned=true",
     "objectStore.enabled=false",
     "objectStore.externalEndpoint=https://s3.example.com",
 )
@@ -280,6 +281,36 @@ def test_a_values_file_naming_what_the_chart_does_not_declare_fails_the_render(t
 
     refusal = refused.value.stderr
     assert (bool(re.search(node, refusal)), "undeclared" in refusal, "not allowed" in refusal) == (True, True, True), refusal
+
+
+def _render_refusal(*flags: str) -> str | None:
+    """The message the render refuses ``flags`` with, or ``None`` when it renders."""
+    try:
+        chart_render.render_text(*flags)
+    except subprocess.CalledProcessError as refused:
+        found = re.search(r"execution error at \([^)]*\): (.+)", refused.stderr)
+        return found.group(1).strip() if found else refused.stderr
+    return None
+
+
+@pytest.mark.parametrize(
+    ("heartbeat", "refusal"),
+    [
+        pytest.param(30, None, id="half-the-ack-wait"),
+        pytest.param(
+            31,
+            "maintenance.queue.heartbeatSeconds (31) is past half of ackWaitSeconds (60): a heartbeat late once hands a running task to another replica",
+            id="past-half",
+        ),
+    ],
+)
+def test_a_heartbeat_past_half_the_ack_wait_fails_the_render(heartbeat: int, refusal: str | None) -> None:
+    """[[LH-494]]: a running task stays with its worker only while its in-progress heartbeat reaches the broker inside the
+    consumer's ack wait, and a heartbeat that comes late once hands the task to another replica beneath the pass. So the
+    render refuses a heartbeat past half the ack wait, naming both values."""
+    flags = (*chart_render.DEFAULT_ARGS, "--set", "maintenance.queue.ackWaitSeconds=60", "--set", f"maintenance.queue.heartbeatSeconds={heartbeat}")
+
+    assert _render_refusal(*flags) == refusal
 
 
 def test_no_env_var_is_rendered_twice_on_any_workload() -> None:

@@ -18,7 +18,7 @@ from datetime import datetime
 
 import lance
 from lance.optimize import Compaction, CompactionOptions
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from lakehouse.base_refs import normalise
 from lakehouse.compaction_gate import compaction_refusal
@@ -53,7 +53,7 @@ def table_ids(roots: set[str], storage_options: StorageOptions) -> TableIds:
 
 
 class DueQuestion(BaseModel):
-    """One table's due evaluation: where it is, what governs it, and who resolves files through it."""
+    """One table's due evaluation: where it is, and what governs it."""
 
     table: str
     uuid: str
@@ -64,8 +64,6 @@ class DueQuestion(BaseModel):
     optimize_indices_enabled: bool = True
     #: The fragment size the compaction plan is made for, ``None`` for Lance's own.
     target_rows_per_fragment: int | None = None
-    #: The datasets that resolve their files through this table, from the last whole-estate pre-pass.
-    clones: list[str] = Field(default_factory=list)
 
 
 def compaction_due(ds: lance.LanceDataset, question: DueQuestion, storage_options: StorageOptions) -> CompactionDue | None:
@@ -109,7 +107,6 @@ def evaluate_due(question: DueQuestion, storage_options: StorageOptions, *, now:
         compaction=compaction,
         indices=indices,
         policy=question.policy,
-        clones=question.clones,
         evaluated_at=now,
     )
 

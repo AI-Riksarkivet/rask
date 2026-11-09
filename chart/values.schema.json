@@ -668,16 +668,8 @@
                     "type": "string"
                 },
                 "arrivalEnabled": {
-                    "description": "Subscribe the write-event lane: expire the written table and refresh its due record between sweep ticks.",
+                    "description": "Subscribe the write-event lane: queue the written table's pass on each announced commit.",
                     "type": "boolean"
-                },
-                "bindingName": {
-                    "description": "Name of the Dapr cron binding that fires the sweep tick (`MAINTENANCE_BINDING_NAME`).",
-                    "type": "string"
-                },
-                "cloneListMaxAgeSeconds": {
-                    "description": "Oldest clone list, in seconds, the catalog judges a compaction against and the write-event lane expires against.",
-                    "type": "integer"
                 },
                 "controlEmit": {
                     "description": "Announce each reclamation on the catalog control topic (catalog.control.v1); needs Dapr sidecars. Off by default.",
@@ -704,7 +696,7 @@
                     "type": "integer"
                 },
                 "enabled": {
-                    "description": "Deploy the maintenance service (sweep, reconcile crons and the write-event lane).",
+                    "description": "Deploy the maintenance service (its worker, the hourly audit and the write-event lane).",
                     "type": "boolean"
                 },
                 "floorRaise": {
@@ -720,7 +712,7 @@
                     "type": "integer"
                 },
                 "lineageEmit": {
-                    "description": "Emit a lineage event per dataset whose versions the sweep reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names.",
+                    "description": "Emit a lineage event per dataset whose versions a pass reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names.",
                     "type": "boolean"
                 },
                 "minVersionsToExpire": {
@@ -739,22 +731,57 @@
                     "description": "HTTP port of the maintenance container.",
                     "type": "integer"
                 },
-                "reconcileBindingName": {
-                    "description": "Name of the Dapr cron binding that fires the drift reconciler (`MAINTENANCE_RECONCILE_BINDING_NAME`).",
-                    "type": "string"
+                "queue": {
+                    "type": "object",
+                    "properties": {
+                        "ackWaitSeconds": {
+                            "description": "Consumer ack wait, in seconds: how long a task a dead worker held waits before another replica gets it.",
+                            "type": "integer"
+                        },
+                        "auditSchedule": {
+                            "description": "The audit's NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs and the lost-task backstop, once per firing on one replica.",
+                            "type": "string"
+                        },
+                        "commitPassDelaySeconds": {
+                            "description": "How long the first commit of a burst holds its table's pass: the most often commits pass a table, each pass covering every commit before it.",
+                            "type": "integer"
+                        },
+                        "drainSeconds": {
+                            "description": "How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`.",
+                            "type": "integer"
+                        },
+                        "heartbeatSeconds": {
+                            "description": "How often a running task tells JetStream it is still being worked on; well inside `ackWaitSeconds`.",
+                            "type": "integer"
+                        },
+                        "maxDeliver": {
+                            "description": "Deliveries of one task before it is ended and counted (`maintenance.tasks.ended`); the consumer allows one more, on which a task that outlived its worker every time is ended without running.",
+                            "type": "integer"
+                        },
+                        "maxPassSeconds": {
+                            "description": "A pass running longer than this is logged and counted; at twice this its replica exits, Kubernetes restarts it, and the task is delivered again.",
+                            "type": "integer"
+                        },
+                        "recheckHours": {
+                            "description": "The longest a table goes without a pass: what bounds a lost commit event, and the versions a deleted tag or branch releases.",
+                            "type": "integer"
+                        },
+                        "retrySeconds": {
+                            "description": "When a pass that could not decide, or found the table's history held, is tried again.",
+                            "type": "integer"
+                        },
+                        "scanSchedule": {
+                            "description": "The scan's NATS message schedule: the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies.",
+                            "type": "string"
+                        },
+                        "storeEventsMaxBytes": {
+                            "description": "The most STORE_EVENTS holds, in bytes, before it drops its oldest: each event is a hint of about 2 KB that the table's daily recheck backs up, and the stream shares the bus's JetStream disk with LINEAGE and the work queue.",
+                            "type": "integer"
+                        }
+                    }
                 },
-                "reconcileSchedule": {
-                    "description": "Cadence of the drift reconciler, a wall-clock cron like `schedule`: it only reads OpenFGA, the control-root registries and the bucket listing.",
-                    "type": "string",
-                    "pattern": "^[0-9*,/-]+( [0-9*,/?A-Za-z-]+){5}$"
-                },
-                "schedule": {
-                    "description": "Backstop sweep cadence, a wall-clock cron (`\u003csec\u003e \u003cmin\u003e \u003chour\u003e \u003cdom\u003e \u003cmonth\u003e \u003cdow\u003e`): writes the clone list and due records and expires unwritten tables; its period must stay under `cloneListMaxAgeSeconds`.",
-                    "type": "string",
-                    "pattern": "^[0-9*,/-]+( [0-9*,/?A-Za-z-]+){5}$"
-                },
-                "sweepBudgetSeconds": {
-                    "description": "Wall-clock ceiling for one sweep tick, checked between datasets; 0 means unlimited.",
+                "replicas": {
+                    "description": "Maintenance replicas; each runs a worker on the shared work queue.",
                     "type": "integer"
                 },
                 "tombstoneSweep": {
@@ -770,7 +797,7 @@
                     "type": "integer"
                 },
                 "trashPurge": {
-                    "description": "Delete the bytes of trash records past their grace deadline and revoke their grants, only when that tick's drift report is clean. Irreversible; off by default.",
+                    "description": "Delete the bytes of trash records past their grace deadline and revoke their grants, only when that scan's drift report is clean. Irreversible; off by default.",
                     "type": "boolean"
                 },
                 "trashPurgeDryRun": {
@@ -964,7 +991,41 @@
                                         }
                                     }
                                 },
+                                "maintenance-worker": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
                                 "monitor": {
+                                    "type": "object",
+                                    "properties": {
+                                        "publish": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        },
+                                        "subscribe": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "string"
+                                            }
+                                        }
+                                    }
+                                },
+                                "object-store": {
                                     "type": "object",
                                     "properties": {
                                         "publish": {
@@ -1043,6 +1104,15 @@
                 "enabled": {
                     "description": "This estate uses the development object store (deploy/fixtures/rustfs, Service `\u003crelease\u003e-rustfs`): rask runs its provisioning hook against it (the platform buckets and every identity's policy), and the dev secret store issues its root credential. Off with `externalEndpoint` set uses the platform's S3. The chart renders no store server.",
                     "type": "boolean"
+                },
+                "events": {
+                    "type": "object",
+                    "properties": {
+                        "provisioned": {
+                            "description": "Attests that the platform's store (`objectStore.enabled=false`) delivers every object write of every rask bucket (`s3:ObjectCreated:*`) to the bus subject `store.events`, kept through a bus outage; the render refuses a platform store without it.",
+                            "type": "boolean"
+                        }
+                    }
                 },
                 "externalEndpoint": {
                     "description": "S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store. https on a real deployment: the render refuses an http one.",

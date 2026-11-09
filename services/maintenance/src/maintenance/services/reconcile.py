@@ -753,6 +753,21 @@ class Sources(BaseModel):
     buckets_error: str | None = None
     incomplete: list[IncompleteScan] = Field(default_factory=list)
 
+    def live_tables(self) -> dict[str, str] | None:
+        """Each live table's location by its uuid, as this run read them off ``__manifest`` and the claims; ``None``
+        unless every table root and every claim was read, since a caller deciding what holds no task must see them all."""
+        if self.table_uuids is None or self.table_locations is None or self.uuids_error or self.tables_error:
+            return None
+        if any(scan.source.startswith("catalog:tables") for scan in self.incomplete):
+            return None
+        return {
+            uuid: _resolved(root, location)
+            for table, uuid in self.table_uuids.items()
+            if (found := self.table_locations.get(table)) is not None
+            for root, location in [found]
+            if location
+        }
+
 
 #: Said when no census is asked for at all — distinct from an outage, and the distinction matters: with no reader
 #: there is nothing wrong with the estate, only with the scan.
@@ -1086,11 +1101,9 @@ _ORPHAN_SCAN_OFF = "MAINTENANCE_ORPHAN_SCAN_ENABLED is off — the per-dataset f
 def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources) -> list[str]:
     """Every bucket the orphan scan should open: the configured list PLUS every registered warehouse.
 
-    #81's residual, closed here. `run_sweep` learned to read the warehouse REGISTRY — a bucket is
-    created by an API CALL at runtime, so every tenant provisioned since the last config edit was
-    invisible to a static list — but this scan kept iterating `sweep_buckets` alone. Same blindness,
-    worse consequence: the sweep merely failed to MAINTAIN those datasets, while this reports zero
-    orphans for them, and a zero in a drift report is read as "checked and clean".
+    A bucket is created by an API CALL at runtime, so every tenant provisioned since the last config edit is
+    invisible to the configured list alone (#81): a scan of that list would report zero orphans for them, and a
+    zero in a drift report is read as "checked and clean".
 
     Reuses the registry `_read_sources` ALREADY loaded rather than reading it again. Two reads would
     be two answers — the second could disagree with the one `orphan_buckets` and `dangling_bindings`

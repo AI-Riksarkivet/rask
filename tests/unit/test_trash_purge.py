@@ -29,7 +29,6 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
@@ -49,7 +48,6 @@ from lance_namespace import (
 from pydantic import SecretStr
 
 from lakehouse import location_claims, trash
-from lakehouse.base_refs import BaseRefs, normalise
 from lakehouse.control_events import CatalogControlEvent
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
@@ -612,7 +610,7 @@ def test_a_SECOND_refusal_counts_up_rather_than_looking_like_the_first(tmp_path:
 
     `attempts` accumulates and `last_refusal` is replaced, so the record answers both "how long has
     this been stuck" and "what is the current reason" — the second matters because a record can move
-    between refusal causes (a protected base is dropped, and it becomes still-registered instead).
+    between refusal causes (a store that answers again turns an unreadable location into a still-registered table).
     """
     estate = _Estate(tmp_path)
     canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
@@ -741,71 +739,6 @@ def test_the_dry_run_NEVER_widens_a_real_purge(tmp_path: Path) -> None:
     assert Path(location.removeprefix("file://")).is_dir(), "the dry run deleted the bytes"
 
 
-def test_the_protection_prepass_scans_AS_DEEP_AS_the_thing_it_protects_against(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """CONTRACT: the shallow-clone pre-pass walks to the SAME depth the rest of maintenance walks.
-
-    `_estate_base_refs` called `discover_datasets(fs, bucket)` with the default bound while the sweep and
-    the drift report both pass `settings.discovery_max_depth`. `discoveryMaxDepth` is the documented
-    lever for reaching datasets nested deeper than three levels — so raising it widened what the purge
-    may DELETE while leaving what PROTECTS it at three.
-
-    A referring clone below the shorter bound is never discovered, `is_protected` answers None for its
-    source, and the purge deletes bytes a live dataset resolves through. The failure is silent and the
-    data is gone — and nothing tells an operator that the protection floor stayed put when they raised
-    the lever.
-    """
-    seen: dict[str, Any] = {}
-
-    def _fake_discover(_fs: Any, bucket: str, **kw: Any) -> Any:
-        seen["max_depth"] = kw.get("max_depth")
-        return SimpleNamespace(uris=[], truncated=[])
-
-    from lakehouse import base_refs as base_refs_mod
-    from maintenance.services import discovery as discovery_mod
-
-    monkeypatch.setattr(discovery_mod, "discover_datasets", _fake_discover)
-    monkeypatch.setattr(base_refs_mod, "protected_roots", lambda *_a, **_kw: BaseRefs())
-
-    mod._estate_base_refs({"file:///nowhere"}, StorageOptions(), settings=_settings(tmp_path, discovery_max_depth=7))
-
-    assert seen["max_depth"] == 7, f"the protection pre-pass walked to {seen['max_depth']} while the purge reaches 7"
-
-
-def test_a_dry_run_APPLIES_the_shallow_clone_guard_it_already_paid_for(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """CONTRACT: a previewed record whose bytes back a live clone is REFUSED in the preview, not planned.
-
-    `_estate_base_refs` runs in full on a preview tick — it opens every dataset in every maintained
-    bucket — and `BaseRefs.is_protected` is then a pure in-memory prefix compare. Leaving that answer
-    unread meant the dry run paid the estate's most expensive read pass and discarded its result, while
-    the values file and this module both told the operator the shallow-clone pre-pass was part of what
-    the preview applies.
-
-    The omission fails in the dangerous direction: `would_purge` would name a record a real run
-    refuses, so the preview OVERSTATES reclamation on exactly the records where over-promising costs
-    most — the ones whose deletion breaks a live dataset.
-
-    The preview asks the delete's own question ([[LH-319]]): a table whose only referrer is its own branch, which the
-    delete takes with it, is planned as a real run reclaims it, while a root whose referrers are unknown stays refused.
-    """
-    estate = _Estate(tmp_path)
-    canonical, location = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
-    branched, branched_location = estate.drop_recoverably("team", "branched", dropped_at=datetime.now(UTC) - timedelta(days=30))
-    # Through the estate's OWN comparator: `BaseRefs.protected` holds normalised roots, and
-    # re-spelling one by hand here is precisely the mistake `normalise`'s docstring names — a guard
-    # that silently never matches looks exactly like having no guard at all.
-    guard = BaseRefs(
-        protected={normalise(location), normalise(branched_location)},
-        referrers={normalise(branched_location): {f"{branched_location}/tree/work"}},
-    )
-    monkeypatch.setattr(mod, "_estate_base_refs", lambda *_a, **_kw: guard)
-
-    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=False, trash_purge_dry_run=True))
-
-    assert [plan.id for plan in out.would_purge] == [branched], f"the preview's plan is not the delete's: {out.would_purge}"
-    assert [r.id for r in out.refused] == [canonical]
-    assert "clone" in out.refused[0].reason.lower() or "base" in out.refused[0].reason.lower(), out.refused[0].reason
-
-
 def test_a_dry_run_tick_is_DISTINGUISHABLE_on_the_reclamation_counters(monkeypatch: pytest.MonkeyPatch) -> None:
     """CONTRACT: every reclamation counter point says whether the tick that produced it was a preview.
 
@@ -882,21 +815,23 @@ def test_a_table_recovered_AFTER_the_liveness_snapshot_is_still_refused(tmp_path
     clears the record — is invisible to every later record in the same tick. Purge then revokes a LIVE
     table's grants and deletes its bytes, and answers 200.
 
-    Driven deterministically rather than by timing: the estate pre-pass runs after the snapshot and
-    before the loop, so re-registering from inside it lands the undrop exactly in the window. Nothing
-    here is a sleep or a thread.
+    Driven deterministically rather than by timing: the undrop is re-registered from inside the snapshot's own read,
+    right after it returns, which lands it exactly in the window. Nothing here is a sleep or a thread.
     """
     estate = _Estate(tmp_path)
     canonical, location = estate.drop_recoverably("team", "orders")
 
-    real_prepass = mod._estate_base_refs
+    real_liveness = mod.liveness_across
+    reads: list[None] = []
 
-    def _prepass_then_undrop(*args: Any, **kwargs: Any) -> Any:
-        result = real_prepass(*args, **kwargs)
-        estate.reregister("team", "orders", location=location)  # the undrop lands mid-tick, after the snapshot
+    def _snapshot_then_undrop(*args: Any, **kwargs: Any) -> Any:
+        result = real_liveness(*args, **kwargs)
+        if not reads:
+            estate.reregister("team", "orders", location=location)  # the undrop lands mid-run, after the snapshot
+        reads.append(None)
         return result
 
-    monkeypatch.setattr(mod, "_estate_base_refs", _prepass_then_undrop)
+    monkeypatch.setattr(mod, "liveness_across", _snapshot_then_undrop)
 
     out = _run(estate)
 

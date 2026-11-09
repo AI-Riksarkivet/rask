@@ -7,9 +7,9 @@ Measured on the live estate at helm rev 18, the reconcile ticks at 18:04 and 18:
 `table:c2-a9687292$dropped-owner (2 tuples) <- ghost_tables` in their dry-run drift repair, for a table in the trash.
 
 ONE ESTATE ON MOTO, TWO SERVICES (`catalog_and_maintenance`): the real catalog app drops the table through its door, so
-the trash record is the one that door writes, and the real maintenance app runs its reconcile tick over the same control
-root with drift repair armed, asking the catalog's own grant doors for the census and the revokes (`catalog_doors`,
-[[XC-084]]). One in-memory `TupleStore` stands behind the catalog through the real `lakehouse.governed.fga` functions. A ghost beside the trashed table, a grant on a table nothing names, is the control: the tick must revoke it,
+the trash record is the one that door writes, and the real maintenance app runs its audit over the same control root
+with drift repair armed, asking the catalog's own grant doors for the census and the revokes (`catalog_doors`,
+[[XC-084]]). One in-memory `TupleStore` stands behind the catalog through the real `lakehouse.governed.fga` functions. A ghost beside the trashed table, a grant on a table nothing names, is the control: the audit must revoke it,
 so a pass that revokes nothing cannot pass. A live table and a renamed one are no ghosts: a rename keeps the uuid its
 grants are held by. Every object is a table's uuid (``table:<uuid>``, [[LH-524]]), and the trashed table's is the one
 its record keeps.
@@ -28,7 +28,7 @@ from catalog.core.config import get_settings as catalog_settings
 from lakehouse import trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.fga import user_object
-from tests.integration.catalog_and_maintenance import catalog_and_maintenance
+from tests.integration.catalog_and_maintenance import audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import TupleStore, principal_key
 
@@ -87,7 +87,7 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
         yield _Estate(both.catalog, both.maintenance, both.store, warehouse)
 
 
-def test_a_reconcile_tick_revokes_a_ghost_and_keeps_the_grants_of_a_table_in_the_trash(estate: _Estate) -> None:
+def test_an_audit_revokes_a_ghost_and_keeps_the_grants_of_a_table_in_the_trash(estate: _Estate) -> None:
     estate.bind("bronze")
     for table in ("bronze$kept", "bronze$dropped", "bronze$before"):
         estate.create_table(table)
@@ -101,10 +101,8 @@ def test_a_reconcile_tick_revokes_a_ghost_and_keeps_the_grants_of_a_table_in_the
     assert held and estate.in_trash("bronze$dropped"), "the drop kept nothing for an undrop, so keeping it would pass vacuously"
 
     with catalog_doors(estate.catalog):
-        answer = estate.maintenance.post("/maintenance-reconcile-cron")
+        audit = audited(estate.maintenance)
 
-    assert answer.status_code == 200, answer.text
-    tick = answer.json()
-    assert tick["ghost_tables"] == [{"kind": "table", "id": gone, "fga_object": f"table:{gone}", "tuples": 1}]
-    assert tick["drift_repair"]["revoked"] == [{"fga_object": f"table:{gone}", "tuples": 1, "justified_by": "ghost_tables"}]
-    assert estate.store.naming([dropped, f"table:{gone}"]) == held, "the tick revoked a grant the undrop needs, or kept the ghost's"
+    assert audit["ghost_tables"] == [{"kind": "table", "id": gone, "fga_object": f"table:{gone}", "tuples": 1}]
+    assert audit["drift_repair"]["revoked"] == [{"fga_object": f"table:{gone}", "tuples": 1, "justified_by": "ghost_tables"}]
+    assert estate.store.naming([dropped, f"table:{gone}"]) == held, "the audit revoked a grant the undrop needs, or kept the ghost's"

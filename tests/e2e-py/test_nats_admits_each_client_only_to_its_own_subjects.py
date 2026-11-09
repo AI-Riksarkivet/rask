@@ -35,6 +35,7 @@ from typing import Any
 import nats
 import pytest
 import yaml
+from nats.js.errors import APIError
 from nats_auth_rig import (
     VALUES_ENV,
     Broker,
@@ -80,8 +81,9 @@ BROADCAST_REPLAY = "catalog-control-replay-catalog"
 #: Who may publish each data subject; every other table user must be refused on it.
 #:
 #: lineage: catalog/core/lineage_emit.py, lineage/services/staged.py (recovered signed bytes), maintenance/core/
-#: lineage_emit.py. control: catalog's control_emit and control_relay.py, plus the flagged announcer below. maintenance
-#: work: catalog/endpoints/maintenance.py and maintenance/services/work_queue.py; index: catalog only. dlq.<app>: the
+#: lineage_emit.py. control: catalog's control_emit and control_relay.py, plus the flagged announcer below. maintenance's
+#: tasks and schedules: maintenance/services/queue.py, as the worker's own user. store.events: the development store's
+#: change notifications (deploy/fixtures/rustfs), as its own user. dlq.<app>: the
 #: `deadLetterTopic` of that app's subscriptions. probe.<app>: lakehouse/bus_watchdog.py, which each service runs over its
 #: own sidecar's connections.
 def _values() -> Path:
@@ -104,6 +106,9 @@ PUBLISHERS: dict[str, frozenset[str]] = {
     "dlq.maintenance.arrival": frozenset({"maintenance"}),
     "dlq.catalog.control": frozenset({"catalog"}),
     **{f"probe.{app}": frozenset({app}) for app in ("catalog", "lineage", "maintenance")},
+    "maintenance.task.probe": frozenset({"maintenance-worker"}),
+    "maintenance.schedule.probe": frozenset({"maintenance-worker"}),
+    "store.events": frozenset({"object-store"}),
 }
 #: The subjects no stream captures, so an owner's publish is acknowledged by nobody and only the broker's log says
 #: whether it was refused.
@@ -117,8 +122,10 @@ DAPR_SUBSCRIPTIONS: dict[str, tuple[tuple[str, str], ...]] = {
     "maintenance": (("maintenance-durable", "lineage.events.v1"),),
 }
 
-#: The non-Dapr clients the table must also name: the stream Job and nats-box.
-NON_DAPR_USERS = frozenset({"admin", "monitor"})
+#: The non-Dapr clients the table must also name: the stream Job, nats-box, maintenance's worker and the dev store.
+NON_DAPR_USERS = frozenset({"admin", "monitor", "maintenance-worker", "object-store"})
+#: JetStream's answer to a publish on a subject already holding the one message its stream keeps.
+_ONE_PER_SUBJECT = 10077
 
 
 def _probe_of(subject: str) -> str:
@@ -227,6 +234,10 @@ async def _owner_publish(client: Client, user: str, subject: str) -> list[str]:
         return []
     try:
         await client.js.publish(subject, json.dumps({"probe": user}).encode(), timeout=3)
+    except APIError as exc:
+        # The stream answered, so the broker admitted the publish: a task subject keeps one message (MAINTENANCE_TASKS),
+        # and the owner's earlier probe holds it. A refused publish draws no answer from any stream.
+        return [] if exc.err_code == _ONE_PER_SUBJECT else [f"{user} publishes {subject} and its stream refused it: {exc}"]
     except Exception as exc:  # noqa: BLE001 — any failure to land is the finding
         return [f"{user} publishes {subject} and was refused ({type(exc).__name__})"]
     return []
@@ -252,7 +263,7 @@ async def _publish_matrix(url: str, mint_: Mint, table: dict[str, Permissions], 
 
     Returns the publishes that must have been refused; the broker's log, read once it stops, says whether they were.
     """
-    clients = {user: await Client.connect(url, mint_.credentials[user], f"probe-{user}") for user in table}
+    clients = {user: await Client.connect(url, mint_.credentials[user], f"probe-{user}", table[user].inbox) for user in table}
     universe = sorted(set(PUBLISHERS) | {_probe_of(s) for p in table.values() for s in p.publish if _is_data_subject(s)})
     findings: list[str] = []
     for user, client in clients.items():

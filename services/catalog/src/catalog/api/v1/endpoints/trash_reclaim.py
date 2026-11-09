@@ -82,7 +82,7 @@ async def vend_reclaim_credentials(
     its own data directories, and nothing on the control root.
 
     Vended for a table record past its deadline, at a place whose claim records the record's uuid, crossing no control
-    prefix and held by no live table; anything else is refused 409 (code 19). The record and what it keeps are ended at
+    prefix, held by no live table and read by no registered clone; anything else is refused 409 (code 19). The record and what it keeps are ended at
     ``DELETE /management/v1/trash/{kind}/{uuid}`` once the bytes are gone.
     """
     record = await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
@@ -90,6 +90,7 @@ async def vend_reclaim_credentials(
     if (
         reason := trash_reclaim.vend_refusal(record, claim, kind=kind, uuid=uuid, now=clock())
         or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)
+        or await run_in_threadpool(trash_reclaim.clone_refusal, settings, record)
     ) is not None:
         raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
     scope = await run_in_threadpool(trash_reclaim.scope_of, settings, record)

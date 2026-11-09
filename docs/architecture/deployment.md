@@ -108,7 +108,7 @@ the bus in `nats.url` (the render refuses without it). Each user's credential `n
 the bus's operator and attested with `nats.auth.provisioned` (docs/OPERATORS.md § 7).
 
 What the bus must provide, and the version rask is tested against, are in `deploy/fixtures/nats` (the development
-install `make k3s-up` runs, release `nats`, Service `rask-nats` in rask's namespace): NATS 2.14.2; JetStream on a file
+install `make k3s-up` runs, release `nats`, Service `rask-nats` in rask's namespace): NATS 2.15.2; JetStream on a file
 store; a cluster of at least `nats.streamReplicas` nodes (three); operator mode with one APP account holding JetStream
 and every rask user, so Dapr's pubsub.jetstream can authenticate with a user JWT and NKEY seed.
 

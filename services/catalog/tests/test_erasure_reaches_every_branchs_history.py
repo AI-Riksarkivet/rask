@@ -50,7 +50,6 @@ def _verify(uri: str, retention: timedelta = _NOW, trusted: dict[str, int] | Non
     return verify(
         lance.dataset(uri),
         storage_options=StorageOptions(),
-        protected=None,
         reopen=lambda: lance.dataset(uri),
         table="acme-bronze$subjects",
         predicate=_PREDICATE,

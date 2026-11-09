@@ -94,7 +94,6 @@ def _verify(
     return verify(
         dataset if dataset is not None else lance.dataset(uri),
         storage_options=StorageOptions(),
-        protected=None,
         reopen=reopen or (lambda: lance.dataset(uri)),
         table="t",
         predicate=_PREDICATE,

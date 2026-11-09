@@ -2,7 +2,7 @@
 
 **This module deletes nothing, and that is the whole design.** It writes ONE metadata-only commit to a
 dataset whose orphans sit above its listing floor, which moves the floor above them; the DELETE is then
-`cleanup_old_versions`'s on the next ordinary sweep, under Lance's own rule. So the orphan half of
+`cleanup_old_versions`'s on the table's next pass, under Lance's own rule. So the orphan half of
 reclamation stays what `purge.py` says it is — report-only, never a path this service names and removes.
 
 WHY A FLOOR EXISTS AT ALL. `cleanup_old_versions` clamps its listing of `_transactions/` and
@@ -32,9 +32,9 @@ permit costs data.
 
 **A COMMIT ALONE DOES NOT MOVE THE FLOOR — the old manifests must then be CLEANED.** The floor is
 the EARLIEST RETAINED manifest, so a new version raises nothing until `cleanup_old_versions` drops the
-ones beneath it; the commit is what makes them droppable. That makes this pass USELESS on a dataset the
-sweep cannot maintain, and worse than useless, because the orphans stay stranded and every tick writes
-another version. Measured on the deployed estate 2026-09-19: of the two stranded datasets, the sweep
+ones beneath it; the commit is what makes them droppable. That makes this raise USELESS on a dataset
+maintenance cannot maintain, and worse than useless, because the orphans stay stranded and every scan writes
+another version. Measured on the deployed estate 2026-09-19: of the two stranded datasets, maintenance
 reclaimed `c6t115034-wh/medallion/bronze` (19 files gone, 32 -> 13) and REFUSED
 `m2proof_silver$m2-proof-1788537252` for want of a write credential, whose raise therefore ran twice.
 Both guards below exist for that measurement.
@@ -49,7 +49,7 @@ decides nothing, and each refuses the raise. It is asked only about the table th
 dataset as: a dataset no row names is refused unvended and unwritten ([[LH-520]]).
 
 THE LINEAGE PLANE ALREADY ANTICIPATES THIS SHAPE. Lance records the operation as `UpdateConfig`, which
-`lineage.core.reconcile.MAINTENANCE_OPERATIONS` lists — so the sweep neither reports the version as a
+`lineage.core.reconcile.MAINTENANCE_OPERATIONS` lists — so lineage's reconcile neither reports the version as a
 provenance hole nor back-fills it with a run that never existed. Verified against pylance 11.0.0:
 `read_version_operations` answers `'UpdateConfig'` for a config commit.
 """
@@ -58,25 +58,56 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import lance
 from pydantic import BaseModel, Field
 
-from lakehouse import trash
+from lakehouse import base_refs, trash
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import shared_lance_session
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, write_options_for
 from maintenance.services.due import TableIds
 from maintenance.services.orphans import OrphanFile, listed_at_or_below
-from maintenance.services.sweep import trashed_locations, why_in_trash
 
 
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
 
 log = logging.getLogger(__name__)
+
+
+def trashed_locations(trash_records: list[dict[str, Any]]) -> dict[str, str]:
+    """``{decoded path: why}`` for every trash record naming bytes, each keyed as :func:`base_refs.decoded_path` reads it.
+
+    ONE LOCATION, TWO SPELLINGS ([[LH-318]]). A record holds the location `describe_table` answered, which
+    percent-encodes the table's name (``…$r%C3%A4ksm%C3%B6rg%C3%A5s``, ``…$growth%25``), while the store keeps, and
+    discovery lists, the directory that spelling opens (``…$räksmörgås``, ``…$growth%``); measured on pylance 13.0.0,
+    `dir` backend, over moto and a local root. Keyed as spelled, a recoverably dropped table with such a name would
+    match no discovered dataset, and the pass would raise the floor of a table an undrop restores.
+
+    A trashed NAMESPACE record and a declared-only table both carry `location=""`, and the empty path is a prefix of
+    everything, so a record naming no location excludes nothing.
+    """
+    return {
+        base_refs.decoded_path(str(record["location"])): f"in trash as {record.get('id') or '?'} (expires_at={record.get('expires_at') or '?'})"
+        for record in trash_records
+        if record.get("location")
+    }
+
+
+def why_in_trash(uri: str, trashed_by_path: dict[str, str]) -> str | None:
+    """Why a trash record freezes ``uri``: the reason of the record naming its location or one holding it, else ``None``.
+
+    CONTAINMENT, NOT EQUALITY: discovery lists each branch of a dataset at ``<dataset>/tree/<branch>``, so a record
+    naming a table covers every dataset under it. A wrong refusal costs disk; a wrong permit writes to bytes an owner
+    was told are frozen. One lookup per path segment, the nearest record first, so a whole-estate pass costs the same
+    however many records the trash holds.
+    """
+    segments = base_refs.decoded_path(uri).split("/")
+    return next((why for end in range(len(segments), 0, -1) if (why := trashed_by_path.get("/".join(segments[:end]))) is not None), None)
+
 
 #: The config key the commit writes. Namespaced, and carrying the epoch it was raised at, so an
 #: operator reading a dataset's config can tell this commit apart from a real one without the register.
@@ -88,7 +119,7 @@ class FloorRaise(BaseModel):
     tables were written to is the whole audit trail, and a count answers nobody's question about it."""
 
     dataset: str
-    #: Orphan files this raise is expected to make visible to the next sweep.
+    #: Orphan files this raise is expected to make visible to the next scan.
     orphan_files: int
     orphan_bytes: int
     #: The floor before the commit, as an epoch — what the orphans were measured against.
@@ -210,7 +241,7 @@ def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: Maint
         return outcome.model_copy(update={"refused": f"already raised at {stamped} and the floor has not moved — the sweep cannot clean this dataset"})
     if all(listed_at_or_below(o.mtime_epoch, floor) for o in found):
         # The floor already covers them: something committed to this dataset between the report and
-        # now, so the next sweep will reclaim without help and a commit here buys only a version.
+        # now, so the table's next pass will reclaim without help and a commit here buys only a version.
         return outcome.model_copy(update={"refused": "floor already covers these orphans"})
     # THE CREDENTIAL IS RESOLVED BEFORE THE DRY-RUN BRANCH, so a preview reports the denial it
     # would hit rather than a plan it could never carry out. A dry run that lists a table the
@@ -233,7 +264,7 @@ def _raise_one(uri: str, table: str, found: list[OrphanFile], *, settings: Maint
 
 
 def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanFile], names: TableIds, storage_options: StorageOptions) -> FloorReport:
-    """Write one metadata commit per stranded dataset, so the next sweep can see its residue.
+    """Write one metadata commit per stranded dataset, so the table's next pass can reclaim its residue.
 
     OFF BY DEFAULT and DRY-RUN BY DEFAULT — two separate switches, because they answer different
     questions. `MAINTENANCE_FLOOR_RAISE_ENABLED` is whether this estate wants the behaviour at all;
@@ -248,8 +279,8 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
 
     A DATASET ALREADY CARRYING :data:`FLOOR_KEY` IS REFUSED, and that guard is what bounds the damage
     of a raise that cannot work. The floor only moves once `cleanup_old_versions` drops the manifests
-    beneath the new commit, so on a dataset the sweep may not maintain this pass writes a version per
-    tick forever and reclaims nothing. One raise per dataset: if the floor has not moved by the next
+    beneath the new commit, so on a dataset maintenance may not maintain this writes a version per
+    scan forever and reclaims nothing. One raise per dataset: if the floor has not moved by the next
     tick, the blocker is downstream and another commit is not the answer to it.
 
     A DATASET A TRASH RECORD COVERS IS REFUSED FIRST, before the cap and before any open, vend or commit
@@ -257,7 +288,7 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
     put-if-not-exists on the store (`lance_docs/lance/format/table/transaction.md` § Commit Protocol), so the freeze holds only where
     each writer reads the trash record itself, whatever signs its commit. The orphan scan reads every discovered
     dataset, trashed ones included, because the drift report and the purge gate need them. Before the cap, because a
-    refusal repeated every tick would spend a slot every tick. The index is read once per call, as the sweep reads
+    refusal repeated every scan would spend a slot every scan. The index is read once per call, as a pass reads
     it, and an index that cannot be read writes and plans nothing: no dataset can then be shown to be outside it.
 
     ``names`` is the catalog's ``__manifest`` read for the tick, and a dataset it names no table for is refused with the

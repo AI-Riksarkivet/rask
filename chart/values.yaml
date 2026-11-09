@@ -764,50 +764,53 @@ medallion:
   # -- Map of tier namespace to S3 bucket (e.g. `{gold: lance-sink}`); unset namespaces use `objectStore.bucket`. Listed buckets are auto-created, swept by maintenance and reserved from warehouses.
   buckets: {}
 
-# === Maintenance service (Dapr cron binding) =====================================================
-# A bindings.cron component POSTs /<bindingName> on `schedule`; the sweep expires old versions and
-# writes each table's due record (the tables needing compaction or reindexing, listed by the catalog's
-# `GET /management/v1/maintenance/due`). The rewrite itself is a bring-your-own job (ADR 0162).
+# === Maintenance service (a worker on a NATS JetStream work queue, ADR 0198) =====================
+# Every replica's worker takes one task at a time off MAINTENANCE_TASKS: a table's pass (version expiry, its due
+# record, listed by the catalog's `GET /management/v1/maintenance/due`, and its next pass scheduled), a trash
+# record's release at its deadline, and the hourly audit. The rewrite itself is a bring-your-own job (ADR 0162).
 maintenance:
-  # -- Deploy the maintenance service (sweep, reconcile crons and the write-event lane).
+  # -- Deploy the maintenance service (its worker, the hourly audit and the write-event lane).
   enabled: true
+  # A table's task is on the queue at most once and taken by one worker at a time, so replicas share the work and a
+  # killed replica's task goes to another after the consumer's ack wait. More than one renders a PodDisruptionBudget
+  # when `podDisruptionBudget.enabled`.
+  # -- Maintenance replicas; each runs a worker on the shared work queue.
+  replicas: 2
   # -- Dapr app-id of the maintenance service; also names its durable consumer.
   daprAppId: maintenance
   # -- HTTP port of the maintenance container.
   port: 8000
-  # -- Name of the Dapr cron binding that fires the sweep tick (`MAINTENANCE_BINDING_NAME`).
-  bindingName: maintenance-cron
-  # THE SWEEP IS A BACKSTOP. Version expiry is commit-driven: the write-event lane (`arrivalEnabled`)
-  # expires the written table and refreshes its due record. Each tick walks the estate, writes the clone
-  # list and every table's due record, and expires the tables nobody writes. It still has to run because
-  # the bus is provably incomplete (external OpenLineage producers emit over HTTP only) and an idle table
-  # has no write to react to. The cadence must stay below `cloneListMaxAgeSeconds`, or the commit judge
-  # and the write-event lane read a clone list they refuse as stale.
-  # A WALL-CLOCK cron (Dapr's six fields, seconds first), never `@every`: an interval restarts with the pod and the
-  # lifespan runs no tick at start, so a pod restarted more often than the interval never sweeps, its clone list ages
-  # past `cloneListMaxAgeSeconds` and the catalog refuses every stock compaction 503 ([[LH-562]]; measured live, a pod
-  # started 14:54:23Z first swept at 15:24:32Z). The schema refuses any other shape.
-  # -- Backstop sweep cadence, a wall-clock cron (`<sec> <min> <hour> <dom> <month> <dow>`): writes the clone list and due records and expires unwritten tables; its period must stay under `cloneListMaxAgeSeconds`.
-  schedule: "0 */30 * * * *" # @schema pattern: ^[0-9*,/-]+( [0-9*,/?A-Za-z-]+){5}$
-  # One value for both readers of the clone list the sweep writes: the catalog refuses a stock compaction
-  # 503 while the list is older (`LANCE_CLONE_LIST_MAX_AGE_SECONDS`), and the write-event lane leaves expiry
-  # to the sweep (`MAINTENANCE_CLONE_LIST_MAX_AGE_SECONDS`). Both fail closed: a clone's source must not lose
-  # the files the clone resolves through.
-  # -- Oldest clone list, in seconds, the catalog judges a compaction against and the write-event lane expires against.
-  cloneListMaxAgeSeconds: 3600
-  # The drift reconciler's OWN cron. It only READS three stores (OpenFGA, the control-root registries,
-  # the bucket listing) and reports where they disagree, on a cadence of its own: the sweep's is the
-  # backstop for expiry and the clone list, and a drift report answers a different question.
-  # -- Name of the Dapr cron binding that fires the drift reconciler (`MAINTENANCE_RECONCILE_BINDING_NAME`).
-  reconcileBindingName: maintenance-reconcile-cron
-  # -- Cadence of the drift reconciler, a wall-clock cron like `schedule`: it only reads OpenFGA, the control-root registries and the bucket listing.
-  reconcileSchedule: "0 */5 * * * *" # @schema pattern: ^[0-9*,/-]+( [0-9*,/?A-Za-z-]+){5}$
+  # THE WORK QUEUE (ADR 0198 §2). The chart's stream Job declares MAINTENANCE_TASKS, MAINTENANCE_SCHEDULES, STORE_EVENTS
+  # (the store's change events) and their durable consumers; the worker binds to them as its own bus user
+  # (`nats.auth.users.maintenance-worker`).
+  queue:
+    # -- Consumer ack wait, in seconds: how long a task a dead worker held waits before another replica gets it.
+    ackWaitSeconds: 60
+    # -- How often a running task tells JetStream it is still being worked on; well inside `ackWaitSeconds`.
+    heartbeatSeconds: 20
+    # -- Deliveries of one task before it is ended and counted (`maintenance.tasks.ended`); the consumer allows one more, on which a task that outlived its worker every time is ended without running.
+    maxDeliver: 10
+    # -- A pass running longer than this is logged and counted; at twice this its replica exits, Kubernetes restarts it, and the task is delivered again.
+    maxPassSeconds: 1800
+    # -- The longest a table goes without a pass: what bounds a lost commit event, and the versions a deleted tag or branch releases.
+    recheckHours: 24
+    # -- When a pass that could not decide, or found the table's history held, is tried again.
+    retrySeconds: 900
+    # -- How long the first commit of a burst holds its table's pass: the most often commits pass a table, each pass covering every commit before it.
+    commitPassDelaySeconds: 300
+    # -- The audit's NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs and the lost-task backstop, once per firing on one replica.
+    auditSchedule: "@hourly"
+    # -- The scan's NATS message schedule: the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies.
+    scanSchedule: "@daily"
+    # -- How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`.
+    drainSeconds: 90
+    # -- The most STORE_EVENTS holds, in bytes, before it drops its oldest: each event is a hint of about 2 KB that the table's daily recheck backs up, and the stream shares the bus's JetStream disk with LINEAGE and the work queue.
+    storeEventsMaxBytes: 134217728
   # THE WRITE-EVENT LANE. On, maintenance subscribes `lineage.events.v1` (its own durable,
-  # `<daprAppId>-durable`), expires the written table's old versions and refreshes its due record,
-  # carrying the clone list from the last sweep, so a table that a write made due is listed before the
-  # next tick. It schedules no rewrite: compaction and indexing are the user's job (ADR 0162). Off, the
-  # backstop tick alone expires versions and writes the due records.
-  # -- Subscribe the write-event lane: expire the written table and refresh its due record between sweep ticks.
+  # `<daprAppId>-durable`) and puts the written table's pass on the work queue, where a pass already queued or running
+  # for the table covers it. It schedules no rewrite: compaction and indexing are the user's job (ADR 0162). Off, a
+  # table's pass comes from its birth, its schedule and the audit alone.
+  # -- Subscribe the write-event lane: queue the written table's pass on each announced commit.
   arrivalEnabled: true
   # -- Dead-letter topic of the write-event lane, for deliveries that exhaust their retries; set only with `dapr.resiliency.enabled`, since a dead-letter topic with no retry policy parks on the first failure.
   arrivalDlqTopic: dlq.maintenance.arrival
@@ -855,7 +858,7 @@ maintenance:
   # The `runRetentionDays` note below still applies and is deliberately NOT changed here: with the
   # sweep at 0 errors there are no FAIL Run nodes to accumulate, so pruning run history is a separate
   # decision to make on its own evidence rather than as a side effect of turning provenance on.
-  # -- Emit a lineage event per dataset whose versions the sweep reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names.
+  # -- Emit a lineage event per dataset whose versions a pass reclaimed and a FAIL event per errored one; covers every table the catalog's `__manifest` names.
   lineageEmit: true
   # #79 RECLAMATION. When on, the reconcile tick DELETES the bytes of every trash record past its grace
   # deadline and revokes that object's grants — gated on that same tick's drift report running clean
@@ -866,30 +869,29 @@ maintenance:
   # has already made final by revoking its grants whether or not this is on (ADR 0146). It
   # is also the only irreversible thing this service does; compaction and version GC are bounded by
   # policy, this destroys a whole dataset.
-  # -- Delete the bytes of trash records past their grace deadline and revoke their grants, only when that tick's drift report is clean. Irreversible; off by default.
+  # -- Delete the bytes of trash records past their grace deadline and revoke their grants, only when that scan's drift report is clean. Irreversible; off by default.
   trashPurge: false
   # SEE WHAT RECLAMATION WOULD COST, before spending the permission above. The pass runs for real —
-  # same due-record selection, same liveness and shallow-clone pre-passes, same refusal check — and
+  # same due-record selection, same liveness pre-pass, same refusal check — and
   # performs none of the mutations, reporting `trash_purge.would_purge` instead. With `trashPurge`
   # off the pass otherwise returns before the trash prefix is even read, so without this the only way
   # to learn what a purge would do is to let it do it.
   #
-  # It subtracts every MUTATION: with both on, the tick previews and reclaims nothing. A deployment
+  # It subtracts every MUTATION: with both on, the scan previews and reclaims nothing. A deployment
   # that means to reclaim and quietly previews forever would look exactly like a healthy one, so every
   # reclamation counter carries a `dry_run` dimension and `maintenance.trash.purge_planned` exists to
   # make that state queryable.
   #
   # IT ADDS READ COST. With `trashPurge` off the pass returns before reading anything; with this on it
-  # does the full trash listing, a Lance `__manifest` open per maintained root, and the shallow-clone
-  # pre-pass over EVERY dataset in EVERY maintained bucket — against a 512Mi pod that has been
-  # OOMKilled before. Turn it on to answer a question, not as a standing setting.
+  # does the full trash listing and a Lance `__manifest` open per maintained root. Turn it on to answer a
+  # question, not as a standing setting.
   #
   # `would_purge` is an UPPER BOUND: the FGA revoke, a non-dataset location and a failing delete each
   # refuse records a preview cannot test without performing the act they guard.
   # -- Run the purge pass for real but perform no mutation, reporting `would_purge`; adds full read cost.
   trashPurgeDryRun: false
-  # Per-tick ceiling on purged records. The remainder is reported (`trash_purge.capped`) and drained on
-  # the next tick, so a backlog never becomes one unbounded delete storm against object storage.
+  # Per-scan ceiling on purged records. The remainder is reported (`trash_purge.capped`) and drained on
+  # the next scan, so a backlog never becomes one unbounded delete storm against object storage.
   # -- Maximum trash records purged per tick; the remainder is reported as capped and drained next tick.
   trashPurgeMaxPerTick: 25
   # [[LH-094]] — raise a stranded dataset's Lance LISTING FLOOR so its residue becomes reclaimable.
@@ -1037,8 +1039,6 @@ maintenance:
   # estate's dataset count and the tick interval, and inferring one would be guessing. Set it and the
   # tick logs `sweep_budget_exhausted` with what it executed and what it did not reach, which is the
   # starvation this exists to make visible.
-  # -- Wall-clock ceiling for one sweep tick, checked between datasets; 0 means unlimited.
-  sweepBudgetSeconds: 0
   # Announce each reclamation on the catalog's control topic (catalog.control.v1). Requires
   # dapr.enabled — and the component's `scopes` must list this app-id, which the chart does below;
   # without it the sidecar rejects every publish SILENTLY (emission is best-effort by design).
@@ -1201,6 +1201,16 @@ objectStore:
   # development store — pair with objectStore.enabled=false to use the platform's S3.
   # -- S3 endpoint the apps use instead of the development store; pair with `objectStore.enabled=false`. Empty uses the development store. https on a real deployment: the render refuses an http one.
   externalEndpoint: "" # e.g. https://s3.us-east-1.amazonaws.com
+  # THE STORE'S CHANGE EVENTS (ADR 0198 §3). The store's event of an object write under a table, on the bus subject
+  # `store.events` (the chart's stream Job declares STORE_EVENTS over it), holds that table's pass a few minutes out, and
+  # the pass, which checks every file the table's commits recorded against one listing of its root, reports a file
+  # overwritten in place. The table's daily recheck is the backstop for an event that never arrives.
+  # The store's operator configures them on every bucket the estate uses, the catalog's warehouse buckets included, as
+  # it configures their versioning: the development store's fixture does it for its own buckets
+  # (deploy/fixtures/rustfs), and a platform's operator does it for its store.
+  events:
+    # -- Attests that the platform's store (`objectStore.enabled=false`) delivers every object write of every rask bucket (`s3:ObjectCreated:*`) to the bus subject `store.events`, kept through a bus outage; the render refuses a platform store without it.
+    provisioned: false
   # No persistence value: the development store's durability is its fixture's (a StatefulSet claim that survives pod
   # rolls and `helm uninstall`), and a production store's is the platform's.
 
@@ -1292,8 +1302,9 @@ nats:
   #   - a subscriber on stream S through durable D also requests $JS.API.STREAM.NAMES (unless its component sets streamName),
   #     $JS.API.CONSUMER.INFO.S.D and $JS.API.CONSUMER.CREATE.S.D.> (the create and the bind's lookup), and acknowledges on
   #     $JS.ACK.S.D.>. The server sends the v1 ack subject `$JS.ACK.<stream>.<consumer>.<delivered>.<sseq>.<cseq>.<ts>.<pending>`
-  #     (measured, and FeatureFlagJsAckFormatV2 is false at v2.14.2), so a v2 pattern refuses every ack and every message
-  #     redelivers to the DLQ; a server upgrade that flips the flag changes these rows. A durable each pod names (the
+  #     (measured, and FeatureFlagJsAckFormatV2 is false at v2.14.2; `js_ack_fc_v2` keeps that default in 2.15, whose
+  #     upgrade guide makes v2 the default in 2.16), so a v2 pattern refuses every ack and every message redelivers to the
+  #     DLQ; a server upgrade that flips the flag changes these rows. A durable each pod names (the
   #     catalog's broadcast, `catalog-control-{podName}` on CATALOG_CONTROL_BROADCAST) takes D as `*`;
   #   - a sidecar parks a dead letter through the component the delivery came on, so a subscriber publishes its own dlq.<app>;
   #   - each service probes its own sidecar's connections on probe.<app-id> (lakehouse.bus_watchdog), which no stream
@@ -1335,8 +1346,8 @@ nats:
   # client carries its credential either way. The dev fixture's operator mode (deploy/fixtures/nats, `nats.auth.server`) reads
   # the server config and the route credential from this chart's dev store.
   #
-  # RESIDUALS, named: _INBOX.> is shared within the APP account (a client could read another's replies; Dapr exposes no inbox
-  # prefix); the catalog's grant on CATALOG_CONTROL_BROADCAST covers every consumer there, since each replica's durable is
+  # RESIDUALS, named: _INBOX.> is shared by the Dapr apps within the APP account (a client could read another's replies;
+  # Dapr exposes no inbox prefix), while the maintenance worker, which connects itself, reads its own; the catalog's grant on CATALOG_CONTROL_BROADCAST covers every consumer there, since each replica's durable is
   # named by its pod, so one replica could ack another's broadcast copy (the same identity, and the copies are hints); and
   # 8222 monitoring is unauthenticated by design.
   auth:
@@ -1362,7 +1373,7 @@ nats:
     # -- The bus user table, one user per Dapr app-id plus admin and monitor, each with publish and subscribe subject lists (never empty).
     users:
       admin:
-        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.STREAM.UPDATE.LINEAGE, $JS.API.STREAM.UPDATE.DLQ, $JS.API.STREAM.UPDATE.CATALOG_CONTROL, $JS.API.STREAM.UPDATE.CATALOG_CONTROL_BROADCAST, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
+        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.STREAM.UPDATE.LINEAGE, $JS.API.STREAM.UPDATE.DLQ, $JS.API.STREAM.UPDATE.CATALOG_CONTROL, $JS.API.STREAM.UPDATE.CATALOG_CONTROL_BROADCAST, $JS.API.STREAM.UPDATE.MAINTENANCE_TASKS, $JS.API.STREAM.UPDATE.MAINTENANCE_SCHEDULES, $JS.API.STREAM.UPDATE.STORE_EVENTS, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
         subscribe: [_INBOX.>]
       catalog:
         publish:
@@ -1391,6 +1402,31 @@ nats:
           - lineage.events.v1
           - $JS.API.STREAM.NAMES
           - probe.maintenance
+        subscribe: [_INBOX.>]
+      # The maintenance worker's own user (ADR 0198 decision 5): its app talks to the bus directly, since Dapr's subscription
+      # sends no in-progress ack and its publish no schedule header. Pull and ack on its three durables, tasks and schedules
+      # published, and the two queue streams' info for the audit's count; no stream or consumer is created or changed by
+      # it. Its replies arrive on an inbox of its own (`maintenance.services.queue.INBOX_PREFIX`), which no other user reads.
+      maintenance-worker:
+        publish:
+          - maintenance.task.>
+          - maintenance.schedule.>
+          - $JS.API.CONSUMER.MSG.NEXT.MAINTENANCE_TASKS.maintenance-worker
+          - $JS.API.CONSUMER.MSG.NEXT.MAINTENANCE_SCHEDULES.maintenance-due
+          - $JS.ACK.MAINTENANCE_TASKS.maintenance-worker.>
+          - $JS.ACK.MAINTENANCE_SCHEDULES.maintenance-due.>
+          - $JS.API.STREAM.INFO.MAINTENANCE_TASKS
+          - $JS.API.STREAM.INFO.MAINTENANCE_SCHEDULES
+          - $JS.API.CONSUMER.MSG.NEXT.STORE_EVENTS.maintenance-store-events
+          - $JS.ACK.STORE_EVENTS.maintenance-store-events.>
+        subscribe: [_INBOX_maintenance.>]
+      # The development store's own user (deploy/fixtures/rustfs): it publishes each object write of a rask bucket on
+      # store.events, and reads STORE_EVENTS's info, which RustFS checks before it publishes there. A platform's store
+      # delivers there by its operator's means (`objectStore.events.provisioned`).
+      object-store:
+        publish:
+          - store.events
+          - $JS.API.STREAM.INFO.STORE_EVENTS
         subscribe: [_INBOX.>]
       monitor:
         publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.CONSUMER.LIST.*, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $SYS.REQ.USER.INFO]

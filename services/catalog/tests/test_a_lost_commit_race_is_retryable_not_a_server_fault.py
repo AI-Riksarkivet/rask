@@ -122,7 +122,7 @@ def test_concurrent_add_columns_each_land_once_and_a_lost_attempt_leaves_nothing
     transactions = {path.name.split("-", 1)[1].removesuffix(".txn") for path in (root / "_transactions").iterdir()}
     named = {data_file.path for fragment in latest.get_fragments() for data_file in fragment.data_files()}
     data = {path.name for path in (root / "data").iterdir()}
-    records = {r.transaction_uuid for r in file_identities.recorded(str(tmp_path / "control"), StorageOptions(), table_uuid)}
+    records = set(file_identities.listed_records(str(tmp_path / "control"), StorageOptions(), table_uuid))
     staged = [path.name for path in (root / "_versions").iterdir() if ".manifest-" in path.name]
     assert (transactions, data, records - committed, staged) == (committed, named, set(), [])
 

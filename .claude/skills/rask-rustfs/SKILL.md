@@ -81,7 +81,8 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 - **STS tokens are signed with the ROOT secret.** Advisory GHSA-m77q-r63m-pj89 is intentionally unfixed: anyone holding
   the root secret can forge any session token, and rotating root invalidates every outstanding STS credential
   (`rustfs@1.0.3:crates/iam/src/root_credentials.rs:25-36`). The root pair is a trust root, not just an admin
-  login: only the store pod, the dev secret store that seeds it and the provisioning hook read it. It sits at
+  login: only the store pod, the dev secret store that seeds it, the provisioning hook and the fixture's bucket-events
+  job (the dev store's operator stand-in for its change events, `deploy/fixtures/rustfs`) read it. It sits at
   `secret/object-store-root`, which only ESO's store policy reads, and in a Secret of its own,
   `<release>-object-store-root`; `tests/unit/test_every_secret_in_the_dev_store_has_exactly_its_readers.py` follows every
   path the chart hands a secret through. Every plane presents its ServiceAccount token instead, the backups
@@ -110,7 +111,9 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   multibase data base holds none either: it is its tables' storage, reached under the catalog's own identity
   ([[LH-286]]). Narrowing an identity is a policy change in git, which the next provisioning run converges on.
 - **Maintenance writes almost nothing under its own session.** Its canned policy reads the estate and writes only
-  `<control bucket>/_maintenance_due/*`, `_policies/state/*` and `_lineage_outbox/*` (owner, 2026-11-03: a compromised
+  `<control bucket>/_maintenance_due/*`, `_maintenance_files/*` (its copy of the commit records it has read,
+  `lakehouse.file_identities`, which no erasure or hold reads), `_policies/state/*` and `_lineage_outbox/*` (owner,
+  2026-11-03: a compromised
   maintenance pod must not be able to defeat an erasure or a hold). A rewrite signs with the table's `maintain`-tier
   vend, and the trash purge deletes a due record's bytes with a reclaim session the catalog vends for that one record
   (`POST /management/v1/trash/{kind}/{uuid}/credentials`, `catalog.core.vending.ReclaimScope`: list and delete over its

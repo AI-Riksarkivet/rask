@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
 from functools import partial
 from typing import Annotated
 
@@ -44,11 +43,10 @@ from catalog.api.pagination import ListLimit, paginate_versions
 from catalog.api.security import CurrentToken
 from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge
-from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane, maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
-from lakehouse import commit_records, maintenance_due
+from lakehouse import commit_records
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.history_fences import HistoryWork
@@ -241,7 +239,6 @@ async def create_table_version(
                 managed_versions.judge,
                 base_judge=judge,
                 external_bases=record.entries if record is not None else (),
-                clone_evidence=await _clone_evidence_for(staged, settings),
             ),
             staged,
             so,
@@ -264,9 +261,6 @@ async def create_table_version(
                 )
             except commit_records.AuthorRecordedError as exc:
                 raise InvalidInputError(f"commit refused: its transaction {staged.transaction_uuid} is another commit's at version {staged.version}") from exc
-    except maintenance.ReferredSourceError as exc:
-        await run_in_threadpool(managed_versions.refuse, staged, so)
-        raise await fga_deps.refusal_naming_referrers(settings, token, client, exc) from exc
     except BaseException:
         await run_in_threadpool(managed_versions.refuse, staged, so)
         raise
@@ -319,16 +313,6 @@ async def create_table_version(
     return response
 
 
-async def _clone_evidence_for(staged: managed_versions.StagedVersion, settings: Settings) -> managed_versions.CloneEvidence | None:
-    """The maintenance sweep's clone list, for a compaction's two commits only (ADR 0162); ``None`` when there is none."""
-    if staged.operation not in managed_versions.COMPACTION_OPERATIONS:
-        return None
-    clones = await run_in_threadpool(maintenance_due.read_clone_list, settings.registry_root, settings.storage_options())
-    if clones is None:
-        return None
-    return managed_versions.CloneEvidence(clones=clones, max_age=timedelta(seconds=settings.clone_list_max_age_seconds))
-
-
 @router.post("/{id}/version/describe", response_model_exclude_none=True)
 def describe_table_version(
     id: str,
@@ -378,24 +362,14 @@ async def batch_delete_table_versions(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    try:
-        return await run_in_threadpool(_delete_versions, table, so, settings, body)
-    except maintenance.ReferredSourceError as exc:
-        raise await fga_deps.refusal_naming_referrers(settings, token, client, exc) from exc
+    return await run_in_threadpool(_delete_versions, table, so, body)
 
 
-def _delete_versions(table: DoorTable, so: StorageOptions, settings: Settings, body: BatchDeleteTableVersionsRequest) -> BatchDeleteTableVersionsResponse:
+def _delete_versions(table: DoorTable, so: StorageOptions, body: BatchDeleteTableVersionsRequest) -> BatchDeleteTableVersionsResponse:
     ds = table.open_unchecked(so, branch=body.branch)
     ranges = [(r.start_version, r.end_version) for r in body.ranges]
-    # Judged before the sibling scan, which opens every dataset beside this one, so a refused request
-    # does no estate I/O. `delete_versions` judges again against the handle it deletes from.
-    maintenance.versions_in_ranges(ranges, current=int(ds.version))
-    location = str(getattr(ds, "uri", "") or "")
-    refs = BaseJudge.from_settings(settings).sibling_base_refs(location, so)
-    if refs.unreadable:
-        log.warning("version_delete_base_refs_incomplete", extra={"location": location, "unreadable": len(refs.unreadable)})
     # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
     # version this deletes. A ref write holding it answers this request 409.
     with table.history_held(HistoryWork.RECLAIM):
-        deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, protected=refs)
+        deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch)
     return BatchDeleteTableVersionsResponse(deleted_count=deleted)

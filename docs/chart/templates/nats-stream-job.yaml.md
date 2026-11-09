@@ -53,7 +53,8 @@ to or from workqueue, lifting `deny_delete` or `deny_purge` (nats-server v2.14.2
 fails with the server's reason and names the hand step (drain, `nats stream rm`, re-run), rather than leaving a stream
 the chart does not describe. Measured on natscli v0.1.5 against nats-server 2.14.2: an edit to an unchanged config exits
 0, an allowed change (max age, retention `interest` to `limits`) applies and exits 0, a refused one exits 1 naming the
-reason (`... can not change retention policy to/from workqueue (10052)`). The Job's bus user (`nats.auth.users.admin`)
+reason (`... can not change retention policy to/from workqueue (10052)`); natscli 0.5.1 (nats-box 0.20.2) against
+nats-server 2.15.2 answered an unchanged config and a refused one the same way (2026-11-09). The Job's bus user (`nats.auth.users.admin`)
 holds `$JS.API.STREAM.UPDATE` for exactly the streams it edits, so an operator-mode bus admits the edits and nothing
 wider; the `nats-auth` lane runs this Job as that user against such a bus. `allow_direct: true` is in the declared config
 because `nats stream add --defaults` sets it, so a stream created that way edits to no change, and a config without it
@@ -99,3 +100,44 @@ config is written whole because `nats stream add --mirror` asks for the mirror's
 (nats-box 0.14.5's CLI v0.1.5), which a Job without a terminal cannot answer. Before the Job creates the mirror on an
 upgrade, a rolled catalog pod's subscribe fails on the missing stream and daprd retries it (dapr
 `pkg/runtime/processor/subscriber/subscriber.go:354-360`).
+
+## `converge_stream MAINTENANCE_TASKS`
+
+MAINTENANCE_TASKS is maintenance's work queue (ADR 0198 §2). It keeps one task per subject and refuses a second
+(`max_msgs_per_subject` 1, `discard_new_per_subject`), so a table is never queued or passed twice at once. The
+schedules (NATS message schedules, ADR-51) sit apart on MAINTENANCE_SCHEDULES: each holds when its task is next due, a
+newer one replacing it, and a schedules stream may not discard new. Both are work queues: an ack deletes, and no
+consumer reads a held schedule. A schedules stream is served with `allow_rollup_hdrs` on and `deny_purge` off whatever
+its config asks (asking otherwise is overridden, and `deny_purge` beside rollups is refused, 10052), so it is declared
+that way, and the worker asserts the audit's and the scan's schedules at its start and every 15 minutes
+(`maintenance.services.tasks`), which brings them back after a purge. Measured on nats-server 2.15.2 with file storage
+(2026-11-09).
+
+## `{{- if gt (mul 2 (int $queue.heartbeatSeconds)) (int $queue.ackWaitSeconds) }}`
+
+A running maintenance task stays with its worker only while the worker's in-progress acknowledgement reaches the broker
+inside the `maintenance-worker` consumer's ack wait; once one is late, JetStream delivers the task to another replica
+while the first is still passing the table. So the render refuses a heartbeat past half the ack wait, naming both values
+(`tests/unit/test_invariants.py::test_a_heartbeat_past_half_the_ack_wait_fails_the_render`). The worker's side is
+`tests/e2e-py/test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other.py`: a live worker's task stayed
+with it for three ack waits, and a killed one's moved to the other.
+
+## `converge_consumer MAINTENANCE_TASKS maintenance-worker`
+
+The consumer delivers a task once more than `maintenance.queue.maxDeliver`. A worker whose run fails on the last
+delivery ends the task itself, but a pass that takes its replica down (out of memory, or past twice
+`maintenance.queue.maxPassSeconds`, when the worker exits) never gets there, and JetStream keeps a work-queue message
+whose deliveries ran out (measured on nats-server 2.15.2, 2026-11-09): it would hold its table's subject, refusing
+every later pass of the table, until the stream's day-long `max_age`. The extra delivery reaches a worker, which ends
+the task without running it, counts it (`maintenance.tasks.ended`, the alert MaintenanceTasksEnded) and holds its next
+try `maintenance.queue.recheckHours` out, since the hourly audit queues a table nothing holds.
+
+## `converge_stream STORE_EVENTS`
+
+STORE_EVENTS holds the store's change events (ADR 0198 §3): each object write of a rask bucket, published on
+`store.events` by the store and read by maintenance alone. Its duplicate window covers the store's retry lifetime,
+since RustFS 1.0.3 refuses a stream whose window is shorter (274 s at its 30 s ack timeout; measured 2026-11-09). An
+event is a hint: the table's daily recheck finds what a lost one would have reported. So the stream drops its oldest
+events past `maintenance.queue.storeEventsMaxBytes` (`discard` old) rather than refusing the store, because it shares
+the bus's JetStream disk with LINEAGE and the work queue, and a long maintenance outage must not fill that disk for
+them. One event is about 2 KB (RustFS 1.0.3), so the default 128 MiB holds about 65,000.

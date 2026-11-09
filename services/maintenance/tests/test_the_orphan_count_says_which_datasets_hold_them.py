@@ -21,7 +21,7 @@ hid is the failure this whole summary exists to end.
 
 from __future__ import annotations
 
-from maintenance.api.routes import _orphans_by_dataset
+from maintenance.services.audit import _orphans_by_dataset
 from maintenance.services.orphans import OrphanFile
 from maintenance.services.reconcile import ReconcileReport
 

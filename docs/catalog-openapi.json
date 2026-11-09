@@ -6420,13 +6420,8 @@
         "type": "object"
       },
       "DueTable": {
-        "description": "One table a compaction or an index optimize is due on, as the maintenance sweep measured it (ADR 0162).",
+        "description": "One table a compaction or an index optimize is due on, as its maintenance pass measured it (ADR 0162).",
         "properties": {
-          "clones": {
-            "default": 0,
-            "title": "Clones",
-            "type": "integer"
-          },
           "compaction": {
             "anyOf": [
               {
@@ -19468,7 +19463,7 @@
     },
     "/management/v1/trash/{kind}/{uuid}/credentials": {
       "post": {
-        "description": "Vend the session that deletes one trashed table's bytes: every object at its location, in both spellings, and in\nits own data directories, and nothing on the control root.\n\nVended for a table record past its deadline, at a place whose claim records the record's uuid, crossing no control\nprefix and held by no live table; anything else is refused 409 (code 19). The record and what it keeps are ended at\n``DELETE /management/v1/trash/{kind}/{uuid}`` once the bytes are gone.",
+        "description": "Vend the session that deletes one trashed table's bytes: every object at its location, in both spellings, and in\nits own data directories, and nothing on the control root.\n\nVended for a table record past its deadline, at a place whose claim records the record's uuid, crossing no control\nprefix, held by no live table and read by no registered clone; anything else is refused 409 (code 19). The record and what it keeps are ended at\n``DELETE /management/v1/trash/{kind}/{uuid}`` once the bytes are gone.",
         "operationId": "vend_reclaim_credentials_management_v1_trash__kind___uuid__credentials_post",
         "parameters": [
           {

@@ -55,7 +55,7 @@ def _recorded(settings: Settings, table: str, tmp_path: Path) -> DueRecord:
     """A due record for ``table``, a table the catalog holds at a location of its own."""
     table_uuid, location = str(uuid4()), f"{tmp_path}/{uuid4()}"
     location_claims.take(table_claims.claim_store(settings), location, table, parse_identifier(table), is_gone=lambda _claim: False, uuid=table_uuid)
-    record = DueRecord(table=table, uuid=table_uuid, location=location, version=6, compaction=DUE, clones=["s3://other/clone"], evaluated_at=datetime.now(UTC))
+    record = DueRecord(table=table, uuid=table_uuid, location=location, version=6, compaction=DUE, evaluated_at=datetime.now(UTC))
     write_due(settings.registry_root, settings.storage_options(), record)
     return record
 
@@ -75,7 +75,7 @@ def test_a_caller_sees_only_the_due_tables_it_maintains(real_ns_client: TestClie
     listed = client.get("/management/v1/maintenance/due", headers=AUTH)
 
     assert listed.status_code == 200, listed.text
-    assert [(table["table"], table["uuid"], table["clones"]) for table in listed.json()["tables"]] == [("acme$mine", mine.uuid, 1)]
+    assert [(table["table"], table["uuid"]) for table in listed.json()["tables"]] == [("acme$mine", mine.uuid)]
 
 
 def test_a_walk_a_page_at_a_time_reads_each_record_a_bounded_number_of_times(
@@ -90,19 +90,13 @@ def test_a_walk_a_page_at_a_time_reads_each_record_a_bounded_number_of_times(
     grants.grant("alice", *(("can_maintain", f"table:{record.uuid}") for record in records[1:]))
     act_as(client, "alice")
     read: list[str] = []
-    reads_one, reads_every = maintenance_due.read_due_named, maintenance_due.list_due
+    reads_one = maintenance_due.read_due_named
 
     def _reads_one(control_root: str, options: StorageOptions, name: str) -> DueRecord | None:
         read.append(name)
         return reads_one(control_root, options, name)
 
-    def _reads_every(control_root: str, options: StorageOptions) -> list[DueRecord]:
-        every = reads_every(control_root, options)
-        read.extend(record.uuid for record in every)
-        return every
-
     monkeypatch.setattr(maintenance_due, "read_due_named", _reads_one)
-    monkeypatch.setattr(maintenance_due, "list_due", _reads_every)
 
     walked: list[str] = []
     token: str | None = None

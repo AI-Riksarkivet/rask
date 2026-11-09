@@ -1,7 +1,7 @@
 """Where the estate's Lance datasets are: a bounded walk of one bucket, and the prefixes it could not reach.
 
-Pure list-logic over a pyarrow filesystem, shared by the sweep, the orphan scan (``reconcile.py``) and the purge's
-base-reference pre-pass, so all three cover the same datasets.
+Pure list-logic over a pyarrow filesystem, shared by a table's pass, the orphan scan (``reconcile.py``), the trash
+purge and the floor raise, so all of them cover the same datasets.
 """
 
 from __future__ import annotations
@@ -17,10 +17,10 @@ class Discovery(BaseModel):
     """What one bucket's walk found — AND what it did not reach.
 
     ``truncated`` keeps the depth bound from being silent: a dataset nested deeper than ``max_depth`` is
-    neither maintained by the sweep nor scanned by the orphan pass, and a report over the datasets the
+    neither maintained by a pass nor scanned by the orphan pass, and a report over the datasets the
     walk happened to reach would be the "0 that means we did not look" the orphan module forbids. A
-    prefix the walk stopped at is DATA the caller must dispose of — the sweep logs it, the reconciler
-    files an ``IncompleteScan``.
+    prefix the walk stopped at is DATA the caller must dispose of — the reconciler files an
+    ``IncompleteScan``.
     """
 
     uris: list[str] = []
@@ -49,7 +49,7 @@ class Discovery(BaseModel):
 #: `IncompleteScan` — and `report_is_clean` refuses to certify an estate with anything incomplete, which
 #: gates the #79 purge. Measured on the deployed release 2026-09-16: three incomplete entries, all
 #: backup snapshots, against 932 orphan files across 8 datasets the purge could not touch.
-#: `_bases` holds the catalog's per-table base records ([[LH-279]]) and `_maintenance_due` the sweep's own due records
+#: `_bases` holds the catalog's per-table base records ([[LH-279]]) and `_maintenance_due` maintenance's own due records
 #: (ADR 0162): control-root JSON, never a dataset.
 #: The set is the estate's one list (:data:`lakehouse.control_prefixes.CONTROL_PREFIXES`), which the
 #: catalog's destructive drop and the purge refuse a location crossing.
@@ -75,8 +75,7 @@ def _may_hide_a_dataset(fs: pafs.FileSystem, path: str) -> bool:
     know, and trading a false gap for a false CLEAN is strictly worse: the first blocks a purge, the
     second lets one run over ground nobody scanned. That is also why this asks the cheap question
     (are there directories) rather than recursing to look for a marker: one listing per truncated
-    prefix, at the bound only, against a walk whose dominant cost is `_protected_roots` opening every
-    dataset it found.
+    prefix, at the bound only, against a scan whose dominant cost is opening every dataset it found.
     """
     try:
         children = fs.get_file_info(pafs.FileSelector(path, recursive=False, allow_not_found=True))
@@ -127,8 +126,8 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
 
     The catalog lays top-level tables out as ``<uuid>_<table_id>/``, but a registered table's dataset
     may sit below a prefix of the writer's choosing (``pipeline/bronze``, ``pipeline/silver`` …) — without
-    the marker probe the sweep would report the ``pipeline/`` prefix as a failed dataset AND never
-    maintain the real ones under it.
+    the marker probe a walk would report the ``pipeline/`` prefix as a failed dataset AND never
+    reach the real ones under it.
 
     Returns a :class:`Discovery`, not a bare list, so the depth cut-off cannot be dropped on the floor.
     """

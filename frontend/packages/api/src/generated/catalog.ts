@@ -2160,7 +2160,7 @@ export interface paths {
          *     its own data directories, and nothing on the control root.
          *
          *     Vended for a table record past its deadline, at a place whose claim records the record's uuid, crossing no control
-         *     prefix and held by no live table; anything else is refused 409 (code 19). The record and what it keeps are ended at
+         *     prefix, held by no live table and read by no registered clone; anything else is refused 409 (code 19). The record and what it keeps are ended at
          *     ``DELETE /management/v1/trash/{kind}/{uuid}`` once the bytes are gone.
          */
         post: operations["vend_reclaim_credentials_management_v1_trash__kind___uuid__credentials_post"];
@@ -6931,14 +6931,9 @@ export interface components {
         };
         /**
          * DueTable
-         * @description One table a compaction or an index optimize is due on, as the maintenance sweep measured it (ADR 0162).
+         * @description One table a compaction or an index optimize is due on, as its maintenance pass measured it (ADR 0162).
          */
         DueTable: {
-            /**
-             * Clones
-             * @default 0
-             */
-            clones?: number;
             compaction?: components["schemas"]["CompactionDue"] | null;
             /**
              * Evaluated At

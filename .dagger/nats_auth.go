@@ -9,11 +9,11 @@ import (
 
 // natsBoxImage is the nats-box the estate deploys: the NATS fixture's operator box, and the openbao fixture's `mintImage`,
 // whose nsc the dev mint runs. The lane mints its test keys with this image's nsc, so they come from the same tool.
-const natsBoxImage = "natsio/nats-box:0.19.7"
+const natsBoxImage = "natsio/nats-box:0.20.2"
 
 // natsStreamJobImage is the image chart/templates/nats-stream-job.yaml runs the stream Job in. The lane runs that
 // Job's rendered script with this image's nats CLI, as the `admin` user.
-const natsStreamJobImage = "natsio/nats-box:0.14.5"
+const natsStreamJobImage = "natsio/nats-box:0.20.2"
 
 // daprdImage is the sidecar the Dapr fixture's injector stamps into every pod (its SIDECAR_IMAGE).
 const daprdImage = "ghcr.io/dapr/daprd:1.19.0-rc.4"
@@ -21,7 +21,9 @@ const daprdImage = "ghcr.io/dapr/daprd:1.19.0-rc.4"
 // NatsAuth proves the chart's NATS permission table (`nats.auth.users`) on a real broker: the NATS fixture's
 // nats-server in operator mode with a MEMORY resolver and JetStream, test-only keys minted with nsc, one user
 // per table row, and the real daprd the Dapr fixture injects, running the chart's own Components against it
-// (tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py says what it asserts).
+// (tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py says what it asserts). On the same rig, the
+// maintenance worker on the queue the chart's stream Job declares, as its own bus user: two replicas share a burst and a
+// killed one's task goes to the other (tests/e2e-py/test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other.py).
 //
 //	dagger call nats-auth
 //	dagger call nats-auth --values=<a values file carrying nats.auth.users>
@@ -70,10 +72,12 @@ func (m *Rask) NatsAuth(
 		WithEnvVariable("RASK_NATS_AUTH_TOOLS", "/opt/nats-auth").
 		WithEnvVariable("RASK_NATS_AUTH_VALUES", "/opt/nats-auth/values.yaml").
 		// A hang detector, as in Test: a stuck broker or sidecar would otherwise print nothing at all, because
-		// Dagger buffers an exec's output until it completes. The test's measured runtime is under a minute.
+		// Dagger buffers an exec's output until it completes. The permission proof runs under a minute and the worker's
+		// about two (it waits out a follow-up's 60 s retry).
 		// `--require-live`: a skip in a lane that stood its stack up is a test that ran nowhere, so it fails the lane.
 		WithExec([]string{
 			"uv", "run", "--no-sync", "pytest", "tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py",
+			"tests/e2e-py/test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other.py",
 			"-m", "nats_auth", "-v", "-rs", "-p", "no:cacheprovider", "--timeout=600", "--timeout-method=thread", "--require-live",
 		}).
 		Stdout(ctx)

@@ -19,7 +19,6 @@ import lance
 from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse import auto_cleanup
-from lakehouse.base_refs import BaseRefs, rewrite_refusal
 from lakehouse.base_registry import RecordedBase
 from lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
 from lakehouse.features import (
@@ -41,13 +40,10 @@ from maintenance.services import base_reclaim
 log = logging.getLogger(__name__)
 
 #: A refusal is "we declined, before touching a byte" — never a skip ("not this tick") and never an error ("something
-#: failed"). The gate names which: a count that merges them is not actionable, because a clone's source stays refused
-#: forever, a manifest flag is a pylance upgrade away from being supported, and a bad branch name clears when somebody
-#: removes a directory, and ``vending_not_direct`` holds while the deployment vends no direct credential. A closed set:
-#: it is a metric label.
-type Gate = Literal[
-    "protected_base", "manifest_flags", "invalid_ref", "nested_branch", "governed_elsewhere", "unauthenticated", "vending_not_direct", "unnamed", "unidentified"
-]
+#: failed"). The gate names which: a count that merges them is not actionable, because a manifest flag is a pylance
+#: upgrade away from being supported, a bad branch name clears when somebody removes a directory, and
+#: ``vending_not_direct`` holds while the deployment vends no direct credential. A closed set: it is a metric label.
+type Gate = Literal["manifest_flags", "invalid_ref", "nested_branch", "governed_elsewhere", "unauthenticated", "vending_not_direct", "unnamed", "unidentified"]
 
 #: Whether the dataset's table needs compacting or reindexing, as this tick's due evaluation decided
 #: (:mod:`maintenance.services.due`): ``due`` wrote its record, ``clear`` deleted it, ``unnamed`` found no
@@ -90,9 +86,6 @@ class DatasetResult(BaseModel):
     #: The table's fragments that keep a deleted row's bytes in one of its data directories: only a compaction rewrites
     #: them, and the compaction gate refuses such a table ([[LH-286]]).
     base_fragments_holding_deleted_rows: int = 0
-    #: This pass found Lance's commit-path auto-cleanup armed and removed every ``lance.auto_cleanup.*`` key
-    #: ([[LH-245]]).
-    auto_cleanup_disarmed: bool = False
     #: Each file a commit added, by its path under the table, that the store no longer holds as the catalog recorded it
     #: when it committed: overwritten in place ([[LH-419]]).
     overwritten_files: list[str] = Field(default_factory=list)
@@ -146,8 +139,6 @@ class ExpiryTarget(BaseModel):
     #: when the probe found nothing to write and so asked for none: the pass then writes nothing, and a write it finds
     #: needed waits for the next pass rather than being signed by anything else.
     write_options: StorageOptions | None = None
-    #: The whole-estate base references this tick's pre-pass took.
-    protected: BaseRefs = Field(default_factory=BaseRefs)
     #: The id the caller resolved, and vended the credential under.
     table_id: str | None = None
     #: The table's own data directories, as its base record names them; empty for a branch, whose files are its table's.
@@ -165,14 +156,12 @@ class ExpiryTarget(BaseModel):
 
 
 class DisarmOutcome(BaseModel):
-    """What :func:`_disarm_commit_path_cleanup` did, carried onto whichever result the pass returns."""
+    """The failure :func:`_disarm_commit_path_cleanup` met, if any, carried onto whichever result the pass returns."""
 
-    disarmed: bool = False
     error: str | None = None
     error_type: str | None = None
 
     def onto(self, result: DatasetResult) -> DatasetResult:
-        result.auto_cleanup_disarmed = self.disarmed
         if self.error is not None and result.error is None:
             result.error, result.error_type = self.error, self.error_type
         return result
@@ -198,11 +187,11 @@ def _disarm_commit_path_cleanup(ds: lance.LanceDataset, target: ExpiryTarget) ->
 
     Every catalog door that commits disarms the ref first (:mod:`lakehouse.auto_cleanup` records the
     measurements); a table nobody commits on is disarmed here, so it does not stay armed until some later commit
-    reclaims behind the sweep's gates.
+    reclaims behind maintenance's gates.
 
-    Called right after the open, BEFORE every refusal gate: the hold and the protected base are exactly the tables
-    whose history the lane would delete. The write is a config-only commit, and only when a key is present. A failure
-    is reported on the result, never raised: the dataset stays armed, which an operator must see, and the next tick
+    Called right after the open, BEFORE every refusal gate: a refused table is exactly one whose history a commit-path
+    cleanup would delete behind them. The write is a config-only commit, and only when a key is present. A failure is
+    reported on the result, never raised: the dataset stays armed, which an operator must see, and the next pass
     retries. A pass holding no vend commits nothing: a held table is vended none and keeps its keys until a door's
     commit disarms it, and a key armed since its probe looked is the next pass's to remove.
     """
@@ -218,7 +207,7 @@ def _disarm_commit_path_cleanup(ds: lance.LanceDataset, target: ExpiryTarget) ->
     if not disarmed:
         return DisarmOutcome()
     log.warning("auto_cleanup_disarmed", extra={"uri": target.uri, "keys": disarmed})
-    return DisarmOutcome(disarmed=True)
+    return DisarmOutcome()
 
 
 #: The prefix pylance puts on every ref-name rejection. Matched as a PREFIX: the bodies are upstream's wording, and a
@@ -235,15 +224,6 @@ def classify_maintain_failure(message: str) -> Literal["invalid_ref"] | None:
     too broadly would file genuine faults as "declined".
     """
     return "invalid_ref" if message.startswith(_INVALID_REF) else None
-
-
-def summarize_refusals(results: list[DatasetResult]) -> dict[str, int]:
-    """How many datasets each gate refused this sweep — empty when none were, so a caller can stay silent."""
-    counts: dict[str, int] = {}
-    for result in results:
-        if result.refused_by is not None:
-            counts[result.refused_by] = counts.get(result.refused_by, 0) + 1
-    return counts
 
 
 def _branches_inside(ds: lance.LanceDataset, uri: str) -> list[str]:
@@ -291,25 +271,6 @@ def _refuse_unsupported_flags(opened: _Opened, uri: str) -> DatasetResult | None
     return opened.result(uri).refuse(refusal, gate="manifest_flags")
 
 
-def _refuse_a_referenced_root(opened: _Opened, target: ExpiryTarget) -> DatasetResult | None:
-    """The ``protected_base`` refusal when another dataset resolves its files through this one (#114), else ``None``.
-
-    The source of a shallow clone carries no flag and no ``base_paths`` of its own; only the whole-estate pre-pass
-    knows another manifest resolves through these bytes. Measured: ``cleanup_old_versions`` after a rewrite removed the
-    obsoleted originals and the clone failed to open IN A FRESH PROCESS. The rule is
-    :func:`lakehouse.base_refs.rewrite_refusal`, which permits an in-root branch and a root held by its
-    pins. DEBUG, not WARNING: measured 2026-09-18, the line fired 116 times in ONE tick for the same permanent facts;
-    the sweep's summary reports the count and the breakdown once.
-    """
-    if target.protected.is_protected(target.uri) is None:
-        return None
-    why = rewrite_refusal(target.protected, target.uri, opened.ds.tags.list())
-    if why is None:
-        return None
-    log.debug("maintenance_refused_protected_base", extra={"uri": target.uri, "reason": why})
-    return opened.result(target.uri).refuse(why, gate="protected_base")
-
-
 def _open(target: ExpiryTarget) -> _Opened | DatasetResult:
     """The dataset opened with its manifest facts, or the result that says why it could not be.
 
@@ -337,9 +298,7 @@ def _open(target: ExpiryTarget) -> _Opened | DatasetResult:
 
 def _refusal(opened: _Opened, target: ExpiryTarget) -> DatasetResult | None:
     """The first gate that refuses reclamation on this dataset, in ladder order, or ``None`` to reclaim."""
-    return (
-        _refuse_a_branch_with_branches_inside(opened, target.uri) or _refuse_unsupported_flags(opened, target.uri) or _refuse_a_referenced_root(opened, target)
-    )
+    return _refuse_a_branch_with_branches_inside(opened, target.uri) or _refuse_unsupported_flags(opened, target.uri)
 
 
 def count_reclaimable(ds: lance.LanceDataset, policy: ExpiryPolicy) -> int:
@@ -359,7 +318,7 @@ _STAGED_MANIFEST: Final = re.compile(r"^(?P<inverted>\d{20})\.manifest-[0-9a-f]{
 _U64_MAX: Final = (1 << 64) - 1
 
 
-def _staged_manifests(uri: str, storage_options: StorageOptions) -> list[tuple[str, int, datetime]]:
+def staged_manifests(uri: str, storage_options: StorageOptions) -> list[tuple[str, int, datetime]]:
     """Each manifest staged under the ref's ``_versions/``: its store path, the version it was staged for, when it was put."""
     staged: list[tuple[str, int, datetime]] = []
     for listed in list_under(f"{uri.rstrip('/')}/_versions", storage_options):
@@ -378,7 +337,7 @@ def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, 
     a commit still in flight and is kept, and the grace keeps a commit deciding its outcome from losing the file.
     """
     cutoff = datetime.now(UTC) - policy.staged_grace
-    lost = [path for path, version, modified in _staged_manifests(target.uri, target.storage_options) if version <= ds.version and modified <= cutoff]
+    lost = [path for path, version, modified in staged_manifests(target.uri, target.storage_options) if version <= ds.version and modified <= cutoff]
     delete_objects(target.uri, vend, lost)
     result.staged_manifests_removed = len(lost)
 

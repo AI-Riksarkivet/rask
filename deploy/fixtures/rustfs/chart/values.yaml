@@ -42,6 +42,28 @@ identityProvider:
   issuer: https://kubernetes.default.svc.cluster.local
   # The audience the catalog projects its token for: rask's `objectStore.identity.audience`.
   clientId: rask-object-store
+# -- The store's change events (ADR 0198 §3): every object write of every bucket, published on the bus for rask's
+# maintenance (rask's `objectStore.events`). This fixture plays the platform's store operator for them: the server
+# publishes each one, and the job below puts the bucket event configuration on every bucket, the catalog's warehouse
+# buckets included. While the bus is down the server queues the events in an emptyDir (`/queue`), which survives a
+# restart of its container but not the pod's replacement; a table whose events were lost is found at its daily
+# recheck. Measured 2026-11-09 on 1.0.3 with nats-server 2.15.2: a write and an overwrite in place each publish one
+# event (a delete does too when configured, which this is not); two writes made while the bus was down were delivered
+# about 5 s after it returned. Empty `busAddress` publishes nothing.
+events:
+  # -- The bus the server publishes on: the NATS fixture's Service.
+  busAddress: rask-nats:4222
+  # -- The Secret holding the store's own bus credential (`nats.creds`): rask's, written by ESO from its dev store for
+  # its bus user `object-store`. Mounted as a file, never env.
+  busCredentials: rask-object-store-bus-creds
+  # -- How often every bucket's event configuration is put again: the longest a new bucket's writes go unpublished.
+  schedule: "*/5 * * * *"
+  # -- The S3 client that puts each bucket's event configuration (Docker Hub, `amazon/aws-cli:2.39.6`, its multi-arch
+  # index, read from the registry 2026-11-09).
+  image:
+    repository: amazon/aws-cli
+    tag: "2.39.6"
+    digest: sha256:eccdb3ec77e159d43ca6a750a70738c546883138be7f094498294a1477ec7e42
 # RustFS's footprint on this estate is not measured; these bounds leave room for an estate of ~100 buckets and
 # ~8,000 datasets, where an OOM mid-write is the partially-failed write the orphan scan exists to report.
 resources:

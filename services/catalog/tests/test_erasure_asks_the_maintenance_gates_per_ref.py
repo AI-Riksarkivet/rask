@@ -29,8 +29,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
-from lakehouse import base_refs, base_registry
-from lakehouse.base_refs import BaseRefs
+from lakehouse import base_registry
 from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.storage_options import StorageOptions
 
@@ -59,7 +58,6 @@ def test_a_table_mixing_file_versions_is_not_reclaimed_on_any_ref(tmp_path: Path
     report = verify(
         lance.dataset(uri),
         storage_options=StorageOptions(),
-        protected=None,
         reopen=lambda: lance.dataset(uri),
         table="t",
         predicate=_PREDICATE,
@@ -95,7 +93,6 @@ def test_no_ref_is_reclaimed_while_a_ref_write_holds_the_tables_history(tmp_path
     report = verify(
         lance.dataset(uri),
         storage_options=StorageOptions(),
-        protected=None,
         reopen=lambda: lance.dataset(uri),
         table="t",
         predicate=_PREDICATE,
@@ -112,9 +109,8 @@ def test_no_ref_is_reclaimed_while_a_ref_write_holds_the_tables_history(tmp_path
 
 
 def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every hop the verification door takes to the store carries the request's storage options: the #114
-    pre-pass's listing, the verification and its reopen. Without them an `s3://` table is read as a local path,
-    and the listing and the reopen fail."""
+    """Every hop the verification door takes to the store carries the request's storage options: the verification
+    and its reopen. Without them an `s3://` table is read as a local path, and the reopen fails."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("alice").schema) as writer:
@@ -132,19 +128,12 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     )
     so = StorageOptions(options={"aws_region": "eu-north-1"})
     seen: dict[str, Any] = {}
-    listed: list[StorageOptions] = []
-    siblings = base_refs.sibling_base_refs
 
     def _record(dataset: Any, **kwargs: Any) -> ErasureReport:
         seen.update(kwargs)
         return ErasureReport(table="db$subjects", predicate=_PREDICATE)
 
-    def _listing(location: str, storage_options: StorageOptions, *, configured: list[str], record_of: Any) -> BaseRefs:
-        listed.append(storage_options)
-        return siblings(location, storage_options, configured=configured, record_of=record_of)
-
     monkeypatch.setattr(door.erasure, "verify", _record)
-    monkeypatch.setattr(base_refs, "sibling_base_refs", _listing)
     application = FastAPI()
     application.include_router(door.router)
     settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
@@ -158,7 +147,6 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
 
     assert response.status_code == 200, response.text
     assert seen["storage_options"] == so
-    assert listed == [so]
     assert _options_the_reopen_passes(seen["reopen"], monkeypatch) == [so.in_clear()]
 
 

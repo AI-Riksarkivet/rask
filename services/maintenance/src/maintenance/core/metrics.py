@@ -1,8 +1,9 @@
 """OpenTelemetry domain metrics for the maintenance service (exported OTLP-direct to GreptimeDB).
 
-The sweep's counters carry the ``compaction.*`` prefix the alert rules and dashboards query; maintenance compacts
-nothing (ADR 0155), and what they count is the sweep: its passes, the versions it reclaimed, the datasets it refused or
-failed. Only the instrumentation scope names the service."""
+A table's pass counts under the ``compaction.*`` prefix the alert rules and dashboards query; maintenance compacts
+nothing (ADR 0155), and what they count is its own work: the datasets a pass reached, the versions it reclaimed, the
+datasets it refused or failed. The worker counts its tasks under ``maintenance.tasks.*`` (ADR 0198 §2). Only the
+instrumentation scope names the service."""
 
 from __future__ import annotations
 
@@ -19,11 +20,6 @@ type CatalogRefusal = Literal["vend_denied", "table_not_governed"]
 
 _meter = metrics.get_meter("lance.maintenance")
 
-_runs = _meter.create_counter(
-    "compaction.runs",
-    unit="{run}",
-    description="Maintenance sweeps triggered by the Dapr cron binding.",
-)
 _versions_removed = _meter.create_counter(
     "compaction.versions.removed",
     unit="{version}",
@@ -37,7 +33,7 @@ _versions_removed = _meter.create_counter(
 _bytes_reclaimed = _meter.create_counter(
     "compaction.bytes.reclaimed",
     unit="By",
-    description="Bytes freed by GC'ing superseded Lance versions during the sweep.",
+    description="Bytes freed by GC'ing superseded Lance versions in a table's pass.",
 )
 #: #64 — datasets the pass REFUSED, labelled by the gate that refused them (`record_refused` names each).
 #: Its own series, not a sub-case of an error counter: nothing failed, and the number that matters is the
@@ -111,19 +107,6 @@ _failed = _meter.create_counter(
 )
 
 
-#: F6(d) — datasets left alone because they are IN THE TRASH: dropped with a grace window, recoverable,
-#: and therefore frozen. Its own series rather than a fold into `_refused` because the two answer
-#: different questions: refused is "this dataset's LAYOUT defeats us", this is "this dataset's
-#: GOVERNANCE state forbids us". A step change here without a matching drop count is the signal that the
-#: exclusion is keyed wrong — the failure mode where a control-root misconfiguration quietly stops the
-#: estate being maintained while every tick still reports zero errors.
-_trashed_skipped = _meter.create_counter(
-    "compaction.datasets.trashed_skipped",
-    unit="{dataset}",
-    description="Discovered datasets the maintenance pass left untouched because a trash record covers them.",
-)
-
-
 #: #79 reclamation. Separate series from the sweep counters above because they answer a different
 #: question: those say how much history was folded away, these say how many DROPPED objects had their
 #: bytes destroyed — the only irreversible thing this service does.
@@ -168,21 +151,11 @@ _trash_planned = _meter.create_counter(
 _KINDS = ("table", "namespace")
 
 
-#: The lost-pass detectors. `compaction.runs` fires only AFTER the sweep
-#: loop, so a process killed at dataset 400 of 900 was observationally identical to a tick that never
-#: arrived. `started` fires before discovery; started minus completed IS the lost-pass count, and
-#: `datasets.swept` inside the loop says how far a lost pass got. This pair is also the prerequisite
-#: for any sweep-cadence or durability decision: without it nobody can measure how often a pass is
-#: actually lost.
-_runs_started = _meter.create_counter(
-    "compaction.runs.started",
-    unit="{run}",
-    description="Maintenance sweep passes STARTED (before discovery). started minus compaction.runs = passes lost mid-flight.",
-)
+#: Every dataset a table's pass reached, policy-skips included: the denominator `MaintenanceRefusalsRising` divides by.
 _datasets_swept = _meter.create_counter(
     "compaction.datasets.swept",
     unit="{dataset}",
-    description="Datasets the sweep loop reached this pass (including policy-skips) — the progress heartbeat of a running sweep.",
+    description="Datasets a table's pass reached, including those its policy skipped.",
 )
 
 
@@ -230,16 +203,8 @@ def record_signature_would_refuse(*, door: SignatureDoor, reason: str) -> None:
     _signature_would_refuse.add(1, {"door": door, "reason": reason})
 
 
-def record_run_started() -> None:
-    _runs_started.add(1)
-
-
 def record_dataset_swept() -> None:
     _datasets_swept.add(1)
-
-
-def record_run() -> None:
-    _runs.add(1)
 
 
 def record_trash_purge(
@@ -283,17 +248,6 @@ def record_reclaimed(*, versions_removed: int, bytes_removed: int = 0) -> None:
     _bytes_reclaimed.add(bytes_removed)
 
 
-def record_trashed_skipped(datasets: int) -> None:
-    """Record how many discovered datasets this tick left alone because they are IN THE TRASH (F6(d)).
-
-    Always emits, including zero, for `record_refused`'s reason applied one rung out: this exclusion is
-    keyed on a registry read, so a control-root misconfiguration or a bug in the path comparison could
-    start excluding the whole estate — and a sweep that maintains nothing while reporting no errors is
-    indistinguishable from a clean one without a series to look at.
-    """
-    _trashed_skipped.add(datasets)
-
-
 def record_refused(datasets: int, refused_by: str | None = None) -> None:
     """Record how many datasets this tick REFUSED, by WHICH GATE refused them.
 
@@ -326,6 +280,54 @@ def record_refused(datasets: int, refused_by: str | None = None) -> None:
         _refused.add(datasets, {"refused_by": refused_by})
         return
     _refused.add(datasets)
+
+
+#: A task its worker ran to the end and acknowledged, by kind: what tells that the hourly audit and the daily scan run,
+#: and that a worker runs at all (`MaintenanceAuditNotCompleting`, `MaintenanceTaskMetricsMissing`).
+_tasks_completed = _meter.create_counter(
+    "maintenance.tasks.completed",
+    unit="{task}",
+    description="Maintenance tasks their worker ran to the end and acknowledged, by kind.",
+)
+#: A task its worker ended on its last delivery (ADR 0198 §2), by kind: a pass, a release or an audit that failed every
+#: time it was tried, or a message no task parses (``unreadable``). Its table waits for its next commit or the audit.
+_tasks_ended = _meter.create_counter(
+    "maintenance.tasks.ended",
+    unit="{task}",
+    description="Maintenance tasks ended on their last delivery, by kind.",
+)
+#: A task still running past ``MAINTENANCE_MAX_PASS_SECONDS``, by kind: until its replica ends itself at twice that, the
+#: count is the only sign.
+_passes_overran = _meter.create_counter(
+    "maintenance.passes.overran",
+    unit="{task}",
+    description="Maintenance tasks still running past their bound, by kind.",
+)
+
+
+def create_task_series(kinds: tuple[str, ...]) -> None:
+    """Create each kind's series of the worker's three counters at 0 when it starts, and the `unreadable` one of the
+    ended count: a series born at 1 has no 0 before it, so `increase()` sees no increase and the first task ended or
+    overrun never pages, and a worker that has completed nothing yet would read "no data"."""
+    for kind in kinds:
+        for counter in (_tasks_completed, _tasks_ended, _passes_overran):
+            counter.add(0, {"kind": kind})
+    _tasks_ended.add(0, {"kind": "unreadable"})
+
+
+def record_task_completed(*, kind: str) -> None:
+    """Record a task its worker ran to the end and acknowledged."""
+    _tasks_completed.add(1, {"kind": kind})
+
+
+def record_task_ended(*, kind: str) -> None:
+    """Record a task its worker ended on its last delivery, or one whose message no task parses."""
+    _tasks_ended.add(1, {"kind": kind})
+
+
+def record_pass_overran(*, kind: str) -> None:
+    """Record a task still running past its bound."""
+    _passes_overran.add(1, {"kind": kind})
 
 
 def record_table_parked(*, table_id: str, refused_by: CatalogRefusal) -> None:

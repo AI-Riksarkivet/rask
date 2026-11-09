@@ -1,10 +1,11 @@
-"""The maintenance service's write-event subscription: after a commit, the written table's due record and its expiry.
+"""The maintenance service's commit-lane subscription: the task each announced write, registration or drop asks for goes
+on the work queue.
 
-Subscribes to `lineage.events.v1`, the one lane every governed writer converges on, with a queue group so replicas
-compete rather than each evaluating the same table. On a write it re-evaluates that one table's due record and, once
-enough of its versions are reclaimable, expires them (:func:`maintenance.services.arrival.act_on_write`), emitting the
-same `expire_versions` lineage run the sweep does. Registered when `MAINTENANCE_ARRIVAL_ENABLED` is on and a lineage
-topic is set.
+Subscribes to `lineage.events.v1`, the one lane every governed writer converges on and the catalog announces its tables'
+births and drops on, with a queue group so replicas compete rather than each queueing the same event. Which task an event
+asks for is :func:`maintenance.services.arrival.lane_task`'s: a table's pass, held a delay out, or a dropped table's
+release. A task already queued or running for the table covers it, and one replica's worker runs it
+(:mod:`maintenance.services.queue`). Registered when `MAINTENANCE_ARRIVAL_ENABLED` is on and a lineage topic is set.
 
 A WRITE IS ITS PUBLISHER'S CLAIM UNTIL ITS SIGNATURE IS CHECKED ([[XC-078]], owner ruling R4). The Dapr app token
 proves that this pod's own sidecar delivered an event, not who published it, and the location a write names is what
@@ -12,33 +13,34 @@ this service reads. So before evaluating, the door checks the write's `rask_sign
 publishes, with the signer sets lineage verifies with (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`), and
 `RASK_SIGNATURE_DOORS` decides what it does with the verdict (`lakehouse.lineage.door`): off checks nothing, observe evaluates
 as before and counts what enforcing would refuse, and enforce evaluates only a write a listed signer's key verifies. A
-refusal is acknowledged and evaluates nothing, since no redelivery can sign bytes already published; a key list that
-cannot be read is retried, since it says nothing about the signature. Only a write the lane would evaluate is checked
-(`plannable_write`), so an event it acknowledges untouched costs no key read.
+refusal is acknowledged and queues nothing, since no redelivery can sign bytes already published; a key list that cannot
+be read is retried, since it says nothing about the signature. Only an event the lane would queue a task for is checked
+(`lane_task`), so an event it acknowledges untouched costs no key read.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Final
 
 from dapr.ext.fastapi import DaprApp
 from fastapi import Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 
-from lakehouse import maintenance_policies
+from lakehouse import location_claims
 from lakehouse.draining import retry_when_draining
 from lakehouse.governed.dapr_auth import require_dapr_token
 from lakehouse.governed.signing_key import published_key_fetch, retry_until_signed
 from lakehouse.lineage.door import DoorMode, DoorVerdict, judge
 from lakehouse.lineage.keys import PublishedKeys
 from lakehouse.lineage.signing import signature_of, verify_signature
-from maintenance.api.dependencies import LineageEmitterDep, SettingsDep
+from maintenance.api.dependencies import SettingsDep, TaskQueueDep
 from maintenance.core.config import MaintenanceSettings
-from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import SignatureDoor, create_signature_refused_series, record_signature_refused, record_signature_would_refuse
-from maintenance.services.arrival import act_on_write, plannable_write, should_replan
-from maintenance.services.sweep import emit_sweep_lineage
+from maintenance.services.arrival import lane_task
+from maintenance.services.naming import claim_store
+from maintenance.services.queue import QueueUnavailableError, Task, TaskQueue
 
 
 log = logging.getLogger(__name__)
@@ -71,7 +73,8 @@ def _bounded(value: object) -> str | None:
 
 
 async def _judge_arrival(arrived: dict[str, Any], *, event_id: object, request: Request, settings: MaintenanceSettings) -> DoorVerdict:
-    """The door's verdict on a write this lane would plan, counted and logged whenever it is anything but a pass.
+    """The door's verdict on an event this lane would queue a task for, counted and logged whenever it is anything but a
+    pass.
 
     Over the event exactly as it arrived, never a re-serialisation: the producer signed the document it published. Off
     answers before any key is read; otherwise the check reads the store through a blocking client, so it runs in the
@@ -104,39 +107,38 @@ async def _judge_arrival(arrived: dict[str, Any], *, event_id: object, request: 
     return verdict
 
 
-async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, emitter: MaintenanceEmitter) -> dict[str, str]:
-    """Refresh the due record of the table this write names and expire its versions, when enough have accumulated.
+def _claimed_uuid(location: str, settings: MaintenanceSettings) -> str | None:
+    """The uuid of the table holding ``location``'s claim, for an event that names none; ``None`` when no table does."""
+    claims = claim_store(settings)
+    held = location_claims.holder(claims, location)
+    return held.uuid if held is not None else None
 
-    A compaction's commits and an index build or optimize skip the debounce: the refresh after one is what takes the
-    table off the due list.
 
-    ACKS a byte-free operation, an event carrying no physical URI, a debounced write and a table no manifest names:
-    none of those is retryable, and the sweep re-evaluates anything this declines. RETRIES only when the evaluation
-    could not decide (a manifest, the policy registry or the dataset unreadable), and stamps the debounce only after a
-    decision, so a failed refresh is not skipped by the next event. The debounce is keyed by the table uuid the event
-    names ([[LH-523]]), so a table registered later at the same location starts unstamped; an event naming none is
-    evaluated every time.
+async def handle_arrival(event: dict[str, Any], settings: MaintenanceSettings, queue: TaskQueue | None) -> dict[str, str]:
+    """Put the task this event asks for on the work queue (:func:`maintenance.services.arrival.lane_task`), now or held.
 
-    It checks no signature: the route calls it only for a write its door admitted, and a direct caller verifies nothing.
+    A table's pass is held a delay out, unless one is held already, which covers this event; a drop's release is queued
+    now, unless one is queued already. ACKS an event the lane leaves untouched and a location no table's claim holds: none
+    of those is retryable. RETRIES only when the bus did not take the task, so a lost publish is asked for again. On a
+    stack that runs no worker there is no queue, and the event is acknowledged untouched.
+
+    It checks no signature: the route calls it only for an event its door admitted, and a direct caller verifies nothing.
     """
-    write = plannable_write(event.get("data", event))
-    if write is None:
+    lane = lane_task(event.get("data", event))
+    if lane is None or queue is None:
         return {"status": SUCCESS}
-    options = settings.storage_options()
-    last = (
-        await run_in_threadpool(maintenance_policies.read_planned_version, settings.resolved_policy_root, options, write.table_uuid)
-        if write.table_uuid is not None
-        else None
-    )
-    if not write.refreshes_regardless() and not should_replan(last_planned=last, event_version=write.version, min_versions=settings.event_min_versions):
+    uuid = lane.uuid or await run_in_threadpool(_claimed_uuid, lane.location, settings)
+    if uuid is None:
         return {"status": SUCCESS}
-    acted = await run_in_threadpool(act_on_write, write.location, settings)
-    if acted.verdict == "failed":
+    task = Task(kind=lane.kind, uuid=uuid, location=lane.location)
+    try:
+        if task.kind == "table":
+            await queue.follow_up(task, datetime.now(UTC) + timedelta(seconds=settings.commit_pass_delay_seconds))
+        else:
+            await queue.enqueue(task)
+    except QueueUnavailableError as exc:
+        log.warning("maintenance_arrival_not_queued", extra={"task": task.subject("task"), "error": str(exc)[:_MAX_LOGGED_CHARS]})
         return {"status": RETRY}
-    if acted.expired is not None:
-        await emit_sweep_lineage(emitter, [acted.expired])
-    if write.version is not None and write.table_uuid is not None:
-        await run_in_threadpool(maintenance_policies.write_planned_version, settings.resolved_policy_root, options, write.table_uuid, write.version)
     return {"status": SUCCESS}
 
 
@@ -158,7 +160,7 @@ def register_arrival_route(app: FastAPI, settings: MaintenanceSettings) -> DaprA
         request: Request,
         *,
         config: SettingsDep,
-        emitter: LineageEmitterDep,
+        queue: TaskQueueDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
         signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
@@ -168,8 +170,8 @@ def register_arrival_route(app: FastAPI, settings: MaintenanceSettings) -> DaprA
         signature door, when it enforces, is what stops a forged write from naming any URI in any bucket for
         this service to read.
 
-        While draining, ask for REDELIVERY rather than evaluating — Dapr's delivery does not consult a readiness
-        probe. The same answer while this service's signing key is unresolved, so the lane and the sweep come up
+        While draining, ask for REDELIVERY rather than queueing — Dapr's delivery does not consult a readiness
+        probe. The same answer while this service's signing key is unresolved, so the lane and the worker come up
         together. Both answer before the event is read; the door reads it, so it comes after them and before anything
         is evaluated.
         """
@@ -178,13 +180,13 @@ def register_arrival_route(app: FastAPI, settings: MaintenanceSettings) -> DaprA
         if signing is not None:
             return signing
         arrived = event.get("data", event)
-        if plannable_write(arrived) is not None:
+        if lane_task(arrived) is not None:
             verdict = await _judge_arrival(arrived, event_id=event.get("id"), request=request, settings=config)
             if verdict.retry:
                 return {"status": RETRY}
             if not verdict.act:
                 return {"status": SUCCESS}
-        return await handle_arrival(event, config, emitter)
+        return await handle_arrival(event, config, queue)
 
     return wrapper
 

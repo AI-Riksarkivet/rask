@@ -69,7 +69,6 @@ DEX="$(svc "$RELEASE-dex")"          || true
 FGA="$(svc "$RELEASE-openfga")"      || true
 # The telemetry store is the platform's; on a dev estate, the observability fixture's (deploy/fixtures/observability).
 GREPTIME="$(svc greptimedb observability)" || true
-MAINT="$(svc "$RELEASE-maintenance")" || true
 # THE BUS THE RELEASE'S PUB/SUB COMPONENTS DIAL (`nats.url`), read off one of them and resolved to that Service's
 # ClusterIP like every address above: the NATS fixture's `rask-nats` on a dev estate. A bus that is no Service in this
 # cluster resolves to nothing, and the suites that read the bus skip.
@@ -132,7 +131,6 @@ url LANCE_E2E_S3_ENDPOINT     "$S3"
 url LANCE_E2E_DEX             "$DEX" /dex
 url LANCE_E2E_FGA             "$FGA"
 url LANCE_E2E_GREPTIME_URL    "$GREPTIME"
-url LANCE_E2E_MAINTENANCE_URL "$MAINT"
 if [ -n "$NATS" ]; then export LANCE_E2E_NATS_URL="nats://$NATS"; else _missing="$_missing LANCE_E2E_NATS_URL"; fi
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
 export LANCE_E2E_TOKEN="$ALICE"
@@ -234,7 +232,6 @@ export LANCE_E2E_OUTBOX_URI="s3://lance-catalog/_lineage_outbox"
 CONTROL_OUTBOX="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="LANCE_CONTROL_OUTBOX_URI")].value}' 2>/dev/null || true)"
 [ -z "$CONTROL_OUTBOX" ] || export LANCE_E2E_CONTROL_OUTBOX_URI="$CONTROL_OUTBOX"
 export LANCE_E2E_RELAY_BINDING=lineage-relay-cron
-export LANCE_E2E_MAINTENANCE_BINDING=maintenance-cron
 export AWS_ACCESS_KEY_ID="$S3_KEY"
 export AWS_SECRET_ACCESS_KEY="$S3_SECRET"
 # THE S3 PAIR IS READ UNDER ITS OWN NAMES TOO, and exporting only the AWS_* spelling is why suites

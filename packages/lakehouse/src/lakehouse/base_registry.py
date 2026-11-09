@@ -34,8 +34,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from lakehouse import location_claims, records
-from lakehouse.base_refs import decoded_path, location_in_store, names_a_location, normalise, store_of
+from lakehouse import clone_sources, location_claims, records
+from lakehouse.base_refs import decoded_path, key_uri, location_in_store, names_a_location, normalise, store_of
 from lakehouse.features import BasePathRef
 from lakehouse.record_store import delete_record, record_key
 from lakehouse.storage_options import StorageOptions
@@ -316,18 +316,40 @@ def forget_base_record(registry: BaseRegistry, location: str, *, table: str) -> 
     The one removal that is not a claim's undo: a record outliving the manifest it describes would
     sanction those bases for whatever is next written at the location.
 
-    THE DATA DIRECTORIES GO FIRST ([[LH-252]]). Each ``data`` entry names the table's own directory
+    THE DATA DIRECTORIES AND THE CLONE TAGS GO FIRST. Each ``data`` entry names the table's own directory
     beneath an approved data base, held for ``table`` by a location claim on the same control root
-    (:func:`claim_data_directories`); the record is the one place that still lists them, so they are
-    released before it is deleted. A claim another table holds is left alone
-    (:func:`~lakehouse.location_claims.release`).
+    (:func:`claim_data_directories`, [[LH-252]]), and each ``derived_from`` entry a source whose version a tag keeps
+    for this clone (:mod:`lakehouse.clone_sources`, ADR 0198); the record is the one place that still lists them, so
+    they are released before it is deleted, and a failure leaves the record for the retry. A claim another table
+    holds is left alone (:func:`~lakehouse.location_claims.release`).
+
+    Raises:
+        OSError: The store refused a source's tag read or delete; the record stands.
     """
     record = read_base_record(registry, location)
     claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
     for entry in record.entries if record is not None else []:
         if entry.role is BaseRole.DATA:
             location_claims.release(claims, entry.path, table)
+    release_clone_sources(registry, location, record=record)
     return delete_record(registry.control_root, registry.storage_options, record_key_for(location))
+
+
+def release_clone_sources(registry: BaseRegistry, location: str, *, record: BaseRecord | None = None) -> list[str]:
+    """Delete the tag the clone at ``location`` holds on each source its record names as ``derived_from``; the sources
+    a tag was deleted on (ADR 0198 §1). ``record`` is the clone's, when the caller already read it.
+
+    Every door that stops governing a clone asks it: one that forgets the record (:func:`forget_base_record`), and a
+    deregister, which keeps the record for the bytes it leaves in place and ends what the catalog promised them.
+
+    Raises:
+        UnreadableBaseRecordError: The record exists and cannot be read.
+        OSError: The store did not answer a source's tag read or delete.
+        ValueError: A source's dataset stands and could not be opened, or its tag could not be deleted.
+    """
+    held = record if record is not None else read_base_record(registry, location)
+    sources = [key_uri(entry.store, entry.path) for entry in held.entries if entry.role is BaseRole.DERIVED_FROM] if held is not None else []
+    return clone_sources.release_all(sources, clone_location=location, storage_options=registry.storage_options)
 
 
 def claim_data_directories(

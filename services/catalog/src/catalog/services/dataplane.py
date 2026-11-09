@@ -123,6 +123,7 @@ from lakehouse import (
     auto_cleanup,
     base_registry,
     branch_layout,
+    clone_sources,
     commit_records,
     commit_turns,
     data_directories,
@@ -1854,8 +1855,10 @@ def destroy_table(
        deregister's answer was lost.
 
     Raises:
-        InvalidTableStateError: The location is not one a drop may delete; nothing changed.
-        ServiceUnavailableError: The table's base record or a data directory's claim could not be read; nothing changed.
+        InvalidTableStateError: The location is not one a drop may delete, or a registered clone reads through it
+            (:func:`require_no_clone_reading`); nothing changed.
+        ServiceUnavailableError: The table's base record, a data directory's claim or its tags could not be read; nothing
+            changed.
         TableNotFoundError: The backend holds no such table; nothing changed.
         TableBytesLeftError: The row is gone and objects remain at the location or in a data directory, or the row
             removed named another location, whose bytes are left alone. The residue record stands.
@@ -1863,6 +1866,7 @@ def destroy_table(
     stored, spelled = _table_paths(location)
     holds_a_dataset = _require_destroyable(location, so, stored, spelled, estate_roots=estate_roots)
     table = CATALOG_DELIMITER.join(segments)
+    require_no_clone_reading(location, so, table=table)
     directories = _data_directories_of(control, location, table)
     residue = (
         trash.make_record(table, uuid=table_uuid, location=location, dropped_by=dropped_by, grace_days=0, namespace_uuid=namespace_uuid, residue=True)
@@ -1978,6 +1982,37 @@ def _contents(path: str, objects: Iterable[str]) -> list[str]:
     """``objects`` named relative to ``path``, without directory markers, which hold nothing."""
     prefix = f"{path.rstrip('/')}/"
     return sorted(name for name in (obj.removeprefix(prefix) for obj in objects) if name and not name.endswith("/"))
+
+
+def clone_readers(location: str, so: StorageOptions, *, table: str) -> set[str]:
+    """The tags of the registered clones that read the table at ``location`` (:func:`clone_sources.clones_reading`).
+
+    Raises:
+        ServiceUnavailableError: Its tags could not be listed, so whether a clone reads it is unknown.
+    """
+    try:
+        return set(clone_sources.clones_reading(location, so))
+    except (OSError, ClientError, BotoCoreError) as exc:
+        raise ServiceUnavailableError(f"the tags of table {table} could not be listed, so whether a clone reads it is unknown; nothing changed") from exc
+
+
+def require_no_clone_reading(location: str, so: StorageOptions, *, table: str) -> None:
+    """Refuse destroying the bytes at ``location`` while a registered clone reads through them (ADR 0198 §1).
+
+    A clone reads its source's data files where they are (`lance_docs/lance/format/table/blob.md` § Clones), so the
+    source's bytes are the clone's too; the tag each clone holds on its source says so (:mod:`lakehouse.clone_sources`).
+    A recoverable drop keeps the bytes and is not refused; its purge asks this again.
+
+    Raises:
+        InvalidTableStateError: The table carries a registered clone's tag (code 19, 409).
+        ServiceUnavailableError: Its tags could not be listed, so whether a clone reads it is unknown.
+    """
+    if readers := clone_readers(location, so, table=table):
+        log.warning("destroy_refused_clone_source", extra={"table": table, "location": location, "clones": readers})
+        raise InvalidTableStateError(
+            f"table {table} cannot be destroyed while {len(readers)} registered clone(s) read its files: drop or deregister the clones first, "
+            "or drop it recoverably"
+        )
 
 
 def _require_destroyable(location: str, so: StorageOptions, stored: str, spelled: str, *, estate_roots: Sequence[str]) -> bool:

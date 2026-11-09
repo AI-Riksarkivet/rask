@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import Iterator, Mapping
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +31,6 @@ import pytest
 from fastapi.testclient import TestClient
 from lance.optimize import Compaction
 
-from lakehouse import base_refs, maintenance_due
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from tests.integration.lineage_app import SUBJECT_HEADER, free_port, governed_lineage, live_catalog, live_lineage, run_event
 
@@ -78,12 +76,6 @@ def _operation(event: dict[str, Any]) -> str:
 
 def _compact_the_feed(catalog_url: str) -> None:
     """Compact ``provenance$events`` as a bring-your-own job does, through the catalog's doors with Lance's own protocol."""
-    from catalog.core.config import get_settings
-
-    settings = get_settings()
-    # The clone list a maintenance sweep writes, which the catalog judges every compaction against (ADR 0162).
-    clones = maintenance_due.CloneList.taken(base_refs.BaseRefs(), at=datetime.now(UTC))
-    maintenance_due.write_clone_list(settings.registry_root, settings.storage_options(), clones)
     feed = lance.dataset(namespace_client=lance_namespace.connect("rest", {"uri": catalog_url}), table_id=["provenance", "events"])
     plan = Compaction.plan(feed, {"target_rows_per_fragment": 1024})
     Compaction.commit(feed, [task.execute(feed) for task in plan.tasks])

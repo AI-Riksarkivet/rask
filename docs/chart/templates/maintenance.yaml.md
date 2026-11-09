@@ -168,6 +168,7 @@ the token, and refuses a pair beside it (`lakehouse.store_session.require_one_st
 THE SESSION READS THE ESTATE AND WRITES ONLY ITS OWN RECORDS. Its canned policy (`lance.objectStorePolicy`, component
 `maintenance`, rendered into `<release>-object-store-identities`) allows `ListAllMyBuckets`; list, `GetBucketLocation`
 and get on every bucket and key; and put and delete only on `<control bucket>/_maintenance_due/*`,
+`<control bucket>/_maintenance_files/*` (its copy of the commit records it has read, which no erasure or hold reads),
 `<control bucket>/_policies/state/*` and `<control bucket>/_lineage_outbox/*`. Owner, 2026-11-03: a compromised
 maintenance pod must not be able to defeat an erasure or a hold. Every other write is signed by a catalog vend:
 

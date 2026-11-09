@@ -75,12 +75,12 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from lakehouse import trash, warehouse_records
-from lakehouse.base_refs import BaseRefs, decoded_path, decoded_segments, location_within, names_a_location, store_of
+from lakehouse.base_refs import decoded_path, decoded_segments, location_within, names_a_location, store_of
 from lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError
 from lakehouse.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from lakehouse.control_events import ControlAction, ControlObjectType, ControlUuids
 from lakehouse.control_prefixes import CONTROL_PREFIXES
-from lakehouse.data_directories import delete_directories, directories_to_end, directory_uri
+from lakehouse.data_directories import delete_directories, directories_to_end
 from lakehouse.objectfs import fs_and_base
 from lakehouse.storage_options import StorageOptions
 from lakehouse.stored_objects import StoredObject, delete_objects, list_under
@@ -577,28 +577,7 @@ def _versions_last(path: str, objects: list[StoredObject]) -> list[str]:
     return sorted((stored.path for stored in objects), key=lambda stored_path: stored_path.startswith(versions))
 
 
-def _protected_base_reason(location: str, *, referrer: str) -> str:
-    """The ONE wording for "a live dataset resolves through these bytes".
-
-    Shared by the delete that raises it and the preview that predicts it: a preview reporting a
-    different sentence than the run it previews is a preview an operator cannot match up to the real
-    outcome, and two copies of a sentence drift the moment either is edited.
-    """
-    return (
-        f"refusing to delete {location}: another dataset resolves its files through {referrer} "
-        f"(shallow clone / multi-base) — deleting these bytes would break a live dataset"
-    )
-
-
-class ProtectedBaseError(RuntimeError):
-    """Refusal: another dataset's manifest resolves its files through this location (#128d).
-
-    Its own type rather than a bare RuntimeError because the caller must be able to report this as a
-    REFUSAL — a deliberate, correct non-deletion — and not as an error that failed the purge.
-    """
-
-
-def delete_location(location: str, storage_options: StorageOptions, *, protected: BaseRefs | None = None) -> tuple[int, int]:
+def delete_location(location: str, storage_options: StorageOptions) -> tuple[int, int]:
     """Delete the recorded table's bytes, under both of its spellings (:func:`lakehouse.table_paths.spellings`); return
     ``(bytes_deleted, files_deleted)``.
 
@@ -611,18 +590,9 @@ def delete_location(location: str, storage_options: StorageOptions, *, protected
     pyarrow's directory delete puts the location's parent back as a marker outside it (measured on pyarrow 25.0.0). A
     store's refusal propagates as ``OSError``, so a purge is never reported over bytes that are still there.
 
-    ``protected`` is the #128d guard: the estate's foreign ``base_paths`` collected by
-    :func:`lakehouse.base_refs.protected_roots`. When a dataset that outlives this delete resolves its
-    files through these bytes, deleting them breaks it, so this refuses with :class:`ProtectedBaseError`. A referrer
-    inside the location, the table's own branch, goes with it (:meth:`BaseRefs.protects_from_deletion`).
-
-    Passing ``None`` skips the check, and that is for callers that have already run the pre-pass, not
-    a default to lean on: the SOURCE of a clone carries no feature flag and no ``base_paths`` of its
-    own (measured), so nothing about the dataset in front of you reveals the danger. Only the
-    cross-estate pre-pass can.
+    A trashed table a registered clone still reads through is never deleted here: the catalog vends no session to delete
+    it with while the clone's tag stands on it (``catalog.services.trash_reclaim.clone_refusal``, ADR 0198 §1).
     """
-    if protected is not None and (root := protected.protects_from_deletion(location)) is not None:
-        raise ProtectedBaseError(_protected_base_reason(location, referrer=root))
     dataset, spelled = spellings(location)
     held = list_under(dataset, storage_options)
     stray = list_under(spelled, storage_options) if spelled != dataset else []
@@ -702,17 +672,14 @@ def refusal_log_entry(record: RefusedRecord) -> dict[str, object]:
 
 
 async def _delete_bytes_or_refuse(
-    out: TrashPurgeReport, record: dict[str, Any], *, session: StorageOptions, settings: MaintenanceSettings, control_root: str, protected: BaseRefs | None
+    out: TrashPurgeReport, record: dict[str, Any], *, session: StorageOptions, settings: MaintenanceSettings, control_root: str
 ) -> tuple[int, int] | None:
     """Delete the bytes this record names, its root and its data directories, under its reclaim session, or record a
     refusal and answer ``None``.
 
-    THREE ARMS RATHER THAN ONE, because they say different things to an operator and only one of them
-    means the record itself is wrong: ``NotADatasetRootError`` means this record points at something
-    that is not a dataset; ``ProtectedBaseError`` means a live clone resolves its files through these
-    bytes or through one of its data directories, so an operator who drops the clone first can let the
-    next tick reclaim them legitimately; an ``OSError``, or a base record that could not be
-    read, is transient and the next tick simply retries.
+    TWO ARMS RATHER THAN ONE, because they say different things to an operator and only one of them means the record
+    itself is wrong: ``NotADatasetRootError`` means this record points at something that is not a dataset; an
+    ``OSError``, or a base record that could not be read, is transient and the next run simply retries.
 
     The base record and the claims that say which data directories are the table's are READ with maintenance's own
     session, which reads the estate; only the deletes are the session's, which reaches the bytes and nothing else.
@@ -720,13 +687,10 @@ async def _delete_bytes_or_refuse(
     location, obj_id = trash.location_of(record), trash.name_of(record)
     registry = BaseRegistry(control_root=control_root, storage_options=settings.storage_options())
     try:
-        return await run_in_threadpool(partial(_delete_guarded, location, session, protected, registry=registry, table=obj_id))
+        return await run_in_threadpool(partial(_delete_guarded, location, session, registry=registry, table=obj_id))
     except NotADatasetRootError as exc:
         await _refuse(out, record, reason=str(exc), settings=settings)
         log.warning("trash_purge_refused_not_a_dataset", extra={"kind": trash.kind_of(record), "id": obj_id, "location": location})
-    except ProtectedBaseError as exc:
-        await _refuse(out, record, reason=str(exc), settings=settings)
-        log.warning("trash_purge_refused_protected_base", extra={"kind": trash.kind_of(record), "id": obj_id, "location": location})
     except (OSError, UnreadableBaseRecordError, ClientError, BotoCoreError) as exc:
         reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
         await _refuse(out, record, reason=reason, settings=settings)
@@ -790,7 +754,7 @@ async def _asked_of_the_catalog[T](record: dict[str, Any], out: TrashPurgeReport
         return None
 
 
-async def _preview_one(record: dict[str, Any], out: TrashPurgeReport, *, roots: set[str], live: Liveness | None, protected: BaseRefs | None) -> None:
+async def _preview_one(record: dict[str, Any], out: TrashPurgeReport, *, roots: set[str], live: Liveness | None) -> None:
     """Plan ONE record, or report why the purge would refuse it; writes nothing and asks for no session.
 
     The cut is placed after the REFUSAL CHECK deliberately: everything above it is a read, everything after it mutates,
@@ -802,14 +766,6 @@ async def _preview_one(record: dict[str, Any], out: TrashPurgeReport, *, roots: 
     if (reason := check(record, roots=roots, live=live)) is not None:
         out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason))
         log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
-        return
-    # THE SHALLOW-CLONE GUARD IS APPLIED HERE, not left to the delete it never reaches. The estate pre-pass has already
-    # run in full on this tick and `is_protected` is a pure in-memory prefix compare, so reading its answer is free — and
-    # NOT reading it made the preview overstate in the one direction that costs most: naming a record whose bytes a live
-    # dataset resolves through.
-    if protected is not None and (referrer := protected.protects_from_deletion(location)) is not None:
-        out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=_protected_base_reason(location, referrer=referrer)))
-        log.warning("trash_purge_refused_protected_base", extra={"kind": kind, "id": obj_id, "location": location})
         return
     # PAST EVERY REFUSAL THIS PASS CAN EVALUATE WITHOUT MUTATING. `would_purge` remains an UPPER BOUND: the catalog's own
     # judgement, a non-dataset location and a failing delete can each still refuse a planned record, and none of them
@@ -828,7 +784,6 @@ async def _purge_one(
     live: Liveness | None,
     recheck_live: Callable[[], Liveness | None],
     control: ControlEmitter,
-    protected: BaseRefs | None = None,
 ) -> None:
     """Delete → end → announce, for ONE record. Never raises; every failure is a refusal.
 
@@ -850,7 +805,7 @@ async def _purge_one(
     if kind == "table" and location:
         if (session := await _asked_of_the_catalog(record, out, partial(reclaim_options_for, kind, uuid, settings), asked="reclaim session")) is None:
             return
-        reclaimed = await _delete_bytes_or_refuse(out, record, session=session, settings=settings, control_root=control_root, protected=protected)
+        reclaimed = await _delete_bytes_or_refuse(out, record, session=session, settings=settings, control_root=control_root)
         if reclaimed is None:
             return
         deleted = reclaimed
@@ -948,21 +903,9 @@ async def purge_expired_trash(
     # One manifest read per root per tick, shared by every record — and `None` (unreadable) refuses all
     # of them rather than letting a broken index read as "nothing is live".
     live = await run_in_threadpool(liveness_across, roots, storage_options) if due else Liveness()
-    # #128d THE PRE-PASS, over every dataset in the maintained estate and BEFORE any delete. A trash
-    # record names one path, but nothing in that record says whether a live shallow clone resolves its
-    # data files through it — the SOURCE carries no feature flag and no `base_paths` of its own
-    # (measured), so only the referring side holds the evidence and only a whole-estate pass finds it.
-    # Computed once per tick and shared by every record, exactly like `live` above.
-    try:
-        protected = await run_in_threadpool(partial(_estate_base_refs, roots, storage_options, settings=settings)) if due else BaseRefs()
-    except UnreadableBaseRecordError as exc:
-        # A protective record read as absent would free a recorded clone source's bytes ([[LH-279]]).
-        out.reason = f"a table's base record could not be read ({exc}) — refusing to purge on a partial map"
-        log.error("trash_purge_blocked", extra={"reason": out.reason})
-        return out
     for record in due:
         if dry_run:
-            await _preview_one(record, out, roots=roots, live=live, protected=protected)
+            await _preview_one(record, out, roots=roots, live=live)
             continue
         await _purge_one(
             record,
@@ -973,7 +916,6 @@ async def purge_expired_trash(
             live=live,
             recheck_live=lambda: liveness_across(roots, storage_options),
             control=control,
-            protected=protected,
         )
 
     _record_metrics(out)
@@ -1013,72 +955,27 @@ def _record_metrics(out: TrashPurgeReport) -> None:
     )
 
 
-def _estate_base_refs(roots: set[str], storage_options: StorageOptions, *, settings: MaintenanceSettings) -> BaseRefs:
-    """Sanctioned foreign ``base_paths`` across every maintained root — the #128d pre-pass for the purge.
-
-    Judged as the sweep judges them ([[LH-279]]): a base nothing sanctions protects nothing, so a planted
-    base cannot keep a trashed victim's bytes alive, and a recorded one keeps protecting.
-
-    Discovery is per-root and best-effort: a root that will not list contributes nothing rather than
-    aborting the tick, and `protected_roots` separately records datasets that would not open. Both
-    gaps narrow the protection rather than widening the deletion, which is the safe direction — but a
-    caller reading this should know the set is a floor, not a proof of completeness.
-    """
-    from lakehouse.base_refs import protected_roots
-    from maintenance.services.discovery import discover_datasets
-    from maintenance.services.sweep import base_record_reader
-
-    uris: list[str] = []
-    for root in sorted(roots):
-        bucket = root.split("://", 1)[-1].strip("/")
-        try:
-            fs, _ = fs_and_base(root, storage_options)
-            # THE SAME BOUND THE PURGE ITSELF REACHES. This walked to `discover_datasets`' default
-            # while the sweep and the drift report both pass `settings.discovery_max_depth`, so raising
-            # `discoveryMaxDepth` — the documented lever for datasets nested deeper than three levels —
-            # widened what may be DELETED and left what PROTECTS it where it was. A referring clone
-            # below the shorter bound is never discovered, `is_protected` answers None for its source,
-            # and the purge deletes bytes a live dataset resolves through, silently.
-            uris.extend(discover_datasets(fs, bucket, max_depth=settings.discovery_max_depth).uris)
-        except Exception as exc:  # noqa: BLE001 — an unlistable root must not abort the purge
-            log.warning("trash_purge_base_ref_discovery_failed", extra={"root": root, "error": str(exc)})
-    return protected_roots(
-        uris,
-        storage_options,
-        configured=settings.external_blob_base_list,
-        record_of=base_record_reader(settings, storage_options),
-        session=shared_lance_session(),
-    )
-
-
-def _judged_data_directories(location: str, *, registry: BaseRegistry, table: str, protected: BaseRefs | None) -> list[RecordedBase]:
+def _judged_data_directories(location: str, *, registry: BaseRegistry, table: str) -> list[RecordedBase]:
     """The data directories ending the table at ``location`` deletes, each judged before any byte goes ([[LH-286]]).
 
     :func:`lakehouse.data_directories.directories_to_end` decides which are the table's (its claim names
-    the table, held or released by it, and every other one is left); one a live dataset resolves its files through
-    refuses the whole delete, as the root does.
+    the table, held or released by it, and every other one is left).
 
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
-        ProtectedBaseError: A live dataset reads through one of the directories.
         botocore.exceptions.ClientError: The store refused a read of the record or a claim.
     """
-    directories = directories_to_end(registry, location, table=table)
-    for directory in directories:
-        uri = directory_uri(directory)
-        if protected is not None and (root := protected.protects_from_deletion(uri, along_with=location)) is not None:
-            raise ProtectedBaseError(_protected_base_reason(uri, referrer=root))
-    return directories
+    return directories_to_end(registry, location, table=table)
 
 
-def _delete_guarded(location: str, storage_options: StorageOptions, protected: BaseRefs | None, *, registry: BaseRegistry, table: str) -> tuple[int, int]:
-    """`delete_location` with the #128d guard bound, and the table's data directories after its root; ``(bytes, files)``.
+def _delete_guarded(location: str, storage_options: StorageOptions, *, registry: BaseRegistry, table: str) -> tuple[int, int]:
+    """`delete_location`, and the table's data directories after its root; ``(bytes, files)``.
 
     Every directory is judged before the root is touched, so a refusal deletes nothing. The record names the directories,
     so it is forgotten only after them (:func:`_delete_bytes_or_refuse`): a failure here leaves the record for the next
     tick, which finds the root already empty and finishes the directories.
     """
-    directories = _judged_data_directories(location, registry=registry, table=table, protected=protected)
-    root_bytes, root_files = delete_location(location, storage_options, protected=protected)
+    directories = _judged_data_directories(location, registry=registry, table=table)
+    root_bytes, root_files = delete_location(location, storage_options)
     deleted = delete_directories(directories, storage_options)
     return root_bytes + deleted.bytes, root_files + deleted.files

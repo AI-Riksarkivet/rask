@@ -6,12 +6,11 @@ That includes a FAIL: it was authorless, which a verifier could never accept, an
 person is most likely to have to chase. The control event a trash purge announces names the service as its actor and is
 signed the same way, with no delegation: maintenance never signs for a person.
 
-A SIGNER WITHOUT ITS KEY EMITS NOTHING and reports itself not ready, and every delivery that would make it act (a write
-arrival, the sweep's own tick) is answered before the delivery is read, so it is redelivered or retried rather than
-lost. Every event names its table's and namespace's uuids beside the names (ADR 0173 §10), inside what is signed. The
-sweep and the purge emit after the work they describe, so a signature that
-cannot be made is a withheld event and never a failed pass; maintenance stages no control event, so nothing signs one
-later.
+A SIGNER WITHOUT ITS KEY EMITS NOTHING and reports itself not ready, and a write arrival is answered before the delivery
+is read, so it is redelivered rather than lost; its worker takes no task meanwhile (`maintenance.services.queue.Worker`,
+driven on a real broker by the queue's own lane). Every event names its table's and namespace's uuids beside the names
+(ADR 0173 §10), inside what is signed. A pass and the purge emit after the work they describe, so a signature that cannot
+be made is a withheld event and never a failed pass; maintenance stages no control event, so nothing signs one later.
 
 The first two claims are driven through the real service lifespan, so the key reaches the emitters the way it does in the
 cluster: the secret store, the holder, the emitters and their author. The sidecar's secret API is answered by respx,
@@ -37,9 +36,8 @@ from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
 from lakehouse.lineage import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
 from lakehouse.lineage_events import DatasetUuids, dataset_uuids
 from maintenance.api.arrival import register_arrival_route
-from maintenance.api.routes import build_router
 from maintenance.core.config import MaintenanceSettings
-from maintenance.core.lineage_emit import DaprMaintenanceEmitter, NoopEmitter
+from maintenance.core.lineage_emit import DaprMaintenanceEmitter
 from maintenance.services.purge import ACTOR
 
 
@@ -124,7 +122,7 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None, moto
 
 
 def _emit(client: TestClient, kind: str) -> None:
-    """Emit through the service's own emitters, on the loop its lifespan runs on: the sweep's lineage, or the purge's control event."""
+    """Emit through the service's own emitters, on the loop its lifespan runs on: a pass's lineage, or the purge's control event."""
     lineage = client.app.state.lineage_emitter
     control = client.app.state.control_emitter
     portal = client.portal
@@ -196,32 +194,15 @@ def test_a_maintenance_without_its_key_emits_nothing_and_is_not_ready(boot: Boot
 RETRY = {"status": "RETRY"}
 
 
-@pytest.mark.parametrize(
-    ("route", "body", "answer"),
-    [
-        pytest.param("/maintenance-arrival", {"data": {"not": "an event"}}, RETRY, id="a-write-arrival"),
-        pytest.param("/maintenance-cron", {}, {"status": "skipped", "reason": "signing key unresolved"}, id="the-sweeps-tick"),
-    ],
-)
-def test_every_delivery_that_would_emit_is_answered_before_it_is_read_while_the_key_is_unresolved(
-    route: str, body: dict[str, Any], answer: dict[str, str]
-) -> None:
-    settings = MaintenanceSettings.model_validate(
-        {
-            "MAINTENANCE_ARRIVAL_ENABLED": "true",
-            "MAINTENANCE_BINDING_NAME": "maintenance-cron",
-            "MAINTENANCE_S3_ACCESS_KEY_ID": "test",
-        }
-    )
+def test_a_write_arrival_is_answered_before_it_is_read_while_the_key_is_unresolved() -> None:
+    settings = MaintenanceSettings.model_validate({"MAINTENANCE_ARRIVAL_ENABLED": "true", "MAINTENANCE_S3_ACCESS_KEY_ID": "test"})
     app = FastAPI()
-    app.state.lineage_emitter = NoopEmitter()
     attach_signing(app, SigningKeyHolder(identity=IDENTITY, store="lance-secrets", load_key=SigningKey.from_seed, parse_published=parse_published_keys))
-    app.include_router(build_router(settings))
     register_arrival_route(app, settings)
 
-    answered = TestClient(app).post(route, json=body)
+    answered = TestClient(app).post("/maintenance-arrival", json={"data": {"not": "an event"}})
 
-    assert (answered.status_code, answered.json()) == (200, answer)
+    assert (answered.status_code, answered.json()) == (200, RETRY)
 
 
 def test_an_emitter_refuses_a_key_for_an_identity_it_does_not_stamp_as_its_author() -> None:

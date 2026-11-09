@@ -19,6 +19,20 @@ spec:
       app.kubernetes.io/instance: {{ $.Release.Name }}
 {{- end }}
 {{- end }}
+{{- if and .Values.maintenance.enabled (gt (int .Values.maintenance.replicas) 1) }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lance.fullname" . }}-maintenance
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: maintenance
+      app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
 {{- if .Values.openfga.enabled }}
 ---
 # OpenFGA is the authz chokepoint — every governed catalog write and lineage read fails

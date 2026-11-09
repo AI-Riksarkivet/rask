@@ -194,30 +194,3 @@ def test_a_branch_delete_removes_the_branch_version_and_leaves_main(client: Test
     assert answer.json()["deleted_count"] == 1
     assert _versions(ns, branch=BRANCH) == [4, 6]
     assert _versions(ns) == [1, 2, 3, 4], "a branch-scoped delete reached main"
-
-
-def test_a_table_another_dataset_resolves_its_files_through_is_refused(client: TestClient, ns: LanceNamespace, tmp_path: Path) -> None:
-    """The reclaim deletes data files only the removed versions referenced, and a shallow clone of this
-    table may be the one still reading them — the #114 guard `maintenance/run` applies, applied here.
-
-    The clone is in its base record, as the catalog records a clone it made: an unrecorded one would be
-    a base nothing sanctioned, which protects nothing ([[LH-279]])."""
-    source = open_by_name(ns, StorageOptions(), TABLE)
-    # Joined as a string: the table's location is a `file://` URI, which `Path` would collapse to `file:/`.
-    clone = f"{source.uri.rsplit('/', 1)[0]}/clone.lance"
-    source.shallow_clone(clone, reference=2)
-    base_registry.claim_bases(
-        base_registry.BaseRegistry(control_root=str(tmp_path / "control")),
-        clone,
-        [
-            base_registry.RecordedBase(
-                path=source.uri, role=base_registry.BaseRole.DERIVED_FROM, is_dataset_root=True, origin=base_registry.BaseOrigin.SILVER, source_table=source.uri
-            )
-        ],
-    )
-
-    answer = _delete(client, (1, 2))
-
-    assert answer.status_code == 406, answer.text
-    assert "resolves its files through" in answer.json()["detail"]
-    assert _versions(ns) == [1, 2, 3, 4]

@@ -6,8 +6,8 @@ edit (storage, a mirror, retention to or from workqueue) it fails with the serve
 chart does not describe.
 
 RUN, not read: the Job's rendered script runs under `sh` against a stand-in `nats` CLI on `PATH`, which records the config
-each edit submits and answers as natscli v0.1.5 did against nats-server 2.14.2 (an accepted edit exits 0; a refused one
-exits 1, `nats: error: could not edit Stream <name>: <reason> (10052)`). The live bus is the GitOps lane's (`dagger call
+each edit submits and answers as natscli 0.5.1 (nats-box 0.20.2) did against nats-server 2.15.2, measured 2026-11-09 (an
+accepted edit exits 0; a refused one exits 1, `nats: error: could not edit Stream <name>: <reason> (10052)`). The live bus is the GitOps lane's (`dagger call
 gitops-from-empty`), which changes the max age on a running estate and reads the stream back.
 """
 
@@ -24,7 +24,7 @@ from tests.unit.chart_render import DEFAULT_ARGS, containers, render
 
 
 #: The stand-in CLI: `stream info` finds the streams named in `exists/`, `stream edit` records the config it is handed and
-#: refuses it when `refuse` holds a reason, and a consumer read finds none.
+#: refuses it when `refuse` holds a reason, a consumer read finds none, and a consumer add is accepted.
 _NATS = r"""#!/bin/sh
 [ "$1" = "--server" ] && shift 2
 case "$1 $2" in
@@ -35,7 +35,8 @@ case "$1 $2" in
     if [ -s "$FAKE_NATS/refuse" ]; then echo "nats: error: could not edit Stream $3: $(cat "$FAKE_NATS/refuse")" >&2; exit 1; fi
     echo "Stream $3 was updated"; exit 0 ;;
   "stream add") cp "$4" "$FAKE_NATS/added-$(basename "$4")"; exit 0 ;;
-  "consumer ls"|"consumer rm"|"consumer edit") exit 0 ;;
+  "consumer ls"|"consumer rm"|"consumer edit"|"consumer add") exit 0 ;;
+  "consumer info") echo "nats: error: consumer not found" >&2; exit 1 ;;
   "req "*) echo '{"err_code":10014}'; exit 0 ;;
 esac
 echo "stand-in nats: unexpected call: $*" >&2

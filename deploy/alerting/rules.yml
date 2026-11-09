@@ -316,10 +316,10 @@ groups:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Maintenance is REFUSING write events ({{ $labels.door }}, {{ $labels.reason }}) — their writes wait for the sweep"
+          summary: "Maintenance is REFUSING write events ({{ $labels.door }}, {{ $labels.reason }}) — their tables wait for their next pass"
           description: >-
-            A write event no listed signer's key verifies was ACKED and planned nothing, so only this alert and the
-            `maintenance_signature_refused` log line record it; the sweep still compacts the table on its next pass. Forged
+            A write event no listed signer's key verifies was ACKED and held no pass, so only this alert and the
+            `maintenance_signature_refused` log line record it; the table's next scheduled pass still reads it. Forged
             events are reaching the bus, or a signer broke.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
       # [[CTL-32]] The catalog's own subscription to its control lane.
@@ -448,12 +448,13 @@ groups:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Maintenance dead-lettered write events ({{ $labels.topic }}) — their tables wait for the sweep"
+          summary: "Maintenance dead-lettered write events ({{ $labels.topic }}) — their tables wait for their next pass"
           description: >-
             The write-event lane's sidecar exhausted its retry schedule and parked a write on dlq.maintenance.arrival, so
-            the table's versions were not expired and its due record not refreshed on arrival; the sweep re-finds it on its
-            next pass. The park is kept on the DLQ stream. A lane that parks every delivery cannot read a manifest, the
-            policy registry or the dataset: read maintenance's logs for the failing evaluation.
+            no pass was held for the commit; the table's next scheduled pass, within `maintenance.queue.recheckHours`,
+            reads it, and the hourly audit queues one for a table no schedule holds. The park is kept on the DLQ stream. A
+            lane that parks every delivery cannot reach the work queue or read a table's claim: read maintenance's logs
+            for the failing delivery.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
       # The drift report decides whether the purge may run at all and is the estate's answer to "is the
@@ -479,17 +480,17 @@ groups:
         annotations:
           summary: "A reconcile drift category grew in the last two hours — {{ $labels.category }}"
           description: >-
-            The maintenance reconcile is finding MORE of this drift category than it did two hours ago.
+            The hourly audit's drift report is finding MORE of this drift category than it did two hours ago.
             Each category names a different disagreement between the registry, OpenFGA and object
             storage, and a rising one means something is producing it now rather than leaving residue
             from before. A gating category also blocks the expired-trash purge, so reclamation stops
-            until it clears. Find the named objects in the `maintenance_reconcile` log line for the
+            until it clears. Find the named objects in the `reconcile_drift` log line for the
             matching category; `orphaned_trash` and the other non-gating categories are counted and
             reported but never block the purge.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
-      # A 1h window over a 30-minute tick: a failing dataset is counted once a tick, so a narrower window drops to 0
-      # between ticks and resets the `for:`.
+      # A failing dataset's pass is retried every `maintenance.queue.retrySeconds` (15 minutes) and counted once each
+      # time, so the 1h window holds four, and a narrower one would drop to 0 between retries and reset the `for:`.
       - alert: MaintenanceDatasetsFailing
         expr: sum(increase(compaction_datasets_failed_total[1h])) > 0
         for: 1h
@@ -499,47 +500,93 @@ groups:
         annotations:
           summary: "Table maintenance is failing on one or more datasets"
           description: >-
-            The sweep could not complete one or more datasets. Sustained failure means those datasets
-            accumulate superseded versions indefinitely while every tick still reports a successful run. Break down by error.type; the per-dataset URI is on the trace span and in
-            the maintenance_sweep log line, deliberately not on the metric (unbounded cardinality).
+            A table's pass could not complete one or more datasets, and retries them every
+            `maintenance.queue.retrySeconds`. Sustained failure means those datasets accumulate superseded versions
+            indefinitely. Break down by error.type; the per-dataset URI is on the trace span and in the
+            maintenance_dataset_outcome log line, deliberately not on the metric (unbounded cardinality).
 
-      # The sweep is the only thing that reclaims storage. It stopping is silent by construction: no
-      # error is raised, the cron simply never fires or the pass dies before completing.
-      - alert: MaintenanceSweepNotCompleting
-      # ABSENT IS NOT ZERO. A sweep pod that has
-      # died stops emitting `compaction_runs_total` entirely, and a bare `== 0` over an empty vector
-      # cannot fire, so the one thing that reclaims storage stops silently AND its alert goes quiet with it.
-      # The absence half is now its own rule below: GreptimeDB answers HTTP 500 to the composite form.
-      # A 2h window over the 30-minute tick: four passes should complete in it, so one slow pass does not page.
-        expr: sum(increase(compaction_runs_total[2h])) == 0
+      # The worker's heartbeat is the hourly audit (`maintenance.queue.auditSchedule`): a NATS message schedule puts it
+      # on the work queue once an hour whatever the replica count, and one worker runs it. Its stopping is silent by
+      # construction: nothing raises, the schedule simply never reaches a worker that completes it. A 2h window over
+      # the hourly audit, so one slow audit does not page. The series exists from a worker's start at 0
+      # (`create_task_series`), so a flat zero is a worker that runs and completes no audit.
+      - alert: MaintenanceAuditNotCompleting
+        expr: sum(increase(maintenance_tasks_completed_total{kind="audit"}[2h])) == 0
         for: 30m
         labels:
           severity: critical
           service: maintenance
         annotations:
-          summary: "No maintenance sweep has COMPLETED in two hours"
+          summary: "No maintenance audit has COMPLETED in two hours"
           description: >-
-            At a 30-minute cadence roughly four passes should have completed. Either the Dapr cron binding
-            is not delivering or every pass is dying mid-flight — compare with
-            compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count.
+            The hourly audit (the drift report, its repairs, the release of every drop past its deadline, and the
+            backstop that queues a table no schedule holds) has not completed in two hours. Either its schedule no
+            longer reaches a worker, or every audit fails or overruns: compare maintenance_tasks_ended_total and
+            maintenance_passes_overran_total for kind audit, and read the maintenance_task_retried log lines.
 
-      # The absence half. A sweep pod that has DIED emits no compaction_runs_total at all, and the
-      # `== 0` above cannot fire over a vector that does not exist. `for: 1h` because a fresh pod's series first appears
-      # when its first pass completes, up to one 30-minute tick plus the pass after boot.
-      - alert: MaintenanceSweepMetricsMissing
-        expr: absent(compaction_runs_total)
-        for: 1h
+      # ABSENT IS NOT ZERO. A worker that has died, or whose export broke, emits no maintenance_tasks_completed_total
+      # at all, and the `== 0` above cannot fire over a vector that does not exist. Bare `absent()` in its own rule:
+      # GreptimeDB answers HTTP 500 to the composite form. The series exists from a worker's start, so the `for:` is
+      # the export's own lag.
+      - alert: MaintenanceTaskMetricsMissing
+        expr: absent(maintenance_tasks_completed_total)
+        for: 15m
         labels:
           severity: critical
           service: maintenance
         annotations:
-          summary: "The maintenance sweep has stopped reporting entirely"
+          summary: "Maintenance's worker has stopped reporting entirely"
           description: >-
-            No `compaction_runs_total` series exists. The sweep pod is gone or its OTLP export is broken.
-            Storage reclamation has stopped and nothing else in this file can tell you.
+            No `maintenance_tasks_completed_total` series exists. No maintenance worker runs, or its OTLP export is
+            broken: nothing passes a table, releases a drop or audits the estate, and nothing else in this file can
+            tell you.
+
+      # The daily scan (`maintenance.queue.scanSchedule`): the orphan scan, the listing floors, and the expired-trash
+      # purge, which acts only on its own scan's report. A 26h window over the daily schedule, so one late scan does
+      # not page.
+      - alert: MaintenanceScanNotCompleting
+        expr: sum(increase(maintenance_tasks_completed_total{kind="scan"}[26h])) == 0
+        for: 1h
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "No maintenance scan has COMPLETED in a day"
+          description: >-
+            The daily scan has not completed in 26 hours, so no orphan scan, listing floor or expired-trash purge ran.
+            Either its schedule no longer reaches a worker, or the scan fails or overruns every time: compare
+            maintenance_tasks_ended_total and maintenance_passes_overran_total for kind scan.
+
+      # A task a worker ended: it failed, or outlived its worker, on every delivery. No `for:`: an end is final.
+      - alert: MaintenanceTasksEnded
+        expr: sum by (kind) (increase(maintenance_tasks_ended_total[1h])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Maintenance ended {{ $labels.kind }} tasks that failed on every delivery"
+          description: >-
+            A {{ $labels.kind }} task failed, or outlived its worker, on each of its `maintenance.queue.maxDeliver`
+            deliveries, and a worker ended it. The maintenance_task_ended ERROR line names the subject and the last error; kind unreadable is a
+            message no task parses. Its next try is held `maintenance.queue.recheckHours` out, unless a commit queues it sooner.
+
+      # A task running past `maintenance.queue.maxPassSeconds`. It keeps its task until twice that, when its replica exits
+      # and the task is delivered again, so until then this count is the only sign.
+      - alert: MaintenancePassesOverran
+        expr: sum by (kind) (increase(maintenance_passes_overran_total[1h])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "A maintenance {{ $labels.kind }} task is running past its bound"
+          description: >-
+            A {{ $labels.kind }} task has run past `maintenance.queue.maxPassSeconds` and still holds its task; at twice
+            that its replica exits and the task is delivered again. The
+            maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later
+            commit's pass of its table can start.
 
       # `SUPPORTED` is a whitelist, so a pylance upgrade that introduces a legitimate new manifest flag
-      # makes the sweep refuse datasets it used to maintain — and refusals are NOT errors, so nothing
+      # makes a pass refuse datasets it used to maintain — and refusals are NOT errors, so nothing
       # else in this file would fire. Measured 2026-08-16: 17 refused datasets were exactly the ones
       # that needed compaction, and the estate looked healthy throughout.
       - alert: MaintenanceRefusalsRising
@@ -549,27 +596,28 @@ groups:
           severity: warning
           service: maintenance
         annotations:
-          summary: "More than half of swept datasets are being REFUSED"
+          summary: "More than half of the datasets passed are being REFUSED"
           description: >-
             The supported-manifest-flag whitelist is rejecting most of the estate, so maintenance is
             running without reclaiming. Usually a pylance upgrade introducing a flag the guard does not
-            know. Check the refusal reasons in the maintenance_sweep log line.
+            know. Check the refusal reasons in the maintenance_dataset_outcome log line.
 
       # One mixed table is an incident the ratio rule above cannot see (45.3-46.5% of every sweep is refused,
       # measured 2026-09-24). No `for:`: the flag cannot be removed, so waiting buys nothing. The window sets how
-      # long the alert HOLDS between counts: a table is counted only on ticks that open it, so the window spans two
-      # 30-minute ticks, and a policy-skipped table is never opened, so it is not counted.
+      # long the alert HOLDS between counts: a refused table is passed again only at its recheck
+      # (`maintenance.queue.recheckHours`, a day) or its next commit, so the window spans a recheck; a policy-skipped
+      # table is never opened, so it is not counted.
       - alert: LanceMixedDataFileVersions
-        expr: sum(increase(compaction_datasets_mixed_file_versions_total[1h])) > 0
+        expr: sum(increase(compaction_datasets_mixed_file_versions_total[25h])) > 0
         labels:
           severity: critical
           service: maintenance
         annotations:
           summary: "A Lance table's data files are at more than one file version"
           description: >-
-            The sweep found a table whose manifest carries reader flag 256 (mixed data file versions).
+            A table's pass found a table whose manifest carries reader flag 256 (mixed data file versions).
             The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8)
-            cannot open the table (pylance 12+ and lancedb 0.40 can), and maintenance refuses it on every tick. The only measured heal is
+            cannot open the table (pylance 12+ and lancedb 0.40 can), and maintenance refuses it on every pass. The only measured heal is
             recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and
             indices. Find the table in the maintenance_dataset_outcome records where
             mixed_data_file_versions is true, and the writer that appended at another data_storage_version.
@@ -607,16 +655,18 @@ groups:
             the store's error.
 
       # One table the catalog keeps refusing, which the ratio rule cannot see: an id that holds no tuples is answered
-      # 403 at the vend door on every tick. A series first appears at 1, which increase() cannot see, so the window
-      # spans several sweep periods. vmalert keeps `for:` in memory, so its own restart restarts the clock.
+      # 403 at the vend door on every pass. A refused table is passed again at its recheck (a day) or its next commit, and
+      # a series first appears at 1, which increase() cannot see, so the rule fires at the second refused pass a 25h
+      # window holds: a table refused on passes a day apart. vmalert keeps `for:` in memory, so its own restart restarts
+      # the clock.
       - alert: MaintenanceTableParked
-        expr: sum by (table_id) (increase(compaction_tables_parked_total[4h])) > 0
-        for: 24h
+        expr: sum by (table_id) (increase(compaction_tables_parked_total[25h])) > 0
+        for: 1h
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "The catalog has refused maintenance of {{ $labels.table_id }} for 24 hours"
+          summary: "The catalog has refused maintenance of {{ $labels.table_id }} on passes a day apart"
           description: >-
             For a day the catalog has refused this table id, so its superseded versions are not reclaimed.
             Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id,
@@ -663,22 +713,16 @@ groups:
             docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
 
       # LATENCY, and the threshold is deliberately far above the observed estate rather than tuned to
-      # it. Measured over a 10m window on 2026-08-26: lineage 500ms, maintenance
-      # 10s — maintenance runs long BY DESIGN (its sweeps are the request), which is exactly why this
-      # fires at 15s rather than at a value that would page on a healthy sweep. A latency rule that
-      # cries wolf is one people mute, and a muted rule is worse than none.
+      # it. Measured over a 10m window on 2026-08-26: lineage 500ms. A latency rule that cries wolf is
+      # one people mute, and a muted rule is worse than none.
       #
       # `histogram_quantile` over the bucket series is supported by GreptimeDB — verified by running
       # this exact expression against the live store, because promtool accepting it proves nothing
       # about the engine that evaluates it.
-      # `maintenance` IS EXCLUDED BY NAME, and that is a consequence of making this rule fireable at
-      # all ([[XC-067]]). Its buckets now reach 300s, so a sweep measured at 39.5s would trip a 15s
-      # threshold on every evaluation — and a warning that is always firing is muted, which is worse
-      # than the silence it replaced. The annotation below already stated the intent ("`maintenance`
-      # legitimately runs long during a sweep; any other service here is a defect"); this makes the
-      # expression say it. `MaintenanceSweepRunsLong` covers that service on its own terms.
+      # Maintenance is held to it like any service: its work runs on its work queue (ADR 0198 §2), never inside a
+      # request, so its doors (the write-event lane's delivery, the probes) answer as quickly as the rest.
       - alert: HttpServerLatencyHigh
-        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket{service_name!="maintenance"}[10m]))) > 15000
+        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[10m]))) > 15000
         for: 15m
         labels:
           severity: warning
@@ -688,29 +732,6 @@ groups:
           description: >-
             Sustained p95 over 15 seconds means requests are queueing behind something — a blocking
             call on the event loop, an exhausted threadpool, or an upstream that stopped answering.
-            `maintenance` legitimately runs long during a sweep; any other service here is a defect.
-            Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
-
-      # THE THRESHOLD IS THE HISTOGRAM'S TOP BUCKET, because the hazard lies past it. The sweep is the
-      # backstop pass every 30 minutes (`maintenance.schedule`), and each pass writes the clone list that
-      # `version/create` judges every compaction against, refusing them once the list is older than
-      # `maintenance.cloneListMaxAgeSeconds` (an hour). A pass longer than its tick lets the list age out,
-      # but 30 minutes is beyond the duration histogram's 300s top bucket ([[XC-067]]), so the rule fires
-      # when the p95 pass reaches that bucket, the longest duration this metric can name. Measured
-      # 2026-09-21 a pass ran ~39.5s. The route selector keeps the write-event lane's requests, which now
-      # expire a table each, out of the sweep's quantile; the 2h window holds four ticks.
-      - alert: MaintenanceSweepRunsLong
-        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron"}[2h]))) >= 300000
-        for: 1h
-        labels:
-          severity: warning
-          service: maintenance
-        annotations:
-          summary: "The maintenance sweep's passes reach five minutes"
-          description: >-
-            p95 sweep duration has reached 300s, the top of what its histogram measures. Each pass writes the
-            clone list the catalog judges compactions against; a pass that outgrows the 30-minute schedule lets
-            that list age past an hour, and every bring-your-own compaction is refused 503 until a pass completes.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
 
       # The watcher's watcher. Both rules above evaluate over an empty vector and go quiet if the

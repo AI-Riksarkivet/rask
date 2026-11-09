@@ -30,12 +30,12 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_refs import normalise
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.history_fences import HistoryWork, TableHistory
-from lakehouse.maintenance_due import CloneList
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import sweep
+from maintenance.services import table_pass
 from maintenance.services.due import TableIds
+from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import PlanContext
 from tests.integration.maintenance_vend_doors import CATALOG_URL, described_by, maintain_tier_door
 
@@ -65,14 +65,12 @@ class _Estate:
     def versions(self) -> list[int]:
         return [int(version["version"]) for version in lance.dataset(self.location, storage_options=self.key.in_clear()).versions()]
 
-    def swept(self) -> sweep.DatasetResult:
+    def swept(self) -> DatasetResult:
         """Maintenance's own pass over the table, every version but the current one reclaimable."""
         now = datetime.now(UTC)
         namespace = self.client.post("/v1/namespace/db/describe", json={})
         assert namespace.status_code == 200, namespace.text
-        tick = sweep.SweepPlan(
-            uris=[self.location],
-            clones=CloneList(taken_at=now),
+        readings = table_pass.PassReadings(
             table_ids=TableIds(by_location={normalise(self.location): TABLE}, namespace_uuids={"db": str(namespace.json()["properties"][UUID_PROPERTY])}),
             context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
         )
@@ -89,7 +87,7 @@ class _Estate:
             }
         )
         with maintain_tier_door(described_by(self.client)):
-            return sweep.maintain_dataset(self.location, sweep=tick, settings=settings)
+            return table_pass.maintain_dataset(self.location, readings=readings, settings=settings)
 
 
 @pytest.fixture

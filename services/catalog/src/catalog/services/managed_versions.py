@@ -20,7 +20,6 @@ import json
 import logging
 from collections import Counter
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
 from functools import partial
 
 import lance
@@ -42,7 +41,7 @@ from pydantic import BaseModel, InstanceOf
 from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.services import client_fragments, committed_files, dataplane, maintenance, primary_keys, row_digests, table_claims
-from lakehouse import base_refs, base_registry, commit_records, commit_turns, features, file_identities, maintenance_due
+from lakehouse import base_registry, commit_records, commit_turns, features, file_identities
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.outage import reads_as_store_outage
 from lakehouse.storage_options import StorageOptions
@@ -338,13 +337,6 @@ def _split(proposed: lance.LanceDataset, current: lance.LanceDataset | None) -> 
     return _Fragments(new=[fragment.metadata for fragment in new], added_files=added)
 
 
-class CloneEvidence(BaseModel):
-    """The maintenance sweep's clone list, and how old it may be, as a compaction is judged against it."""
-
-    clones: maintenance_due.CloneList
-    max_age: timedelta
-
-
 class _Judged(BaseModel):
     """A staged version beside the version it follows: what every rule of :func:`judge` reads."""
 
@@ -354,8 +346,6 @@ class _Judged(BaseModel):
     #: ``None`` for the table's first version, which follows none.
     current: InstanceOf[lance.LanceDataset] | None
     split: _Fragments
-    #: Read for a compaction and for no other operation; ``None`` when no sweep has written a clone list.
-    clone_evidence: CloneEvidence | None = None
 
     @property
     def followed(self) -> lance.LanceDataset:
@@ -548,9 +538,6 @@ def _refuse_malformed_new_fragments(version: _Judged) -> None:
         raise InvalidInputError(f"commit refused: appended fragment(s) {carrying[:5]} carry an overlay or a deletion file, which an append never writes")
 
 
-#: A compaction's two commits: the ``ReserveFragments`` and the ``Rewrite`` that uses the ids it reserved.
-COMPACTION_OPERATIONS = frozenset({"ReserveFragments", "Rewrite"})
-
 #: Operations whose new files carry only rows the table held at some version, so they add no data a run produced.
 _CARRIES_HELD_ROWS = frozenset({"Rewrite", "Restore"})
 
@@ -635,7 +622,6 @@ def _refuse_a_reservation_beyond_the_table(version: _Judged) -> None:
     rows = sum(fragment.metadata.physical_rows or 0 for fragment in version.followed.get_fragments())
     if not 1 <= reserved <= rows:
         raise InvalidInputError(f"commit refused: a ReserveFragments reserves between 1 and the table's {rows} rows of fragment ids, not {reserved}")
-    _refuse_a_compaction_others_read_through(version)
 
 
 def _refuse_a_rewrite_that_changes_rows(version: _Judged) -> None:
@@ -653,7 +639,6 @@ def _refuse_a_rewrite_that_changes_rows(version: _Judged) -> None:
         raise InvalidInputError(f"commit refused: a Rewrite writes its fragments afresh, and new fragment(s) {reused[:5]} carry a deletion file or an overlay")
     _refuse_rows_not_carried(version, replaced=before.keys() - after.keys(), written=after.keys() - before.keys())
     maintenance.require_compactable(version.followed, version.staged.table_location, version.so)
-    _refuse_a_compaction_others_read_through(version)
 
 
 def _refuse_rows_not_carried(version: _Judged, *, replaced: set[int], written: set[int]) -> None:
@@ -684,34 +669,6 @@ def _refuse_rows_not_carried(version: _Judged, *, replaced: set[int], written: s
     changed = before.row_ids[before.digests != after.digests].tolist()
     if changed:
         raise InvalidInputError(f"commit refused: a Rewrite keeps the values of every row it carries; it changes {len(changed)} (stable row ids {changed[:5]})")
-
-
-def _refuse_a_compaction_others_read_through(version: _Judged) -> None:
-    """A compaction of a table another dataset resolves its files through is refused, by the maintenance sweep's clone list.
-
-    Judged at both of a compaction's commits, so a refused one leaves the table at its version. Only the referring
-    manifests name a table's referrers, so no check of the table finds them; the judge reads the list the sweep's
-    whole-estate pre-pass wrote (ADR 0162) and applies its rule (:func:`base_refs.rewrite_refusal`). A list that is
-    missing or older than its maximum age refuses, as a protective record read as absent always does here.
-
-    Raises:
-        ServiceUnavailableError: No sweep has written a clone list within its maximum age.
-        ReferredSourceError: Another dataset resolves its files through this table; the door names it to whoever may see it.
-    """
-    evidence = version.clone_evidence
-    if evidence is None:
-        raise ServiceUnavailableError("compaction refused: the maintenance sweep has written no clone list yet, so this table's referrers are unknown")
-    clones = evidence.clones
-    age = datetime.now(UTC) - clones.taken_at
-    if age > evidence.max_age:
-        raise ServiceUnavailableError(
-            f"compaction refused: the maintenance sweep's clone list is {int(age.total_seconds())}s old, past "
-            f"{int(evidence.max_age.total_seconds())}s, so a dataset cloned since is unknown"
-        )
-    location = version.staged.location
-    reason = base_refs.rewrite_refusal(clones.refs(), location, version.followed.tags.list())
-    if reason is not None:
-        raise maintenance.ReferredSourceError(f"compaction refused: {reason}.", referrers=clones.clones_of(location))
 
 
 #: What one operation may change beyond the rules every commit meets: a ``ReserveFragments`` and a ``CreateIndex``
@@ -832,7 +789,6 @@ def judge(
     *,
     base_judge: BaseJudge,
     external_bases: Sequence[base_registry.RecordedBase],
-    clone_evidence: CloneEvidence | None = None,
 ) -> Verdict:
     """Refuse the staged version if it breaks a rule the catalog's own write doors hold; say whether it adds data, and
     what it adds under the table's root.
@@ -840,14 +796,12 @@ def judge(
     The version is compared with the one it follows. What it adds is judged: a file or a row carried over was judged
     when it landed. It adds data when it names a data file the version it follows does not hold, unless it is a
     compaction or a restore, whose files carry rows the table already held: such a commit on a derived tier names its
-    run. A compaction is judged against ``clone_evidence``, which the caller reads for the two operations in
-    :data:`COMPACTION_OPERATIONS` and no other.
+    run. A compaction of a table a registered clone reads is judged as any other: the clone's tag keeps the version it
+    reads, whatever a compaction and the cleanup after it remove (ADR 0198 §1).
 
     Raises:
         InvalidInputError: The version breaks one of the rules below; nothing was finalized.
-        ServiceUnavailableError: A compaction arrived with no clone list within its maximum age.
-        UnsupportedOperationError: The version needs a Lance feature this catalog does not serve, or compacts a table
-            another dataset resolves its files through.
+        UnsupportedOperationError: The version needs a Lance feature this catalog does not serve.
     """
     proposed = _open(staged, so)
     current = None if staged.creates else lance.dataset(staged.location, version=staged.version - 1, storage_options=so.in_clear() or None)
@@ -855,7 +809,7 @@ def judge(
     _refuse_changed_schema_governance(proposed, current)
     encoding.require_no_new_invalid_encoding(current, proposed)
     _refuse_config(proposed, current)
-    version = _Judged(staged=staged, so=so, proposed=proposed, current=current, split=_split(proposed, current), clone_evidence=clone_evidence)
+    version = _Judged(staged=staged, so=so, proposed=proposed, current=current, split=_split(proposed, current))
     files = committed_files.added(
         current,
         proposed,

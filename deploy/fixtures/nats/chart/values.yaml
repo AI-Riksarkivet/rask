@@ -1,5 +1,5 @@
 # NOT FOR PRODUCTION (deploy/fixtures/README.md). A three-node NATS JetStream cluster for rask, from the upstream nats
-# 2.14.2 chart, plus the ExternalSecrets that write its operator-mode config from rask's dev OpenBao.
+# 2.15.2 chart, plus the ExternalSecrets that write its operator-mode config from rask's dev OpenBao.
 
 # The rask release this bus serves: its dev OpenBao's SecretStore (`<rask>-vault`) holds `nats-server` and
 # `nats-route`, which operator mode reads.
@@ -96,6 +96,11 @@ nats:
       merge:
         automountServiceAccountToken: false
     container:
+      # The one nats-box the estate runs, the release the stream Job (chart/templates/nats-stream-job.yaml) and the dev
+      # OpenBao's mint (`mintImage`) run too, so an operator reads the bus with the CLI the Job converges it with. The
+      # chart's own default is 0.20.0.
+      image:
+        tag: 0.20.2
       merge:
         resources:
           requests: { cpu: 10m, memory: 16Mi }

@@ -121,8 +121,8 @@ tests:
               door: maintenance-arrival
               reason: kid
             exp_annotations:
-              summary: "Maintenance is REFUSING write events (maintenance-arrival, kid) — their writes wait for the sweep"
-              description: "A write event no listed signer's key verifies was ACKED and planned nothing, so only this alert and the `maintenance_signature_refused` log line record it; the sweep still compacts the table on its next pass. Forged events are reaching the bus, or a signer broke. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
+              summary: "Maintenance is REFUSING write events (maintenance-arrival, kid) — their tables wait for their next pass"
+              description: "A write event no listed signer's key verifies was ACKED and held no pass, so only this alert and the `maintenance_signature_refused` log line record it; the table's next scheduled pass still reads it. Forged events are reaching the bus, or a signer broke. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events"
       - eval_time: 8m
         alertname: CatalogControlLaneRefusingEvents
         exp_alerts:
@@ -250,8 +250,8 @@ tests:
               service: maintenance
               topic: lineage.events.v1
             exp_annotations:
-              summary: "Maintenance dead-lettered write events (lineage.events.v1) — their tables wait for the sweep"
-              description: "The write-event lane's sidecar exhausted its retry schedule and parked a write on dlq.maintenance.arrival, so the table's versions were not expired and its due record not refreshed on arrival; the sweep re-finds it on its next pass. The park is kept on the DLQ stream. A lane that parks every delivery cannot read a manifest, the policy registry or the dataset: read maintenance's logs for the failing evaluation. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              summary: "Maintenance dead-lettered write events (lineage.events.v1) — their tables wait for their next pass"
+              description: "The write-event lane's sidecar exhausted its retry schedule and parked a write on dlq.maintenance.arrival, so no pass was held for the commit; the table's next scheduled pass, within `maintenance.queue.recheckHours`, reads it, and the hourly audit queues one for a table no schedule holds. The park is kept on the DLQ stream. A lane that parks every delivery cannot reach the work queue or read a table's claim: read maintenance's logs for the failing delivery. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # ── M24: the six rules that had no fire-proof ────────────────────────────────────────────────────
   # `promtool test rules` only evaluates the cases declared here, so a rule with no case is never
@@ -392,7 +392,7 @@ tests:
         alertname: LineageIngestRefusingProvenance
         exp_alerts: []
 
-  # M24 f. A dataset failing on every 30-minute tick → MaintenanceDatasetsFailing fires once the hour has held.
+  # M24 f. A dataset failing on retries 30 minutes apart → MaintenanceDatasetsFailing fires once the hour has held.
   - interval: 1m
     input_series:
       - series: "compaction_datasets_failed_total"
@@ -406,33 +406,35 @@ tests:
               service: "maintenance"
             exp_annotations:
               summary: "Table maintenance is failing on one or more datasets"
-              description: "The sweep could not complete one or more datasets. Sustained failure means those datasets accumulate superseded versions indefinitely while every tick still reports a successful run. Break down by error.type; the per-dataset URI is on the trace span and in the maintenance_sweep log line, deliberately not on the metric (unbounded cardinality)."
+              description: "A table's pass could not complete one or more datasets, and retries them every `maintenance.queue.retrySeconds`. Sustained failure means those datasets accumulate superseded versions indefinitely. Break down by error.type; the per-dataset URI is on the trace span and in the maintenance_dataset_outcome log line, deliberately not on the metric (unbounded cardinality)."
 
-  # M24 g. A sweep that COMPLETES nothing for 2h30m — a FLAT counter, not a missing one. The rule is
-  #        `== 0`, so the series must exist and not move; a deleted series would make it vacuous instead.
+  # M24 g. A worker that completes no audit for 2h30m — a FLAT counter, not a missing one. The rule is `== 0`, so the
+  #        series must exist and not move; a deleted series would make it vacuous instead.
   - interval: 1m
     input_series:
-      - series: "compaction_runs_total"
+      - series: 'maintenance_tasks_completed_total{kind="audit"}'
         values: "7+0x180"
     alert_rule_test:
       - eval_time: 155m
-        alertname: MaintenanceSweepNotCompleting
+        alertname: MaintenanceAuditNotCompleting
         exp_alerts:
           - exp_labels:
               severity: "critical"
               service: "maintenance"
             exp_annotations:
-              summary: "No maintenance sweep has COMPLETED in two hours"
-              description: "At a 30-minute cadence roughly four passes should have completed. Either the Dapr cron binding is not delivering or every pass is dying mid-flight — compare with compaction_runs_started_total, whose excess over compaction_runs_total is the lost-pass count."
+              summary: "No maintenance audit has COMPLETED in two hours"
+              description: "The hourly audit (the drift report, its repairs, the release of every drop past its deadline, and the backstop that queues a table no schedule holds) has not completed in two hours. Either its schedule no longer reaches a worker, or every audit fails or overruns: compare maintenance_tasks_ended_total and maintenance_passes_overran_total for kind audit, and read the maintenance_task_retried log lines."
 
-  # M24 h. A sweep completing once every 30-minute tick must not page.
+  # M24 h. An audit completing every hour must not page, and neither must table passes, which are not the audit.
   - interval: 1m
     input_series:
-      - series: "compaction_runs_total"
-        values: "0+0x29 1+0x29 2+0x29 3+0x29 4+0x29 5+0x29"
+      - series: 'maintenance_tasks_completed_total{kind="audit"}'
+        values: "0+0x59 1+0x59 2+0x59 3+0x59"
+      - series: 'maintenance_tasks_completed_total{kind="table"}'
+        values: "0+0x239"
     alert_rule_test:
-      - eval_time: 170m
-        alertname: MaintenanceSweepNotCompleting
+      - eval_time: 230m
+        alertname: MaintenanceAuditNotCompleting
         exp_alerts: []
 
   # M24 i. Refusals outrunning half the swept datasets over an hour → MaintenanceRefusalsRising fires.
@@ -450,8 +452,8 @@ tests:
               severity: "warning"
               service: "maintenance"
             exp_annotations:
-              summary: "More than half of swept datasets are being REFUSED"
-              description: "The supported-manifest-flag whitelist is rejecting most of the estate, so maintenance is running without reclaiming. Usually a pylance upgrade introducing a flag the guard does not know. Check the refusal reasons in the maintenance_sweep log line."
+              summary: "More than half of the datasets passed are being REFUSED"
+              description: "The supported-manifest-flag whitelist is rejecting most of the estate, so maintenance is running without reclaiming. Usually a pylance upgrade introducing a flag the guard does not know. Check the refusal reasons in the maintenance_dataset_outcome log line."
 
   # M24 j. Refusals well under half of swept → silent. The ratio, not the absolute count, is the rule.
   - interval: 1m
@@ -480,15 +482,15 @@ tests:
               service: "maintenance"
             exp_annotations:
               summary: "A Lance table's data files are at more than one file version"
-              description: "The sweep found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table (pylance 12+ and lancedb 0.40 can), and maintenance refuses it on every tick. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
+              description: "A table's pass found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table (pylance 12+ and lancedb 0.40 can), and maintenance refuses it on every pass. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
 
-  # The only count is 49 minutes old at evaluation, longer than one 30-minute tick: the 1h window must still hold.
-  - interval: 1m
+  # The only count is 23 hours old at evaluation, inside one recheck: the 25h window must still hold.
+  - interval: 10m
     input_series:
       - series: "compaction_datasets_mixed_file_versions_total"
-        values: "0+0x5 1+0x55"
+        values: "0 1+0x150"
     alert_rule_test:
-      - eval_time: 55m
+      - eval_time: 23h10m
         alertname: LanceMixedDataFileVersions
         exp_alerts:
           - exp_labels:
@@ -496,7 +498,7 @@ tests:
               service: "maintenance"
             exp_annotations:
               summary: "A Lance table's data files are at more than one file version"
-              description: "The sweep found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table (pylance 12+ and lancedb 0.40 can), and maintenance refuses it on every tick. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
+              description: "A table's pass found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table (pylance 12+ and lancedb 0.40 can), and maintenance refuses it on every pass. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
 
   # A flat zero is the healthy estate and must stay quiet.
   - interval: 1m
@@ -560,12 +562,17 @@ tests:
         alertname: CommittedFilesUnrecorded
         exp_alerts: []
 
-  # One table refused on every 2-minute tick for 26 hours pages once the day has passed.
-  - interval: 2m
+  # One table refused on its daily passes. Its series first appears at 1, which increase() cannot see, so the second
+  # refused pass, a day after the first, is the one that counts, and the alert fires an hour after it and holds until
+  # the next refused pass a day later.
+  - interval: 1h
     input_series:
       - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
-        values: "0+1x780"
+        values: "1+0x23 2+0x23 3+0x5"
     alert_rule_test:
+      - eval_time: 23h
+        alertname: MaintenanceTableParked
+        exp_alerts: []
       - eval_time: 25h
         alertname: MaintenanceTableParked
         exp_alerts:
@@ -574,57 +581,26 @@ tests:
               service: maintenance
               table_id: "acme$events"
             exp_annotations:
-              summary: "The catalog has refused maintenance of acme$events for 24 hours"
+              summary: "The catalog has refused maintenance of acme$events on passes a day apart"
+              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
+      - eval_time: 47h
+        alertname: MaintenanceTableParked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              table_id: "acme$events"
+            exp_annotations:
+              summary: "The catalog has refused maintenance of acme$events on passes a day apart"
               description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
 
   # The SAME table refused 403, then 404 once it is dropped: one table, one clock.
-  - interval: 2m
-    input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
-        values: "0+1x390 390+0x390"
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="table_not_governed"}'
-        values: "_x360 0+1x420"
-    alert_rule_test:
-      - eval_time: 25h
-        alertname: MaintenanceTableParked
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: maintenance
-              table_id: "acme$events"
-            exp_annotations:
-              summary: "The catalog has refused maintenance of acme$events for 24 hours"
-              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
-
-  # An hourly cadence: one count an hour must hold the clock.
   - interval: 1h
     input_series:
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
+        values: "1+0x23 2+0x10"
       - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="table_not_governed"}'
-        values: "0+1x26"
-    alert_rule_test:
-      - eval_time: 25h
-        alertname: MaintenanceTableParked
-        exp_alerts:
-          - exp_labels:
-              severity: warning
-              service: maintenance
-              table_id: "acme$events"
-            exp_annotations:
-              summary: "The catalog has refused maintenance of acme$events for 24 hours"
-              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
-
-  # Hourly ticks across pods replaced at 12h. A new pod's series first appears at 1, which increase() cannot
-  # see, so the replacement leaves 3h between visible counts (11h to 14h): the window holds it.
-  - interval: 5m
-    input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="a"}'
-        values: "1+0x23 2+0x23 3+0x23 4+0x23 5+0x23 6+0x23 _x180"
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="b"}'
-        values: "_x12 1+0x23 2+0x23 3+0x23 4+0x23 5+0x23 6+0x11 _x180"
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="c"}'
-        values: "_x144 1+0x23 2+0x23 3+0x23 4+0x23 5+0x23 6+0x23 7+0x23 8+0x11"
-      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="d"}'
-        values: "_x156 1+0x23 2+0x23 3+0x23 4+0x23 5+0x23 6+0x23 7+0x23"
+        values: "_x30 1+0x10"
     alert_rule_test:
       - eval_time: 26h
         alertname: MaintenanceTableParked
@@ -634,62 +610,131 @@ tests:
               service: maintenance
               table_id: "acme$events"
             exp_annotations:
-              summary: "The catalog has refused maintenance of acme$events for 24 hours"
+              summary: "The catalog has refused maintenance of acme$events on passes a day apart"
               description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
 
-  # Two tables, each refused for half the day: no table has been refused for 24 hours.
-  - interval: 2m
+  # A pod replaced between two refused passes: the new pod's series first appears at 1, unseen, and its next count
+  # still fires the table.
+  - interval: 1h
     input_series:
-      - series: 'compaction_tables_parked_total{table_id="acme$a",refused_by="vend_denied"}'
-        values: "0+1x390 390+0x390"
-      - series: 'compaction_tables_parked_total{table_id="acme$b",refused_by="vend_denied"}'
-        values: "_x360 0+1x420"
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="a"}'
+        values: "1+0x23 2+0x6 _x20"
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="b"}'
+        values: "_x30 1+0x17 2+0x3"
     alert_rule_test:
-      - eval_time: 25h
+      - eval_time: 50h
         alertname: MaintenanceTableParked
-        exp_alerts: []
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              table_id: "acme$events"
+            exp_annotations:
+              summary: "The catalog has refused maintenance of acme$events on passes a day apart"
+              description: "For a day the catalog has refused this table id, so its superseded versions are not reclaimed. Break down by refused_by. vend_denied is a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a stale lineage.dataset_id stamp leaves. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied and maintenance_table_not_governed WARNING lines name the dataset."
 
-  # Granted after 19 hours: the 4h window holds the clock to 23h, short of the day, so nothing fires by 25h.
-  - interval: 2m
+  # One refused pass, then a grant: nothing the rule can see, so nothing fires.
+  - interval: 1h
     input_series:
       - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="table_not_governed"}'
-        values: "0+1x570 570+0x210"
+        values: "1+0x48"
     alert_rule_test:
-      - eval_time: 22h30m
-        alertname: MaintenanceTableParked
-        exp_alerts: []
       - eval_time: 25h
         alertname: MaintenanceTableParked
         exp_alerts: []
 
-  # A gap longer than the window restarts the clock: refused 0-12h, nothing for 5h, refused again.
-  - interval: 2m
+  # Granted after the second refusal: once a 25h window holds no count, the alert resolves.
+  - interval: 1h
     input_series:
       - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
-        values: "0+1x360 360+0x150 360+1x270"
+        values: "1+0x23 2+0x40"
     alert_rule_test:
-      - eval_time: 25h
+      - eval_time: 50h
         alertname: MaintenanceTableParked
         exp_alerts: []
 
-  # The sweep pod gone entirely — the one thing that reclaims storage, previously silent AND unalertable.
+  # No worker reporting at all: the `== 0` audit rule over an empty vector cannot fire, so the absence rule must.
   - interval: 1m
     input_series:
-      - series: "compaction_runs_total"
+      - series: 'maintenance_tasks_completed_total{kind="audit"}'
         values: "_x70"
     alert_rule_test:
-      - eval_time: 65m
-        alertname: MaintenanceSweepMetricsMissing
+      - eval_time: 20m
+        alertname: MaintenanceTaskMetricsMissing
         exp_alerts:
           - exp_labels:
               severity: critical
               service: maintenance
             exp_annotations:
-              summary: "The maintenance sweep has stopped reporting entirely"
-              description: "No `compaction_runs_total` series exists. The sweep pod is gone or its OTLP export is broken. Storage reclamation has stopped and nothing else in this file can tell you."
-      - eval_time: 65m
-        alertname: MaintenanceSweepNotCompleting
+              summary: "Maintenance's worker has stopped reporting entirely"
+              description: "No `maintenance_tasks_completed_total` series exists. No maintenance worker runs, or its OTLP export is broken: nothing passes a table, releases a drop or audits the estate, and nothing else in this file can tell you."
+      - eval_time: 20m
+        alertname: MaintenanceAuditNotCompleting
         exp_alerts: []
+
+  # No daily scan for 27 hours → MaintenanceScanNotCompleting; a scan a day keeps it quiet, between scans as well.
+  - interval: 10m
+    input_series:
+      - series: 'maintenance_tasks_completed_total{kind="scan"}'
+        values: "3+0x170"
+    alert_rule_test:
+      - eval_time: 27h10m
+        alertname: MaintenanceScanNotCompleting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+            exp_annotations:
+              summary: "No maintenance scan has COMPLETED in a day"
+              description: "The daily scan has not completed in 26 hours, so no orphan scan, listing floor or expired-trash purge ran. Either its schedule no longer reaches a worker, or the scan fails or overruns every time: compare maintenance_tasks_ended_total and maintenance_passes_overran_total for kind scan."
+  - interval: 10m
+    input_series:
+      - series: 'maintenance_tasks_completed_total{kind="scan"}'
+        values: "0+0x143 1+0x143 2+0x30"
+    alert_rule_test:
+      - eval_time: 46h
+        alertname: MaintenanceScanNotCompleting
+        exp_alerts: []
+      - eval_time: 49h
+        alertname: MaintenanceScanNotCompleting
+        exp_alerts: []
+
+  # A task ended on its last delivery pages on the evaluation that sees it; the 0 its worker creates at start is what
+  # lets increase() see the first one. A flat zero stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_tasks_ended_total{kind="table"}'
+        values: "0x4 1x10"
+      - series: 'maintenance_tasks_ended_total{kind="audit"}'
+        values: "0x14"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MaintenanceTasksEnded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              kind: table
+            exp_annotations:
+              summary: "Maintenance ended table tasks that failed on every delivery"
+              description: "A table task failed, or outlived its worker, on each of its `maintenance.queue.maxDeliver` deliveries, and a worker ended it. The maintenance_task_ended ERROR line names the subject and the last error; kind unreadable is a message no task parses. Its next try is held `maintenance.queue.recheckHours` out, unless a commit queues it sooner."
+
+  # A task running past its bound, the same way.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_passes_overran_total{kind="scan"}'
+        values: "0x4 1x10"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: MaintenancePassesOverran
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              kind: scan
+            exp_annotations:
+              summary: "A maintenance scan task is running past its bound"
+              description: "A scan task has run past `maintenance.queue.maxPassSeconds` and still holds its task; at twice that its replica exits and the task is delivered again. The maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later commit's pass of its table can start."
 
   # ------------------------------------------------------------------------------------------------
   # The HTTP plane. Series names are the live store's, verified — `http_server_duration_milliseconds_*`,
@@ -775,7 +820,7 @@ tests:
               service_name: catalog
             exp_annotations:
               summary: "One service's p95 HTTP latency is above 15s"
-              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. `maintenance` legitimately runs long during a sweep; any other service here is a defect. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
+              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
 
   # A fast service must not page — every observation under 1s.
   - interval: 1m
@@ -1002,7 +1047,7 @@ tests:
               category: "orphaned_trash"
             exp_annotations:
               summary: "A reconcile drift category grew in the last two hours — orphaned_trash"
-              description: "The maintenance reconcile is finding MORE of this drift category than it did two hours ago. Each category names a different disagreement between the registry, OpenFGA and object storage, and a rising one means something is producing it now rather than leaving residue from before. A gating category also blocks the expired-trash purge, so reclamation stops until it clears. Find the named objects in the `maintenance_reconcile` log line for the matching category; `orphaned_trash` and the other non-gating categories are counted and reported but never block the purge. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              description: "The hourly audit's drift report is finding MORE of this drift category than it did two hours ago. Each category names a different disagreement between the registry, OpenFGA and object storage, and a rising one means something is producing it now rather than leaving residue from before. A gating category also blocks the expired-trash purge, so reclamation stops until it clears. Find the named objects in the `reconcile_drift` log line for the matching category; `orphaned_trash` and the other non-gating categories are counted and reported but never block the purge. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # THE 989 MUST NOT PAGE. It is residue from warehouse deletes that predate the fix clearing them —
   # a triage queue, not an incident, and nothing an on-call window can drain. This is the case the
@@ -1052,15 +1097,10 @@ tests:
               service_name: catalog
             exp_annotations:
               summary: "One service's p95 HTTP latency is above 15s"
-              description: >-
-                Sustained p95 over 15 seconds means requests are queueing behind something — a blocking
-                call on the event loop, an exhausted threadpool, or an upstream that stopped answering.
-                `maintenance` legitimately runs long during a sweep; any other service here is a defect.
-                Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
+              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
 
-  # THE EXCLUSION IS ALSO PROVEN, because it is the half that keeps the rule from being muted. Identical
-  # series, `service_name="maintenance"`, far past the threshold: `HttpServerLatencyHigh` must stay
-  # silent. A sweep measured at 39.5s would otherwise fire it on every evaluation forever.
+  # Maintenance is held to the same rule: its work runs on its queue, never inside a request, so a slow maintenance
+  # door is a defect like any other's. Identical series, `service_name="maintenance"`: the rule fires for it.
   - interval: 1m
     input_series:
       - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="15000"}'
@@ -1072,57 +1112,14 @@ tests:
     alert_rule_test:
       - eval_time: 30m
         alertname: HttpServerLatencyHigh
-        exp_alerts: []
-
-  # AND THE SWEEP'S OWN RULE FIRES when its passes reach the histogram's 300s top bucket, and only on the
-  # sweep's route: the same durations on the write-event lane's route stay silent.
-  - interval: 1m
-    input_series:
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="120000"}'
-        values: "0+0x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="300000"}'
-        values: "0+0x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="+Inf"}'
-        values: "0+1x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="120000"}'
-        values: "0+0x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="300000"}'
-        values: "0+0x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="+Inf"}'
-        values: "0+1x160"
-    alert_rule_test:
-      - eval_time: 150m
-        alertname: MaintenanceSweepRunsLong
         exp_alerts:
           - exp_labels:
               severity: warning
-              service: maintenance
+              service: fleet
               service_name: maintenance
             exp_annotations:
-              summary: "The maintenance sweep's passes reach five minutes"
-              description: >-
-                p95 sweep duration has reached 300s, the top of what its histogram measures. Each pass writes the
-                clone list the catalog judges compactions against; a pass that outgrows the 30-minute schedule lets
-                that list age past an hour, and every bring-your-own compaction is refused 503 until a pass completes.
-                Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly
-  - interval: 1m
-    input_series:
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="120000"}'
-        values: "0+1x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="300000"}'
-        values: "0+1x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-cron", le="+Inf"}'
-        values: "0+1x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="120000"}'
-        values: "0+0x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="300000"}'
-        values: "0+0x160"
-      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", http_target="/maintenance-arrival", le="+Inf"}'
-        values: "0+1x160"
-    alert_rule_test:
-      - eval_time: 150m
-        alertname: MaintenanceSweepRunsLong
-        exp_alerts: []
+              summary: "One service's p95 HTTP latency is above 15s"
+              description: "Sustained p95 over 15 seconds means requests are queueing behind something — a blocking call on the event loop, an exhausted threadpool, or an upstream that stopped answering. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-service-answers-5xx-or-slowly"
 
   # LH-050'S TRIPWIRE, both directions. The row is parked on a NUMBER, so the rule that re-reads it has
   # to be proven at the threshold rather than merely valid: a tripwire that cannot trip re-creates the

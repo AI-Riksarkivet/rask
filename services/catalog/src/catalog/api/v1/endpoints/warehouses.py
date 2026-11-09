@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Final
@@ -43,6 +44,7 @@ from lance_namespace import (
     DescribeTableResponse,
     DropNamespaceRequest,
     InvalidInputError,
+    InvalidTableStateError,
     LanceNamespace,
     ListTablesRequest,
     NamespaceAlreadyExistsError,
@@ -92,10 +94,10 @@ from catalog.schemas import (
     WarehouseNamespacesResponse,
     WarehouseResponse,
 )
-from catalog.services import native, object_uuids, table_claims, trash_doors, warehouses
+from catalog.services import dataplane, native, object_uuids, table_claims, trash_doors, warehouses
 from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, ENCRYPTED_WRITE, SCOPE_CHECK, ProbeCheck, ProbeReport, summarize_probe
-from lakehouse import base_registry, data_directories, location_claims, trash
+from lakehouse import base_registry, clone_sources, data_directories, location_claims, trash
 from lakehouse.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.deps import ANONYMOUS_SUBJECT
@@ -1055,7 +1057,40 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
         await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), detached.location, canonical)
         if purge:
             await run_in_threadpool(partial(base_registry.forget_base_record, registry, detached.location, table=canonical))
+        else:
+            # The catalog no longer governs the bytes it leaves, so what it promised a clone among them ends too.
+            await run_in_threadpool(partial(base_registry.release_clone_sources, registry, detached.location))
     return True
+
+
+async def _require_no_outside_clones(ns: LanceNamespace | None, settings: Settings, *, subtrees: list[_BoundSubtree], trashed: list[dict[str, Any]]) -> None:
+    """Refuse a ``?purge_bucket=true`` that would destroy a table a registered clone outside the warehouse reads, before
+    anything changes (ADR 0198 §1): the purge empties the bucket, so a source's bytes go whatever its clones' tags say.
+
+    Raises:
+        InvalidTableStateError: A table in the warehouse, live or trashed, is read by a clone outside it (code 19, 409).
+        ServiceUnavailableError: A table's tags could not be listed.
+    """
+    so = settings.storage_options()
+    located: dict[str, str] = {}
+    if ns is not None:
+        for table in [table for subtree in subtrees for table in subtree.tables]:
+            with suppress(TableNotFoundError):
+                described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=table))
+                if described.location:
+                    located[fga.canonical_object_id(table)] = described.location
+    for entry in trashed:
+        if location := trash.location_of(entry):
+            located[f"{trash.name_of(entry)}@{trash.object_uuid(entry)}"] = location
+    carried = {name: await run_in_threadpool(partial(dataplane.clone_readers, location, so, table=name)) for name, location in located.items()}
+    try:
+        clone_sources.destroy_order({name: clone_sources.tag_of(location) for name, location in located.items()}, carried)
+    except clone_sources.ReadFromOutsideError as exc:
+        log.warning("warehouse_purge_refused_clone_sources", extra={"read": {name: sorted(tags) for name, tags in exc.read.items()}})
+        raise InvalidTableStateError(
+            f"the purge would destroy {len(exc.read)} table(s) read by registered clones outside this warehouse; drop or deregister those "
+            "clones first, or delete the warehouse without ?purge_bucket=true"
+        ) from exc
 
 
 async def _forget_trashed(settings: Settings, entry: dict[str, Any], *, purge: bool) -> None:
@@ -1207,6 +1242,8 @@ async def delete_warehouse(
     subtrees = await _cascade_subtrees(ns_conn, settings, bound, force=force) if ns_conn is not None else []
     # The warehouse's own trash, which the bindings select: it is ended before the cascade below removes them.
     trashed = await run_in_threadpool(partial(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id, bucket=bucket))
+    if purge_bucket:
+        await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
     # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
     namespaces_dropped: list[str] = []
     tables_removed: list[str] = []

@@ -97,6 +97,37 @@ def identities(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -
     return {key: identity for key, identity in zip(keys, found, strict=True) if identity is not None}
 
 
+def listed_identities(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -> dict[str, ObjectIdentity]:
+    """Each object at ``<uri>/<key>`` the store holds, as :func:`identities` answers it, read off one listing of ``uri``.
+
+    An S3 ``ListObjectsV2`` page names a thousand objects with the same ETag and size a HEAD answers, so asking about every
+    file a table's commits recorded costs a request per thousand objects under its root rather than one per file. A local
+    root is hashed key by key, as :func:`identities` does.
+
+    Raises:
+        OSError: The store refused, or could not be reached for, the listing.
+    """
+    if not keys:
+        return {}
+    if not uri.startswith("s3://"):
+        return identities(uri, storage_options, keys)
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
+    under, wanted = f"{prefix}/" if prefix else "", set(keys)
+    found: dict[str, ObjectIdentity] = {}
+    try:
+        for page in object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=under):
+            for entry in page.get("Contents", []):
+                if (key := str(entry["Key"]).removeprefix(under)) in wanted:
+                    found[key] = ObjectIdentity(etag=str(entry["ETag"]).strip('"'), size=int(entry.get("Size", 0)))
+    except ClientError as exc:
+        raise OSError(f"the store refused listing {bucket}/{under}: {exc}") from exc
+    except BotoCoreError as exc:
+        raise OSError(f"the store could not be reached listing {bucket}/{under}: {exc}") from exc
+    return found
+
+
 def _s3_identity(uri: str, storage_options: StorageOptions) -> Callable[[str], ObjectIdentity | None]:
     from botocore.exceptions import BotoCoreError, ClientError
 

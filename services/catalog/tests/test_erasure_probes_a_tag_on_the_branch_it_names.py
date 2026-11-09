@@ -58,7 +58,6 @@ def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
         return verify(
             lance.dataset(uri),
             storage_options=StorageOptions(),
-            protected=None,
             reopen=lambda: lance.dataset(uri),
             table="acme-bronze$subjects",
             predicate=_PREDICATE,

@@ -1,4 +1,4 @@
-"""#80 — the maintenance sweep and the orphan scan, against REAL object storage.
+"""#80 — a table's maintenance pass and the orphan scan, against REAL object storage.
 
 Every orphan assertion in the estate was written against ``pafs.LocalFileSystem`` (tests/unit/
 test_orphan_files.py). That is the right place to pin the RULES, and it cannot pin the STORE: the
@@ -20,19 +20,18 @@ store does differently.
    produces on S3, which is what the 2026-08-04 live run got wrong (29 MB of real page images named
    reclaimable).
 
-And the sweep half: #81 taught ``run_sweep`` to union its configured buckets with the warehouse
-REGISTRY, and ``reconcile._scannable_buckets`` to do the same but WITHOUT excluding deactivated
-warehouses — reporting is not rewriting. That asymmetry has only ever had fake-filesystem coverage.
+And the pass half: #81 taught maintenance to govern a warehouse bucket the REGISTRY names beside its configured ones,
+while a DEACTIVATED warehouse's is not passed (`table_pass.governs`), and ``reconcile._scannable_buckets`` to scan both
+— reporting is not rewriting. That asymmetry has only ever had fake-filesystem coverage.
 
-Order matters and is enforced by the fixture graph: the sweep runs FIRST and the scan runs over what
-the sweep left behind, because that is the production order (both are cron-driven against the same
-buckets). The sweep compacts nothing (ADR 0155): it expires versions and writes a due record for a table
-its `__manifest` names and Lance's planner has work for, so the plain table is registered in a real `dir`
-namespace on the control bucket and its record is read back from object storage.
+The passes run first and the scan over what they left, as the hourly audit scans an estate its passes have maintained.
+A pass compacts nothing (ADR 0155): it expires versions and writes a due record for a table its `__manifest` names and
+Lance's planner has work for, so each passed table is registered in a real `dir` namespace on its bucket, its location
+claimed as a catalog door claims one, and the plain table's record is read back from object storage.
 
-**Self-contained and destructive-by-nature.** ``run_sweep`` reclaims versions of every dataset it
-discovers and writes records on the control root, so this suite never points at an existing bucket: it creates four uuid-suffixed buckets of
-its own, sweeps only those, and deletes them. ``LANCE_E2E_S3_BUCKET`` is deliberately NOT read —
+**Self-contained and destructive-by-nature.** A pass reclaims versions of the table it names and writes records on the
+control root, so this suite never points at an existing bucket: it creates four uuid-suffixed buckets of its own,
+passes only its own tables, and deletes them. ``LANCE_E2E_S3_BUCKET`` is deliberately NOT read —
 that variable names the shared catalog bucket the CAS suite uses.
 
 **Scope, stated plainly.** The warehouse registry records are written as JSON directly to the control
@@ -64,18 +63,17 @@ import pytest
 from lance import blob_array, blob_field
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from lakehouse import location_claims
 from lakehouse.base_refs import normalise
-from lakehouse.maintenance_due import list_due
+from lakehouse.maintenance_due import read_due
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import s3_filesystem
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans
-from maintenance.services.expiry import DatasetResult
 from maintenance.services.reconcile import ReconcileReport, reconcile
-from maintenance.services.sweep import run_sweep, summarize
+from maintenance.services.table_pass import PassOutcome, TableTask, run_table_pass
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
@@ -87,12 +85,12 @@ pytestmark = [pytest.mark.e2e, pytest.mark.compaction]
 
 #: Stray `data/*.lance` files planted by hand — the POSITIVE controls. Without them every "is not
 #: reported" assertion below would also pass on a scan that reports nothing at all.
-STRAY_IN_SWEPT = "data/00000000000000000000000000deadbeef.lance"
+STRAY_IN_PASSED = "data/00000000000000000000000000deadbeef.lance"
 STRAY_IN_DEACTIVATED = "data/000000000000000000000000cafebabe00.lance"
 
 
 class Estate(BaseModel):
-    """The four throwaway buckets and the six dataset URIs written across them."""
+    """The four throwaway buckets, the six dataset URIs written across them, and the uuid of each table a pass is given."""
 
     ctl: str
     extra: str
@@ -104,25 +102,13 @@ class Estate(BaseModel):
     extra_uri: str
     reg_uri: str
     deact_uri: str
+    #: The table's uuid each passed table's claim records, by its location.
+    uuids: dict[str, str] = Field(default_factory=dict)
 
     @property
     def branch_child_uri(self) -> str:
         """The BRANCH itself, which lives at ``<dataset>/tree/<name>`` and is a dataset in its own right."""
         return f"{self.branch_uri}/tree/feature-a"
-
-    @property
-    def swept_uris(self) -> set[str]:
-        """Every dataset the sweep must find — the deactivated warehouse's is deliberately absent.
-
-        THE BRANCH COUNTS TWICE ON PURPOSE, and leaving its child out is what made this assertion fail
-        against a correct sweep. `discovery.discover_datasets` lists a dataset's branches and says
-        why: "a BRANCH is a full dataset the parent contains rather than part of it". So `branched` and
-        `branched/tree/feature-a` are two datasets, both carry a `_versions/` marker, and both are
-        maintained on their own merits — which is consistent with what main cleanup does, since the
-        version a branch stands on survives it (`services/catalog/tests/test_the_gc_preview_names_
-        exactly_what_the_run_deletes.py`). Expecting only the parent asserted the opposite of the design.
-        """
-        return {self.plain_uri, self.blob_uri, self.branch_uri, self.branch_child_uri, self.extra_uri, self.reg_uri}
 
 
 def _rows(n: int = 3, offset: int = 0) -> pa.Table:
@@ -175,7 +161,10 @@ def estate(s3: Any) -> Iterator[Estate]:
         pytest.skip(f"the credential at {ENDPOINT} may not create buckets, which this suite requires: {exc}")
 
     built = Estate(
-        **names,
+        ctl=names["ctl"],
+        extra=names["extra"],
+        reg=names["reg"],
+        deact=names["deact"],
         plain_uri=f"s3://{names['ctl']}/plain",
         blob_uri=f"s3://{names['ctl']}/blobtbl",
         branch_uri=f"s3://{names['ctl']}/branched",
@@ -185,19 +174,13 @@ def estate(s3: Any) -> Iterator[Estate]:
     )
     options = _settings_for(built).storage_options()
 
-    # THREE separate appends, so Lance's compaction planner has real work to list on object storage, and the
-    # table registered in the control bucket's `__manifest` so the sweep can name it. A single-fragment dataset
-    # would make the due evaluation a no-op and every assertion below vacuous. The namespace and the table carry the
-    # uuids a catalog door mints (ADR 0173): the namespace's in its `__manifest` row, the table's in its location's
-    # claim, since maintenance refuses a table whose policy owners it cannot identify ([[LH-523]]).
+    # THREE separate appends, so Lance's compaction planner has real work to list on object storage; a single-fragment
+    # dataset would make the due evaluation a no-op and every assertion below vacuous. The namespace and the table carry
+    # the uuids a catalog door mints (ADR 0173), registered below: the namespace's in its `__manifest` row, the table's in
+    # its location's claim, since maintenance refuses a table whose policy owners it cannot identify ([[LH-523]]).
     lance.write_dataset(_rows(), built.plain_uri, storage_options=options.in_clear())
     lance.write_dataset(_rows(offset=10), built.plain_uri, mode="append", storage_options=options.in_clear())
     lance.write_dataset(_rows(offset=20), built.plain_uri, mode="append", storage_options=options.in_clear())
-    namespace = connect("dir", {"root": f"s3://{built.ctl}", **{f"storage.{key}": value for key, value in options.in_clear().items()}})
-    namespace.create_namespace(CreateNamespaceRequest(id=["e2e"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
-    namespace.register_table(RegisterTableRequest(id=["e2e", "plain"], location="plain"))
-    claims = location_claims.ClaimStore(control_root=f"s3://{built.ctl}", storage_options=options)
-    location_claims.take(claims, normalise(built.plain_uri), "e2e$plain", ["e2e", "plain"], is_gone=lambda _claim: False, uuid=str(uuid.uuid4()))
     # A TAG — `_refs/tags/blessed.json`, a live version pointer. The first live run of this pass named
     # every promotion tag in the estate as an orphan.
     lance.dataset(built.plain_uri, storage_options=options.in_clear()).tags.create("blessed", 1)
@@ -221,6 +204,17 @@ def estate(s3: Any) -> Iterator[Estate]:
     for uri in (built.extra_uri, built.reg_uri, built.deact_uri):
         lance.write_dataset(_rows(), uri, storage_options=options.in_clear())
 
+    # Each table a pass is given is one the catalog names: a row in its own bucket's `__manifest`, under a namespace carrying
+    # its uuid, and its location's claim on the control root recording the table's.
+    claims = location_claims.ClaimStore(control_root=f"s3://{built.ctl}", storage_options=options)
+    for bucket, uri in ((built.ctl, built.plain_uri), (built.reg, built.reg_uri), (built.deact, built.deact_uri)):
+        name = uri.rsplit("/", 1)[-1]
+        namespace = connect("dir", {"root": f"s3://{bucket}", **{f"storage.{key}": value for key, value in options.in_clear().items()}})
+        namespace.create_namespace(CreateNamespaceRequest(id=["e2e"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
+        namespace.register_table(RegisterTableRequest(id=["e2e", name], location=name))
+        built.uuids[uri] = str(uuid.uuid4())
+        location_claims.take(claims, normalise(uri), f"e2e${name}", ["e2e", name], is_gone=lambda _claim: False, uuid=built.uuids[uri])
+
     # The warehouse REGISTRY, on the control root — the record shape `catalog/services/warehouses.py`
     # writes and `warehouse_records.list_warehouse_records` reads. `reg` is active, `deact` quarantined.
     for wid, bucket, status in (("wh-reg", built.reg, "active"), ("wh-deact", built.deact, "deactivated")):
@@ -238,7 +232,7 @@ def estate(s3: Any) -> Iterator[Estate]:
 
 def _settings_for(estate: Estate) -> MaintenanceSettings:
     """Settings pinned to THIS estate. Never `get_settings()` — that is lru_cached off the ambient env,
-    and the one thing this suite must never do is sweep a bucket it did not create."""
+    and the one thing this suite must never do is maintain a bucket it did not create."""
     return MaintenanceSettings(
         s3_endpoint=ENDPOINT,
         s3_access_key_id=ACCESS_KEY,
@@ -258,18 +252,18 @@ def settings(estate: Estate) -> MaintenanceSettings:
 
 
 @pytest.fixture(scope="module")
-def swept(settings: MaintenanceSettings) -> list[DatasetResult]:
-    """ONE real sweep over the estate. Module-scoped: it reclaims versions and writes due records, so running it per
-    test would both cost minutes and mean each test saw a different estate."""
-    return run_sweep(settings)
+def passed(estate: Estate, settings: MaintenanceSettings) -> dict[str, PassOutcome]:
+    """ONE real pass of each table the estate registers, by its location. Module-scoped: a pass reclaims versions and
+    writes due records, so running them per test would both cost minutes and mean each test saw a different estate."""
+    return {uri: run_table_pass(TableTask(uuid=table_uuid, location=uri), settings) for uri, table_uuid in estate.uuids.items()}
 
 
 @pytest.fixture(scope="module")
-def scanned(estate: Estate, settings: MaintenanceSettings, s3: Any, swept: list[DatasetResult]) -> ReconcileReport:
-    """The orphan scan, run AFTER the sweep (production order — the `swept` dependency is what
-    guarantees it) over datasets the sweep has just maintained.
+def scanned(estate: Estate, settings: MaintenanceSettings, s3: Any, passed: dict[str, PassOutcome]) -> ReconcileReport:
+    """The orphan scan, run AFTER the passes (the `passed` dependency guarantees it) over datasets they have just
+    maintained.
 
-    Two stray `data/*.lance` files are planted first: one under a swept dataset and one under the
+    Two stray `data/*.lance` files are planted first: one under a passed dataset and one under the
     DEACTIVATED warehouse's. They are the positive controls — a scan that reports nothing would
     satisfy every refusal assertion in this file, and these are what make that impossible.
 
@@ -280,8 +274,8 @@ def scanned(estate: Estate, settings: MaintenanceSettings, s3: Any, swept: list[
     (`rel == ".lance-reserved"`) against a path `posixpath.relpath` derived from `bucket/key`, and
     that arithmetic is the thing a LocalFileSystem test cannot reach.
     """
-    assert swept, "the sweep must have run before the scan — the production order is the thing under test"
-    s3.put_object(Bucket=estate.ctl, Key=f"plain/{STRAY_IN_SWEPT}", Body=b"a fragment no manifest references")
+    assert passed, "the passes must have run before the scan"
+    s3.put_object(Bucket=estate.ctl, Key=f"plain/{STRAY_IN_PASSED}", Body=b"a fragment no manifest references")
     s3.put_object(Bucket=estate.deact, Key=f"deacttbl/{STRAY_IN_DEACTIVATED}", Body=b"orphaned in a quarantined tenant")
     s3.put_object(Bucket=estate.ctl, Key="plain/.lance-reserved", Body=b"")
     # `client=None` → the FGA-backed categories report UNAVAILABLE, which is correct and irrelevant
@@ -290,48 +284,35 @@ def scanned(estate: Estate, settings: MaintenanceSettings, s3: Any, swept: list[
 
 
 # --------------------------------------------------------------------------- #
-# The sweep, on real object storage
+# A table's pass, on real object storage
 # --------------------------------------------------------------------------- #
 
 
-def test_the_sweep_names_exactly_the_datasets_it_found_on_s3(estate: Estate, swept: list[DatasetResult]) -> None:
-    """Discovery is right in BOTH directions: every dataset found, and nothing invented.
-
-    Set equality rather than `>= 1` (which is all `test_maintenance_e2e.py` can assert against a
-    deployed stack whose contents it does not control): a sweep that missed a bucket and a sweep that
-    reported a namespace prefix as a failed dataset both satisfy a floor.
-    """
-    assert {r.uri for r in swept} == estate.swept_uris
-    assert summarize(swept)["errors"] == {}, "a dataset failed its maintenance pass on real object storage"
-
-
-def test_the_sweep_lists_the_compaction_it_does_not_run_on_object_storage(estate: Estate, settings: MaintenanceSettings, swept: list[DatasetResult]) -> None:
-    """The anti-vacuous control. Without it every other assertion here passes on a sweep that opened
-    five datasets and did nothing — which is precisely what a silently mis-credentialled or
-    mis-pathed sweep looks like from the outside.
+def test_a_pass_lists_the_compaction_it_does_not_run_on_object_storage(estate: Estate, settings: MaintenanceSettings, passed: dict[str, PassOutcome]) -> None:
+    """The anti-vacuous control. Without it every other assertion here passes on a pass that opened the table and did
+    nothing — which is precisely what a silently mis-credentialled or mis-pathed pass looks like from the outside.
 
     The due record, not `old_versions_removed`: `older_than_days` is `ge=1`, so no version of a dataset written
     seconds ago is ever eligible for reclamation. Its fragments are unchanged: maintenance rewrites nothing.
     """
-    plain = next(r for r in swept if r.uri == estate.plain_uri)
-    record = next((due for due in list_due(settings.resolved_control_root, settings.storage_options()) if due.table == "e2e$plain"), None)
-    assert plain.due == "due", f"three appends should have been listed for compaction, got {plain.model_dump()}"
+    (plain,) = passed[estate.plain_uri].results
+    record = read_due(settings.resolved_control_root, settings.storage_options(), estate.uuids[estate.plain_uri])
+    assert (plain.error, plain.due) == (None, "due"), f"three appends should have been listed for compaction, got {plain.model_dump()}"
     assert record is not None and record.compaction is not None and record.compaction.fragments == 3, record
-    assert len(lance.dataset(estate.plain_uri, storage_options=settings.storage_options().in_clear()).get_fragments()) == 3, "the sweep rewrote the table"
+    assert len(lance.dataset(estate.plain_uri, storage_options=settings.storage_options().in_clear()).get_fragments()) == 3, "the pass rewrote the table"
 
 
-def test_a_registry_only_bucket_is_swept_and_a_deactivated_one_is_not(estate: Estate, swept: list[DatasetResult]) -> None:
+def test_a_registry_only_buckets_table_is_passed_and_a_deactivated_ones_is_not(estate: Estate, passed: dict[str, PassOutcome]) -> None:
     """#81's residual, closed against real storage.
 
-    `reg` is named by NO config — only by a warehouse record the sweep reads at runtime, which is the
-    whole point: a bucket is created by an API call, so a config-time list goes stale by construction.
-    `deact` is named by a record too, and must be skipped: deactivate is offboarding step one, and
-    reclaiming a quarantined tenant's versions would leave maintenance as the one process still deleting
-    data the estate has said nobody may touch.
+    `reg` is named by NO config — only by a warehouse record the pass reads at runtime, which is the whole point: a
+    bucket is created by an API call, so a config-time list goes stale by construction. `deact` is named by a record
+    too, and must be left alone until its recheck: deactivate is offboarding step one, and reclaiming a quarantined
+    tenant's versions would leave maintenance as the one process still deleting data the estate has said nobody may
+    touch.
     """
-    found = {r.uri for r in swept}
-    assert estate.reg_uri in found, "a bucket known only to the warehouse registry went unmaintained"
-    assert estate.deact_uri not in found, "a DEACTIVATED warehouse's data was maintained by the sweep"
+    assert [result.uri for result in passed[estate.reg_uri].results] == [estate.reg_uri], "a bucket known only to the warehouse registry went unmaintained"
+    assert passed[estate.deact_uri].results == [], "a DEACTIVATED warehouse's table was maintained"
 
 
 # --------------------------------------------------------------------------- #
@@ -344,7 +325,7 @@ def test_a_stray_data_file_on_s3_is_still_reported(estate: Estate, scanned: Reco
     an orphan, and is classified as `data` — the kind whose reclamation loses rows, so the kind a
     reader must never learn to ignore."""
     found = {(o.dataset, o.path, o.kind) for o in scanned.orphan_files}
-    assert (estate.plain_uri, STRAY_IN_SWEPT, "data") in found, f"the planted orphan was not reported: {sorted(found)}"
+    assert (estate.plain_uri, STRAY_IN_PASSED, "data") in found, f"the planted orphan was not reported: {sorted(found)}"
 
 
 def test_a_real_blob_sidecar_written_by_lance_is_not_an_orphan(estate: Estate, settings: MaintenanceSettings, scanned: ReconcileReport) -> None:
@@ -438,15 +419,15 @@ def test_a_branch_is_refused_on_object_storage(estate: Estate, settings: Mainten
     assert not any(o.dataset == estate.branch_uri for o in scanned.orphan_files)
 
 
-def test_a_deactivated_warehouse_is_still_scanned_even_though_it_is_not_swept(estate: Estate, scanned: ReconcileReport) -> None:
+def test_a_deactivated_warehouse_is_still_scanned_even_though_it_is_not_passed(estate: Estate, scanned: ReconcileReport) -> None:
     """The deliberate asymmetry between `warehouse_records.maintainable_buckets` (excludes
     deactivated) and `reconcile._scannable_buckets` (includes them), pinned end to end on real
     storage.
 
     Reporting is not rewriting. A quarantined tenant's orphans are exactly what an operator wants
     named before deciding whether to offboard it, and naming them changes nothing on disk — while
-    reclaiming the same bytes would not. `test_a_registry_only_bucket_is_swept_and_a_deactivated_one_is_not`
-    proves the other half: this same dataset was NOT swept.
+    reclaiming the same bytes would not. `test_a_registry_only_buckets_table_is_passed_and_a_deactivated_ones_is_not`
+    proves the other half: this same table was NOT passed.
     """
     found = {(o.dataset, o.path) for o in scanned.orphan_files}
     assert (estate.deact_uri, STRAY_IN_DEACTIVATED) in found, (

@@ -26,14 +26,11 @@ from fastapi.concurrency import run_in_threadpool
 from catalog.api import fga_deps
 from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
-from catalog.core.base_judge import BaseJudge
-from catalog.core.config import Settings
 from catalog.schemas import DueTable, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
 from catalog.services import maintenance, table_claims
 from lakehouse import maintenance_due
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryWork
-from lakehouse.storage_options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -42,29 +39,6 @@ log = logging.getLogger(__name__)
 #: three rungs of `api/v1/router.py`.
 table_router = APIRouter(prefix="/management/v1/table", tags=["maintenance"])
 due_router = APIRouter(prefix="/management/v1/maintenance", tags=["maintenance"])
-
-
-async def _base_refs(ds: object, so: StorageOptions, settings: Settings) -> maintenance.BaseRefs:
-    """The #114 pre-pass, run BEFORE either destructive verb.
-
-    It has to happen out here rather than inside the service function because the evidence is not on
-    this dataset: a shallow clone's SOURCE carries no flag and no base_paths, and only the referring
-    manifests say that anything resolves through its bytes. Collected per call rather than cached —
-    a clone created a minute ago must protect its source on the next click, and the listing is one
-    non-recursive call against a flat layout.
-
-    An unreadable sibling is LOGGED and the call proceeds, matching the sweep
-    (``maintenance_base_refs_incomplete``): a partial map still refuses everything it does see, and
-    failing the button closed on any unreadable directory in the warehouse would make on-demand
-    maintenance unusable. The refusals it can make are the point.
-    """
-    location = str(getattr(ds, "uri", "") or "")
-    # Judged against the record and the configured bases ([[LH-279]]): a base a writer planted in a
-    # sibling's manifest protects nothing, so it cannot freeze the table this button maintains.
-    refs = await run_in_threadpool(BaseJudge.from_settings(settings).sibling_base_refs, location, so)
-    if refs.unreadable:
-        log.warning("maintenance_base_refs_incomplete", extra={"location": location, "unreadable": len(refs.unreadable)})
-    return refs
 
 
 @table_router.post("/{id}/maintenance/preview")
@@ -121,18 +95,14 @@ async def run_maintenance(
     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
     parent's data files, counted before and after — rather than which ref the door opened."""
     ds = await run_in_threadpool(partial(table.open, so, branch=branch))
-    protected = await _base_refs(ds, so, settings)
 
     def _reclaim() -> maintenance.GcRunData:
         # [[LH-308]] Held while Lance deletes: it reads the refs once, so a tag or branch written meanwhile could pin a
         # version this deletes. A ref write holding it answers this request 409.
         with table.history_held(HistoryWork.RECLAIM):
-            return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, protected=protected, branch=branch)
+            return maintenance.run_gc(ds, retention_days=body.retention_days, retain_versions=body.retain_versions, branch=branch)
 
-    try:
-        return GcRunResult(**await run_in_threadpool(_reclaim))
-    except maintenance.ReferredSourceError as exc:
-        raise await fga_deps.refusal_naming_referrers(settings, token, client, exc) from exc
+    return GcRunResult(**await run_in_threadpool(_reclaim))
 
 
 @due_router.get("/due")
@@ -178,8 +148,7 @@ async def list_due_maintenance(
 
 
 def _due_view(record: maintenance_due.DueRecord, *, table: str) -> DueTable:
-    """A record as the door shows it, naming its table ``table``: the referrers' locations are other tables' storage,
-    so only their count."""
+    """A record as the door shows it, naming its table ``table``."""
     return DueTable(
         table=table,
         uuid=record.uuid,
@@ -187,7 +156,6 @@ def _due_view(record: maintenance_due.DueRecord, *, table: str) -> DueTable:
         compaction=record.compaction,
         indices=record.indices,
         policy=record.policy,
-        clones=len(record.clones),
         evaluated_at=record.evaluated_at,
     )
 

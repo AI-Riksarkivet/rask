@@ -172,11 +172,10 @@ data:
           "compactionSweeps": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Compaction sweeps (cron) — total" },
+              "display": { "name": "Maintenance tasks completed per hour, by kind" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum(compaction_runs_total)",
-                "seriesNameFormat": "compaction sweeps" } } } } ]
+                "query": "sum by (kind) (increase(maintenance_tasks_completed_total[1h]))" } } } } ]
             }
           },
           "errorRate": {
@@ -260,34 +259,32 @@ data:
       "kind": "Dashboard",
       "metadata": { "name": "maintenance", "project": "rask" },
       "spec": {
-        "display": { "name": "Table maintenance — the sweep", "description": "What the 120s sweep actually did: datasets covered, what it refused, and the versions and bytes it RECLAIMED. Maintenance compacts nothing (ADR 0155); its counters carry the compaction_* prefix." },
+        "display": { "name": "Table maintenance — the passes", "description": "What the worker's tasks did: the tasks it completed and ended, the datasets its passes covered and refused, and the versions and bytes they RECLAIMED. Maintenance compacts nothing (ADR 0155); its counters carry the compaction_* prefix." },
         "duration": "6h",
         "panels": {
           "runs": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Sweep runs /s (started vs completed)" },
+              "display": { "name": "Tasks ended and overrun per hour, by kind" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(rate(compaction_runs_started_total[5m]))", "seriesNameFormat": "started" } } } },
+                  "query": "sum by (kind) (increase(maintenance_tasks_ended_total[1h]))" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(rate(compaction_runs_total[5m]))", "seriesNameFormat": "completed" } } } }
+                  "query": "sum by (kind) (increase(maintenance_passes_overran_total[1h]))" } } } }
               ]
             }
           },
           "coverage": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Datasets per tick — swept vs refused vs trash-skipped" },
+              "display": { "name": "Datasets per 10 minutes — passed vs refused" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(increase(compaction_datasets_swept_total[10m]))", "seriesNameFormat": "swept" } } } },
+                  "query": "sum(increase(compaction_datasets_swept_total[10m]))", "seriesNameFormat": "passed" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(increase(compaction_datasets_refused_total[10m]))", "seriesNameFormat": "refused" } } } },
-                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum(increase(compaction_datasets_trashed_skipped_total[10m]))", "seriesNameFormat": "trash-skipped" } } } }
+                  "query": "sum(increase(compaction_datasets_refused_total[10m]))", "seriesNameFormat": "refused" } } } }
               ]
             }
           },

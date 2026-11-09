@@ -1,1 +1,1 @@
-"""FastAPI-coupled glue for the maintenance service (the Dapr cron route + DI)."""
+"""FastAPI-coupled glue for the maintenance service (the write-event route + DI)."""

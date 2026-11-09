@@ -38,7 +38,7 @@ dev = [
     "respx>=0.21",
     # The bus client the operator-mode NATS rig drives (tests/e2e-py/nats_auth_rig.py): the suite publishes
     # and subscribes as each bus user directly, because the claim is what the broker admits.
-    "nats-py>=2.15",
+    "nats-py>=2.16",
     "jsonschema>=4.26",
     "duckdb>=1.4",
     "requests>=2.32",
@@ -161,6 +161,7 @@ extend-select = ["TID251", "FAST001"]
 "packages/lakehouse/src/lakehouse/storage/client.py" = ["TID251"]  # boto3: the S3 client seam
 "packages/lakehouse/src/lakehouse/storage/sts.py" = ["TID251"]  # boto3: the STS client seam
 "packages/lakehouse/src/lakehouse/draining.py" = ["TID251"]  # signal: the drain seam
+"services/maintenance/src/maintenance/services/queue.py" = ["TID251"]  # nats: the work queue's seam, which Dapr cannot serve (ADR 0198 decision 5)
 "packages/lakehouse/src/lakehouse/arrow_ipc.py" = ["TID251"]  # arrow ipc: the validating decoder
 "packages/lakehouse/src/lakehouse/lancekit/reader.py" = ["TID251", "A002"]  # decode_arrow_response: the /query reader; `filter=` is the request's own field
 
@@ -293,7 +294,7 @@ markers = [
     "chaos: criterion 5's dependency-outage drills (XC-095): each takes one dependency of the release down, so they are deselected unless the run passes --chaos",
     "compaction: compaction/GC sweep e2e",
     "edge: each public /api prefix reaches its service through the cluster Gateway and is refused there anonymously (needs RASK_E2E_EDGE_URL)",
-    "nats_auth: operator-mode NATS admits each bus client only to its own subjects (run by `dagger call nats-auth`, which provides the broker, nsc and daprd)",
+    "nats_auth: operator-mode NATS admits each bus client only to its own subjects, and maintenance's worker shares the chart's work queue (run by `dagger call nats-auth`, which provides the broker, nsc and daprd)",
     "observability: observability (OTLP/Greptime) e2e",
     "phase1: Phase 1's acceptance (XC-090): one drive of the bring-your-own scenario (`byo_scenario`), its own claims, and one module per criterion read off that drive; criterion 1, provenance, is XC-091, criterion 2, the catalog, is XC-092, criterion 4, events, is XC-094, and criterion 5, resilience, is XC-095, whose drills also carry `chaos`; criterion 3, no engine, is the import contracts `make lint-imports` runs, on a release the e2e-stack lane installs with no engine",
     "rustfs_provisioning: the provisioning hook's script against a real RustFS (run by `dagger call rustfs-provisioning`, which binds a throwaway store; XC-163)",

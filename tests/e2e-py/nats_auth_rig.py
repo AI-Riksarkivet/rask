@@ -106,6 +106,12 @@ class Permissions(BaseModel):
     publish: tuple[str, ...] = ()
     subscribe: tuple[str, ...] = ()
 
+    @property
+    def inbox(self) -> str:
+        """The prefix this user's replies arrive under: the one subject its subscribe grant admits with ``.>``."""
+        (inbox,) = (subject.removesuffix(".>") for subject in self.subscribe if subject.endswith(".>"))
+        return inbox
+
 
 class Credential(BaseModel):
     """One user's JWT and NKEY seed, as nsc wrote them into the user's creds file."""
@@ -450,7 +456,8 @@ class Client:
         self.js = nc.jetstream()
 
     @classmethod
-    async def connect(cls, url: str, credential: Credential, name: str) -> Self:
+    async def connect(cls, url: str, credential: Credential, name: str, inbox: str = "_INBOX") -> Self:
+        """Connect as ``credential``'s user, its replies arriving under ``inbox``: the prefix its subscribe grant admits."""
         nc = await nats.connect(
             url,
             name=name,
@@ -460,6 +467,7 @@ class Client:
             connect_timeout=5,
             user_jwt_cb=credential.jwt_bytes,
             signature_cb=credential.sign_nonce,
+            inbox_prefix=inbox,
         )
         return cls(nc)
 

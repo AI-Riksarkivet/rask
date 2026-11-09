@@ -44,13 +44,12 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_refs import normalise
 from lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
 from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.maintenance_due import CloneList
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage import S3Client
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import sweep
+from maintenance.services import table_pass
 from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import PlanContext
@@ -126,14 +125,12 @@ class _Estate:
         """Maintenance's own pass on the table at ``location``, every version but the current one reclaimable, as of ``now``."""
         described = self.client.post("/v1/namespace/db/describe", json={})
         assert described.status_code == 200, described.text
-        tick = sweep.SweepPlan(
-            uris=[location],
-            clones=CloneList(taken_at=now),
+        readings = table_pass.PassReadings(
             table_ids=TableIds(by_location={normalise(location): table}, namespace_uuids={"db": str(described.json()["properties"][UUID_PROPERTY])}),
             context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
         )
         with maintain_tier_door(described_by(self.client)):
-            return sweep.maintain_dataset(location, sweep=tick, settings=self.maintenance(min_versions_to_expire=1, catalog_url=CATALOG_URL))
+            return table_pass.maintain_dataset(location, readings=readings, settings=self.maintenance(min_versions_to_expire=1, catalog_url=CATALOG_URL))
 
 
 @pytest.fixture

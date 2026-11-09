@@ -430,7 +430,7 @@ class GcRunResult(BaseModel):
 
 
 class DueTable(BaseModel):
-    """One table a compaction or an index optimize is due on, as the maintenance sweep measured it (ADR 0162)."""
+    """One table a compaction or an index optimize is due on, as its maintenance pass measured it (ADR 0162)."""
 
     #: The table's name now, or the name the record kept when the table is gone.
     table: str
@@ -442,8 +442,6 @@ class DueTable(BaseModel):
     indices: list[IndexDue] = Field(default_factory=list)
     #: The policy record that governed the evaluation, ``None`` when none matched.
     policy: str | None = None
-    #: How many datasets resolve their files through this table; a compaction of it is refused while any does.
-    clones: int = 0
     evaluated_at: datetime
 
 

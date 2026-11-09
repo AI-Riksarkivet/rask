@@ -6,10 +6,10 @@ import (
 	"dagger/rask/internal/dagger"
 )
 
-// natsImage matches the server the NATS fixture deploys (deploy/fixtures/nats pins the nats chart at 2.14.2,
+// natsImage matches the server the NATS fixture deploys (deploy/fixtures/nats pins the nats chart at 2.15.2,
 // whose appVersion is the same), so the broker CI tests against cannot drift from the broker the estate
 // runs.
-const natsImage = "nats:2.14.2-alpine"
+const natsImage = "nats:2.15.2-alpine"
 
 // withRenderableChart gives a python-gate container what `tests/unit/chart_render.py` needs to render the
 // chart: the pinned helm and the vendored subcharts. Shared by the pytest lane (Test) and the NATS auth lane

@@ -45,13 +45,6 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     lance_metadata_cache_mb: int = Field(default=128, ge=8, alias="MAINTENANCE_LANCE_METADATA_CACHE_MB")
     lance_index_cache_mb: int = Field(default=256, ge=8, alias="MAINTENANCE_LANCE_INDEX_CACHE_MB")
 
-    # The Dapr cron binding name == the POST route the sidecar delivers ticks to (must match the
-    # bindings.cron Component's metadata.name). Default matches the chart.
-    binding_name: str = Field(default="maintenance-cron", alias="MAINTENANCE_BINDING_NAME")
-    # The reconciler's OWN cron binding, separate from the sweep's. Two bindings rather than one route
-    # doing both because they have genuinely different cadences: the sweep opens every dataset and
-    # reclaims versions, while the drift report only reads three stores and is cheap enough to run often.
-    reconcile_binding_name: str = Field(default="maintenance-reconcile-cron", alias="MAINTENANCE_RECONCILE_BINDING_NAME")
     # Serve /docs + /openapi.json (default on for dev; prod sets false, like the catalog's LANCE_REST_DOCS).
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
     #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
@@ -86,10 +79,6 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: Where an event the lane could not decide on parks once its redeliveries are spent, so a poison event leaves the
     #: subscription instead of recirculating.
     arrival_dlq_topic: str = Field(default="", alias="MAINTENANCE_ARRIVAL_DLQ_TOPIC")
-    #: How many versions must accumulate before the event lane re-evaluates one dataset: the debounce that keeps a burst
-    #: of writes from paying an evaluation each. A compaction's or an index's commit skips it. The sweep covers
-    #: whatever this skips, which is what makes a threshold safe rather than a way to lose a refresh.
-    event_min_versions: int = Field(default=10, ge=1, alias="MAINTENANCE_EVENT_MIN_VERSIONS")
     #: Expire a table's versions only once at least this many are RECLAIMABLE under its policy. Both lanes ask it: an
     #: expiry pass that reclaims one version a tick costs a vend, a manifest commit read and a listing for almost nothing.
     #: The count is Lance's own, ``explain_cleanup_old_versions`` with the arguments the pass's ``cleanup_old_versions``
@@ -99,11 +88,40 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: ([[LH-529]]): one whose commit lost its version is garbage Lance's own cleanup never lists, and the grace outlasts any
     #: commit still deciding its outcome.
     staged_manifest_grace_seconds: int = Field(default=600, ge=0, alias="MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS")
-    #: How old the sweep's clone list may be before the event lane stops trusting it to expire a table. The list is the
-    #: only evidence of which tables another dataset resolves its files through, so an older one leaves expiry to the
-    #: sweep, which takes a fresh one first. The catalog's commit judge holds the same bound
-    #: (`LANCE_CLONE_LIST_MAX_AGE_SECONDS`, default 3600).
-    clone_list_max_age_seconds: int = Field(default=3600, ge=60, alias="MAINTENANCE_CLONE_LIST_MAX_AGE_SECONDS")
+    # --- The work queue (ADR 0198 §2). Each table's pass, each trash record's release and the hourly audit are tasks on
+    # NATS JetStream, which every replica's worker pulls from; the streams and their durable consumers are the chart's
+    # (`chart/templates/nats-stream-job.yaml`), so the worker binds to them and creates nothing.
+    #: The bus the worker connects to; empty runs no worker, which leaves a stack with no NATS to the doors and the tests.
+    nats_url: str = Field(default="", alias="MAINTENANCE_NATS_URL")
+    #: The store secret holding the worker's own bus user (`jwt`, `seedKey`), read once at start and never from env. Its
+    #: permissions are the chart's `nats.auth.users` row: pull and ack on the two consumers, publish tasks and schedules.
+    nats_credentials_secret: str = Field(default="nats-user-maintenance-worker", alias="MAINTENANCE_NATS_CREDENTIALS_SECRET")
+    #: How often a running task tells JetStream it is still being worked on, well inside the consumer's ack wait (the
+    #: chart's `maintenance.queue.ackWaitSeconds`), so a long pass is never redelivered beneath itself while its worker lives.
+    task_heartbeat_seconds: float = Field(default=20.0, gt=0, alias="MAINTENANCE_TASK_HEARTBEAT_SECONDS")
+    #: Deliveries of one task before the worker ends it and counts it (the chart's `maintenance.queue.maxDeliver`); the
+    #: consumer allows one more, on which a task that outlived its worker every time is ended without running.
+    task_max_deliver: int = Field(default=10, ge=1, alias="MAINTENANCE_TASK_MAX_DELIVER")
+    #: A pass running longer than this is logged and counted once. It keeps its task, since a redelivery while the pass
+    #: still runs would put the table in flight twice, until twice this, when its replica ends its own process.
+    max_pass_seconds: int = Field(default=1800, ge=60, alias="MAINTENANCE_MAX_PASS_SECONDS")
+    #: The longest a table goes without a pass: what bounds what no event announces, a lost commit event and the versions a
+    #: deleted tag or branch releases (an erasure's pins among them), and a table only a commit can make due.
+    recheck_hours: int = Field(default=24, ge=1, alias="MAINTENANCE_RECHECK_HOURS")
+    #: When a pass that could not decide, or found the table's history held, is tried again.
+    retry_seconds: int = Field(default=900, ge=60, alias="MAINTENANCE_RETRY_SECONDS")
+    #: How long the first commit of a burst holds its table's pass, and so the most often commits pass a table: every commit
+    #: until the pass runs is covered by it, and a pass costs a fixed handful of store requests however busy the table is.
+    commit_pass_delay_seconds: int = Field(default=300, ge=1, alias="MAINTENANCE_COMMIT_PASS_DELAY_SECONDS")
+    #: How long a stopping replica lets the task it is running finish before its connection drains, inside the pod's
+    #: `terminationGracePeriodSeconds`; a task cut short goes to another replica once its heartbeat stops.
+    drain_seconds: float = Field(default=50.0, gt=0, alias="MAINTENANCE_DRAIN_SECONDS")
+    #: The audit's schedule, a NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs, the
+    #: release and the lost-task backstop run once per firing on one replica, whatever the replica count.
+    audit_schedule: str = Field(default="@hourly", alias="MAINTENANCE_AUDIT_SCHEDULE")
+    #: The scan's schedule: the audit with the orphan scan, which opens every table, and then the listing floors and the
+    #: purge its report certifies (owner 2026-11-09: daily).
+    scan_schedule: str = Field(default="@daily", alias="MAINTENANCE_SCAN_SCHEDULE")
 
     # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each dataset whose versions
     # were reclaimed, to the lineage graph via Dapr pub/sub. Publishes to the SAME pubsub component + topic the
@@ -200,8 +218,7 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: learn what the purge would do was to let it do it — the wrong order for the one irreversible
     #: operation this service performs.
     #:
-    #: It runs the REAL pass: the same `due_records`, the same liveness and shallow-clone pre-passes,
-    #: the same `check`. Only the mutations are skipped (the byte delete and the catalog's ending of the
+    #: It runs the REAL pass: the same `due_records`, the same liveness pre-pass, the same `check`. Only the mutations are skipped (the byte delete and the catalog's ending of the
     #: record and its grants) plus the refusal annotation, which is a write onto the very records being
     #: previewed. A separate preview routine would be a second mechanism that drifts from the one it
     #: previews, and the drift would surface as deleting the wrong thing.
@@ -211,16 +228,13 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: looks exactly like a healthy one — which is why `maintenance.trash.purge_planned` and every
     #: reclamation counter carry a `dry_run` dimension, so that state is visible rather than inferred.
     #:
-    #: IT ADDS READ COST, and on this pod that is not free. With reclamation off the pass returns
-    #: before the trash prefix is read at all; with the preview on it performs the full listing, a
-    #: Lance `__manifest` open per maintained root, and the shallow-clone pre-pass that opens EVERY
-    #: dataset in EVERY maintained bucket — against a 512Mi limit this service has already been
-    #: OOMKilled against. Turning it on is a real workload, not an inspection.
+    #: IT ADDS READ COST. With reclamation off the pass returns before the trash prefix is read at all;
+    #: with the preview on it performs the full listing and a Lance `__manifest` open per maintained root.
     #:
-    #: `would_purge` is an UPPER BOUND, never exact. Four of the seven refusal causes sit below the
-    #: preview cut: the catalog's judgement, a location that is not a dataset, and a failing delete cannot be
-    #: evaluated without asking for or performing the act they guard. The fourth — the shallow-clone guard —
-    #: IS applied, because the pre-pass has already run and `is_protected` is an in-memory compare.
+    #: `would_purge` is an UPPER BOUND, never exact. Three refusal causes sit below the preview cut: the
+    #: catalog's judgement (a registered clone still reading the bytes among them, ADR 0198 §1), a location
+    #: that is not a dataset, and a failing delete cannot be evaluated without asking for or performing the
+    #: act they guard.
     trash_purge_dry_run: bool = Field(default=False, alias="MAINTENANCE_TRASH_PURGE_DRY_RUN")
 
     #: Write one metadata-only commit to a dataset whose orphans sit above its Lance listing floor, so
@@ -310,17 +324,9 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     # nothing, so raising it reveals no hidden data. The default stays 3 because that measurement
     # covers one of 93 buckets.
     #
-    # BOUNDED at both ends deliberately. 0 maintains nothing; an unbounded walk is not a freedom but a
-    # foot-gun, because `sweep.py::_protected_roots` opens every discovered dataset in every bucket
-    # before one is expired, so the walk is the sweep's dominant cost.
+    # BOUNDED at both ends deliberately. 0 scans nothing; an unbounded walk is not a freedom but a
+    # foot-gun, because the orphan scan opens every dataset the walk discovers.
     discovery_max_depth: int = Field(default=3, ge=1, le=16, alias="MAINTENANCE_DISCOVERY_MAX_DEPTH")
-    #: [[LH-101]]. Wall-clock ceiling for ONE sweep tick, checked BETWEEN datasets — never inside one,
-    #: because a budget that interrupted a reclaim would leave it half-done. 0 (the default)
-    #: means unlimited. The value is an
-    #: operator decision: too small and a large estate never completes a pass, too large and the bound is
-    #: decorative, and exhausting it logs what was executed and what remains rather than stopping quietly.
-    sweep_budget_seconds: float = Field(default=0.0, ge=0.0, alias="MAINTENANCE_SWEEP_BUDGET_SECONDS")
-
     # The reconciler reads the catalog's registries (`_projects/`, `_warehouses/`) off the control root.
     # Defaults to the primary bucket, matching the catalog's own LANCE_CONTROL_ROOT default; override
     # only when the catalog's control root has been moved.
@@ -393,6 +399,13 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
         if self.secrets_from_dapr:
             require_a_token(self.web_identity, prefix="MAINTENANCE")
         require_one_store_identity(self.web_identity, env_pair=self.env_pair, prefix="MAINTENANCE")
+        return self
+
+    @model_validator(mode="after")
+    def _a_bus_needs_the_store(self) -> Self:
+        """Refuse a bus address without the secret store: the worker's bus credential is read from the store alone."""
+        if self.nats_url and not self.secrets_from_dapr:
+            raise ValueError("MAINTENANCE_NATS_URL needs MAINTENANCE_SECRETS_FROM_DAPR: the worker's bus credential is read from the store, never env")
         return self
 
     def s3_key_pair(self) -> S3KeyPair:

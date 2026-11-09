@@ -15,8 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import random
-import time
 from typing import Any, cast
 
 import pytest
@@ -35,7 +33,7 @@ from maintenance.core.lineage_emit import (
     make_emitter,
 )
 from maintenance.services.expiry import DatasetResult
-from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_lineage
+from maintenance.services.table_pass import emit_pass_lineage
 
 
 # --------------------------------------------------------------------------- #
@@ -145,7 +143,7 @@ def _named(table: str, **kw: Any) -> DatasetResult:
     return DatasetResult(uri=f"s3://b/{table}", table_id=table, **kw)
 
 
-def test_emit_sweep_lineage_emits_only_for_datasets_whose_versions_were_reclaimed() -> None:
+def test_emit_pass_lineage_emits_only_for_datasets_whose_versions_were_reclaimed() -> None:
     emitter = _RecordingEmitter()
     results = [
         _named("ns$a", old_versions_removed=3),  # compacted → emit
@@ -154,12 +152,12 @@ def test_emit_sweep_lineage_emits_only_for_datasets_whose_versions_were_reclaime
         _named("ns$d", old_versions_removed=1, error="open: boom"),  # transient noise → skip
         _result("s3://b/nounderscore", old_versions_removed=1),  # no __manifest row names it → skip
     ]
-    asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
+    asyncio.run(emit_pass_lineage(cast(Any, emitter), results))
     assert emitter.calls == [("ns$a", "s3://b/ns$a"), ("ns$b", "s3://b/ns$b")]
     assert emitter.failed_calls == []  # an open:-errored dir NEVER produces an event (§4 selection)
 
 
-def test_emit_sweep_lineage_fails_only_for_maintain_errors() -> None:
+def test_emit_pass_lineage_fails_only_for_maintain_errors() -> None:
     # §4 selection: maintain: (escaped compact/GC — post-auto-retry terminal) → FAIL; open: (unreadable /
     # declared-only dir) → nothing; a maintain:-errored dataset that ALSO did partial material work gets
     # the FAIL, not a COMPLETE (the pass did not complete); a dataset no __manifest row names → nothing either way.
@@ -172,7 +170,7 @@ def test_emit_sweep_lineage_fails_only_for_maintain_errors() -> None:
         _result("s3://b/medallion", error="maintain: nope"),  # no __manifest row names it → skip
         _named("ns$e", old_versions_removed=1),  # healthy → COMPLETE as before
     ]
-    asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
+    asyncio.run(emit_pass_lineage(cast(Any, emitter), results))
     assert emitter.calls == [("ns$e", "s3://b/ns$e")]
     assert emitter.failed_calls == [
         ("ns$a", "s3://b/ns$a", "maintain: Commit conflict"),
@@ -180,36 +178,7 @@ def test_emit_sweep_lineage_fails_only_for_maintain_errors() -> None:
     ]
 
 
-def test_emit_sweep_lineage_caps_fail_emits_and_logs_the_drop(caplog: pytest.LogCaptureFixture) -> None:
-    # The per-tick FAIL fan-out is capped so a bucket where everything fails can't push the cron handler
-    # past the 30s Dapr ack window — and the cap is LOGGED, never silent (dropped datasets converge onto
-    # the same deterministic run ids next tick anyway).
-    # The capped subset is SHUFFLED, so a dataset late in listing order is not dropped on every tick of a
-    # mass incident.
-    emitter = _RecordingEmitter()
-    results = [_named(f"ns$t{i}", error="maintain: boom") for i in range(_MAX_FAIL_EMITS_PER_TICK + 5)]
-    random.seed(0)
-    with caplog.at_level("WARNING"):
-        asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
-    assert len(emitter.failed_calls) == _MAX_FAIL_EMITS_PER_TICK
-    assert any(r.message == "maintenance_fail_emits_capped" for r in caplog.records)
-    in_listing_order = {f"ns$t{i}" for i in range(_MAX_FAIL_EMITS_PER_TICK)}
-    assert {table_id for table_id, _, _ in emitter.failed_calls} != in_listing_order, "the cap keeps the first datasets listed on every tick"
-
-
-def test_cap_counts_actual_emits_not_unnamed_slots(caplog: pytest.LogCaptureFixture) -> None:
-    # Review 2026-07-10: the cap must apply AFTER the naming filter — 30 maintain: failures no __manifest row
-    # names must not consume cap slots and starve the 5 real emits, and no cap warning fires when the actual
-    # emit count is under the cap.
-    emitter = _RecordingEmitter()
-    results = [_result("s3://b/medallion", error="maintain: nope")] * 30 + [_named(f"ns$t{i}", error="maintain: real") for i in range(5)]
-    with caplog.at_level("WARNING"):
-        asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
-    assert len(emitter.failed_calls) == 5  # every named failure emitted
-    assert not any(r.message == "maintenance_fail_emits_capped" for r in caplog.records)
-
-
-def test_emit_sweep_lineage_never_raises_even_for_a_broken_emitter() -> None:
+def test_emit_pass_lineage_never_raises_even_for_a_broken_emitter() -> None:
     # The guardrail is structural: "a publish failure must never fail the sweep" holds even for an
     # emitter that predates the FAIL protocol (AttributeError while building the coros) or one whose
     # coroutine raises — either way the cron handler must never see it.
@@ -222,49 +191,8 @@ def test_emit_sweep_lineage_never_raises_even_for_a_broken_emitter() -> None:
             raise RuntimeError("boom from a non-best-effort emitter")
 
     results = [_named("ns$a", error="maintain: x")]
-    asyncio.run(emit_sweep_lineage(cast(Any, _OldProtocolEmitter()), results))  # no raise
-    asyncio.run(emit_sweep_lineage(cast(Any, _RaisingEmitter()), results))  # no raise
-
-
-def test_fail_batch_bounded_through_the_real_emitter_with_a_hung_sidecar() -> None:
-    # The COMPOSED ack-window claim: cap + concurrent gather + the real DaprMaintenanceEmitter._publish
-    # timeout. 30 failing datasets against a sidecar that never responds must complete in ~one publish
-    # timeout (0.2s here), not 30 × anything — and must not raise.
-    class _HungClient:
-        async def publish_event(self, **_kw: Any) -> None:
-            await asyncio.sleep(60)
-
-    emitter = DaprMaintenanceEmitter(
-        cast(Any, _HungClient()),
-        pubsub="p",
-        topic="t",
-        job_namespace="compaction",
-        timeout_seconds=0.2,
-        dataset_namespace="lance-namespace://localhost/api/catalog",
-    )
-    results = [_named(f"ns$t{i}", error="maintain: hung") for i in range(30)]
-    start = time.monotonic()
-    asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
-    elapsed = time.monotonic() - start
-    assert elapsed < 5.0, f"hung-sidecar FAIL batch not bounded ({elapsed:.2f}s)"
-
-
-def test_emit_sweep_lineage_fail_batch_is_concurrent_not_sequential() -> None:
-    # The FAIL publishes gather CONCURRENTLY (each internally bounded by the emitter's publish timeout):
-    # N slow publishes must take ~one publish's latency, not N of them — the ack-window bound. 20 emits
-    # sleeping 0.1s each would be 2s sequential; concurrent they finish in a fraction of that.
-    class _SlowEmitter(_RecordingEmitter):
-        async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
-            await asyncio.sleep(0.1)
-            await super().emit_maintenance_failed(table_id=table_id, location=location, error=error)
-
-    emitter = _SlowEmitter()
-    results = [_named(f"ns$t{i}", error="maintain: slow") for i in range(20)]
-    start = time.monotonic()
-    asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
-    elapsed = time.monotonic() - start
-    assert len(emitter.failed_calls) == 20
-    assert elapsed < 1.0, f"FAIL batch ran sequentially ({elapsed:.2f}s for 20 × 0.1s sleeps)"
+    asyncio.run(emit_pass_lineage(cast(Any, _OldProtocolEmitter()), results))  # no raise
+    asyncio.run(emit_pass_lineage(cast(Any, _RaisingEmitter()), results))  # no raise
 
 
 # --------------------------------------------------------------------------- #
@@ -406,7 +334,7 @@ def test_a_pass_is_named_only_by_the_table_the_sweep_named(tmp_path: Any) -> Non
     assert [(r.error, r.old_versions_removed) for r in results] == [(None, 1), (None, 1)], results
 
     emitter = _RecordingEmitter()
-    asyncio.run(emit_sweep_lineage(cast(Any, emitter), results))
+    asyncio.run(emit_pass_lineage(cast(Any, emitter), results))
     assert emitter.calls == [("silver$plain", named)], "a pass was named by a stamp"
 
 

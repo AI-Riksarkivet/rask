@@ -23,7 +23,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
-from maintenance.services.sweep import _record_dataset_outcome, audit_material_work
+from maintenance.services.table_pass import _record_dataset_outcome, audit_material_work
 
 
 if TYPE_CHECKING:

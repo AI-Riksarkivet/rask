@@ -27,9 +27,8 @@ import pyarrow as pa
 import pytest
 import respx
 
-from lakehouse import base_refs
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import credentials, sweep
+from maintenance.services import credentials, table_pass
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import DatasetPlan
 
@@ -67,12 +66,12 @@ def _refused(status: int, body: dict[str, Any]) -> VendAnswer:
     return lambda _uri: httpx.Response(status, json=body)
 
 
-def _execute(maintain_one: Callable[..., DatasetResult], uri: str, *, vend: VendAnswer, protected: base_refs.BaseRefs | None = None) -> DatasetResult:
+def _execute(maintain_one: Callable[..., DatasetResult], uri: str, *, vend: VendAnswer) -> DatasetResult:
     """One dataset's pass through the real vend client."""
     settings = MaintenanceSettings.model_validate({"s3_bucket": "lake", "catalog_url": CATALOG, "min_versions_to_expire": 1})
     with respx.mock(assert_all_called=False) as router:
         router.post(VEND_URL).mock(return_value=vend(uri))
-        return maintain_one(uri, settings, protected=protected, plan=DatasetPlan(older_than=timedelta(0), retain_versions=1), table_id=TABLE_ID)
+        return maintain_one(uri, settings, plan=DatasetPlan(older_than=timedelta(0), retain_versions=1), table_id=TABLE_ID)
 
 
 def test_a_vend_refusal_is_counted_under_its_table_and_its_door(
@@ -84,21 +83,9 @@ def test_a_vend_refusal_is_counted_under_its_table_and_its_door(
     assert refused_added == [(1, {"refused_by": "vend_denied"})], f"the refusal reached the datasets counter unlabelled or not at all: {refused_added}"
 
 
-def test_a_layout_refusal_is_not_a_table_the_catalog_refused(
-    *, tmp_path: Path, maintain_one: Callable[..., DatasetResult], parked_added: Recorded, refused_added: Recorded
-) -> None:
-    """A clone's source is refused by the estate's own pre-pass, under a location that may name no table."""
-    uri = _written(tmp_path, fragments=3)
-
-    _execute(maintain_one=maintain_one, uri=uri, vend=_vended_at(None), protected=base_refs.BaseRefs(protected={base_refs.normalise(uri)}))
-
-    assert refused_added == [(1, {"refused_by": "protected_base"})], "the fixture did not reach the protected-base refusal"
-    assert parked_added == [], parked_added
-
-
 @pytest.mark.parametrize("gate", ["manifest_flags"])
 def test_a_layout_gate_is_not_counted_even_beside_an_id(gate: str, parked_added: Recorded) -> None:
     """The label set is the catalog's answers, whatever else a result carries."""
-    sweep._record_parked(DatasetResult.model_validate({"uri": "s3://b/t", "refused": "no", "refused_by": gate, "refused_table_id": TABLE_ID}))
+    table_pass._record_parked(DatasetResult.model_validate({"uri": "s3://b/t", "refused": "no", "refused_by": gate, "refused_table_id": TABLE_ID}))
 
     assert parked_added == [], parked_added

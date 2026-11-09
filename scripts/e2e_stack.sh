@@ -464,30 +464,9 @@ door "$ALICE" POST /management/v1/projects "{\"id\":\"$TENANT_B\"}" 200 201 409 
 door "$ALICE" PUT "/management/v1/projects/$TENANT_B/members" "{\"user\":\"$BOB_PRINCIPAL\",\"relation\":\"admin\"}" 200 || exit 1
 echo "   tenant B: $TENANT_B (admin=bob)"
 
-step "8/9 the outbox suite's Dapr app token, and maintenance's first sweep"
+step "8/9 the outbox suite's Dapr app token"
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
 [ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
-# A FRESH ESTATE REFUSES EVERY COMPACTION UNTIL MAINTENANCE HAS SWEPT ONCE: `version/create` judges a compaction against
-# the clone list the sweep writes, and a missing list refuses (ADR 0162). The sweep that writes it is the backstop on
-# `maintenance.schedule`, on the hour and the half hour, so the lane runs the first one itself, on the route the cron binding posts to,
-# and the erasure drill's compaction a minute later is judged as it would be on an estate that has run for a while.
-# A SWEEP RAN WHEN ITS SUMMARY CAME BACK, and nothing else counts: the route answers `skipped` while the signing key is
-# unresolved or another sweep holds the lock, and the forward answers nothing while the pod is out of its Service, which
-# a signer is until it re-resolves a key the dev store minted after it booted (within five minutes, the signer's
-# re-read). Each distinct answer is printed, so a lane that gives up says what it saw.
-SWEEP_OUT="$(mktemp)"
-seen=""
-for i in $(seq 1 60); do
-  code="$(curl -s -m 600 -o "$SWEEP_OUT" -w '%{http_code}' -X POST "http://localhost:18001/maintenance-cron" -H "dapr-api-token: $DAPR_TOKEN" || true)"
-  if [ "$code" = "200" ] && python3 -c 'import json, sys; sys.exit(0 if "datasets" in json.load(open(sys.argv[1])) else 1)' "$SWEEP_OUT" 2>/dev/null; then
-    echo "   maintenance swept once: the clone list is written"
-    break
-  fi
-  answer="HTTP ${code:-none} $(head -c 200 "$SWEEP_OUT" 2>/dev/null)"
-  [ "$answer" = "$seen" ] || { echo "   no sweep yet: $answer"; seen="$answer"; }
-  [ "$i" = "60" ] && { echo "!! maintenance's first sweep never ran in ten minutes (last answer: $answer)"; exit 1; }
-  sleep 10
-done
 
 step "9/9 run the guarded e2e suites against the live stack"
 export LANCE_E2E_S3=http://localhost:9900
@@ -495,7 +474,7 @@ export LANCE_E2E_S3=http://localhost:9900
 # skipped on every run — the suite named in the goal has, until now, never actually executed.
 # The maintenance-on-real-S3 suite (#80) gates on the same variable. It is safe to run against the live
 # store precisely because it never READS one: it creates four uuid-suffixed buckets of its own, sweeps
-# only those, and deletes them — `run_sweep` compacts and GCs everything it discovers, so pointing it at
+# only those, and deletes them — its passes expire every table it registers there, so pointing it at
 # `lance-catalog` would rewrite the estate this job just seeded.
 export LANCE_E2E_S3_ENDPOINT=http://localhost:9900
 export LANCE_E2E_S3_ACCESS_KEY="$S3_KEY"
@@ -505,8 +484,6 @@ export LANCE_E2E_CATALOG_URL=http://localhost:2333
 export LANCE_REST_E2E_URL=http://localhost:2333
 export LANCE_E2E_AUTH_SERVER=http://localhost:2333
 export LANCE_E2E_LINEAGE_URL=http://localhost:18000
-# The maintenance service, whose cron route its suite calls with the Dapr app token below.
-export LANCE_E2E_MAINTENANCE_URL=http://localhost:18001
 # WITH the /dex path prefix — that is what every suite defaults to, and what Dex actually serves the OIDC
 # discovery document under. Exporting the bare host OVERRODE the correct default with a broken one, so the
 # client-direct suite's reachability probe 404'd and it SKIPPED — silently, on every run.

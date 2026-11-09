@@ -14,7 +14,7 @@ serviceAccount: rask-sa-openbao
 image: openbao/openbao:2.2.0
 port: 8200
 # The image the mint runs: nk mints the signing pairs and the bus users, and nsc issues the users under the bus's root.
-mintImage: natsio/nats-box:0.19.7
+mintImage: natsio/nats-box:0.20.2
 # What rask's chart renders, for release `rask`: the seed's scripts and the credentials ESO generates for the store.
 seedScripts: rask-openbao-seed
 # The roles and policies of every identity that reads the store, which rask's chart renders for any store, this one or a

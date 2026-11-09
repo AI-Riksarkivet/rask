@@ -383,10 +383,6 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: The maintenance sweep's cleanup window (`maintenance.olderThanDays`), which an erasure report quotes as
     #: the last condition before the subject's bytes leave storage. Read here only to say it; the sweep owns it.
     erasure_cleanup_window_days: int = Field(default=7, ge=0, alias="LANCE_ERASURE_CLEANUP_WINDOW_DAYS")
-    #: How old the maintenance sweep's clone list may be when ``version/create`` judges a compaction against it
-    #: (``lakehouse.maintenance_due``, ADR 0162). An older list means the sweep has stopped, and a
-    #: dataset cloned since is unknown, so the compaction is refused; the sweep writes one every tick.
-    clone_list_max_age_seconds: int = Field(default=3600, ge=60, alias="LANCE_CLONE_LIST_MAX_AGE_SECONDS")
 
 
 class CatalogVendingSettings(BaseSettings):

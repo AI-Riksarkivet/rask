@@ -37,7 +37,7 @@ import pytest
 from lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
 from lakehouse.storage_options import StorageOptions
 from maintenance.services.expiry import ExpiryPolicy
-from maintenance.services.sweep import _probe_before_vending
+from maintenance.services.table_pass import _probe_before_vending
 
 
 #: Keep the newest version, so every superseded one is reclaimable.
