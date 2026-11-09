@@ -48,16 +48,19 @@ class LaneTask(BaseModel):
     location: str = ""
 
 
-def lane_task(event: dict[str, Any]) -> LaneTask | None:
+def lane_task(event: object) -> LaneTask | None:
     """The task this lane would queue for ``event``, or ``None`` when it acknowledges the event untouched.
 
     ONE DECISION FOR THE DOOR AND THE HANDLER ([[XC-078]]). `/maintenance-arrival` checks the signature of exactly the
     events this selects and the handler queues exactly those, so what the lane acts on cannot widen past what the door
-    checks. FAILS CLOSED on anything it cannot read: events arrive off a bus and are client-controlled, so a malformed one
-    is ignored rather than raised, which would turn one bad publish into a redelivery loop. A pass needs the table's
-    location and a release needs its uuid, so a write naming no location and a drop naming no uuid are acknowledged
-    without a read: a pass must never be pointed at a location nobody confirmed.
+    checks. FAILS CLOSED on anything it cannot read, a CloudEvent whose `data` is not an object included: events arrive
+    off a bus and are client-controlled, so a malformed one is ignored rather than raised, which would turn one bad
+    publish into a redelivery loop. A pass needs the table's location and a release needs its uuid, so a write naming no
+    location and a drop naming no uuid are acknowledged without a read: a pass must never be pointed at a location nobody
+    confirmed.
     """
+    if not isinstance(event, dict):
+        return None
     run = event.get("run")
     facets = run.get("facets") if isinstance(run, dict) else None
     lance = facets.get(LANCE_FACET) if isinstance(facets, dict) else None

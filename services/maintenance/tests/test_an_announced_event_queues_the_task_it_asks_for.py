@@ -115,9 +115,10 @@ def test_an_event_that_moves_no_bytes_asks_for_nothing(operation: str) -> None:
         pytest.param({**_event("insert"), "outputs": []}, id="no-output"),
         pytest.param({**_event("insert"), "run": {"runId": "r-1", "facets": {}}}, id="no-operation-facet"),
         pytest.param({"run": "not-a-dict", "outputs": [{"name": "t"}]}, id="malformed"),
+        pytest.param("a CloudEvent's data that is not an object", id="data-that-is-not-an-object"),
     ],
 )
-def test_an_event_the_lane_cannot_act_on_is_acknowledged_untouched(event: dict[str, Any]) -> None:
+def test_an_event_the_lane_cannot_act_on_is_acknowledged_untouched(event: object) -> None:
     """Fails closed: a pass must never be pointed at a location nobody confirmed, and a raise would turn one bad publish
     into a redelivery loop."""
     assert lane_task(event) is None
@@ -339,3 +340,27 @@ def test_a_task_is_queued_only_when_the_door_admits_its_signature(
         expected.setdefault(name, {})[("maintenance-arrival", reason)] = 1
     reached = [task.location for task, _ in queue.followed]
     assert (answered.status_code, answered.json(), reached, signature_counts()) == (200, {"status": "SUCCESS"}, queued, expected)
+
+
+@respx.mock
+def test_a_door_that_cannot_read_the_signers_keys_asks_for_the_event_again(*, arrival_door: Door, event_signer: Any) -> None:
+    """Enforcing, a door that cannot read a signer's keys can neither admit nor refuse the event, so it asks for it again,
+    since the read can succeed on a later delivery, and queues nothing meanwhile. Off reads no key: the shared judge
+    answers off before it verifies anything (`lakehouse.lineage.door.judge`)."""
+    delegator = event_signer(SIGNER)
+    keys = respx.get(f"{SECRETS}/signing-public-{SIGNER}").mock(return_value=httpx.Response(503))
+    client, queue = arrival_door("enforce")
+
+    answered = client.post(
+        "/maintenance-arrival",
+        json={
+            "id": "ce-2",
+            "specversion": "1.0",
+            "type": "com.dapr.event.sent",
+            "datacontenttype": "application/json",
+            "data": delegator.sign(_arrived_write(), on_behalf_of=AUTHOR),
+        },
+        headers={"dapr-api-token": TOKEN},
+    )
+
+    assert (answered.status_code, answered.json(), queue.followed, keys.called) == (200, {"status": "RETRY"}, [], True)
