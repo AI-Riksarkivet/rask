@@ -6,8 +6,10 @@ requests passing through `store_requests.counted`, since Lance's and pyarrow's n
 hook. Each table is a catalog table of three commits and three fragments, and a commit's pass is measured after the pass
 before that commit.
 
-* **A commit's pass** (`table_pass.run_table_pass`) reads its claim, its trash record, its bucket's ``__manifest``, the
-  policies and its own datasets: the same number of requests at 4 tables as at 12. The files its commits recorded are
+* **A commit's pass** (`table_pass.run_table_pass`) reads its claim, its trash record, its namespace's warehouse, the rows of
+  its bucket's ``__manifest`` naming it and its namespace, the policy records that may govern it and its own datasets,
+  each by key: the same number of requests at 4 tables as at 12, and once eight more warehouses and a policy on every
+  other table are there, since a pass that listed the registries would read each record. The files its commits recorded are
   checked against one listing of its root, and of the records only the one the commit wrote is read, maintenance's copy
   holding the rest (`lakehouse.file_identities.recorded_and_copied`), so a table of 13 commits reads one. Measured
   2026-11-09: 58. What still grows with a table is Lance's own cleanup accounting, which reads each retained version's
@@ -24,6 +26,7 @@ before that commit.
 from __future__ import annotations
 
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -98,6 +101,15 @@ class _Estate:
             described = self.both.catalog.post(f"/v1/table/{table}/describe", json={}).json()
             self.tables.append(TableTask(uuid=str(described["properties"]["rask.uuid"]), location=str(described["location"])))
 
+    def crowd(self, warehouses: int, *, spared: set[int]) -> None:
+        """``warehouses`` more warehouses of the project, and a policy set on every table but those ``spared``."""
+        for _ in range(warehouses):
+            answer = self.both.catalog.post("/management/v1/warehouses", json={"id": f"wh-{uuid.uuid4().hex[:6]}", "project": "acme"})
+            assert answer.status_code == 200, answer.text
+        for index in set(range(len(self.tables))) - spared:
+            answer = self.both.catalog.post(f"/management/v1/table/bronze$t{index}/policy/set", json={"retention_days": 30})
+            assert answer.status_code == 200, answer.text
+
     def deepen(self, table: int, commits: int) -> None:
         """The ``table``-th table given ``commits`` more commits."""
         for _ in range(commits):
@@ -159,10 +171,15 @@ def test_a_commits_pass_costs_a_fixed_handful_and_an_idle_estate_opens_no_table(
             small_pass, small_audit = estate.a_commits_pass(0), estate.audited()
             estate.grow(12)
             large_pass, large_audit = estate.a_commits_pass(4), estate.audited()
+            # A table measured for the first time, as the fifth was: a second pass of the fifth would read one more commit.
+            estate.crowd(8, spared={5})
+            crowded_pass = estate.a_commits_pass(5)
             estate.deepen(0, 8)
             deep_pass = estate.a_commits_pass(0)
 
     assert len(large_pass) == len(small_pass) <= _PASS_CEILING, f"a commit's pass cost {len(small_pass)} requests at 4 tables and {len(large_pass)} at 12"
+    grown = Counter((request.method, request.path) for request in crowded_pass) - Counter((request.method, request.path) for request in large_pass)
+    assert len(crowded_pass) == len(large_pass), f"a commit's pass read {sorted(grown)} beside 8 more warehouses and 10 policies"
     assert estate.records_read(deep_pass, 0) == 1, f"a commit's pass read {estate.records_read(deep_pass, 0)} of its table's 13 commit records"
     assert (estate.opened(small_audit), estate.opened(large_audit)) == ([], []), "the hourly audit read inside a table"
     assert len(large_audit) - len(small_audit) <= 12 - 4, f"the audit grew by {len(large_audit) - len(small_audit)} requests for 8 more tables"

@@ -26,10 +26,11 @@ from lance_namespace import (
     DescribeTableResponse,
     InvalidInputError,
     LanceNamespace,
+    PermissionDeniedError,
     ServiceUnavailableError,
     TableNotFoundError,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
@@ -251,11 +252,16 @@ def require_exclusive_location(root: str, relative: str, storage_options: Storag
 class CloneAdmission(BaseModel):
     """What a registered shallow clone is admitted with: the sources to tag, and the record entries its roots earn."""
 
-    #: The source the clone's first transaction names, which its tag pins (:mod:`lakehouse.clone_sources`).
+    #: Every table the clone reads through, each at the version its tag pins (:mod:`lakehouse.clone_sources`): the
+    #: source its first transaction names, and each table that source itself reads through (a clone of a clone reads
+    #: the first source's files where they are, measured on pylance 13.0.0).
     sources: list[clone_sources.CloneSource] = Field(default_factory=list)
-    #: A ``derived_from`` entry per source root the clone reads through: the source it names, and each one that source's
-    #: own record holds as ``derived_from``, which the source's own tag on it keeps (a clone of a clone).
+    #: A ``derived_from`` entry per dataset root the clone declares through those sources: each source's root, carrying
+    #: the version and branch pinned there, and a source branch's own directory, which lies inside its table's root.
     entries: list[base_registry.RecordedBase] = Field(default_factory=list)
+    #: The root, as the clone's own manifest spells it, of a source no table the catalog governs holds; ``None`` when
+    #: every source is governed.
+    ungoverned: str | None = None
 
     def admits(self, ref: BasePathRef) -> base_registry.RecordedBase | None:
         """The entry admitting the declared base ``ref``, or ``None`` when this admission does not cover it."""
@@ -263,65 +269,172 @@ class CloneAdmission(BaseModel):
         return next((entry for entry in self.entries if (entry.path, entry.store, entry.is_dataset_root) == key), None)
 
 
+#: What registering a shallow clone asks of its caller on each source, in the order asked. The clone's owner reads the
+#: source's rows through it, so it asks what a read asks; its registration writes a tag there (ADR 0198 §1), so it asks
+#: what the tag door asks as well (owner, 2026-11-09). The model grants neither to a holder of the other: a publisher
+#: moves a pointer and reads nothing.
+CLONE_RELATIONS = ("can_read_data", "can_create_tag")
+
+
+class _Pin(BaseModel):
+    """One dataset root a clone reads through, and the version and branch of it the clone reads."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ref: BasePathRef
+    version: int
+    branch: str | None = None
+
+
+def clone_read(location: str, so: StorageOptions, context: RegistrationContext) -> CloneAdmission | None:
+    """What the dataset at ``location`` reads through as a shallow clone, read before anything is registered so its caller
+    can be asked for each source first; ``None`` when no dataset is there. A source no table holds is named in
+    ``ungoverned`` rather than refused here, so the door refuses it as it refuses a source its caller may not tag.
+
+    Raises:
+        ServiceUnavailableError: The dataset, a claim or a record could not be read, so nothing was judged.
+    """
+    try:
+        facts = registered_dataset_facts(location, so)
+    except Exception as exc:
+        log.warning("register_clone_unreadable", extra={"location": location, "error": str(exc)[:300]})
+        raise ServiceUnavailableError("the dataset at the registered location could not be opened to read what it clones") from exc
+    return None if facts is None else clone_of(facts.clone, facts.bases, location=location, context=context)
+
+
+def _same_place(left: str, right: str) -> bool:
+    return location_in_store(left, right) and location_in_store(right, left)
+
+
+def _pins(reference: clone_sources.CloneReference | None, foreign: Sequence[BasePathRef], *, location: str, judge: BaseJudge) -> list[_Pin]:
+    """Each foreign dataset root the clone reads through as a table of its own, at the version it reads there.
+
+    The source the clone's first transaction names comes first, and then each root that source's record holds as one it
+    reads through at a pinned version: a clone of a clone inherits its source's bases. A clone whose own version expiry
+    has removed that first transaction (measured on pylance 13.0.0: ``cleanup_old_versions`` takes it with the clone's
+    first version) is read from its own record instead, which a registration of it wrote.
+
+    Raises:
+        ServiceUnavailableError: A record could not be read.
+    """
+    if reference is None:
+        return _recorded_pins(judge.read_record(location), foreign)
+    direct = next((ref for ref in foreign if _same_place(ref.path, reference.root)), None)
+    if direct is None:
+        return []
+    beyond = [ref for ref in foreign if ref is not direct and not location_in_store(direct.path, ref.path)]
+    inherited = _recorded_pins(judge.read_record(direct.path), beyond) if beyond else []
+    return [_Pin(ref=direct, version=reference.version, branch=reference.branch), *inherited]
+
+
+def _recorded_pins(record: base_registry.BaseRecord | None, refs: Sequence[BasePathRef]) -> list[_Pin]:
+    """Those of ``refs`` that ``record`` holds as a source table's own root read at a pinned version."""
+    pins: list[_Pin] = []
+    for ref in refs:
+        key = (normalise(ref.path), store_of(ref.path))
+        entry = next((held for held in (record.entries if record is not None else []) if _pins_a_table(held) and (held.path, held.store) == key), None)
+        if entry is not None and entry.version is not None:
+            pins.append(_Pin(ref=ref, version=entry.version, branch=entry.branch))
+    return pins
+
+
+def _pins_a_table(entry: base_registry.RecordedBase) -> bool:
+    """Whether ``entry`` records a source table's own root at a pinned version, rather than a branch's directory in it."""
+    return entry.role is base_registry.BaseRole.DERIVED_FROM and entry.version is not None and entry.source_table in (None, entry.path)
+
+
+def _governed_source(pin: _Pin, context: RegistrationContext) -> clone_sources.CloneSource | None:
+    """The table the catalog governs at the source root ``pin`` names, as the clone reads it, or ``None`` when no claim
+    holds it.
+
+    Raises:
+        ServiceUnavailableError: The claim could not be read.
+    """
+    claims = location_claims.ClaimStore(control_root=context.registry.control_root, storage_options=context.registry.storage_options)
+    try:
+        held = location_claims.holder(claims, pin.ref.path)
+    except (ValueError, OSError) as exc:
+        raise ServiceUnavailableError("the claim of a clone's source could not be read, so the clone was not judged") from exc
+    if held is None or held.uuid is None:
+        return None
+    return clone_sources.CloneSource(
+        location=pin.ref.path, table_uuid=held.uuid, table=held.table, segments=held.segments, version=pin.version, branch=pin.branch
+    )
+
+
+def refused_clone(path: str) -> PermissionDeniedError:
+    """The refusal of a clone whose source its caller holds nothing on, the same whether a governed table is at ``path``
+    or not: it names the first relation asked and only the path the caller's own manifest holds ([[LH-436]])."""
+    return PermissionDeniedError(f"{CLONE_RELATIONS[0]} required on {path}")
+
+
+def clone_of(reference: clone_sources.CloneReference | None, bases: Sequence[BasePathRef], *, location: str, context: RegistrationContext) -> CloneAdmission:
+    """What a dataset declaring ``bases`` reads through as a shallow clone; an empty admission for one that is none, and
+    one naming ``ungoverned`` for the first source no table holds, which :func:`admit_clone` refuses. The sources read
+    before that one stay in the admission, in the order the clone reads through them, so its caller is asked for each
+    in that order and a refusal never skips past a governed source to name what lies behind it ([[LH-436]]).
+
+    Raises:
+        ServiceUnavailableError: A claim or a record could not be read.
+    """
+    foreign = [ref for ref in bases if ref.is_dataset_root and not base_registry.is_own(location, ref)]
+    if not foreign:
+        return CloneAdmission()
+    judge = BaseJudge(registry=context.registry, configured=list(context.configured), governed=context.governed)
+    pins = _pins(reference, foreign, location=location, judge=judge)
+    sources: list[clone_sources.CloneSource] = []
+    for pin in pins:
+        if (source := _governed_source(pin, context)) is None:
+            return CloneAdmission(sources=sources, ungoverned=pin.ref.path)
+        sources.append(source)
+    entries = [_derived_from(ref, pin) for pin in pins for ref in foreign if location_in_store(pin.ref.path, ref.path)]
+    return CloneAdmission(sources=sources, entries=entries)
+
+
 def admit_clone(reference: clone_sources.CloneReference | None, bases: Sequence[BasePathRef], *, location: str, context: RegistrationContext) -> CloneAdmission:
     """The sources a dataset reads through as a shallow clone of tables the catalog governs (ADR 0198 §1).
 
     A clone's source is a dataset-root base outside its own root (`lance_docs/lance/format/table/layout.md` § Shallow
     Clone), and it is admitted only where the dataset's own first transaction is a shallow ``Clone`` naming that root
-    (:func:`clone_sources.clone_reference`): ``add_bases`` writes the same base without one, which is a plant
-    ([[LH-279]]). The source must be a table the catalog holds a claim for, so the version is tagged on a table whose
-    history fence the catalog keeps. A clone of a clone also declares its source's own sources, each admitted only where
-    that source's record holds it as ``derived_from``. A dataset-root base this admits nothing for is left to the base
-    judge, which refuses it.
+    (:func:`clone_sources.clone_reference`), or the catalog's record of an earlier registration of it says so:
+    ``add_bases`` writes the same base without one, which is a plant ([[LH-279]]). Each source must be a table the
+    catalog holds a claim for, so the version is tagged on a table whose history fence the catalog keeps. A clone of a
+    clone reads its source's own sources too, each admitted where that source's record pins it, and tagged for this
+    clone as well: the first clone's end releases only its own tag. A dataset-root base this admits nothing for is left
+    to the base judge, which refuses it.
 
     Raises:
-        InvalidInputError: The clone's source is no table the catalog governs.
+        PermissionDeniedError: A source is no table the catalog governs, refused as one its caller may not tag
+            (:func:`refused_clone`).
         ServiceUnavailableError: A claim or a record could not be read.
     """
-    foreign = [ref for ref in bases if ref.is_dataset_root and not base_registry.is_own(location, ref)]
-    if not foreign or reference is None:
-        return CloneAdmission()
-    source = next((ref for ref in foreign if location_in_store(ref.path, reference.path) and location_in_store(reference.path, ref.path)), None)
-    if source is None:
-        return CloneAdmission()
-    claims = location_claims.ClaimStore(control_root=context.registry.control_root, storage_options=context.registry.storage_options)
-    try:
-        held = location_claims.holder(claims, source.path)
-    except (ValueError, OSError) as exc:
-        raise ServiceUnavailableError("the claim of a clone's source could not be read, so the clone was not judged") from exc
-    if held is None or held.uuid is None:
-        raise InvalidInputError(
-            f"the dataset is a shallow clone of {reference.path!r}, which is no table the catalog governs: register the source first, or clone a "
-            "table registered here"
-        )
-    tagged = clone_sources.CloneSource(
-        location=source.path, table_uuid=held.uuid, table=held.table, segments=held.segments, version=reference.version, branch=reference.branch
-    )
-    derived = [_derived_from(source)]
-    inherited = [ref for ref in foreign if ref is not source]
-    if inherited:
-        source_record = BaseJudge(registry=context.registry, configured=list(context.configured), governed=context.governed).read_record(source.path)
-        derived.extend(_derived_from(ref) for ref in inherited if _source_derives_from(source_record, ref))
-    return CloneAdmission(sources=[tagged], entries=derived)
+    admission = clone_of(reference, bases, location=location, context=context)
+    if admission.ungoverned is not None:
+        log.warning("register_refused_ungoverned_clone_source", extra={"location": location, "source": admission.ungoverned})
+        raise refused_clone(admission.ungoverned)
+    return admission
 
 
-def _derived_from(ref: BasePathRef) -> base_registry.RecordedBase:
+def _derived_from(ref: BasePathRef, pin: _Pin) -> base_registry.RecordedBase:
+    """The record entry of the declared root ``ref``, read through the source table ``pin`` names."""
     return base_registry.RecordedBase(
         path=ref.path,
         role=base_registry.BaseRole.DERIVED_FROM,
         is_dataset_root=True,
         name=ref.name,
         origin=base_registry.BaseOrigin.REGISTER,
-        source_table=ref.path,
+        source_table=pin.ref.path,
+        version=pin.version,
+        branch=pin.branch,
     )
 
 
-def _source_derives_from(record: base_registry.BaseRecord | None, ref: BasePathRef) -> bool:
-    """Whether the source's record holds ``ref`` as a root it reads through, which keeps it while the source stands."""
-    if record is None:
-        return False
-    key = (normalise(ref.path), store_of(ref.path))
-    return any(entry.role is base_registry.BaseRole.DERIVED_FROM and (entry.path, entry.store) == key for entry in record.entries)
+def _read_through_with_no_tag_to_take(judgement: base_registry.BaseJudgement) -> bool:
+    """Whether the record holds the base as a root read through another table. Asked of a base the clone's admission does
+    not cover, which is one the registration could take no tag for: the record pins no version of it, or no table the
+    catalog governs holds it any more. A clone governed with no tag is broken by its source's next cleanup."""
+    entry = judgement.entry
+    return judgement.standing is base_registry.BaseStanding.RECORDED and entry is not None and entry.role is base_registry.BaseRole.DERIVED_FROM
 
 
 def entries_for_registration(
@@ -362,6 +475,7 @@ def entries_for_registration(
     judged = judge.judge(location, bases)
     entries: list[base_registry.RecordedBase] = []
     refused: list[str] = []
+    untagged: list[str] = []
     for judgement in judged:
         ref = judgement.ref
         if clone is not None and (derived := clone.admits(ref)) is not None:
@@ -370,6 +484,8 @@ def entries_for_registration(
             entries.append(
                 base_registry.RecordedBase(path=ref.path, role=base_registry.BaseRole.EXTERNAL_BLOB, name=ref.name, origin=base_registry.BaseOrigin.REGISTER)
             )
+        elif _read_through_with_no_tag_to_take(judgement):
+            untagged.append(ref.path)
         elif judgement.standing is base_registry.BaseStanding.UNRECORDED:
             first_record = (state["record"] if "record" in state else _load()) is None
             if first_record and not ref.is_dataset_root and names_a_location(ref.path) and _beneath_an_approved_base(ref.path, data_allowlist):
@@ -378,6 +494,13 @@ def entries_for_registration(
                 )
             else:
                 refused.append(ref.path)
+    if untagged:
+        log.warning("register_refused_untaggable_sources", extra={"location": normalise(location), "bases": untagged[:10]})
+        raise InvalidInputError(
+            f"the dataset reads through {untagged[:10]}, which the catalog's record for it holds as another table's root, and this "
+            "registration can keep no version of it: the record pins none, or no table the catalog governs is there any more. "
+            "Clone a version of a governed table again and register that."
+        )
     if refused:
         log.warning("register_refused_unrecorded_bases", extra={"location": normalise(location), "bases": refused[:10]})
         raise InvalidInputError(

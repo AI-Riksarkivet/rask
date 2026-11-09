@@ -52,6 +52,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
 from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult
+from maintenance.services.naming import claim_store, policy_owners
 from maintenance.services.plan import PlanContext
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, CategorySkipped, ReconcileReport
@@ -125,12 +126,16 @@ class _Estate:
         """Maintenance's own pass on the table at ``location``, every version but the current one reclaimable, as of ``now``."""
         described = self.client.post("/v1/namespace/db/describe", json={})
         assert described.status_code == 200, described.text
+        settings = self.maintenance(min_versions_to_expire=1, catalog_url=CATALOG_URL)
+        ids = TableIds(by_location={normalise(location): table}, namespace_uuids={"db": str(described.json()["properties"][UUID_PROPERTY])})
         readings = table_pass.PassReadings(
-            table_ids=TableIds(by_location={normalise(location): table}, namespace_uuids={"db": str(described.json()["properties"][UUID_PROPERTY])}),
+            table_ids=ids,
             context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
+            table=table,
+            owners=policy_owners(ids, table, claims=claim_store(settings)),
         )
         with maintain_tier_door(described_by(self.client)):
-            return table_pass.maintain_dataset(location, readings=readings, settings=self.maintenance(min_versions_to_expire=1, catalog_url=CATALOG_URL))
+            return table_pass.maintain_dataset(location, readings=readings, settings=settings)
 
 
 @pytest.fixture

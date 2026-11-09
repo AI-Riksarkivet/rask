@@ -11,7 +11,7 @@
 # serve, Phase 1's acceptance (`-m phase1`, XC-090) and its soak, each in a session of its own (ADR 0167), on the
 # lakehouse and its platform fixtures alone, with no client installed (XC-183).
 #
-# The telemetry chain is off: OpenTelemetry is rask's boundary and the store behind the Collector is the platform's. Maintenance is on, because its deployed sweep is a lakehouse claim
+# The telemetry chain is off: OpenTelemetry is rask's boundary and the store behind the Collector is the platform's. Maintenance is on, because a commit's pass on the deployed queue is a lakehouse claim
 # (`tests/e2e-py/test_maintenance_e2e.py`).
 #
 # Idempotent: safe to re-run against an existing cluster. Env overrides: CLUSTER, RELEASE, KEEP_STACK=1.

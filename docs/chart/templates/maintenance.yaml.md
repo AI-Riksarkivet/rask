@@ -23,6 +23,22 @@ ready, on a service whose work is an hourly cron with no request path to interru
 
 Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.
 
+## `{{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds)...`
+
+The sidecar must outlive the app's drain (`_helpers.tpl.md`), and this pod's drain is long: after preStop and uvicorn's
+wait the worker lets its running pass finish for `maintenance.queue.drainSeconds`, and a pass publishes through the
+sidecar until it ends. So this pod's sidecar blocks its shutdown for the grace less the teardown, which covers preStop,
+uvicorn's bound and the whole drain, where the fleet's 20 s would stop it about 15 s into a 90 s drain. Held by
+`tests/unit/test_sidecar_drain_budget.py`.
+
+## `{{- include "rask.shutdownArg" (list . (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) $drain)) | nindent 12 }}`
+
+The worker's drain (`maintenance.queue.drainSeconds`) runs in the lifespan's teardown, after uvicorn has stopped waiting
+for its requests, so uvicorn's graceful bound here is the pod's grace less preStop, the teardown and that drain: preStop,
+a slow request, a full drain and the teardown then sum to the grace, and the kubelet never kills a replica mid-drain. The
+render refuses a drain that leaves uvicorn no time at all. Held by
+`tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py`.
+
 ## `- { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }`
 
 Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —

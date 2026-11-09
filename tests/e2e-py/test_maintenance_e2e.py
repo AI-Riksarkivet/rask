@@ -30,9 +30,6 @@ from byo_scenario import CATALOG, Tenant, ok, rows_of
 
 pytestmark = [pytest.mark.e2e, pytest.mark.compaction, pytest.mark.skipif(not scenario.LIVE, reason=scenario.REQUIRES)]
 
-#: How long the due record may take to appear: the commit delay (five minutes by default), the queue and one pass.
-_WAIT_SECONDS = 600
-
 
 def _due_record(tenant: Tenant, table_uuid: str) -> dict[str, Any] | None:
     """The due door's record of the table ``table_uuid`` names, as its owner reads it, walking every page."""
@@ -55,12 +52,12 @@ def test_a_commit_is_followed_by_its_tables_pass(byo_tenant: Tenant) -> None:
         lance.write_dataset(rows_of(range(start, start + 10)), namespace_client=stock, table_id=table_id, mode="append")
     table_uuid = str(ok(byo_tenant.pipeline.http.post(f"{CATALOG}/v1/table/{table}/describe", json={}, timeout=60))["properties"]["rask.uuid"])
 
-    deadline = time.monotonic() + _WAIT_SECONDS
+    deadline = time.monotonic() + scenario.COMMIT_PASS_SECONDS
     record = _due_record(byo_tenant, table_uuid)
     while (record is None or record["version"] < 4) and time.monotonic() < deadline:
         time.sleep(5)
         record = _due_record(byo_tenant, table_uuid)
 
-    assert record is not None, f"no pass followed the commits on {table} within {_WAIT_SECONDS} s: its due record never appeared"
+    assert record is not None, f"no pass followed the commits on {table} within {scenario.COMMIT_PASS_SECONDS:.0f} s: its due record never appeared"
     assert (record["table"], record["version"]) == (table, 4), f"no pass followed the last commit on {table}: {record}"
     assert record["compaction"] is not None and record["compaction"]["candidate_fragments"] >= 2, f"the pass listed no compaction: {record}"

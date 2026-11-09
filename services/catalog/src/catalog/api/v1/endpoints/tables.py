@@ -959,11 +959,21 @@ async def _detach(ns: LanceNamespace, settings: Settings, table: ResolvedTable, 
     except Exception:
         await run_in_threadpool(table_claims.lift_fence, claims, fenced)
         raise
-    # The detached bytes are nobody's now, so the id's claim on them goes ([[LH-204]]), and so does the version a clone
-    # among them was promised on its sources (ADR 0198 §1): the base record stays, for the bytes it describes.
-    await run_in_threadpool(location_claims.release, claims, fenced.location, canonical)
+    # The detached bytes are nobody's now, so the version a clone among them was promised on its sources goes (ADR 0198
+    # §1), and then the id's claim on them ([[LH-204]]): the base record stays, for the bytes it describes. The tags go
+    # first, while the fence still holds the location, so no clone registered there meanwhile can hold a tag of the same
+    # name, and a tag that cannot be deleted leaves the location held rather than free with the tag standing.
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-    await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location))
+    try:
+        await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, holder=canonical))
+    except (OSError, ValueError, base_registry.UnreadableBaseRecordError) as exc:
+        log.error("deregister_clone_tags_kept", extra={"table": canonical, "location": fenced.location, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        raise PartiallyApplied(
+            f"table {canonical} was detached, and its tag on a table it clones could not be deleted: its location stays held, and the "
+            "tag keeps that table from being destroyed until the clone is registered and deregistered again",
+            problem_extra={"table": canonical, "detached": True},
+        ) from exc
+    await run_in_threadpool(location_claims.release, claims, fenced.location, canonical)
     return response
 
 
@@ -1110,6 +1120,24 @@ async def register_table(
     segments = parse_identifier(id)
     await fga_deps.require_parent_exists(ns, "table", segments)
     body.id = reconcile_body_id(segments, body.id)
+    # A shallow clone reads its source's files, and registering it tags the source (ADR 0198 §1), so its caller must be
+    # one who may tag each source, asked BEFORE anything is attached: a refused caller leaves no row, mark or claim behind.
+    # A location another standing table holds is refused first, so the dataset there is never read for a caller it is
+    # not theirs. One this table's own name holds, with the table standing, is a registration made again: the backend
+    # answers it TableAlreadyExists below (the spec's 409), and the dataset is not read for what it clones on the way
+    # there. A claim whose holder no longer resolves to the location is nobody's: the registration goes on, and the
+    # claim's own take decides whether its lease has lapsed.
+    stated_claim = await run_in_threadpool(location_claims.holder, table_claims.claim_store(settings), f"{root.rstrip('/')}/{body.location}")
+    held_by_a_standing_table = stated_claim is not None and not await run_in_threadpool(
+        table_claims.holder_is_gone, ns, table_claims.claim_store(settings), stated_claim
+    )
+    if stated_claim is not None and held_by_a_standing_table and stated_claim.table != fga.canonical_object_id(segments):
+        log.warning("register_refused_held_location", extra={"table": id, "location": stated_claim.location, "holder": stated_claim.table})
+        raise table_bases.occupied_location_refusal(body.location)
+    registered_already = held_by_a_standing_table
+    asked: set[str] = set()
+    if not registered_already:
+        asked = await _require_clone_sources(client, settings, token, location=f"{root.rstrip('/')}/{body.location}", so=so, context=context)
     try:
         response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:
@@ -1168,6 +1196,8 @@ async def register_table(
                             registry=context.registry,
                             configured=context.configured,
                             data_allowlist=context.data_allowlist,
+                            # A registered clone's roots stand on the pins its record holds, which its tags keep.
+                            clone=await run_in_threadpool(partial(table_bases.clone_of, facts.clone, facts.bases, location=registered, context=context)),
                         )
                     )
                 except InvalidInputError:
@@ -1199,15 +1229,21 @@ async def register_table(
     # records it so that the table's commit marks are kept under it first.
     table_uuid = str(uuid4())
 
-    async def _detach() -> None:
+    async def _deregister() -> None:
         # DEREGISTER, never drop. Register ATTACHES bytes that already existed and are not ours to
         # destroy — the whole point of the door. Deregister is the exact inverse: it removes the
-        # catalog object this request created and leaves the data exactly where it was found. The
-        # location's claim goes with it; one another table holds is not this registration's to free.
-        # The records kept under this request's uuid go last, once no table holds it.
+        # catalog object this request created and leaves the data exactly where it was found.
         await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+
+    async def _free_location() -> None:
+        # The location's claim goes with the row; one another table holds is not this registration's to free.
+        # The records kept under this request's uuid go last, once no table holds it.
         await run_in_threadpool(location_claims.release, claims, claimed_location, canonical)
         await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
+
+    async def _detach() -> None:
+        await _deregister()
+        await _free_location()
 
     # AFTER THE REGISTER, because only the backend knows which root a relative location resolves
     # against and the overlap check must see this registration's own row; BEFORE THE SEED, so a refused
@@ -1226,9 +1262,11 @@ async def register_table(
             log.warning("register_refused_held_location", extra={"table": id, "location": held.claim.location, "holder": held.claim.table})
             raise table_bases.occupied_location_refusal(body.location) from None
         verdict = await run_in_threadpool(table_bases.judge_registered_table, ns, so, segments, body.location, context)
-        # A clone reads its sources' rows through their files, so registering one asks what reading each source asks.
-        for source in verdict.sources:
-            await fga_deps.require_relation(client, settings, token, relation="can_read_data", obj=fga.table_object(source.table_uuid), label=source.table)
+        # The sources judged on the registered dataset are the ones its caller was asked for: one that differs (the source
+        # changed hands meanwhile) was asked of no one, and is refused as one the caller may not tag.
+        if unasked := [source for source in verdict.sources if source.table_uuid not in asked]:
+            log.warning("register_refused_unasked_clone_source", extra={"table": id, "sources": [source.table for source in unasked]})
+            raise table_bases.refused_clone(unasked[0].location)
         admitted = await run_in_threadpool(
             partial(table_bases.admit_registered_table, ns, so, segments=segments, verdict=verdict, clone_uuid=table_uuid, context=context)
         )
@@ -1250,10 +1288,13 @@ async def register_table(
     location = verdict.location
 
     async def _undo_register() -> None:
-        # Detach first: while the table is attached its record must stay, because its manifest still
-        # declares those bases. Then the entries, directories and clone tags this registration took go with it.
-        await _detach()
+        # The row first: while the table is attached its record must stay, because its manifest still declares those
+        # bases. Then the entries, directories and clone tags this registration took, and the location's claim last,
+        # as at every other end of a clone: a tag the store keeps leaves the location held, so no clone registered
+        # there next takes a tag of the same name while this one stands.
+        await _deregister()
         await run_in_threadpool(partial(table_bases.release_admitted, admitted, clone_location=location, so=so, context=context))
+        await _free_location()
 
     await fga_deps.seed_ownership_or_compensate(client, settings, token, resolver, resource="table", segments=segments, uuid=table_uuid, undo=_undo_register)
     # RESOLVED, not echoed — `response.location` is the caller's own relative path, which names nothing a
@@ -1281,6 +1322,40 @@ async def register_table(
     )
     await converge.remember(200, response)
     return response
+
+
+async def _require_clone_sources(
+    client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, location: str, so: StorageOptions, context: table_bases.RegistrationContext
+) -> set[str]:
+    """Refuse registering the dataset at ``location`` unless its caller may read and tag every source it reads through as
+    a shallow clone (:data:`table_bases.CLONE_RELATIONS`); the uuids of the sources asked for, empty for a dataset that
+    is no clone.
+
+    The sources are asked in the order the clone reads through them. A caller holding nothing on a source is refused the
+    same whether a governed table is at its root or not, by a sentence naming only that root, which the caller's own
+    manifest holds ([[LH-436]]); which table it was is logged for the operator.
+
+    Raises:
+        PermissionDeniedError: The caller may not read or may not tag a source, or no table the catalog governs is there
+            (403).
+        ServiceUnavailableError: The dataset, a source's claim or a record could not be read (503).
+    """
+    clone = await run_in_threadpool(table_bases.clone_read, location, so, context)
+    if clone is None:
+        return set()
+    for source in clone.sources:
+        try:
+            for relation in table_bases.CLONE_RELATIONS:
+                await fga_deps.require_relation_on_a_path(
+                    client, settings, token, relation=relation, obj=fga.table_object(source.table_uuid), path=source.location
+                )
+        except PermissionDeniedError:
+            log.warning("register_refused_clone_source", extra={"location": location, "source": source.table})
+            raise
+    if clone.ungoverned is not None:
+        log.warning("register_refused_ungoverned_clone_source", extra={"location": location, "source": clone.ungoverned})
+        await fga_deps.require_relation_on_a_path(client, settings, token, relation=table_bases.CLONE_RELATIONS[0], obj=None, path=clone.ungoverned)
+    return {source.table_uuid for source in clone.sources}
 
 
 @management_router.get("/{id}/protection", response_model_exclude_none=True)

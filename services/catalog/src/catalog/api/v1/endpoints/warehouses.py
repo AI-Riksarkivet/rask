@@ -1054,12 +1054,13 @@ async def _detach_table(ns: LanceNamespace, settings: Settings, segments: list[s
     except TableNotFoundError:
         return False
     if detached.location:
-        await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), detached.location, canonical)
+        # What the catalog promised a clone among the bytes ends before the location's claim does, as at the deregister
+        # door: a tag that cannot be deleted leaves the location held, and no clone registered there can hold its name.
         if purge:
             await run_in_threadpool(partial(base_registry.forget_base_record, registry, detached.location, table=canonical))
         else:
-            # The catalog no longer governs the bytes it leaves, so what it promised a clone among them ends too.
-            await run_in_threadpool(partial(base_registry.release_clone_sources, registry, detached.location))
+            await run_in_threadpool(partial(base_registry.release_clone_sources, registry, detached.location, holder=canonical))
+        await run_in_threadpool(location_claims.release, table_claims.claim_store(settings), detached.location, canonical)
     return True
 
 

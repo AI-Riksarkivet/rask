@@ -27,7 +27,7 @@ HELM_SET=(
   --set services.lineage.outbox.enabled=true
   --set services.lineage.relay.enabled=true
   --set observability.enabled=false
-  # Maintenance is a lakehouse component: the e2e lane drives its deployed sweep (tests/e2e-py/test_maintenance_e2e.py).
+  # Maintenance is a lakehouse component: the e2e lane drives a commit's pass on its deployed queue (tests/e2e-py/test_maintenance_e2e.py).
   --set maintenance.enabled=true
   # The lanes drive each service directly, not through an edge, and a lane cluster runs no Gateway.
   --set route.enabled=false

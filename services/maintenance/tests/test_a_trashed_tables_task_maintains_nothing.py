@@ -26,7 +26,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from lakehouse import location_claims, trash
+from lakehouse import location_claims, maintenance_due, trash
 from lakehouse.base_refs import normalise
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
@@ -59,7 +59,7 @@ def _governed(uri: str, table: str, settings: MaintenanceSettings, monkeypatch: 
     claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options={})
     location_claims.take(claims, normalise(uri), table, table.split("$"), is_gone=lambda _claim: False, uuid=uuid)
     named = TableIds(by_location={normalise(uri): table}, namespace_uuids={"db": str(uuid4())})
-    monkeypatch.setattr(table_pass, "table_ids", lambda *_a, **_k: named)
+    monkeypatch.setattr(table_pass, "table_ids_of", lambda *_a, **_k: named)
     return TableTask(uuid=uuid, location=uri)
 
 
@@ -108,3 +108,19 @@ def test_an_unreadable_trash_raises_so_the_task_is_retried(tmp_path: Path, setti
 
     with pytest.raises(OSError, match="control root unreachable"):
         run_table_pass(task, settings)
+
+
+def test_a_task_naming_a_table_at_anothers_location_leaves_that_tables_due_record(
+    tmp_path: Path, settings: MaintenanceSettings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task's location is its announcer's word: one that names a table at a place another table holds says nothing of
+    whether that table is gone, so its due record stands for its own pass to refresh."""
+    standing = _governed(_dataset(tmp_path / "standing.lance"), "db$standing", settings, monkeypatch)
+    elsewhere = _governed(_dataset(tmp_path / "elsewhere.lance"), "db$elsewhere", settings, monkeypatch)
+    control = str(settings.resolved_control_root)
+    due = maintenance_due.DueRecord(table="db$standing", uuid=standing.uuid, location=standing.location, version=2, evaluated_at=datetime.now(UTC))
+    maintenance_due.write_due(control, StorageOptions(), due)
+
+    misaddressed = run_table_pass(TableTask(uuid=standing.uuid, location=elsewhere.location), settings)
+
+    assert (misaddressed.ended, maintenance_due.read_due(control, StorageOptions(), standing.uuid)) == ("gone", due)

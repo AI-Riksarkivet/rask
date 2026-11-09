@@ -37,7 +37,7 @@ that variable names the shared catalog bucket the CAS suite uses.
 **Scope, stated plainly.** The warehouse registry records are written as JSON directly to the control
 root rather than through ``POST /management/v1/warehouses``. That contradicts seed_estate.py's "drive the real
 doors" rule and is a deliberate bound: what is under test is the READER
-(``warehouse_records.list_warehouse_records``) and the two bucket-set unions built on it, not catalog
+(``warehouse_records.namespace_warehouse``, and the listing the scan's bucket set is built on), not catalog
 provisioning — which ``test_warehouses_e2e.py`` already drives, and which would re-gate this suite
 behind a deployed catalog and two tokens. This suite proves nothing about warehouse creation.
 
@@ -54,6 +54,7 @@ import json
 import os
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import lance
@@ -205,23 +206,30 @@ def estate(s3: Any) -> Iterator[Estate]:
         lance.write_dataset(_rows(), uri, storage_options=options.in_clear())
 
     # Each table a pass is given is one the catalog names: a row in its own bucket's `__manifest`, under a namespace carrying
-    # its uuid, and its location's claim on the control root recording the table's.
+    # its uuid, and its location's claim on the control root recording the table's. A warehouse's tables are under a top
+    # namespace bound to it, one warehouse per top namespace, as the catalog binds them.
     claims = location_claims.ClaimStore(control_root=f"s3://{built.ctl}", storage_options=options)
-    for bucket, uri in ((built.ctl, built.plain_uri), (built.reg, built.reg_uri), (built.deact, built.deact_uri)):
+    for bucket, uri, top in ((built.ctl, built.plain_uri, "e2e"), (built.reg, built.reg_uri, "e2e-reg"), (built.deact, built.deact_uri, "e2e-deact")):
         name = uri.rsplit("/", 1)[-1]
         namespace = connect("dir", {"root": f"s3://{bucket}", **{f"storage.{key}": value for key, value in options.in_clear().items()}})
-        namespace.create_namespace(CreateNamespaceRequest(id=["e2e"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
-        namespace.register_table(RegisterTableRequest(id=["e2e", name], location=name))
+        namespace.create_namespace(CreateNamespaceRequest(id=[top], properties={UUID_PROPERTY: str(uuid.uuid4())}))
+        namespace.register_table(RegisterTableRequest(id=[top, name], location=name))
         built.uuids[uri] = str(uuid.uuid4())
-        location_claims.take(claims, normalise(uri), f"e2e${name}", ["e2e", name], is_gone=lambda _claim: False, uuid=built.uuids[uri])
+        location_claims.take(claims, normalise(uri), f"{top}${name}", [top, name], is_gone=lambda _claim: False, uuid=built.uuids[uri])
 
-    # The warehouse REGISTRY, on the control root — the record shape `catalog/services/warehouses.py`
-    # writes and `warehouse_records.list_warehouse_records` reads. `reg` is active, `deact` quarantined.
-    for wid, bucket, status in (("wh-reg", built.reg, "active"), ("wh-deact", built.deact, "deactivated")):
+    # The warehouse REGISTRY, on the control root — the record shapes `catalog/services/warehouses.py` writes: each
+    # warehouse, and the binding of the top namespace its tables are under, which `warehouse_records.namespace_warehouse`
+    # reads; and the listing `reconcile` scans by. `reg` is active, `deact` quarantined.
+    for wid, bucket, status, top in (("wh-reg", built.reg, "active", "e2e-reg"), ("wh-deact", built.deact, "deactivated", "e2e-deact")):
         s3.put_object(
             Bucket=built.ctl,
             Key=f"_warehouses/{wid}.json",
             Body=json.dumps({"id": wid, "project": "e2e-maint", "bucket": bucket, "status": status}).encode(),
+        )
+        s3.put_object(
+            Bucket=built.ctl,
+            Key=f"_warehouses/bindings/{top}.json",
+            Body=json.dumps({"top_ns": top, "warehouse_id": wid, "root_uri": f"s3://{bucket}"}).encode(),
         )
 
     yield built
@@ -302,17 +310,24 @@ def test_a_pass_lists_the_compaction_it_does_not_run_on_object_storage(estate: E
     assert len(lance.dataset(estate.plain_uri, storage_options=settings.storage_options().in_clear()).get_fragments()) == 3, "the pass rewrote the table"
 
 
-def test_a_registry_only_buckets_table_is_passed_and_a_deactivated_ones_is_not(estate: Estate, passed: dict[str, PassOutcome]) -> None:
+def test_a_registry_only_buckets_table_is_passed_and_a_deactivated_ones_is_not(
+    estate: Estate, settings: MaintenanceSettings, passed: dict[str, PassOutcome]
+) -> None:
     """#81's residual, closed against real storage.
 
-    `reg` is named by NO config — only by a warehouse record the pass reads at runtime, which is the whole point: a
-    bucket is created by an API call, so a config-time list goes stale by construction. `deact` is named by a record
-    too, and must be left alone until its recheck: deactivate is offboarding step one, and reclaiming a quarantined
-    tenant's versions would leave maintenance as the one process still deleting data the estate has said nobody may
-    touch.
+    `reg` is named by NO config — only by a warehouse record the pass reads at runtime, through its namespace's binding,
+    which is the whole point: a bucket is created by an API call, so a config-time list goes stale by construction.
+    `deact` is named by a record too, and must be left alone until its recheck: deactivate is offboarding step one, and
+    reclaiming a quarantined tenant's versions would leave maintenance as the one process still deleting data the estate
+    has said nobody may touch. A pass that could not read the registry would be retried within minutes instead, so the
+    next pass's time tells the two apart.
     """
+    deactivated = passed[estate.deact_uri]
     assert [result.uri for result in passed[estate.reg_uri].results] == [estate.reg_uri], "a bucket known only to the warehouse registry went unmaintained"
-    assert passed[estate.deact_uri].results == [], "a DEACTIVATED warehouse's table was maintained"
+    assert deactivated.results == [], "a DEACTIVATED warehouse's table was maintained"
+    assert deactivated.next_due is not None and deactivated.next_due - datetime.now(UTC) > timedelta(hours=settings.recheck_hours - 1), (
+        f"a deactivated warehouse's table is passed again at {deactivated.next_due}, not at its recheck"
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -524,7 +524,24 @@ tests:
               service: "maintenance"
             exp_annotations:
               summary: "A committed Lance file was overwritten in place"
-              description: "The sweep found a file a commit added whose ETag or size is no longer what the catalog recorded when it committed: a holder of the table's write vend put over it, and readers are served bytes no commit wrote. The committed_file_overwritten ERROR log names the table uuid, the path and both ETags. Restore the file's noncurrent object version, which a platform store keeps for this, and find the writer in the store's access log."
+              description: "A table's pass found a file a commit added whose ETag or size is no longer what the catalog recorded when it committed: a holder of the table's write vend put over it, and readers are served bytes no commit wrote. The committed_file_overwritten ERROR log names the table uuid, the path and both ETags. Restore the file's noncurrent object version, which a platform store keeps for this, and find the writer in the store's access log."
+
+  # The page stands for the day between the pass that found the file and the table's recheck: an overwrite found 23 hours
+  # ago still pages.
+  - interval: 1h
+    input_series:
+      - series: "maintenance_files_overwritten_total"
+        values: "0 1+0x30"
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: CommittedFileOverwritten
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "maintenance"
+            exp_annotations:
+              summary: "A committed Lance file was overwritten in place"
+              description: "A table's pass found a file a commit added whose ETag or size is no longer what the catalog recorded when it committed: a holder of the table's write vend put over it, and readers are served bytes no commit wrote. The committed_file_overwritten ERROR log names the table uuid, the path and both ETags. Restore the file's noncurrent object version, which a platform store keeps for this, and find the writer in the store's access log."
 
   # A flat zero is the healthy estate and must stay quiet.
   - interval: 1m

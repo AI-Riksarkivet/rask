@@ -21,7 +21,7 @@ from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
 from maintenance.services.expiry import DatasetResult
-from maintenance.services.naming import TableIds
+from maintenance.services.naming import TableIds, policy_owners
 from maintenance.services.plan import DatasetPlan, PlanContext
 
 
@@ -84,9 +84,12 @@ def maintain_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..
         claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
         location_claims.take(claims, normalise(uri), table_id, segments, is_gone=lambda _claim: False, uuid=str(uuid4()))
         namespaces = {CATALOG_DELIMITER.join(segments[:depth]): str(uuid4()) for depth in range(1, len(segments))}
+        ids = TableIds(by_location={normalise(uri): table_id}, namespace_uuids=namespaces)
         readings = table_pass.PassReadings(
-            table_ids=TableIds(by_location={normalise(uri): table_id}, namespace_uuids=namespaces),
+            table_ids=ids,
             context=PlanContext(policies=[], now=now, older_than=timedelta(days=settings.older_than_days)),
+            table=table_id,
+            owners=policy_owners(ids, table_id, claims=claims),
         )
         return table_pass.maintain_dataset(uri, readings=readings, settings=settings)
 

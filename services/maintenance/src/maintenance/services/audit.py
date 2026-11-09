@@ -10,9 +10,10 @@ raises listing floors and reclaims expired trash (#79). The purge rides the scan
 because its permission comes from the report: it consumes the report object the same run produced, never a stored one.
 It is off by default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so the shipped configuration deletes no trashed byte.
 
-One task of each, once per firing whatever the replica count: each schedule is a NATS message schedule (``@hourly`` and
-``@daily`` by default), each on a subject of its own, and the queue holds one task per subject, so no two replicas run
-either together and neither refuses the other.
+One task of each, once per firing whatever the replica count: each schedule is a NATS message schedule (``@hourly``, and
+``0 30 0 * * *`` for the scan, by default), each on a subject of its own, and the queue holds one task per subject. Both
+repair the estate from a drift report of their own, so they hold one claim (:mod:`maintenance.services.queue`): the two
+never run at once, and the later waits out the other.
 """
 
 import logging

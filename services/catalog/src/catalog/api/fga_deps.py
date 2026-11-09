@@ -2514,6 +2514,35 @@ async def require_relation(
     await authz.require(relation, obj, label=label)
 
 
+async def require_relation_on_a_path(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: Caller | None,
+    *,
+    relation: str,
+    obj: str | None,
+    path: str,
+) -> None:
+    """Gate on ``relation`` over the object found at ``path``, a place the caller named only through data it sent (a shallow
+    clone's source, which its own manifest names), refusing alike whether an object is there or not.
+
+    The refusal names ``path`` and never the object, so it tells no caller whether, or as what, a governed table lives
+    there ([[LH-436]]); with no object there (``obj`` ``None``) it refuses whatever authorization is on, since no tuple can
+    grant a relation on nothing. Who is asking is settled first either way (:func:`authorization`), so a caller with no
+    token, or an unwired client, is answered alike for a path that holds an object and one that holds none.
+
+    Raises:
+        PermissionDeniedError: The caller holds no ``relation`` on the object, or no object is at ``path`` (403).
+        ServiceUnavailableError: FGA is on and unwired.
+        UnauthenticatedError: FGA is on and nobody is signed in.
+    """
+    authz = authorization(settings, client, token)
+    if obj is None:
+        raise _refuse_absent(user=token.subject if token is not None else "", relation=relation, label=path)
+    if authz is not None:
+        await authz.require(relation, obj, label=path)
+
+
 async def require_classifier_to_copy_a_label(
     client: OpenFgaClient | None,
     settings: Settings,

@@ -151,7 +151,7 @@ and never creates it, and `admin` holds UPDATE for it as for every stream this J
 A running maintenance task stays with its worker only while the worker's in-progress acknowledgement reaches the broker
 inside the `maintenance-worker` consumer's ack wait; once one is late, JetStream delivers the task to another replica
 while the first is still passing the table. So the render refuses a heartbeat past half the ack wait, naming both values
-(`tests/unit/test_invariants.py::test_a_heartbeat_past_half_the_ack_wait_fails_the_render`). The worker's side is
+(`tests/unit/test_invariants.py::test_a_queue_value_the_worker_cannot_run_with_fails_the_render`). The worker's side is
 `tests/e2e-py/test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other.py`: a live worker's task stayed
 with it for three ack waits, a killed one's moved to the other, and one the bus stopped answering ended itself before its
 task moved.

@@ -29,8 +29,10 @@ Every IO function is BLOCKING — callers threadpool it, as they do for every co
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Sequence
 from enum import StrEnum
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -39,6 +41,9 @@ from lakehouse.base_refs import decoded_path, key_uri, location_in_store, names_
 from lakehouse.features import BasePathRef
 from lakehouse.record_store import delete_record, record_key
 from lakehouse.storage_options import StorageOptions
+
+
+log = logging.getLogger(__name__)
 
 
 _BASES_PREFIX = "_bases"
@@ -91,6 +96,11 @@ class RecordedBase(BaseModel):
     source_table: str | None = None
     #: The source's tag that pins the relation, for a pinned ``DERIVED_FROM``.
     tag: str | None = None
+    #: The source version a ``DERIVED_FROM`` entry's clone reads, and the source branch it is on (``None`` for main): what
+    #: the clone's tag pins on ``source_table`` (:mod:`lakehouse.clone_sources`). Kept here because the clone's own first
+    #: transaction, the only other place that says so, goes with the clone's own version expiry.
+    version: int | None = None
+    branch: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -123,6 +133,11 @@ class RecordedBase(BaseModel):
         restating it, and counting it twice would make the record grow on every converge.
         """
         return self.path, self.store, self.is_dataset_root, self.role
+
+    @property
+    def pin(self) -> tuple[int | None, str | None]:
+        """The source version and branch a ``DERIVED_FROM`` entry pins; ``(None, None)`` for every other entry."""
+        return self.version, self.branch
 
 
 class BaseRecord(BaseModel):
@@ -259,8 +274,8 @@ def claim_bases(registry: BaseRegistry, location: str, entries: Sequence[Recorde
         current = read_base_record(registry, location)
         if current is None:
             continue  # released between the create and the read; create again
-        held = {entry.identity for entry in current.entries}
-        if all(entry.identity in held for entry in wanted.entries):
+        held = {entry.identity: entry.pin for entry in current.entries}
+        if all(held.get(entry.identity, _ABSENT) == entry.pin for entry in wanted.entries):
             return BaseClaim(location=wanted.location, created=False)
         try:
             added = _add_missing(registry, key, wanted)
@@ -270,16 +285,26 @@ def claim_bases(registry: BaseRegistry, location: str, entries: Sequence[Recorde
     raise records.RecordChangedError(f"the base record for {wanted.location!r} kept appearing and disappearing across {_CLAIM_ATTEMPTS} attempts")
 
 
+#: The pin of an entry a record does not hold, which equals no entry's.
+_ABSENT: Final = ("absent",)
+
+
 def _add_missing(registry: BaseRegistry, key: str, wanted: BaseRecord) -> list[RecordedBase]:
-    """Add ``wanted``'s entries the stored record lacks, under its ETag; return the ones this write added."""
+    """Add ``wanted``'s entries the stored record lacks, under its ETag; return the ones this write added.
+
+    An entry the record holds under another pin is replaced: a clone registered again at the location reads the version
+    its own first transaction names now, and the record is what a later registration tags from.
+    """
     added: list[RecordedBase] = []
 
     def _add(raw: dict[str, object]) -> dict[str, object]:
         record = _parsed(raw, wanted.location)
-        present = {entry.identity for entry in record.entries}
+        present = {entry.identity: entry.pin for entry in record.entries}
         # Recomputed on every round: `mutate_json` re-applies this to a record another writer changed.
-        added[:] = [entry for entry in wanted.entries if entry.identity not in present]
-        return BaseRecord(location=record.location, entries=[*record.entries, *added]).model_dump(mode="json")
+        added[:] = [entry for entry in wanted.entries if present.get(entry.identity, _ABSENT) != entry.pin]
+        replaced = {entry.identity for entry in added}
+        kept = [entry for entry in record.entries if entry.identity not in replaced]
+        return BaseRecord(location=record.location, entries=[*kept, *added]).model_dump(mode="json")
 
     records.mutate_json(registry.control_root, registry.storage_options, key, _add)
     return added
@@ -323,32 +348,49 @@ def forget_base_record(registry: BaseRegistry, location: str, *, table: str) -> 
     they are released before it is deleted, and a failure leaves the record for the retry. A claim another table
     holds is left alone (:func:`~lakehouse.location_claims.release`).
 
+    The record is keyed by the location, so while the location's claim names another table the record is that table's:
+    an end of ``table`` landing after a registration there forgets nothing and answers ``False``, as it keeps that
+    table's tags (:func:`release_clone_sources`).
+
     Raises:
-        OSError: The store refused a source's tag read or delete; the record stands.
+        OSError: The store refused the claim's read, or a source's tag read or delete; the record stands.
+        ValueError: The claim is not one.
     """
-    record = read_base_record(registry, location)
     claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
+    if (claimed := location_claims.holder(claims, location)) is not None and claimed.table != table:
+        log.warning("base_record_kept_for_another_holder", extra={"location": location, "holder": claimed.table, "ending": table})
+        return False
+    record = read_base_record(registry, location)
     for entry in record.entries if record is not None else []:
         if entry.role is BaseRole.DATA:
             location_claims.release(claims, entry.path, table)
-    release_clone_sources(registry, location, record=record)
+    release_clone_sources(registry, location, holder=table, record=record)
     return delete_record(registry.control_root, registry.storage_options, record_key_for(location))
 
 
-def release_clone_sources(registry: BaseRegistry, location: str, *, record: BaseRecord | None = None) -> list[str]:
-    """Delete the tag the clone at ``location`` holds on each source its record names as ``derived_from``; the sources
-    a tag was deleted on (ADR 0198 §1). ``record`` is the clone's, when the caller already read it.
+def release_clone_sources(registry: BaseRegistry, location: str, *, holder: str, record: BaseRecord | None = None) -> list[str]:
+    """Delete the tag the clone ``holder`` at ``location`` holds on each source its record names as ``derived_from``; the
+    sources a tag was deleted on (ADR 0198 §1). ``record`` is the clone's, when the caller already read it.
 
-    Every door that stops governing a clone asks it: one that forgets the record (:func:`forget_base_record`), and a
-    deregister, which keeps the record for the bytes it leaves in place and ends what the catalog promised them.
+    Every door that stops governing a clone asks it, before it releases the location's claim: one that forgets the record
+    (:func:`forget_base_record`), and a deregister, which keeps the record for the bytes it leaves in place and ends what
+    the catalog promised them. A tag is named for its clone's location (:func:`clone_sources.tag_of`), so a clone
+    registered there since holds a tag of the same name: while the location's claim names another table, the tags are
+    that table's, and none is deleted.
 
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
-        OSError: The store did not answer a source's tag read or delete.
-        ValueError: A source's dataset stands and could not be opened, or its tag could not be deleted.
+        OSError: The store did not answer the claim's read, or a source's tag read or delete.
+        ValueError: The claim is not one, a source's dataset stands and could not be opened, or its tag could not be deleted.
     """
+    claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
+    if (claimed := location_claims.holder(claims, location)) is not None and claimed.table != holder:
+        log.warning("clone_source_tags_kept_for_another_holder", extra={"location": location, "holder": claimed.table, "ending": holder})
+        return []
     held = record if record is not None else read_base_record(registry, location)
-    sources = [key_uri(entry.store, entry.path) for entry in held.entries if entry.role is BaseRole.DERIVED_FROM] if held is not None else []
+    # One source per table: a clone of a branch also records the branch's directory, which lies inside its table's root.
+    derived = [entry for entry in held.entries if entry.role is BaseRole.DERIVED_FROM] if held is not None else []
+    sources = list(dict.fromkeys(key_uri(entry.store, entry.source_table or entry.path) for entry in derived))
     return clone_sources.release_all(sources, clone_location=location, storage_options=registry.storage_options)
 
 

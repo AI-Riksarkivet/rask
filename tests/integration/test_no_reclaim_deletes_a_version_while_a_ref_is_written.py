@@ -36,6 +36,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
 from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult
+from maintenance.services.naming import claim_store, policy_owners
 from maintenance.services.plan import PlanContext
 from tests.integration.maintenance_vend_doors import CATALOG_URL, described_by, maintain_tier_door
 
@@ -70,10 +71,6 @@ class _Estate:
         now = datetime.now(UTC)
         namespace = self.client.post("/v1/namespace/db/describe", json={})
         assert namespace.status_code == 200, namespace.text
-        readings = table_pass.PassReadings(
-            table_ids=TableIds(by_location={normalise(self.location): TABLE}, namespace_uuids={"db": str(namespace.json()["properties"][UUID_PROPERTY])}),
-            context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
-        )
         settings = MaintenanceSettings.model_validate(
             {
                 "s3_endpoint": self.url,
@@ -85,6 +82,13 @@ class _Estate:
                 "min_versions_to_expire": 1,
                 "catalog_url": CATALOG_URL,
             }
+        )
+        ids = TableIds(by_location={normalise(self.location): TABLE}, namespace_uuids={"db": str(namespace.json()["properties"][UUID_PROPERTY])})
+        readings = table_pass.PassReadings(
+            table_ids=ids,
+            context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
+            table=TABLE,
+            owners=policy_owners(ids, TABLE, claims=claim_store(settings)),
         )
         with maintain_tier_door(described_by(self.client)):
             return table_pass.maintain_dataset(self.location, readings=readings, settings=settings)

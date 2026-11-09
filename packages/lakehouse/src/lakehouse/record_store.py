@@ -85,18 +85,46 @@ def get_record(control_root: str, storage_options: StorageOptions, key: str, *, 
     A malformed record reads as ABSENT rather than propagating: every caller of a registry treats
     ``None`` as "no record was set", and handing back a list or a string instead makes the fault surface
     somewhere that cannot name it. A store OUTAGE is not this case — it surfaces as an exception from
-    pyarrow and is deliberately left to propagate.
+    pyarrow and is deliberately left to propagate. A caller making a DESTRUCTIVE decision reads through
+    :func:`read_record` instead, which raises on a record it cannot read.
     """
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        with fs.open_input_stream(f"{base}/{key}") as stream:
-            loaded: Any = json.loads(stream.readall().decode())
-    except FileNotFoundError:
+    loaded = _loaded(control_root, storage_options, key)
+    if loaded is None:
         return None
     if not isinstance(loaded, dict):
         log.warning(f"{event}_malformed", extra={"key": key})
         return None
     return loaded
+
+
+def read_record(control_root: str, storage_options: StorageOptions, key: str) -> dict[str, Any] | None:
+    """One record, or ``None`` when it is absent; one that is not a JSON object RAISES, for a caller that decides on it.
+
+    Raises:
+        ValueError: The stored record is not JSON, or not a JSON object.
+        OSError: The store failed the read.
+    """
+    loaded = _loaded(control_root, storage_options, key)
+    if loaded is None:
+        return None
+    if not isinstance(loaded, dict):
+        raise ValueError(f"the record at {key} is not a JSON object")
+    return loaded
+
+
+def _loaded(control_root: str, storage_options: StorageOptions, key: str) -> object:
+    """The JSON stored at ``key``, or ``None`` when nothing is.
+
+    Raises:
+        ValueError: What is stored is not JSON.
+        OSError: The store failed the read.
+    """
+    fs, base = fs_and_base(control_root, storage_options)
+    try:
+        with fs.open_input_stream(f"{base}/{key}") as stream:
+            return json.loads(stream.readall().decode())
+    except FileNotFoundError:
+        return None
 
 
 def delete_record(control_root: str, storage_options: StorageOptions, key: str) -> bool:

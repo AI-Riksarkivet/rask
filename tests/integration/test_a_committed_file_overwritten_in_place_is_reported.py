@@ -56,6 +56,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
 from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult
+from maintenance.services.naming import claim_store, policy_owners
 from maintenance.services.plan import PlanContext
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.store_events import StoreEvents
@@ -177,11 +178,14 @@ class _Estate:
         described = self.client.post("/v1/namespace/db/describe", json={})
         assert described.status_code == 200, described.text
         now = datetime.now(UTC)
-        readings = table_pass.PassReadings(
-            table_ids=TableIds(by_location={normalise(location): _TABLE}, namespace_uuids={"db": str(described.json()["properties"][UUID_PROPERTY])}),
-            context=PlanContext(policies=list(policies), now=now, older_than=timedelta(0) if reclaiming else timedelta(days=7)),
-        )
         settings = self.settings(**({"min_versions_to_expire": 1} if reclaiming else {}))
+        ids = TableIds(by_location={normalise(location): _TABLE}, namespace_uuids={"db": str(described.json()["properties"][UUID_PROPERTY])})
+        readings = table_pass.PassReadings(
+            table_ids=ids,
+            context=PlanContext(policies=list(policies), now=now, older_than=timedelta(0) if reclaiming else timedelta(days=7)),
+            table=_TABLE,
+            owners=policy_owners(ids, _TABLE, claims=claim_store(settings)),
+        )
         with door or maintain_tier_door(described_by(self.client)):
             result = table_pass.maintain_dataset(location, readings=readings, settings=settings)
         assert result.error is None, result.error

@@ -32,7 +32,8 @@ from fastapi.testclient import TestClient
 from lance.optimize import Compaction
 
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
-from tests.integration.lineage_app import SUBJECT_HEADER, free_port, governed_lineage, live_catalog, live_lineage, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, live_lineage, run_event
+from tests.loopback import free_port
 
 
 #: The pipeline reading the feed, under its own service account.

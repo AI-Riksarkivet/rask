@@ -37,8 +37,9 @@ import logging
 from collections.abc import Sequence
 from typing import Any, Final
 
-from lakehouse import stored_objects
-from lakehouse.record_store import delete_record, get_record, list_records, put_record, record_key
+from lakehouse import stored_objects, warehouse_records
+from lakehouse.record_store import delete_record, get_record, list_records, put_record, read_record, record_key
+from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions
 
 
@@ -130,6 +131,59 @@ def resolve_policy(records: list[dict[str, Any]], uri: str, *, table_uuid: str, 
         if namespace_uuid in namespaces:
             return namespaces[namespace_uuid]
     return _project_policy(records, uri)
+
+
+class UnreadablePolicyError(RuntimeError):
+    """A policy record that may govern a table exists and cannot be read, or the store did not answer its read: whether it
+    keeps the table's history is unknown, so nothing that would reclaim it may be decided."""
+
+
+def governing_policy(
+    control_root: str, storage_options: StorageOptions, *, claims_root: str, location: str, table_uuid: str, namespace_uuids: Sequence[str]
+) -> dict[str, Any] | None:
+    """The policy governing the table ``table_uuid`` names at ``location``, read by key: the table's own record, else the
+    nearest namespace's in ``namespace_uuids`` (outermost first), else the record of the project the bucket's claim names
+    as its owner, where that record names the bucket; ``None`` for the global defaults. The precedence is
+    :func:`resolve_policy`'s, which a caller may hand the one record this returns; the project level differs only where
+    several project records name one bucket, which :func:`resolve_policy` refuses to choose between and the store's
+    claim, written once by the warehouse that took the bucket, settles. The policy records are read under
+    ``control_root`` and the bucket's claim under ``claims_root``, the catalog's registry, which a deployment may keep
+    apart from its policies.
+
+    Each record is read by its key, so what this costs is the table's depth, never the estate's policies. STRICT: a record
+    that is there and cannot be read, and a read the store fails, raise, since the record may be a legal hold, and a
+    caller that went on without it would reclaim history its owner kept.
+
+    Raises:
+        UnreadablePolicyError: A record, or the claim naming the bucket's project, cannot be read.
+    """
+    try:
+        if (own := _keyed(control_root, storage_options, "table", table_uuid)) is not None:
+            return own
+        for namespace_uuid in reversed(namespace_uuids):
+            if (nearest := _keyed(control_root, storage_options, "namespace", namespace_uuid)) is not None:
+                return nearest
+        bucket = split_s3_uri(location)[0] if location.startswith("s3://") else ""
+        project = warehouse_records.bucket_project(claims_root, storage_options, bucket) if bucket else None
+        tenant = _keyed(control_root, storage_options, "project", project) if project is not None else None
+    except (OSError, ValueError) as exc:
+        raise UnreadablePolicyError(f"a maintenance policy that may govern the table {table_uuid} could not be read: {exc}") from exc
+    return tenant if tenant is not None and bucket in (tenant.get("buckets") or []) else None
+
+
+def _keyed(control_root: str, storage_options: StorageOptions, kind: str, key: str) -> dict[str, Any] | None:
+    """The ``kind`` policy record stored under ``key`` (:func:`policy_key`), or ``None`` when none is.
+
+    Raises:
+        ValueError: The stored record is not a policy record of ``kind`` for ``key``.
+        OSError: The store failed the read.
+    """
+    record = read_record(control_root, storage_options, record_key(PREFIX, kind, key))
+    if record is None:
+        return None
+    if record.get("kind") != kind or not _record_is_well_formed(record) or policy_key(record) != key:
+        raise ValueError(f"the {kind} policy record stored for {key} is not one")
+    return record
 
 
 def keeps_whole_history(policy: dict[str, Any] | None) -> bool:

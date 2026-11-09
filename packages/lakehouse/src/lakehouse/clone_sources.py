@@ -21,15 +21,15 @@ Every function is blocking IO.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import objectfs, stored_objects
+from lakehouse import location_claims, objectfs, stored_objects
 from lakehouse.base_refs import decoded_path, key_uri, store_of
+from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.history_fences import HistoryWork, TableHistory
 
 
@@ -64,15 +64,24 @@ class ReadFromOutsideError[K](ValueError):
 
 
 class CloneReference(BaseModel):
-    """What a shallow clone's first transaction says it reads: the source root, the version, and the branch it is on."""
+    """What a shallow clone's first transaction says it reads: the source ref's directory, the version, and the branch
+    it is on."""
 
     model_config = ConfigDict(frozen=True)
 
-    #: The source's root as the cloner spelled it (``Clone.ref_path``).
+    #: The directory of the ref the clone was made from, as the cloner spelled it (``Clone.ref_path``): the source's
+    #: root for a clone of main, and ``<root>/tree/<branch>`` for a clone of a branch (measured on pylance 13.0.0).
     path: str
     version: int
-    #: The source branch the version is on, ``None`` for main.
+    #: The source branch the version is on (``Clone.ref_name``), ``None`` for main.
     branch: str | None = None
+
+    @property
+    def root(self) -> str:
+        """The source table's root: :attr:`path` without the branch's directory, which lies inside it
+        (`lance_docs/lance/format/table/branch_tag.md`)."""
+        path = self.path.rstrip("/")
+        return path if self.branch is None else path.removesuffix(f"/{BRANCH_CONTAINER}/{self.branch}")
 
 
 class CloneSource(BaseModel):
@@ -95,7 +104,7 @@ class CloneSource(BaseModel):
 def tag_of(clone_location: str) -> str:
     """The tag the clone at ``clone_location``, in either spelling, holds on each source it reads through: the SHA-256 of
     the path it decodes to, as `lakehouse.location_claims` keys the location's claim."""
-    return f"{TAG_PREFIX}{hashlib.sha256(decoded_path(clone_location).encode()).hexdigest()}"
+    return f"{TAG_PREFIX}{location_claims.claim_digest(clone_location)}"
 
 
 def clone_reference(clone: lance.LanceDataset) -> CloneReference | None:
@@ -112,7 +121,9 @@ def clone_reference(clone: lance.LanceDataset) -> CloneReference | None:
     operation = transaction.operation if transaction is not None else None
     if not isinstance(operation, lance.LanceOperation.Clone) or not operation.is_shallow:
         return None
-    return CloneReference(path=operation.ref_path, version=operation.ref_version, branch=operation.branch_name or None)
+    # ``ref_name`` is the source's branch; ``branch_name`` names a branch the operation itself creates, and is unset for a
+    # clone into a dataset of its own (measured on pylance 13.0.0).
+    return CloneReference(path=operation.ref_path, version=operation.ref_version, branch=operation.ref_name or None)
 
 
 def _reference(source: CloneSource) -> int | tuple[str, int]:
@@ -179,18 +190,27 @@ def release(source_location: str, *, clone_location: str, storage_options: Stora
         OSError: The store did not answer the open, the read or the delete.
         ValueError: The source's dataset stands and could not be opened, or its tag could not be deleted.
     """
-    tag = tag_of(clone_location)
+    return delete_tag(source_location, tag_of(clone_location), storage_options=storage_options)
+
+
+def delete_tag(source_location: str, tag: str, *, storage_options: StorageOptions) -> bool:
+    """Delete the clone tag ``tag`` on the source at ``source_location``; whether one was there (:func:`release`).
+
+    Raises:
+        OSError: The store did not answer the open, the read or the delete.
+        ValueError: The source's dataset stands and could not be opened, or the tag could not be deleted.
+    """
     try:
         dataset = _open(source_location, storage_options)
     except (OSError, ValueError):
         if objectfs.is_lance_dataset_root(_dataset_key(source_location), storage_options):
             raise
-        log.warning("clone_source_gone", extra={"source": source_location, "clone": clone_location})
+        log.warning("clone_source_gone", extra={"source": source_location, "tag": tag})
         return False
     if tag not in dataset.tags.list():
         return False
     dataset.tags.delete(tag)
-    log.info("clone_source_untagged", extra={"source": source_location, "clone": clone_location})
+    log.info("clone_source_untagged", extra={"source": source_location, "tag": tag})
     return True
 
 

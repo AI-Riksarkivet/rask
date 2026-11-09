@@ -736,53 +736,65 @@
                     "properties": {
                         "ackWaitSeconds": {
                             "description": "Consumer ack wait, in seconds: how long a task a dead worker held waits before another replica gets it. A worker whose heartbeats the bus stops answering ends itself before the ack wait its last answered heartbeat restarted runs out, so its pass never runs beside the next.",
-                            "type": "integer"
+                            "type": "integer",
+                            "minimum": 3
                         },
                         "auditSchedule": {
                             "description": "The audit's NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs and the lost-task backstop, once per firing on one replica.",
-                            "type": "string"
+                            "type": "string",
+                            "pattern": "^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$"
                         },
                         "commitPassDelaySeconds": {
                             "description": "How long the first commit of a burst holds its table's pass: the most often commits pass a table, each pass covering every commit before it.",
-                            "type": "integer"
+                            "type": "integer",
+                            "minimum": 1
                         },
                         "drainSeconds": {
-                            "description": "How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain and the task would reach another replica while it ran on.",
-                            "type": "integer"
+                            "description": "How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain and the task would reach another replica while it ran on. The drain runs after uvicorn's own graceful wait, so that wait is cut by it: the pod's grace less preStop, the teardown and this.",
+                            "type": "integer",
+                            "minimum": 1
                         },
                         "heartbeatSeconds": {
                             "description": "How often a running task tells JetStream it is still being worked on; well inside `ackWaitSeconds`.",
-                            "type": "integer"
+                            "type": "integer",
+                            "minimum": 1
                         },
                         "maxDeliver": {
                             "description": "Deliveries of one task before it is ended and counted (`maintenance.tasks.ended`); the consumer allows one more, on which a task that outlived its worker every time is ended without running.",
-                            "type": "integer"
+                            "type": "integer",
+                            "minimum": 1
                         },
                         "maxPassSeconds": {
                             "description": "A pass running longer than this is logged and counted; at twice this its replica exits, Kubernetes restarts it, and the task is delivered again.",
-                            "type": "integer"
+                            "type": "integer",
+                            "minimum": 60
                         },
                         "recheckHours": {
                             "description": "The longest a table goes without a pass: what bounds a lost commit event, and the versions a deleted tag or branch releases.",
-                            "type": "integer"
+                            "type": "integer",
+                            "minimum": 1
                         },
                         "retrySeconds": {
                             "description": "When a pass that could not decide, or found the table's history held, is tried again.",
-                            "type": "integer"
+                            "type": "integer",
+                            "minimum": 60
                         },
                         "scanSchedule": {
-                            "description": "The scan's NATS message schedule: the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies.",
-                            "type": "string"
+                            "description": "The scan's NATS message schedule, a six-field cron (seconds first): the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim.",
+                            "type": "string",
+                            "pattern": "^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$"
                         },
                         "storeEventsMaxBytes": {
                             "description": "The most STORE_EVENTS holds, in bytes, before it drops its oldest: each event is a hint of about 2 KB that the table's daily recheck backs up, and the stream shares the bus's JetStream disk with LINEAGE and the work queue.",
-                            "type": "integer"
+                            "type": "integer",
+                            "minimum": 1
                         }
                     }
                 },
                 "replicas": {
                     "description": "Maintenance replicas; each runs a worker on the shared work queue.",
-                    "type": "integer"
+                    "type": "integer",
+                    "minimum": 1
                 },
                 "tombstoneSweep": {
                     "description": "Clear trash records whose bytes a probe proves are gone; deletes bookkeeping rows, never bytes. Off by default.",

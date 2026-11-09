@@ -40,7 +40,8 @@ import pyarrow.ipc as ipc
 import pytest
 
 from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
-from tests.integration.lineage_app import SUBJECT_HEADER, free_port, governed_lineage, live_catalog, live_lineage, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, live_lineage, run_event
+from tests.loopback import free_port
 
 
 #: The commit reconciler's binding name, which its tick is mounted at as the chart names it.

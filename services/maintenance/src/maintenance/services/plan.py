@@ -68,24 +68,6 @@ class DatasetPlan(BaseModel):
         return str(self.policy.get("id") or "") or None
 
 
-def load_policies(settings: MaintenanceSettings, options: StorageOptions) -> list[dict[str, Any]]:
-    """The maintenance policies, loaded once per tick.
-
-    A registry that cannot be read at all RAISES (fail toward not deleting, audit 2026-07-16): policies are the
-    protective surface (retention extensions, legal holds), so expiring without them would reclaim history an owner
-    explicitly kept. One bad record inside a readable registry is skipped-with-warning by ``list_policies``.
-    """
-    try:
-        policy_records = maintenance_policies.list_policies(settings.resolved_policy_root, options)
-    except Exception:
-        log.error("compaction_policies_unreadable_tick_aborted")
-        raise
-    # The count distinguishes "no policies set" from "policies invisible" (a control root moved without
-    # MAINTENANCE_POLICY_ROOT following lists cleanly as empty).
-    log.info("compaction_policies_loaded", extra={"policies": len(policy_records)})
-    return policy_records
-
-
 def buckets_to_sweep(settings: MaintenanceSettings, options: StorageOptions) -> list[str]:
     """#81 EVERY warehouse bucket the registry knows, beside the configured ones.
 

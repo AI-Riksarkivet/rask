@@ -42,6 +42,8 @@ dapr.io/enabled: "true"
 {{- $root := index . 0 -}}
 {{- $appId := index . 1 -}}
 {{- $appPort := index . 2 -}}
+{{- $block := int $root.Values.lifecycle.sidecarBlockShutdownSeconds -}}
+{{- if gt (len .) 3 }}{{- $block = int (index . 3) }}{{- end -}}
 {{- if $root.Values.dapr.enabled -}}
 dapr.io/enabled: "true"
 dapr.io/app-id: {{ $appId | quote }}
@@ -53,7 +55,7 @@ dapr.io/max-body-size: {{ . | quote }}
 {{- end }}
 dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
 checksum/dapr: {{ include "lance.daprDigest" (list $root $appId) | quote }}
-dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sidecarBlockShutdownSeconds) | quote }}
+dapr.io/block-shutdown-duration: {{ printf "%ds" $block | quote }}
 {{- include "lance.daprSidecarResources" $root | nindent 0 }}
 
 {{- if $root.Values.dapr.enabled }}
@@ -810,7 +812,7 @@ activeDeadlineSeconds: 1800
   (dict "app" $v.services.catalog.daprAppId "sa" "catalog" "api" (concat (list "dapr-app-token" "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))) "bus" true)
   (dict "app" $v.services.lineage.daprAppId "sa" "lineage" "api" (concat (list "dapr-app-token") (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce))) "bus" true) -}}
 {{- if $v.maintenance.enabled -}}
-{{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "dapr-app-token" (printf "nats-user-%s-worker" $v.maintenance.daprAppId)) (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
+{{- $apps = append $apps (dict "app" $v.maintenance.daprAppId "sa" "maintenance" "api" (concat (list "dapr-app-token" "nats-user-maintenance-worker") (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) "bus" (or $v.maintenance.arrivalEnabled $v.maintenance.lineageEmit (and $v.catalog.controlEmit $v.maintenance.controlEmit))) -}}
 {{- end -}}
 {{- range $apps -}}
 {{- $api := concat .api (get $own .app | default list) | compact | uniq | sortAlpha -}}

@@ -13,14 +13,17 @@ and that primitive now exists: :mod:`lakehouse.record_store`.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
-from lakehouse.record_store import list_records
+from lakehouse.record_store import list_records, read_record
 from lakehouse.storage_options import StorageOptions
 
 
-#: Where the catalog writes warehouse records. Kept in sync with `catalog/services/warehouses.py`.
+#: Where the catalog writes warehouse records, a top namespace's binding to its warehouse, and which project owns a bucket.
+#: Kept in sync with `catalog/services/warehouses.py`.
 REGISTRY_PREFIX = "_warehouses"
+_BINDINGS_PREFIX: Final = f"{REGISTRY_PREFIX}/bindings"
+_BUCKET_CLAIMS_PREFIX: Final = f"{REGISTRY_PREFIX}/bucket-claims"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "warehouse_record"
@@ -50,3 +53,46 @@ def maintainable_buckets(records: list[dict[str, Any]]) -> list[str]:
     """
     buckets = {str(r["bucket"]) for r in records if r.get("bucket") and str(r.get("status", "active")).lower() != "deactivated"}
     return sorted(buckets)
+
+
+def is_deactivated(record: dict[str, Any]) -> bool:
+    """Whether the warehouse ``record`` is quarantined: offboarding's first step, after which nothing rewrites its data."""
+    return str(record.get("status", "active")).lower() == "deactivated"
+
+
+def namespace_warehouse(control_root: str, storage_options: StorageOptions, top_namespace: str) -> dict[str, Any] | None:
+    """The record of the warehouse the top-level namespace ``top_namespace`` is bound to, read by its key, or ``None`` when
+    the namespace is bound to none (its tables are on the default root).
+
+    Raises:
+        ValueError: The binding or the warehouse record cannot be read as one, or the binding names a warehouse with no
+            record.
+        OSError: The store failed a read.
+    """
+    binding = read_record(control_root, storage_options, f"{_BINDINGS_PREFIX}/{top_namespace}.json")
+    if binding is None:
+        return None
+    warehouse_id = binding.get("warehouse_id")
+    if not isinstance(warehouse_id, str) or not warehouse_id:
+        raise ValueError(f"the binding of namespace {top_namespace!r} names no warehouse")
+    record = read_record(control_root, storage_options, f"{REGISTRY_PREFIX}/{warehouse_id}.json")
+    if record is None:
+        raise ValueError(f"namespace {top_namespace!r} is bound to warehouse {warehouse_id!r}, which has no record")
+    return record
+
+
+def bucket_project(control_root: str, storage_options: StorageOptions, bucket: str) -> str | None:
+    """The project that owns ``bucket``, as the claim the catalog wrote when a warehouse first took the bucket records it;
+    ``None`` when no warehouse took it. A bucket is one project's, which the store arbitrates.
+
+    Raises:
+        ValueError: The claim cannot be read as one.
+        OSError: The store failed the read.
+    """
+    claim = read_record(control_root, storage_options, f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json")
+    if claim is None:
+        return None
+    project = claim.get("project")
+    if not isinstance(project, str) or not project:
+        raise ValueError(f"the claim on bucket {bucket!r} names no project")
+    return project

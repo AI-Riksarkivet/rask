@@ -22,7 +22,6 @@ import copy
 import json
 import os
 import re
-import socket
 import subprocess
 import threading
 import time
@@ -37,6 +36,7 @@ from nats.errors import NoRespondersError
 from pydantic import BaseModel, ConfigDict, PrivateAttr
 
 from lakehouse.lineage.signing import SigningKey
+from tests.loopback import free_port, free_ports
 
 
 if TYPE_CHECKING:
@@ -198,15 +198,13 @@ def _nsc(nsc: Path, home: Path, *args: str) -> str:
     return done.stdout
 
 
-def free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
-
-
 #: The NATS fixture's cluster size (`deploy/fixtures/nats/chart/values.yaml`, `config.cluster.replicas`), and so the
 #: copies of each stream the chart declares at its default `nats.streamReplicas`.
 _NODES = 3
+
+#: How much of a server's log a failed start quotes, traces left out: enough for the startup lines and a fatal error, or
+#: a crash's stack, which a server writes last.
+_LOG_END_LINES = 30
 
 
 class Broker:
@@ -224,14 +222,19 @@ class Broker:
     def __init__(self, server: Path, mint: Mint, workdir: Path) -> None:
         self._server, self._mint, self._dir = server, mint, workdir
         self._processes: list[subprocess.Popen[bytes]] = []
-        self._ports = [free_port() for _ in range(_NODES)]
-        self._routes = [free_port() for _ in range(_NODES)]
+        ports = free_ports(2 * _NODES)
+        self._ports, self._routes = ports[:_NODES], ports[_NODES:]
         self.port = self._ports[0]
         self.url = f"nats://127.0.0.1:{self.port}"
 
     def start(self, timeout: float = 30.0) -> None:
         """Start every server, and return once each knows the cluster's JetStream metadata leader, from when a stream can
-        be declared (measured: about 6 s after start)."""
+        be declared (measured: about 6 s after start).
+
+        Raises:
+            RuntimeError: A server exited first. The message names it, its exit code and the end of its log.
+            TimeoutError: A server knew no leader within `timeout` seconds. The message names it and the end of its log.
+        """
         self._dir.mkdir(parents=True)
         routes = ", ".join(f"nats://127.0.0.1:{route}" for route in self._routes)
         for node, (port, route) in enumerate(zip(self._ports, self._routes, strict=True)):
@@ -250,9 +253,11 @@ class Broker:
             with (home / "nats-server.log").open("wb") as log:
                 self._processes.append(subprocess.Popen([str(self._server), "-c", str(home / "server.conf")], stdout=log, stderr=subprocess.STDOUT))  # noqa: S603
         deadline = time.monotonic() + timeout
-        while not all("metadata leader" in self._log(node) for node in range(_NODES)):
-            if any(process.poll() is not None for process in self._processes) or time.monotonic() > deadline:
-                raise RuntimeError(f"the cluster elected no JetStream metadata leader: {self.log_text()[-1500:]}")
+        while waiting := [node for node in range(_NODES) if "metadata leader" not in self._log(node)]:
+            if exited := [node for node, process in enumerate(self._processes) if process.poll() is not None]:
+                raise RuntimeError(f"a server exited before the cluster elected a JetStream metadata leader:\n{self._log_ends(exited)}")
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"the cluster elected no JetStream metadata leader within {timeout} s:\n{self._log_ends(waiting)}")
             time.sleep(0.1)
 
     def stop(self) -> None:
@@ -268,6 +273,16 @@ class Broker:
 
     def _node_dir(self, node: int) -> Path:
         return self._dir / f"node-{node}"
+
+    def _log_ends(self, nodes: list[int]) -> str:
+        """Each server's name, its exit code or that it runs, and the end of its own log with the traces left out."""
+        ends = []
+        for node in nodes:
+            code = self._processes[node].poll()
+            state = "still running" if code is None else f"exit code {code}"
+            said = [line for line in self._log(node).splitlines() if " [TRC] " not in line]
+            ends.append("\n".join([f"rask-test-{node} ({state}):", *said[-_LOG_END_LINES:]]))
+        return "\n".join(ends)
 
     def _log(self, node: int) -> str:
         path = self._node_dir(node) / "nats-server.log"
@@ -439,7 +454,7 @@ class Sidecar:
 
     def __init__(self, daprd: Path, app_id: str, components: list[dict[str, Any]], app: SubscriberApp, workdir: Path) -> None:
         self._daprd, self.app_id, self._components, self.app, self._dir = daprd, app_id, components, app, workdir
-        self.http_port = free_port()
+        self.http_port, self._grpc_port, self._internal_port, self._public_port = free_ports(4)
         self.log_path = workdir / "daprd.log"
         self._process: subprocess.Popen[bytes] | None = None
 
@@ -451,8 +466,8 @@ class Sidecar:
         argv = [
             str(self._daprd),
             *("--app-id", self.app_id, "--app-port", str(self.app.port), "--app-protocol", "http"),
-            *("--dapr-http-port", str(self.http_port), "--dapr-grpc-port", str(free_port())),
-            *("--dapr-internal-grpc-port", str(free_port()), "--dapr-public-port", str(free_port())),
+            *("--dapr-http-port", str(self.http_port), "--dapr-grpc-port", str(self._grpc_port)),
+            *("--dapr-internal-grpc-port", str(self._internal_port), "--dapr-public-port", str(self._public_port)),
             *("--enable-metrics=false", "--resources-path", str(resources), "--log-level", "debug"),
         ]
         # The injector sets POD_NAME from the pod's name (Dapr 1.18.1 `pkg/injector/patcher/sidecar_container.go:264`), and

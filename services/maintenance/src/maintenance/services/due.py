@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from typing import Any
 
 import lance
 from lance.optimize import Compaction, CompactionOptions
@@ -22,13 +23,14 @@ from pydantic import BaseModel
 
 from lakehouse.base_refs import normalise
 from lakehouse.compaction_gate import compaction_refusal
+from lakehouse.governed.fga import canonical_object_id
 from lakehouse.maintenance_due import CompactionDue, DueRecord, IndexDue, delete_due, write_due
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.expiry import DueVerdict
 from maintenance.services.index_health import due_indices
 from maintenance.services.naming import TableIds, manifest_uuid
-from maintenance.services.purge import manifest_rows, table_location
+from maintenance.services.purge import manifest_rows, manifest_rows_named, table_location
 
 
 log = logging.getLogger(__name__)
@@ -43,13 +45,31 @@ def table_ids(roots: set[str], storage_options: StorageOptions) -> TableIds:
         if rows is None:
             found.complete = False
             continue
-        for row in rows:
-            location = table_location(root, row)
-            if location is not None and row.get("object_id"):
-                found.by_location[normalise(location)] = str(row["object_id"])
-            elif row.get("object_type") == "namespace" and row.get("object_id") and (uuid := manifest_uuid(row)) is not None:
-                found.namespace_uuids[str(row["object_id"])] = uuid
+        _add_rows(found, root, rows)
     return found
+
+
+def table_ids_of(root: str, storage_options: StorageOptions, *, segments: list[str]) -> TableIds | None:
+    """What ``root``'s ``__manifest`` holds of the table ``segments`` names and of each namespace above it, read by their
+    ids (:func:`maintenance.services.purge.manifest_rows_named`), or ``None`` when it cannot be read: what one table's
+    pass names its datasets and finds its policy's owners by."""
+    ids = [canonical_object_id(segments[:depth]) for depth in range(1, len(segments) + 1)]
+    rows = manifest_rows_named(root, storage_options, ids)
+    if rows is None:
+        return None
+    found = TableIds()
+    _add_rows(found, root, rows)
+    return found
+
+
+def _add_rows(found: TableIds, root: str, rows: list[dict[str, Any]]) -> None:
+    """Add each table row's location and each namespace row's uuid, as ``root``'s ``__manifest`` holds them, to ``found``."""
+    for row in rows:
+        location = table_location(root, row)
+        if location is not None and row.get("object_id"):
+            found.by_location[normalise(location)] = str(row["object_id"])
+        elif row.get("object_type") == "namespace" and row.get("object_id") and (uuid := manifest_uuid(row)) is not None:
+            found.namespace_uuids[str(row["object_id"])] = uuid
 
 
 class DueQuestion(BaseModel):

@@ -26,17 +26,18 @@ S3's own record shape names them at ``s3.bucket.name``, ``s3.object.key`` and ``
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime, timedelta
 from time import monotonic
-from typing import Any, Final
+from typing import Final
 from urllib.parse import unquote_plus
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lakehouse import location_claims, table_layout
+from lakehouse.governed.store_credential import StoreCredentialUnavailableError
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.naming import claim_store, claimed_location
 from maintenance.services.queue import Task, TaskQueue
@@ -65,34 +66,50 @@ class StoredKey(BaseModel):
     written: bool
 
 
+class _Bucket(BaseModel):
+    name: str = Field(min_length=1)
+
+
+class _Object(BaseModel):
+    key: str = Field(min_length=1)
+
+
+class _Entity(BaseModel):
+    bucket: _Bucket
+    stored: _Object = Field(validation_alias="object")
+
+
+class _Record(BaseModel):
+    """One object a store event names: its event's name, and its bucket and key."""
+
+    event_name: str = Field(default="", validation_alias="eventName")
+    s3: _Entity
+
+    @model_validator(mode="before")
+    @classmethod
+    def _unwrapped(cls, record: object) -> object:
+        """RustFS sends each record under ``data``; S3 sends it bare."""
+        if isinstance(record, dict) and isinstance(record.get("data"), dict):
+            return record["data"]
+        return record
+
+
+class _StoreEvent(BaseModel):
+    records: list[_Record] = Field(validation_alias="Records")
+
+
 def stored_keys(body: bytes) -> list[StoredKey]:
     """Every object the store event ``body`` names, its key decoded.
 
     Raises:
-        ValueError: ``body`` is no store event: not JSON, or naming no ``Records``.
+        ValueError: ``body`` is no store event: not JSON, or a record that names no bucket and key (pydantic's
+            ``ValidationError`` is one).
     """
-    try:
-        event = json.loads(body)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"a store event is JSON: {exc}") from exc
-    records = event.get("Records") if isinstance(event, dict) else None
-    if not isinstance(records, list):
-        raise ValueError("a store event names its objects under `Records`")
-    return [found for record in records if (found := _stored_key(record)) is not None]
-
-
-def _stored_key(record: Any) -> StoredKey | None:
-    if not isinstance(record, dict):
-        return None
-    data = record.get("data")
-    body = data if isinstance(data, dict) else record
-    s3, name = body.get("s3"), body.get("eventName")
-    if not isinstance(s3, dict):
-        return None
-    bucket, key = (s3.get("bucket") or {}).get("name"), (s3.get("object") or {}).get("key")
-    if not (isinstance(bucket, str) and isinstance(key, str) and bucket and key):
-        return None
-    return StoredKey(bucket=bucket, key=unquote_plus(key), written=isinstance(name, str) and name.startswith(_WRITE))
+    event = _StoreEvent.model_validate_json(body)
+    return [
+        StoredKey(bucket=record.s3.bucket.name, key=unquote_plus(record.s3.stored.key), written=record.event_name.startswith(_WRITE))
+        for record in event.records
+    ]
 
 
 def table_roots(stored: StoredKey) -> list[str]:
@@ -108,7 +125,6 @@ class StoreEvents:
     def __init__(self, settings: MaintenanceSettings, queue: TaskQueue) -> None:
         self._settings = settings
         self._queue = queue
-        self._claims = claim_store(settings)
         #: Each root asked about lately: until when the answer stands, and the table found there, or none.
         self._found: dict[str, tuple[float, Task | None]] = {}
         #: Each table whose follow-up this replica holds, until it fires: until then that follow-up covers every write.
@@ -149,11 +165,20 @@ class StoreEvents:
         return None
 
     async def _claimed(self, root: str) -> Task | None:
+        """The table whose claim holds the store key ``root``, or ``None`` when no table holds it.
+
+        Raises:
+            OSError: The store refused, or could not be reached for, the claim's read.
+        """
         try:
-            claim = await run_in_threadpool(location_claims.holder, self._claims, f"s3://{root}")
+            # The claim store is built at each read: it signs with the session in force now, and the one held when the
+            # replica started expires within the hour.
+            claim = await run_in_threadpool(location_claims.holder, claim_store(self._settings), f"s3://{root}")
         except ValueError as exc:
             log.warning("maintenance_store_event_claim_unreadable", extra={"root": root, "error": str(exc)[:300]})
             return None
+        except (ClientError, BotoCoreError, StoreCredentialUnavailableError) as exc:
+            raise OSError(f"the claim on {root} could not be read: {exc}") from exc
         if claim is None or claim.uuid is None:
             return None
         return Task(kind="table", uuid=claim.uuid, location=claimed_location(self._settings.resolved_control_root, claim))

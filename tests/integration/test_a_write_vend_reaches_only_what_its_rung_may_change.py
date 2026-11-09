@@ -245,6 +245,22 @@ def test_a_held_table_is_vended_no_maintain_tier(estate: _Estate, tier: _Tier, a
     assert (vended.status_code, vended.headers["content-type"], vended.json().get("code")) == answer, vended.text
 
 
+def test_a_table_whose_hold_cannot_be_read_is_vended_no_maintain_tier(estate: _Estate) -> None:
+    """[[XC-084]] A policy record that cannot be read may be a hold, so whether the table's history may be reclaimed is
+    unknown: the maintain tier is refused as the store's outage, and nothing is vended that could delete what it keeps."""
+    held = estate.client.post(f"/management/v1/table/{_TABLE}/policy/set", json={"cleanup_enabled": False})
+    assert held.status_code == 200, held.text
+    estate.s3.put_object(Bucket=estate.bucket, Key=record_key("_policies", "table", estate.table_uuid()), Body=b'{"kind": "table", "cleanup_enabled": fal')
+
+    vended = estate.client.post(f"/management/v1/table/{_TABLE}/credentials", params={"tier": "maintain"})
+
+    assert (vended.status_code, vended.headers["content-type"], vended.json().get("code")) == (
+        503,
+        "application/problem+json",
+        ErrorCode.SERVICE_UNAVAILABLE,
+    ), vended.text
+
+
 def _dropped(estate: _Estate, monkeypatch: pytest.MonkeyPatch, *, grace_days: str, name: str = "gone") -> tuple[str, str]:
     """A table dropped into the trash for ``grace_days``, by its uuid and location."""
     from catalog.core.config import get_settings

@@ -26,6 +26,7 @@ from unittest.mock import MagicMock
 
 import boto3
 import httpx
+import lance
 import pyarrow as pa
 import pytest
 from botocore.exceptions import ClientError
@@ -35,7 +36,7 @@ from openfga_sdk.client.models import ClientWriteRequest
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import HttpLineageEmitter
 from catalog.services import warehouses
-from lakehouse import base_registry, maintenance_policies, object_records, trash
+from lakehouse import base_registry, clone_sources, location_claims, maintenance_policies, object_records, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage import S3Client
 from lakehouse.storage_options import StorageOptions
@@ -353,3 +354,29 @@ def test_a_cascade_that_fails_part_way_says_what_landed_keeps_the_rest_governed_
     assert tenant.trashed(trash_held) == [], "the re-issue left the warehouse's trash behind"
     assert tenant.store.naming(tenant.fga([*governed, *kept])) == {}, "the re-issue left a grant on an object it removed"
     assert not tenant.bucket_exists()
+
+
+def _a_store_that_will_not_delete_a_tag(source_location: str, tag: str, *, storage_options: StorageOptions) -> bool:
+    raise OSError(f"the store did not answer the delete of {tag} on {source_location}")
+
+
+def test_a_cascade_that_cannot_delete_a_clones_tag_keeps_the_clones_location(tenant: _Tenant, moto_url: str) -> None:
+    """A cascade keeping its bucket ends what the catalog promised a clone before it frees the clone's location, as the
+    deregister door does (ADR 0198 §1): a tag the store will not delete leaves the location held, so no clone registered
+    there next takes it while the old tag stands."""
+    tenant.bind("bronze")
+    tenant.create_table("bronze$src")
+    key = {"aws_endpoint": moto_url, "aws_access_key_id": "test", "aws_secret_access_key": "test", "aws_region": "us-east-1", "aws_allow_http": "true"}
+    source = lance.dataset(tenant.client.post("/v1/table/bronze$src/describe", json={}).json()["location"], storage_options=key)
+    clone = f"s3://{tenant.warehouse}/silver"
+    source.shallow_clone(clone, source.version, storage_options=key)
+    assert tenant.client.post("/v1/table/bronze$silver/register", json={"location": "silver"}).status_code == 200
+    tenant.monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
+
+    ended = tenant.client.delete(f"/management/v1/warehouses/{tenant.warehouse}", params={"cascade": "true"})
+
+    settings = get_settings()
+    held = location_claims.holder(location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options()), clone)
+    detached = tenant.client.post("/v1/table/bronze$silver/describe", json={}).status_code
+    assert (ended.status_code, ended.json().get("code"), detached) == (503, 17, 404), ended.text
+    assert held is not None and held.table == "bronze$silver", "the clone's location was freed with its tag still standing"

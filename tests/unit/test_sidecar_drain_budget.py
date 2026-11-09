@@ -98,3 +98,20 @@ def test_the_grace_period_budgets_the_sidecar_drain() -> None:
 
     # preStop + the sidecar's own drain + a buffer must still fit, or the budget is nominal.
     assert grace >= pre_stop + block + 5, f"grace={grace}s does not cover preStop={pre_stop}s + sidecar block={block}s + a 5s buffer"
+
+
+def test_the_maintenance_sidecar_outlives_the_workers_drain() -> None:
+    """Maintenance's worker lets its running pass finish for `maintenance.queue.drainSeconds` after uvicorn's wait, and a
+    pass publishes through the sidecar until it ends: this pod's sidecar blocks its shutdown until preStop, uvicorn's
+    bound and that drain have all run, and still ends before the pod's grace does."""
+    from test_invariants import _rendered_docs  # noqa: PLC0415
+
+    maintenance = next(doc for doc in _rendered_docs() if doc.get("kind") == "Deployment" and doc["metadata"]["name"].endswith("-maintenance"))
+    pod = maintenance["spec"]["template"]
+    container = pod["spec"]["containers"][0]
+    env = {entry["name"]: entry.get("value") for entry in container["env"]}
+    pre_stop = int(" ".join(container["lifecycle"]["preStop"]["exec"]["command"]).rsplit(" ", 1)[-1])
+    uvicorn_bound = next(int(arg.rsplit("=", 1)[-1]) for arg in container["args"] if arg.startswith("--timeout-graceful-shutdown="))
+    block = int(pod["metadata"]["annotations"][BLOCK].rstrip("s"))
+
+    assert pre_stop + uvicorn_bound + int(env["MAINTENANCE_DRAIN_SECONDS"]) <= block < pod["spec"]["terminationGracePeriodSeconds"]

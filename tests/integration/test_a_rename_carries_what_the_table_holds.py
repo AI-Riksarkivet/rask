@@ -33,9 +33,9 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.maintenance_due import CompactionDue, DueRecord
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services.due import table_ids
 from maintenance.services.naming import policy_owners
-from maintenance.services.plan import PlanContext, load_policies, resolve_plan
+from maintenance.services.plan import resolve_plan
+from maintenance.services.table_pass import read_for
 from tests.integration.openfga_grants import TupleStore, act_as
 
 
@@ -110,11 +110,14 @@ def test_a_rename_keeps_the_tables_protection_and_policy_and_writes_no_record(re
     assert _protected(real_ns_client, "db$dst"), "the renamed table arrived unprotected"
     assert _ok(real_ns_client, "/management/v1/table/db$dst/policy/describe")["retention_days"] == 7
     settings = MaintenanceSettings.model_validate({"MAINTENANCE_POLICY_ROOT": str(tmp_path), "MAINTENANCE_CONTROL_ROOT": str(tmp_path)})
-    named = table_ids({str(tmp_path)}, StorageOptions())
-    owners = policy_owners(named, "db$dst", claims=location_claims.ClaimStore(control_root=str(tmp_path)))
+    claims = location_claims.ClaimStore(control_root=str(tmp_path))
+    held = location_claims.holder(claims, location)
+    assert held is not None, "no claim holds the renamed table's location"
+    readings = read_for(location, held, settings, now=datetime.now(UTC))
+    assert readings is not None, "maintenance cannot read what a pass on the renamed table reads"
+    owners = policy_owners(readings.table_ids, "db$dst", claims=claims)
     assert owners is not None, "maintenance reads no uuid for the renamed table"
-    context = PlanContext(policies=load_policies(settings, StorageOptions()), now=datetime.now(UTC), older_than=timedelta(days=30))
-    plan = resolve_plan(location, context=context, owners=owners)
+    plan = resolve_plan(location, context=readings.context, owners=owners)
     assert (plan.policy or {}).get("uuid") == minted, f"maintenance resolves another policy for the renamed table: {plan.policy}"
     assert plan.older_than == timedelta(days=7)
 

@@ -327,17 +327,24 @@ def staged_manifests(uri: str, storage_options: StorageOptions) -> list[tuple[st
     return staged
 
 
-def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
-    """Remove each manifest staged for a version the ref already holds, once past ``policy.staged_grace`` ([[LH-529]]).
+def lost_staged_manifests(uri: str, storage_options: StorageOptions, *, version: int) -> list[tuple[str, datetime]]:
+    """Each manifest staged under the ref at ``uri`` for a version it already holds (``version`` is its latest), with when
+    it was put: one whose commit lost its version to another, which no later commit can land ([[LH-529]]).
 
     A commit that loses its version to another leaves the manifest it staged: Lance deletes a losing one with the
     committer's own credential, which the write tier does not grant, and keeps one whose outcome it cannot prove
     (`lose_or_retain`, `rust/lance-table/src/io/commit/external_manifest.rs` at v13.0.0). Neither can land once another
     commit holds its version, and each is one more key every open of the table lists. One staged for a later version is
-    a commit still in flight and is kept, and the grace keeps a commit deciding its outcome from losing the file.
+    a commit still in flight, and is not one of these.
     """
-    cutoff = datetime.now(UTC) - policy.staged_grace
-    lost = [path for path, version, modified in staged_manifests(target.uri, target.storage_options) if version <= ds.version and modified <= cutoff]
+    return [(path, modified) for path, staged_for, modified in staged_manifests(uri, storage_options) if staged_for <= version]
+
+
+def _reclaim_staged_manifests(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
+    """Remove each lost staged manifest (:func:`lost_staged_manifests`) once past ``policy.staged_grace``, judged on the
+    pass's clock: the grace keeps a commit still deciding its outcome from losing the file."""
+    cutoff = target.now - policy.staged_grace
+    lost = [path for path, modified in lost_staged_manifests(target.uri, target.storage_options, version=ds.version) if modified <= cutoff]
     delete_objects(target.uri, vend, lost)
     result.staged_manifests_removed = len(lost)
 
@@ -356,13 +363,11 @@ def _versions_due(result: DatasetResult, policy: ExpiryPolicy) -> bool:
     return policy.cleanup_enabled and (result.reclaimable_versions or 0) >= policy.min_reclaimable
 
 
-def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions, policy: ExpiryPolicy) -> None:
-    """Reclaim superseded versions once enough are reclaimable, then the manifests no version will take; tagged versions
-    are EXEMPT.
+def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, policy: ExpiryPolicy) -> None:
+    """Reclaim superseded versions once enough are reclaimable; tagged versions are EXEMPT.
 
     ``error_if_tagged_old_versions=False``: the default RAISES once any tag ages past ``older_than``, and the catalog's
-    long-lived ``published`` tag would then stall reclamation on that dataset forever. The staged manifests go in the same
-    pass because only a pass that reclaims holds a write credential (``sweep._probe_before_vending``).
+    long-lived ``published`` tag would then stall reclamation on that dataset forever.
     """
     if not _versions_due(result, policy):
         log.debug("maintenance_expiry_below_threshold", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
@@ -370,7 +375,6 @@ def _reclaim_versions(ds: lance.LanceDataset, *, result: DatasetResult, target: 
     stats: Any = ds.cleanup_old_versions(older_than=policy.older_than, retain_versions=policy.retain_versions, error_if_tagged_old_versions=False)
     result.old_versions_removed = int(getattr(stats, "old_versions", 0))
     result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
-    _reclaim_staged_manifests(ds, result=result, target=target, vend=vend, policy=policy)
 
 
 def _reclaim_data_directories(ds: lance.LanceDataset, *, result: DatasetResult, target: ExpiryTarget, vend: StorageOptions) -> None:
@@ -444,8 +448,11 @@ def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy) -> DatasetResult
                 log.info("maintenance_reclaim_awaits_its_vend", extra={"uri": result.uri, "reclaimable": result.reclaimable_versions})
             return result
         with _history_held(result, target, policy):
-            _reclaim_versions(opened.ds, result=result, target=target, vend=vend, policy=policy)
+            _reclaim_versions(opened.ds, result=result, policy=policy)
             _reclaim_data_directories(opened.ds, result=result, target=target, vend=vend)
+        # Whether or not any version is due: a lost staged manifest is no version's, so no ref's fence guards it, and a
+        # pass that left it would find the table due again at once.
+        _reclaim_staged_manifests(opened.ds, result=result, target=target, vend=vend, policy=policy)
     except HistoryFencedError as exc:
         log.info("maintenance_history_fenced", extra={"uri": result.uri, "table_id": result.table_id, "reason": str(exc)})
         result.skipped = HISTORY_FENCED

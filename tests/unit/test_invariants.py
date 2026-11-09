@@ -284,33 +284,89 @@ def test_a_values_file_naming_what_the_chart_does_not_declare_fails_the_render(t
 
 
 def _render_refusal(*flags: str) -> str | None:
-    """The message the render refuses ``flags`` with, or ``None`` when it renders."""
+    """The message the render refuses ``flags`` with, a template's own or the values schema's, or ``None`` when it renders."""
     try:
         chart_render.render_text(*flags)
     except subprocess.CalledProcessError as refused:
-        found = re.search(r"execution error at \([^)]*\): (.+)", refused.stderr)
+        found = re.search(r"execution error at \([^)]*\): (.+)", refused.stderr) or re.search(r"- (at '[^']+': .+)", refused.stderr)
         return found.group(1).strip() if found else refused.stderr
     return None
 
 
+_SCHEDULE = "^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$"
+
+
 @pytest.mark.parametrize(
-    ("heartbeat", "refusal"),
+    ("value", "refusal"),
     [
-        pytest.param(30, None, id="half-the-ack-wait"),
+        pytest.param("heartbeatSeconds=30", None, id="a-heartbeat-at-half-the-ack-wait"),
         pytest.param(
-            31,
+            "heartbeatSeconds=31",
             "maintenance.queue.heartbeatSeconds (31) is past half of ackWaitSeconds (60): a heartbeat late once hands a running task to another replica",
-            id="past-half",
+            id="a-heartbeat-past-half-the-ack-wait",
+        ),
+        pytest.param("maxDeliver=null", "maintenance.queue.maxDeliver is required", id="no-delivery-bound"),
+        pytest.param("drainSeconds=104", None, id="a-drain-the-grace-holds"),
+        pytest.param(
+            "drainSeconds=105",
+            "maintenance.queue.drainSeconds (105) is not inside the 105 s the pod's grace leaves after preStop and the teardown: a stopping replica "
+            "would be killed with its pass still running",
+            id="a-drain-the-grace-cannot-hold",
+        ),
+        pytest.param("maxPassSeconds=10", "at '/maintenance/queue/maxPassSeconds': minimum: got 10, want 60", id="a-pass-bound-the-worker-refuses"),
+        pytest.param("ackWaitSeconds=2", "at '/maintenance/queue/ackWaitSeconds': minimum: got 2, want 3", id="an-ack-wait-no-heartbeat-fits-in"),
+        pytest.param(
+            "auditSchedule=@every 30m",
+            f"at '/maintenance/queue/auditSchedule': '@every 30m' does not match pattern '{_SCHEDULE}'",
+            id="an-interval-each-reassertion-would-restart",
+        ),
+        pytest.param(
+            "auditSchedule=bogus", f"at '/maintenance/queue/auditSchedule': 'bogus' does not match pattern '{_SCHEDULE}'", id="a-schedule-nats-refuses"
         ),
     ],
 )
-def test_a_heartbeat_past_half_the_ack_wait_fails_the_render(heartbeat: int, refusal: str | None) -> None:
-    """[[LH-494]]: a running task stays with its worker only while its in-progress heartbeat reaches the broker inside the
-    consumer's ack wait, and a heartbeat that comes late once hands the task to another replica beneath the pass. So the
-    render refuses a heartbeat past half the ack wait, naming both values."""
-    flags = (*chart_render.DEFAULT_ARGS, "--set", "maintenance.queue.ackWaitSeconds=60", "--set", f"maintenance.queue.heartbeatSeconds={heartbeat}")
+def test_a_queue_value_the_worker_cannot_run_with_fails_the_render(value: str, refusal: str | None) -> None:
+    """[[LH-494]]: the worker's queue values are rendered into its settings and into the consumers the stream Job declares,
+    and one the worker cannot run with must fail the render rather than the pods. A running task stays with its worker only
+    while its heartbeat reaches the broker inside the ack wait, so the render refuses a heartbeat past half of it; an unset
+    delivery bound would declare a consumer of one delivery; a drain the pod's grace cannot hold kills a replica with its
+    pass still running; and the schema holds each value to the worker's own bound (an ack wait under 3 s leaves no heartbeat
+    the worker accepts) and each schedule to a form nats-server takes (a six-field cron: 2.15.2 refuses a five-field one,
+    10189) and that the worker's reassertion of it every 15 minutes cannot restart, which an interval's might."""
+    assert _render_refusal(*chart_render.DEFAULT_ARGS, "--set", f"maintenance.queue.{value}") == refusal
 
-    assert _render_refusal(*flags) == refusal
+
+def test_each_queue_consumer_is_declared_one_delivery_past_the_workers_bound() -> None:
+    """[[LH-494]]: the worker ends a task, and a store event, on its last delivery (`maintenance.queue.maxDeliver`), and the
+    consumer allows one more, on which a message whose worker died every time is ended unhandled. A consumer declared
+    without a bound would deliver such a message for ever; the fired schedules are moved, never run, so theirs has none."""
+    docs = chart_render.render(*chart_render.DEFAULT_ARGS, "--set", "maintenance.queue.maxDeliver=7")
+    job = next(doc for doc in docs if doc.get("kind") == "Job" and "-nats-stream-" in doc["metadata"]["name"])
+    script = job["spec"]["template"]["spec"]["containers"][0]["command"][2]
+    consumers = [json.loads(declared) for declared in re.findall(r"printf '%s' '(\{\"durable_name\".*?\})' >", script)]
+
+    assert {consumer["durable_name"]: consumer["max_deliver"] for consumer in consumers} == {
+        "maintenance-worker": 8,
+        "maintenance-due": -1,
+        "maintenance-store-events": 8,
+    }
+
+
+def test_the_worker_reads_the_bus_credential_the_user_table_issues_whatever_its_app_id() -> None:
+    """[[LH-494]]: the worker's bus user is `maintenance-worker` in `nats.auth.users`, and the store issues its credential
+    under that name. An install that renames maintenance's Dapr app id must still read that secret, or the worker finds
+    none at its start and fails closed."""
+    renamed = (
+        "--set",
+        "maintenance.daprAppId=maint",
+        "--set-json",
+        'nats.auth.users.maint={"publish":["lineage.events.v1","probe.maint"],"subscribe":["_INBOX.>"]}',
+    )
+    docs = chart_render.render(*chart_render.DEFAULT_ARGS, *renamed)
+    maintenance = next(doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"].endswith("-maintenance"))
+    env = {entry["name"]: entry.get("value") for container in maintenance["spec"]["template"]["spec"]["containers"] for entry in container.get("env", [])}
+
+    assert env["MAINTENANCE_NATS_CREDENTIALS_SECRET"] == "nats-user-maintenance-worker"
 
 
 def test_no_env_var_is_rendered_twice_on_any_workload() -> None:

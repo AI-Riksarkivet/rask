@@ -52,7 +52,8 @@ import pytest
 from fastapi import Body, FastAPI, Response
 from lance.fragment import write_fragments
 
-from tests.integration.lineage_app import free_port, live_catalog, live_lineage, serve
+from tests.integration.lineage_app import live_catalog, live_lineage, serve
+from tests.loopback import free_port
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

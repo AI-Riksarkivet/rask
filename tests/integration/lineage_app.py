@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import socket
 import threading
 import time
 from collections.abc import AsyncGenerator, Generator, Mapping
@@ -77,7 +76,7 @@ def live_catalog(root: Path, monkeypatch: pytest.MonkeyPatch, **env: str) -> Gen
 def live_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, *, port: int = 0) -> Generator[str]:
     """Lineage's own app and lifespan under a live uvicorn, its store the catalog at ``catalog_url``; yields its base URL.
 
-    ``port`` is for a catalog that must be told where lineage listens before lineage starts (`free_port`).
+    ``port`` is for a catalog that must be told where lineage listens before lineage starts (`tests.loopback.free_port`).
     """
     monkeypatch.setenv("LINEAGE_CATALOG_URL", catalog_url)
     from lineage.core.config import get_settings
@@ -90,13 +89,6 @@ def live_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, *, port: int
             yield url
     finally:
         get_settings.cache_clear()
-
-
-def free_port() -> int:
-    """A port nothing listens on now, for a server another must be configured to reach before it starts."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 @contextmanager

@@ -48,7 +48,7 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 import lakehouse.storage as storage
-from lakehouse import base_registry, clone_sources
+from lakehouse import base_registry, clone_sources, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_refs import normalise
 from lakehouse.features import manifest_base_path_refs
@@ -56,10 +56,12 @@ from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage import S3Client
+from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge, table_pass
 from maintenance.services.due import TableIds
 from maintenance.services.expiry import DatasetResult
+from maintenance.services.naming import claim_store, policy_owners
 from maintenance.services.plan import PlanContext
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 
@@ -234,11 +236,14 @@ def _maintained_through(client: TestClient, estate: _Estate, token_file: Path) -
     # Every version but the current one reclaimable, and one enough to expire: the pass asks for a credential.
     settings = estate.maintenance(catalog_url="http://catalog.test", catalog_identity_token_file=str(token_file), min_versions_to_expire=1)
     now = datetime.now(UTC)
+    # The namespace's uuid as its `__manifest` row holds it, read here through the catalog's describe door; the
+    # table's is in the claim its create took (ADR 0173 §8).
+    ids = TableIds(by_location={normalise(estate.attacker): "db$attacker"}, namespace_uuids={"db": estate.namespace_uuid("db")})
     readings = table_pass.PassReadings(
-        # The namespace's uuid as its `__manifest` row holds it, read here through the catalog's describe door; the
-        # table's is in the claim its create took (ADR 0173 §8).
-        table_ids=TableIds(by_location={normalise(estate.attacker): "db$attacker"}, namespace_uuids={"db": estate.namespace_uuid("db")}),
+        table_ids=ids,
         context=PlanContext(policies=[], now=now, older_than=timedelta(0)),
+        table="db$attacker",
+        owners=policy_owners(ids, "db$attacker", claims=claim_store(settings)),
     )
     # Asked only when the pass finds something to write; a refusal's `vend_denied` is the door's own answer.
     with respx.mock(base_url="http://catalog.test", assert_all_called=False) as catalog:
@@ -400,6 +405,62 @@ def test_a_registered_clone_reads_after_its_source_is_cleaned(estate: _Estate) -
     assert _reads_cold(clone, estate.key.in_clear()) == _CLONED_IDS, "the tag did not keep the version the clone reads"
 
 
+def _cleaned_at_age_zero(estate: _Estate, source: str) -> None:
+    """Overwrite ``source`` and reclaim every version nothing keeps, as its maintenance would once they aged out."""
+    lance.write_dataset(_MINE, source, mode="overwrite", storage_options=estate.key.in_clear())
+    estate.open(source).cleanup_old_versions(older_than=timedelta(0), delete_unverified=True, error_if_tagged_old_versions=False)
+
+
+def test_a_clone_of_a_clone_reads_after_the_clone_between_is_deregistered(estate: _Estate) -> None:
+    """A clone of a clone reads the first source's files where they are, so its registration tags that source too: the
+    end of the clone between them releases only that clone's own tag."""
+    bronze, silver = _registered_clone(estate)
+    gold = f"{estate.root}/gold"
+    between = estate.open(silver)
+    between.shallow_clone(gold, between.version, storage_options=estate.key.in_clear())
+    assert estate.client.post("/v1/table/db$gold/register", json={"location": "gold"}).status_code == 200
+    assert estate.client.post("/v1/table/db$silver/deregister", json={}).status_code == 200
+
+    _cleaned_at_age_zero(estate, bronze)
+
+    assert _reads_cold(gold, estate.key.in_clear()) == _CLONED_IDS, "the first source kept no version for the clone of its clone"
+
+
+def test_a_clone_registered_again_once_its_first_version_is_gone_keeps_its_source(estate: _Estate) -> None:
+    """A clone's own expiry removes the version whose transaction names its source, so a later registration of it tags
+    the source from the catalog's record of the first: it is never governed with no tag."""
+    bronze, clone = _registered_clone(estate)
+    for _ in range(2):
+        estate.open(clone).insert(_MINE)
+    estate.open(clone).cleanup_old_versions(older_than=timedelta(0), delete_unverified=True, error_if_tagged_old_versions=False)
+    held = _reads_cold(clone, estate.key.in_clear())
+    assert estate.client.post("/v1/table/db$silver/deregister", json={}).status_code == 200
+    registered = estate.client.post("/v1/table/db$silver/register", json={"location": "silver"})
+
+    _cleaned_at_age_zero(estate, bronze)
+
+    assert registered.status_code == 200, registered.text
+    assert _reads_cold(clone, estate.key.in_clear()) == held, "the clone was registered again with no tag on its source"
+
+
+def test_a_clone_of_a_source_branch_is_registered_and_keeps_the_branch_version(estate: _Estate) -> None:
+    """A clone made from a source's branch names the branch's directory, inside the source's root: its registration tags
+    the branch version on the source table, and the clone reads after the source is cleaned."""
+    bronze = estate.create("db$bronze", fragments=3)
+    clone = f"{estate.root}/silver"
+    estate.open(bronze).create_branch("exp", estate.open(bronze).version, storage_options=estate.key.in_clear())
+    branch = estate.open(bronze).checkout_version(("exp", None))
+    branch.shallow_clone(clone, ("exp", branch.version), storage_options=estate.key.in_clear())
+
+    registered = estate.client.post("/v1/table/db$silver/register", json={"location": "silver"})
+
+    assert registered.status_code == 200, registered.text
+    tag = estate.open(bronze).tags.list()[clone_sources.tag_of(clone)]
+    assert (tag["branch"], tag["version"]) == ("exp", branch.version)
+    _cleaned_at_age_zero(estate, bronze)
+    assert _reads_cold(clone, estate.key.in_clear()) == _CLONED_IDS
+
+
 def test_a_source_a_registered_clone_reads_is_not_destroyed(estate: _Estate) -> None:
     """A drop destroying a table's bytes is refused while a registered clone reads through them."""
     _, clone = _registered_clone(estate)
@@ -420,6 +481,98 @@ def test_a_clones_end_frees_its_source(estate: _Estate, purge: str, tags: int) -
 
     assert dropped.status_code == 200, dropped.text
     assert len([tag for tag in estate.open(bronze).tags.list() if tag.startswith(clone_sources.TAG_PREFIX)]) == tags
+
+
+def _a_store_that_will_not_delete_a_tag(source_location: str, tag: str, *, storage_options: StorageOptions) -> bool:
+    raise OSError(f"the store did not answer the delete of {tag} on {source_location}")
+
+
+def test_a_clone_whose_end_cannot_delete_its_tag_keeps_its_location(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A clone's end deletes its tag on the source before it frees the clone's location (ADR 0198 §1): a tag the store
+    will not delete leaves the location held, so no clone registered there next takes it while the old tag stands."""
+    _, clone = _registered_clone(estate)
+    monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
+
+    ended = estate.client.post("/v1/table/db$silver/deregister", json={})
+
+    held = location_claims.holder(location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key), clone)
+    answered = (ended.status_code, ended.headers["content-type"], ended.json().get("code"), ended.json().get("detached"))
+    assert answered == (503, "application/problem+json", 17, True), ended.text
+    assert held is not None and held.table == "db$silver", "the clone's location was freed with its tag still standing"
+
+
+def test_a_trashed_clone_whose_end_cannot_delete_its_tag_keeps_its_location(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The end of a clone in the trash forgets its base record, and with it its tag on the source, before it frees the
+    clone's location: a tag the store will not delete leaves the location held, as at the deregister door."""
+    _, clone = _registered_clone(estate)
+    assert estate.client.post("/v1/table/db$silver/drop", json={}).status_code == 200
+    record = trash.named(estate.root, estate.key, "db$silver", kind="table")[0]
+    monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
+
+    with pytest.raises(OSError, match="did not answer the delete"):
+        trash.end(estate.root, estate.key, record, kind="table", uuid=str(trash.object_uuid(record)))
+
+    held = location_claims.holder(location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key), clone)
+    assert held is not None and held.table == "db$silver", "the clone's location was freed with its tag still standing"
+
+
+def test_a_late_end_of_a_former_clone_keeps_the_tag_of_the_clone_there_now(estate: _Estate) -> None:
+    """A clone's tag is named for its location, so a clone registered there since holds a tag of the same name: an end of
+    the table that held the location before, landing late, leaves that tag while the location's claim names the clone."""
+    bronze, clone = _registered_clone(estate)
+
+    released = base_registry.release_clone_sources(estate.registry, clone, holder="db$gone")
+
+    assert (released, clone_sources.tag_of(clone) in estate.open(bronze).tags.list()) == ([], True)
+
+
+def test_a_late_end_of_a_former_clone_keeps_the_record_of_the_clone_there_now(estate: _Estate) -> None:
+    """The base record is keyed by the location as the tag is named for it: a late end of the table that held the
+    location before leaves the record of the clone the claim names now, which is what sanctions that clone's source and
+    names the tags its own end deletes."""
+    _, clone = _registered_clone(estate)
+
+    forgotten = base_registry.forget_base_record(estate.registry, clone, table="db$gone")
+
+    assert (forgotten, base_registry.read_base_record(estate.registry, clone) is not None) == (False, True)
+
+
+def test_a_register_undone_with_a_tag_the_store_keeps_leaves_the_clones_location_held(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A registration whose ownership seed fails is undone tags first, as every other end of a clone is: a tag the store
+    will not delete leaves the location held, so no clone registered there next takes it while that tag stands."""
+    from catalog.api import fga_deps
+
+    bronze = estate.create("db$bronze", fragments=3)
+    clone = f"{estate.root}/silver"
+    source = estate.open(bronze)
+    source.shallow_clone(clone, source.version, storage_options=estate.key.in_clear())
+
+    async def _no_store(*_args: object, **_kwargs: object) -> None:
+        raise OSError("the authorization store did not take the grant")
+
+    monkeypatch.setattr(fga_deps, "seed_ownership", _no_store)
+    monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
+
+    with pytest.raises(OSError, match="did not take the grant"):
+        estate.client.post("/v1/table/db$silver/register", json={"location": "silver"})
+
+    held = location_claims.holder(location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key), clone)
+    assert held is not None and held.table == "db$silver", "the undone registration freed the location with its tag still standing"
+
+
+def test_a_location_whose_holder_is_gone_is_registered_under_another_name(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A claim whose table no longer resolves to the location (an end that released nothing) is taken over once its
+    lease lapses, by whichever name registers there next: the location is not kept for the name that left it."""
+    uri = f"{estate.root}/left"
+    lance.write_dataset(_MINE, uri, storage_options=estate.key.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
+    claims = location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key)
+    location_claims.take(claims, uri, "db$gone", ["db", "gone"], is_gone=lambda _claim: True, uuid=str(uuid.uuid4()))
+    monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
+
+    registered = estate.client.post("/v1/table/db$found/register", json={"location": "left"})
+
+    held = location_claims.holder(claims, uri)
+    assert (registered.status_code, held.table if held is not None else None) == (200, "db$found"), registered.text
 
 
 def _registered(estate: _Estate, table: str, location: str) -> str:

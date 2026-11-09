@@ -181,7 +181,31 @@ places and two defects in the fixes themselves. Each is fixed with the first aud
   answered a table registered again at its own location 400; it reaches the backend's `TableAlreadyExists` (409) and the
   converge path again.
 
-Not fixed here, and stated: the hourly audit and each pass's listing still grow with the estate and the table; store
+### The review of that change (2026-11-09)
+
+Two fresh reviewers read the change before it was committed. What they found is fixed in it:
+
+- **Registering a clone asks `can_read_data` and `can_create_tag` on each source, in that order.** The owner's decision
+  put the tag door's rung on the door, and the change had replaced the read check with it. In the model
+  `can_create_tag` is `owner or publisher`, and a publisher is no reader: it moves a pointer. A publisher who could not
+  read a table registered a clone of it and, as the clone's owner, read its rows (shown on a real OpenFGA: 200). A caller
+  holding nothing on a source is refused `can_read_data required on <root>` whether a governed table is there or not.
+- **The sources are asked in the order the clone reads through them.** A source no table holds, behind a governed one,
+  was refused first, which told a caller with no rights on the governed one what it is a clone of.
+- **The register door's own undo deletes the clone's tags before it frees the location**, as every other end does, and
+  **a late end forgets no record a newer holder of the location owns**: the base record is keyed by the location, as the
+  tag is named for it.
+- **A location whose holder is gone is registered under another name again.** The check added ahead of the backend call
+  refused any location another name's claim stood on, standing table or not, so a claim an end left behind kept the
+  location for that name for good.
+- **A pass reads the uuids its table's policy is kept under once.** They were read to find the policy and again to name
+  the dataset; a claim read that failed the first time and answered the second ran the pass with no policy read, under
+  the defaults (shown over moto).
+- **The bucket's owner is read off the control root and the project's policy off the policy root.** Both were read from
+  the policy root, so a deployment keeping them apart lost every project-level hold.
+
+Not fixed here, and stated: the hourly audit and each pass's listing still grow with the estate and the table, and a
+pass's read of its bucket's `__manifest` is one filtered scan whose bytes grow with the bucket's rows; store
 events in production rest on an attestation nothing checks; the queue has no operator-visible task history, dead letter
 or cancel; and four of the worker's recovery paths (a refused enqueue of a fired schedule, a refused hold of an ended
 task's next try, a fetch and a settle the bus fails) have no test, since each needs one request to fail on a real bus

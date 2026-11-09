@@ -28,7 +28,8 @@ import pytest
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from tests.integration.lineage_app import free_port, live_catalog, live_lineage
+from tests.integration.lineage_app import live_catalog, live_lineage
+from tests.loopback import free_port
 
 
 _ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

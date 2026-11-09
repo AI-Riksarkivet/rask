@@ -242,7 +242,7 @@ def clear(control_root: str, storage_options: StorageOptions, uuid: str, *, kind
 
 def end(control_root: str, storage_options: StorageOptions, record: dict[str, Any], *, kind: TrashKind, uuid: str) -> None:
     """End what the trashed object ``uuid`` names kept for an undrop besides its grants: the records it holds under its
-    uuid (:func:`lakehouse.object_records.end_object_records`), a table's claim and base record, then ``record`` itself.
+    uuid (:func:`lakehouse.object_records.end_object_records`), a table's base record and claim, then ``record`` itself.
 
     The record goes last: it is all that still names what the object holds, so a failure before it is cleared leaves it
     for the next attempt to end. Every step is idempotent. The base record is forgotten with its data directories'
@@ -255,8 +255,10 @@ def end(control_root: str, storage_options: StorageOptions, record: dict[str, An
     """
     object_records.end_object_records(control_root, storage_options, kind, uuid)
     if location := location_of(record):
-        location_claims.release(location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location, name_of(record))
+        # The base record first: forgetting it deletes the tag a clone holds on each source, and one the store will not
+        # delete must leave the location held, or a clone registered there next would hold a tag of the same name.
         forget_base_record(BaseRegistry(control_root=control_root, storage_options=storage_options), location, table=name_of(record))
+        location_claims.release(location_claims.ClaimStore(control_root=control_root, storage_options=storage_options), location, name_of(record))
     clear(control_root, storage_options, uuid, kind=kind)
 
 

@@ -48,12 +48,10 @@ pytestmark = [
     ),
 ]
 
-#: The version the test writes up to. Maintenance's write-event lane evaluates a table at its first write and again once
-#: ten more versions have landed (`MAINTENANCE_EVENT_MIN_VERSIONS`), and expires only once twenty are reclaimable
-#: (`maintenance.minVersionsToExpire`). Under a policy keeping one version, an evaluation at version 21 or later finds
-#: twenty, and by version 32 one has run whichever version the lane first evaluated. The lane expires only against a
-#: clone list younger than `MAINTENANCE_CLONE_LIST_MAX_AGE_SECONDS` (3600 s); the sweep writes one every
-#: `maintenance.schedule` (1800 s), and the e2e-stack lane runs the first sweep itself.
+#: The version the test writes up to. A table's pass expires versions only once twenty are reclaimable
+#: (`maintenance.minVersionsToExpire`), so under a policy keeping one version a pass that reads the table at version 21
+#: or later expires every older one. The first commit holds the table's pass the commit delay out, and a pass covers
+#: every commit before it, so the pass that reads the last write runs within `scenario.COMMIT_PASS_SECONDS` of it.
 LAST_VERSION = 32
 
 
@@ -82,13 +80,13 @@ def _ids(client: lance_namespace.LanceNamespace, table_id: list[str]) -> list[in
 
 
 def _versions_once_gone(client: lance_namespace.LanceNamespace, table_id: list[str], gone: set[int]) -> set[int]:
-    """The table's versions, read until none of ``gone`` is among them or the settle window has passed."""
-    deadline = time.monotonic() + scenario.SETTLE_SECONDS
+    """The table's versions, read until none of ``gone`` is among them or a commit's pass has had its time."""
+    deadline = time.monotonic() + scenario.COMMIT_PASS_SECONDS
     while True:
         versions = {int(listed["version"]) for listed in lance.dataset(namespace_client=client, table_id=table_id).versions()}
         if gone.isdisjoint(versions) or time.monotonic() > deadline:
             return versions
-        time.sleep(2)
+        time.sleep(5)
 
 
 @pytest.mark.parametrize(

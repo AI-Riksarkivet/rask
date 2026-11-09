@@ -54,6 +54,7 @@ Run by `dagger call nats-auth` (`make nats-auth`), beside the bus's permission p
 from __future__ import annotations
 
 import asyncio
+import base64
 import inspect
 import json
 import os
@@ -63,6 +64,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -73,13 +75,15 @@ from nats.aio.msg import Msg
 from nats_auth_rig import VALUES_ENV, Broker, Client, Credential, Link, Mint, Permissions, Tools, Violation, issue, mint, run_stream_job, violations
 from pydantic import SecretStr
 
-from lakehouse import store_session
+from lakehouse import location_claims, store_session
 from lakehouse.control_emit import NoopControlEmitter
 from lakehouse.governed.store_credential import S3KeyPair
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
+from maintenance.services import queue as worker_queue
 from maintenance.services import tasks
-from maintenance.services.queue import INBOX_PREFIX, SCHEDULES_STREAM, TASK_CONSUMER, TASKS_STREAM, Task, TaskQueue, Worker
+from maintenance.services.queue import INBOX_PREFIX, SCHEDULES_STREAM, STORE_EVENTS_STREAM, TASK_CONSUMER, TASKS_STREAM, Task, TaskQueue, Worker
+from maintenance.services.store_events import StoreEvents
 from tests.unit.chart_render import DEFAULT_ARGS, nats_users, render
 
 
@@ -87,6 +91,8 @@ pytestmark = pytest.mark.nats_auth
 
 REPO = Path(__file__).resolve().parents[2]
 _WORKER = "maintenance-worker"
+#: The store's own bus user, which publishes each object write on `store.events` (`deploy/fixtures/rustfs`).
+_STORE = "object-store"
 #: The test's own user, every JetStream call granted: it reads and purges what the worker's schedules leave on the bus,
 #: and sees and replays the workers' pulls.
 _RIG = "rask-test-rig"
@@ -283,8 +289,8 @@ def _declare_the_queue(tools: Tools, docs: tuple[dict[str, Any], ...], broker: B
 
 
 def _the_bus(tmp_path: Path, extra: dict[str, Permissions] | None = None) -> tuple[Tools, tuple[dict[str, Any], ...], Mint, Broker]:
-    """The bus as the chart declares it, at the lane's short timings: `admin` and the worker's user minted with the grants
-    the render issues (and ``extra`` users the test needs for itself), and the three-node cluster started."""
+    """The bus as the chart declares it, at the lane's short timings: `admin`, the worker's user and the store's minted with
+    the grants the render issues (and ``extra`` users the test needs for itself), and the three-node cluster started."""
     tools = Tools.from_env(os.environ)
     values = Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
     queue_values = (
@@ -293,10 +299,9 @@ def _the_bus(tmp_path: Path, extra: dict[str, Permissions] | None = None) -> tup
     )
     docs = render(*DEFAULT_ARGS, "-f", str(values), *queue_values)
     issued = nats_users(docs)
-    table = {
-        user: Permissions(publish=tuple(sorted(issued[user][0])), subscribe=tuple(sorted(issued[user][1]))) for user in ("admin", _WORKER) if user in issued
-    }
-    assert set(table) == {"admin", _WORKER}, f"the render with {values} issues no {sorted({'admin', _WORKER} - set(table))}"
+    rendered = {"admin", _WORKER, _STORE}
+    table = {user: Permissions(publish=tuple(sorted(issued[user][0])), subscribe=tuple(sorted(issued[user][1]))) for user in rendered if user in issued}
+    assert set(table) == rendered, f"the render with {values} issues no {sorted(rendered - set(table))}"
     mint_ = mint(tools.nsc, {**table, **(extra or {})}, tmp_path / "nsc")
     broker = Broker(tools.nats_server, mint_, tmp_path / "broker")
     broker.start()
@@ -666,3 +671,400 @@ async def test_a_worker_whose_credential_the_bus_takes_no_longer_ends_itself(tmp
                 await process.wait()
         await link.stop()
         broker.stop()
+
+
+def _schedule_of(answer: dict[str, Any] | None) -> str | None:
+    """The `Nats-Schedule` header of a message a `STREAM.MSG.GET` answered with, or None when it found none."""
+    stored = (answer or {}).get("message")
+    if not stored or not stored.get("hdrs"):
+        return None
+    for line in base64.b64decode(stored["hdrs"]).decode().split("\r\n"):
+        name, _, value = line.partition(":")
+        if name == "Nats-Schedule":
+            return value.strip()
+    return None
+
+
+async def _is_held(read: Callable[[], Awaitable[datetime | None]]) -> bool:
+    return await read() is not None
+
+
+def _held_at(answer: dict[str, Any] | None) -> datetime | None:
+    """When the `@at` schedule a `STREAM.MSG.GET` answered with fires, or None when it found none."""
+    schedule = _schedule_of(answer)
+    return datetime.strptime(schedule.removeprefix("@at "), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC) if schedule else None
+
+
+def _write_event(key: str, *, bucket: object = "b") -> bytes:
+    """A store's event of one object write, in S3's record shape; a ``bucket`` that is no name is sent as it is."""
+    named = {"name": bucket} if isinstance(bucket, str) else bucket
+    return json.dumps({"Records": [{"eventName": "s3:ObjectCreated:Put", "s3": {"bucket": named, "object": {"key": key}}}]}).encode()
+
+
+async def _never_run(task: Task) -> None:
+    raise AssertionError(f"a store-event worker ran the task {task}")
+
+
+@pytest.mark.asyncio
+async def test_a_worker_settles_each_store_event_by_what_its_handling_found(tmp_path: Path) -> None:
+    """A store event is acknowledged once its table's pass is held, ended at once when it is no store event, delivered
+    again after a delay when the store refused a claim's read, the delay doubling with each delivery, and ended on its last
+    delivery when the store refuses it on every one. The handling is the service's own
+    (`maintenance.services.store_events.StoreEvents`), on a control root of the test's own, where a claim the store cannot
+    read is a directory standing at its key. The worker ends an event on the third delivery, which the consumer the
+    render declares at `_MAX_DELIVER` allows (one past it)."""
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    control = tmp_path / "control"
+    control.mkdir()
+    settings = MaintenanceSettings(s3_bucket="b", control_root=str(control), commit_pass_delay_seconds=3600)
+    claims = location_claims.ClaimStore(control_root=str(control))
+    for table in ("held", "flaky", "locked"):
+        location_claims.take(claims, f"s3://b/{table}", f"db${table}", ["db", table], is_gone=lambda _claim: False, uuid=table)
+    unreadable_claims = {table: control / location_claims.claim_key(f"s3://b/{table}") for table in ("flaky", "locked")}
+    for claim in unreadable_claims.values():
+        claim.unlink()
+        claim.mkdir()
+    events = {
+        "held": _write_event("held/data/a.lance"),
+        "unreadable": _write_event("held/data/b.lance", bucket=["b"]),
+        "flaky": _write_event("flaky/data/c.lance"),
+        "locked": _write_event("locked/data/d.lance"),
+    }
+    handled: dict[bytes, list[float]] = {body: [] for body in events.values()}
+    queue: TaskQueue | None = None
+    store: Client | None = None
+    rig: Client | None = None
+    loops: list[asyncio.Task[None]] = []
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        queue = await TaskQueue.connect(broker.url, mint_.credentials[_WORKER].creds_file.read_text(), name="store-events")
+        replica = StoreEvents(settings, queue)
+        loop = asyncio.get_running_loop()
+
+        async def handle(body: bytes) -> int:
+            handled[body].append(loop.time())
+            return await replica.hold_passes(body)
+
+        worker = Worker(
+            queue,
+            run=_never_run,
+            ready=lambda: True,
+            heartbeat_seconds=_HEARTBEAT,
+            ack_wait_seconds=_ACK_WAIT,
+            max_deliver=_MAX_DELIVER + 1,
+            max_pass_seconds=600,
+            retry_ended_seconds=3600,
+            store_events=handle,
+        )
+        loops.append(asyncio.create_task(worker.run_store_events()))
+        store = await Client.connect(broker.url, mint_.credentials[_STORE], _STORE)
+        rig = reader = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+        for body in events.values():
+            await store.nc.publish("store.events", body)
+        await store.settle()
+        assert await _until(lambda: len(handled[events["flaky"]]) == 1, 30), f"the event the store refused was never handled: {handled}"
+        unreadable_claims["flaky"].rmdir()
+        location_claims.take(claims, "s3://b/flaky", "db$flaky", ["db", "flaky"], is_gone=lambda _claim: False, uuid="flaky")
+
+        async def settled() -> bool:
+            state = (await reader.request(f"$JS.API.STREAM.INFO.{STORE_EVENTS_STREAM}") or {}).get("state", {})
+            return len(handled[events["flaky"]]) == 2 and len(handled[events["locked"]]) == 3 and state.get("messages") == 0
+
+        assert await _until(settled, 90), f"the store's events were not all settled: {handled}"
+
+        async def follow_up(table: str) -> dict[str, Any] | None:
+            subject = Task(kind="table", uuid=table).follow_up_subject("schedule")
+            return await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": subject})
+
+        held = {table: _held_at(await follow_up(table)) is not None for table in ("held", "flaky", "locked")}
+    finally:
+        try:
+            for running in loops:
+                running.cancel()
+            await asyncio.gather(*loops, return_exceptions=True)
+            for client in (store, rig):
+                if client is not None:
+                    await client.close()
+            if queue is not None:
+                await queue.close()
+        finally:
+            broker.stop()
+
+    locked = handled[events["locked"]]
+    waits = [round(later - earlier) for earlier, later in pairwise(locked)]
+    assert {name: len(handled[body]) for name, body in events.items()} == {"held": 1, "unreadable": 1, "flaky": 2, "locked": 3}
+    assert 10 <= waits[0] < 25 and waits[1] >= 25, f"the refused event came back after {waits} s, not after a doubling retry delay"
+    assert held == {"held": True, "flaky": True, "locked": False}
+
+
+@pytest.mark.asyncio
+async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_delivery_and_an_unreadable_one_ends_at_once(tmp_path: Path) -> None:
+    """A task whose run raises is delivered again after its retry delay, and on its last delivery is ended, its next try
+    held a recheck out; a message on the queue that is no task is ended without running."""
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    worker = mint_.credentials[_WORKER]
+    runs: list[float] = []
+    queue: TaskQueue | None = None
+    writer: Client | None = None
+    rig: Client | None = None
+    loops: list[asyncio.Task[None]] = []
+    ended_at: datetime | None = None
+    held_at: datetime | None = None
+    failing = Task(kind="table", uuid="failing", location="s3://bucket/failing")
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        queue = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="failing")
+        loop = asyncio.get_running_loop()
+
+        async def fails(task: Task) -> None:
+            runs.append(loop.time())
+            raise RuntimeError(f"the store refused the pass of {task.uuid}")
+
+        def ends_its_process(event: str, **extra: object) -> NoReturn:
+            raise AssertionError(f"the worker ended its process: {event} {extra}")
+
+        replica = Worker(
+            queue,
+            run=fails,
+            ready=lambda: True,
+            heartbeat_seconds=_HEARTBEAT,
+            ack_wait_seconds=_ACK_WAIT,
+            max_deliver=_MAX_DELIVER,
+            max_pass_seconds=600,
+            retry_ended_seconds=3600,
+            end_process=ends_its_process,
+        )
+        loops.append(asyncio.create_task(replica.run_tasks()))
+        writer = await Client.connect(broker.url, worker, "garbage", inbox=INBOX_PREFIX)
+        await writer.nc.publish("maintenance.task.table.garbage", b"no task")
+        await writer.settle()
+        assert await queue.enqueue(failing) is True
+        rig = reader = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+
+        async def ended() -> bool:
+            return len(runs) == _MAX_DELIVER and not await queue.held("task", "table")
+
+        assert await _until(ended, 60), f"the failing task was not ended on its last delivery: {len(runs)} runs"
+        ended_at = datetime.now(UTC)
+
+        async def next_try() -> datetime | None:
+            return _held_at(await reader.request(f"$JS.API.STREAM.MSG.GET.{SCHEDULES_STREAM}", {"last_by_subj": failing.subject("schedule")}))
+
+        assert await _until(lambda: _is_held(next_try), 10), "the ended task's next try was never held"
+        held_at = await next_try()
+    finally:
+        try:
+            for running in loops:
+                running.cancel()
+            await asyncio.gather(*loops, return_exceptions=True)
+            for client in (writer, rig):
+                if client is not None:
+                    await client.close()
+            if queue is not None:
+                await queue.close()
+        finally:
+            broker.stop()
+
+    assert 10.0 <= runs[1] - runs[0] < 30.0, f"the failed task came back after {runs[1] - runs[0]:.1f} s, not after its retry delay"
+    assert held_at is not None and abs((held_at - ended_at).total_seconds() - 3600) < 10, f"the ended task's next try is held for {held_at}, not a recheck out"
+
+
+@pytest.mark.asyncio
+async def test_the_audit_and_the_scan_never_run_at_once(tmp_path: Path) -> None:
+    """The audit and the scan each repair the estate from a drift report of their own, so one waits out the other's claim
+    while it runs, on two replicas, and runs once it is done."""
+    tools, docs, mint_, broker = _the_bus(tmp_path)
+    worker = mint_.credentials[_WORKER]
+    runs = _Runs()
+    runs.held[""] = release = asyncio.Event()
+    replicas: list[_Replica] = []
+    lane: TaskQueue | None = None
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
+        for name in ("audit-replica", "scan-replica"):
+            replicas.append(await _Replica.start(broker.url, worker, name, runs, ready=lambda: True))
+        assert await lane.enqueue(Task(kind="audit")) is True
+        assert await lane.enqueue(Task(kind="scan")) is True
+        assert await _until(lambda: len(runs.ran) >= 1, 15), f"neither the audit nor the scan ran: {runs.ran}"
+        # The other's first delivery waits one ack wait for the claim, and comes back after its retry delay: nothing to poll
+        # for while it must not run, and released before its second delivery, which a held claim would give back again.
+        await asyncio.sleep(3 * _ACK_WAIT)
+        beside = list(runs.ran)
+        release.set()
+        assert await _until(lambda: len(runs.ran) == 2, 60), f"the other never ran once the first was done: {runs.ran}"
+    finally:
+        try:
+            for replica in replicas:
+                await replica.stop()
+            if lane is not None:
+                await lane.close()
+        finally:
+            broker.stop()
+    assert len(beside) == 1, f"the audit and the scan ran at once: {beside}"
+
+
+@pytest.mark.asyncio
+async def test_an_audit_the_scan_outlasts_is_given_up_and_is_not_counted_as_a_task_that_ended(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An audit that finds the scan's claim held on every delivery failed at nothing: it leaves the queue on its last
+    delivery without running and without the count the ended-tasks alert reads, and its next firing brings it back."""
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    worker = mint_.credentials[_WORKER]
+    runs = _Runs()
+    runs.held[""] = release = asyncio.Event()
+    ended: list[str] = []
+    monkeypatch.setattr(worker_queue, "record_task_ended", lambda *, kind: ended.append(kind))
+    replicas: list[_Replica] = []
+    lane: TaskQueue | None = None
+    rig: Client | None = None
+    left = False
+    ran: list[tuple[str, str]] = []
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
+        rig = reader = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+        for name in ("scan-replica", "audit-replica"):
+            replicas.append(await _Replica.start(broker.url, worker, name, runs, ready=lambda: True))
+        assert await lane.enqueue(Task(kind="scan")) is True
+        assert await _until(lambda: len(runs.ran) == 1, 15), f"the scan never ran: {runs.ran}"
+        assert await lane.enqueue(Task(kind="audit")) is True
+
+        async def the_audit_left_the_queue() -> bool:
+            answer = await reader.request(f"$JS.API.STREAM.MSG.GET.{TASKS_STREAM}", {"last_by_subj": Task(kind="audit").subject("task")})
+            return answer is not None and "error" in answer
+
+        left = await _until(the_audit_left_the_queue, 120)
+        # Read before the scan is let go: a replica stopped mid-pass leaves its task to the other, which would run it.
+        ran = list(runs.ran)
+    finally:
+        release.set()
+        try:
+            for replica in replicas:
+                await replica.stop()
+            for client in (lane, rig):
+                if client is not None:
+                    await client.close()
+        finally:
+            broker.stop()
+
+    assert left, "the audit was still queued behind the scan's claim after every delivery it had"
+    assert (ended, ran) == ([], [("scan-replica", "")]), f"the audit was counted as ended, or ran beside the scan: {ended} {ran}"
+
+
+@pytest.mark.asyncio
+async def test_a_pass_whose_claim_is_gone_ends_its_replica(tmp_path: Path) -> None:
+    """A pass renews its claim on its table with each heartbeat, and one that finds the claim no longer its own cannot
+    tell whether another pass has taken the table: the replica ends itself rather than run beside it."""
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    worker = mint_.credentials[_WORKER]
+    runs = _Runs()
+    runs.held["claimed"] = asyncio.Event()
+    replica: _Replica | None = None
+    lane: TaskQueue | None = None
+    rig: Client | None = None
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
+        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+        replica = await _Replica.start(broker.url, worker, "claiming", runs, ready=lambda: True)
+        assert await lane.enqueue(Task(kind="table", uuid="claimed", location="s3://bucket/claimed")) is True
+        assert await _until(lambda: runs.times("claimed") == 1, 15), f"the task never ran: {runs.ran}"
+
+        purged = await rig.request("$JS.API.STREAM.PURGE.KV_MAINTENANCE_CLAIMS")
+
+        ended = await _until(lambda: bool(replica is not None and replica.ended), 3 * _ACK_WAIT)
+    finally:
+        try:
+            if replica is not None:
+                await replica.stop()
+            for client in (lane, rig):
+                if client is not None:
+                    await client.close()
+        finally:
+            broker.stop()
+
+    assert purged is not None and purged.get("success") is True, f"the claims were not purged: {purged}"
+    assert ended and replica is not None and replica.ended == ["maintenance_claim_lost"], (
+        f"the replica ran on without its claim: {replica.ended if replica else None}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_fired_schedule_that_is_no_task_is_ended_and_not_delivered_again(tmp_path: Path) -> None:
+    """What a schedule fires is moved onto the queue as the task it carries; one that carries none can never be moved, so
+    it is ended, where giving it back would deliver it for ever (the consumer of fired schedules has no delivery bound)."""
+    fires = Permissions(publish=(*_RIG_GRANTS.publish, "maintenance.due.>"), subscribe=_RIG_GRANTS.subscribe)
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: fires})
+    replica: _Replica | None = None
+    rig: Client | None = None
+    ended = False
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        rig = reader = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+        replica = await _Replica.start(broker.url, mint_.credentials[_WORKER], "mover", _Runs(), ready=lambda: True)
+        await reader.nc.publish("maintenance.due.table.garbage", b"no task")
+        await reader.settle()
+
+        async def the_schedules_hold_nothing() -> bool:
+            state = (await reader.request(f"$JS.API.STREAM.INFO.{SCHEDULES_STREAM}") or {}).get("state", {})
+            return state.get("messages") == 0 and state.get("last_seq", 0) >= 1
+
+        ended = await _until(the_schedules_hold_nothing, 20)
+    finally:
+        try:
+            if replica is not None:
+                await replica.stop()
+            if rig is not None:
+                await rig.close()
+        finally:
+            broker.stop()
+
+    assert ended, "the fired schedule that is no task was still held, to be delivered again"
+
+
+@pytest.mark.asyncio
+async def test_a_task_whose_claim_the_bus_does_not_answer_is_held_until_it_is_and_then_runs(tmp_path: Path) -> None:
+    """A claim the bus cannot answer, as with the claims bucket not yet declared, says nothing of whether another pass
+    holds the table: the worker keeps the task and asks again, and runs it once the claim is answered, without spending
+    a delivery on it."""
+    tools, docs, mint_, broker = _the_bus(tmp_path, {_RIG: _RIG_GRANTS})
+    worker = mint_.credentials[_WORKER]
+    runs = _Runs()
+    replica: _Replica | None = None
+    lane: TaskQueue | None = None
+    rig: Client | None = None
+    ran_unclaimed: list[tuple[str, str]] = []
+    ran = False
+    redelivered: object = None
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        lane = await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name="commit-lane")
+        rig = await Client.connect(broker.url, mint_.credentials[_RIG], _RIG, answer_within=10.0)
+        dropped = await rig.request("$JS.API.STREAM.DELETE.KV_MAINTENANCE_CLAIMS")
+        assert dropped is not None and dropped.get("success") is True, f"the claims bucket was not removed: {dropped}"
+        replica = await _Replica.start(broker.url, worker, "waiting", runs, ready=lambda: True)
+        assert await lane.enqueue(Task(kind="table", uuid="unclaimed", location="s3://bucket/unclaimed")) is True
+        # Longer than the worker's wait between asks, and well inside the first redelivery delay (15 s).
+        await asyncio.sleep(_ACK_WAIT)
+        ran_unclaimed = list(runs.ran)
+
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+
+        ran = await _until(lambda: runs.times("unclaimed") == 1, 30)
+        consumer = await rig.request(f"$JS.API.CONSUMER.INFO.{TASKS_STREAM}.{TASK_CONSUMER}") or {}
+        redelivered = consumer.get("num_redelivered")
+    finally:
+        try:
+            if replica is not None:
+                await replica.stop()
+            for client in (lane, rig):
+                if client is not None:
+                    await client.close()
+        finally:
+            broker.stop()
+
+    assert ran_unclaimed == [], f"the task ran with no claim on its table: {ran_unclaimed}"
+    assert ran and replica is not None and replica.ended == [], (
+        f"the task did not run once its claim was answered: {runs.ran} {replica.ended if replica else None}"
+    )
+    assert redelivered == 0, f"the unanswered claim spent {redelivered} of the task's deliveries"

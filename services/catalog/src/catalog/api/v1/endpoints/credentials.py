@@ -55,7 +55,8 @@ router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
 
 
 async def _ancestor_uuids(resolver: Resolver, segments: list[str]) -> list[str]:
-    """The uuids of the namespaces the table ``segments`` names lies in, outermost first."""
+    """The uuids of the namespaces the table ``segments`` names lies in, outermost first; a name no namespace holds keeps
+    no policy, and a namespace whose uuid cannot be read is refused by the resolver (``UnidentifiedObjectError``)."""
     uuids: list[str] = []
     for depth in range(1, len(segments)):
         if (namespace_uuid := await resolver.namespace_uuid(segments[:depth])) is not None:
@@ -70,21 +71,29 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
     so its holder could delete or rewrite the history the policy keeps. The pass has nothing to write there: it reclaims
     nothing on a held table, and the commit-path cleanup a held table may be armed with fires only inside a commit, which
     every catalog door disarms before it makes (``lakehouse.auto_cleanup``). The policy is resolved as maintenance
-    resolves it: the table's own record, else its nearest namespace's, else its project's
-    (``maintenance_policies.resolve_policy``).
+    resolves it, each record read by its key: the table's own record, else its nearest namespace's, else its project's
+    (``maintenance_policies.governing_policy``). A record that cannot be read may be the hold, so it refuses.
 
     Raises:
         InvalidTableStateError: The table's policy keeps its whole history (code 19).
-        ServiceUnavailableError: The policies could not be read, so whether the table is held is unknown.
+        ServiceUnavailableError: A policy record could not be read, so whether the table is held is unknown.
     """
     if requested_tier(request.query_params) != "maintain":
         return
     namespace_uuids = await _ancestor_uuids(resolver, table.resolved.segments)
+    resolve = partial(
+        maintenance_policies.governing_policy,
+        settings.registry_root,
+        settings.storage_options(),
+        claims_root=settings.registry_root,
+        location=table.location,
+        table_uuid=table.resolved.require_uuid(),
+        namespace_uuids=namespace_uuids,
+    )
     try:
-        records = await run_in_threadpool(maintenance_policies.list_policies, settings.registry_root, settings.storage_options())
-    except OSError as exc:
+        policy = await run_in_threadpool(resolve)
+    except maintenance_policies.UnreadablePolicyError as exc:
         raise ServiceUnavailableError("the maintenance policies could not be read, so no maintain-tier credential was vended") from exc
-    policy = maintenance_policies.resolve_policy(records, table.location, table_uuid=table.resolved.require_uuid(), namespace_uuids=namespace_uuids)
     if maintenance_policies.keeps_whole_history(policy):
         raise InvalidTableStateError("the table's maintenance policy keeps its whole history, so no credential that could delete or rewrite it is vended")
 

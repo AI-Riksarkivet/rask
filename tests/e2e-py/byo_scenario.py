@@ -56,6 +56,9 @@ PIPELINE_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.intern
 VALIDATOR_USER = os.environ.get("LANCE_E2E_VALIDATOR_USER", "bob@example.com")
 #: How long a committed write may take to reach lineage's feed.
 SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_SETTLE_SECONDS", "120"))
+#: How long a commit's pass may take to follow it: the first commit of a burst holds its table's pass the commit delay out
+#: (`maintenance.queue.commitPassDelaySeconds`, five minutes by default), then the queue and one pass.
+COMMIT_PASS_SECONDS = float(os.environ.get("LANCE_E2E_COMMIT_PASS_SECONDS", "600"))
 ARROW = "application/vnd.apache.arrow.stream"
 #: The branch the pipeline cuts from silver and commits on.
 STAGING = "staging"

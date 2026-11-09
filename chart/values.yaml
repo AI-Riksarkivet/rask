@@ -775,7 +775,7 @@ maintenance:
   # killed replica's task goes to another after the consumer's ack wait. More than one renders a PodDisruptionBudget
   # when `podDisruptionBudget.enabled`.
   # -- Maintenance replicas; each runs a worker on the shared work queue.
-  replicas: 2
+  replicas: 2 # @schema type: integer; minimum: 1
   # -- Dapr app-id of the maintenance service; also names its durable consumer.
   daprAppId: maintenance
   # -- HTTP port of the maintenance container.
@@ -785,27 +785,27 @@ maintenance:
   # (`nats.auth.users.maintenance-worker`).
   queue:
     # -- Consumer ack wait, in seconds: how long a task a dead worker held waits before another replica gets it. A worker whose heartbeats the bus stops answering ends itself before the ack wait its last answered heartbeat restarted runs out, so its pass never runs beside the next.
-    ackWaitSeconds: 60
+    ackWaitSeconds: 60 # @schema type: integer; minimum: 3
     # -- How often a running task tells JetStream it is still being worked on; well inside `ackWaitSeconds`.
-    heartbeatSeconds: 20
+    heartbeatSeconds: 20 # @schema type: integer; minimum: 1
     # -- Deliveries of one task before it is ended and counted (`maintenance.tasks.ended`); the consumer allows one more, on which a task that outlived its worker every time is ended without running.
-    maxDeliver: 10
+    maxDeliver: 10 # @schema type: integer; minimum: 1
     # -- A pass running longer than this is logged and counted; at twice this its replica exits, Kubernetes restarts it, and the task is delivered again.
-    maxPassSeconds: 1800
+    maxPassSeconds: 1800 # @schema type: integer; minimum: 60
     # -- The longest a table goes without a pass: what bounds a lost commit event, and the versions a deleted tag or branch releases.
-    recheckHours: 24
+    recheckHours: 24 # @schema type: integer; minimum: 1
     # -- When a pass that could not decide, or found the table's history held, is tried again.
-    retrySeconds: 900
+    retrySeconds: 900 # @schema type: integer; minimum: 60
     # -- How long the first commit of a burst holds its table's pass: the most often commits pass a table, each pass covering every commit before it.
-    commitPassDelaySeconds: 300
+    commitPassDelaySeconds: 300 # @schema type: integer; minimum: 1
     # -- The audit's NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs and the lost-task backstop, once per firing on one replica.
-    auditSchedule: "@hourly"
-    # -- The scan's NATS message schedule: the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies.
-    scanSchedule: "@daily"
-    # -- How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain and the task would reach another replica while it ran on.
-    drainSeconds: 90
+    auditSchedule: "@hourly" # @schema type: string; pattern: ^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$
+    # -- The scan's NATS message schedule, a six-field cron (seconds first): the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim.
+    scanSchedule: "0 30 0 * * *" # @schema type: string; pattern: ^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$
+    # -- How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain and the task would reach another replica while it ran on. The drain runs after uvicorn's own graceful wait, so that wait is cut by it: the pod's grace less preStop, the teardown and this.
+    drainSeconds: 90 # @schema type: integer; minimum: 1
     # -- The most STORE_EVENTS holds, in bytes, before it drops its oldest: each event is a hint of about 2 KB that the table's daily recheck backs up, and the stream shares the bus's JetStream disk with LINEAGE and the work queue.
-    storeEventsMaxBytes: 134217728
+    storeEventsMaxBytes: 134217728 # @schema type: integer; minimum: 1
   # THE WRITE-EVENT LANE. On, maintenance subscribes `lineage.events.v1` (its own durable,
   # `<daprAppId>-durable`) and puts the written table's pass on the work queue, where a pass already queued or running
   # for the table covers it. It schedules no rewrite: compaction and indexing are the user's job (ADR 0162). Off, a

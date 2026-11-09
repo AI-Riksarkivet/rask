@@ -60,10 +60,10 @@ from maintenance.core.metrics import (
     record_unrecorded_bases,
 )
 from maintenance.services import base_reclaim, committed_files, credentials
-from maintenance.services.due import refresh_due, table_ids
-from maintenance.services.expiry import HISTORY_FENCED, DatasetResult, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, staged_manifests
+from maintenance.services.due import refresh_due, table_ids_of
+from maintenance.services.expiry import HISTORY_FENCED, DatasetResult, ExpiryPolicy, ExpiryTarget, count_reclaimable, expire_versions, lost_staged_manifests
 from maintenance.services.naming import PolicyOwners, TableIds, claim_store, policy_owners, read_uuids
-from maintenance.services.plan import DatasetPlan, PlanContext, cadence_skip, load_policies, resolve_plan
+from maintenance.services.plan import DatasetPlan, PlanContext, cadence_skip, resolve_plan
 
 
 log = logging.getLogger(__name__)
@@ -95,11 +95,16 @@ class PassOutcome(BaseModel):
 
 
 class PassReadings(BaseModel):
-    """What a pass reads once before it touches a dataset: the ids its bucket's ``__manifest`` holds, and the policies
-    and clock its plan is resolved under."""
+    """What a pass reads once before it touches a dataset: the ids its bucket's ``__manifest`` holds, the uuids its
+    table's policy is kept under, and the policies and clock its plan is resolved under."""
 
     table_ids: TableIds
     context: PlanContext
+    #: The table the pass is of, and the uuids its policy was read under; ``None`` when they could not be read, which
+    #: refuses each of its datasets. Read once, so the policy in ``context`` is the one these uuids name: a second read
+    #: that succeeded where the first failed would name the table with no policy read for it.
+    table: str | None = None
+    owners: PolicyOwners | None = None
 
 
 class NamedDataset(BaseModel):
@@ -149,7 +154,9 @@ def _probe_before_vending(
     delete ([[LH-286]]), found by the rule the pass applies again under its vend (`base_reclaim.unreferenced`). A held
     table, whose policy keeps its whole history, is written nothing, its disarm included: the catalog vends it no
     maintain tier ([[XC-084]]), and the cleanup it may be armed with fires only inside a commit, which every catalog
-    door disarms before it makes (`lakehouse.auto_cleanup`).
+    door disarms before it makes (`lakehouse.auto_cleanup`). A manifest a stock writer staged for a version the table
+    already holds, past its grace, is one more thing to write: the pass removes it whether or not any version is due
+    ([[LH-529]]), and a pass that could not would find the table due again a minute later.
 
     CONSERVATIVE BY CONSTRUCTION: an unreadable dataset answers `True`, because skipping a dataset that WOULD have been
     maintained is the failure this service exists to prevent while a spare credential is only a cost. Logged, never
@@ -160,8 +167,9 @@ def _probe_before_vending(
         armed = policy.cleanup_enabled and bool(auto_cleanup.armed_keys(ds.config()))
         reclaimable = policy.cleanup_enabled and count_reclaimable(ds, policy) >= policy.min_reclaimable
         stranded = policy.cleanup_enabled and bool(directories) and bool(base_reclaim.unreferenced(ds, directories, options, now=now))
+        lost = policy.cleanup_enabled and any(modified <= now - policy.staged_grace for _, modified in lost_staged_manifests(uri, options, version=ds.version))
         return WriteProbe(
-            may_write=armed or reclaimable or stranded,
+            may_write=armed or reclaimable or stranded or lost,
             data_storage_version=ds.data_storage_version,
             mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
         )
@@ -308,10 +316,9 @@ def name_dataset(uri: str, *, readings: PassReadings, settings: MaintenanceSetti
     table = readings.table_ids.table_of(uri)
     if table is None:
         return _unnamed(uri, settings=settings)
-    owners = policy_owners(readings.table_ids, table, claims=claim_store(settings))
-    if owners is None:
+    if table != readings.table or readings.owners is None:
         return _unidentified(uri, table, settings=settings)
-    return NamedDataset(table=table, owners=owners)
+    return NamedDataset(table=table, owners=readings.owners)
 
 
 def _plan_for(uri: str, named: NamedDataset, *, readings: PassReadings, settings: MaintenanceSettings) -> DatasetPlan:
@@ -590,44 +597,64 @@ async def emit_pass_lineage(emitter: MaintenanceEmitter, results: list[DatasetRe
             log.warning(f"maintenance_{lane}_emit_error", extra={"table": result.table_id, "error": str(exc)})
 
 
-def governs(location: str, settings: MaintenanceSettings, options: StorageOptions) -> bool | None:
-    """Whether ``location`` is in a bucket maintenance governs, a configured one or an active warehouse's (#81); ``None``
-    when the warehouse registry cannot be read, which decides nothing.
+def governs(location: str, *, top_namespace: str, settings: MaintenanceSettings, options: StorageOptions) -> bool | None:
+    """Whether the table at ``location``, under the top-level namespace ``top_namespace``, is one maintenance governs: in a
+    configured bucket, or in its namespace's warehouse while that warehouse is active (#81); ``None`` when the warehouse
+    cannot be read, which decides nothing.
 
-    A deactivated warehouse's bucket is not governed: deactivate is offboarding step one, and maintenance must not be the
-    one process still rewriting a quarantined tenant's data (`lakehouse.warehouse_records.maintainable_buckets`). A
-    location outside S3 is the control root's own.
+    A deactivated warehouse's tables are not governed: deactivate is offboarding step one, and maintenance must not be the
+    one process still rewriting a quarantined tenant's data. The warehouse is the namespace's, read through its binding by
+    key, so what the pass costs is the table's, never the registry's; and two warehouses one project backs with one bucket
+    (the work and gold pair) are each judged by their own status. A location outside S3 is the control root's own.
     """
     if not location.startswith("s3://"):
         return True
-    bucket = location.removeprefix("s3://").split("/", 1)[0]
-    if bucket in settings.sweep_buckets:
+    if location.removeprefix("s3://").split("/", 1)[0] in settings.sweep_buckets:
         return True
     try:
-        records = warehouse_records.list_warehouse_records(settings.resolved_control_root, options)
-    except OSError as exc:
-        log.warning("maintenance_warehouse_registry_unreadable", extra={"location": location, "error": f"{type(exc).__name__}: {exc}"[:300]})
+        warehouse = warehouse_records.namespace_warehouse(settings.resolved_control_root, options, top_namespace)
+    except (OSError, ValueError) as exc:
+        log.warning("maintenance_warehouse_unreadable", extra={"location": location, "namespace": top_namespace, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return None
-    return bucket in warehouse_records.maintainable_buckets(records)
+    return warehouse is not None and not warehouse_records.is_deactivated(warehouse)
 
 
-def read_for(location: str, settings: MaintenanceSettings, *, now: datetime) -> PassReadings | None:
-    """What a pass on the table at ``location`` reads before touching it, or ``None`` when no decision is possible.
+def read_for(location: str, held: location_claims.LocationClaim, settings: MaintenanceSettings, *, now: datetime) -> PassReadings | None:
+    """What a pass on the table ``held`` names at ``location`` reads before touching it, or ``None`` when no decision is
+    possible.
 
-    The table's id comes from the ``__manifest`` of the bucket ``location`` is in. A manifest or the policy registry that
-    cannot be read decides nothing (``None``): the policies are the protective surface, and expiring without them would
-    reclaim history an owner kept.
+    What it costs in requests is the table's, never the estate's: the rows of the table and of each namespace above it
+    in the ``__manifest`` of the bucket ``location`` is in, one filtered read of an index Lance keeps unindexed, so its
+    bytes grow with the bucket's rows while its requests do not (:func:`maintenance.services.purge.manifest_rows_named`);
+    and, by key, the one policy record that governs the table (:func:`lakehouse.maintenance_policies.governing_policy`).
+    A manifest or a policy record that cannot be read decides nothing (``None``): the policies are the protective
+    surface, and expiring without them would reclaim history an owner kept. A table whose policy owners cannot be read
+    (:func:`maintenance.services.naming.policy_owners`) leaves the policy unread and the readings without owners, so each
+    of its datasets is refused (:func:`name_dataset`).
     """
     options = settings.storage_options()
     root = f"s3://{location.removeprefix('s3://').split('/', 1)[0]}" if location.startswith("s3://") else settings.resolved_control_root
-    ids = table_ids({root}, options)
-    if not ids.complete:
+    ids = table_ids_of(root, options, segments=held.segments)
+    if ids is None:
         return None
-    try:
-        policies = load_policies(settings, options)
-    except Exception:  # noqa: BLE001 — logged by `load_policies`; an unread policy registry decides nothing
-        return None
-    return PassReadings(table_ids=ids, context=PlanContext(policies=policies, now=now, older_than=timedelta(days=settings.older_than_days)))
+    policies: list[dict[str, object]] = []
+    owners = policy_owners(ids, held.table, claims=claim_store(settings))
+    if owners is not None:
+        try:
+            policy = maintenance_policies.governing_policy(
+                settings.resolved_policy_root,
+                options,
+                claims_root=settings.resolved_control_root,
+                location=location,
+                table_uuid=owners.table_uuid,
+                namespace_uuids=owners.namespace_uuids,
+            )
+        except maintenance_policies.UnreadablePolicyError as exc:
+            log.error("maintenance_policy_unreadable", extra={"uuid": held.uuid, "table": held.table, "error": str(exc)[:300]})
+            return None
+        policies = [policy] if policy is not None else []
+    context = PlanContext(policies=policies, now=now, older_than=timedelta(days=settings.older_than_days))
+    return PassReadings(table_ids=ids, context=context, table=held.table, owners=owners)
 
 
 def _held_location(location: str) -> str:
@@ -670,15 +697,20 @@ def run_table_pass(task: TableTask, settings: MaintenanceSettings, *, now: datet
     now = now or datetime.now(UTC)
     options = settings.storage_options()
     held = location_claims.holder(claim_store(settings), task.location)
-    if held is None or held.uuid != task.uuid:
+    if held is None:
         log.info("maintenance_task_table_gone", extra={"uuid": task.uuid, "location": task.location})
         delete_due(settings.resolved_control_root, options, task.uuid)
+        return PassOutcome(ended="gone")
+    if held.uuid != task.uuid:
+        # The location is another table's, so the task named a table by a place it is not at: nothing says the table it
+        # names is gone, and its due record is left to its own pass.
+        log.warning("maintenance_task_names_anothers_location", extra={"uuid": task.uuid, "location": task.location, "held_by": held.uuid})
         return PassOutcome(ended="gone")
     if trash.keeps(settings.resolved_control_root, options, task.uuid):
         log.info("maintenance_task_table_trashed", extra={"uuid": task.uuid, "table": held.table})
         delete_due(settings.resolved_control_root, options, task.uuid)
         return PassOutcome(ended="trashed")
-    if (governed := governs(task.location, settings, options)) is not True:
+    if (governed := governs(task.location, top_namespace=held.segments[0], settings=settings, options=options)) is not True:
         if governed is None:
             return PassOutcome(next_due=now + timedelta(seconds=settings.retry_seconds))
         log.warning("maintenance_task_outside_the_estate", extra={"uuid": task.uuid, "location": task.location})
@@ -688,7 +720,7 @@ def run_table_pass(task: TableTask, settings: MaintenanceSettings, *, now: datet
     if datasets is None:
         log.info("maintenance_task_table_unwritten", extra={"uuid": task.uuid, "table": held.table})
         return PassOutcome(next_due=now + timedelta(hours=settings.recheck_hours))
-    readings = read_for(task.location, settings, now=now)
+    readings = read_for(task.location, held, settings, now=now)
     if readings is None:
         return PassOutcome(next_due=now + timedelta(seconds=settings.retry_seconds))
     results = [maintain_dataset(uri, readings=readings, settings=settings) for uri in datasets]
@@ -728,8 +760,11 @@ def versions_due_at(ds: lance.LanceDataset, policy: ExpiryPolicy, *, now: dateti
 
 
 def staged_due_at(ds: lance.LanceDataset, uri: str, *, policy: ExpiryPolicy, options: StorageOptions) -> datetime | None:
-    """When the oldest manifest a stock writer staged for a version this ref already holds passes its grace ([[LH-529]])."""
-    lost = [modified for _, version, modified in staged_manifests(uri, options) if version <= ds.version]
+    """When the oldest manifest a stock writer staged for a version this ref already holds passes its grace ([[LH-529]]),
+    or ``None`` when there is none, or the table's policy keeps its whole history, under which no pass removes one."""
+    if not policy.cleanup_enabled:
+        return None
+    lost = [modified for _, modified in lost_staged_manifests(uri, options, version=ds.version)]
     return min(lost) + policy.staged_grace if lost else None
 
 

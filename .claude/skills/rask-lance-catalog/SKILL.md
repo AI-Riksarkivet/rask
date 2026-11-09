@@ -615,11 +615,13 @@ governing their data. The project-scoped surface is the console's project page, 
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs as two tasks of
   its own (`maintenance.services.audit`), each a NATS message schedule the worker asserts at its start and every 15
   minutes, so a purged schedules stream heals: the hourly AUDIT (`maintenance.queue.auditSchedule`, `@hourly`) leaves
-  the file layer unscanned, so it opens no table, and the daily SCAN (`scanSchedule`, `@daily`) adds the orphan scan
-  (about 20 store requests a table, owner 2026-11-09), then the floor raise and the trash purge that report certifies.
-  Each runs once per firing, on one replica whatever the replica count: its schedule fires on a subject of its own,
-  and the queue holds one task per subject. Maintenance has no Dapr cron binding; the chart's six are the catalog's
-  and lineage's relay (`chart/templates/dapr-component.yaml`).
+  the file layer unscanned, so it opens no table, and the daily SCAN (`scanSchedule`, `0 30 0 * * *`, a six-field
+  cron: nats-server 2.15.2 refuses a five-field one) adds the orphan scan (about 20 store requests a table, owner
+  2026-11-09), then the floor raise and the trash purge that report certifies. Each runs once per firing, on one replica
+  whatever the replica count: its schedule fires on a subject of its own, and the queue holds one task per subject. The
+  two share one claim (`queue._claim_key`, `reconcile`), since each repairs the estate from a report of its own: they
+  never run at once, and the scan fires off the hour so it rarely waits. Maintenance has no Dapr cron binding; the
+  chart's six are the catalog's and lineage's relay (`chart/templates/dapr-component.yaml`).
 - **OpenFGA rejects a bare-type Read.** `read_tuples(obj="project:")` with no user is HTTP 400
   (*"the object id and user cannot be empty"*), and the wrapper reports it as
   `ServiceUnavailableError` — so it presents as a permanent outage on a healthy server. To enumerate
@@ -780,7 +782,7 @@ governing their data. The project-scoped surface is the console's project page, 
   location in both spellings and its data directories, nothing on the control root, a whole-bucket place refused, and
   none while a registered clone's tag stands on the table, `trash_reclaim.clone_refusal`, ADR 0198 §1);
   `DELETE ...` ends a released record once its place holds nothing (`lakehouse.trash.end`: the object's records, its
-  claim, its base record, then the record); `POST .../refusals` notes maintenance's own refusals. The release comes
+  base record and with it a clone's tags, its claim, then the record); `POST .../refusals` notes maintenance's own refusals. The release comes
   first, so the settle an undrop admitted at the deadline needs and the telling of each person who loses access
   precede any delete; maintenance's purge selects released records only (`purge.due_from`), and the daily scan releases
   before it purges (`audit.run_scan`), so a record the scan releases is purged and ended in the same run (measured on
@@ -859,13 +861,22 @@ governing their data. The project-scoped surface is the console's project page, 
   reads is judged as any other: the clone's tag keeps the version it reads, whatever the compaction and the cleanup
   after it remove (ADR 0198 §1, `lakehouse.clone_sources`). The register door takes that tag,
   `rask.clone.<sha256 of the clone's location>`, on the source version the clone's first transaction (a shallow
-  `Clone`) names, under the source's history fence (`table_bases.admit_clone`, `clone_sources.take`): 400 when the
-  source is no table the catalog governs or no longer keeps that version, 409 code 14 while a reclaim holds its history.
-  Every door that forgets the clone's base record releases the tag (`base_registry.forget_base_record`). While one
-  stands, a destructive drop of the source refuses 409 code 19 (`dataplane.require_no_clone_reading`), a destroying
-  cascade removes each source after the clones it removes with it and refuses 409 code 19 while a clone outside it
-  reads one of its tables (`clone_sources.destroy_order`), and the trash credentials door vends no session to delete a
-  trashed source's bytes. Measured on pylance 13.0.0, Lance itself commits a rewrite that loses or duplicates rows and an
+  `Clone`) names, under the source's history fence (`table_bases.admit_clone`, `clone_sources.take`). It takes one on EVERY table the clone reads through: a clone of a clone reads the first source's files where they are (measured on pylance 13.0.0), so it tags that source too, at the version its own source's record pins, and the end of the clone between them releases only that clone's tag. A clone of a source branch names `<source>/tree/<branch>` and `Clone.ref_name`, and is tagged `(branch, version)` on the source table. Each `derived_from` entry of the clone's base record keeps the version and branch it pins, because the clone's own version expiry removes the transaction that says so: a later registration of it tags from the record, and a recorded root with no pin is refused (400), never admitted untagged. Its caller must
+  hold `can_read_data` and `can_create_tag` on each source, asked in that order and in the order the clone reads through
+  them (`table_bases.CLONE_RELATIONS`: the clone's owner reads the source's rows, and the model's `publisher`, who may
+  tag, is no reader; owner 2026-11-09 on the tag rung: a reader would pin the owner's table), BEFORE the native register
+  (`tables._require_clone_sources`), so a refused caller leaves no row, mark or claim: 403 code 15, and for a caller
+  holding nothing on a source one sentence (`can_read_data required on <source root>`) whether a governed table is at
+  the source's root or not, naming only that root ([[LH-436]]); 400 when the source no longer keeps that version, 409 code
+  14 while a reclaim holds its history. Every door that ends the clone releases the tag BEFORE the location's claim
+  (`base_registry.release_clone_sources`, `forget_base_record`), and keeps a tag the location's claim names another
+  table for (a clone registered there since holds one of the same name); a deregister that cannot delete it answers
+  503 PartiallyApplied with the location still held. While a tag stands, a destructive drop of the source refuses 409
+  code 19 (`dataplane.require_no_clone_reading`), a destroying cascade removes each source after the clones it removes
+  with it and refuses 409 code 19 while a clone outside it reads one of its tables (`clone_sources.destroy_order`), and
+  the trash credentials door vends no session to delete a trashed source's bytes. Nothing ends a tag a failed end left:
+  the source stays undestroyable until the clone is registered and deregistered again (owner 2026-11-09: no reader-side
+  auto-end, which could judge a live clone gone; the cure is #638's change 2). Measured on pylance 13.0.0, Lance itself commits a rewrite that loses or duplicates rows and an
   index naming a base or an empty directory, so the judge is what refuses them.
   **Provenance travels in the spec Context** ([[LH-225]]): the staged manifest's `rask.*` transaction properties name
   the run, `version/create` refuses a silver or gold commit adding data without a run and inputs, and the finalize's

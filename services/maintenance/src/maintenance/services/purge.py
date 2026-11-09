@@ -63,7 +63,7 @@ witnessed". The flag ships OFF.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from functools import partial
 from typing import Any
@@ -342,13 +342,29 @@ def manifest_rows(root: str, storage_options: StorageOptions) -> list[dict[str, 
     A root with no ``_versions`` directory is a fresh estate and yields ``[]``: an absent manifest is not an unreadable
     one, and collapsing the two would let a broken manifest read as "nothing is live".
     """
+    return _manifest_rows(root, storage_options, where=None)
+
+
+def manifest_rows_named(root: str, storage_options: StorageOptions, object_ids: Sequence[str]) -> list[dict[str, Any]] | None:
+    """The rows of ``root``'s ``__manifest`` whose ``object_id`` is one of ``object_ids``, or ``None`` when unreadable
+    (:func:`manifest_rows`).
+
+    Measured on pylance 13.0.0 (2026-11-09): the ``dir`` namespace keeps its ``__manifest`` as one fragment whatever it
+    holds (one at 10, 50 and 150 tables) and builds no index on it, so the read costs the same few requests on any estate,
+    and the filter keeps the rows decoded to those asked for.
+    """
+    literals = ", ".join("'" + object_id.replace("'", "''") + "'" for object_id in object_ids)
+    return _manifest_rows(root, storage_options, where=f"object_id IN ({literals})")
+
+
+def _manifest_rows(root: str, storage_options: StorageOptions, *, where: str | None) -> list[dict[str, Any]] | None:
     try:
         fs, base = fs_and_base(root, storage_options)
         if fs.get_file_info(f"{base}/{MANIFEST_DIR}/_versions").type != pafs.FileType.Directory:
             return []
         manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
         dataset = lance.dataset(manifest_uri, storage_options=storage_options.in_clear(), session=shared_lance_session())
-        return dataset.to_table(columns=["object_id", "object_type", "location", "metadata"]).to_pylist()
+        return dataset.to_table(columns=["object_id", "object_type", "location", "metadata"], filter=where).to_pylist()
     except Exception:  # noqa: BLE001 — ANY failure here must read as unreadable, never as a partial set
         log.warning("trash_purge_manifest_unreadable", extra={"root": root}, exc_info=True)
         return None
@@ -392,12 +408,6 @@ def manifest_liveness(root: str, storage_options: StorageOptions) -> Liveness | 
         elif row.get("object_type") == "namespace" and row["object_id"] and (uuid := manifest_uuid(row)) is not None:
             live.namespace_uuids[str(row["object_id"])] = uuid
     return live
-
-
-def live_object_ids(root: str, storage_options: StorageOptions) -> set[str] | None:
-    """The ids half of :func:`manifest_liveness`: ``None`` when the manifest is unreadable."""
-    live = manifest_liveness(root, storage_options)
-    return None if live is None else live.ids
 
 
 def liveness_across(roots: set[str], storage_options: StorageOptions) -> Liveness | None:

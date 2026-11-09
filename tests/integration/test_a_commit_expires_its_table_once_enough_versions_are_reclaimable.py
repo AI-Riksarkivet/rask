@@ -3,8 +3,11 @@
 Driven through `run_table_pass` for the task the commit lane queues for a write (`maintenance.services.arrival`: the
 table's uuid and the location the event names), over a moto store, for a table registered in a real `dir` namespace's
 `__manifest`, under a policy keeping one version. The threshold is set through the environment, and each side of it is
-one case: one reclaimable version short reclaims nothing; at the threshold every reclaimable version goes. The same pass
-removes what a commit that lost its version left behind, the manifest it staged ([[LH-529]]).
+one case: one reclaimable version short reclaims nothing; at the threshold every reclaimable version goes. A pass also
+removes what a commit that lost its version left behind, the manifest it staged ([[LH-529]]), whether or not versions are
+due, and then schedules the table's next pass for its recheck, never a minute out; under a policy that keeps the whole
+history it removes nothing. A pass that cannot read the table's own policy record, which may be a legal hold, reclaims
+nothing, whatever the policy of its namespace allows, and is retried.
 
 The table's name is one the catalog percent-encodes ([[LH-319]]): the event names the URL the catalog opened,
 ``…$r%C3%A4ksm%C3%B6rg%C3%A5s`` as ``describe_table`` answers it, while the ``__manifest`` row and the store hold
@@ -16,6 +19,8 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import boto3
 import lance
@@ -30,8 +35,10 @@ from lakehouse import location_claims, maintenance_policies
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.objectfs import lance_storage_options
+from lakehouse.record_store import record_key
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
+from maintenance.services import table_pass
 from maintenance.services.table_pass import TableTask, run_table_pass
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
 
@@ -63,9 +70,16 @@ def store(moto_url: str) -> StorageOptions:
     return lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
 
 
-def _table_with(versions: int, *, bucket: str, options: StorageOptions) -> TableTask:
-    """The table at ``versions`` versions, registered, under a policy keeping one; the task the lane queues for its
-    write: its uuid, and the location the catalog describes it at."""
+#: The policy every table here is kept under, but where a case names its own.
+KEEP_ONE: dict[str, Any] = {"retain_versions": 1}
+
+
+def _table_with(
+    versions: int, *, bucket: str, options: StorageOptions, policy: dict[str, Any] | None = KEEP_ONE, namespace_uuid: str | None = None
+) -> TableTask:
+    """The table at ``versions`` versions, registered under a namespace holding ``namespace_uuid`` (a fresh one by default),
+    under ``policy`` (keeping one version by default; ``None`` for a table with no record of its own); the task the lane
+    queues for its write: its uuid, and the location the catalog describes it at."""
     root = f"s3://{bucket}"
     for i in range(versions):
         rows = pa.table({"id": pa.array([i], pa.int64())})
@@ -78,13 +92,14 @@ def _table_with(versions: int, *, bucket: str, options: StorageOptions) -> Table
             enable_stable_row_ids=True,
         )
     namespace = connect("dir", {"root": root, **{f"storage.{key}": value for key, value in options.in_clear().items()}})
-    namespace.create_namespace(CreateNamespaceRequest(id=["db"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
+    namespace.create_namespace(CreateNamespaceRequest(id=["db"], properties={UUID_PROPERTY: namespace_uuid or str(uuid.uuid4())}))
     namespace.register_table(RegisterTableRequest(id=TABLE.split("$"), location=LOCATION))
     described = str(namespace.describe_table(DescribeTableRequest(id=TABLE.split("$"))).location)
     table_uuid = str(uuid.uuid4())
     claims = location_claims.ClaimStore(control_root=root, storage_options=options)
     location_claims.take(claims, described, TABLE, ["db", "räksmörgås"], is_gone=lambda _claim: False, uuid=table_uuid)
-    maintenance_policies.put_policy(root, options, {"kind": "table", "id": TABLE, "uuid": table_uuid, "retain_versions": 1})
+    if policy is not None:
+        maintenance_policies.put_policy(root, options, {"kind": "table", "id": TABLE, "uuid": table_uuid, **policy})
     return TableTask(uuid=table_uuid, location=described)
 
 
@@ -137,10 +152,11 @@ def _staged(bucket: str, moto_url: str, location: str, version: int) -> str:
 
 
 @pytest.mark.parametrize(
-    ("grace_seconds", "lost_stays"),
+    ("grace_seconds", "policy", "lost_stays", "next_pass"),
     [
-        pytest.param("0", False, id="a-manifest-staged-for-a-committed-version-goes"),
-        pytest.param("3600", True, id="one-inside-its-grace-stays"),
+        pytest.param("0", KEEP_ONE, False, timedelta(hours=24), id="a-manifest-staged-for-a-committed-version-goes"),
+        pytest.param("3600", KEEP_ONE, True, timedelta(hours=1), id="one-inside-its-grace-stays-until-the-grace-ends"),
+        pytest.param("0", {"cleanup_enabled": False}, True, timedelta(hours=24), id="one-whose-table-keeps-its-whole-history-stays"),
     ],
 )
 def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
@@ -151,20 +167,91 @@ def test_a_commits_pass_removes_the_staged_manifests_no_version_will_take(
     settings: Callable[[], MaintenanceSettings],
     monkeypatch: pytest.MonkeyPatch,
     grace_seconds: str,
+    policy: dict[str, Any],
     lost_stays: bool,
+    next_pass: timedelta,
 ) -> None:
     """A commit that lost its version to another leaves the manifest it staged, which Lance's listing skips and so
-    ``cleanup_old_versions`` never reclaims ([[LH-529]]); the pass after a commit removes it once past its grace. One
-    staged for the version after the latest is a commit still in flight and stays."""
+    ``cleanup_old_versions`` never reclaims ([[LH-529]]); a pass removes it once past its grace, on a table no version of
+    which is due yet, and next passes the table at its recheck. One staged for the version after the latest is a commit
+    still in flight and stays. The table's next pass comes when what it holds next comes due: the grace's end, or its
+    recheck (a day, `MAINTENANCE_RECHECK_HOURS`)."""
     monkeypatch.setenv("MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS", grace_seconds)
-    task = _table_with(THRESHOLD + 1, bucket=bucket, options=store)
+    task = _table_with(THRESHOLD, bucket=bucket, options=store, policy=policy)
     lost = _staged(bucket, moto_url, LOCATION, 2)
-    in_flight = _staged(bucket, moto_url, LOCATION, THRESHOLD + 2)
+    in_flight = _staged(bucket, moto_url, LOCATION, THRESHOLD + 1)
+    now = datetime.now(UTC)
 
     with maintain_tier_door(lambda _table: task.location):
-        run_table_pass(task, settings())
+        outcome = run_table_pass(task, settings(), now=now)
 
     s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     held = {entry["Key"].rsplit("/", 1)[-1] for entry in s3.list_objects_v2(Bucket=bucket, Prefix=f"{LOCATION}/_versions/").get("Contents", [])}
     assert {name for name in (lost, in_flight) if name in held} == ({lost, in_flight} if lost_stays else {in_flight})
-    assert lance.dataset(task.location, storage_options=store.in_clear()).version == THRESHOLD + 1
+    due = outcome.next_due
+    assert due is not None, "the pass scheduled no next pass"
+    # The store stamps a put to the second, so the grace's end comes up to a second before the pass's clock adds it up.
+    assert abs(due - now - next_pass) < timedelta(seconds=2), f"the table's next pass is {due - now} out"
+    assert lance.dataset(task.location, storage_options=store.in_clear()).version == THRESHOLD
+
+
+def test_a_pass_that_cannot_read_its_tables_policy_reclaims_nothing_and_is_retried(
+    *, bucket: str, moto_url: str, store: StorageOptions, settings: Callable[[], MaintenanceSettings]
+) -> None:
+    namespace_uuid = str(uuid.uuid4())
+    task = _table_with(THRESHOLD + 1, bucket=bucket, options=store, namespace_uuid=namespace_uuid)
+    maintenance_policies.put_policy(f"s3://{bucket}", store, {"kind": "namespace", "id": "db", "uuid": namespace_uuid, "retain_versions": 1})
+    s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    s3.put_object(Bucket=bucket, Key=record_key(maintenance_policies.PREFIX, "table", task.uuid), Body=b'{"kind": "table", "cleanup_enabled": fal')
+    now = datetime.now(UTC)
+
+    with maintain_tier_door(lambda _table: task.location):
+        outcome = run_table_pass(task, settings(), now=now)
+
+    kept = len(lance.dataset(task.location, storage_options=store.in_clear()).versions())
+    assert (kept, outcome.next_due) == (THRESHOLD + 1, now + timedelta(seconds=settings().retry_seconds))
+
+
+def test_a_pass_whose_tables_uuid_is_read_once_and_fails_runs_under_no_policy_at_all(
+    *, bucket: str, store: StorageOptions, settings: Callable[[], MaintenanceSettings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The uuids a table's policy is kept under are read once a pass: a claim read the store fails leaves the table
+    refused for that pass, and no later read of the same claim lets it run under the defaults its own record replaces."""
+    task = _table_with(THRESHOLD + 1, bucket=bucket, options=store)
+    read = location_claims.read
+    failed: list[str] = []
+
+    def _fails_once(claims: location_claims.ClaimStore, location: str) -> location_claims.ClaimRead | None:
+        if not failed:
+            failed.append(location)
+            raise OSError("SlowDown")
+        return read(claims, location)
+
+    monkeypatch.setattr(location_claims, "read", _fails_once)
+
+    with maintain_tier_door(lambda _table: task.location):
+        outcome = run_table_pass(task, settings(), now=datetime.now(UTC))
+
+    kept = len(lance.dataset(task.location, storage_options=store.in_clear()).versions())
+    assert (failed != [], [result.refused_by for result in outcome.results], kept) == (True, ["unidentified"], THRESHOLD + 1)
+
+
+def test_a_projects_hold_governs_its_buckets_table_where_the_policies_are_kept_apart_from_the_registry(
+    *, bucket: str, moto_url: str, store: StorageOptions, settings: Callable[[], MaintenanceSettings], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bucket's owner is read off the claim the catalog keeps on the control root, and the project's record off the
+    policy root: with the two apart, a project's hold still governs a table that has no record of its own."""
+    task = _table_with(THRESHOLD + 1, bucket=bucket, options=store, policy=None)
+    s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    apart = f"{bucket}-policies"
+    s3.create_bucket(Bucket=apart)
+    monkeypatch.setenv("MAINTENANCE_POLICY_ROOT", f"s3://{apart}")
+    hold = {"kind": "project", "id": "acme", "buckets": [bucket], "cleanup_enabled": False}
+    maintenance_policies.put_policy(f"s3://{apart}", store, hold)
+    s3.put_object(Bucket=bucket, Key=f"_warehouses/bucket-claims/{bucket}.json", Body=b'{"project": "acme"}')
+    held = location_claims.holder(location_claims.ClaimStore(control_root=f"s3://{bucket}", storage_options=store), task.location)
+    assert held is not None
+
+    readings = table_pass.read_for(task.location, held, settings(), now=datetime.now(UTC))
+
+    assert readings is not None and [policy.get("cleanup_enabled") for policy in readings.context.policies] == [False]

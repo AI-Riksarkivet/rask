@@ -125,8 +125,10 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: release and the lost-task backstop run once per firing on one replica, whatever the replica count.
     audit_schedule: str = Field(default="@hourly", alias="MAINTENANCE_AUDIT_SCHEDULE")
     #: The scan's schedule: the audit with the orphan scan, which opens every table, and then the listing floors and the
-    #: purge its report certifies (owner 2026-11-09: daily).
-    scan_schedule: str = Field(default="@daily", alias="MAINTENANCE_SCAN_SCHEDULE")
+    #: purge its report certifies (owner 2026-11-09: daily). At half past midnight, so it does not fire with the hourly
+    #: audit, whose claim it would wait out (the two never run at once). A six-field cron, seconds first: nats-server
+    #: 2.15.2 refuses a five-field one (10189, measured 2026-11-09).
+    scan_schedule: str = Field(default="0 30 0 * * *", alias="MAINTENANCE_SCAN_SCHEDULE")
 
     # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each dataset whose versions
     # were reclaimed, to the lineage graph via Dapr pub/sub. Publishes to the SAME pubsub component + topic the

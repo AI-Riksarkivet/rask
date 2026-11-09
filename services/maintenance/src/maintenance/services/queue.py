@@ -75,6 +75,9 @@ _FETCH_TIMEOUT: Final = 5.0
 _DUE_BATCH: Final = 10
 #: The kinds whose task has a schedule of its own, which the hourly audit reads to find one nothing holds.
 _SCHEDULED_KINDS: Final = frozenset({"table", "trash"})
+#: The kinds that repair the estate from a drift report, and the one claim they share.
+_RECONCILING_KINDS: Final = frozenset({"audit", "scan"})
+_RECONCILE_CLAIM: Final = "reconcile"
 #: The redelivery delay after a failed delivery, doubling up to a ceiling: a store that is down for a while is asked
 #: again at a pace it can bear.
 _RETRY_FIRST: Final = 15.0
@@ -178,7 +181,10 @@ async def _standing(claims: KeyValue, key: str, token: str) -> int | None:
 
 
 def _claim_key(task: Task) -> str:
-    """The key of the claim a pass of ``task`` takes: its table (or trash record), as its subject names it."""
+    """The key of the claim a pass of ``task`` takes: its table (or trash record), as its subject names it, and one key for
+    the audit and the scan, which both repair the estate from a drift report of their own, so never at once."""
+    if task.kind in _RECONCILING_KINDS:
+        return _RECONCILE_CLAIM
     return task.subject("task").removeprefix("maintenance.task.")
 
 
@@ -464,7 +470,8 @@ class Worker:
     (:meth:`drain`), and a task is only ever run off the pull it answered (:meth:`run_tasks`): never two passes of one
     table at once, a bus cut, a reconnect and a shutdown included. A pass also holds a claim on its table that outlives
     its lease (:meth:`_claim`), which another pass of the table waits out, so even a settle the network held past the
-    lease and JetStream applied late starts no second pass beside it. The consumer
+    lease and JetStream applied late starts no second pass beside it; a task that finds the claim held on every
+    delivery is given up uncounted (:meth:`_give_back`). The consumer
     allows one delivery past ``max_deliver``, which only a task whose worker died on every delivery reaches: it is ended
     and counted without running, since JetStream keeps a work-queue task that ran out of deliveries unacknowledged, and
     its table would take no other (measured on nats-server 2.15.2). A run past ``_HUNG_FACTOR`` times
@@ -569,7 +576,7 @@ class Worker:
         beating = asyncio.create_task(self._keep_alive(msg, task, lease))
         try:
             if not await self._claim(task, lease):
-                await self._tell(msg, _nak(_redelivery_delay(delivered)), lease)
+                await self._give_back(msg, task, lease, delivered=delivered)
                 return
             self._passing = True
             try:
@@ -608,6 +615,23 @@ class Worker:
                     log.info("maintenance_claim_held", extra={"key": key})
                     return False
             await asyncio.sleep(_VOUCH_RETRY)
+
+    async def _give_back(self, msg: Msg, task: Task, lease: _Lease, *, delivered: int) -> None:
+        """Give back a task whose table another pass holds, to come again after its retry delay; on its last delivery it is
+        given up instead, uncounted, since nothing failed: the pass holding the claim is what the task asked for, or, for
+        the audit and the scan, the other of the two, whose next firing brings this one back. A table's or a trash
+        record's next try is held a follow-up's wait out, so the hourly audit is not what finds it."""
+        if delivered < self._max_deliver:
+            await self._tell(msg, _nak(_redelivery_delay(delivered)), lease)
+            return
+        log.warning("maintenance_task_given_up_to_its_claim", extra={"subject": msg.subject, "deliveries": delivered})
+        await self._tell(msg, Msg.Ack.Term, lease)
+        if task.kind not in _SCHEDULED_KINDS:
+            return
+        try:
+            await self._queue.schedule_at(task, datetime.now(UTC) + timedelta(seconds=_FOLLOW_UP_RETRY))
+        except QueueUnavailableError as exc:
+            log.warning("maintenance_task_end_unscheduled", extra={"subject": msg.subject, "error": str(exc)[:300]})
 
     async def _keep_alive(self, msg: Msg, task: Task, lease: _Lease) -> None:
         """Renew ``lease`` every ``heartbeat_seconds`` from the delivery's arrival, the first at once, and end the process
@@ -702,8 +726,15 @@ class Worker:
                 await self._safely(self._move(msg), msg)
 
     async def run_store_events(self) -> None:
-        """Hand each of the store's change events to ``store_events`` until :meth:`stop`. An event that is not one is
-        ended; one whose handling the store or the bus refused is delivered again after a pause."""
+        """Hand each of the store's change events to ``store_events`` until :meth:`stop`.
+
+        ``store_events`` raises ``ValueError`` for a body that is no store event, which is ended at once, and ``OSError``
+        or :class:`QueueUnavailableError` for one whose handling the store or the bus refused, which is delivered again
+        after a delay that grows with each delivery, and ended on its ``max_deliver``-th: an event is a hint the table's
+        recheck backs up. The consumer allows one delivery more, on which an event whose handling outlived its worker
+        every time is ended without handling. Any other error is a fault of the handling's own: it ends the loop, which
+        runs again, and the event is delivered again after the consumer's ack wait.
+        """
         handle = self._store_events
         if handle is None:
             return
@@ -713,17 +744,30 @@ class Worker:
                 await self._safely(self._on_store_event(msg, handle), msg)
 
     async def _on_store_event(self, msg: Msg, handle: Callable[[bytes], Awaitable[object]]) -> None:
+        delivered = msg.metadata.num_delivered or 1
+        if delivered > self._max_deliver:
+            log.error("maintenance_store_event_ended", extra={"subject": msg.subject, "deliveries": delivered, "error": "every delivery outlived its worker"})
+            await msg.term()
+            return
         try:
             await handle(msg.data)
         except ValueError as exc:
             log.error("maintenance_store_event_unreadable", extra={"subject": msg.subject, "error": str(exc)[:300]})
             await msg.term()
             return
-        except Exception as exc:  # noqa: BLE001 — a store or bus that failed the handling is asked again, never the loop's end
-            log.warning("maintenance_store_event_retried", extra={"subject": msg.subject, "error": f"{type(exc).__name__}: {exc}"[:300]})
-            await msg.nak(delay=_RETRY_FIRST)
+        except (OSError, QueueUnavailableError) as exc:
+            await self._retry_or_end_store_event(msg, exc, delivered=delivered)
             return
         await msg.ack()
+
+    async def _retry_or_end_store_event(self, msg: Msg, exc: OSError | QueueUnavailableError, *, delivered: int) -> None:
+        error = f"{type(exc).__name__}: {exc}"[:300]
+        if delivered >= self._max_deliver:
+            log.error("maintenance_store_event_ended", extra={"subject": msg.subject, "deliveries": delivered, "error": error})
+            await msg.term()
+            return
+        log.warning("maintenance_store_event_retried", extra={"subject": msg.subject, "deliveries": delivered, "error": error})
+        await msg.nak(delay=_redelivery_delay(delivered))
 
     async def _fetch(self, subscription: JetStreamContext.PullSubscription, batch: int) -> list[Msg]:
         """The next ``batch`` messages, or none: an empty wait, or a fetch the bus refused or dropped, which is logged

@@ -837,8 +837,8 @@ def test_a_table_recovered_AFTER_the_liveness_snapshot_is_still_refused(tmp_path
 
     # THE TEST'S OWN PRECONDITION. If the mid-tick re-register had failed, the id would not be live and
     # purging it would be CORRECT — the assertions below would then be demanding the wrong behaviour.
-    live_now = mod.live_object_ids(estate.data_root, StorageOptions())
-    assert live_now is not None and canonical in live_now, f"the mid-tick undrop did not land; this test proves nothing: {live_now}"
+    live_now = mod.manifest_liveness(estate.data_root, StorageOptions())
+    assert live_now is not None and canonical in live_now.ids, f"the mid-tick undrop did not land; this test proves nothing: {live_now}"
 
     assert out.purged == [], f"purge reclaimed a table that was re-registered during the tick: {out.purged}"
     assert [(r.kind, r.id) for r in out.refused] == [("table", canonical)], out.refused

@@ -143,8 +143,13 @@ class ClaimChangedError(Exception):
     """The claim is no longer the one the request read, or another request is acting on its table."""
 
 
+def claim_digest(location: str) -> str:
+    """The SHA-256 of the path ``location`` decodes to, in either spelling: what its claim is keyed by."""
+    return hashlib.sha256(decoded_path(location).encode()).hexdigest()
+
+
 def claim_key(location: str) -> str:
-    return f"{_PREFIX}/{hashlib.sha256(decoded_path(location).encode()).hexdigest()}.json"
+    return f"{_PREFIX}/{claim_digest(location)}.json"
 
 
 def holder(store: ClaimStore, location: str) -> LocationClaim | None:

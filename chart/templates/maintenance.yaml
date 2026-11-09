@@ -17,7 +17,7 @@ spec:
     metadata:
       annotations:
         {{- if .Values.dapr.enabled }}
-        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port) | nindent 8 }}
+        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) (int .Values.lifecycle.teardownSeconds))) | nindent 8 }}
         {{- end }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
@@ -45,7 +45,15 @@ spec:
             - "maintenance.service:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
-            {{- include "rask.shutdownArg" (list . .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) | nindent 12 }}
+            {{- $drain := 0 }}
+            {{- if .Values.dapr.enabled }}
+            {{- $drain = int (required "maintenance.queue.drainSeconds is required" (required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue).drainSeconds) }}
+            {{- $budget := sub (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) (int .Values.lifecycle.preStopSeconds)) (int .Values.lifecycle.teardownSeconds) }}
+            {{- if ge $drain $budget }}
+            {{- fail (printf "maintenance.queue.drainSeconds (%d) is not inside the %d s the pod's grace leaves after preStop and the teardown: a stopping replica would be killed with its pass still running" $drain $budget) }}
+            {{- end }}
+            {{- end }}
+            {{- include "rask.shutdownArg" (list . (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) $drain)) | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
@@ -107,17 +115,17 @@ spec:
             {{- if .Values.dapr.enabled }}
             {{- $queue := required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue }}
             - { name: MAINTENANCE_NATS_URL, value: {{ include "lance.natsUrl" . | quote }} }
-            - { name: MAINTENANCE_NATS_CREDENTIALS_SECRET, value: "nats-user-{{ .Values.maintenance.daprAppId }}-worker" }
-            - { name: MAINTENANCE_TASK_HEARTBEAT_SECONDS, value: {{ $queue.heartbeatSeconds | quote }} }
-            - { name: MAINTENANCE_TASK_ACK_WAIT_SECONDS, value: {{ $queue.ackWaitSeconds | quote }} }
-            - { name: MAINTENANCE_TASK_MAX_DELIVER, value: {{ $queue.maxDeliver | quote }} }
-            - { name: MAINTENANCE_MAX_PASS_SECONDS, value: {{ $queue.maxPassSeconds | quote }} }
-            - { name: MAINTENANCE_RECHECK_HOURS, value: {{ $queue.recheckHours | quote }} }
+            - { name: MAINTENANCE_NATS_CREDENTIALS_SECRET, value: "nats-user-maintenance-worker" }
+            - { name: MAINTENANCE_TASK_HEARTBEAT_SECONDS, value: {{ required "maintenance.queue.heartbeatSeconds is required" $queue.heartbeatSeconds | quote }} }
+            - { name: MAINTENANCE_TASK_ACK_WAIT_SECONDS, value: {{ required "maintenance.queue.ackWaitSeconds is required" $queue.ackWaitSeconds | quote }} }
+            - { name: MAINTENANCE_TASK_MAX_DELIVER, value: {{ required "maintenance.queue.maxDeliver is required" $queue.maxDeliver | quote }} }
+            - { name: MAINTENANCE_MAX_PASS_SECONDS, value: {{ required "maintenance.queue.maxPassSeconds is required" $queue.maxPassSeconds | quote }} }
+            - { name: MAINTENANCE_RECHECK_HOURS, value: {{ required "maintenance.queue.recheckHours is required" $queue.recheckHours | quote }} }
             - { name: MAINTENANCE_COMMIT_PASS_DELAY_SECONDS, value: {{ required "maintenance.queue.commitPassDelaySeconds is required" $queue.commitPassDelaySeconds | quote }} }
-            - { name: MAINTENANCE_RETRY_SECONDS, value: {{ $queue.retrySeconds | quote }} }
-            - { name: MAINTENANCE_AUDIT_SCHEDULE, value: {{ $queue.auditSchedule | quote }} }
+            - { name: MAINTENANCE_RETRY_SECONDS, value: {{ required "maintenance.queue.retrySeconds is required" $queue.retrySeconds | quote }} }
+            - { name: MAINTENANCE_AUDIT_SCHEDULE, value: {{ required "maintenance.queue.auditSchedule is required" $queue.auditSchedule | quote }} }
             - { name: MAINTENANCE_SCAN_SCHEDULE, value: {{ required "maintenance.queue.scanSchedule is required" $queue.scanSchedule | quote }} }
-            - { name: MAINTENANCE_DRAIN_SECONDS, value: {{ $queue.drainSeconds | quote }} }
+            - { name: MAINTENANCE_DRAIN_SECONDS, value: {{ $drain | quote }} }
             {{- end }}
             - { name: MAINTENANCE_MIN_VERSIONS_TO_EXPIRE, value: {{ required "maintenance.minVersionsToExpire is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.minVersionsToExpire | quote }} }
             - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
