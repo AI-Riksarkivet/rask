@@ -211,11 +211,11 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | objectStore.port | int | `9000` | S3 API port of the development store's Service. |
 | observability.enabled | bool | `false` | Deploy rask's OTel Collector and turn on OTLP export from the lakehouse services, Dapr and OpenFGA to it; needs `export.endpoint`. |
 | observability.environment | string | `"rask"` | Value of the `deployment.environment.name` OTel resource attribute; empty falls back to the release namespace. |
-| observability.export.auditHeaders | object | `{"x-greptime-log-table-name":"lance_audit"}` | Headers added to the export of `lance.audit` records, which leave on their own exporter. |
+| observability.export.auditHeaders | object | `{}` | Headers added to the export of `lance.audit` records, which leave on their own exporter, so a backend can route the governance trail apart from telemetry. |
 | observability.export.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled. |
 | observability.export.endpoint | string | `""` | OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render, and http on a real deployment. |
-| observability.export.headers | object | `{"x-greptime-db-name":"public"}` | Headers sent on every export. |
-| observability.export.traceHeaders | object | `{"x-greptime-pipeline-name":"greptime_trace_v1"}` | Headers added to the trace export. |
+| observability.export.headers | object | `{}` | Headers sent on every export: the backend's ingestion contract, none by default (the dev overlay names GreptimeDB's). |
+| observability.export.traceHeaders | object | `{}` | Headers added to the trace export. |
 | observability.otelCollector.image | string | `"otel/opentelemetry-collector-contrib:0.157.0"` | Container image for the OTel Collector (contrib distribution). |
 | observability.samplingRate | string | `"1"` | Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request. |
 | openbao.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the store's readers to the platform's store. Required under networkPolicy.enabled when `enabled` is false. |

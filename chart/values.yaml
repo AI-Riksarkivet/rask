@@ -1995,23 +1995,19 @@ observability:
   otelCollector:
     # -- Container image for the OTel Collector (contrib distribution).
     image: otel/opentelemetry-collector-contrib:0.157.0
-  # Where the Collector sends what it collects. Every exporter presents the credential above. The headers are
-  # the backend's ingestion contract, not OTLP's: GreptimeDB picks its database from `x-greptime-db-name`,
-  # ingests traces only through the pipeline `x-greptime-pipeline-name` names, and writes a log stream to the
-  # table `x-greptime-log-table-name` names (the governance trail is routed apart from telemetry so it can be
-  # kept longer).
+  # Where the Collector sends what it collects. Every exporter presents the credential above. The headers are the
+  # backend's ingestion contract, not OTLP's, so the chart names none: the install sets its backend's, as the dev
+  # overlay sets GreptimeDB's (deploy/values-local.yaml). The audit trail leaves on its own exporter, so its headers can
+  # route the governance trail apart from telemetry, to be kept longer.
   export:
     # -- OTLP/HTTP base URL the Collector exports traces, metrics and logs to (`/v1/traces` etc. are appended); the platform's backend. Required while `enabled`: empty fails the render, and http on a real deployment.
     endpoint: ""
-    # -- Headers sent on every export.
-    headers:
-      x-greptime-db-name: public
+    # -- Headers sent on every export: the backend's ingestion contract, none by default (the dev overlay names GreptimeDB's).
+    headers: {}
     # -- Headers added to the trace export.
-    traceHeaders:
-      x-greptime-pipeline-name: greptime_trace_v1
-    # -- Headers added to the export of `lance.audit` records, which leave on their own exporter.
-    auditHeaders:
-      x-greptime-log-table-name: lance_audit
+    traceHeaders: {}
+    # -- Headers added to the export of `lance.audit` records, which leave on their own exporter, so a backend can route the governance trail apart from telemetry.
+    auditHeaders: {}
     # -- NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled.
     egress: []
   # -- Dapr tracing sampling rate in the Dapr Configuration, as a string from 0 to 1; "1" traces every request.

@@ -1177,13 +1177,8 @@
                     "type": "object",
                     "properties": {
                         "auditHeaders": {
-                            "description": "Headers added to the export of `lance.audit` records, which leave on their own exporter.",
-                            "type": "object",
-                            "properties": {
-                                "x-greptime-log-table-name": {
-                                    "type": "string"
-                                }
-                            }
+                            "description": "Headers added to the export of `lance.audit` records, which leave on their own exporter, so a backend can route the governance trail apart from telemetry.",
+                            "type": "object"
                         },
                         "egress": {
                             "description": "NetworkPolicy egress rules ({to, ports}) admitting the Collector to the backend at `endpoint`, at the port a policy sees. Required under networkPolicy.enabled.",
@@ -1194,22 +1189,12 @@
                             "type": "string"
                         },
                         "headers": {
-                            "description": "Headers sent on every export.",
-                            "type": "object",
-                            "properties": {
-                                "x-greptime-db-name": {
-                                    "type": "string"
-                                }
-                            }
+                            "description": "Headers sent on every export: the backend's ingestion contract, none by default (the dev overlay names GreptimeDB's).",
+                            "type": "object"
                         },
                         "traceHeaders": {
                             "description": "Headers added to the trace export.",
-                            "type": "object",
-                            "properties": {
-                                "x-greptime-pipeline-name": {
-                                    "type": "string"
-                                }
-                            }
+                            "type": "object"
                         }
                     }
                 },

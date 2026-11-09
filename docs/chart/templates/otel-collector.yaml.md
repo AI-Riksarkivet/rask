@@ -92,9 +92,10 @@ minutes the queue, not the retry loop, is what carries the data.
 
 ## `otlphttp/audit:`
 
-The audit trail's own table, named by `export.auditHeaders`. `x-greptime-log-table-name` is what
-GreptimeDB's OTLP log ingestion routes on — verified against the running v1.1.1 rather than taken from docs: a
-protobuf record carrying the header created the named table. Same endpoint, same durability
+The audit trail's own table, named by `export.auditHeaders`, which the chart leaves empty: the headers are the
+backend's contract, so the install names them. The dev overlay sets `x-greptime-log-table-name`, what GreptimeDB's
+OTLP log ingestion routes on, verified against the running v1.1.1 rather than taken from docs: a protobuf record
+carrying the header created the named table. Same endpoint, same durability
 settings as the shared exporter; only the destination table differs.
 
 ## `traces:`

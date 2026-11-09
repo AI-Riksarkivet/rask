@@ -87,6 +87,14 @@ observability:
   enabled: true
   export:
     endpoint: http://greptimedb.observability:4000/v1/otlp
+    # GreptimeDB's ingestion contract, the fixture's backend: the database every signal lands in, the pipeline traces
+    # are ingested through, and the audit trail's own table (each verified against GreptimeDB v1.1.1).
+    headers:
+      x-greptime-db-name: public
+    traceHeaders:
+      x-greptime-pipeline-name: greptime_trace_v1
+    auditHeaders:
+      x-greptime-log-table-name: lance_audit
 
 # The bus is the platform's (ADR 0153); on a dev estate it is the nats fixture (deploy/fixtures/nats, release `nats`
 # in this namespace), which `make k3s-up` installs first.

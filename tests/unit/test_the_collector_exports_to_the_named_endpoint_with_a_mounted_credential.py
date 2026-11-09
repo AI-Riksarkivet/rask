@@ -48,18 +48,10 @@ def test_every_signal_leaves_for_the_named_endpoint_presenting_a_credential_eso_
     routes = {(name, spec["endpoint"], tuple(sorted(spec["headers"].items()))) for name, spec in exporters.items()}
 
     assert routes == {
-        ("otlphttp", _ENDPOINT, (("x-greptime-db-name", "public"), ("x-tenant", "rask"))),
-        (
-            "otlphttp/traces",
-            _ENDPOINT,
-            (("x-greptime-db-name", "public"), ("x-greptime-pipeline-name", "greptime_trace_v1"), ("x-tenant", "rask"), ("x-trace-route", "spans")),
-        ),
-        (
-            "otlphttp/audit",
-            _ENDPOINT,
-            (("x-greptime-db-name", "public"), ("x-greptime-log-table-name", "lance_audit"), ("x-log-table", "audit"), ("x-tenant", "rask")),
-        ),
-    }, f"a pipeline leaves for somewhere other than the named endpoint, or without its headers: {sorted(routes)}"
+        ("otlphttp", _ENDPOINT, (("x-tenant", "rask"),)),
+        ("otlphttp/traces", _ENDPOINT, (("x-tenant", "rask"), ("x-trace-route", "spans"))),
+        ("otlphttp/audit", _ENDPOINT, (("x-log-table", "audit"), ("x-tenant", "rask"))),
+    }, f"a pipeline leaves for somewhere other than the named endpoint, or with headers the install did not name: {sorted(routes)}"
     authenticators = {name: (spec.get("auth") or {}).get("authenticator") for name, spec in exporters.items()}
     assert None not in authenticators.values(), f"an exporter writes the store unauthenticated: {authenticators}"
     [authenticator] = set(authenticators.values())
