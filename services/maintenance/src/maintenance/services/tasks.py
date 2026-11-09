@@ -63,8 +63,8 @@ async def running_worker(
     worker until the app stops; the queue, for the commit lane's publishes. A stack with no bus runs no worker and yields
     ``None``.
 
-    Every loop is kept running: one that ends with an error is logged and started again after a pause, so no failure of
-    one read leaves a replica that stays Ready and does nothing. The two cadences are asserted again every
+    Every loop is kept running: one that ends before the worker stops, with an error or without, is logged and started
+    again after a pause, so no failure of one read leaves a replica that stays Ready and does nothing. The two cadences are asserted again every
     ``_CADENCE_SECONDS``, since a schedules stream purged or recreated loses them with every table's schedule, and the
     audit they start is what queues those tables again; a cadence is a clock, so asserting it again moves no firing.
 
@@ -90,6 +90,7 @@ async def running_worker(
         run=partial(run_task, settings=settings, queue=queue, emitter=emitter, control=control),
         ready=ready,
         heartbeat_seconds=settings.task_heartbeat_seconds,
+        ack_wait_seconds=settings.task_ack_wait_seconds,
         max_deliver=settings.task_max_deliver,
         max_pass_seconds=settings.max_pass_seconds,
         retry_ended_seconds=settings.recheck_hours * 3600,
@@ -104,10 +105,7 @@ async def running_worker(
     try:
         yield queue
     finally:
-        worker.stop()
-        _, unfinished = await asyncio.wait(loops, timeout=settings.drain_seconds)
-        for loop in unfinished:
-            loop.cancel()
+        await worker.drain(loops, settings.drain_seconds)
         await queue.close()
 
 
@@ -130,10 +128,18 @@ async def _keep_cadences(worker: Worker, queue: TaskQueue, settings: Maintenance
 
 
 async def _supervised(worker: Worker, name: str, loop: Callable[[], Awaitable[None]]) -> None:
-    """Run ``loop`` until the worker stops, starting it again after a pause whenever it ends with an error."""
+    """Run ``loop`` until the worker stops, starting it again after a pause whenever it ends before then.
+
+    A loop ends early with an error, or without one, which only a wrong loop does; started again at once, that one would
+    hold the event loop and starve every other loop of the replica, its heartbeats among them, so it pauses too.
+    """
     while not worker.stopping():
         try:
             await loop()
         except Exception:  # noqa: BLE001 — whatever ended the loop is logged, and the loop runs again
             log.exception("maintenance_loop_failed", extra={"loop": name})
-            await worker.pause(_RESTART_SECONDS)
+        else:
+            if worker.stopping():
+                return
+            log.error("maintenance_loop_ended", extra={"loop": name})
+        await worker.pause(_RESTART_SECONDS)

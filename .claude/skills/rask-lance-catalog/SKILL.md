@@ -576,7 +576,11 @@ governing their data. The project-scoped surface is the console's project page, 
   `chart/templates/maintenance.yaml`) runs a pull worker on the chart's durable consumers, as its own bus user
   (`maintenance-worker`) through nats-py rather than Dapr, whose JetStream subscription sends no in-progress ack and whose
   publish cannot set a schedule header (`maintenance.services.tasks`). It takes one task at a time and heartbeats it
-  every `maintenance.queue.heartbeatSeconds`, so a killed replica's task goes to another after `ackWaitSeconds`; a pass
+  every `maintenance.queue.heartbeatSeconds`, so a killed replica's task goes to another after `ackWaitSeconds`; a replica
+  whose heartbeats the bus stops answering ends itself before that ack wait runs out (`Worker._tell`), one whose drain
+  ends with a pass still running ends there (`Worker.drain`), each pull has a subscription of its own, and a pass
+  holds a claim on its table in the MAINTENANCE_CLAIMS bucket that another pass waits out (`Worker._claim`), so two
+  passes of one table never overlap; a pass
   past twice `maxPassSeconds` ends its replica, and a task that outlived its worker on all `maxDeliver` deliveries is
   ended unrun on the one more the consumer allows. A commit's announcement on `lineage.events.v1` (`/maintenance-arrival`,
   `maintenance.services.arrival.lane_task`) holds one follow-up pass `commitPassDelaySeconds` (300) out unless one is

@@ -99,6 +99,10 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: How often a running task tells JetStream it is still being worked on, well inside the consumer's ack wait (the
     #: chart's `maintenance.queue.ackWaitSeconds`), so a long pass is never redelivered beneath itself while its worker lives.
     task_heartbeat_seconds: float = Field(default=20.0, gt=0, alias="MAINTENANCE_TASK_HEARTBEAT_SECONDS")
+    #: The consumer's ack wait (the chart's `maintenance.queue.ackWaitSeconds`): how long JetStream waits for a heartbeat
+    #: before it hands a running task to another replica. A worker whose heartbeats go unanswered until the ack wait the
+    #: last answer restarted runs out ends itself, since its task may then be another replica's.
+    task_ack_wait_seconds: float = Field(default=60.0, gt=0, alias="MAINTENANCE_TASK_ACK_WAIT_SECONDS")
     #: Deliveries of one task before the worker ends it and counts it (the chart's `maintenance.queue.maxDeliver`); the
     #: consumer allows one more, on which a task that outlived its worker every time is ended without running.
     task_max_deliver: int = Field(default=10, ge=1, alias="MAINTENANCE_TASK_MAX_DELIVER")
@@ -114,7 +118,8 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: until the pass runs is covered by it, and a pass costs a fixed handful of store requests however busy the table is.
     commit_pass_delay_seconds: int = Field(default=300, ge=1, alias="MAINTENANCE_COMMIT_PASS_DELAY_SECONDS")
     #: How long a stopping replica lets the task it is running finish before its connection drains, inside the pod's
-    #: `terminationGracePeriodSeconds`; a task cut short goes to another replica once its heartbeat stops.
+    #: `terminationGracePeriodSeconds`; a task cut short goes to another replica once its heartbeat stops. A pass still
+    #: running when the drain ends ends its replica (`Worker.drain`), since its heartbeat ends with the drain.
     drain_seconds: float = Field(default=50.0, gt=0, alias="MAINTENANCE_DRAIN_SECONDS")
     #: The audit's schedule, a NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs, the
     #: release and the lost-task backstop run once per firing on one replica, whatever the replica count.

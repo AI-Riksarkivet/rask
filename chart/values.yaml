@@ -784,7 +784,7 @@ maintenance:
   # (the store's change events) and their durable consumers; the worker binds to them as its own bus user
   # (`nats.auth.users.maintenance-worker`).
   queue:
-    # -- Consumer ack wait, in seconds: how long a task a dead worker held waits before another replica gets it.
+    # -- Consumer ack wait, in seconds: how long a task a dead worker held waits before another replica gets it. A worker whose heartbeats the bus stops answering ends itself before the ack wait its last answered heartbeat restarted runs out, so its pass never runs beside the next.
     ackWaitSeconds: 60
     # -- How often a running task tells JetStream it is still being worked on; well inside `ackWaitSeconds`.
     heartbeatSeconds: 20
@@ -802,7 +802,7 @@ maintenance:
     auditSchedule: "@hourly"
     # -- The scan's NATS message schedule: the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies.
     scanSchedule: "@daily"
-    # -- How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`.
+    # -- How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain and the task would reach another replica while it ran on.
     drainSeconds: 90
     # -- The most STORE_EVENTS holds, in bytes, before it drops its oldest: each event is a hint of about 2 KB that the table's daily recheck backs up, and the stream shares the bus's JetStream disk with LINEAGE and the work queue.
     storeEventsMaxBytes: 134217728
@@ -1373,7 +1373,7 @@ nats:
     # -- The bus user table, one user per Dapr app-id plus admin and monitor, each with publish and subscribe subject lists (never empty).
     users:
       admin:
-        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.STREAM.UPDATE.LINEAGE, $JS.API.STREAM.UPDATE.DLQ, $JS.API.STREAM.UPDATE.CATALOG_CONTROL, $JS.API.STREAM.UPDATE.CATALOG_CONTROL_BROADCAST, $JS.API.STREAM.UPDATE.MAINTENANCE_TASKS, $JS.API.STREAM.UPDATE.MAINTENANCE_SCHEDULES, $JS.API.STREAM.UPDATE.STORE_EVENTS, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
+        publish: [$JS.API.INFO, $JS.API.STREAM.LIST, $JS.API.STREAM.NAMES, $JS.API.STREAM.INFO.*, $JS.API.STREAM.CREATE.*, $JS.API.STREAM.UPDATE.LINEAGE, $JS.API.STREAM.UPDATE.DLQ, $JS.API.STREAM.UPDATE.CATALOG_CONTROL, $JS.API.STREAM.UPDATE.CATALOG_CONTROL_BROADCAST, $JS.API.STREAM.UPDATE.MAINTENANCE_TASKS, $JS.API.STREAM.UPDATE.MAINTENANCE_SCHEDULES, $JS.API.STREAM.UPDATE.STORE_EVENTS, $JS.API.STREAM.UPDATE.KV_MAINTENANCE_CLAIMS, $JS.API.CONSUMER.NAMES.*, $JS.API.CONSUMER.INFO.*.*, $JS.API.CONSUMER.CREATE.*.>, $JS.API.CONSUMER.DELETE.*.*]
         subscribe: [_INBOX.>]
       catalog:
         publish:
@@ -1405,7 +1405,8 @@ nats:
         subscribe: [_INBOX.>]
       # The maintenance worker's own user (ADR 0198 decision 5): its app talks to the bus directly, since Dapr's subscription
       # sends no in-progress ack and its publish no schedule header. Pull and ack on its three durables, tasks and schedules
-      # published, and the two queue streams' info for the audit's count; no stream or consumer is created or changed by
+      # published, the two queue streams' info for the audit's count, and the claim a pass holds on its table in the
+      # MAINTENANCE_CLAIMS bucket (created, renewed and released by revision); no stream or consumer is created or changed by
       # it. Its replies arrive on an inbox of its own (`maintenance.services.queue.INBOX_PREFIX`), which no other user reads.
       maintenance-worker:
         publish:
@@ -1419,6 +1420,9 @@ nats:
           - $JS.API.STREAM.INFO.MAINTENANCE_SCHEDULES
           - $JS.API.CONSUMER.MSG.NEXT.STORE_EVENTS.maintenance-store-events
           - $JS.ACK.STORE_EVENTS.maintenance-store-events.>
+          - $KV.MAINTENANCE_CLAIMS.>
+          - $JS.API.STREAM.INFO.KV_MAINTENANCE_CLAIMS
+          - $JS.API.DIRECT.GET.KV_MAINTENANCE_CLAIMS.>
         subscribe: [_INBOX_maintenance.>]
       # The development store's own user (deploy/fixtures/rustfs): it publishes each object write of a rask bucket on
       # store.events, and reads STORE_EVENTS's info, which RustFS checks before it publishes there. A platform's store

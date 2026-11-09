@@ -735,7 +735,7 @@
                     "type": "object",
                     "properties": {
                         "ackWaitSeconds": {
-                            "description": "Consumer ack wait, in seconds: how long a task a dead worker held waits before another replica gets it.",
+                            "description": "Consumer ack wait, in seconds: how long a task a dead worker held waits before another replica gets it. A worker whose heartbeats the bus stops answering ends itself before the ack wait its last answered heartbeat restarted runs out, so its pass never runs beside the next.",
                             "type": "integer"
                         },
                         "auditSchedule": {
@@ -747,7 +747,7 @@
                             "type": "integer"
                         },
                         "drainSeconds": {
-                            "description": "How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`.",
+                            "description": "How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain and the task would reach another replica while it ran on.",
                             "type": "integer"
                         },
                         "heartbeatSeconds": {

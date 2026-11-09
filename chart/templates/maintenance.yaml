@@ -109,6 +109,7 @@ spec:
             - { name: MAINTENANCE_NATS_URL, value: {{ include "lance.natsUrl" . | quote }} }
             - { name: MAINTENANCE_NATS_CREDENTIALS_SECRET, value: "nats-user-{{ .Values.maintenance.daprAppId }}-worker" }
             - { name: MAINTENANCE_TASK_HEARTBEAT_SECONDS, value: {{ $queue.heartbeatSeconds | quote }} }
+            - { name: MAINTENANCE_TASK_ACK_WAIT_SECONDS, value: {{ $queue.ackWaitSeconds | quote }} }
             - { name: MAINTENANCE_TASK_MAX_DELIVER, value: {{ $queue.maxDeliver | quote }} }
             - { name: MAINTENANCE_MAX_PASS_SECONDS, value: {{ $queue.maxPassSeconds | quote }} }
             - { name: MAINTENANCE_RECHECK_HOURS, value: {{ $queue.recheckHours | quote }} }

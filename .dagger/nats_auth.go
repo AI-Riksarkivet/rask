@@ -18,8 +18,9 @@ const natsStreamJobImage = "natsio/nats-box:0.20.2"
 // daprdImage is the sidecar the Dapr fixture's injector stamps into every pod (its SIDECAR_IMAGE).
 const daprdImage = "ghcr.io/dapr/daprd:1.19.0-rc.4"
 
-// NatsAuth proves the chart's NATS permission table (`nats.auth.users`) on a real broker: the NATS fixture's
-// nats-server in operator mode with a MEMORY resolver and JetStream, test-only keys minted with nsc, one user
+// NatsAuth proves the chart's NATS permission table (`nats.auth.users`) on a real bus: the NATS fixture's three
+// nats-servers clustered in operator mode with a MEMORY resolver and JetStream, each stream at the chart's default
+// replicas as on the estate, test-only keys minted with nsc, one user
 // per table row, and the real daprd the Dapr fixture injects, running the chart's own Components against it
 // (tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py says what it asserts). On the same rig, the
 // maintenance worker on the queue the chart's stream Job declares, as its own bus user: two replicas share a burst and a

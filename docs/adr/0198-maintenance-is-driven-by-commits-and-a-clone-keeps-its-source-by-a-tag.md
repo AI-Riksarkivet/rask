@@ -66,7 +66,25 @@ The four rows were built as one (owner, 2026-11-08), and building them settled w
 - **Decision 2, the queue.** A commit's announcement holds one follow-up for its table, `maintenance.queue.commitPassDelaySeconds`
   out, so a burst makes one pass; each pass schedules the table's own next one. Tasks sit on MAINTENANCE_TASKS, one per
   subject: a guarded publish (`Nats-Expected-Last-Subject-Sequence: 0`) refuses a second while one is queued or in flight.
-  A running worker keeps its task by heartbeat; a pass past twice `maxPassSeconds` ends its replica, and a task that
+  A running worker keeps its task by heartbeat, and ends its replica when the bus stops answering until the ack wait its
+  last answered heartbeat restarted runs out: JetStream answers a heartbeat for a delivery it has already handed on as it
+  answers a live one (measured on nats-server 2.15.2, three nodes, R3, 2026-11-09), so only an unbroken run of answers
+  vouches for the task, and two passes of one table never overlap, a bus cut that closes the connection included. An
+  ack, nak or term is sent the same way, answered inside the lease or never, since JetStream applies a handed-on
+  delivery's late ack, which frees the table's task under another replica's pass. A settle the network itself holds
+  past the lease (a silent partition that heals, a stalled node that resumes) is still applied late, so a pass also
+  holds a claim on its table in the MAINTENANCE_CLAIMS key-value bucket: created only where none stands, renewed by
+  revision with each heartbeat, released only by its holder's revision, and gone one ack wait after its last renewal.
+  A pass that finds another's claim waits it out, and a stale holder's late renewal or release cannot match the
+  revision standing (measured on nats-server 2.15.2, three nodes, R3, 2026-11-09). The owner asked for it to be fixed
+  rather than documented (2026-11-09), though two cleanups of one table at once were measured harmless (pylance 13.0.0:
+  60 rounds on disk and S3, no table harmed). A heartbeat-extended deadline survives a consumer leader change (measured: a
+  task redelivered at the extended deadline after a step-down). A pass is a thread nothing can
+  stop, so it is the process that ends: a bus outage longer than the ack wait restarts each replica that was mid-pass,
+  which has no work without the bus and may wait out a crash-loop backoff once it is back. For the same reason a stopping
+  replica whose drain ends with a pass still running ends there, and a task is only ever run off the pull it answered:
+  each pull has a subscription of its own, so a pull a reconnect held back, answered after the worker gave up on it,
+  delivers to an inbox no one reads. A pass past twice `maxPassSeconds` ends its replica, and a task that
   outlives its worker on every one of `maxDeliver` deliveries is ended unrun on one more, which the consumer allows. The
   backstop is the hourly audit, which opens no table and queues each table whose schedule was lost; the orphan scan and the
   trash purge run once a day (owner, 2026-11-09).

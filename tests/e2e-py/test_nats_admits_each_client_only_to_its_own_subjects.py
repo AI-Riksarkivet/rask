@@ -76,16 +76,20 @@ BLIND_ADMIN = "rask-test-blind-admin"
 LINK_DOWN_SECONDS = 10.0
 #: The durable the replay binds for the catalog's broadcast, named as a replica named `replay-catalog` would name it.
 BROADCAST_REPLAY = "catalog-control-replay-catalog"
+#: How many times the stream Job runs before the lane gives up on it, inside the chart's `backoffLimit` of 20.
+_JOB_RUNS = 3
 
 
 #: Who may publish each data subject; every other table user must be refused on it.
 #:
 #: lineage: catalog/core/lineage_emit.py, lineage/services/staged.py (recovered signed bytes), maintenance/core/
 #: lineage_emit.py. control: catalog's control_emit and control_relay.py, plus the flagged announcer below. maintenance's
-#: tasks and schedules: maintenance/services/queue.py, as the worker's own user. store.events: the development store's
+#: tasks, schedules and claims on tables: maintenance/services/queue.py, as the worker's own user. store.events: the development store's
 #: change notifications (deploy/fixtures/rustfs), as its own user. dlq.<app>: the
 #: `deadLetterTopic` of that app's subscriptions. probe.<app>: lakehouse/bus_watchdog.py, which each service runs over its
 #: own sidecar's connections.
+
+
 def _values() -> Path:
     return Path(os.environ.get(VALUES_ENV) or REPO / "chart" / "values.yaml")
 
@@ -108,6 +112,7 @@ PUBLISHERS: dict[str, frozenset[str]] = {
     **{f"probe.{app}": frozenset({app}) for app in ("catalog", "lineage", "maintenance")},
     "maintenance.task.probe": frozenset({"maintenance-worker"}),
     "maintenance.schedule.probe": frozenset({"maintenance-worker"}),
+    "$KV.MAINTENANCE_CLAIMS.probe": frozenset({"maintenance-worker"}),
     "store.events": frozenset({"object-store"}),
 }
 #: The subjects no stream captures, so an owner's publish is acknowledged by nobody and only the broker's log says
@@ -196,11 +201,16 @@ def _run_stream_job(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_:
 
 
 def _stream_job(tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, home: Path) -> list[str]:
-    """The chart's stream Job, run as `admin` against this broker; it must finish and exit 0."""
-    done = _run_stream_job(tools, docs, broker, mint_, home, "admin")
-    if isinstance(done, str):
-        return [done]
-    return [] if done.returncode == 0 else [f"the stream Job exited {done.returncode} as admin: {(done.stdout + done.stderr)[-800:]}"]
+    """The chart's stream Job, run as `admin` against this broker; it must finish and exit 0, within the runs Kubernetes would
+    give it: a failed run is run again (the chart's `backoffLimit`), since creating a stream copied to three servers can
+    outlast the CLI's request deadline on a loaded host (measured 2026-11-09), and the Job is idempotent."""
+    for _ in range(_JOB_RUNS):
+        done = _run_stream_job(tools, docs, broker, mint_, home, "admin")
+        if isinstance(done, str):
+            return [done]
+        if done.returncode == 0:
+            return []
+    return [f"the stream Job exited {done.returncode} as admin on each of {_JOB_RUNS} runs: {(done.stdout + done.stderr)[-800:]}"]
 
 
 async def _last_seqs(rig: Client) -> dict[str, int]:
@@ -523,6 +533,21 @@ async def _judged_durables(rig: Client, docs: tuple[dict, ...]) -> set[tuple[str
     }
 
 
+async def _stream_job_converges_a_changed_ack_wait(tools: Tools, values: Path, broker: Broker, mint_: Mint, rig: Client, home: Path) -> list[str]:
+    """The Job run again on a render whose `maintenance.queue.ackWaitSeconds` changed, as an upgrade runs it: as `admin`
+    it converges the claims bucket's max age and the worker's consumer to the new ack wait, so neither is left on the
+    old one beside pods that vouch for the new."""
+    changed = render(*DEFAULT_ARGS, "-f", str(values), "--set", "maintenance.queue.ackWaitSeconds=120")
+    findings = await asyncio.to_thread(_stream_job, tools, changed, broker, mint_, home)
+    bucket = ((await rig.request("$JS.API.STREAM.INFO.KV_MAINTENANCE_CLAIMS")) or {}).get("config", {})
+    consumer = ((await rig.request("$JS.API.CONSUMER.INFO.MAINTENANCE_TASKS.maintenance-worker")) or {}).get("config", {})
+    if bucket.get("max_age") != 120_000_000_000:
+        findings.append(f"the stream Job left the claims bucket's max age at {bucket.get('max_age')} for an ack wait of 120 s")
+    if consumer.get("ack_wait") != 120_000_000_000:
+        findings.append(f"the stream Job left the worker's consumer's ack wait at {consumer.get('ack_wait')} for 120 s")
+    return findings
+
+
 async def _stream_job_deletes_nothing_it_could_not_read(
     tools: Tools, docs: tuple[dict, ...], broker: Broker, mint_: Mint, rig: Client, home: Path
 ) -> list[str]:
@@ -587,7 +612,7 @@ def _daprd_calls_the_replay_misses(log_text: str, mint_: Mint, components: list[
 async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path) -> None:
     tools = Tools.from_env(os.environ)
     values = _values()
-    docs = render(*DEFAULT_ARGS, "-f", str(values), "--set", "nats.streamReplicas=1")
+    docs = render(*DEFAULT_ARGS, "-f", str(values))
     table = {user: Permissions(publish=tuple(sorted(pub)), subscribe=tuple(sorted(sub))) for user, (pub, sub) in nats_users(docs).items()}
     assert table, f"the render with {values} issues no NATS user (the dev seed is absent)"
     components = _pubsub_components(docs)
@@ -599,7 +624,7 @@ async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path) 
     broker.start()
     try:
         findings += await asyncio.to_thread(_stream_job, tools, docs, broker, mint_, tmp_path)
-        rig = await Client.connect(broker.url, mint_.credentials[RIG], RIG)
+        rig = await Client.connect(broker.url, mint_.credentials[RIG], RIG, answer_within=10.0)
         findings += await _without_credential(broker.url)
         matrix, foreign, probes = await _publish_matrix(broker.url, mint_, table, rig)
         findings += matrix
@@ -607,6 +632,7 @@ async def test_nats_admits_each_client_only_to_its_own_subjects(tmp_path: Path) 
         findings += await _replay_subscriptions(broker.url, mint_, components, probes)
         findings += await _stream_job_repairs(tools, docs, broker, mint_, rig, tmp_path)
         findings += await _stream_job_deletes_nothing_it_could_not_read(tools, docs, broker, mint_, rig, tmp_path)
+        findings += await _stream_job_converges_a_changed_ack_wait(tools, values, broker, mint_, rig, tmp_path)
         findings += await asyncio.to_thread(_monitor_reads, tools, broker, mint_, tmp_path)
         for client in [rig, *probes.values()]:
             await client.close()

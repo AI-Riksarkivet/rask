@@ -1,8 +1,9 @@
-"""An operator-mode NATS broker with test-only keys, and the clients the bus-auth proof drives through it.
+"""An operator-mode NATS cluster with test-only keys, and the clients the bus-auth proof drives through it.
 
 The rig behind `test_nats_admits_each_client_only_to_its_own_subjects.py` ([[XC-078]] slice 2). It mints an
 operator, a SYS account, one APP account with JetStream and one user per permission-table entry with `nsc`, runs
-`nats-server` in operator mode with a MEMORY resolver, and runs `daprd` against it with the chart's own Components.
+the NATS fixture's three `nats-server`s in operator mode with a MEMORY resolver, clustered as the estate runs them, and
+runs `daprd` against them with the chart's own Components.
 Every binary is the one the chart deploys: `.dagger/nats_auth.go` copies them out of those images into
 `RASK_NATS_AUTH_TOOLS` and names each image in `images.json`, which the test compares with the render.
 
@@ -193,42 +194,74 @@ def free_port() -> int:
         return int(probe.getsockname()[1])
 
 
+#: The NATS fixture's cluster size (`deploy/fixtures/nats/chart/values.yaml`, `config.cluster.replicas`), and so the
+#: copies of each stream the chart declares at its default `nats.streamReplicas`.
+_NODES = 3
+
+
 class Broker:
-    """One `nats-server` in operator mode (MEMORY resolver, JetStream on, every client op traced)."""
+    """The NATS fixture's bus: `_NODES` `nats-server`s in operator mode (MEMORY resolver, JetStream on, every client op
+    traced), routed into one cluster, so each stream the chart declares keeps a copy on every server, as it does live.
+
+    A copied stream refuses some puts unlike one server: a put expecting its subject to hold nothing is refused with 10164
+    while another put for that subject is still being agreed, and with 10071 once that one is stored, where one server
+    answers 10071 to both (measured on nats-server 2.15.2, 2026-11-09: 40 of 40 racing puts). Every client connects to the
+    first server, and the cluster advertises no other (`no_advertise`), so a client stays on the connection the test gave
+    it and a `Link` in front of that server cuts it. The routes run on loopback without the fixture's route credential,
+    which this rig does not prove.
+    """
 
     def __init__(self, server: Path, mint: Mint, workdir: Path) -> None:
         self._server, self._mint, self._dir = server, mint, workdir
-        self._process: subprocess.Popen[bytes] | None = None
-        self.port = free_port()
+        self._processes: list[subprocess.Popen[bytes]] = []
+        self._ports = [free_port() for _ in range(_NODES)]
+        self._routes = [free_port() for _ in range(_NODES)]
+        self.port = self._ports[0]
         self.url = f"nats://127.0.0.1:{self.port}"
-        self.log_path = workdir / "nats-server.log"
 
-    def start(self, timeout: float = 20.0) -> None:
+    def start(self, timeout: float = 30.0) -> None:
+        """Start every server, and return once each knows the cluster's JetStream metadata leader, from when a stream can
+        be declared (measured: about 6 s after start)."""
         self._dir.mkdir(parents=True)
-        (self._dir / "resolver.conf").write_text(self._mint.resolver_conf)
-        (self._dir / "server.conf").write_text(
-            f"listen: 127.0.0.1:{self.port}\n"
-            "server_name: rask-test\n"
-            f'jetstream: {{ store_dir: "{self._dir / "js"}", max_file_store: 1G, max_memory_store: 64M }}\n'
-            "trace: true\n"
-            "logtime: true\n"
-            "include resolver.conf\n"
-        )
-        with self.log_path.open("wb") as log:
-            self._process = subprocess.Popen([str(self._server), "-c", str(self._dir / "server.conf")], stdout=log, stderr=subprocess.STDOUT)  # noqa: S603
+        routes = ", ".join(f"nats://127.0.0.1:{route}" for route in self._routes)
+        for node, (port, route) in enumerate(zip(self._ports, self._routes, strict=True)):
+            home = self._node_dir(node)
+            home.mkdir()
+            (home / "resolver.conf").write_text(self._mint.resolver_conf)
+            (home / "server.conf").write_text(
+                f"listen: 127.0.0.1:{port}\n"
+                f"server_name: rask-test-{node}\n"
+                f'jetstream: {{ store_dir: "{home / "js"}", max_file_store: 1G, max_memory_store: 64M }}\n'
+                f"cluster: {{ name: rask-test, listen: 127.0.0.1:{route}, routes: [{routes}], no_advertise: true }}\n"
+                "trace: true\n"
+                "logtime: true\n"
+                "include resolver.conf\n"
+            )
+            with (home / "nats-server.log").open("wb") as log:
+                self._processes.append(subprocess.Popen([str(self._server), "-c", str(home / "server.conf")], stdout=log, stderr=subprocess.STDOUT))  # noqa: S603
         deadline = time.monotonic() + timeout
-        while "Server is ready" not in self.log_text():
-            if self._process.poll() is not None or time.monotonic() > deadline:
-                raise RuntimeError(f"nats-server did not start: {self.log_text()[-1500:]}")
+        while not all("metadata leader" in self._log(node) for node in range(_NODES)):
+            if any(process.poll() is not None for process in self._processes) or time.monotonic() > deadline:
+                raise RuntimeError(f"the cluster elected no JetStream metadata leader: {self.log_text()[-1500:]}")
             time.sleep(0.1)
 
     def stop(self) -> None:
-        if self._process is not None and self._process.poll() is None:
-            self._process.terminate()
-            self._process.wait(timeout=15)
+        running = [process for process in self._processes if process.poll() is None]
+        for process in running:
+            process.terminate()
+        for process in running:
+            process.wait(timeout=15)
 
     def log_text(self) -> str:
-        return self.log_path.read_text(errors="replace") if self.log_path.exists() else ""
+        """Every server's log, the first's first: a client's calls and refusals are logged by the server it is on."""
+        return "".join(self._log(node) for node in range(_NODES))
+
+    def _node_dir(self, node: int) -> Path:
+        return self._dir / f"node-{node}"
+
+    def _log(self, node: int) -> str:
+        path = self._node_dir(node) / "nats-server.log"
+        return path.read_text(errors="replace") if path.exists() else ""
 
 
 class Link:
@@ -451,13 +484,20 @@ async def ignore_refusal(_: Exception) -> None:
 class Client:
     """A nats-py connection authenticated as one user."""
 
-    def __init__(self, nc: NatsClient) -> None:
+    def __init__(self, nc: NatsClient, answer_within: float) -> None:
         self.nc = nc
         self.js = nc.jetstream()
+        self._answer_within = answer_within
 
     @classmethod
-    async def connect(cls, url: str, credential: Credential, name: str, inbox: str = "_INBOX") -> Self:
-        """Connect as ``credential``'s user, its replies arriving under ``inbox``: the prefix its subscribe grant admits."""
+    async def connect(cls, url: str, credential: Credential, name: str, inbox: str = "_INBOX", answer_within: float = 3.0) -> Self:
+        """Connect as ``credential``'s user, its replies arriving under ``inbox``: the prefix its subscribe grant admits.
+
+        ``answer_within`` is how long each of its requests waits. A refused request is never answered, so a probe that
+        expects refusals waits briefly; a client every call of which is granted waits as long as the service's own JetStream
+        calls do (`maintenance.services.queue`'s 10 s), since on the cluster a stream's leader answers one route away, and
+        a lane sharing its host with another missed 3 s (measured 2026-11-09).
+        """
         nc = await nats.connect(
             url,
             name=name,
@@ -469,7 +509,7 @@ class Client:
             signature_cb=credential.sign_nonce,
             inbox_prefix=inbox,
         )
-        return cls(nc)
+        return cls(nc, answer_within)
 
     async def settle(self) -> None:
         """Return once the server has processed everything this client sent.
@@ -481,10 +521,10 @@ class Client:
         await self.nc.flush()
         await self.nc.flush()
 
-    async def request(self, subject: str, body: dict[str, Any] | None = None, timeout: float = 3.0) -> dict[str, Any] | None:
+    async def request(self, subject: str, body: dict[str, Any] | None = None) -> dict[str, Any] | None:
         """A JetStream API request; None when no answer came (a refused request is never answered)."""
         try:
-            reply = await self.nc.request(subject, json.dumps(body or {}).encode(), timeout=timeout)
+            reply = await self.nc.request(subject, json.dumps(body or {}).encode(), timeout=self._answer_within)
         except (TimeoutError, NoRespondersError):
             return None
         return json.loads(reply.data)

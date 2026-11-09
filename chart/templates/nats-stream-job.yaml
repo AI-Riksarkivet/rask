@@ -74,6 +74,26 @@ spec:
                   echo "stream $1: created"
                 fi
               }
+              # A key-value bucket's stream converges through JetStream's own update request: natscli asks before it edits a
+              # bucket's stream, a question `-f` does not answer and a Job cannot, and `nats kv edit` cannot keep rollups off.
+              # The request exits 0 however it is answered, so the answer is read (docs/chart/templates/nats-stream-job.yaml.md).
+              converge_bucket() {
+                if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
+                  got=$(nats --server "$S" req "\$JS.API.STREAM.UPDATE.$1" "$(cat "$HOME/$1.json")" 2>&1)
+                  case "$got" in
+                    *'"error":'*)
+                      echo "!! stream $1 cannot be edited to the declared config in place: $(echo "$got" | grep -F '"error":')"
+                      echo "!! Drain it and run: nats --server $S stream rm $1   then re-run this Job."
+                      exit 1 ;;
+                    *'"config":'*) echo "stream $1: converged to the declared config"; return 0 ;;
+                  esac
+                  echo "!! the bus did not take stream $1's update, so re-run this Job: $(echo "$got" | grep -v -e 'Sending request' -e 'Received with rtt')"
+                  exit 1
+                fi
+                nats --server "$S" stream add --config "$HOME/$1.json" >/dev/null \
+                  || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
+                echo "stream $1: created"
+              }
               # `allow_direct: true`, as `nats stream add --defaults` sets it, so a stream created that way edits to no change.
               declare_stream() {
                 printf '%s' '{"name":"'"$1"'","subjects":["'"$2"'"],"retention":"limits","max_consumers":-1,"max_msgs":-1,"max_bytes":-1,"max_msgs_per_subject":-1,"max_msg_size":-1,"max_age":{{ mul (int (required "nats.streamMaxAgeSeconds is required" .Values.nats.streamMaxAgeSeconds)) 1000000000 }},"storage":"file","discard":"old","num_replicas":{{ $replicas }},"duplicate_window":120000000000,"deny_delete":true,"deny_purge":true,"allow_rollup_hdrs":false,"allow_direct":true}' > "$HOME/$1.json"
@@ -125,6 +145,8 @@ spec:
               {{- if gt (mul 2 (int $queue.heartbeatSeconds)) (int $queue.ackWaitSeconds) }}
               {{- fail (printf "maintenance.queue.heartbeatSeconds (%d) is past half of ackWaitSeconds (%d): a heartbeat late once hands a running task to another replica" (int $queue.heartbeatSeconds) (int $queue.ackWaitSeconds)) }}
               {{- end }}
+              printf '%s' '{"name":"KV_MAINTENANCE_CLAIMS","subjects":["$KV.MAINTENANCE_CLAIMS.>"],"retention":"limits","max_consumers":-1,"max_msgs":-1,"max_bytes":-1,"max_msgs_per_subject":1,"max_msg_size":-1,"max_age":{{ mul (int $queue.ackWaitSeconds) 1000000000 }},"storage":"file","discard":"new","num_replicas":{{ $replicas }},"duplicate_window":{{ mul (int $queue.ackWaitSeconds) 1000000000 }},"deny_delete":true,"deny_purge":false,"allow_rollup_hdrs":false,"allow_direct":true}' > "$HOME/KV_MAINTENANCE_CLAIMS.json"
+              converge_bucket KV_MAINTENANCE_CLAIMS
               printf '%s' '{"durable_name":"maintenance-worker","ack_policy":"explicit","ack_wait":{{ mul (int $queue.ackWaitSeconds) 1000000000 }},"max_deliver":{{ add1 (int $queue.maxDeliver) }},"filter_subject":"maintenance.task.>","deliver_policy":"all","replay_policy":"instant","max_ack_pending":1000,"max_waiting":512}' > "$HOME/MAINTENANCE_TASKS-maintenance-worker.json"
               converge_consumer MAINTENANCE_TASKS maintenance-worker
               printf '%s' '{"durable_name":"maintenance-due","ack_policy":"explicit","ack_wait":30000000000,"max_deliver":-1,"filter_subject":"maintenance.due.>","deliver_policy":"all","replay_policy":"instant","max_ack_pending":1000,"max_waiting":512}' > "$HOME/MAINTENANCE_SCHEDULES-maintenance-due.json"

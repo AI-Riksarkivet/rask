@@ -62,6 +62,26 @@ would turn it off. The mirror's `mirror_direct` is the server's: it derives `tru
 gets, on create and on an edit that omits it (measured on nats-server 2.14.2), so the declared config leaves it out. `tests/unit/test_the_stream_job_converges_each_stream_to_its_declared_config.py` runs the script against a
 stand-in CLI; the GitOps lane reads a running bus back after a change.
 
+## `converge_bucket() {`
+
+A key-value bucket's stream converges to its declared config as every stream does, but not through `nats stream edit`.
+natscli recognises a bucket's stream and asks its own question before editing it ("Interacting with KV buckets outside of
+the 'nats kv' subcommand can lead unexpected outcomes ... Continuing this operation is an unsupported action"), which
+`-f` does not answer, so without a terminal the edit fails (`nats: error: cannot ask for confirmation without a
+terminal`) on every run after the one that created the bucket, and the next upgrade's Job with it. `nats kv edit` asks
+nothing but cannot keep rollups off, and `nats kv add` makes buckets that allow them. So the Job sends JetStream's own
+update request, `$JS.API.STREAM.UPDATE.<stream>` carrying the whole declared config: the request `nats stream edit`
+sends, under the same grant. It exits 0 however it is answered, so the Job reads the answer: the stream's info
+(`"config":`) for a config applied or already in place, an error naming the reason for one JetStream refuses (storage,
+lifting `deny_delete`: 10052), which fails the Job with the hand step a refused stream edit names, and neither when the
+request was refused by the bus's permissions or answered by no one, which fails the Job asking for a re-run, since
+draining the bucket would not help. Measured on
+natscli 0.5.1 (nats-box 0.20.2) against nats-server 2.15.2 (2026-11-09): an unchanged config and a doubled max age and
+duplicate window were applied, a storage change and a lifted `deny_delete` were refused with 10052, rollups turned on by
+hand were turned back off, and a request no one answered exited 0. A bucket that does not exist yet is created with
+`nats stream add`, which asks nothing. The `nats-auth` lane re-runs this Job as `admin` on a running three-node bus after
+changing `maintenance.queue.ackWaitSeconds`, and reads the bucket's max age back.
+
 ## `consumer_of() {`
 
 The drift passes judge a durable by its info, and a judgement on a failed read deleted a healthy durable, which the
@@ -113,6 +133,19 @@ that way, and the worker asserts the audit's and the scan's schedules at its sta
 (`maintenance.services.tasks`), which brings them back after a purge. Measured on nats-server 2.15.2 with file storage
 (2026-11-09).
 
+## `printf '%s' '{"name":"KV_MAINTENANCE_CLAIMS",...}' > "$HOME/KV_MAINTENANCE_CLAIMS.json"`
+
+The MAINTENANCE_CLAIMS key-value bucket holds the claim a pass takes on its table before it runs (ADR 0198): created only
+where none stands, renewed with each heartbeat against its revision, released only by its holder's revision, and gone one
+ack wait after its last renewal, since the bucket's `max_age` is `maintenance.queue.ackWaitSeconds`. So a worker's claim
+outlives its lease, and a pass that finds another's claim waits it out: a settle the network held past a stale worker's
+lease, which JetStream applies late and which frees the table's task under a live pass, can no longer let a second pass of
+the table start beside it. A stale holder's late renewal or release cannot match the revision now standing (measured on
+nats-server 2.15.2, three nodes, R3, 2026-11-09). The bucket is the stream nats-py's `create_key_value` would make, less
+rollups, which would let one publish on the worker's grant wipe every claim; it is declared here so the worker binds to it
+and never creates it, and `admin` holds UPDATE for it as for every stream this Job edits (`converge_bucket`), so a changed
+`maintenance.queue.ackWaitSeconds` converges its max age with the consumer's ack wait.
+
 ## `{{- if gt (mul 2 (int $queue.heartbeatSeconds)) (int $queue.ackWaitSeconds) }}`
 
 A running maintenance task stays with its worker only while the worker's in-progress acknowledgement reaches the broker
@@ -120,7 +153,8 @@ inside the `maintenance-worker` consumer's ack wait; once one is late, JetStream
 while the first is still passing the table. So the render refuses a heartbeat past half the ack wait, naming both values
 (`tests/unit/test_invariants.py::test_a_heartbeat_past_half_the_ack_wait_fails_the_render`). The worker's side is
 `tests/e2e-py/test_two_workers_share_the_queue_and_a_dead_ones_task_goes_to_the_other.py`: a live worker's task stayed
-with it for three ack waits, and a killed one's moved to the other.
+with it for three ack waits, a killed one's moved to the other, and one the bus stopped answering ended itself before its
+task moved.
 
 ## `converge_consumer MAINTENANCE_TASKS maintenance-worker`
 
