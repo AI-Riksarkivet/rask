@@ -941,6 +941,48 @@ async def test_a_task_a_pull_answers_as_its_worker_stops(tmp_path: Path, allowed
 
 
 @pytest.mark.asyncio
+async def test_an_idle_worker_stops_and_closes_its_connection_at_once(tmp_path: Path) -> None:
+    """A worker with nothing to do stops within one pull's wait, and its connection then closes at once: each loop ends
+    the subscription it pulled on, so the connection's drain waits on none (measured on the estate before each did:
+    an idle worker took 34 s to stop, the client's 30 s drain timeout, on every rollout)."""
+    tools, docs, mint_, broker = _the_bus(tmp_path)
+    queue: TaskQueue | None = None
+    took: float | None = None
+
+    def ends_its_process(event: str, **extra: object) -> NoReturn:
+        raise AssertionError(f"the worker ended its process: {event} {extra}")
+
+    async def handled(_body: bytes) -> None:
+        return None
+
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        queue = await TaskQueue.connect(broker.url, mint_.credentials[_WORKER].creds_file.read_text(), name="idle")
+        idle = Worker(
+            queue,
+            run=_never_run,
+            ready=lambda: True,
+            heartbeat_seconds=_HEARTBEAT,
+            ack_wait_seconds=_ACK_WAIT,
+            max_deliver=_MAX_DELIVER,
+            max_pass_seconds=600,
+            retry_ended_seconds=3600,
+            end_process=ends_its_process,
+            store_events=handled,
+        )
+        loops = [asyncio.create_task(loop()) for loop in (idle.run_tasks, idle.run_due, idle.run_store_events)]
+        await asyncio.sleep(2.0)  # each loop's pull is out
+        began = asyncio.get_running_loop().time()
+        await idle.drain(loops, 20)
+        await queue.close()
+        took = asyncio.get_running_loop().time() - began
+    finally:
+        broker.stop()
+
+    assert took is not None and took < 10, f"an idle worker took {took:.1f} s to stop and close"
+
+
+@pytest.mark.asyncio
 async def test_the_audit_and_the_scan_never_run_at_once(tmp_path: Path) -> None:
     """The audit and the scan each repair the estate from a drift report of their own, so one waits out the other's claim
     while it runs, on two replicas, and runs once it is done."""

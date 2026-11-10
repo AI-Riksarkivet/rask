@@ -143,7 +143,7 @@ def test_the_process_under_sigterm_keeps_its_probes_up_until_it_is_done_and_exit
     """``main`` under a real SIGTERM, with the work stood in for. A running worker drains until the test lets it go: the
     signal reaches the worker's loop and not the probes' server, which answers until the drain is done. A worker stopped
     while a start step it cannot cancel still runs in a thread ends at once, without waiting for that thread."""
-    port, gate = _free_port(), tmp_path / "let-go"
+    port, gate, entered = _free_port(), tmp_path / "let-go", tmp_path / "entered"
     script = tmp_path / "drains.py"
     script.write_text(
         textwrap.dedent(
@@ -154,6 +154,7 @@ def test_the_process_under_sigterm_keeps_its_probes_up_until_it_is_done_and_exit
             from maintenance import worker
 
             async def drains(settings, stop):
+                pathlib.Path({str(entered)!r}).touch()
                 mark_started(worker.app)
                 await stop.wait()
                 mark_draining(worker.app)
@@ -163,6 +164,7 @@ def test_the_process_under_sigterm_keeps_its_probes_up_until_it_is_done_and_exit
 
             async def stopped_while_starting(settings, stop):
                 threading.Thread(target=time.sleep, args=(120,)).start()
+                pathlib.Path({str(entered)!r}).touch()
                 await stop.wait()
                 return False
 
@@ -174,6 +176,11 @@ def test_the_process_under_sigterm_keeps_its_probes_up_until_it_is_done_and_exit
     process = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)  # noqa: S603 — this test's own script
     try:
         up = _polled(port, (200, 200, "ready") if started else (200, 503, "starting"), process)
+        # The probes answer before the worker's loop takes SIGTERM for itself: signalled then, the process would die of
+        # the signal, which is no claim of this test.
+        deadline = time.monotonic() + 30
+        while not entered.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
         process.send_signal(signal.SIGTERM)
         draining = _polled(port, (200, 503, "shutting_down"), process) if started else None
         gate.touch()

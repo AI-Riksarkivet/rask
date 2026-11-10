@@ -740,9 +740,14 @@ class Worker:
         is covered by it, since its pass computes the table's next time; a fired follow-up is not, since the commit it
         follows may be one that task's pass read the table before, so it waits until nothing holds the table."""
         subscription = await self._queue.bind(SCHEDULES_STREAM, DUE_CONSUMER)
-        while not self._stopping.is_set():
-            for msg in await self._fetch(subscription, _DUE_BATCH):
-                await self._safely(self._move(msg), msg)
+        try:
+            while not self._stopping.is_set():
+                for msg in await self._fetch(subscription, _DUE_BATCH):
+                    await self._safely(self._move(msg), msg)
+        finally:
+            # Ended with the loop: the connection's drain waits on every subscription still open, for the client's whole
+            # drain timeout (measured on the estate: an idle worker took 34 s to stop).
+            await _unsubscribe(subscription)
 
     async def run_store_events(self) -> None:
         """Hand each of the store's change events to ``store_events`` until :meth:`stop`.
@@ -758,9 +763,12 @@ class Worker:
         if handle is None:
             return
         subscription = await self._queue.bind(STORE_EVENTS_STREAM, STORE_EVENTS_CONSUMER)
-        while not self._stopping.is_set():
-            for msg in await self._fetch(subscription, _DUE_BATCH):
-                await self._safely(self._on_store_event(msg, handle), msg)
+        try:
+            while not self._stopping.is_set():
+                for msg in await self._fetch(subscription, _DUE_BATCH):
+                    await self._safely(self._on_store_event(msg, handle), msg)
+        finally:
+            await _unsubscribe(subscription)
 
     async def _on_store_event(self, msg: Msg, handle: Callable[[bytes], Awaitable[object]]) -> None:
         delivered = msg.metadata.num_delivered or 1
