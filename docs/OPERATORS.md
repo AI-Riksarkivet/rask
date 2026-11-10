@@ -31,18 +31,22 @@ No operator of rask's own exists yet. One is planned as the reconciler that make
 The state of record stays where it is: catalog and lakehouse state, lineage's commit feed and edge list included,
 lives in **Lance manifests on S3**, and authorization in **OpenFGA**. An operator that copied either into custom
 resources would be a second owner of state that already has one, so it does not. What it reconciles is declared
-intent that today reaches the estate by an imperative step an install from git would miss:
+intent inside the catalog ([architecture/operator-findings.md](architecture/operator-findings.md), read from the two
+reference operators' source 2026-11-10):
 
-- **Provisioning the chart runs as Jobs**: the bus streams and consumers, the object store's buckets and policies, the
-  development secret-store seed. Each is idempotent and re-run per release; a reconciler converges them continuously
-  and reports drift.
-- **Projects, warehouses and grants**, if they become resources declared in git. Until the operator is designed,
+- **Projects, warehouses and grants** declared in git as namespaced resources, each reconciled only through the
+  catalog's audited doors as the operator's own ServiceAccount identity, never the store or OpenFGA directly. The
+  catalog stays the state of record: a deletion defaults to retaining what is behind the resource, and a grant
+  resource revokes only the tuple it wrote. Until it is built,
   [ADR 0192](adr/0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) stands: a
-  grant is made at the catalog's access doors. The operator would call those same audited doors as its own
-  identity, never the store or OpenFGA directly.
+  grant is made at the catalog's access doors.
+- **It replaces none of the chart's provisioning Jobs.** Reconciling the object store's policies, the bus permissions
+  or the signing pairs continuously would mean holding the platform store's admin credential, the bus account's
+  signing key and write access to the secret store, which zero trust refuses. Those stay idempotent Jobs for the
+  development fixtures and the platform's own controllers in production (§ 3 for the streams).
 
 It installs none of the platform's operators in § 1, and it holds no credential a service does not already hold by
-its own ServiceAccount.
+its own ServiceAccount: one Role in its namespace, with no access to Secrets, Deployments or Jobs.
 
 ## 3 · Optional: NACK for the streams
 

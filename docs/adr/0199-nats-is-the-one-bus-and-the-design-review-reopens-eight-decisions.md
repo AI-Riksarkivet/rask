@@ -93,6 +93,20 @@ merge take transaction properties.
   authorization-model package (P17), confidence high. The second pass's HIGH findings are rows LH-575 (#797), LH-576
   (#798) and XC-202 (#799), and additions to #793, #794, #796, #788 and #144. Proposed by a reviewer and not judged
   here: ADR 0038, 0033, 0116 and 0061.
+- **The operator's scope, read from the reference operators' source on 2026-11-10**
+  (`docs/architecture/operator-findings.md`), reopens one more record. [ADR 0196](0196-an-install-from-git-converges-under-argo-cd.md)'s
+  last consequence loses to zero trust: an operator that continuously reconciled production store policies, bus
+  permissions and signing pairs would hold the platform store's admin credential, the bus account's signing key and
+  write access to the secret store. Direction: the operator reconciles projects, warehouses and grants through the
+  catalog's doors and replaces no provisioning Job; decided with the operator's own design, confidence medium-high.
+- **The bus credential of track D is settled from sources and measured on 2026-11-10**
+  (`docs/architecture/bus-credentials-findings.md`; the owner: NATS is run secured and hardened by the platform team).
+  Each pod sends only its projected ServiceAccount token, over TLS; the platform's auth callout verifies it and returns a
+  user signed by that service's scoped account signing key, expiring in minutes, and the server enforces the key's scope.
+  The pod holds no bus credential at rest (`default_sentinel`). Measured on nats-server 2.15.2 with nats-py 2.16.0: an
+  expiry closes the client for good, so the client refreshes before expiry and rebuilds in-process on close, with no
+  message lost across expiries, token rotation and a callout outage. mTLS mapped to users cannot work in operator mode.
+  Until the callout runs, a credential read from the store into memory is the interim, and it is not short-lived.
 - **Two things wait on the owner and are in no package**: a public, per-project CloudEvents stream for clients (today
   `docs/COMMIT-EVENTS.md` calls the bus topics internal and a client polls the feed), and whether projects, warehouses
   and grants become resources declared in git.

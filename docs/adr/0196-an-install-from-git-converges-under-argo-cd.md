@@ -1,5 +1,7 @@
 # 0196. An install from git converges under Argo CD, and a changed input converges on the next sync (2026-11-07)
 
+**Reopened 2026-11-10** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): its consequence that the planned operator reconciles production store policies, bus permissions and signing pairs continuously would give that operator the platform store's admin credential, the bus account's signing key and secret-store write access.
+
 **Status:** accepted. Source: [[XC-164]] (#658), the design audit of 2026-11-01 that widened it, and the owner's rulings
 of 2026-11-07: Argo CD is the one GitOps reconciler rask targets ("Fuck flux, only Argo cd if you use any of them"),
 and each generated dev credential becomes a Secret of its own, carried over on the dev estate. Refines
