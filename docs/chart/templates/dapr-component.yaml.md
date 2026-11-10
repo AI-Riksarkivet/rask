@@ -99,14 +99,14 @@ component's alone and changes no durable. The other subscribers keep one at a ti
 
 ## `{{- if and .Values.maintenance.enabled .Values.maintenance.arrivalEnabled }}`
 
-MAINTENANCE's write-event subscription: a write refreshes that table's due record (the tables needing
-compaction or reindexing, ADR 0162) between sweep ticks. It schedules no work; the rewrite is the
-user's job. Its dead letters go to `maintenance.arrivalDlqTopic`.
+MAINTENANCE's write-event subscription: a write holds that table's pass on maintenance's work queue
+(ADR 0198), which refreshes its due record (the tables needing compaction or reindexing, ADR 0162). It
+rewrites nothing; the rewrite is the user's job. Its dead letters go to `maintenance.arrivalDlqTopic`.
 
 `new`, because a replayed event acts twice: replaying the retained stream on a pod restart would
-refresh the due record of every table written in the window, hundreds of manifest opens to reach the
-answer the next sweep tick writes anyway. A missed window costs at most one tick; a replayed one costs
-the walk this lane exists to avoid.
+queue a pass for every table written in the window, hundreds of manifest opens to reach answers each
+table's own scheduled pass reaches anyway. A missed window costs at most that table's next pass, within
+`maintenance.queue.recheckHours`; a replayed one costs the walk this lane exists to avoid.
 
 ## `{{- range $subscribers }}`
 
@@ -258,19 +258,3 @@ drain the lineage outbox, prune the feed, forward the feed to the configured gra
 here, not in app code (no scheduler thread). Scoped to the lineage app; the route mounts only when
 LINEAGE_RELAY_BINDING_NAME matches this name. Gated on dapr.enabled too: without the Dapr control
 plane the Component CRD doesn't exist and the release would fail to apply.
-
-## `{{- if and .Values.maintenance.enabled .Values.dapr.enabled }}`
-
-The maintenance cron binding (from its own rationale below).
-
-### `apiVersion: dapr.io/v1alpha1`
-
-Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule`. The schedule lives here
-as component config, not in app code (no scheduler thread in the service). Scoped to the maintenance app.
-Gated on dapr.enabled: without the Dapr control plane the Component CRD doesn't exist and the release
-would fail to apply (the service still renders in `maintenance.yaml`; its cron route just never fires).
-
-The RECONCILE cron — its own binding on its own schedule. Separate from the sweep above because the
-two differ by an order of magnitude in cost: the sweep rewrites data files, this only reads three
-stores and reports where they disagree. Sharing one binding would force the cheap drift report onto
-the expensive rewrite's cadence, which is how a drift report becomes too stale to act on.

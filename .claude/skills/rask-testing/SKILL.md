@@ -98,7 +98,7 @@ consequences it does not spell out.
   means a live stack: `tests/e2e-py/conftest.py` applies it to everything collected there, and each
   per-suite selector (`cas`, `nats_auth`, ...) rides on top of it. Neither `strict_markers` nor
   `--strict-markers` is configured, so pass `--strict-markers` when you add or use a marker (the whole
-  suite, 4,214 tests, collects cleanly under it, measured 2026-11-06; `make test`'s filter selects 3,726 of them).
+  suite, 3,850 tests, collects cleanly under it, measured 2026-11-09; `make test`'s filter selects 3,349 of them).
 - **An empty parametrize is a collection error.** `empty_parameter_set_mark = "fail_at_collect"`, so a test whose
   cases come off a walk (the routes, the rendered chart) fails collection when the walk finds nothing, instead of
   skipping and asserting nothing. Walk a FastAPI app's routes with `services/catalog/tests/router_walk.py`'s

@@ -4,7 +4,7 @@
 	//
 	// BACKFILL IS STATED, NOT OFFERED. This section used to wire a fourth per-column action to
 	// `alter_table_backfill_columns`, which is one of the six ops the pinned native `dir` backend
-	// stubs — a 501 for every caller on every table (`docs/COVERAGE.md`), never a wrong argument or a
+	// stubs — a 501 for every caller on every table, never a wrong argument or a
 	// missing grant. The control stays on screen carrying its reason (#143: show disabled, never
 	// hide) and the work itself is done by the "Update / delete rows" section, which SETs an existing
 	// column to a SQL expression under an optional predicate. See `./unavailable`.

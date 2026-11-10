@@ -31,9 +31,10 @@ OTLP to GreptimeDB and queryable by `audit.action` / `audit.outcome` / `audit.su
 service (the policy-decision point); lineage-read governance is enforced by its own FGA gates and logged
 through the standard service logs, and durable data/model-mutation provenance (who created/wrote/promoted
 what, when) additionally lives in lineage's commit feed, for `services.lineage.eventsRetentionDays`, and in the
-graph backend lineage forwards every event to. Retention: audit records currently share the
-observability store's TTL (`observability.retention`, default `14d`) — raise it for compliance deploys;
-routing `lance.audit` to an independently-retained table is a known open enhancement.
+graph backend lineage forwards every event to. Retention: audit records last as long as the
+platform's telemetry store keeps what the OTel Collector exports to it (`observability.export.endpoint`); the chart
+sets no retention, so a compliance deploy sets it on that store. Routing `lance.audit` to an independently-retained
+table is a known open enhancement.
 
 | Capability | Endpoints | Notes |
 |---|---|---|
@@ -44,13 +45,13 @@ routing `lance.audit` to an independently-retained table is a known open enhance
 | ★ **Client-direct write** | spec: `describe`/`declare` (they vend the tier FGA grants and answer `managed_versioning=true`), `POST /v1/table/{id}/version/create`; rask extension: `POST /management/v1/table/{id}/credentials` | the client writes data, transaction and deletion files and a staged manifest with its vended credential; the catalog judges the staged version and finalizes it (ADR 0157). No data byte transits the catalog |
 | **Schema evolution** | `POST /v1/table/{id}/{add_columns,alter_columns,drop_columns,backfill_column,update_field_metadata,schema_metadata/update}` | |
 | **Versions / branches / tags** | `POST /v1/table/{id}/version/{create,delete,describe,list}`, `.../branches/{create,delete,list}`, `.../tags/{create,update,delete,list,version}` | `version/delete` never removes the current version, nor a tagged or forked-from one that exists when it runs (a ref created during the reclaim is not seen); `version/create` answers 406 (`managed_versioning` is never advertised) |
-| **Indexes** | `POST /v1/table/{id}/{create_index,create_scalar_index,index/list,index/{name}/drop,index/{name}/stats}` | |
+| **Indexes** | `POST /v1/table/{id}/{create_index,create_scalar_index,index/list,index/{name}/drop,index/{name}/stats}` | `create_index` and `create_scalar_index` answer 406: an index is built on the caller's compute and committed through `version/create` (ADR 0162) |
 | **Blobs** | `GET /management/v1/table/{id}/blobs` | credential-less blob read (data-reader gated) |
 | **Batch** | `POST /v1/table/{batch-commit,version/batch-create}` | 406: the catalog judges and finalizes one table version at a time |
 | ★ **Publication & gates** | `POST /management/v1/table/{id}/publish`, `GET /management/v1/promotions`, `POST /management/v1/table/{id}/promotion/{approve,reject}`, `POST /management/v1/project/{id}/gate/{set,describe,delete}` | the project's quality gate, run at publish; a pass moves the table's `published` tag, and with review declared a breach is held for a `can_promote` holder to approve or reject ([TIER-GOVERNANCE.md](TIER-GOVERNANCE.md)) |
 | ★ **Project registry / tenants** | `GET,POST /management/v1/projects`, `GET,DELETE /management/v1/projects/{id}` | A tenant EXISTS when its registry record does — `POST` writes the record AND the `project#admin` tuple in ONE operation (the creator's; a machine identity creating a project names the person in `admin` and is never admin itself, LH-433), so existence and permission cannot drift (the list is the caller's projects — every tenant for an estate observer, else those the caller is a `member` of; create and get are estate-observer gated; a fresh project legitimately has zero warehouses). `DELETE` is gated on the project's OWN `can_administer`, refuses **409 naming its warehouses** while any remain, and has **no `cascade` parameter at all** — retiring a tenant must never destroy buckets transitively. `?force=true` overrides the `protected` flag ONLY, never the authz gate |
 | ★ **Warehouse admin / physical multi-tenancy (#3-A)** | `GET,POST /management/v1/warehouses`, `GET,DELETE /management/v1/warehouses/{id}`, `POST /management/v1/warehouses/{id}/{activate,deactivate,namespaces}` | project-admin (`can_create_warehouse`) provisions a bucket per warehouse + binds namespaces to it; the project must already exist (404 naming `POST /management/v1/projects` — there is no bootstrap exception). `DELETE` gates on the **project's** `can_administer` (destroying storage is a tenant-level act), refuses **409 naming bound namespaces**, and takes three SEPARATE opt-ins that never share a default: `?cascade=true` drops those namespaces, `?purge_bucket=true` is the only thing that removes bytes (and refuses if a same-project sibling or platform reserve claims the bucket), `?force=true` overrides `protected` alone |
-| ★ **Maintenance policies (#50)** | `POST /v1/table/{id}/policy/{set,describe,delete}`, `POST /v1/namespace/{id}/policy/{set,describe,delete}` | per-target compaction cadence/opt-out + old-version retention (`retention_days`/`retain_versions`), enforced by the compaction sweep; set/delete are owner-tier (`can_drop`/`can_delete`, audited), describe is reader-tier; tag-pinned versions (e.g. `published`) are exempt from cleanup by Lance itself |
+| ★ **Maintenance policies (#50)** | `POST /v1/table/{id}/policy/{set,describe,delete}`, `POST /v1/namespace/{id}/policy/{set,describe,delete}` | per-target compaction cadence/opt-out + old-version retention (`retention_days`/`retain_versions`), enforced by maintenance's per-table passes; set/delete are owner-tier (`can_drop`/`can_delete`, audited), describe is reader-tier; tag-pinned versions (e.g. `published`) are exempt from cleanup by Lance itself |
 | ★ **Access review and grants (#51)** | `POST /management/v1/{table,namespace,warehouse}/{id}/access/{list,grant,revoke}` | who holds which `can_*` action, expanded through the FGA model (roles, teams, parent cascade) via ListUsers, and the doors that hand a base rung out and take it back. A grant asks `can_grant_<rung>` and refuses one raising the caller's own access, a revoke asks `can_revoke_grant`; the listing asks `can_drop` on a table, `can_delete` on a namespace and `can_read_assignments` on a warehouse, which a project's admin holds (LH-555). Each disclosure is audited as `access_review`, each grant and revoke as `access_grant` / `access_revoke` with a `grant_added` / `grant_revoked` control event naming the grantee |
 | **Materialized views** | `POST /v1/materialized_view/{id}/{create,refresh}` | spec-defined + FGA-typed, but the `dir` backend does not implement MVs yet (answers 406 Unsupported); dormant until Lance adds native MV support |
 | **Transactions** | `POST /v1/transaction/{id}/{alter,describe}` | |
@@ -69,7 +70,8 @@ on `can_get_metadata` for every dataset they name; the HTTP ingest takes the aut
 | **Dead letters** | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | parked deliveries |
 | **Health** | `GET /livez`, `GET /readyz` | |
 
-The maintenance sweep is Dapr/queue-driven (no public REST surface), so it is not in these specs; its contract is
-the OpenLineage events it publishes, consumed here. A user's pipeline that moves data between tiers is not a rask
+Maintenance has no public REST surface: its replicas share a NATS JetStream work queue (ADR 0198), so it is not in
+these specs; its contract is the OpenLineage events it publishes, consumed here, and the due list the catalog serves
+(`GET /management/v1/maintenance/due`). A user's pipeline that moves data between tiers is not a rask
 service: it writes through the catalog's doors above
 ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).

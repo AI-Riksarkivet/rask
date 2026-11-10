@@ -244,7 +244,7 @@ export type DeleteRowsResult = v.InferOutput<typeof DeleteRowsResponseSchema>;
 // delete — live in `remote/catalog.api.ts`, which parses each reply against the schemas above.
 //
 // The console offers no async column backfill: `alter_table_backfill_columns` is one of the six ops
-// the pinned native backend stubs (501 for every table — `docs/COVERAGE.md`). What the UI says in its
+// the pinned native backend stubs (501 for every table). What the UI says in its
 // place is `table-detail/unavailable.ts`.
 
 // The lance-namespace DropNamespaceResponse wire contract (all fields optional — the catalog serializes

@@ -2,7 +2,7 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
-rask is **single-context**: one root `CONTEXT.md` glossary (created lazily) and numbered ADRs in
+rask is **single-context**: one root `CONTEXT.md` glossary and numbered ADRs in
 `docs/adr/`. `docs/adr/` is the only decision log; it also holds the history the comment rule in
 `CLAUDE.md` keeps out of code comments.
 

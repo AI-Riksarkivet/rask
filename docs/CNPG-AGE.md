@@ -30,12 +30,11 @@ as an immutable, separately-versioned volume.
 the Cluster's runtime image) and emits the `FROM scratch` artifacts-only layout CNPG expects
 (`/share/extension/age.control` + SQL, `/lib/age.so`, `/licenses/age/`):
 ```
-bash scripts/dagger-image.sh --name cnpg-age-ext --tag <registry>/age-cnpg-ext:1.7.0-18
-# or straight to a registry, skipping the local daemon:
-#   bash scripts/dagger-image.sh --name cnpg-age-ext --push <registry>/age-cnpg-ext:1.7.0-18
-docker push <registry>/age-cnpg-ext:1.7.0-18
+bash scripts/dagger-image.sh --name cnpg-age-ext --arg AGE_REF=release/PG18/1.7.0 --push <registry>/age-cnpg-ext:1.7.0-18
+# or as an OCI tarball, for a registry-less node:
+#   bash scripts/dagger-image.sh --name cnpg-age-ext --arg AGE_REF=release/PG18/1.7.0 --out build/age-cnpg-ext.tar
 ```
-Pin the AGE branch to the PG major (`--build-arg AGE_REF=release/PG18/1.7.0`); a PG-major bump means rebuilding
+Pin the AGE branch to the PG major (`--arg AGE_REF=release/PG18/1.7.0`); a PG-major bump means rebuilding
 this small image for the new major (the same lockstep the PG-major runbook in `docs/runbooks/RUNBOOK-restore.md` covers)
 — but it's an isolated extension image, not a whole Postgres fork.
 
@@ -84,8 +83,8 @@ environment snag, not an AGE one.
    **The 2026-07-20 investigation below stands as the record of a KIND-HOST problem**, kept because it
    is what a reader will otherwise re-derive: it was tried across CNPG **1.30 + 1.28** and kind K8s
    **1.31 / 1.33 / 1.34** (containerd 2.1.x, ImageVolume gate on):
-   - The operator **binary is fine on this host** — run standalone (`docker run … controller` with an admin
-     kubeconfig, as root, `OPERATOR_NAMESPACE=cnpg-system`, no `--leader-elect`) it starts clean and runs.
+   - The operator **binary is fine on this host** — run standalone outside the cluster (its `controller`
+     command with an admin kubeconfig, as root, `OPERATOR_NAMESPACE=cnpg-system`, no `--leader-elect`) it starts clean and runs.
    - Three real startup gates were diagnosed from the standalone's full error chain (the in-cluster pod
      logs only 3 lines then exits, with the error **never flushed** to the container log): (a) `ensurePKI`
      needs `OPERATOR_NAMESPACE` (else "empty namespace may not be set"); (b) it writes its webhook cert under

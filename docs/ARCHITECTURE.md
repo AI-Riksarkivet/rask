@@ -6,7 +6,7 @@ where we are right now, and what's next**. Skim the diagrams; read the section y
 > 🧭 **Want what happens to a write, in order — a client writes through the catalog → the catalog announces it →
 > lineage records it → the user's pipeline moves it on → maintenance?** Read **[`FLOW.md`](FLOW.md)**.
 >
-> 🔬 **Are we correct against the spec?** See [`COVERAGE.md`](COVERAGE.md) and the recorded spec deviations in
+> 🔬 **Are we correct against the spec?** See the HTTP surface in [`API.md`](API.md) and the recorded spec deviations in
 > **[`docs/adr/0020-feature-gap-minor-deviations-1-7-the-spec-deviation-register.md`](adr/0020-feature-gap-minor-deviations-1-7-the-spec-deviation-register.md)**.
 >
 > 📜 **What contract do producers and consumers actually rely on?** See **[`DATA-CONTRACT.md`](DATA-CONTRACT.md)** —
@@ -151,8 +151,9 @@ HTTP request
          delete EVERY tuple on the removed object's uuid. Every grant is held by the uuid the
          catalog minted (ADR 0173 §8), which no later object holds, so a re-created name
          inherits nothing either way: the revoke keeps the store from holding grants on
-         nothing. A recoverable drop revokes nothing (its owner must be able to undrop it); the
-         trash purge revokes when it reclaims the bytes, in maintenance (`purge._revoke`). A
+         nothing. A recoverable drop revokes nothing (its owner must be able to undrop it); once
+         maintenance's purge has deleted the bytes, it asks the catalog to end the trash record
+         (DELETE /management/v1/trash/{kind}/{uuid}) and the catalog revokes then. A
          rename writes no tuple but a moved parent edge, and an Overwrite keeps every grant.
 ```
 
@@ -242,7 +243,7 @@ gate for readers), are in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md).
 | Medallion model + tests (bronze/silver/gold + persona roles) | ✅ done (model + `model.fga.yaml`) |
 | Tier movement (bronze→silver→gold) | the user's pipeline, on its own compute ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); the catalog runs the publish-time quality gate, and the ADR 0156 tier rules are tracked in [`TIER-GOVERNANCE.md`](TIER-GOVERNANCE.md) |
 | `project` type + 3-axis governance (teams × projects × tiers) | ✅ modeled (`model.fga`: project/warehouse/team/validator) + fga-tested |
-| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); Dapr cron bindings drive maintenance and lineage's relay tick, and NATS/Dapr pub-sub carries the internal events |
+| Orchestration | the lakehouse runs none ([ADR 0154](adr/0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md)); maintenance runs a NATS work queue with message schedules (each table's pass, the hourly audit, the daily scan; ADR 0198), Dapr cron bindings drive lineage's relay tick and the catalog's five reconcilers, and NATS JetStream, the one bus (ADR 0199), carries the internal events |
 | Lineage (authenticated OpenLineage intake, the commit feed and table-level edges as catalog-governed Lance tables, a forwarder to a bring-your-own graph backend; producer-side emitter) | ✅ service built & deployed; read-side authz implemented (see §9, `docs/LINEAGE.md`) |
 | OTel observability (OTel Collector + GreptimeDB + Perses) | ✅ built, deployed, `make e2e-observability`-verified |
 
@@ -263,10 +264,11 @@ client's `CreateTableVersion`). In a governed catalog you want a commit to be **
 So **commit auth already exists**: committing goes through the same `authorize` dependency that gates every write,
 checking `can_write_data` on `table:<uuid>`. A stock client commits through the spec's `CreateTableVersion`: the
 catalog answers `managed_versioning=true`, judges the staged version (the operation's rung, file versions, bases,
-footers, the primary key, protected columns) and finalizes it (ADR 0157, LH-471 #597). Decided and not yet built:
-on silver and gold a commit must name its run and its inputs in the spec `Context` headers, which the catalog
-stamps as `rask.*` transaction properties after checking `can_read_data` on each input, and from which it emits
-the lineage edge itself (ADR 0156 C2, LH-225 #180). `docs/TIER-GOVERNANCE.md` tracks each rule.
+footers, the primary key, protected columns) and finalizes it (ADR 0157, LH-471 #597). On silver and gold a commit
+names its run and its inputs, in the spec `Context` headers on the catalog's own write doors or as `rask.*` transaction
+properties in a stock client's staged manifest; the catalog checks `can_read_data` on each input, stamps the run into
+the commit, and its announcement names the inputs, from which lineage records the edges (ADR 0156 C2, LH-225 #180;
+`catalog/core/run_context.py`, `catalog/core/tier_policy.py`). `docs/TIER-GOVERNANCE.md` tracks each rule.
 
 ---
 
@@ -315,7 +317,7 @@ make governance-chain           # = dagger call governance-chain: anon 401 → a
 
 Config is env-driven and estate-wide — ONE name per setting, declared once in
 `packages/lakehouse/src/lakehouse/governed/settings.py`: `RASK_OIDC_ENABLED`, `RASK_FGA_ENABLED`,
-`RASK_FGA_API_URL`, `RASK_FGA_ROOT_OBJECT` (default `warehouse:lance_catalog`),
+`RASK_FGA_API_URL`, `RASK_FGA_ROOT_OBJECT` (default `estate:rask`),
 `RASK_FGA_TIMEOUT_SECONDS`, etc.
 
 ---
@@ -329,7 +331,8 @@ Config is env-driven and estate-wide — ONE name per setting, declared once in
 - **Tuple** — an OpenFGA fact, e.g. `user:dex~alice owner table:<uuid>`: a table's or namespace's grants are held by the uuid the catalog minted for it, never by its name (ADR 0173 §8).
 - **`can_*` relation** — an action permission the app checks (model maps it to a rung).
 - **Concentric** — owner ⊇ writer ⊇ reader.
-- **Cascade** — a grant flows down the `parent` edge (catalog → namespace → table).
+- **Cascade** — a grant flows down the hierarchy (project → warehouse → namespace → table), through each object's
+  `project` or `parent` edge.
 - **Create-on-parent** — creating a child is authorized against its parent.
 - **Credential vending** — the catalog returns scoped storage creds per table (`describe` with `vend_credentials`).
 - **Medallion** — bronze → silver → gold tiers, governed in the catalog's write path.

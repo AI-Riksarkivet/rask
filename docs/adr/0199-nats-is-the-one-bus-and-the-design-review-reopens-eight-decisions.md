@@ -84,6 +84,15 @@ merge take transaction properties.
   catcher installed by the app factory (P2), and a worker role of the same image (P11).
 - **A row that implements a reopened record amends that record in its own commit**, with the measurement that settled
   it. Until then the record describes the code as it runs, and its header says it is reopened here.
+- **The audit's second pass, the same day, reopens one more record and admits three rows.** Twelve further reviews
+  (the catalog's authorization layer, the auth plane and model, maintenance and lineage, the spec's 54 operations and
+  the rest of `lance_docs`, telemetry, delivery, the docs, the console, the live suites) are on the same page.
+  [ADR 0083](0083-a-service-is-the-serviceaccount-its-projected-token-names.md) loses to zero trust ("every credential
+  scoped and short-lived"): its accepted 660 s is the kubelet's projection, not a bound a door enforces
+  (`lakehouse/governed/machine_identity.py`); the direction is a local ceiling on `exp - iat`, decided with the
+  authorization-model package (P17), confidence high. The second pass's HIGH findings are rows LH-575 (#797), LH-576
+  (#798) and XC-202 (#799), and additions to #793, #794, #796, #788 and #144. Proposed by a reviewer and not judged
+  here: ADR 0038, 0033, 0116 and 0061.
 - **Two things wait on the owner and are in no package**: a public, per-project CloudEvents stream for clients (today
   `docs/COMMIT-EVENTS.md` calls the bus topics internal and a client polls the feed), and whether projects, warehouses
   and grants become resources declared in git.

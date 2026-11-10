@@ -21,14 +21,12 @@ as the hook takes. While the setting still names a warehouse the estate grants a
 which is exactly what is wanted. The release sequence is what holds the two in that order, and
 `make fga-estate-migrate` carries the holders this hook does not know about.
 
-THE SERVICE GRANTS DO NOT DEPEND ON A HUMAN ADMIN BEING NAMED, and this whole Job used to. Its gate
-was `and .Values.auth.enabled .Values.auth.bootstrapAdmin`, so an estate that never chose a first
-owner rendered no Job at all and every service grant with it. Measured on the live k3s estate
-2026-09-10: `auth.bootstrapAdmin: ""`, `kubectl get jobs` listed no bootstrap Job, and the tuples the
-notifications reconciler and the sweep each depend on were unreachable — controls that could not
-fire, behind a values key that has nothing to do with any of them. Who the
-first HUMAN owner is, is a deployment's choice; that the sweep may maintain is a property of the
-software.
+THE SERVICE GRANTS DO NOT DEPEND ON A HUMAN ADMIN BEING NAMED. A Job gated on
+`and .Values.auth.enabled .Values.auth.bootstrapAdmin` renders nothing for an estate that never chose a first
+owner, and every service grant with it. Measured on the live k3s estate 2026-09-10 under that gate:
+`auth.bootstrapAdmin: ""`, `kubectl get jobs` listed no bootstrap Job, and the tuples maintenance depends on
+were unreachable, behind a values key that has nothing to do with them. Who the first HUMAN owner is, is a
+deployment's choice; that maintenance may maintain is a property of the software.
 There is no fga CLI image, so the Job reuses the catalog image and speaks the OpenFGA HTTP API with
 lakehouse's own store and model rules, CHECKS each grant first (the idempotence guard), and only
 then writes it, treating a duplicate-write 400/409 as success.

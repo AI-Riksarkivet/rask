@@ -53,7 +53,7 @@ chart names no client.
 |---|---|---|---|
 | **catalog** | 2333 | `/api/catalog` | the Lance Namespace REST catalog and the management doors (`rask-lance-catalog`) |
 | **lineage** | 8000 | `/api/lineage` | the OpenLineage intake, the commit feed (`GET /events`) and the forwarder (ADR 0158) |
-| **maintenance** | 8000 | none | the sweep, the reconciler and the due list; reached in-cluster and by its Dapr crons only |
+| **maintenance** | 8000 | none | the work-queue worker (each table's pass, the hourly audit, the daily scan, ADR 0198) and the write-event lane; it pulls its tasks from NATS and is reached only by its Dapr subscription (`/maintenance-arrival`) and the probes |
 | **console** | 3000 | `/` | the console's static-file server (`serve.ts`), the lakehouse's own UI; calls no door itself (`rask-frontend`) |
 
 The lakehouse rows are `/api/catalog` and `/api/lineage`. There is no ingest row and no medallion row: the lakehouse
@@ -106,7 +106,7 @@ service directly. See `rask-frontend`.
    access doors (`decider` on the estate root, a project or a warehouse, [[LH-563]]): anything else is answered refused.
 6. **Forwarded headers are trusted from the Gateway's data plane only.** Every routed pod runs uvicorn with
    `--proxy-headers --forwarded-allow-ips=<forwardedAllowIps>` (the Gateway data plane's pod CIDR; `*` is refused), so
-   the client address behind the edge is the real one and anonymous rate-limit keys stay per client.
+   the client address behind the edge is the real one in every service's logs and audit records.
 7. **NetworkPolicy follows the route.** Each routed lakehouse service admits ingress on its app port only, from any peer
    (`<release>-edge-<component>`, one per `rask.apiRoutes` row): the Gateway's data plane lives in the platform's
    namespace, and the service authenticates each request itself, while daprd's ports on the same pod stay

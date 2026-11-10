@@ -27,7 +27,7 @@ lakehouse service imports `ray` (the import contract `the-lakehouse-knows-no-cli
 An operator earns its complexity when state of record lives in CRDs and needs reconciling. Ours does not: catalog and
 lakehouse state, lineage's commit feed and edge list included, lives in **Lance manifests on S3**, authz in
 **Postgres** (OpenFGA, on the `rask-age` server), and every
-control loop we need is either an existing service (the maintenance sweep), an existing Job (stream, bucket and seed
+control loop we need is either an existing service (maintenance's work queue), an existing Job (stream, bucket and seed
 provisioning), or one of the operators above. A lakehouse operator would be a second reconciler over state that
 already has an owner.
 
@@ -66,7 +66,7 @@ DOES have are already owned elsewhere:
 
 | Concern | Owner today | Status |
 |---|---|---|
-| background maintenance (version expiry, trash purge, orphan scan, reconcile, the due list) | `services/maintenance`: commit-driven expiry plus a 30-minute backstop sweep (FAIL-visible) | shipped; compaction and index builds are a bring-your-own job's, judged at `version/create` (ADR 0162) |
+| background maintenance (version expiry, trash purge, orphan scan, reconcile, the due list) | `services/maintenance`: per-table passes on a NATS work queue, held after each commit and at least every `maintenance.queue.recheckHours`, plus the hourly audit and the daily scan (ADR 0198; FAIL-visible) | shipped; compaction and index builds are a bring-your-own job's, judged at `version/create` (ADR 0162) |
 | stream/bucket/grant provisioning | chart Jobs + seed scripts (idempotent) | shipped; NACK could absorb the stream half |
 | version/feature pinning (`pylance`, data_storage_version) | image pins + probe-before-callsite (§0) + `lance_docs/` | process, not software |
 

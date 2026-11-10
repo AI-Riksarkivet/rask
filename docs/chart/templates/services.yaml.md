@@ -177,7 +177,7 @@ the Deployment to one replica until the HPA scales it back to `autoscaling.minRe
 
 ## `- { name: LANCE_FGA_MAINTAINERS, value: {{ include "lance.fgaMaintainers" $root | quote }} }`
 
-THE SWEEP'S OWN RUNG: maintenance rewrites HOW a dataset is stored and must hold
+MAINTENANCE'S OWN RUNG: maintenance rewrites HOW a dataset is stored and must hold
 `maintainer` and nothing else. `can_maintain` neither implies nor is implied by
 `can_write_data`, so no writer identity may ride this list. ADR 0156 C4 narrows the
 maintain vend tier to this identity alone (LH-473, #599).

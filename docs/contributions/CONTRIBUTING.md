@@ -8,4 +8,4 @@ Conventional commits — see `cliff.toml` for the changelog parsers.
 
 ## Adding a UI component
 
-See `packages/ui/README.md`.
+See `frontend/packages/ui/README.md`.

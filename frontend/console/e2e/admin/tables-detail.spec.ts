@@ -647,7 +647,7 @@ test('a 403 row update renders the writer-denied state (#85)', async ({ page }) 
 // Two specs used to live here, and they drove the button through the mock catalog to a seeded
 // `{job_id: "j1"}`. That fixture was the whole problem: `alter_table_backfill_columns` is one of the
 // six ops stubbed in the native `dir` backend the chart pins, so the real catalog answers 501 for
-// every caller on every table (`docs/COVERAGE.md`) — the suite was green about a control that could
+// every caller on every table — the suite was green about a control that could
 // only ever error in the estate. Both are replaced by the one assertion that is true of the deployed
 // system: the affordance stays visible, carries its reason, and reaches no catalog.
 

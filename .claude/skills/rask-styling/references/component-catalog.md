@@ -45,7 +45,7 @@ Re-exporting a Bits UI primitive unchanged needs an explicit `typeof` annotation
 
 ## The `child` escape hatch
 
-`sidebar-menu-button.svelte:68-77` declares a local `{#snippet Button({ props })}`, merges with `mergeProps(buttonProps, props)` from `bits-ui`, and forwards to a caller-supplied `child?: Snippet<[{ props: Record<string, unknown> }]>`. `shell/zone-nav.svelte` (the in-page sidebar navigation) declares a `leafLink` snippet at `:32` and passes `child` at four call sites (`:73, :90, :106, :119`): three render `leafLink` (`:74, :107, :120`) to emit an `<a>` where the component would otherwise emit a `<button>`, and one (`:90`) renders a `Collapsible.Trigger` in place of a group label. Reach for this instead of forking a component to change its tag.
+`sidebar-menu-button.svelte:68-77` declares a local `{#snippet Button({ props })}`, merges with `mergeProps(buttonProps, props)` from `bits-ui`, and forwards to a caller-supplied `child?: Snippet<[{ props: Record<string, unknown> }]>`. `shell/page-nav.svelte` (the in-page sidebar navigation) declares a `leafLink` snippet at `:32` and passes `child` at four call sites (`:73, :90, :106, :119`): three render `leafLink` (`:74, :107, :120`) to emit an `<a>` where the component would otherwise emit a `<button>`, and one (`:90`) renders a `Collapsible.Trigger` in place of a group label. Reach for this instead of forking a component to change its tag.
 
 ## Data-table stack
 

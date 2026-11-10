@@ -11,7 +11,7 @@ fixture's) or a user report — not a page.
 
 - **Services** (FastAPI): `catalog` (REST catalog and tier governance), `lineage`
   (OpenLineage intake into the commit feed and edge list, Lance tables in the catalog's `provenance` namespace;
-  the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (the sweep, the write-event lane, the reconciler),
+  the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (a NATS work queue its replicas share: each table's pass, the hourly audit with the drift report, the daily scan; and the write-event lane, ADR 0198),
   and the console's static-file server `rask-console`; public `/api/*` reaches the lakehouse through the platform's Gateway on the chart's HTTPRoutes (`chart/templates/route.yaml`), and `/` reaches the console on the chart's HTTPRoute `rask-console` (`chart/templates/console.yaml`). The lakehouse runs no stage and no pipeline: moving data
   between tiers is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
 - **Stores**: `age-postgres` (OpenFGA's datastore),
@@ -41,7 +41,8 @@ fixture's) or a user report — not a page.
 | FGA failing across the estate | [AGE down](#age-postgres-down--fga) |
 | `DaprConsumerWedge` firing: a sidecar retrying its app's inbound deliveries | [A subscriber retries without end](#a-subscriber-retries-without-end) |
 | `HttpServerMetricsMissing` firing | [No app reports HTTP metrics](#no-app-reports-http-metrics) |
-| `HttpServerErrorRatioHigh`, `HttpServerLatencyHigh` or `MaintenanceSweepRunsLong` firing | [A service answers 5xx or slowly](#a-service-answers-5xx-or-slowly) |
+| `HttpServerErrorRatioHigh` or `HttpServerLatencyHigh` firing | [A service answers 5xx or slowly](#a-service-answers-5xx-or-slowly) |
+| Any other alert in `deploy/alerting/rules.yml` | [Alerts by name](#alerts-by-name) |
 
 ---
 
@@ -121,7 +122,7 @@ service's logs to the root failure (a bad payload, a persistent downstream outag
 **Act.** Fix the root cause, then **replay** from the retained JetStream stream. Deliberately no auto-requeue —
 re-firing a poison message blind would loop it through the same failure. The catalog's and maintenance's parks
 (`dlq.catalog.control`, `dlq.maintenance.arrival`) need no replay: a control event is a hint the console re-reads past, and
-the sweep re-finds a parked write's table on its next pass. For those two, the alert alone says the lane is failing; the
+the parked write's table is passed anyway on its own schedule, at most `maintenance.queue.recheckHours` later. For those two, the alert alone says the lane is failing; the
 cause is in the app's log for the delivery (`catalog` or `maintenance` container, the alert's `topic`).
 
 ## Lineage refusing a signer's events
@@ -176,7 +177,7 @@ An identity a list lacks after a chart change is a render defect. `kid` or `sign
 
 **Act.** A forged event is an incident: find the pod that published it, and rotate any identity whose key it presented.
 A signer that broke: restart it so it re-resolves its key. A refused event is not presented again; a write maintenance
-refused to plan is picked up by the hourly sweep.
+refused to plan is picked up by its table's next scheduled pass.
 
 ## Outbox not draining
 
@@ -327,19 +328,88 @@ store must answer at `observability.export.endpoint` (GreptimeDB in development)
 ## A service answers 5xx or slowly
 
 **Symptom.** `HttpServerErrorRatioHigh` (critical: more than 5% of one service's responses are 5xx for 10 minutes),
-`HttpServerLatencyHigh` (warning: one service's p95 is above 15 s for 15 minutes, maintenance left out), or
-`MaintenanceSweepRunsLong` (warning: the sweep's p95 pass reaches five minutes over two hours).
+or `HttpServerLatencyHigh` (warning: one service's p95 is above 15 s for 15 minutes, maintenance left out; a
+maintenance pass that runs long is `MaintenancePassesOverran`, § Alerts by name).
 
 **Cause.** A dependency of that service is failing or slow: every governed door asks OpenFGA, every data door reads the
-object store, lineage records through the catalog, and a pod whose secret store is sealed cannot finish booting. For the
-sweep, the size of what it walks: a pass visits every table it maintains.
+object store, lineage records through the catalog, and a pod whose secret store is sealed cannot finish booting.
 
 **Diagnose.** The alert's `service_name` names the service. Its log at ERROR shows the failing door and the problem+json
 it answered (`status`, `code`). Then its readiness (`kubectl get pods`) and the dependency's section:
 [OpenFGA down](#openfga-down--503-everywhere), [Object store down](#object-store-down--data-plane),
 [Lineage not ready](#lineage-not-ready--catalog-unreachable),
-[The secret store sealed](#the-secret-store-sealed--boot-deadlock). For the sweep, maintenance's log for its passes and
-the tables they reach.
+[The secret store sealed](#the-secret-store-sealed--boot-deadlock).
 
-**Act.** Restore the dependency. A sweep that is slow on a large estate is not failing: read which pass takes longest
-before changing the sweep's schedule.
+**Act.** Restore the dependency.
+
+## Alerts by name
+
+Each alert below is read from its rule in `deploy/alerting/rules.yml`; the rule's own description carries the detail.
+Every log line named is in the service's container log (`kubectl logs deploy/rask-<service> -c <service>`).
+
+**Lineage outbox** (see also [Outbox not draining](#outbox-not-draining)):
+
+- `LineageOutboxNotDraining` (critical): staged events exist and the relay has drained or refused none for 15 minutes.
+  First check: lineage's pod and log, then the bus.
+- `LineageOutboxBacklogAging` (warning): the oldest staged event is older than 300 s while nothing is refused. First
+  check: the relay tick's log on lineage, and whether `lineage-relay-cron` still fires (`kubectl logs … -c daprd`).
+- `LineageOutboxEventsRefused` (warning): the relay is refusing staged events every tick, because their producer holds
+  no grant to record them. Not retryable: check the producer's grant, or whether the event should have been staged.
+- `LineageOutboxStagingFailing` (warning): the outbox stage fails, so events reach the bus with no durable copy. First
+  check: the producer's log for the stage error, then the object store.
+
+**Lineage ingest** (see also [DLQ parking](#dlq-parking--a-delivery-gave-up)):
+
+- `LineageIngestRefusingProvenance` (warning): a delivered run's author lacks the rung its operation needs on the
+  tables it names, and the refusal is acked. First check: lineage's refusal log lines for the author and the table, then
+  that author's grants.
+- `LineageIngestDiscardingUnrepairable` (warning): delivered events that can never be recorded (no parse, no author, or
+  only ungoverned outputs) are acked and counted. First check: which producer publishes them to `lineage.events.v1`.
+
+**Catalog:**
+
+- `CatalogWritesShedSustained` (warning): bulk Arrow-IPC writes answered 429 for 15 minutes. First check: the catalog's
+  write load; then scale its replicas or raise `LANCE_MAX_CONCURRENT_WRITES`, watching pod memory.
+- `CatalogListingLoadReachedInteractiveFrequency` (warning): namespace, table or warehouse listing above 1 request/s for
+  30 minutes. Nothing is broken: re-read the per-route rates against LH-050's parked query-store design.
+- `CommittedFilesUnrecorded` (warning): a one-call commit's added files could not be recorded on the control root, so
+  maintenance never checks them. First check: the `committed_files_unrecorded` ERROR line (location, version, the
+  store's error), then the object store.
+
+**A table's files and format:**
+
+- `CommittedFileOverwritten` (critical): a table's pass found a committed file whose ETag or size changed, so readers
+  are served bytes no commit wrote. First check: the `committed_file_overwritten` ERROR line (table uuid, path, both
+  ETags); restore the noncurrent object version and find the writer in the store's access log.
+- `LanceMixedDataFileVersions` (critical): a pass found a table carrying reader flag 256 (mixed data file versions),
+  which no Lance operation removes. First check: the `maintenance_dataset_outcome` records with
+  `mixed_data_file_versions` true, and the writer that appended at another `data_storage_version`.
+
+**Maintenance's work queue** (ADR 0198):
+
+- `MaintenanceTaskMetricsMissing` (critical): no `maintenance_tasks_completed_total` series at all. First check:
+  whether a maintenance pod runs, then its OTLP export.
+- `MaintenanceAuditNotCompleting` (critical): no hourly audit has completed in two hours. First check:
+  `maintenance_tasks_ended_total` and `maintenance_passes_overran_total` for kind `audit`, and the
+  `maintenance_task_retried` lines.
+- `MaintenanceScanNotCompleting` (warning): no daily scan has completed in 26 hours, so no orphan scan, listing floor or
+  trash purge ran. First check: the same two counters for kind `scan`.
+- `MaintenanceTasksEnded` (warning): a task failed or outlived its worker on every one of its
+  `maintenance.queue.maxDeliver` deliveries and was ended. First check: the `maintenance_task_ended` ERROR line (subject,
+  last error); kind `unreadable` is a message no task parses.
+- `MaintenancePassesOverran` (warning): a task has run past `maintenance.queue.maxPassSeconds`; at twice that its
+  replica exits and the task is delivered again. First check: the `maintenance_task_overran` ERROR line (subject, how
+  long it has run).
+- `MaintenanceDatasetsFailing` (warning): a table's pass could not complete, and is retried every
+  `maintenance.queue.retrySeconds`. First check: the breakdown by `error.type`, then the `maintenance_dataset_outcome`
+  log line for the table.
+- `MaintenanceRefusalsRising` (warning): more than half of the tables passed in an hour were refused, usually by a
+  manifest flag the supported-flag list does not know after a pylance upgrade. First check: the refusal reasons in
+  `maintenance_dataset_outcome`.
+- `MaintenanceTableParked` (warning): the catalog refused maintenance of one table id on passes a day apart, so its
+  versions are not reclaimed. First check: `refused_by` — `vend_denied` (403: no `can_maintain` on the id, or a stale
+  `lineage.dataset_id` stamp) or `table_not_governed` (404); the `maintenance_vend_denied` and
+  `maintenance_table_not_governed` WARNING lines name the dataset.
+- `MaintenanceDriftRising` (warning): a drift category of the hourly audit's report grew in two hours, so something is
+  producing it now; a gating category also blocks the trash purge. First check: the `reconcile_drift` log line for the
+  category, which names the objects.

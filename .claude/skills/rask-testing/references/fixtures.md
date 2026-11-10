@@ -30,7 +30,7 @@ Every service builds `app` at module import. Pick the fixture by how settings re
    (`*_S3_STS_ENDPOINT`), a key pair beside it is refused, and the sidecar's secret API serves only
    the signing keys: answer it with respx, and the STS exchange and the store with a moto server
    (`services/catalog/tests/conftest.py::two_stores` for the catalog,
-   `services/maintenance/tests/test_the_sweep_signs_what_it_emits.py` for maintenance, on its suite's `moto_url`).
+   `services/maintenance/tests/test_maintenance_signs_what_it_emits.py` for maintenance, on its suite's `moto_url`).
    A maintenance pass that rewrites a table asks the catalog's maintain-tier door first ([[LH-219]]), and one that
    purges, releases or sweeps the trash, or repairs grants, asks the catalog's trash and grant doors ([[XC-084]]): give
    it `catalog_url` and answer the doors with respx (`tests/integration/maintenance_vend_doors.py`:

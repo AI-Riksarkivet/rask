@@ -15,14 +15,14 @@ lakehouse governs, records and announces it.
  the user's pipeline (on its own compute) reads bronze, writes silver through the catalog, emits its own
    │  OpenLineage run; then silver → gold the same way
    ▼
- maintenance ── expires versions, purges trash, scans orphans, reconciles stores ── emits maintenance lineage
+ maintenance ── per-table passes on a work queue: expires versions, lists due work; audit, orphan scan, purge ── emits maintenance lineage
 ```
 
 ## 1. A client writes, through the catalog
 
 Data enters only through the catalog's Lance Namespace doors (`CreateTable`, `InsertIntoTable`,
 `MergeInsertIntoTable`, `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`). The
-writer is a client: the deployer's ingest job on its own compute (a bring-your-own client job, CP-061, not yet built), or a user's
+writer is a client: the deployer's ingest job on its own compute (a bring-your-own client job), or a user's
 pipeline moving data between tiers, as the live lane `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py`
 does with stock clients: pylance seeds bronze and the lance-namespace client derives silver. Each door authorizes the
 caller on OpenFGA before it commits.
@@ -54,19 +54,24 @@ configured (Marquez in development), which answers upstream, downstream and run-
 The user's pipeline reads the tier, transforms on its own compute, writes the next tier through the catalog's doors
 (step 1 again) and emits its own OpenLineage run for the transform (`POST /api/lineage/api/v1/lineage`), naming its
 inputs so the edge list records what the output derives from. A pipeline outside the estate learns of a committed
-write by following lineage's durable `GET /events` feed forward with its own token; the NATS topics are internal. ADR
-0156 moves the run and inputs into the write itself (the spec `Context` headers, stamped by the catalog: LH-225, #180).
+write by following lineage's durable `GET /events` feed forward with its own token; the NATS topics are internal. On
+silver and gold the write itself carries the run and its inputs (the spec `Context` headers, stamped by the catalog as
+`rask.*` transaction properties: ADR 0156 C2, LH-225, #180).
 
 → [`COMMIT-EVENTS.md`](COMMIT-EVENTS.md)
 
 ## 5. Maintenance — data lifecycle
 
-The maintenance service (`services/maintenance`) decides and rewrites nothing (ADR 0162). It expires a table's old
-versions right after a write that leaves 20 reclaimable, runs trash purge, the orphan scan, cross-store reconcile and
-protection, and every 30 minutes lists the tables due for compaction or an index optimize
-(`GET /management/v1/maintenance/due`). Each expiry that reclaims versions gets a versionless `expire_versions`
-maintenance run, so the work shows up in the feed and the graph backend. Compaction and index builds are a bring-your-own job's, on its
-own compute, committed through `version/create`, which judges them.
+The maintenance service (`services/maintenance`) decides and rewrites nothing (ADR 0162). Its replicas share a NATS
+JetStream work queue that holds one task per table (ADR 0198): a commit holds its table's pass a short delay out
+(`maintenance.queue.commitPassDelaySeconds`), and each pass schedules the table's next, at least once every
+`maintenance.queue.recheckHours`. A pass expires the table's old versions once 20 are reclaimable
+(`MAINTENANCE_MIN_VERSIONS_TO_EXPIRE`), checks the files its commits recorded, and records whether a compaction or an
+index optimize is due (`GET /management/v1/maintenance/due`). The hourly audit runs the cross-store drift report and its
+repairs, and the daily scan adds the orphan scan, the listing floors and the trash purge. Each expiry that reclaims
+versions gets a versionless `expire_versions` maintenance run, so the work shows up in the feed and the graph backend.
+Compaction and index builds are a bring-your-own job's, on its own compute, committed through `version/create`, which
+judges them.
 
 → [`DURABILITY.md`](DURABILITY.md) · code: `services/maintenance`
 
@@ -74,7 +79,8 @@ own compute, committed through `version/create`, which judges them.
 
 - **Recovery:** `restore_table` rolls a dataset to any retained Lance version; the feed records the version each
   write produced.
-- **Drift:** a crash between the Lance commit and the catalog's outbox stage loses that write's announcement, and
-  nothing detects it yet (LH-497, #641).
+- **Drift:** a crash between the Lance commit and the catalog's outbox stage loses that write's announcement; the
+  catalog's commit reconciler (`catalog-commit-reconcile-cron`) reads each table's version log after its mark and
+  announces every committed version lineage's feed lacks (LH-497, #641).
 
 → [`LINEAGE.md`](LINEAGE.md), [`DURABILITY.md`](DURABILITY.md)

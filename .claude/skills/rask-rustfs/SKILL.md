@@ -237,9 +237,6 @@ The fixture is **a local chart** (`deploy/fixtures/rustfs/chart`, `CHART=chart`,
   (`rustfs@1.0.3:rustfs/src/server/layer.rs:1441`) can pass while every S3 request still gets 503.
 - **Readiness is read quorum, not write quorum** (`readiness.rs:867-886`). On one drive they coincide; on a multi-node
   store a Ready pod may not accept writes. A resilience drill proves writes with a real conditional PUT.
-- **A fresh estate refuses every compaction until maintenance has swept once**: `version/create` judges a compaction
-  against the clone list the sweep writes (ADR 0162). This is store-independent, and every fresh fixture hits it; the
-  kind lane runs the first sweep itself (`scripts/e2e_stack.sh`, step 8/9).
 - **No Prometheus endpoint.** RustFS pushes OTLP/HTTP only; there is no `/metrics` route
   (`rustfs@1.0.3:crates/obs/src/telemetry/otel.rs:424-480`). Point `RUSTFS_OBS_ENDPOINT` at the Collector's 4318.
 - **Bucket versioning and Object Lock break Lance cleanup.** On a versioned bucket a delete only writes a marker, and a
@@ -294,8 +291,8 @@ The audit's requirement list (§ "What rask must demand of ANY platform store", 
 explicit `RUSTFS_RPC_SECRET` on multi-node; TLS with a CA rask trusts; console unreachable from workload namespaces;
 path-style accepted or the server domain named; durability `strict`; rask buckets versioned, with a noncurrent-version
 expiry the platform owns and sets past the time it takes to answer a page, because a writer's vend can put over a
-committed file and the noncurrent version is what restores it ([[LH-419]]: maintenance's sweep names such a file and
-`CommittedFileOverwritten` pages); no Object Lock default retention, no expiration lifecycle on rask prefixes beyond
+committed file and the noncurrent version is what restores it ([[LH-419]]: maintenance's pass of the table names such a file, reading every file
+the table's commits recorded against one listing of its root, and `CommittedFileOverwritten` pages); no Object Lock default retention, no expiration lifecycle on rask prefixes beyond
 AbortIncompleteMultipartUpload and that noncurrent-version expiry; one writable site per table (async replication cannot
 arbitrate a Lance commit); conditional writes proven exclusive across nodes. Nothing in rask checks that a store keeps
 versions: the dev fixture's buckets are unversioned, so a tampered file there is found and not restorable.

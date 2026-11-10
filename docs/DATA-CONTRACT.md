@@ -74,8 +74,14 @@ Plus the provenance guard: a writer cannot drop, rename or rewrite the provenanc
 Dapr and NATS do **not** enforce the data contract — they enforce the **delivery contract** that
 makes the data contract *checkable*:
 
-- **NATS JetStream** guarantees at-least-once delivery on durable streams (`LINEAGE`, `CATALOG_CONTROL`, `DLQ`,
-  and maintenance's work queues), `maxDeliver=5` with backoff, 168h Limits retention. Its ~1 MB
+- **NATS JetStream** guarantees at-least-once delivery on durable streams. `LINEAGE`, `CATALOG_CONTROL` and `DLQ` keep
+  Limits retention for `nats.streamMaxAgeSeconds` (604,800 s, 168 h), and with `dapr.resiliency.enabled` (the default)
+  each Dapr subscriber's durable redelivers up to 3 times on a 720 s ack wait and back-off after its sidecar's own
+  retries, then parks the event on `dlq.*` (`lance.brokerWindows`). Maintenance's streams are work queues it reads with
+  nats-py (ADR 0198): `MAINTENANCE_TASKS` holds one task per table for at most 24 h, delivered up to
+  `maintenance.queue.maxDeliver` + 1 (11) times on a `maintenance.queue.ackWaitSeconds` (60 s) ack wait kept alive by
+  heartbeats; `MAINTENANCE_SCHEDULES` holds the message schedules; `STORE_EVENTS` holds the store's change events up to
+  `maintenance.queue.storeEventsMaxBytes` (128 MiB), dropping its oldest (`chart/templates/nats-stream-job.yaml`). Its ~1 MB
   message bound is *why* the claim-check rule exists: the bus physically cannot carry data, so
   events must be pointers — a contract enforced by constraint.
 - **Dapr** supplies the pub/sub abstraction, the SUCCESS/RETRY/DROP ack semantics, the

@@ -24,16 +24,18 @@ driver has the same cap. `--history-max` limits how MANY revisions are kept, nev
 `pkg/chart/chart.go`, so everything under `chart/charts/` is invisible to the JSON. Their *rendered*
 output reaches the manifest; their source costs nothing.
 
-Measured 2026-09-25 on revision 240 (96.3% of the ceiling):
+The chart today: with every operator, the compute engine, the telemetry chain and the development stand-ins out of the
+chart (ADR 0153, [[XC-124]] to [[XC-132]]), revision 316 measured 335,260 packed bytes on 2026-10-12 with
+`values.schema.json` in the chart: **32.0%** of the ceiling.
+
+What filled it while operators were subcharts, measured 2026-09-25 on revision 240 (96.3% of the ceiling), is why
+none goes back in:
 
 | part | share of the packed ceiling |
 |---|---|
 | rask's own 63 templates | ~50% — 299 KB of it `{{/* */}}` comments, stored in full every revision |
-| Kueue's templated CRDs (manifest) | ~24% |
+| Kueue's templated CRDs (manifest; a subchart then, none now) | ~24% |
 | the other seven subcharts together | ~5.5% |
-
-With every operator, the compute engine, the telemetry chain and the development stand-ins out of the chart (ADR 0153,
-[[XC-124]] to [[XC-132]]), revision 316 measured 335,260 packed bytes on 2026-10-12 with `values.schema.json` in the chart: **32.0%** of the ceiling.
 
 **`values.yaml` prose is free** — it is stored as a parsed map, comments dropped. **Template prose is
 not**, so templates carry no `{{/* */}}` comments ([[XC-123]], ADR 0153): a template's rationale lives in

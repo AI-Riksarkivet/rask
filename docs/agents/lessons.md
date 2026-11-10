@@ -20,7 +20,7 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 
 - **A secret has two readers.** moving its delivery path breaks the outbound credential; the inbound door passing proves only half.
 - **pkill matches its own command.** pkill/pgrep -f kill the shell; use the [b]racket trick.
-- **Coherent rows ship as one change, one deploy** (`docs/agents/issue-tracker.md`). measured: 33 of 61 docs commits were register bookkeeping; tests/unit is 82% of suite cost; one image serves 10 deployments.
+- **Coherent rows ship as one change, one deploy** (`docs/agents/issue-tracker.md`). measured: 33 of 61 docs commits were register bookkeeping; tests/unit is 82% of suite cost; one image serves the three lakehouse deployments.
 - **A gate is not a gate until it has failed.** mutation-check every new gate; twice in one day one could not fail.
 - **Cite spec.yaml, not the prose.** `lance_docs/ns_catalog/namespace/supported-catalogs/lance-rest.md` gives REST paths the OpenAPI beside it contradicts (`.../index/create`, `.../count`, `.../merge-insert`).
 - **A pipe eats the exit code.** a shell reports its LAST command's status; a pipe's filter or a trailing cleanup silently replaces it.
@@ -51,14 +51,13 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 - **A duplicate YAML key is silent.** last-wins drops the earlier block; it failed a deploy and had killed secret rotation estate-wide.
 - **Independent is not unreadable.** a key 8 pods can fetch identifies none of them; check who can READ, not just who can COMPUTE.
 - **A blocker marker rots in place.** 8 of 11 re-read against code were free; the workable count tallies my stopping points, not the work.
-- **The layers are not the suite.** `tests/unit tests/integration` is 2 of 21 testpaths; a shared-package change breaks its CONSUMERS' suites.
+- **The layers are not the suite.** `tests/unit tests/integration` is 2 of 5 `testpaths` entries, and the `packages/*/tests` and `services/*/tests` globs hold the rest; a shared-package change breaks its CONSUMERS' suites.
 - **Verify what answers before you measure it.** a failed port-forward leaves the port to a scratch container that answers valid JSON.
 - **The estate already has the tool.** twice in one day I rebuilt an instrument rask ships; its comment named the trap I then hit.
 - **Absence in a narrow search is not absence.** five wrong claims in a day from greps of the wrong place, form, region, query shape, or my own output; a one-overlay render is the same mistake.
 - **The environment is part of the measurement.** host-vs-container, default-vs-deployed, serial-vs-parallel, empty-vs-populated store; a check that reads a live system is data-dependent.
 - **An unrun lane rots silently.** 3 lanes outside CI absorbed 3 estate-wide changes in silence; a gate with no caller gates nothing.
 - **A read-only prompt does not make an agent read-only.** subagents amended my commits and tried a live `kubectl delete`; a prompt is not a capability boundary.
-- **The estate cannot take a chart change.** helm upgrade dies at the 1 MiB Secret limit (98.3% full); Kueue off buys 75.5%, the floor is stored chart source.
 - **Workflow args are not persisted.** a resume needs byte-identical args; put unit text in files, pass paths; rebuild a continuation from journal.jsonl.
 - **A skeptic judges against the row's bar.** "refute if no caller impact" refuted 9 true findings; define real as closes-when, house rule, or caller.
 - **An empty review is not a clean review.** 2 of 7 agents returned [] after only setup; require per-case `cases` + `not_run` and read them.

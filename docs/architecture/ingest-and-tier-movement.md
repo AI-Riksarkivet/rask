@@ -6,9 +6,9 @@ moves no data between tiers ([ADR 0155](../adr/0155-the-medallion-is-tier-govern
 - **The way in is the catalog's Lance Namespace doors** (`CreateTable`, `InsertIntoTable`, `MergeInsertIntoTable`,
   `DeclareTable` + vended credentials, `RegisterTable`; `lance_docs/ns_catalog/spec.yaml`). No lakehouse service
   fetches source bytes, lists an external store or writes a governed table except through the catalog.
-- **Ingest of an external source is a client job on bring-your-own compute** (CP-061, not yet built): a job that writes
-  Lance files with vended credentials, commits through the catalog and emits its own OpenLineage run. Until it lands,
-  data reaches bronze only from a client that speaks the namespace doors, as the live lane
+- **Ingest of an external source is a client job on bring-your-own compute**, outside this repository: a job that
+  writes Lance files with vended credentials, commits through the catalog and emits its own OpenLineage run. Data
+  reaches bronze from any client that speaks the namespace doors, as the live lane
   `tests/e2e-py/test_a_bring_your_own_pipeline_runs_end_to_end.py` does with stock pylance.
 - **Tier movement is the user's pipeline.** It writes the next tier through the same doors. The catalog announces
   every committed write on lineage, and the pipeline reads those announcements from lineage's durable `GET /events`
@@ -18,5 +18,5 @@ moves no data between tiers ([ADR 0155](../adr/0155-the-medallion-is-tier-govern
   [ADR 0131](../adr/0131-annotations-are-derived-and-readiness-is-the-published-tag.md): a label is derived data, so
   its tier is silver, and readiness is the `published` tag.
 
-ADRs 0127, 0128, 0129 and 0130 describe the mechanics of an in-lakehouse ingest service; they hold for the ingest runner
-only where CP-061 re-adopts them.
+ADRs 0127, 0128, 0129 and 0130 describe the mechanics of an in-lakehouse ingest service, which the lakehouse does not
+run (ADR 0154); an ingest client reads them as design input, not as a contract the catalog serves.

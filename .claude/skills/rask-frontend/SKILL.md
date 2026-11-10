@@ -76,8 +76,8 @@ links.
 **The audit and streams pages cannot work.** They need the platform's telemetry store and the NATS monitor (`/jsz`),
 which no Gateway route serves to a browser; the owner kept them anyway (2026-11-04), so `audit.api.ts` and
 `jetstream.api.ts` answer with that failure, naming what is missing, without a request. So do the doors the catalog does not serve:
-`#lib/storage/remote/storage.api.ts` (the stores-by-tier registry and its attach write), `catalog.api.ts`'s user-state
-read and write, and `#lib/remote/view-prefs.api.ts` each answer an honest 501 with a `detail` naming what no door
+`#lib/storage/remote/storage.api.ts` (the stores-by-tier registry and its attach write) and `catalog.api.ts`'s
+user-state read and write each answer an honest 501 with a `detail` naming what no door
 keeps, and the storage page renders that refusal ("The stores registry is unavailable (HTTP 501) — …"). The e2e mocks
 serve only doors that exist. Promotions read the catalog's own doors:
 `GET /management/v1/promotions` for the open holds, and `POST /management/v1/table/{id}/promotion/{approve,reject}` for a

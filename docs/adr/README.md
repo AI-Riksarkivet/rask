@@ -23,7 +23,7 @@ with its client to that client's own repository.
 | [0003](0003-p1-1-outbox-observability-the-four-signals.md) | P1.1 | outbox observability (the four signals) |
 | [0004](0004-p1-2-bounded-oldest-first-outbox-drain.md) | P1.2 | bounded, oldest-first outbox drain |
 | [0005](0005-p2-1-single-base-cascade-write.md) | P2.1 | single-base cascade write |
-| [0006](0006-16-dapr-workflow-for-silver-to-gold-promotion.md) | #16 | Dapr Workflow for silver-to-gold promotion |
+| [0006](0006-16-dapr-workflow-for-silver-to-gold-promotion.md) | #16 | Dapr Workflow for silver-to-gold promotion (superseded by 0154) |
 | [0007](0007-7a-live-verification-residuals.md) | §7a | live-verification residuals |
 | [0008](0008-9-feature-gaps-the-open-backlog.md) | §9 | feature gaps (the open backlog) |
 | [0009](0009-12-prod-hardening-backlog-native-switches-off.md) | §12 | prod-hardening backlog (native switches off) |
@@ -42,14 +42,14 @@ with its client to that client's own repository.
 | [0023](0023-workflow-history-has-no-browser-surface-the-alert-is-the.md) |  | Workflow history has no browser surface — the ALERT is the surface (2026-08-26, owner ruling) |
 | [0024](0024-team-role-administration-wontfix-until-the-keycloak-sync.md) |  | Team/role administration — WONTFIX until the Keycloak sync (2026-07-23) |
 | [0026](0026-catalog-control-wildcard-masking-accepted-at-replicas-1.md) |  | CATALOG_CONTROL wildcard masking — accepted at replicas:1 (2026-07-23) |
-| [0027](0027-control-events-broadcast-ring-buffer.md) |  | control-events — broadcast + ring buffer |
-| [0028](0028-control-events-per-replica-cursor-boundary.md) |  | control-events — per-replica cursor boundary |
+| [0027](0027-control-events-broadcast-ring-buffer.md) |  | control-events — broadcast + ring buffer (reopened by 0199) |
+| [0028](0028-control-events-per-replica-cursor-boundary.md) |  | control-events — per-replica cursor boundary (reopened by 0199) |
 | [0029](0029-control-events-estate-admin-scope.md) |  | control-events — estate-admin scope |
 | [0031](0031-control-events-fail-open-emit-contract.md) |  | control-events — fail-open emit contract |
 | [0032](0032-p3b-alerting-rule-logic-proven-hermetically-the-live.md) | P3b | alerting: rule logic proven hermetically; the live transport is a drill |
 | [0033](0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) | P4/P7 | backups + structural SPOFs: the prod answer is externalize, not in-chart HA |
 | [0034](0034-medallion-tiers-hybrid-physical-layout-2026-07-24.md) |  | Medallion tiers — hybrid physical layout (2026-07-24) |
-| [0036](0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md) |  | Ingest orchestration — Dapr Workflow IS adopted; the estate is event-driven now (2026-08-03, owner ruling) |
+| [0036](0036-ingest-orchestration-dapr-workflow-is-adopted-the-estate-is.md) |  | Ingest orchestration — Dapr Workflow IS adopted; the estate is event-driven now (2026-08-03, owner ruling) (superseded by 0154) |
 | [0037](0037-the-outbox-is-application-side-and-dapr-s-transactional.md) |  | The outbox is application-side, and Dapr's transactional outbox cannot replace it (2026-08-15) |
 | [0038](0038-helm-release-storage-the-sql-driver-stands-the-chart-is-not.md) |  | Helm release storage: the SQL driver stands; the chart is NOT split (2026-08-15) |
 | [0039](0039-lineage-records-what-happened-to-data-an-authorization.md) |  | Lineage records what happened to DATA; an authorization denial is not a data event (2026-08-16) |
@@ -57,11 +57,11 @@ with its client to that client's own repository.
 | [0041](0041-watch-enrolment-does-not-wait-for-the-platform-rask-io-crd.md) |  | Watch enrolment does not wait for the `platform.rask.io` CRD (2026-08-16) |
 | [0043](0043-the-bell-cannot-carry-the-publication-verdict-and-the.md) |  | The bell cannot carry the publication verdict, and the reason is the claim check (2026-08-16) |
 | [0044](0044-comments-carry-rationale-and-provenance-never-a-changelog.md) |  | Comments carry rationale and provenance, never a changelog of the prose (2026-08-30, owner ruling) |
-| [0045](0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md) |  | The lakehouse cloud-native cutover (2026-09-03/04) |
+| [0045](0045-the-lakehouse-cloud-native-cutover-2026-09-03-04.md) |  | The lakehouse cloud-native cutover (2026-09-03/04) (superseded in part by 0198) |
 | [0046](0046-a-rename-moves-a-pointer-not-bytes-2026-09-04.md) |  | A rename moves a POINTER, not bytes (2026-09-04) |
 | [0047](0047-the-python-estate-audit-2026-08-07-2026-09-05.md) |  | The Python estate audit (2026-08-07 → 2026-09-05) |
 | [0048](0048-a-repeating-condition-is-a-level-not-an-event-2026-08-30.md) |  | A repeating condition is a LEVEL, not an event (2026-08-30) |
-| [0049](0049-maintenance-leaves-the-planner-pod-2026-09-04.md) |  | Maintenance leaves the planner pod (2026-09-04) |
+| [0049](0049-maintenance-leaves-the-planner-pod-2026-09-04.md) |  | Maintenance leaves the planner pod (2026-09-04) (superseded in part by 0198) |
 | [0050](0050-is-this-governed-at-all-is-a-question-openfga-answers-in.md) |  | "Is this governed at all" is a question OpenFGA answers in one pass (2026-09-11) |
 | [0051](0051-cascade-repair-detection-and-the-repair-verb-2026-09-04.md) |  | Cascade repair — detection, and the repair verb (2026-09-04) |
 | [0052](0052-the-compute-plane-is-decoupled-a-port-two-adapters-and-no.md) |  | The compute plane is decoupled: a port, two adapters, and no engine in the platform (2026-09-04) |
@@ -75,7 +75,7 @@ with its client to that client's own repository.
 | [0060](0060-an-operator-toggle-is-not-evidence-the-resource-exists-2026.md) |  | An operator toggle is not evidence the resource exists (2026-09-07) |
 | [0061](0061-do-not-add-a-control-before-its-verifier-2026-09-07.md) |  | Do not add a control before its verifier (2026-09-07) |
 | [0062](0062-bounding-a-read-changes-what-every-caller-of-the-unbounded.md) |  | Bounding a read changes what every caller of the unbounded contract MEANS (2026-09-07) |
-| [0063](0063-the-object-store-is-minio-and-the-reason-is-who-may-call.md) |  | The object store is MinIO, and the reason is who may call AssumeRole (2026-09-11, LH-133) |
+| [0063](0063-the-object-store-is-minio-and-the-reason-is-who-may-call.md) |  | The object store is MinIO, and the reason is who may call AssumeRole (2026-09-11, LH-133) (superseded by 0168) |
 | [0065](0065-result-is-a-capability-and-both-stage-lanes-go-through-the.md) |  | `RESULT` is a capability, and both stage lanes go through the port (2026-09-17) |
 | [0066](0066-four-rulings-on-the-lakehouse-s-unblocked-rows-owner-2026.md) |  | Four rulings on the lakehouse's unblocked rows (owner, 2026-09-19) |
 | [0067](0067-the-three-mesh-headers-stay-in-the-spec-document-and-the.md) |  | The three mesh headers stay in the spec document, and the quota has no upstream precedent (owner, 2026-09-20) |
@@ -85,7 +85,7 @@ with its client to that client's own repository.
 | [0072](0072-a-resource-measurement-runs-outside-the-thing-it-measures.md) |  | A resource measurement runs OUTSIDE the thing it measures (2026-09-21) |
 | [0073](0073-a-memory-bound-applies-at-every-hop-not-at-the-layer-that.md) |  | A memory bound applies at every hop, not at the layer that happens to set it (2026-09-22) |
 | [0074](0074-a-duration-is-not-evidence-of-the-mechanism-that-produced.md) |  | A duration is not evidence of the mechanism that produced it (2026-09-22) |
-| [0075](0075-a-producer-signs-for-a-person-by-declaring-it-lh-064-owner.md) |  | A producer signs for a person by DECLARING it (LH-064, owner 2026-09-24) |
+| [0075](0075-a-producer-signs-for-a-person-by-declaring-it-lh-064-owner.md) |  | A producer signs for a person by DECLARING it (LH-064, owner 2026-09-24) (superseded by the Ed25519 signing entry of 2026-10-02) |
 | [0076](0076-code-with-no-production-caller-is-deleted-with-the-tests.md) |  | Code with no production caller is deleted with the tests that kept it green (owner, 2026-09-25) |
 | [0077](0077-a-producer-door-on-an-existing-resource-authorizes-on-that.md) |  | A producer door on an existing resource authorizes on THAT resource (owner, 2026-09-25) |
 | [0078](0078-get-stage-runners-admits-any-signed-in-caller-owner-default.md) |  | `GET /stage-runners` admits any signed-in caller (owner default, 2026-09-26) |
@@ -93,7 +93,7 @@ with its client to that client's own repository.
 | [0080](0080-lineage-s-bus-consumer-is-durable-and-a-graph-rebuild-is-an.md) |  | Lineage's bus consumer is durable, and a graph rebuild is an explicit step (LH-303, owner 2026-09-26) |
 | [0081](0081-dropped-at-means-no-longer-catalogued-at-this-id-lh-144.md) |  | `dropped_at` means "no longer catalogued at this id" (LH-144, owner scope 2026-09-27) |
 | [0082](0082-the-store-s-newest-authorization-model-decides-nothing-each.md) |  | The store's newest authorization model decides nothing; each component uses the model its image carries (LH-201, 2026-09-28) |
-| [0083](0083-a-service-is-the-serviceaccount-its-projected-token-names.md) |  | A service is the ServiceAccount its projected token names (LH-220, D1, 2026-10-02) |
+| [0083](0083-a-service-is-the-serviceaccount-its-projected-token-names.md) |  | A service is the ServiceAccount its projected token names (LH-220, D1, 2026-10-02) (reopened by 0199) |
 | [0084](0084-lineage-events-are-signed-with-ed25519-the-keys-in-the.md) |  | Lineage events are signed with Ed25519, the keys in the store (LH-064, owner 2026-10-02) |
 | [0085](0085-the-bus-doors-verify-lh-064-s-signatures-before-they-act-xc.md) |  | The bus doors verify LH-064's signatures before they act (XC-078 slice 1, owner 2026-10-04) |
 | [0086](0086-nats-authenticates-every-client-one-user-per-app-xc-078.md) |  | NATS authenticates every client, one user per app (XC-078 slices 2 and 3, owner 2026-10-04/05) |
@@ -124,10 +124,10 @@ with its client to that client's own repository.
 | [0114](0114-lance-ns-s-frontend-toolchain-and-zone-directory-win-r10-r11.md) | R10, R11 | lance-ns's frontend toolchain and zone directory win (R10, R11, 2026-07-27) |
 | [0115](0115-dagger-tracks-the-newest-release-r12-2026-07-27.md) | R12 | Dagger tracks the newest release (R12, 2026-07-27) |
 | [0116](0116-the-otel-collector-is-the-only-log-shipper-r13-2026-07-27.md) | R13 | The OTel Collector is the only log shipper (R13, 2026-07-27) |
-| [0117](0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) | merge decision 4, R14 | nginx is retired, and the FastAPI gateway is the in-cluster edge (merge decision 4, R14, 2026-07-24) |
+| [0117](0117-nginx-is-retired-and-the-fastapi-gateway-is-the-in-cluster.md) | merge decision 4, R14 | nginx is retired, and the FastAPI gateway is the in-cluster edge (merge decision 4, R14, 2026-07-24) (the gateway is removed by 0165) |
 | [0118](0118-common-merges-into-service-kit-r19-2026-07-27.md) | R19 | common merges into service-kit (R19, 2026-07-27) |
 | [0120](0120-one-compute-lineage-layer-lineage-kit-r21-2026-07-27.md) | R21 | One compute-lineage layer, `lineage-kit` (R21, 2026-07-27) |
-| [0121](0121-raw-is-not-a-catalog-tier-and-ingest-is-its-own-service-r23.md) | R23, R24 | Raw is not a catalog tier, and ingest is its own service (R23, R24, 2026-07-28) |
+| [0121](0121-raw-is-not-a-catalog-tier-and-ingest-is-its-own-service-r23.md) | R23, R24 | Raw is not a catalog tier, and ingest is its own service (R23, R24, 2026-07-28) (R24 superseded by 0154) |
 | [0123](0123-storage-is-registered-with-a-role-r28-2026-07-28.md) | R28 | Storage is registered with a role (R28, 2026-07-28) |
 | [0124](0124-chart-unification-one-control-plane-each-one-object-store.md) | P4 | Chart unification: one control plane each, one object store, every hook pod labelled (P4, 2026-07-24) |
 | [0125](0125-age-on-cnpg-via-imagevolume-behind-its-own-gate-merge.md) | merge decision 1 | AGE on CNPG via ImageVolume, behind its own gate (merge decision 1, 2026-07-24) |
@@ -141,7 +141,7 @@ with its client to that client's own repository.
 | [0133](0133-a-synchronous-head-s-trigger-rides-the-caller-retry-contract.md) | §11 | A synchronous head's trigger rides the caller-retry contract (2026-08-15) |
 | [0134](0134-the-stage-workflow-review-and-its-operator-surface-superseded.md) | §12 | The stage workflow review and its operator surface (2026-08-16, superseded by 0088) |
 | [0138](0138-an-erasure-rebases-a-pinning-branch-after-a-seven-day-notice.md) | D4 | An erasure releases a pinning branch or tag after a seven-day notice (2026-10-10) |
-| [0139](0139-training-stays-in-the-producer-and-names-no-engine.md) | CP-044 | Training stays in the lakehouse producer and names no engine (2026-10-10) |
+| [0139](0139-training-stays-in-the-producer-and-names-no-engine.md) | CP-044 | Training stays in the lakehouse producer and names no engine (2026-10-10) (superseded by 0155) |
 | [0141](0141-the-orphan-scan-reports-and-does-not-gate-the-purge.md) | D13 | The orphan scan reports and does not gate the purge (2026-10-10) |
 | [0142](0142-no-observability-backend-receives-the-object-store-root-key.md) | LH-161 | No observability backend receives the object store's root key (2026-10-10) |
 | [0143](0143-a-project-is-created-by-an-estate-admin-or-an-operator.md) | D2 | A project is created by an estate admin or an operator (2026-10-10) |
@@ -154,7 +154,7 @@ with its client to that client's own repository.
 | [0150](0150-protection-guards-deletion-not-history-reclaim.md) | LH-300 | Protection guards deletion, not history reclaim (2026-10-10) |
 | [0151](0151-a-boot-bound-secret-rotates-only-for-consumers-rask-owns.md) | D8 | A boot-bound secret rotates only for consumers rask owns in production (2026-10-10) |
 | [0152](0152-service-kit-ships-py-typed-and-skips-report-zeros.md) | PS | service-kit ships py.typed, and skip attribution reports zeros (2026-10-10) |
-| [0153](0153-the-app-chart-is-the-product.md) | XC-085 | The app chart is the product; operators, compute and observability are prerequisites (2026-10-11) |
+| [0153](0153-the-app-chart-is-the-product.md) | XC-085 | The app chart is the product; operators, compute and observability are prerequisites (2026-10-11) (reopened by 0199) |
 | [0154](0154-the-lakehouse-runs-no-ingest-and-no-workflow-engine.md) | LH-461 | The lakehouse runs no ingest and no workflow engine; data enters through the catalog's namespace doors (2026-10-12) |
 | [0155](0155-the-medallion-is-tier-governance-in-the-catalog.md) | LH-461 | The medallion is tier governance inside the catalog; the lakehouse runs no stage, no training and no engine (2026-10-12) |
 | [0156](0156-the-audit-grilling-amends-0155.md) | LH-464 | The lakehouse audit's grilling amends ADR 0155: a tag gate, provenance in the spec Context, and one tier judge (2026-10-12) |
@@ -163,13 +163,13 @@ with its client to that client's own repository.
 | [0159](0159-four-owner-rulings-recorded-from-agent-memory.md) | LH-063 | Four owner rulings of 2026-09-25/26 that no ADR recorded: branch writes, the principal key, catalog drop events, an unplannable compaction (2026-10-12) |
 | [0160](0160-the-tier-judge-owns-the-write-rung-and-a-tier-is-declared-once.md) | LH-470 | The tier judge owns the write rung, and a tier is declared once (2026-10-13) |
 | [0161](0161-the-tag-gate-runs-at-publish.md) | LH-466 | The tag gate runs when a version is published, so a hold is the publish door's answer (2026-10-15) |
-| [0162](0162-the-lakehouse-builds-nothing-maintenance-decides.md) | LH-467 | The lakehouse builds nothing: compaction and indexing commit through `version/create`, and maintenance decides (2026-10-15) |
+| [0162](0162-the-lakehouse-builds-nothing-maintenance-decides.md) | LH-467 | The lakehouse builds nothing: compaction and indexing commit through `version/create`, and maintenance decides (2026-10-15) (superseded in part by 0198) |
 | [0163](0163-an-erasure-is-an-obligation-a-job-fulfils-and-the-catalog-verifies.md) | LH-493 | An erasure is an obligation a bring-your-own job fulfils and the catalog verifies (2026-10-15) |
 | [0164](0164-a-stock-client-commits-on-a-branch-through-create-table-version.md) | LH-490 | A stock client commits on a branch through `CreateTableVersion`; `CreateTableBranch` creates it (2026-10-15) |
 | [0165](0165-the-edge-is-the-platforms-gateway-api.md) | XC-150 | The edge is the platform's Gateway: HTTPRoutes with a prefix rewrite, one `RASK_EDGE_URL`, Traefik's Gateway provider in development (2026-10-16) |
-| [0166](0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md) | XC-082 | A secret read from the store is re-read on a TTL; a service's own S3 key pair is held in the store (2026-10-16) |
+| [0166](0166-a-secret-read-from-the-store-is-re-read-on-a-ttl.md) | XC-082 | A secret read from the store is re-read on a TTL; a service's own S3 key pair is held in the store (2026-10-16) (reopened by 0199) |
 | [0167](0167-the-deployed-estate-is-driven-per-deploy-not-on-a-clock.md) | XC-033 | The deployed estate is driven per deploy, not on a clock; the e2e lane runs every module it can serve (2026-10-18) |
-| [0168](0168-the-development-object-store-is-rustfs.md) | XC-163 | The development and CI object store is RustFS; MinIO leaves the repo (2026-10-18) |
+| [0168](0168-the-development-object-store-is-rustfs.md) | XC-163 | The development and CI object store is RustFS; MinIO leaves the repo (2026-10-18) (superseded in part by 0196) |
 | [0169](0169-each-app-reads-only-its-own-secrets-every-sidecar-logs-in-as-itself.md) | XC-165 | Each app reads only its own secrets: every sidecar logs in to the store as its own ServiceAccount (2026-10-18) |
 | [0170](0170-the-catalogs-store-identity-is-its-serviceaccount.md) | XC-083 | The catalog's store identity is its ServiceAccount: its own IO and every vend are sessions its token is exchanged for (2026-10-18) |
 | [0171](0171-the-lakehouse-knows-no-annotation-tool.md) | XC-167 | The lakehouse knows no annotation tool: rask's annotator is a client with its own release, state and roles (2026-10-18) |
@@ -186,18 +186,18 @@ with its client to that client's own repository.
 | [0182](0182-each-catalog-replica-hears-the-control-broadcast-through-a-durable-of-its-own.md) | LH-305 | Each catalog replica hears the control broadcast through a durable of its own (2026-10-27) |
 | [0183](0183-an-erasure-names-every-table-a-run-declared-it-read-whatever-lineage-has-recorded.md) | LH-541 | An erasure names every table a run declared it read, whatever lineage has recorded (2026-10-28) |
 | [0184](0184-a-committed-file-overwritten-in-place-is-found-by-the-sweep.md) | LH-419 | A committed file overwritten in place is found by the sweep (2026-10-30) |
-| [0185](0185-the-catalog-reclaims-each-roots-namespace-index-and-holds-no-connection-past-it.md) | LH-251 | The catalog reclaims each root's namespace index, and holds no connection past it (2026-10-30) |
+| [0185](0185-the-catalog-reclaims-each-roots-namespace-index-and-holds-no-connection-past-it.md) | LH-251 | The catalog reclaims each root's namespace index, and holds no connection past it (2026-10-30) (reopened by 0199) |
 | [0186](0186-a-commit-that-lost-its-race-takes-its-refs-turn.md) | LH-259 | A commit that lost its race takes its ref's turn (2026-10-31) |
 | [0187](0187-a-re-announcement-is-signed-only-for-the-author-the-catalog-recorded.md) | LH-550 | A re-announcement is signed only for the author the catalog recorded authorizing the commit (2026-11-01) |
-| [0188](0188-a-lost-publication-is-announced-from-its-tag-and-lifecycle-markers-stay-best-effort.md) | LH-552 | A lost publication is announced from its tag; a table's lifecycle markers stay best-effort (2026-11-01) |
+| [0188](0188-a-lost-publication-is-announced-from-its-tag-and-lifecycle-markers-stay-best-effort.md) | LH-552 | A lost publication is announced from its tag; a table's lifecycle markers stay best-effort (2026-11-01) (reopened by 0199) |
 | [0189](0189-the-product-chart-carries-no-engine-seam.md) | XC-182 | The product chart carries no engine seam: a bring-your-own engine is a client like any other (2026-11-01) |
 | [0190](0190-the-notifications-inbox-is-a-client-of-the-lakehouses-events.md) | XC-188 | The notifications inbox is a client of the lakehouse's events: the lakehouse emits, a notifier delivers (2026-11-02; the inbox retired by 0193) |
 | [0191](0191-a-rename-is-one-renamed-dataset-and-a-commit-names-its-writers-run-as-parent.md) | LH-554 | A rename is one renamed dataset, and a commit names its writer's run as its parent (2026-11-03) |
-| [0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) | LH-563 | A service's roles are granted at the catalog's doors, scoped to the tenants it serves (2026-11-06) |
+| [0192](0192-a-services-roles-are-granted-at-the-catalogs-doors-scoped-to-the-tenants-it-serves.md) | LH-563 | A service's roles are granted at the catalog's doors, scoped to the tenants it serves (2026-11-06) (reopened by 0199) |
 | [0193](0193-the-inbox-is-retired-and-the-console-joins-the-product.md) | XC-195 | The inbox is retired, and the console joins the product: the bell is a browser-side log of the reader's own writes (2026-11-06) |
 | [0194](0194-the-dev-estates-release-values-are-composed-from-git-alone.md) | XC-194 | The dev estate's release values are composed from git alone: no live values read back, and the schema refuses an undeclared key (2026-11-07) |
-| [0195](0195-the-three-kits-fold-into-one-lakehouse-library.md) | owner | The three kits fold into one lakehouse library: one package by module, no extras, no audience contracts, nothing a client imports (2026-11-07) |
+| [0195](0195-the-three-kits-fold-into-one-lakehouse-library.md) | owner | The three kits fold into one lakehouse library: one package by module, no extras, no audience contracts, nothing a client imports (2026-11-07) (reopened by 0199) |
 | [0196](0196-an-install-from-git-converges-under-argo-cd.md) | XC-164 | An install from git converges under Argo CD, and a changed input converges on the next sync (2026-11-07) |
 | [0197](0197-maintenance-writes-only-under-a-vend-and-no-workload-holds-a-store-key.md) | XC-084, LH-219, LH-238 | Maintenance writes only under a vend, and no workload holds a store key (2026-11-08) |
-| [0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) | owner | Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08) |
+| [0198](0198-maintenance-is-driven-by-commits-and-a-clone-keeps-its-source-by-a-tag.md) | owner | Maintenance is driven by commits, and a clone keeps its source by a tag (2026-11-08) (reopened by 0199) |
 | [0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md) | owner | NATS is the one bus, the library takes subpackages, and the design review reopens eight decisions (2026-11-09) |

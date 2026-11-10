@@ -16,7 +16,7 @@ keep the `api/v1/endpoints/` layout — the factory owns the boot, not the layou
 |---|---|---|---|---|---|
 | `catalog` | 2333 | `lakehouse` | `build_lance_service_app` | no | the Lance Namespace doors and the management doors; public `/api/catalog` |
 | `lineage` | 8000 | `lakehouse` | `build_lance_service_app` | no | intake, commit feed, forwarder (ADR 0158); public `/api/lineage` |
-| `maintenance` | 8000 | `lakehouse` | `build_lance_service_app` | no | sweep, reconciler, due list; no public row |
+| `maintenance` | 8000 | `lakehouse` | `build_lance_service_app` | no | the work-queue worker (table passes, the hourly audit, the daily scan, ADR 0198) and the write-event lane; no public row |
 
 ## The lakehouse runs no ingest, no stage and no engine
 

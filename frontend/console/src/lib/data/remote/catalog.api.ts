@@ -341,7 +341,7 @@ export const setTableProperties = command(
 
 // There is deliberately NO `backfillColumn` here. `alter_table_backfill_columns` is a
 // `NotImplementedError` stub in the native `dir` backend the chart pins, so the command could only
-// ever return 501 (`docs/COVERAGE.md`); the schema table now STATES that (`table-detail/
+// ever return 501; the schema table now STATES that (`table-detail/
 // unavailable.ts`) and points at `updateRows` below, which writes a SQL expression into an existing
 // column under an optional predicate — a bounded backfill, on a door that is backed.
 

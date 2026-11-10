@@ -38,10 +38,6 @@ OpenAPI snapshots of the lakehouse services, checked by `make openapi-check`:
 - [`catalog-openapi.json`](../catalog-openapi.json) — the catalog service surface
 - [`lineage-openapi.json`](../lineage-openapi.json) — the lineage service surface
 
-## Reports
-
-- [Coverage](../COVERAGE.md)
-
 ## Lance format & SDK reference
 
 The vendored upstream Lance documentation (format, SDK, namespace spec) has its own

@@ -1,5 +1,7 @@
 # 0083. A service is the ServiceAccount its projected token names (LH-220, D1, 2026-10-02)
 
+**Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the 660 s bound holds only for a token the kubelet projects; a door checks no ceiling on `exp - iat`, so a token minted for a rask audience with a long duration outlives its pod and its account.
+
 Before this row a service authenticated with the estate-wide `APP_API_TOKEN` plus an `x-lance-service-identity`
 header it chose itself. Privileged subjects presented a static per-identity `service-token-<id>`, and to check
 them the catalog read every peer's key. Measured live on helm rev 261: the shared token plus

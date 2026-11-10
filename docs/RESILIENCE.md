@@ -197,7 +197,7 @@ chart and live-verified on kind.
   consumed from OpenBao at boot when a secret store is configured. `helm template -f values-prod.yaml` shows
   zero plaintext secret values in env/args.
 - **Graceful rollout drain.** Every app Deployment has a `preStop` sleep + `terminationGracePeriodSeconds`
-  (maintenance gets a longer budget for an in-flight sweep) so endpoint removal propagates before SIGTERM —
+  (maintenance gets a longer budget, so a running table pass finishes inside `maintenance.queue.drainSeconds`) so endpoint removal propagates before SIGTERM —
   in-flight requests drain instead of connection-refusing (`lance.preStop`, `lifecycle.*`).
 - **Bounded Dapr publishes.** Every `publish_event` is wrapped in `asyncio.timeout`
   (`lakehouse/dapr_publish.py`) so a wedged sidecar/NATS can't hang a write handler past its ack window.
@@ -216,21 +216,15 @@ chart and live-verified on kind.
 ## Invariants of the lakehouse's own background work
 
 The lakehouse runs no batch pipeline ([ADR 0155](adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)); a
-pipeline's own invariants are its engine's business. Two rules bind the work the lakehouse does run, and each has a
-test that fails without it:
+pipeline's own invariants are its engine's business. One rule binds the work the lakehouse does run, and a test fails
+without it:
 
 - **Refuse new work while draining.** `lakehouse.draining.retry_when_draining` guards every sidecar-delivered work
-  door (maintenance's arrival, work and index routes): a draining process answers
+  door (maintenance's arrival route, `/maintenance-arrival`): a draining process answers
   RETRY so the broker redelivers to a live replica. It answers RETRY, not DROP, because on a subscription that
   declares a `deadLetterTopic` daprd routes a DROP to that topic, so a good message would be parked for a human to
   find (`lakehouse/draining.py` carries the daprd source references). Pinned by
   `packages/lakehouse/tests/test_draining_refuses_admission.py`.
-- **Randomise iteration order.** The maintenance sweep shuffles its dataset list and its failure-retry list
-  (`maintenance/services/sweep.py`), so a dataset that fails every pass cannot starve the ones listed after it.
-  Deleting the shuffle passes every functional test, which is why
-  `services/maintenance/tests/test_the_planner_does_not_hand_out_datasets_in_listing_order.py` (the dataset list) and
-  `tests/unit/test_maintenance_lineage.py::test_emit_sweep_lineage_caps_fail_emits_and_logs_the_drop` (the capped
-  failure list) pin it.
 
 ## Prod hardening backlog (delegate-to-platform — NOT dev-blocking)
 

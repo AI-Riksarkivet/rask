@@ -10,18 +10,14 @@ Use the OpenFGA CLI to validate and test your models.
 
 Use the OpenFGA CLI to validate and test your models.
 
-**Installation:**
+**Installation (rask):** `make bootstrap` pins the `fga` CLI into `.localbin/fga` (the Makefile's `FGA_V`), and
+`make fga-test` runs the model's own suite with it. The OpenFGA server the offline suite starts is exported from its
+pinned image through Dagger by `make openfga` (`.localbin/openfga`). Never run either through docker (CLAUDE.md
+toolchain rule).
 
 ```bash
-# macOS
-brew install openfga/tap/fga
-
-# Debian
-sudo apt install ./fga_<version>_linux_<arch>.deb
-
-# Docker
-docker pull openfga/cli
-docker run -it openfga/cli
+make bootstrap   # .localbin/fga, idempotent
+make fga-test    # validate model.fga, run model.fga.yaml, check the three copies agree
 ```
 
 **Validate model syntax:**
@@ -62,7 +58,7 @@ Checks 5/5 passing
 fga model test --tests store.fga.yaml || exit 1
 ```
 
-You can also use the [OpenFGA Model Test GitHub actions](https://github.com/marketplace/actions/openfga-model-testing-action). 
+You can also use the [OpenFGA Model Test GitHub actions](https://github.com/marketplace/actions/openfga-model-testing-action).
 
 **Verbose output for debugging:**
 

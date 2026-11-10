@@ -10,6 +10,10 @@ AUTHORING (its own README title; its prereqs even assume Docker, which rask forb
 docs list the 12 building blocks without tradeoffs. This skill is the estate-grounded layer: every
 claim below was verified against the render or the code (2026-08-28), not inherited from docs.
 
+**ADR 0199 makes NATS JetStream the lakehouse's one bus and plans the move off Dapr** (its own row after LH-494, an
+ADR of its own). Until then this file describes the Dapr the estate runs; a new capability is not built on a Dapr
+block that the move would have to undo.
+
 ## The inventory — 3 of 12 blocks in use
 
 | Block | Used | Where (verified) |
@@ -20,7 +24,7 @@ claim below was verified against the render or the code (2026-08-28), not inheri
 | Bindings | ✅ | `bindings.cron` ×6 in the product chart (maintenance runs none: its times are NATS message schedules on its own work queue, which fire once whatever its replica count, ADR 0198 decisions 5 and 6): `lineage-relay-cron` (drains the outbox, prunes the feed, forwards to the graph backend), `catalog-control-relay-cron`, `catalog-erasure-release-cron` (ADR 0138, releasing an erasure's pinning tags and branches when due), `catalog-promotion-expiry-cron` (ADR 0161, expiring promotion holds past their review deadline), `catalog-commit-reconcile-cron` ([[LH-497]], announcing each committed version lineage's feed lacks), `catalog-manifest-reclaim-cron` ([[LH-251]], ADR 0185, removing each root's `__manifest` versions past their retention); a client's release renders its own — read the cluster for what runs, not the templates. Each cron is an input binding delivered to `POST /<component-name>` at the pod ROOT. The product chart renders no output binding |
 | Actors | ❌ | No service in the estate hosts an actor, so placement and the Scheduler hold nothing of the lakehouse's. The one host, the notifications inbox, is retired (ADR 0193) |
 | Secrets | ✅ | `secretstores.hashicorp.vault` → the platform's Vault or OpenBao (the dev OpenBao fixture in development; the chart renders none, [[XC-149]]). ONE component, `lance-secrets`, logs each sidecar in with Kubernetes auth as the role `<release>-{appID}` (Dapr 1.19+): the pod's own ServiceAccount, a token projected into daprd alone, a policy reading exactly that app's secrets; each app's Configuration is deny-by-default with `allowedSecrets` (`lance.storeReads`, ADR 0169). THE estate rule: sole source, fail-closed, never env fallback. Every read is held at most a jittered 300-600 s and read again (`lakehouse.governed.secret_cache`, ADR 0166), so a rotation in the store reaches running pods; no lakehouse service holds an object-store key pair, each one's store identity being its ServiceAccount token (ADR 0170, ADR 0197), and the app-token door accepts the current or previous token |
-| Workflow | ❌ | Nothing in this repository runs a workflow. The lakehouse runs none: the import contract `the-lakehouse-is-not-built-on-a-workflow-engine` forbids it (ADR 0154). The promotion gate is a tag, not a saga: readers read `@published`, approval moves the tag, rejection restores main, a cron sweep expires stale holds (ADR 0156 C1, ADR 0161, [[LH-466]]) |
+| Workflow | ❌ | Nothing in this repository runs a workflow. The lakehouse runs none: the import contract `the-lakehouse-is-not-built-on-a-workflow-engine` forbids it (ADR 0154). The promotion gate is a tag, not a saga: readers read `@published`, approval moves the tag, rejection restores main, `catalog-promotion-expiry-cron` expires stale holds (ADR 0156 C1, ADR 0161, [[LH-466]]) |
 | Configuration | ❌ | Ruled out — see refusals |
 | Middleware | ❌ | Ruled out — see refusals |
 | Distributed lock | ❌ | Not yet — the ONE open candidate (see below) |
@@ -68,55 +72,33 @@ actor placement/turn semantics.
 - **Configuration API** (2026-08-28): the fleet's config is ONE ConfigMap via `envFrom`, validated by
   pydantic-settings at boot, and the render-driven invariant tests depend on seeing it; change
   cadence is deliberately rollout-shaped. It solves a problem this estate chose not to have.
-- **Jobs API** (2026-08-28; reasons rewritten 2026-09-03 after four adversarial re-tests — the
-  CONCLUSION held every time, most of the original reasoning did not). The eight crons stay
-  `bindings.cron`. **This entry is deliberately shorter than it was: three of the four counts it used
-  to give are falsified, and a refusal defended by dead reasons invites the re-litigation it exists to
-  prevent.**
+- **Jobs API** (2026-08-28, re-judged 2026-11-09 against the code as it runs). The six crons stay `bindings.cron`,
+  and maintenance needs no scheduler from Dapr at all.
 
-  **The count that carries it, and it was never stated before:** the selection function is
-  WHOLE-ESTATE and a per-table wakeup cannot compute it. `sweep.py::_protected_roots` must open every
-  discovered dataset in every bucket before one is compacted — a shallow clone in bucket B is the only
-  thing that knows bucket A's dataset must not be rewritten, and `base_refs.py` states why no
-  per-dataset check can find it ("the evidence lives only on the referring side"). That pre-pass IS
-  the scan's dominant cost, so a per-target Job avoids a datetime comparison and avoids nothing that
-  is expensive — while either re-running the pre-pass per job (catastrophically worse) or skipping it
-  (re-opening the measured #114/#128d data-loss defect).
+  **Maintenance's times are NATS message schedules on its own work queue** (ADR 0198 decisions 5 and 6,
+  `maintenance/services/queue.py`). Each table's next pass is a schedule on `maintenance.schedule.<kind>.<uuid>` in
+  `MAINTENANCE_SCHEDULES` that fires into `maintenance.due.<kind>.<uuid>`, a newer one replacing it; a commit holds the
+  table's follow-up `maintenance.queue.commitPassDelaySeconds` (300) out; every table is passed at least every
+  `maintenance.queue.recheckHours` (24); and the estate-wide work is two schedules, the audit
+  (`maintenance.queue.auditSchedule`, `@hourly`: the drift report, its repairs and the lost-task backstop) and the scan
+  (`maintenance.queue.scanSchedule`, `0 30 0 * * *`: the audit with the orphan scan, the listing floors and the trash
+  purge). A schedule lives on the bus, fires once whatever the replica count, and the worker takes the fired task off a
+  work queue that holds one per table, so it needs no lease, no lock and no cron binding.
 
-  Secondary, and still true: **the loop must exist anyway** for datasets carrying no policy — they
-  have no `_policies/state/` record at all and are maintained on every tick — so Jobs would add a
-  second mechanism beside the first rather than replacing it.
+  **Why the Jobs API still loses, on today's code:** a Dapr job would be a second home for times the bus already holds,
+  scheduled through a sidecar whose publish cannot set the `Nats-Schedule` headers (`queue.py` cites
+  `pubsub/jetstream/jetstream.go:115-145`), and invisible to the render gates. ADR 0199 makes NATS JetStream the one bus
+  and plans the move off Dapr, so a new time-shaped need goes to a NATS message schedule, not to a Dapr block.
 
-  **What was falsified, so nobody re-derives it from this file:** a tier table CAN carry a
-  policy (a project record matches at bucket level, `maintenance_policies.py:18,156`); the "60x finer
-  resolution" was demo-only arithmetic (prod is `0 */30 * * * *`, i.e. 2x); "per-target wakeups queue
-  on the same lock" does not hold: `routes.on_cron` holds `_sweep_lock` for the whole-estate sweep, and the per-table
-  lane, the write-event subscription (`maintenance/api/arrival.py`), takes no lock; and "creates a
-  second stateful store" names the wrong thing — the Scheduler etcd is already deployed and
-  part of the Dapr control plane, so what per-policy Jobs would create is a second
-  authoritative HOME for policy cadence that every create/update/delete/drop/undrop path must mirror,
-  invisible to the render gates and to the drift report's three store categories.
-
-  **The event-driven lane (2026-09-03) shrinks the question rather than reopening it.** Version expiry is
-  commit-driven: the primary trigger is the `lineage.events.v1` subscription (`maintenance.arrivalEnabled`, on by
-  default) and the sweep's cron (`0 */30 * * * *`) is the backstop, so the scheduling mechanism does not drive
-  maintenance; the component that needs throughput, the write-event subscriber, scales on `queueGroupName` competing
-  consumers, which needs no Jobs. **AUDITED ESTATE-WIDE 2026-08-28** (10 time-shaped clusters,
-  adversarial, fable agents): **zero SHOULD_USE_JOBS.** Every hypothesised consumer dissolved on
-  inspection — the candidates below are REFUTED and must not be re-proposed without new facts:
-  * *auto-purge at trash deadline* → already shipped as a sweep flag (`MAINTENANCE_TRASH_PURGE_ENABLED`,
-    report-only default is a recorded destruction posture). A purge tolerates a tick's lateness and
-    must re-verify state at execution anyway (`purge.due_records` is the one shared rule), so the
-    sweep is the CORRECT mechanism, not a stand-in.
-  * *TTL grants* → already live as an FGA CEL condition (`non_expired_grant`, `packages/lakehouse/src/lakehouse/governed/auth/model.fga:707`) —
+  **The audit of 2026-08-28** (10 time-shaped clusters, adversarial) found zero SHOULD_USE_JOBS, and the candidates it
+  refuted stay refuted on today's code:
+  * *auto-purge at trash deadline* → the daily scan's trash purge (`MAINTENANCE_TRASH_PURGE_ENABLED`, report-only by
+    default, a recorded destruction posture). A purge tolerates a scan's lateness and must re-verify state at execution
+    anyway (`purge.due_records` is the one shared rule).
+  * *TTL grants* → already live as an FGA CEL condition (`non_expired_grant`, `packages/lakehouse/src/lakehouse/governed/auth/model.fga:741`) —
     check-time evaluation, strictly better than revoke-at-T (no window a crashed revoker leaves open).
-  * *per-subject digest one-shots* → actor reminders, correctly (the state lives in the actor's turn;
-    reminders ride the same Scheduler Jobs would). The notifications inbox that held them is retired
-    (ADR 0193), so no digest runs on the estate.
-  **The real revisit trigger:** a one-shot that is scoped to NOTHING that already holds state — no
-  actor to remind, no workflow to time, no record a scan can evaluate. Example: an estate-wide digest
-  at a fixed local time per timezone cohort. None exists. Calendar semantics in a per-entity policy
-  ("02:00 in the project's timezone") are NOT it: still computable from data at each tick.
+  **The real revisit trigger:** a one-shot that is scoped to NOTHING that already holds state and that no NATS message
+  schedule can carry. None exists.
 
 ## Jobs vs Workflow vs reminder — where a DELAY belongs
 

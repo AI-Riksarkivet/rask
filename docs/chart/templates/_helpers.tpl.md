@@ -117,11 +117,10 @@ numbers cannot drift — see the arithmetic in values.yaml.
 ## `{{- if $root.Values.dapr.enabled }}`
 
 DANGLING-REFERENCE GUARD. The `lance-tracing` Configuration renders inside
-`{{- if .Values.dapr.enabled }}` (observability.yaml:18), while this annotation used to be
-emitted on `dapr.enabled` alone. Measured with `dapr.enabled=false`:
+`{{- if .Values.dapr.enabled }}` (observability.yaml:18), so the annotation is gated on the same
+predicate. Measured with `dapr.enabled=false` and the annotation on `dapr.enabled` alone:
 14 pods annotated, 0 Configurations rendered — every sidecar referencing an object that does
-not exist. observability.yaml's own comment says the guard it removed was "against a DANGLING
-dapr.io/config reference"; this is that guard, put back on the side that can see both.
+not exist. This guard sits on the side that can see both.
 
 ## `{{- if has $appId (splitList "," (include "lance.secretScopes" $root)) }}`
 
@@ -458,8 +457,8 @@ excludes the `daprd` container. A pre-SDK crash, a uvicorn.error record and the 
 survive in `opentelemetry_logs`, unparsed but present.
 
 DO NOT "SIMPLIFY" THAT BACK TO THE LABEL. It is POD-SPEC metadata, stamped by the ReplicaSet at creation, so
-it is never absent during a crash loop. This comment used to claim the opposite, and on that false premise the
-filter deleted every crash log and every daprd line on 10 pods — measured 2026-08-23, 0 survivors of 10.
+it is never absent during a crash loop. A filter keyed on the label's absence deleted every crash log and every
+daprd line on 10 pods — measured 2026-08-23, 0 survivors of 10.
 
 ## `- { name: OTEL_METRIC_EXPORT_INTERVAL, value: "5000" }`
 
@@ -584,10 +583,9 @@ Usage: {{- include "lance.rootSecurityContext" . | nindent 10 }}
 
 ## `readOnlyRootFilesystem: {{ .Values.security.readOnlyRootFilesystem }}`
 
-UNCONDITIONAL. This used to be relaxed to false whenever `dev.reload` was set, which existed
-solely so Tilt's live_update could write into a running container. Tilt is gone (2026-08-04),
-and with it the only reason this chart could ever be told to unlock a container's filesystem.
-A chart a reconciler applies should not carry a values flag that weakens it.
+UNCONDITIONAL. No development loop writes into a running container, so nothing needs a
+container's filesystem unlocked, and a chart a reconciler applies should not carry a values flag
+that weakens it.
 
 ## `{{- define "lance.tmpMount" -}}`
 
@@ -1055,21 +1053,17 @@ a Component/Resiliency/Configuration edit reaches running sidecars only after
 
 ## `tracing:`
 
-CORRECTED 2026-08-22. This block used to say "There is NO otel exporter here … Dapr's own sidecar
-spans can't carry GreptimeDB's required db-name/pipeline headers", and concluded the estate still
-had an end-to-end trace. Both halves were wrong.
-
 `samplingRate` is a SAMPLING probability, NOT an enable switch. With no `otel:`, no `zipkin:` and
 no `stdout:`, daprd registers its NullExporter: every sidecar span is created, sampled at 100%,
 has its context propagated — and is dropped by an `ExportSpans` that returns nil. No log, no
-error, no metric. Indistinguishable from a collector that is down. So NO Dapr hop in this estate
-had ever produced a span: not service invocation, pub/sub publish or delivery, actor calls, input
-bindings or workflow steps.
+error, no metric. Indistinguishable from a collector that is down. Measured 2026-08-22 with no
+exporter configured: no Dapr hop produced a span, not service invocation, pub/sub publish or
+delivery, actor calls, input bindings or workflow steps.
 
-The stated reason was false twice over. Dapr's `otel.headers` accepts arbitrary {name,value} (and
-secretKeyRef) pairs, so it CAN carry vendor headers — and it does not need to, because this chart
-deploys a Collector that adds them itself. That Collector's `otlp` receiver already listened on
-4317 and 4318 and was already wired into the traces pipeline.
+So the sidecars export to the Collector. Dapr's `otel.headers` accepts arbitrary {name,value} (and
+secretKeyRef) pairs, so it could carry a backend's headers, and it does not need to: the Collector
+this chart deploys adds them itself, and its `otlp` receiver listens on 4317 and 4318, wired into
+the traces pipeline.
 
 Gated on otelEnabled, the one predicate every plane's export reads.
 

@@ -101,7 +101,7 @@ In production also HA (`global.ha.enabled`) and an injector that drops every sid
 
 ## Prerequisite: NATS JetStream
 
-Every event rask moves (lineage, the catalog's control broadcast, the maintenance queues) rides Dapr pub/sub over **NATS JetStream, a prerequisite** (ADR 0153) the platform runs. The chart
+Every event rask moves rides **NATS JetStream, a prerequisite** (ADR 0153) the platform runs, and ADR 0199 makes it the lakehouse's one bus: lineage's events and the catalog's control broadcast through each app's Dapr pub/sub component, and maintenance's work queue, schedules and the store's change events through nats-py as the bus user `maintenance-worker` (ADR 0198 decision 5). The chart
 renders no server; it renders what is rask's: the address its clients dial, the stream definitions (the stream Job,
 which creates rask's streams on the bus as the `admin` user), and the bus users (`nats.auth.users`, one per app). Name
 the bus in `nats.url` (the render refuses without it). Each user's credential `nats-user-<user>` lives in the store; a store the chart does not seed needs them issued by
@@ -110,7 +110,7 @@ the bus's operator and attested with `nats.auth.provisioned` (docs/OPERATORS.md 
 What the bus must provide, and the version rask is tested against, are in `deploy/fixtures/nats` (the development
 install `make k3s-up` runs, release `nats`, Service `rask-nats` in rask's namespace): NATS 2.15.2; JetStream on a file
 store; a cluster of at least `nats.streamReplicas` nodes (three); operator mode with one APP account holding JetStream
-and every rask user, so Dapr's pubsub.jetstream can authenticate with a user JWT and NKEY seed.
+and every rask user, so Dapr's pubsub.jetstream and maintenance's worker authenticate with a user JWT and NKEY seed.
 
 ## Prerequisite: the CloudNativePG operator, for the AGE-on-CNPG path
 

@@ -13,8 +13,8 @@ not run), **open** (neither).
 | HeadBucket (pyarrow's bucket check before a write) | no rask path through a vended credential | measured: refused to a prefix-scoped session | `rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960` |
 | Multipart from Lance's object_store | Lance data files | measured (create + append) | audit § Measured |
 | Ranged GET | Lance reads | measured implicitly (reads after append); multi-page offsets not isolated | audit § Measured |
-| ListObjectsV2 prefix/delimiter | Lance listing, sweep | measured (prefix-scoped list) + gated | `implemented_tests.txt` |
-| DeleteObjects (≤1,000 keys) | warehouse purge (`services/catalog/src/catalog/services/warehouses.py:605-630`), sweep | gated; purge not measured | limit `rustfs@1.0.3:rustfs/src/app/object/delete.rs:471-474` |
+| ListObjectsV2 prefix/delimiter | Lance listing, maintenance's table pass and orphan scan | measured (prefix-scoped list) + gated | `implemented_tests.txt` |
+| DeleteObjects (≤1,000 keys) | warehouse purge (`services/catalog/src/catalog/services/warehouses.py:698-699`), maintenance's purge, version expiry and base reclaim (`lakehouse.stored_objects.delete_objects`) | gated; purge not measured | limit `rustfs@1.0.3:rustfs/src/app/object/delete.rs:471-474` |
 | CreateBucket / DeleteBucket | warehouse lifecycle | open (purge path not traced) | `rustfs@1.0.3:crates/ecstore/src/store/bucket.rs:36-86` |
 | STS AssumeRole + session token on every call | no rask caller (ADR 0170) | measured | `rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:212-333` |
 | AssumeRoleWithWebIdentity for a ServiceAccount token, the canned policy its `sub` names, an inline session policy | the catalog's own IO and every vend (`vending.mode: web_identity`, ADR 0170) | measured on 1.0.3 (stand-in issuer, `scripts/rustfs_web_identity_measure.py`) | `sts.rs:399-441`; `rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298` |

@@ -2,7 +2,7 @@
 //
 // The catalog wires all 54 Lance Namespace ops, but six of them are `NotImplementedError` stubs in
 // the native Rust `DirectoryNamespace` the chart pins, so they answer 501 for every caller on every
-// table (`docs/COVERAGE.md`). `alter_table_backfill_columns` is one of them.
+// table. `alter_table_backfill_columns` is one of them.
 //
 // A control wired to such an op is a dead end wearing an affordance: it is not refused for a wrong
 // argument or a missing grant, it is refused always, and the user only finds out after committing

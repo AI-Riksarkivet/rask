@@ -228,9 +228,6 @@ nav = [
       { "On-call Runbook" = "runbooks/RUNBOOK-oncall.md" },
       { "Backup & Restore Runbook" = "runbooks/RUNBOOK-restore.md" },
     ]},
-    { "Reports" = [
-      { "Coverage" = "COVERAGE.md" },
-    ]},
   ]},
   { "Lance Reference" = [
     { "Overview" = "lance/index.md" },

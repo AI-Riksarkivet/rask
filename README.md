@@ -18,7 +18,7 @@ doors like any other client (ADRs 0154 and 0155).
 **The platform is workload-agnostic by design.** It stores and governs blobs and multimodal data;
 no workload is its identity. Anything that reads bytes, writes a governed table and emits lineage fits the same
 shape — text, image, audio, video, embeddings. A workload's model, stage graph and output format are its own and live
-outside this repository; no shared seam (the catalog and its tier governance, the maintenance sweep, lineage, the
+outside this repository; no shared seam (the catalog and its tier governance, maintenance's work queue, lineage, the
 events) names one. The test for any shared seam is *would this still be right for audio?*
 
 This repository holds the lakehouse and its console, nothing else. Every other client (flows, compute and the Ray
