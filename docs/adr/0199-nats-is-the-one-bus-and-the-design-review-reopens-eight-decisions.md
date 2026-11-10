@@ -99,6 +99,7 @@ merge take transaction properties.
   permissions and signing pairs would hold the platform store's admin credential, the bus account's signing key and
   write access to the secret store. Direction: the operator reconciles projects, warehouses and grants through the
   catalog's doors and replaces no provisioning Job; decided with the operator's own design, confidence medium-high.
+  Decided by the owner on 2026-11-10 ("Go for operator"): it is written in Go on kubebuilder, its own release.
 - **The bus credential of track D is settled from sources and measured on 2026-11-10**
   (`docs/architecture/bus-credentials-findings.md`; the owner: NATS is run secured and hardened by the platform team).
   Each pod sends only its projected ServiceAccount token, over TLS; the platform's auth callout verifies it and returns a

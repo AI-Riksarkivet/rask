@@ -45,6 +45,9 @@ reference operators' source 2026-11-10):
   signing key and write access to the secret store, which zero trust refuses. Those stay idempotent Jobs for the
   development fixtures and the platform's own controllers in production (§ 3 for the streams).
 
+It is written in Go on kubebuilder (controller-runtime), namespace-scoped and shipped as its own release (owner,
+2026-11-10: "Go for operator"), which makes Go a third language of the product beside Python and TypeScript.
+
 It installs none of the platform's operators in § 1, and it holds no credential a service does not already hold by
 its own ServiceAccount: one Role in its namespace, with no access to Secrets, Deployments or Jobs.
 
