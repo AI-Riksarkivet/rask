@@ -307,7 +307,7 @@ lifecycle:
   terminationGracePeriodSeconds: 40
   # -- Seconds the Dapr sidecar keeps running after SIGTERM to flush acks; must lie between preStopSeconds and the grace period.
   sidecarBlockShutdownSeconds: 20
-  # -- Grace period in seconds for maintenance pods, long enough that an in-flight sweep or Lance write is not SIGKILLed.
+  # -- Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed; the web pods take `terminationGracePeriodSeconds`.
   maintenanceTerminationGracePeriodSeconds: 120
   # -- Seconds reserved for the app's lifespan teardown; uvicorn's graceful-shutdown bound is grace - preStop - this.
   teardownSeconds: 10
@@ -771,11 +771,18 @@ medallion:
 maintenance:
   # -- Deploy the maintenance service (its worker, the hourly audit and the write-event lane).
   enabled: true
-  # A table's task is on the queue at most once and taken by one worker at a time, so replicas share the work and a
-  # killed replica's task goes to another after the consumer's ack wait. More than one renders a PodDisruptionBudget
-  # when `podDisruptionBudget.enabled`.
-  # -- Maintenance replicas; each runs a worker on the shared work queue.
+  # -- Replicas of maintenance's web pods, which serve the write-event lane and run no worker.
   replicas: 2 # @schema type: integer; minimum: 1
+  # THE WORKER'S OWN PODS. The queue's worker is a process of its own (`python -m maintenance.worker`), in a Deployment of
+  # its own from the same image and under the same identity as the web pods: a pass that hangs ends its own replica and
+  # never the write-event lane's, and the two scale apart. A table's task is on the queue at most once and taken by one
+  # worker at a time, so replicas share the work and a killed replica's task goes to another after the consumer's ack
+  # wait. More than one replica of either renders its PodDisruptionBudget when `podDisruptionBudget.enabled`.
+  worker:
+    # -- Replicas of maintenance's worker pods; each runs one worker on the shared work queue.
+    replicas: 2 # @schema type: integer; minimum: 1
+    # -- Port a worker pod serves its probes on, for the kubelet and for its sidecar's health check, which lets the sidecar leave when the worker does.
+    port: 8001 # @schema type: integer; minimum: 1
   # -- Dapr app-id of the maintenance service; also names its durable consumer.
   daprAppId: maintenance
   # -- HTTP port of the maintenance container.
@@ -802,7 +809,7 @@ maintenance:
     auditSchedule: "@hourly" # @schema type: string; pattern: ^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$
     # -- The scan's NATS message schedule, a six-field cron (seconds first): the audit with the orphan scan, which opens every table, then the listing floors and the trash purge its report certifies. Off the hour, so it does not fire with the hourly audit: the two never run at once, and the later one waits out the other's claim.
     scanSchedule: "0 30 0 * * *" # @schema type: string; pattern: ^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$
-    # -- How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain and the task would reach another replica while it ran on. The drain runs after uvicorn's own graceful wait, so that wait is cut by it: the pod's grace less preStop, the teardown and this.
+    # -- How long a stopping worker lets its running task finish, inside its pod's `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain. The render refuses a drain the grace cannot hold after preStop and the teardown, and the worker pod's sidecar blocks its shutdown for the grace less the teardown, which holds it.
     drainSeconds: 90 # @schema type: integer; minimum: 1
     # -- The most STORE_EVENTS holds, in bytes, before it drops its oldest: each event is a hint of about 2 KB that the table's daily recheck backs up, and the stream shares the bus's JetStream disk with LINEAGE and the work queue.
     storeEventsMaxBytes: 134217728 # @schema type: integer; minimum: 1

@@ -639,7 +639,7 @@
             "type": "object",
             "properties": {
                 "maintenanceTerminationGracePeriodSeconds": {
-                    "description": "Grace period in seconds for maintenance pods, long enough that an in-flight sweep or Lance write is not SIGKILLed.",
+                    "description": "Grace period in seconds for maintenance's worker pods, long enough that a stopping worker's running pass finishes (`maintenance.queue.drainSeconds`) rather than being SIGKILLed; the web pods take `terminationGracePeriodSeconds`.",
                     "type": "integer"
                 },
                 "preStopSeconds": {
@@ -750,7 +750,7 @@
                             "minimum": 1
                         },
                         "drainSeconds": {
-                            "description": "How long a stopping replica lets its running task finish, inside `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain and the task would reach another replica while it ran on. The drain runs after uvicorn's own graceful wait, so that wait is cut by it: the pod's grace less preStop, the teardown and this.",
+                            "description": "How long a stopping worker lets its running task finish, inside its pod's `lifecycle.maintenanceTerminationGracePeriodSeconds`. A pass still running when the drain ends ends its replica, since its heartbeat ends with the drain. The render refuses a drain the grace cannot hold after preStop and the teardown, and the worker pod's sidecar blocks its shutdown for the grace less the teardown, which holds it.",
                             "type": "integer",
                             "minimum": 1
                         },
@@ -792,7 +792,7 @@
                     }
                 },
                 "replicas": {
-                    "description": "Maintenance replicas; each runs a worker on the shared work queue.",
+                    "description": "Replicas of maintenance's web pods, which serve the write-event lane and run no worker.",
                     "type": "integer",
                     "minimum": 1
                 },
@@ -835,6 +835,21 @@
                 "vendWriteCredentials": {
                     "description": "Wire maintenance to the catalog's vending door, the only credential its rewrites are signed with; off, maintenance holds no maintain rung and refuses every rewrite.",
                     "type": "boolean"
+                },
+                "worker": {
+                    "type": "object",
+                    "properties": {
+                        "port": {
+                            "description": "Port a worker pod serves its probes on, for the kubelet and for its sidecar's health check, which lets the sidecar leave when the worker does.",
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "replicas": {
+                            "description": "Replicas of maintenance's worker pods; each runs one worker on the shared work queue.",
+                            "type": "integer",
+                            "minimum": 1
+                        }
+                    }
                 }
             }
         },

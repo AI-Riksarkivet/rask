@@ -28,6 +28,8 @@ from __future__ import annotations
 import pathlib
 import sys
 
+import pytest
+
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -100,18 +102,62 @@ def test_the_grace_period_budgets_the_sidecar_drain() -> None:
     assert grace >= pre_stop + block + 5, f"grace={grace}s does not cover preStop={pre_stop}s + sidecar block={block}s + a 5s buffer"
 
 
-def test_the_maintenance_sidecar_outlives_the_workers_drain() -> None:
-    """Maintenance's worker lets its running pass finish for `maintenance.queue.drainSeconds` after uvicorn's wait, and a
-    pass publishes through the sidecar until it ends: this pod's sidecar blocks its shutdown until preStop, uvicorn's
-    bound and that drain have all run, and still ends before the pod's grace does."""
-    from test_invariants import _rendered_docs  # noqa: PLC0415
+def _deployment(docs: tuple[dict, ...], name: str) -> dict:
+    return next(doc for doc in docs if doc.get("kind") == "Deployment" and doc["metadata"]["name"] == name)
 
-    maintenance = next(doc for doc in _rendered_docs() if doc.get("kind") == "Deployment" and doc["metadata"]["name"].endswith("-maintenance"))
-    pod = maintenance["spec"]["template"]
-    container = pod["spec"]["containers"][0]
-    env = {entry["name"]: entry.get("value") for entry in container["env"]}
-    pre_stop = int(" ".join(container["lifecycle"]["preStop"]["exec"]["command"]).rsplit(" ", 1)[-1])
-    uvicorn_bound = next(int(arg.rsplit("=", 1)[-1]) for arg in container["args"] if arg.startswith("--timeout-graceful-shutdown="))
-    block = int(pod["metadata"]["annotations"][BLOCK].rstrip("s"))
 
-    assert pre_stop + uvicorn_bound + int(env["MAINTENANCE_DRAIN_SECONDS"]) <= block < pod["spec"]["terminationGracePeriodSeconds"]
+@pytest.mark.parametrize(
+    "moved",
+    [
+        pytest.param({}, id="the-shipped-lifecycle"),
+        pytest.param(
+            {"terminationGracePeriodSeconds": 61, "maintenanceTerminationGracePeriodSeconds": 97, "preStopSeconds": 3, "teardownSeconds": 7},
+            id="every-lifecycle-number-moved",
+        ),
+    ],
+)
+def test_the_worker_runs_in_pods_of_its_own_whose_sidecar_outlives_its_drain_and_leaves_with_it(moved: dict[str, int]) -> None:
+    """[[LH-494]]: maintenance's queue worker runs in a Deployment of its own, as a process and not a web app's lifespan,
+    and the web pods keep the write-event lane and run no worker. A pass publishes through the sidecar until it ends, so
+    the worker pod's sidecar blocks its shutdown for the pod's grace less the teardown, which holds preStop and the whole
+    drain; and it health-checks the worker's probe port, so it leaves when the worker does rather than at the block's end
+    (measured on daprd 1.19.0-rc.4: with the check, 3 s after the app; without it, the whole block). A health check also
+    gates a sidecar's subscriptions, so only this pod, which subscribes to nothing, has one. The second case moves every
+    lifecycle number, so only a computed grace and block pass it."""
+    import yaml  # noqa: PLC0415
+    from test_invariants import CHART  # noqa: PLC0415
+
+    from tests.unit.chart_render import DEFAULT_ARGS, render, selects  # noqa: PLC0415
+
+    lifecycle = {**yaml.safe_load((CHART / "values.yaml").read_text())["lifecycle"], **moved}
+    docs = render(
+        *DEFAULT_ARGS, "--set", "maintenance.queue.drainSeconds=60", *(arg for key, value in moved.items() for arg in ("--set", f"lifecycle.{key}={value}"))
+    )
+    worker, web = (_deployment(docs, name)["spec"]["template"] for name in ("rask-maintenance-worker", "rask-maintenance"))
+    process, served = worker["spec"]["containers"][0], web["spec"]["containers"][0]
+    env = {entry["name"]: entry.get("value") for entry in process["env"]}
+    notes = worker["metadata"]["annotations"]
+    grace = worker["spec"]["terminationGracePeriodSeconds"]
+    selecting = [
+        doc["metadata"]["name"]
+        for doc in docs
+        if doc.get("kind") == "Service" and selects({"matchLabels": doc["spec"].get("selector") or {"none": "none"}}, worker["metadata"]["labels"])
+    ]
+
+    assert process["args"][-3:] == ["python", "-m", "maintenance.worker"]
+    pre_stop = int(" ".join(process["lifecycle"]["preStop"]["exec"]["command"]).rsplit(" ", 1)[-1])
+    assert (grace, pre_stop, selecting) == (int(lifecycle["maintenanceTerminationGracePeriodSeconds"]), int(lifecycle["preStopSeconds"]), [])
+    assert pre_stop + int(env["MAINTENANCE_DRAIN_SECONDS"]) <= int(notes[BLOCK].rstrip("s")) == grace - int(lifecycle["teardownSeconds"])
+    assert (notes["dapr.io/enable-app-health-check"], notes["dapr.io/app-health-check-path"]) == ("true", "/livez")
+    assert notes["dapr.io/app-port"] == str(process["ports"][0]["containerPort"]) == env["MAINTENANCE_WORKER_PORT"]
+    assert (env["MAINTENANCE_ARRIVAL_ENABLED"], process["livenessProbe"]["httpGet"]["path"], process["readinessProbe"]["httpGet"]["path"]) == (
+        "false",
+        "/livez",
+        "/readyz",
+    )
+    web_env = {entry["name"]: entry.get("value") for entry in served["env"]}
+    assert ("MAINTENANCE_DRAIN_SECONDS" in web_env, "dapr.io/enable-app-health-check" in web["metadata"]["annotations"]) == (False, False)
+    assert (web["spec"]["terminationGracePeriodSeconds"], web["metadata"]["annotations"][BLOCK]) == (
+        int(lifecycle["terminationGracePeriodSeconds"]),
+        f"{lifecycle['sidecarBlockShutdownSeconds']}s",
+    )

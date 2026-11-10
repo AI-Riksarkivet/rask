@@ -1,4 +1,4 @@
-"""What each task on the work queue runs, and the worker's lifetime beside the app's (ADR 0198 §2).
+"""What each task on the work queue runs, and the worker's lifetime in its own process (ADR 0198 §2).
 
 Four kinds: a table's pass (:mod:`maintenance.services.table_pass`), which schedules the table's next one; a trash
 record's release at its deadline (:mod:`maintenance.services.trash_task`); the hourly audit and the daily scan
@@ -56,21 +56,11 @@ async def run_task(task: Task, *, settings: MaintenanceSettings, queue: TaskQueu
 
 
 @asynccontextmanager
-async def running_worker(
-    settings: MaintenanceSettings, *, ready: Callable[[], bool], emitter: MaintenanceEmitter, control: ControlEmitter
-) -> AsyncGenerator[TaskQueue | None]:
-    """Connect the work queue as this service's own bus user, keep the audit's and the scan's schedules, and run the
-    worker until the app stops; the queue, for the commit lane's publishes. A stack with no bus runs no worker and yields
-    ``None``.
+async def connected_queue(settings: MaintenanceSettings) -> AsyncGenerator[TaskQueue | None]:
+    """The work queue, connected as this service's own bus user and drained on the way out; ``None`` for a stack with no
+    bus. The web pods hold it for the write-event lane's publishes alone, and run no worker.
 
-    Every loop is kept running: one that ends before the worker stops, with an error or without, is logged and started
-    again after a pause, so no failure of one read leaves a replica that stays Ready and does nothing. The two cadences are asserted again every
-    ``_CADENCE_SECONDS``, since a schedules stream purged or recreated loses them with every table's schedule, and the
-    audit they start is what queues those tables again; a cadence is a clock, so asserting it again moves no firing.
-
-    The credential is read from the store, never the environment, and held only in this process. On the way out the
-    worker finishes the task it is running, within ``drain_seconds``, before the connection drains: a task cut short is
-    delivered to another replica once its heartbeat stops.
+    The credential is read from the store, never the environment, and held only in this process.
 
     Raises:
         RuntimeError: The store holds no credential for the worker's bus user, or one without its JWT (failing closed).
@@ -82,6 +72,44 @@ async def running_worker(
     if not secret.get("jwt"):
         raise RuntimeError(f"secret 'jwt' unavailable from Dapr store {settings.dapr_secret_store!r}/{settings.nats_credentials_secret!r} — failing closed")
     queue = await TaskQueue.connect(settings.nats_url, creds_document(jwt=secret["jwt"], seed=secret["seed"]), name="maintenance")
+    try:
+        yield queue
+    finally:
+        await queue.close()
+
+
+@asynccontextmanager
+async def running_worker(
+    settings: MaintenanceSettings, *, ready: Callable[[], bool], emitter: MaintenanceEmitter, control: ControlEmitter
+) -> AsyncGenerator[TaskQueue | None]:
+    """Connect the work queue (:func:`connected_queue`), keep the audit's and the scan's schedules, and run the worker
+    until its process stops; the queue it runs on. A stack with no bus runs no worker and yields ``None``.
+
+    Every loop is kept running: one that ends before the worker stops, with an error or without, is logged and started
+    again after a pause, so no failure of one read leaves a replica that stays Ready and does nothing. The two cadences are asserted again every
+    ``_CADENCE_SECONDS``, since a schedules stream purged or recreated loses them with every table's schedule, and the
+    audit they start is what queues those tables again; a cadence is a clock, so asserting it again moves no firing.
+
+    On the way out the worker finishes the task it is running, within ``drain_seconds``, before the connection drains:
+    a task cut short is delivered to another replica once its heartbeat stops. A worker that cannot start, because the
+    bus refuses its cadences, leaves the connection closed all the same.
+
+    Raises:
+        RuntimeError: The store holds no credential for the worker's bus user, or one without its JWT (failing closed).
+    """
+    async with connected_queue(settings) as queue:
+        if queue is None:
+            yield None
+            return
+        async with _worker_on(queue, settings, ready=ready, emitter=emitter, control=control):
+            yield queue
+
+
+@asynccontextmanager
+async def _worker_on(
+    queue: TaskQueue, settings: MaintenanceSettings, *, ready: Callable[[], bool], emitter: MaintenanceEmitter, control: ControlEmitter
+) -> AsyncGenerator[None]:
+    """Run the worker's loops on ``queue`` until the block ends, then drain them."""
     await _assert_cadences(queue, settings)
     emit_zero_baselines()
     create_task_series(get_args(TaskKind.__value__))
@@ -103,10 +131,9 @@ async def running_worker(
         asyncio.create_task(_supervised(worker, "maintenance-cadences", partial(_keep_cadences, worker, queue, settings)), name="maintenance-cadences"),
     ]
     try:
-        yield queue
+        yield
     finally:
         await worker.drain(loops, settings.drain_seconds)
-        await queue.close()
 
 
 #: How long a loop that ended with an error waits before it starts again, and how often the cadences are asserted.

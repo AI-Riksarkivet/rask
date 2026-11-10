@@ -29,6 +29,9 @@ from lakehouse.schemas.health import Liveness, Readiness, ReadinessStatus
 #: A service-specific readiness check, run only AFTER the lifecycle gates pass. Returns the
 #: ``Readiness`` body to serve: ``status=ready`` → 200, anything else (``degraded``) → 503.
 type ReadyCheck = Callable[[Request], Awaitable[Readiness]]
+#: A process's own liveness answer, for one whose probes do not run on the loop its work runs on: without it ``/livez``
+#: proves only that the loop serving the probe turns. It must not wait or touch a dependency.
+type LiveCheck = Callable[[], bool]
 
 
 def _serve(body: Readiness) -> JSONResponse:
@@ -36,15 +39,16 @@ def _serve(body: Readiness) -> JSONResponse:
     return JSONResponse(status_code=status, content=body.model_dump(mode="json"))
 
 
-def make_probes_router(ready_check: ReadyCheck) -> APIRouter:
-    """Build the probe router around the service's readiness check."""
+def make_probes_router(ready_check: ReadyCheck, live_check: LiveCheck | None = None) -> APIRouter:
+    """Build the probe router around the service's readiness check, and its liveness check when it has one."""
     probes = APIRouter(tags=["health"])
 
-    @probes.get("/livez")
-    async def livez() -> Liveness:
+    @probes.get("/livez", response_model=Liveness)
+    async def livez() -> JSONResponse:
         # async, not sync def: the probe must run ON the event loop, never queued behind the
         # blocking data-plane threadpool — no I/O happens here, so there is nothing to yield for.
-        return Liveness()
+        alive = live_check is None or live_check()
+        return JSONResponse(status_code=HTTPStatus.OK if alive else HTTPStatus.SERVICE_UNAVAILABLE, content=Liveness().model_dump(mode="json") if alive else {})
 
     @probes.get("/readyz", response_model=Readiness)
     async def readyz(request: Request) -> JSONResponse:

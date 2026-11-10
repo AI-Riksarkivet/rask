@@ -870,6 +870,77 @@ async def test_a_task_whose_run_fails_comes_back_later_and_ends_on_its_last_deli
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("allowed", "taken_by"),
+    [
+        pytest.param(_MAX_DELIVER, "next", id="with-a-delivery-to-spare-it-goes-to-another-replica"),
+        pytest.param(1, "stopping", id="on-its-last-delivery-it-is-handled-where-it-arrived"),
+    ],
+)
+async def test_a_task_a_pull_answers_as_its_worker_stops(tmp_path: Path, allowed: int, taken_by: str) -> None:
+    """A pull in flight when a worker is asked to stop can still be answered. With a delivery to spare the task is given
+    back at once and another replica runs it, rather than its pass starting under the drain; on the last delivery the
+    worker allows it is handled where it arrived, since a hand-back would spend the consumer's last delivery and leave
+    the task on the queue, undelivered, for good. And a connection the bus has gone from still closes."""
+    tools, docs, mint_, broker = _the_bus(tmp_path)
+    worker = mint_.credentials[_WORKER]
+    ran: list[str] = []
+    queues: list[TaskQueue] = []
+    loops: list[asyncio.Task[None]] = []
+    task = Task(kind="table", uuid="late", location="s3://bucket/late")
+    closed_without_its_bus: BaseException | None = None
+
+    def ends_its_process(event: str, **extra: object) -> NoReturn:
+        raise AssertionError(f"the worker ended its process: {event} {extra}")
+
+    def replica(queue: TaskQueue, name: str, max_deliver: int) -> Worker:
+        async def run(_task: Task) -> None:
+            ran.append(name)
+
+        return Worker(
+            queue,
+            run=run,
+            ready=lambda: True,
+            heartbeat_seconds=_HEARTBEAT,
+            ack_wait_seconds=_ACK_WAIT,
+            max_deliver=max_deliver,
+            max_pass_seconds=600,
+            retry_ended_seconds=3600,
+            end_process=ends_its_process,
+        )
+
+    try:
+        await asyncio.to_thread(_declare_the_queue, tools, docs, broker, mint_.credentials["admin"], tmp_path)
+        for name in ("stopping", "next"):
+            queues.append(await TaskQueue.connect(broker.url, worker.creds_file.read_text(), name=name))
+        stopping = replica(queues[0], "stopping", allowed)
+        loops.append(asyncio.create_task(stopping.run_tasks()))
+        await asyncio.sleep(1.0)  # its first pull is out, and waits up to five seconds for a task
+        stopping.stop()
+        assert await queues[1].enqueue(task) is True
+        await asyncio.wait_for(loops[0], timeout=15)
+        loops.append(asyncio.create_task(replica(queues[1], "next", _MAX_DELIVER).run_tasks()))
+
+        async def settled() -> bool:
+            return bool(ran) and not await queues[1].held("task", "table")
+
+        assert await _until(settled, 30), f"the task was never run and settled: ran by {ran}"
+    finally:
+        for running in loops:
+            running.cancel()
+        await asyncio.gather(*loops, return_exceptions=True)
+        broker.stop()
+        for queue in queues:
+            try:
+                await asyncio.wait_for(queue.close(), timeout=30)
+            except BaseException as exc:  # noqa: BLE001 — kept for the assertion below
+                closed_without_its_bus = exc
+
+    assert ran == [taken_by]
+    assert closed_without_its_bus is None, f"a connection whose bus is gone did not close: {closed_without_its_bus!r}"
+
+
+@pytest.mark.asyncio
 async def test_the_audit_and_the_scan_never_run_at_once(tmp_path: Path) -> None:
     """The audit and the scan each repair the estate from a drift report of their own, so one waits out the other's claim
     while it runs, on two replicas, and runs once it is done."""

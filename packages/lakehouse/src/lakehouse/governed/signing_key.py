@@ -10,8 +10,8 @@ key from it, and signs only while that key is listed.
 READY MEANS LISTED, NOT MERELY READABLE. A verifier refuses an event signed with a key its identity does not publish,
 and a refusal is acknowledged and gone, so a signer that kept signing with an unlisted key would destroy every event it
 emits while every probe stayed green. The publish and the seed are two independent writes, so the readable-but-unlisted
-state is the likelier fault. Until the key is listed the signer takes no delivery (`retry_until_signed`), reports
-itself not ready (`signing_ready_check`) and hands out no key (`SigningKeyHolder.key`).
+state is the likelier fault. Until the key is listed the signer reports itself not ready (`signing_ready_check`), which
+its worker reads before it takes a task, and hands out no key (`SigningKeyHolder.key`).
 
 NOTHING EMPTY IS EVER HELD. Every pass replaces the whole resolution, so an unreadable seed, a malformed one or an
 unlisted key leaves the holder with no key rather than the previous one: a store that was re-minted swaps to its new key
@@ -39,7 +39,6 @@ from typing import Final, Protocol
 
 from fastapi import FastAPI, Request
 
-from lakehouse.draining import RETRY
 from lakehouse.governed.principal import Principal
 from lakehouse.governed.secrets import fetch_dapr_secret
 from lakehouse.probes import ReadyCheck
@@ -298,22 +297,6 @@ def signing_of(app: FastAPI) -> SigningStatus | None:
     """The holder `attach_signing` published on ``app``, or None for a service that does not sign."""
     holder: SigningStatus | None = getattr(app.state, SIGNING_STATE, None)
     return holder
-
-
-async def retry_until_signed(request: Request) -> dict[str, str] | None:
-    """FastAPI dependency for a sidecar-delivered route that emits: the RETRY verdict while the key is unresolved.
-
-    The same shape as `retry_when_draining`, and for the same reason: Dapr delivers a message to a pod whatever its
-    readiness says, so a signer that is not ready would otherwise receive its share of work it cannot sign. It
-    returns rather than raises, and it runs before the handler body, so a trigger that would be dropped as malformed
-    is retried instead and nothing is parsed, started or emitted while the key is unresolved. RETRY and never DROP: a
-    drop is acknowledged and the work is gone. A service that does not sign has no holder, so the gate is open.
-
-    `async def` although it awaits nothing: a sync dependency is queued behind the threadpool, and a pod whose
-    threads are all busy with long work would then answer the gate late, which is the moment it matters.
-    """
-    holder = signing_of(request.app)
-    return RETRY if holder is not None and not holder.ready else None
 
 
 def signing_ready_check(inner: ReadyCheck | None = None) -> ReadyCheck:

@@ -289,6 +289,7 @@ kubectl rollout status deploy/"$RELEASE"-openfga --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-catalog --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-lineage --timeout=300s
 kubectl rollout status deploy/"$RELEASE"-maintenance --timeout=300s
+kubectl rollout status deploy/"$RELEASE"-maintenance-worker --timeout=300s
 
 # Every running container of a side-loaded image must serve the archive this run built — the definitive proof the whole
 # suite tests fresh code, not a stale same-tag image (the failure mode this guard exists for). A container's `imageID`

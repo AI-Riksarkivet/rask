@@ -892,6 +892,14 @@ dapr.io/volume-mounts: "openbao-identity:/var/run/secrets/rask/openbao"
 {{- keys (include "lance.storeReads" . | fromJson) | sortAlpha | join "," -}}
 {{- end -}}
 
+{{- define "lance.secretReaderComponents" -}}
+{{- $apps := splitList "," (include "lance.secretScopes" .) | compact -}}
+{{- if and .Values.maintenance.enabled (has .Values.maintenance.daprAppId $apps) -}}
+{{- $apps = append $apps "maintenance-worker" -}}
+{{- end -}}
+{{- $apps | uniq | sortAlpha | join "," -}}
+{{- end -}}
+
 {{- define "lance.appTokenEnv" -}}
 {{- $root := index . 0 -}}{{- $appId := index . 1 -}}
 {{- if has $appId (splitList "," (include "lance.secretScopes" $root)) -}}

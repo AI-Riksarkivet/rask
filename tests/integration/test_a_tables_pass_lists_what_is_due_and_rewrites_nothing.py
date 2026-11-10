@@ -18,7 +18,8 @@ stand-in, and so is the queue the pass schedules its next pass on, which has `Ta
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Any, ClassVar, cast
@@ -29,6 +30,7 @@ import lance
 import pyarrow as pa
 import pytest
 import respx
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
@@ -134,11 +136,19 @@ def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Test
     from maintenance.core.config import get_settings
 
     get_settings.cache_clear()
-    from maintenance import service
+    from maintenance import runtime
 
-    monkeypatch.setattr(service, "DaprClient", _Sidecar)
+    monkeypatch.setattr(runtime, "DaprClient", _Sidecar)
     _Sidecar.published = []
-    with TestClient(service.app) as client:
+
+    @asynccontextmanager
+    async def _started(app: FastAPI) -> AsyncGenerator[None]:
+        async with runtime.standing(app, get_settings()), runtime.collaborators(app, get_settings()) as held:
+            app.state.held = held
+            yield
+
+    # What the worker's process starts with (`maintenance.runtime`), on a loop the test can run a task on.
+    with TestClient(FastAPI(lifespan=_started)) as client:
         yield client
     get_settings.cache_clear()
 
@@ -178,7 +188,7 @@ def test_a_tables_task_expires_versions_lists_the_compaction_it_does_not_run_and
     asked: list[str] = []
     queue = _RecordingQueue()
     portal = maintenance.portal
-    assert portal is not None, "the client was never entered, so the service's lifespan did not run"
+    assert portal is not None, "the client was never entered, so nothing the worker runs with was started"
     task = Task(kind="table", uuid=LOCATION, location=URI)
 
     with _vends_for(asked, estate.in_clear()):
@@ -188,8 +198,8 @@ def test_a_tables_task_expires_versions_lists_the_compaction_it_does_not_run_and
                 task,
                 settings=get_settings(),
                 queue=cast(TaskQueue, queue),
-                emitter=maintenance.app.state.lineage_emitter,
-                control=maintenance.app.state.control_emitter,
+                emitter=maintenance.app.state.held.lineage,
+                control=maintenance.app.state.held.control,
             )
         )
 

@@ -7,11 +7,6 @@ teardown never runs. The chart renders `--timeout-graceful-shutdown` from the `l
 sets each pod's grace period and preStop sleep:
 
     bound = the pod's terminationGracePeriodSeconds - its preStop sleep - lifecycle.teardownSeconds
-            - the drain its lifespan runs after uvicorn's wait (maintenance's worker, `maintenance.queue.drainSeconds`)
-
-The worker's drain runs in the lifespan's teardown, once uvicorn has stopped waiting, so a bound that left it out would
-spend the pod's grace twice: preStop, a slow request and a full drain would outlast it, and the kubelet would kill a
-replica mid-pass.
 
 READ FROM THE RENDER, per container, because each failure this exists for is only visible there: a
 template whose bound names another pod's grace, a literal that matches today's defaults, and a uvicorn the
@@ -49,11 +44,9 @@ _DEFAULTS = yaml.safe_load((REPO / "chart" / "values.yaml").read_text(encoding="
 _MOVED = {"terminationGracePeriodSeconds": 61, "maintenanceTerminationGracePeriodSeconds": 97, "preStopSeconds": 3, "teardownSeconds": 7}
 
 
-#: A maintenance drain every grace here holds: the render refuses one its pod's grace leaves no room for after preStop and
-#: the teardown, and the moved grace leaves 87 s.
+#: A drain the maintenance worker pod's grace holds under every overlay here: the render refuses one that pod's grace
+#: leaves no room for after preStop and the teardown, and the moved grace leaves 87 s. The worker runs no uvicorn.
 _DRAIN = ("--set", "maintenance.queue.drainSeconds=60")
-#: The setting a container's worker drains by, rendered into its environment.
-_DRAIN_ENV = "MAINTENANCE_DRAIN_SECONDS"
 
 
 def _overlay(lifecycle: dict[str, int | str]) -> tuple[str, ...]:
@@ -64,14 +57,8 @@ def _runs_uvicorn(container: dict) -> bool:
     return any("uvicorn" in str(part) for part in [*(container.get("command") or []), *(container.get("args") or [])])
 
 
-def _drain_of(container: dict) -> int:
-    """The seconds the container's lifespan drains its worker for after uvicorn's wait; 0 for one that runs none."""
-    return next((int(env["value"]) for env in container.get("env") or [] if env.get("name") == _DRAIN_ENV), 0)
-
-
 def _bounded(docs: tuple[dict, ...]) -> dict[tuple[str, str], tuple[int, int, list[str]]]:
-    """`(workload, container) -> (what the pod's grace leaves uvicorn and the teardown, preStop sleep,
-    --timeout-graceful-shutdown args)` for every uvicorn: the grace less the worker's drain, where it runs one."""
+    """`(workload, container) -> (the pod's grace, preStop sleep, --timeout-graceful-shutdown args)` for every uvicorn."""
     grace = {
         f"{doc['kind']}/{doc['metadata']['name']}": doc["spec"]["template"]["spec"].get("terminationGracePeriodSeconds")
         for doc in docs
@@ -84,8 +71,7 @@ def _bounded(docs: tuple[dict, ...]) -> dict[tuple[str, str], tuple[int, int, li
         pre_stop = " ".join(container.get("lifecycle", {}).get("preStop", {}).get("exec", {}).get("command", []))
         sleep = re.search(r"sleep (\d+)", pre_stop)
         assert sleep, f"{workload}/{name} runs uvicorn with no preStop sleep to budget: {pre_stop!r}"
-        left = grace[workload] - _drain_of(container)
-        found[workload, name] = (left, int(sleep.group(1)), [arg for arg in container.get("args") or [] if arg.startswith(_FLAG)])
+        found[workload, name] = (grace[workload], int(sleep.group(1)), [arg for arg in container.get("args") or [] if arg.startswith(_FLAG)])
     return found
 
 
@@ -100,12 +86,12 @@ def test_every_uvicorn_drains_inside_its_own_pods_grace_period(lifecycle: dict[s
     assert not missing, f"{missing} arm the SIGTERM drain but no uvicorn container was found in them"
 
     wrong = {
-        f"{workload}/{name}": f"grace less its worker's drain {grace}s, preStop {pre_stop}s, args {args}"
+        f"{workload}/{name}": f"grace {grace}s, preStop {pre_stop}s, args {args}"
         for (workload, name), (grace, pre_stop, args) in bounded.items()
         if args != [f"{_FLAG}{grace - pre_stop - teardown}"]
     }
     assert not wrong, (
-        f"expected exactly one {_FLAG}<grace - its worker's drain - preStop - {teardown}s teardown> per uvicorn, derived from its own pod: {wrong}. "
+        f"expected exactly one {_FLAG}<grace - preStop - {teardown}s teardown> per uvicorn, derived from its own pod: {wrong}. "
         "Without it one slow request holds the process until SIGKILL and the lifespan teardown never runs."
     )
     assert all(grace - pre_stop - teardown > 0 for grace, pre_stop, _ in bounded.values())

@@ -1,3 +1,111 @@
+{{- define "lance.maintenanceEnv" -}}
+{{- $root := index . 0 -}}
+{{- $worker := eq (index . 1) "worker" -}}
+{{- $drain := index . 2 -}}
+{{- with $root -}}
+{{- $arrival := and (not $worker) .Values.maintenance.arrivalEnabled -}}
+{{- include "lance.allocatorEnv" (list $root) | nindent 0 }}
+{{- if include "lance.otelEnabled" $root }}
+{{- include "lance.otelEnv" (list $root .Values.maintenance.daprAppId) | nindent 0 }}
+{{- end }}
+- { name: MAINTENANCE_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
+- { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
+- { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
+{{- with include "lance.signingEnv" (list $root .Values.maintenance.daprAppId) }}{{ . | nindent 0 }}{{- end }}
+{{- if .Values.dapr.enabled }}
+
+{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 0 }}
+{{- include "lance.busEnv" $root | nindent 0 }}
+{{- end }}
+{{- if $root.Values.maintenance.vendWriteCredentials }}
+- { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
+- { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
+- { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ include "lance.saSubject" (list $root "maintenance") | quote }} }
+{{- end }}
+- { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ $arrival | quote }} }
+{{- if $arrival }}
+{{- if .Values.dapr.resiliency.enabled }}
+- { name: MAINTENANCE_ARRIVAL_DLQ_TOPIC, value: {{ .Values.maintenance.arrivalDlqTopic | quote }} }
+{{- end }}
+{{- with include "lance.doorEnv" (list $root false) }}{{ . | nindent 0 }}{{- end }}
+{{- end }}
+{{- if .Values.maintenance.lineageEmit }}
+- { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
+- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.daprAppId) | quote }} }
+- { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
+- { name: MAINTENANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $root | quote }} }
+{{- if .Values.services.lineage.outbox.enabled }}
+- { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
+{{- end }}
+{{- end }}
+- { name: MAINTENANCE_TRASH_PURGE_ENABLED, value: {{ hasKey .Values.maintenance "trashPurge" | ternary .Values.maintenance.trashPurge false | quote }} }
+- { name: MAINTENANCE_TRASH_PURGE_DRY_RUN, value: {{ hasKey .Values.maintenance "trashPurgeDryRun" | ternary .Values.maintenance.trashPurgeDryRun false | quote }} }
+- { name: MAINTENANCE_TRASH_PURGE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "trashPurgeMaxPerTick") | ternary .Values.maintenance.trashPurgeMaxPerTick 25 | quote }} }
+- { name: MAINTENANCE_FLOOR_RAISE_ENABLED, value: {{ hasKey .Values.maintenance "floorRaise" | ternary .Values.maintenance.floorRaise false | quote }} }
+- { name: MAINTENANCE_FLOOR_RAISE_DRY_RUN, value: {{ hasKey .Values.maintenance "floorRaiseDryRun" | ternary .Values.maintenance.floorRaiseDryRun true | quote }} }
+- { name: MAINTENANCE_FLOOR_RAISE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "floorRaiseMaxPerTick") | ternary .Values.maintenance.floorRaiseMaxPerTick 10 | quote }} }
+- { name: MAINTENANCE_TUPLE_REBUILD_ENABLED, value: {{ hasKey .Values.maintenance "tupleRebuild" | ternary .Values.maintenance.tupleRebuild false | quote }} }
+- { name: MAINTENANCE_TUPLE_REBUILD_DRY_RUN, value: {{ hasKey .Values.maintenance "tupleRebuildDryRun" | ternary .Values.maintenance.tupleRebuildDryRun true | quote }} }
+- { name: MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tupleRebuildMaxPerTick") | ternary .Values.maintenance.tupleRebuildMaxPerTick 50 | quote }} }
+- { name: MAINTENANCE_DRIFT_REPAIR_ENABLED, value: {{ hasKey .Values.maintenance "driftRepair" | ternary .Values.maintenance.driftRepair false | quote }} }
+- { name: MAINTENANCE_DRIFT_REPAIR_DRY_RUN, value: {{ hasKey .Values.maintenance "driftRepairDryRun" | ternary .Values.maintenance.driftRepairDryRun true | quote }} }
+- { name: MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "driftRepairMaxPerTick") | ternary .Values.maintenance.driftRepairMaxPerTick 50 | quote }} }
+- { name: MAINTENANCE_TOMBSTONE_SWEEP_ENABLED, value: {{ hasKey .Values.maintenance "tombstoneSweep" | ternary .Values.maintenance.tombstoneSweep false | quote }} }
+- { name: MAINTENANCE_TOMBSTONE_SWEEP_DRY_RUN, value: {{ hasKey .Values.maintenance "tombstoneSweepDryRun" | ternary .Values.maintenance.tombstoneSweepDryRun true | quote }} }
+- { name: MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tombstoneSweepMaxPerTick") | ternary .Values.maintenance.tombstoneSweepMaxPerTick 50 | quote }} }
+- { name: MAINTENANCE_ORPHAN_SCAN_ENABLED, value: {{ hasKey .Values.maintenance "orphanScan" | ternary .Values.maintenance.orphanScan false | quote }} }
+- { name: MAINTENANCE_DISCOVERY_MAX_DEPTH, value: {{ hasKey .Values.maintenance "discoveryMaxDepth" | ternary .Values.maintenance.discoveryMaxDepth 3 | quote }} }
+{{- if .Values.maintenance.controlEmit }}
+- { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
+- { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.daprAppId | quote }} }
+{{- end }}
+- { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
+{{- if .Values.dapr.enabled }}
+{{- $queue := required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue }}
+- { name: MAINTENANCE_NATS_URL, value: {{ include "lance.natsUrl" . | quote }} }
+- { name: MAINTENANCE_NATS_CREDENTIALS_SECRET, value: "nats-user-maintenance-worker" }
+- { name: MAINTENANCE_TASK_HEARTBEAT_SECONDS, value: {{ required "maintenance.queue.heartbeatSeconds is required" $queue.heartbeatSeconds | quote }} }
+- { name: MAINTENANCE_TASK_ACK_WAIT_SECONDS, value: {{ required "maintenance.queue.ackWaitSeconds is required" $queue.ackWaitSeconds | quote }} }
+- { name: MAINTENANCE_TASK_MAX_DELIVER, value: {{ required "maintenance.queue.maxDeliver is required" $queue.maxDeliver | quote }} }
+- { name: MAINTENANCE_MAX_PASS_SECONDS, value: {{ required "maintenance.queue.maxPassSeconds is required" $queue.maxPassSeconds | quote }} }
+- { name: MAINTENANCE_RECHECK_HOURS, value: {{ required "maintenance.queue.recheckHours is required" $queue.recheckHours | quote }} }
+- { name: MAINTENANCE_COMMIT_PASS_DELAY_SECONDS, value: {{ required "maintenance.queue.commitPassDelaySeconds is required" $queue.commitPassDelaySeconds | quote }} }
+- { name: MAINTENANCE_RETRY_SECONDS, value: {{ required "maintenance.queue.retrySeconds is required" $queue.retrySeconds | quote }} }
+- { name: MAINTENANCE_AUDIT_SCHEDULE, value: {{ required "maintenance.queue.auditSchedule is required" $queue.auditSchedule | quote }} }
+- { name: MAINTENANCE_SCAN_SCHEDULE, value: {{ required "maintenance.queue.scanSchedule is required" $queue.scanSchedule | quote }} }
+{{- if $worker }}
+- { name: MAINTENANCE_DRAIN_SECONDS, value: {{ $drain | quote }} }
+- { name: MAINTENANCE_WORKER_PORT, value: {{ required "maintenance.worker.port is required" $root.Values.maintenance.worker.port | quote }} }
+{{- end }}
+{{- end }}
+- { name: MAINTENANCE_MIN_VERSIONS_TO_EXPIRE, value: {{ required "maintenance.minVersionsToExpire is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.minVersionsToExpire | quote }} }
+- { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
+{{- include "lance.objectStoreSessionEnv" (list $root "MAINTENANCE" "maintenance") | nindent 0 }}
+- { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }
+- { name: MAINTENANCE_S3_BUCKET, value: {{ .Values.objectStore.bucket | quote }} }
+
+
+{{- $extra := list }}
+{{- range $ns, $bkt := .Values.medallion.buckets }}
+{{- if ne $bkt $root.Values.objectStore.bucket }}{{ $extra = append $extra $bkt }}{{ end }}
+{{- end }}
+{{- range .Values.catalog.multibase.dataBases }}
+{{- $extra = append $extra (. | replace "s3://" "" | trimSuffix "/") }}
+{{- end }}
+- { name: MAINTENANCE_S3_EXTRA_BUCKETS, value: {{ $extra | uniq | join "," | quote }} }
+- { name: MAINTENANCE_S3_PLATFORM_BUCKETS, value: {{ include "lance.maintenancePlatformBuckets" . | quote }} }
+- { name: MAINTENANCE_S3_REGION, value: "us-east-1" }
+- { name: MAINTENANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
+- { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.maintenanceVolumes" -}}
+volumeMounts:
+  {{- include "lance.tmpMount" . | nindent 2 }}
+  {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 2 }}
+{{- end -}}
+
 {{- if .Values.maintenance.enabled }}
 {{- $root := . }}
 {{- $port := .Values.maintenance.port }}
@@ -17,7 +125,7 @@ spec:
     metadata:
       annotations:
         {{- if .Values.dapr.enabled }}
-        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) (int .Values.lifecycle.teardownSeconds))) | nindent 8 }}
+        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port) | nindent 8 }}
         {{- end }}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
@@ -25,7 +133,7 @@ spec:
         {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
     spec:
-      terminationGracePeriodSeconds: {{ .Values.lifecycle.maintenanceTerminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-maintenance
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
@@ -45,116 +153,84 @@ spec:
             - "maintenance.service:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
-            {{- $drain := 0 }}
-            {{- if .Values.dapr.enabled }}
-            {{- $drain = int (required "maintenance.queue.drainSeconds is required" (required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue).drainSeconds) }}
-            {{- $budget := sub (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) (int .Values.lifecycle.preStopSeconds)) (int .Values.lifecycle.teardownSeconds) }}
-            {{- if ge $drain $budget }}
-            {{- fail (printf "maintenance.queue.drainSeconds (%d) is not inside the %d s the pod's grace leaves after preStop and the teardown: a stopping replica would be killed with its pass still running" $drain $budget) }}
-            {{- end }}
-            {{- end }}
-            {{- include "rask.shutdownArg" (list . (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) $drain)) | nindent 12 }}
+            {{- include "rask.shutdownArg" . | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
-            {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
-            {{- if include "lance.otelEnabled" $root }}
-            {{- include "lance.otelEnv" (list $root .Values.maintenance.daprAppId) | nindent 12 }}
-            {{- end }}
-            - { name: MAINTENANCE_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
-            - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
-            - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }
-            {{- with include "lance.signingEnv" (list $root .Values.maintenance.daprAppId) }}{{ . | nindent 12 }}{{- end }}
-            {{- if .Values.dapr.enabled }}
-
-{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 12 }}
-            {{- include "lance.busEnv" $root | nindent 12 }}
-            {{- end }}
-            {{- if $root.Values.maintenance.vendWriteCredentials }}
-            - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
-            - { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
-            - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ include "lance.saSubject" (list $root "maintenance") | quote }} }
-            {{- end }}
-            - { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ .Values.maintenance.arrivalEnabled | quote }} }
-            {{- if .Values.maintenance.arrivalEnabled }}
-            {{- if .Values.dapr.resiliency.enabled }}
-            - { name: MAINTENANCE_ARRIVAL_DLQ_TOPIC, value: {{ .Values.maintenance.arrivalDlqTopic | quote }} }
-            {{- end }}
-            {{- with include "lance.doorEnv" (list $root false) }}{{ . | nindent 12 }}{{- end }}
-            {{- end }}
-            {{- if .Values.maintenance.lineageEmit }}
-            - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
-            - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $ .Values.maintenance.daprAppId) | quote }} }
-            - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
-            - { name: MAINTENANCE_LINEAGE_DATASET_NAMESPACE, value: {{ include "rask.lineageDatasetNamespace" $ | quote }} }
-            {{- if .Values.services.lineage.outbox.enabled }}
-            - { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.objectStore.bucket }}/_lineage_outbox" }
-            {{- end }}
-            {{- end }}
-            - { name: MAINTENANCE_TRASH_PURGE_ENABLED, value: {{ hasKey .Values.maintenance "trashPurge" | ternary .Values.maintenance.trashPurge false | quote }} }
-            - { name: MAINTENANCE_TRASH_PURGE_DRY_RUN, value: {{ hasKey .Values.maintenance "trashPurgeDryRun" | ternary .Values.maintenance.trashPurgeDryRun false | quote }} }
-            - { name: MAINTENANCE_TRASH_PURGE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "trashPurgeMaxPerTick") | ternary .Values.maintenance.trashPurgeMaxPerTick 25 | quote }} }
-            - { name: MAINTENANCE_FLOOR_RAISE_ENABLED, value: {{ hasKey .Values.maintenance "floorRaise" | ternary .Values.maintenance.floorRaise false | quote }} }
-            - { name: MAINTENANCE_FLOOR_RAISE_DRY_RUN, value: {{ hasKey .Values.maintenance "floorRaiseDryRun" | ternary .Values.maintenance.floorRaiseDryRun true | quote }} }
-            - { name: MAINTENANCE_FLOOR_RAISE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "floorRaiseMaxPerTick") | ternary .Values.maintenance.floorRaiseMaxPerTick 10 | quote }} }
-            - { name: MAINTENANCE_TUPLE_REBUILD_ENABLED, value: {{ hasKey .Values.maintenance "tupleRebuild" | ternary .Values.maintenance.tupleRebuild false | quote }} }
-            - { name: MAINTENANCE_TUPLE_REBUILD_DRY_RUN, value: {{ hasKey .Values.maintenance "tupleRebuildDryRun" | ternary .Values.maintenance.tupleRebuildDryRun true | quote }} }
-            - { name: MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tupleRebuildMaxPerTick") | ternary .Values.maintenance.tupleRebuildMaxPerTick 50 | quote }} }
-            - { name: MAINTENANCE_DRIFT_REPAIR_ENABLED, value: {{ hasKey .Values.maintenance "driftRepair" | ternary .Values.maintenance.driftRepair false | quote }} }
-            - { name: MAINTENANCE_DRIFT_REPAIR_DRY_RUN, value: {{ hasKey .Values.maintenance "driftRepairDryRun" | ternary .Values.maintenance.driftRepairDryRun true | quote }} }
-            - { name: MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "driftRepairMaxPerTick") | ternary .Values.maintenance.driftRepairMaxPerTick 50 | quote }} }
-            - { name: MAINTENANCE_TOMBSTONE_SWEEP_ENABLED, value: {{ hasKey .Values.maintenance "tombstoneSweep" | ternary .Values.maintenance.tombstoneSweep false | quote }} }
-            - { name: MAINTENANCE_TOMBSTONE_SWEEP_DRY_RUN, value: {{ hasKey .Values.maintenance "tombstoneSweepDryRun" | ternary .Values.maintenance.tombstoneSweepDryRun true | quote }} }
-            - { name: MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tombstoneSweepMaxPerTick") | ternary .Values.maintenance.tombstoneSweepMaxPerTick 50 | quote }} }
-            - { name: MAINTENANCE_ORPHAN_SCAN_ENABLED, value: {{ hasKey .Values.maintenance "orphanScan" | ternary .Values.maintenance.orphanScan false | quote }} }
-            - { name: MAINTENANCE_DISCOVERY_MAX_DEPTH, value: {{ hasKey .Values.maintenance "discoveryMaxDepth" | ternary .Values.maintenance.discoveryMaxDepth 3 | quote }} }
-            {{- if .Values.maintenance.controlEmit }}
-            - { name: MAINTENANCE_CONTROL_EMIT_ENABLED, value: "true" }
-            - { name: MAINTENANCE_CONTROL_PUBSUB, value: {{ printf "%s-%s" (.Values.pubsub.controlName | default "catalog-control-pubsub") .Values.maintenance.daprAppId | quote }} }
-            {{- end }}
-            - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
-            {{- if .Values.dapr.enabled }}
-            {{- $queue := required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue }}
-            - { name: MAINTENANCE_NATS_URL, value: {{ include "lance.natsUrl" . | quote }} }
-            - { name: MAINTENANCE_NATS_CREDENTIALS_SECRET, value: "nats-user-maintenance-worker" }
-            - { name: MAINTENANCE_TASK_HEARTBEAT_SECONDS, value: {{ required "maintenance.queue.heartbeatSeconds is required" $queue.heartbeatSeconds | quote }} }
-            - { name: MAINTENANCE_TASK_ACK_WAIT_SECONDS, value: {{ required "maintenance.queue.ackWaitSeconds is required" $queue.ackWaitSeconds | quote }} }
-            - { name: MAINTENANCE_TASK_MAX_DELIVER, value: {{ required "maintenance.queue.maxDeliver is required" $queue.maxDeliver | quote }} }
-            - { name: MAINTENANCE_MAX_PASS_SECONDS, value: {{ required "maintenance.queue.maxPassSeconds is required" $queue.maxPassSeconds | quote }} }
-            - { name: MAINTENANCE_RECHECK_HOURS, value: {{ required "maintenance.queue.recheckHours is required" $queue.recheckHours | quote }} }
-            - { name: MAINTENANCE_COMMIT_PASS_DELAY_SECONDS, value: {{ required "maintenance.queue.commitPassDelaySeconds is required" $queue.commitPassDelaySeconds | quote }} }
-            - { name: MAINTENANCE_RETRY_SECONDS, value: {{ required "maintenance.queue.retrySeconds is required" $queue.retrySeconds | quote }} }
-            - { name: MAINTENANCE_AUDIT_SCHEDULE, value: {{ required "maintenance.queue.auditSchedule is required" $queue.auditSchedule | quote }} }
-            - { name: MAINTENANCE_SCAN_SCHEDULE, value: {{ required "maintenance.queue.scanSchedule is required" $queue.scanSchedule | quote }} }
-            - { name: MAINTENANCE_DRAIN_SECONDS, value: {{ $drain | quote }} }
-            {{- end }}
-            - { name: MAINTENANCE_MIN_VERSIONS_TO_EXPIRE, value: {{ required "maintenance.minVersionsToExpire is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.minVersionsToExpire | quote }} }
-            - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
-            {{- include "lance.objectStoreSessionEnv" (list $root "MAINTENANCE" "maintenance") | nindent 12 }}
-            - { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }
-            - { name: MAINTENANCE_S3_BUCKET, value: {{ .Values.objectStore.bucket | quote }} }
-
-
-            {{- $extra := list }}
-            {{- range $ns, $bkt := .Values.medallion.buckets }}
-            {{- if ne $bkt $.Values.objectStore.bucket }}{{ $extra = append $extra $bkt }}{{ end }}
-            {{- end }}
-            {{- range .Values.catalog.multibase.dataBases }}
-            {{- $extra = append $extra (. | replace "s3://" "" | trimSuffix "/") }}
-            {{- end }}
-            - { name: MAINTENANCE_S3_EXTRA_BUCKETS, value: {{ $extra | uniq | join "," | quote }} }
-            - { name: MAINTENANCE_S3_PLATFORM_BUCKETS, value: {{ include "lance.maintenancePlatformBuckets" . | quote }} }
-            - { name: MAINTENANCE_S3_REGION, value: "us-east-1" }
-            - { name: MAINTENANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }
-            - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
+            {{- include "lance.maintenanceEnv" (list $root "web" 0) | nindent 12 }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "maintenance") | nindent 12 }}
-          volumeMounts:
-            {{- include "lance.tmpMount" . | nindent 12 }}
-            {{- include "lance.identityTokens" (list "mounts" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 12 }}
+          {{- include "lance.maintenanceVolumes" . | nindent 10 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
         {{- include "lance.storeIdentity" (list $root .Values.maintenance.daprAppId "volumes") | nindent 8 }}
         {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
+{{- if .Values.dapr.enabled }}
+{{- $worker := required "maintenance.worker is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.worker }}
+{{- $probes := required "maintenance.worker.port is required" $worker.port }}
+{{- $grace := int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds }}
+{{- $block := sub $grace (int .Values.lifecycle.teardownSeconds) }}
+{{- $budget := sub $block (int .Values.lifecycle.preStopSeconds) }}
+{{- $drain := int (required "maintenance.queue.drainSeconds is required" (required "maintenance.queue is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.queue).drainSeconds) }}
+{{- if ge $drain $budget }}
+{{- fail (printf "maintenance.queue.drainSeconds (%d) is not inside the %d s the pod's grace leaves after preStop and the teardown: a stopping replica would be killed with its pass still running" $drain $budget) }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lance.fullname" . }}-maintenance-worker
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  replicas: {{ required "maintenance.worker.replicas is required" $worker.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app.kubernetes.io/component: maintenance-worker, app.kubernetes.io/instance: {{ .Release.Name }} }
+  template:
+    metadata:
+      annotations:
+        {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $probes $block) | nindent 8 }}
+        dapr.io/enable-app-health-check: "true"
+        dapr.io/app-health-check-path: "/livez"
+        dapr.io/app-health-probe-interval: "2"
+        dapr.io/app-health-threshold: "2"
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: maintenance-worker
+        {{- include "rask.daprPodLabels" $root | nindent 8 }}
+        lance.dev/logs: otlp
+    spec:
+      terminationGracePeriodSeconds: {{ $grace }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-maintenance
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: worker
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          {{- include "lance.preStop" . | nindent 10 }}
+          args:
+            {{- if include "lance.otelEnabled" $root }}
+            - "opentelemetry-instrument"
+            {{- end }}
+            - "python"
+            - "-m"
+            - "maintenance.worker"
+          ports: [{ name: http, containerPort: {{ $probes }} }]
+          env:
+            {{- include "lance.maintenanceEnv" (list $root "worker" $drain) | nindent 12 }}
+          {{- include "lance.appProbes" . | nindent 10 }}
+          resources: {{- include "lance.resources" (dict "root" . "comp" "maintenance") | nindent 12 }}
+          {{- include "lance.maintenanceVolumes" . | nindent 10 }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.storeIdentity" (list $root .Values.maintenance.daprAppId "volumes") | nindent 8 }}
+        {{- include "lance.identityTokens" (list "volumes" "rask-catalog" (include "lance.objectStoreAudience" .)) | nindent 8 }}
+{{- end }}
 ---
 apiVersion: v1
 kind: Service

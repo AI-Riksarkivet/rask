@@ -47,7 +47,7 @@ from lakehouse.exceptions import register_handlers
 from lakehouse.governed.audit import configure_audit
 from lakehouse.middleware import RequestIDMiddleware
 from lakehouse.ns_errors import install_problem_handlers
-from lakehouse.probes import ReadyCheck, make_probes_router
+from lakehouse.probes import LiveCheck, ReadyCheck, make_probes_router
 
 
 def build_lance_service_app(
@@ -59,6 +59,7 @@ def build_lance_service_app(
     lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]],
     log: logging.Logger,
     ready_check: ReadyCheck,
+    live_check: LiveCheck | None = None,
     routers: Sequence[APIRouter] = (),
     inner_middleware: Sequence[Callable[[Any, Any], Any]] = (),
 ) -> FastAPI:
@@ -70,6 +71,9 @@ def build_lance_service_app(
     ``ready_check`` is the service's own readiness answer, run once the lifecycle flags say started and not draining.
     REQUIRED, as ``docs_enabled`` is: every lakehouse service has a dependency or a fact `/readyz` reports (the
     catalog's namespace and signing key, lineage's feed, maintenance's signing key), so a new one answers it too.
+
+    ``live_check`` is for a process whose probes are not served by the loop its work runs on (a worker serving them
+    from a thread): what `/livez` then answers, where otherwise it proves only that the serving loop turns.
 
     ``inner_middleware`` are ``http`` middleware functions that must run INSIDE the request-id layer
     (see the module docstring). Everything else the caller adds after this returns, which keeps it
@@ -101,5 +105,5 @@ def build_lance_service_app(
     app.add_middleware(RequestIDMiddleware)
     for router in routers:
         app.include_router(router)
-    app.include_router(make_probes_router(ready_check))
+    app.include_router(make_probes_router(ready_check, live_check))
     return app

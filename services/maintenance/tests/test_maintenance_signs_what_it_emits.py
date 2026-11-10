@@ -6,22 +6,24 @@ That includes a FAIL: it was authorless, which a verifier could never accept, an
 person is most likely to have to chase. The control event a trash purge announces names the service as its actor and is
 signed the same way, with no delegation: maintenance never signs for a person.
 
-A SIGNER WITHOUT ITS KEY EMITS NOTHING and reports itself not ready, and a write arrival is answered before the delivery
-is read, so it is redelivered rather than lost; its worker takes no task meanwhile (`maintenance.services.queue.Worker`,
-driven on a real broker by the queue's own lane). Every event names its table's and namespace's uuids beside the names
+A SIGNER WITHOUT ITS KEY EMITS NOTHING and reports itself not ready, and takes no task meanwhile
+(`maintenance.services.queue.Worker`, driven on a real broker by the queue's own lane). The signer is the worker's
+process: the web process, which serves the write-event lane, signs nothing and holds no key. Every event names its table's and namespace's uuids beside the names
 (ADR 0173 §10), inside what is signed. A pass and the purge emit after the work they describe, so a signature that cannot
 be made is a withheld event and never a failed pass; maintenance stages no control event, so nothing signs one later.
 
-The first two claims are driven through the real service lifespan, so the key reaches the emitters the way it does in the
-cluster: the secret store, the holder, the emitters and their author. The sidecar's secret API is answered by respx,
+The first two claims are driven through what the worker's process starts with (`maintenance.runtime`) behind the
+fleet's own probes, so the key reaches the emitters the way it does in the cluster: the secret store, the holder, the
+emitters and their author. The sidecar's secret API is answered by respx,
 its publish is a recording stand-in, and the store session is exchanged at moto's STS.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import ExitStack
+import logging
+from collections.abc import AsyncGenerator, Callable, Iterator, Sequence
+from contextlib import ExitStack, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -32,11 +34,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lakehouse.control_emit import emit_control
-from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
+from lakehouse.governed.signing_key import SigningKeyHolder, signing_ready_check
+from lakehouse.lance_app import build_lance_service_app
+from lakehouse.lifecycle import mark_started
 from lakehouse.lineage import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
 from lakehouse.lineage_events import DatasetUuids, dataset_uuids
-from maintenance.api.arrival import register_arrival_route
-from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import DaprMaintenanceEmitter
 from maintenance.services.purge import ACTOR
 
@@ -84,7 +86,8 @@ type Boot = Callable[[httpx.Response, httpx.Response], TestClient]
 
 @pytest.fixture
 def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None, moto_url: str, tmp_path: Path) -> Iterator[Boot]:
-    """Boot the real maintenance service with signing configured: `boot(seed, keys)` answers the running client.
+    """Start what the worker's process stands on, with signing configured, behind the probes it serves: `boot(seed, keys)`
+    answers the running client.
 
     Its store identity is a projected token exchanged at moto's STS, as the deployed service's is: with the secret store
     on, a service holds no key pair.
@@ -103,28 +106,44 @@ def boot(monkeypatch: pytest.MonkeyPatch, respx_allows_unused_routes: None, moto
     }
     for name, value in env.items():
         monkeypatch.setenv(name, value)
-    from maintenance import service
+    from maintenance import runtime
     from maintenance.core.config import get_settings
 
-    monkeypatch.setattr(service, "DaprClient", _Sidecar)
+    monkeypatch.setattr(runtime, "DaprClient", _Sidecar)
     _Sidecar.published = []
     get_settings.cache_clear()
+
+    @asynccontextmanager
+    async def _started(app: FastAPI) -> AsyncGenerator[None]:
+        async with runtime.standing(app, get_settings()), runtime.collaborators(app, get_settings()) as held:
+            app.state.held = held
+            mark_started(app)
+            yield
+
+    worker = build_lance_service_app(
+        title="maintenance worker",
+        docs_enabled=False,
+        audit_enabled=False,
+        lifespan=_started,
+        log=logging.getLogger(__name__),
+        ready_check=signing_ready_check(),
+    )
     with ExitStack() as stack:
 
         def _boot(seed: httpx.Response, keys: httpx.Response) -> TestClient:
             stack.enter_context(respx.mock)
             respx.get(f"{SECRETS}/signing-key-{KEY_NAME}").mock(return_value=seed)
             respx.get(f"{SECRETS}/signing-public-{KEY_NAME}").mock(return_value=keys)
-            return stack.enter_context(TestClient(service.app))
+            return stack.enter_context(TestClient(worker))
 
         yield _boot
     get_settings.cache_clear()
 
 
 def _emit(client: TestClient, kind: str) -> None:
-    """Emit through the service's own emitters, on the loop its lifespan runs on: a pass's lineage, or the purge's control event."""
-    lineage = client.app.state.lineage_emitter
-    control = client.app.state.control_emitter
+    """Emit through the worker's own emitters, on the loop they were built on: a pass's lineage, or the purge's control event."""
+    lineage = client.app.state.held.lineage
+    control = client.app.state.held.control
     portal = client.portal
     assert portal is not None, "the client was never entered, so the service's lifespan did not run"
     if kind == "purge":
@@ -189,20 +208,6 @@ def test_a_maintenance_without_its_key_emits_nothing_and_is_not_ready(boot: Boot
 
     assert _Sidecar.published == [], f"a signer without its key published {len(_Sidecar.published)} events"
     assert (readiness.status_code, sorted(readiness.json()["components"])) == (503, ["signing"])
-
-
-RETRY = {"status": "RETRY"}
-
-
-def test_a_write_arrival_is_answered_before_it_is_read_while_the_key_is_unresolved() -> None:
-    settings = MaintenanceSettings.model_validate({"MAINTENANCE_ARRIVAL_ENABLED": "true", "MAINTENANCE_S3_ACCESS_KEY_ID": "test"})
-    app = FastAPI()
-    attach_signing(app, SigningKeyHolder(identity=IDENTITY, store="lance-secrets", load_key=SigningKey.from_seed, parse_published=parse_published_keys))
-    register_arrival_route(app, settings)
-
-    answered = TestClient(app).post("/maintenance-arrival", json={"data": {"not": "an event"}})
-
-    assert (answered.status_code, answered.json()) == (200, RETRY)
 
 
 def test_an_emitter_refuses_a_key_for_an_identity_it_does_not_stamp_as_its_author() -> None:

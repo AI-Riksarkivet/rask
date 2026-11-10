@@ -17,16 +17,15 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Iterator
-from typing import Annotated
 
 import httpx
 import pytest
 import respx
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, retry_until_signed, signing_ready_check
+from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, signing_ready_check
 from lakehouse.lifecycle import mark_started
 from lakehouse.probes import make_probes_router
 
@@ -143,15 +142,13 @@ async def test_a_signer_heals_in_place_follows_a_re_minted_store_and_drops_an_un
 
 
 @pytest.mark.parametrize(
-    ("seed", "delivery", "readiness"),
+    ("seed", "readiness"),
     [
-        pytest.param(_found("seed", "SEED-a"), "SUCCESS", 200, id="a-key-its-identity-lists"),
-        pytest.param(httpx.Response(500), "RETRY", 503, id="no-key"),
+        pytest.param(_found("seed", "SEED-a"), 200, id="a-key-its-identity-lists"),
+        pytest.param(httpx.Response(500), 503, id="no-key"),
     ],
 )
-def test_a_signer_takes_deliveries_and_reports_ready_only_while_it_holds_its_key(
-    store: _Store, seed: httpx.Response | None, delivery: str, readiness: int
-) -> None:
+def test_a_signer_reports_ready_only_while_it_holds_its_key(store: _Store, seed: httpx.Response | None, readiness: int) -> None:
     holder: SigningKeyHolder[_Key] | None = None
     if seed is not None:
         store.serve(seed, _found("keys", "PUB-a"))
@@ -162,14 +159,7 @@ def test_a_signer_takes_deliveries_and_reports_ready_only_while_it_holds_its_key
     mark_started(app)
     attach_signing(app, holder)
 
-    @app.post("/delivery")
-    async def deliver(signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None) -> dict[str, str]:
-        return signing if signing is not None else {"status": "SUCCESS"}
-
-    client = TestClient(app)
-    answered, probed = client.post("/delivery"), client.get("/readyz")
-
-    assert (answered.json()["status"], probed.status_code) == (delivery, readiness)
+    assert TestClient(app).get("/readyz").status_code == readiness
 
 
 @pytest.mark.parametrize(

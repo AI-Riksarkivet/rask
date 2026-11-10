@@ -50,7 +50,7 @@ STORE_POD: Final = "Deployment/rask-openbao"
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
 _DOORS: Final = frozenset({"catalog", "lineage", "maintenance"})
-_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance"))
+_SIDECARS: Final = frozenset(f"Deployment/rask-{app}" for app in ("catalog", "lineage", "maintenance", "maintenance-worker"))
 _POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-r1", "CronJob/rask-pg-backup"})
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})

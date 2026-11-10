@@ -572,8 +572,11 @@ governing their data. The project-scoped surface is the console's project page, 
   2026-11-09 amendment): a table is passed when it changes or its time comes, never on a whole-estate clock. Its work is tasks on a NATS JetStream
   work queue (`maintenance.services.queue`): one per subject on `MAINTENANCE_TASKS` (`maintenance.task.<kind>.<uuid>`; a
   guarded publish, `Nats-Expected-Last-Subject-Sequence: 0`, refuses a second while one is queued or in flight), and its
-  times are NATS message schedules on `MAINTENANCE_SCHEDULES`. Every replica (two, RollingUpdate,
-  `chart/templates/maintenance.yaml`) runs a pull worker on the chart's durable consumers, as its own bus user
+  times are NATS message schedules on `MAINTENANCE_SCHEDULES`. The worker is a process of
+  its own (`python -m maintenance.worker`) in a Deployment of its own (`-maintenance-worker`, two replicas, RollingUpdate,
+  `chart/templates/maintenance.yaml`), under the same identity as the web pods, which serve the write-event lane and run
+  no task; its sidecar health-checks its probe port, so it outlives the drain and leaves with the worker. Every worker
+  replica runs a pull worker on the chart's durable consumers, as its own bus user
   (`maintenance-worker`) through nats-py rather than Dapr, whose JetStream subscription sends no in-progress ack and whose
   publish cannot set a schedule header (`maintenance.services.tasks`). It takes one task at a time and heartbeats it
   every `maintenance.queue.heartbeatSeconds`, so a killed replica's task goes to another after `ackWaitSeconds`; a replica

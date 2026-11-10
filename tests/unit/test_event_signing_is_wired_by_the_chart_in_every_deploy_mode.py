@@ -271,7 +271,7 @@ def _loaded_dapr_objects(docs: tuple[dict, ...]) -> dict[str, tuple[str, str]]:
     [
         pytest.param("services.lineage.deliveriesInFlight=32", {"rask-lineage"}, id="pubsub-component"),
         pytest.param("catalog.commitReconcile.schedule=@every 660s", {"rask-catalog"}, id="binding-component"),
-        pytest.param("maintenance.arrivalEnabled=false", {"rask-catalog", "rask-lineage", "rask-maintenance"}, id="resiliency"),
+        pytest.param("maintenance.arrivalEnabled=false", {"rask-catalog", "rask-lineage", "rask-maintenance", "rask-maintenance-worker"}, id="resiliency"),
     ],
 )
 def test_a_dapr_object_edit_rolls_exactly_the_pods_whose_sidecar_loads_it(probe: str, loaded_by: set[str]) -> None:

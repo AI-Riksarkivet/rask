@@ -31,7 +31,7 @@ from fastapi.concurrency import run_in_threadpool
 from lakehouse import location_claims
 from lakehouse.draining import retry_when_draining
 from lakehouse.governed.dapr_auth import require_dapr_token
-from lakehouse.governed.signing_key import published_key_fetch, retry_until_signed
+from lakehouse.governed.signing_key import published_key_fetch
 from lakehouse.lineage.door import DoorMode, DoorVerdict, judge
 from lakehouse.lineage.keys import PublishedKeys
 from lakehouse.lineage.signing import signature_of, verify_signature
@@ -163,7 +163,6 @@ def register_arrival_route(app: FastAPI, settings: MaintenanceSettings) -> DaprA
         queue: TaskQueueDep,
         _: Annotated[None, Depends(require_dapr_token)],
         drain: Annotated[dict[str, str] | None, Depends(retry_when_draining)] = None,
-        signing: Annotated[dict[str, str] | None, Depends(retry_until_signed)] = None,
     ) -> dict[str, str]:
         """``event`` is typed ``dict`` so FastAPI parses the CloudEvent body — an ``Any`` param becomes
         a query param and 422s. The Dapr app-api-token authenticates the sidecar that delivered it; the
@@ -177,8 +176,6 @@ def register_arrival_route(app: FastAPI, settings: MaintenanceSettings) -> DaprA
         """
         if drain is not None:
             return drain
-        if signing is not None:
-            return signing
         arrived = event.get("data", event)
         if lane_task(arrived) is not None:
             verdict = await _judge_arrival(arrived, event_id=event.get("id"), request=request, settings=config)

@@ -451,9 +451,15 @@ class TaskQueue:
         return answer if isinstance(answer, dict) else {}
 
     async def close(self) -> None:
-        """Drain, so the acknowledgements and publishes in flight are sent before the connection goes."""
+        """Drain, so the acknowledgements and publishes in flight are sent before the connection goes. A connection the
+        bus cannot take a drain on (it is reconnecting, or gone) is closed as it is: nothing in flight can be sent on
+        it, and an error here would hide whatever ended the block that closes it."""
         self._closing.set()
-        await self._client.drain()
+        try:
+            await self._client.drain()
+        except NatsError as exc:
+            log.warning("maintenance_queue_closed_undrained", extra={"error": f"{type(exc).__name__}: {exc}"[:300]})
+            await self._client.close()
 
 
 class Worker:
@@ -531,6 +537,8 @@ class Worker:
             self._end_process("maintenance_drain_outrun", seconds=seconds)
         for loop in unfinished:
             loop.cancel()
+        # Waited for, so nothing of a loop still runs on the connection its caller closes next.
+        await asyncio.gather(*unfinished, return_exceptions=True)
 
     async def pause(self, seconds: float) -> None:
         """Wait ``seconds``, or less if the worker is asked to stop meanwhile."""
@@ -561,7 +569,18 @@ class Worker:
             finally:
                 await _unsubscribe(subscription)
             for msg in msgs:
-                await self._safely(self._handle(msg, received), msg)
+                await self._safely(self._hand_on(msg, received) if self._hands_on(msg) else self._handle(msg, received), msg)
+
+    def _hands_on(self, msg: Msg) -> bool:
+        """Whether ``msg`` arrived as the worker stopped with a delivery to spare. On the last delivery this worker allows,
+        or the one past it, a hand-back would spend the consumer's last delivery, after which JetStream delivers the task
+        no more and keeps it on the queue, where its table takes no other: that delivery is handled as any other is."""
+        return self._stopping.is_set() and (msg.metadata.num_delivered or 1) < self._max_deliver
+
+    async def _hand_on(self, msg: Msg, received: float) -> None:
+        """Give back, undelayed, a task a pull answered as the worker stopped: started now, its pass would run under the
+        drain and end this replica when the drain did, so another replica takes it instead."""
+        await self._tell(msg, _nak(0), _Lease(until=received + self._ack_wait))
 
     async def _handle(self, msg: Msg, received: float) -> None:
         lease = _Lease(until=received + self._ack_wait)

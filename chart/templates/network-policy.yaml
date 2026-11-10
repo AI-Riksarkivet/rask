@@ -129,7 +129,7 @@ spec:
       - key: app.kubernetes.io/component
         operator: In
         values:
-          {{- range (splitList "," (include "lance.secretScopes" .) | compact) }}
+          {{- range (splitList "," (include "lance.secretReaderComponents" .) | compact) }}
           - {{ . }}
           {{- end }}
   policyTypes: [Egress]
@@ -199,10 +199,10 @@ spec:
         - podSelector: {}
 {{- if .Values.openbao.enabled }}
 ---
-# (3b) openbao:8200, the development store (the openbao fixture's pod): only the pods whose sidecar reads it, the apps
-# the lance-secrets component is scoped to (`lance.secretScopes`, which takes in the state-store-scoped apps: their
-# daprd resolves the state store's connectionString through it at boot, so blocking them wedges the sidecar on component
-# init), and the store's own pods, whose seed reads the outgoing pod through the Service. External-secrets
+# (3b) openbao:8200, the development store (the openbao fixture's pod): only the pods whose sidecar reads it, by their
+# component labels (`lance.secretReaderComponents`: the apps the lance-secrets component is scoped to, and maintenance's
+# worker pods, which run under maintenance's app id with a label of their own), and the store's own pods, whose seed
+# reads the outgoing pod through the Service. External-secrets
 # (off-namespace) needs an entry in networkPolicy.openbaoExtraFrom.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -220,7 +220,7 @@ spec:
               - key: app.kubernetes.io/component
                 operator: In
                 values:
-                  {{- range (append (splitList "," (include "lance.secretScopes" .) | compact) "openbao" | uniq) }}
+                  {{- range (append (splitList "," (include "lance.secretReaderComponents" .) | compact) "openbao" | uniq) }}
                   - {{ . }}
                   {{- end }}
         {{- with .Values.networkPolicy.openbaoExtraFrom }}
@@ -321,6 +321,7 @@ spec:
                   - catalog
                   - lineage
                   - maintenance
+                  - maintenance-worker
                   - object-store-backup
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
                   - backup-control-root # the control-root backup copies the registries to _backups/control/

@@ -3,17 +3,19 @@
 Rationale for `chart/templates/network-policy.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `{{- range (append (splitList "," (include "lance.secretScopes" .)) "openbao" | uniq) }}`
+## `{{- range (append (splitList "," (include "lance.secretReaderComponents" .) | compact) "openbao" | uniq) }}`
 
-The dev store's readers are the secret-store component's scope itself, `lance.secretScopes` (app-id ==
-component label for these pods), so this list and the scope of `lance-secrets` (dapr-component.yaml) cannot
-drift, and the store's own pods, because the seed reads the signing pairs and the bus root from the outgoing
-pod through the Service (openbao-seed.yaml).
+The dev store's readers are the pods whose sidecar reads it, named by their component labels:
+`lance.secretReaderComponents`, which is the secret-store component's scope (`lance.secretScopes`, where an app's id is
+its pods' component label) and maintenance's worker pods, which run under maintenance's app id and carry the label
+`maintenance-worker`. Derived from the scope, so this list and the scope of `lance-secrets` (dapr-component.yaml)
+cannot drift. The store's own pods are admitted too, because the seed reads the signing pairs and the bus root from the
+outgoing pod through the Service (openbao-seed.yaml).
 
 ## `{{- if not .Values.openbao.enabled }}`
 
 THE PLATFORM'S STORE, REACHED ONLY BY ITS READERS ([[XC-149]]). It lives outside the namespace, so the lock
-is egress: the pods whose sidecar reads it, the same `lance.secretScopes` as the dev store's ingress lock,
+is egress: the pods whose sidecar reads it, the same `lance.secretReaderComponents` as the dev store's ingress lock,
 reach the addresses the platform states in `openbao.egress`, and no other pod does. Like the API server, the
 store is reached at addresses no URL derives, and the render refuses the rule empty under
 `networkPolicy.enabled`.

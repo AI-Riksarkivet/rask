@@ -3,48 +3,53 @@
 Rationale for `chart/templates/maintenance.yaml`. It lives here because Helm stores the chart's templates in
 every release revision, under a 1 MiB ceiling. Each section is headed by the template line it explains.
 
-## `apiVersion: apps/v1`
+## `{{- define "lance.maintenanceEnv" -}}`
 
-Table maintenance service — runs uvicorn maintenance.service:app (shares the catalog image).
+One environment for maintenance's two Deployments, which are one service under one identity (ServiceAccount, Dapr app
+id, store and bus credentials): the web pods and the worker pods read the same settings and differ in three values. The
+write-event lane is on for the web pods alone (`MAINTENANCE_ARRIVAL_ENABLED`, and with it the door's signer lists), and
+the worker's drain and probe port (`MAINTENANCE_DRAIN_SECONDS`, `MAINTENANCE_WORKER_PORT`) are the worker pods' alone.
 
-## `strategy:`
+## `name: {{ include "lance.fullname" . }}-maintenance`
 
-RECREATE, NOT ROLLINGUPDATE, and the one replica above is why. `bindings.cron` is stateless and
-uncoordinated — each replica runs the schedule independently — and this service holds no lease, so
-the pin IS the duplicate-tick guarantee. A rolling update spends it: Kubernetes rounds `maxSurge`
-UP, so the default 25% of one replica is one surge pod, and for the length of every rollout there
-are TWO maintenance pods each able to fire the sweep. Steady state was correct and the transition
-was not, which is why `replicas: 1` alone never proved the invariant.
+The web pods: `uvicorn maintenance.service:app`, serving the write-event lane (`/maintenance-arrival`) and running no
+task. They hold the queue's connection only to publish the passes that lane queues. Their grace, preStop, sidecar block
+and uvicorn bound are the fleet's (`lifecycle.terminationGracePeriodSeconds`, `rask.shutdownArg`): nothing here drains
+longer than a request.
 
-The cost is deliberate and small: a gap between the old pod stopping and the new one becoming
-ready, on a service whose work is an hourly cron with no request path to interrupt.
+## `name: {{ include "lance.fullname" . }}-maintenance-worker`
 
-## `terminationGracePeriodSeconds: {{ .Values.lifecycle.maintenanceTerminationGracePeriodSeconds }}`
+The worker pods: `python -m maintenance.worker`, a process of its own and not a web app's lifespan, one worker per
+replica on the shared work queue (ADR 0198). A pass that hangs ends its own replica and never the write-event lane's,
+and the two Deployments scale apart (`maintenance.worker.replicas`). Rendered only with Dapr on: the worker reads its
+bus credential and its signing key through the sidecar. RollingUpdate with no pod unavailable: the queue holds one task
+per table and hands it to one worker at a time, so a surge pod shares the work and repeats none.
 
-Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.
+## `terminationGracePeriodSeconds: {{ $grace }}`
 
-## `{{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds)...`
+`lifecycle.maintenanceTerminationGracePeriodSeconds`, longer than the fleet's: a stopping worker lets the pass it is
+running finish for `maintenance.queue.drainSeconds` rather than leave it to be delivered again. The render refuses a
+drain the grace cannot hold after preStop and the teardown, since a replica killed mid-pass is what the drain exists to
+avoid. Held by `tests/unit/test_invariants.py::test_a_queue_value_the_worker_cannot_run_with_fails_the_render`.
 
-The sidecar must outlive the app's drain (`_helpers.tpl.md`), and this pod's drain is long: after preStop and uvicorn's
-wait the worker lets its running pass finish for `maintenance.queue.drainSeconds`, and a pass publishes through the
-sidecar until it ends. So this pod's sidecar blocks its shutdown for the grace less the teardown, which covers preStop,
-uvicorn's bound and the whole drain, where the fleet's 20 s would stop it about 15 s into a 90 s drain. Held by
-`tests/unit/test_sidecar_drain_budget.py`.
+## `dapr.io/enable-app-health-check: "true"`
 
-## `{{- include "rask.shutdownArg" (list . (sub (int .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) $drain)) | nindent 12 }}`
-
-The worker's drain (`maintenance.queue.drainSeconds`) runs in the lifespan's teardown, after uvicorn has stopped waiting
-for its requests, so uvicorn's graceful bound here is the pod's grace less preStop, the teardown and that drain: preStop,
-a slow request, a full drain and the teardown then sum to the grace, and the kubelet never kills a replica mid-drain. The
-render refuses a drain that leaves uvicorn no time at all. Held by
-`tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py`.
+A pass publishes through the sidecar until it ends, so this pod's sidecar blocks its shutdown for the grace less the
+teardown, which holds preStop and the whole drain. A blocking sidecar leaves early only when its app turns unhealthy,
+and it learns that from a health check: with none it holds the pod in Terminating for the whole block however soon the
+worker is done. Measured on daprd 1.19.0-rc.4 (2026-11-10): block 40 s and the app gone after 5 s, the sidecar left at
+40.0 s with no check and at 7.9 s with one (interval 2 s, threshold 2); with the app still up it held the whole block.
+On the estate a worker pod under the block alone stayed Terminating 113 s on every rollout (helm revision 33). So the
+sidecar probes the worker's `/livez` on `maintenance.worker.port`, which the worker serves from a thread that keeps
+answering through the drain. A health check also starts and stops a sidecar's subscriptions with the app's health, so
+only this pod has one: it subscribes to nothing. Held by `tests/unit/test_sidecar_drain_budget.py`.
 
 ## `- { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.enabled | quote }} }`
 
 Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —
 symmetric with the lineage service (the audit's consistency fix).
 
-## `{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 12 }}`
+## `{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 0 }}`
 
 Gated on the sidecar because that is what it VERIFIES — the token exists to check the
 `dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
@@ -78,14 +83,15 @@ hasKey+ternary for the reason recorded at the catalog's copy: `| default` makes 
 explicit false un-settable, and a bare reference renders "" on a `--reuse-values`
 upgrade, which is a bool_parsing crash at boot.
 
-## `- { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ .Values.maintenance.arrivalEnabled | quote }} }`
+## `- { name: MAINTENANCE_ARRIVAL_ENABLED, value: {{ $arrival | quote }} }`
 
-The write-event lane: a write refreshes that table's due record between sweep ticks (ADR 0162).
-Rendered on and off, so the service reads the chart's decision rather than its own default. Its
-dead-letter topic and the signature door settings (`lance.doorEnv`, the `/maintenance-arrival`
-door) render only with the lane on, because only then is the route registered.
+The write-event lane: a commit's announcement holds its table's pass a delay out (ADR 0198). It is the web pods'
+alone: `$arrival` is `maintenance.arrivalEnabled` for them and false for the worker pods, which serve no route.
+Rendered on and off, so each process reads the chart's decision rather than its own default. Its dead-letter topic
+and the signature door settings (`lance.doorEnv`, the `/maintenance-arrival` door) render only with the lane on,
+because only then is the route registered.
 
-## `- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $ .Values.maintenance.daprA...`
+## `- { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.maintenance.daprAppId) | quote }} }`
 
 The PER-SUBSCRIBER component, not the shared broadcast one. `queueGroupName` lives on the
 COMPONENT, so subscribing through `pubsub.name` gives every replica every event instead of
@@ -173,7 +179,7 @@ from `kubectl describe`, and this one gates whether the purge can certify at all
 The purge announces each reclamation on the catalog's control topic, through maintenance's own
 component (dapr-component.yaml): one the sidecar is not scoped to refuses the publish SILENTLY.
 
-## `{{- include "lance.objectStoreSessionEnv" (list $root "MAINTENANCE" "maintenance") | nindent 12 }}`
+## `{{- include "lance.objectStoreSessionEnv" (list $root "MAINTENANCE" "maintenance") | nindent 0 }}`
 
 MAINTENANCE'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-084]], ADR 0170). The pod projects a token for
 `objectStore.identity.audience` beside its `rask-catalog` one (the `lance.identityTokens` mount below), and maintenance
@@ -227,7 +233,7 @@ estate made for GreptimeDB's object store, sat in that list.
 Sourced from `lance.maintenancePlatformBuckets`: `objectStore.buckets` (the set the
 provisioning hook, `object-store-provisioning.yaml`, creates on the dev store) plus the multibase bases.
 
-## `- { name: MAINTENANCE_RECONCILE_BINDING_NAME, value: {{ .Values.maintenance.reconcileBindingName | quote }} }`
+## `- { name: MAINTENANCE_WAREHOUSES_ENABLED, value: {{ .Values.catalog.warehouses.enabled | default false | quote }} }`
 
 The drift reconciler's inputs. It only READS: the catalog's grant census says who
 (`GET /management/v1/grants/census`, which leaves out the objects the deployment keeps for itself), the control-root

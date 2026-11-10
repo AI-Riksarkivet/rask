@@ -974,10 +974,17 @@ ServiceAccount, so the login would no longer be daprd's alone.
 The app-ids `lance-secrets` admits: every app with a read in `lance.storeReads`. It has several readers that must
 not drift: the Component's `scopes:` is what daprd enforces, `lance.appTokenEnv` below decides a pod's credential
 path from the same membership, the per-app Configuration and the store token's volume follow it, and the
-NetworkPolicy admits exactly these pods to the store. A pod told to read the store while its app-id is absent from
+NetworkPolicy admits exactly these apps' pods to the store (`lance.secretReaderComponents`). A pod told to read the store while its app-id is absent from
 `scopes:` gets ERR_SECRET_STORES_NOT_CONFIGURED and fails closed at boot.
 
 Usage: {{ splitList "," (include "lance.secretScopes" .) }}
+
+## `{{- define "lance.secretReaderComponents" -}}`
+
+The component labels of the pods whose sidecar reads the store, for the NetworkPolicies that admit them: the scope
+above, where an app's id is its pods' component label, and `maintenance-worker`, the label of maintenance's worker pods,
+which run under maintenance's app id (ADR 0198's amendment of 2026-11-10) and so appear in no scope of their own. A
+policy that ranged the scope alone would lock the worker's sidecar out of the store, and its start would fail closed.
 
 ## `{{- define "lance.appTokenEnv" -}}`
 

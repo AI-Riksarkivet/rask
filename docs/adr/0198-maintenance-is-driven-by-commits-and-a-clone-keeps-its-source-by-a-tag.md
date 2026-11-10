@@ -204,6 +204,44 @@ Two fresh reviewers read the change before it was committed. What they found is 
 - **The bucket's owner is read off the control root and the project's policy off the policy root.** Both were read from
   the policy root, so a deployment keeping them apart lost every project-level hold.
 
+## Amendment, 2026-11-10: the worker runs in pods of its own ([[LH-494]], the second change)
+
+The owner's decision of 2026-11-09 (the queue worker leaves the web app's lifespan for a Deployment of its own from the
+same image; the web Deployment keeps the write-event lane), as built:
+
+- **One service, two Deployments, one identity.** The worker pods keep the ServiceAccount, the Dapr app id and the store
+  and bus credentials the single pod had, so nothing gains access it lacked, and no second Dapr identity is built ahead
+  of the move off Dapr (ADR 0199). Lakekeeper runs its API pods and its worker pods from one binary under one identity
+  (`docs/docs/table-maintenance.md`, `configuration.md` at `e9b202d`). A sidecar subscribes only to what its app
+  declares, and the worker declares nothing, so the write-event lane's deliveries reach the web pods alone.
+- **The worker is a process (`python -m maintenance.worker`), owned by its `main` and not by a lifespan.** It serves no
+  API, only `/livez` and `/readyz`, from a thread: uvicorn on the main thread takes SIGTERM for itself and would stop
+  answering as the drain begins.
+- **The sidecar outlives the drain and leaves with the worker.** daprd ends its shutdown block early only when its app
+  turns unhealthy (`pkg/runtime/runtime.go:541-566` at v1.19.0-rc.4), which it learns from a health check; measured on
+  that binary, 3 s after the app with the check and the whole block without. Under the block alone a maintenance pod
+  stayed Terminating 113 s on every rollout (helm revision 33). The check is on the worker pod only, since it also gates
+  a sidecar's subscriptions.
+- The web pods take the fleet's grace and uvicorn bound again: nothing in them drains longer than a request.
+- **Each process starts only what it uses.** The worker holds the signing key, the sidecar client and the two
+  emitters; the web process holds none of them, asserts the app token its delivered route needs, and connects the queue
+  only while the write-event lane is served. The lane no longer waits on a signing key: the process that serves it
+  signs nothing.
+- **The worker's liveness is its own loop's.** Served from another thread, `/livez` would prove only that the probes'
+  loop turns, so the worker's loop marks a beat each second and `/livez` fails once the last is 30 s old. A worker asked
+  to stop while it is still starting stops there (its first bus connection is retried without end), and one that has
+  not started within 240 s ends, to be started again. A task a pull answers as the worker stops is handed back at once
+  rather than started under the drain, while it has a delivery to spare; on its last it is handled where it arrived, since
+  a hand-back there would spend the consumer's last delivery and leave the task on the queue for good.
+- **The two Deployments share one Dapr app id and one ServiceAccount until the move off Dapr** (owner, 2026-11-10, after
+  the cost was laid out). Stated costs: Dapr's operator keeps one `<app id>-dapr` Service per app id and rewrites its
+  selector and owner from whichever Deployment it reconciled last (`pkg/operator/handlers/dapr_handler.go:204-250` at
+  v1.19.0-rc.4), so `maintenance-dapr` changes hands at rollouts, and nothing in the estate reads it; and the secret
+  store scopes a sidecar's reads by app id and binds the role to the ServiceAccount, so each kind of pod can read what
+  the other reads. A separate ServiceAccount, store policy, bus user and store role per pod kind belongs to the row that
+  rebuilds those identities (XC-199), since the bus user table is keyed by app id and `maintenance-worker` is already
+  the worker's own user there.
+
 Not fixed here, and stated: the hourly audit and each pass's listing still grow with the estate and the table, and a
 pass's read of its bucket's `__manifest` is one filtered scan whose bytes grow with the bucket's rows; store
 events in production rest on an attestation nothing checks; the queue has no operator-visible task history, dead letter

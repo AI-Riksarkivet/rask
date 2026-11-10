@@ -1,55 +1,33 @@
-"""Table maintenance service — a FastAPI app whose worker runs the tasks on a NATS JetStream work queue (ADR 0198).
+"""Table maintenance's web process: a FastAPI app serving the write-event lane (ADR 0198).
 
-Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4 and C6, ADR 0162). Every replica runs a worker
-(:mod:`maintenance.services.tasks`) that takes one task at a time off the queue, so no table is passed twice at once:
-
-* a **table's pass** expires its superseded versions (``cleanup_old_versions`` behind the refusal ladder that guards
-  reclamation), writes its due record when a bring-your-own job should compact or reindex it, and schedules its next
-  pass; the catalog queues one when it makes a table, a commit when it lands, and the schedule when it comes due;
-* a **trash record's release** at its deadline;
-* the **audit**, once an hour on one replica: it reads OpenFGA's grant census (through the catalog), the control-root
-  registries and object storage, REPORTS where they disagree, and queues each table and trash record nothing holds;
-* the **scan**, once a day: the audit with the orphan scan, which opens every table, then, ONLY if that report ran
-  clean, the purge of expired trash records (#79), off by default.
-
-With ``MAINTENANCE_ARRIVAL_ENABLED``, ``/maintenance-arrival`` queues a written table's pass. Blocking Lance/S3 IO runs
-in the threadpool so the event loop stays free. Run: ``uvicorn maintenance.service:app``.
+Maintenance decides and does not rewrite (ADR 0155, ADR 0156 C4 and C6, ADR 0162). Its work is tasks on a NATS JetStream
+work queue, run by the worker, a process of its own in pods of its own (:mod:`maintenance.worker`). This process runs no
+task. With ``MAINTENANCE_ARRIVAL_ENABLED`` it serves ``/maintenance-arrival``, which queues a written table's pass, and
+holds the queue's connection for those publishes alone. Run: ``uvicorn maintenance.service:app``.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager, suppress
+from contextlib import AbstractAsyncContextManager, asynccontextmanager, nullcontext
 
-from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 
-from lakehouse.bus_watchdog import start_bus_watchdog
-from lakehouse.control_emit import ControlSign, make_control_emitter
 from lakehouse.draining import arm_drain_on_sigterm
 from lakehouse.governed.dapr_auth import assert_app_token_configured
-from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, signing_ready_check
 from lakehouse.lance_app import build_lance_service_app
-from lakehouse.lance_metrics import instrument_lance_if_available
-from lakehouse.lineage import SigningKey, attach_control_signature, parse_published_keys
 from lakehouse.obs import configure_app_logging
-from lakehouse.store_session import require_env_pair, start_store_session
+from lakehouse.schemas.health import Readiness, ReadinessStatus
 from maintenance.api.arrival import register_arrival_route
-from maintenance.core.config import get_settings
-from maintenance.core.lineage_emit import make_emitter
-from maintenance.services.tasks import running_worker
+from maintenance.core.config import MaintenanceSettings, get_settings
+from maintenance.runtime import standing
+from maintenance.services.queue import TaskQueue
+from maintenance.services.tasks import connected_queue
 
 
 configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
-
 log = logging.getLogger(__name__)
-
-
-def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
-    """The purge's control events, signed as this service with no delegation: maintenance authenticates nobody, so the
-    actor it stamps is itself (`purge.ACTOR`) and it never signs for a person."""
-    return lambda envelope: attach_control_signature(envelope, key=holder.key(), identity=holder.identity)
 
 
 @asynccontextmanager
@@ -59,98 +37,31 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     # ARMED ON THE SIGNAL, not on lifespan unwind: the `finally` below runs after uvicorn has stopped serving, so
     # `retry_when_draining` on the arrival route could never refuse a delivery.
     _disarm_drain = arm_drain_on_sigterm(app)
-    settings = get_settings()
-    instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
-    # Fail closed if behind a Dapr sidecar but the app-token is unset — the write-event route would otherwise be an
-    # open forged-commit path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
-    assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
-    # MAINTENANCE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its identity at the store is the ServiceAccount token its pod
-    # projects for the store's audience, exchanged here for a session before the first sweep, failing the boot closed if
-    # none is issued, then exchanged again once half the session's life is used. Its own reads and records sign with that
-    # session; every rewrite signs with its table's vend. With no token (the offline and Dagger lanes) the environment's
-    # pair signs, and is refused here when either half is missing.
-    store_session = await start_store_session(settings.web_identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds)
-    if store_session is None:
-        require_env_pair(settings.env_pair, prefix="MAINTENANCE")
-    app.state.store_session = store_session
-    # ONE sidecar client for both emitters — lineage (data) and control (governance). Built when either is on; the
-    # sidecar is local, so construction is cheap and needs no broker reachability at boot.
-    dapr_client = DaprClient() if (settings.lineage_emit_enabled or settings.control_emit_enabled) else None
-    # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), or None for a stack with no store or no identity. It is also the author every event stamps, which the emitter checks
-    # at construction: a verifier refuses a signer that is not its event's author.
-    signing = make_signing_holder(
-        secrets_from_dapr=settings.secrets_from_dapr,
-        identity=settings.signing_identity,
-        store=settings.dapr_secret_store,
-        load_key=SigningKey.from_seed,
-        parse_published=parse_published_keys,
-    )
-    attach_signing(app, signing)
-    app.state.lineage_emitter = make_emitter(
-        enabled=settings.lineage_emit_enabled,
-        dapr=dapr_client,
-        pubsub=settings.lineage_pubsub,
-        topic=settings.lineage_topic,
-        job_namespace=settings.lineage_job_namespace,
-        dataset_namespace=settings.lineage_dataset_namespace,
-        timeout_seconds=settings.publish_timeout_seconds,
-        outbox_uri=settings.lineage_outbox_uri,
-        storage_options=settings.storage_options,
-        # The SAME identity this service presents at the catalog's service door, so the graph and the
-        # catalog cannot disagree about who maintained a dataset. A signer must sign as it: the emitter refuses to
-        # be built with a key for any other identity.
-        author=settings.catalog_service_identity,
-        signing=signing,
-    )
-    # #79: the expired-trash purge announces each reclamation on the catalog's control topic. A no-op
-    # when off — never a half-configured transport that looks like it publishes.
-    app.state.control_emitter = make_control_emitter(
-        enabled=settings.control_emit_enabled,
-        dapr=dapr_client,
-        pubsub=settings.control_pubsub,
-        timeout_seconds=settings.publish_timeout_seconds,
-        service="maintenance",
-        # SIGNED AS THIS SERVICE ([[XC-078]]) with the holder its lineage signs with; None for a stack with no store or
-        # no identity. Nothing stages a control event here, so one the purge emits while the key is unresolved is
-        # withheld and counted, never published unsigned.
-        sign=_control_sign(signing) if signing is not None else None,
-    )
-    # Maintenance holds no OpenFGA credential, since one could write any tuple ([[XC-084]]): its drift report reads the
-    # grant census through the catalog, and the catalog makes every grant change the reconcile tick asks for.
-    app.state.dapr_client = dapr_client
-    # RESOLVED LAST, so the probes and the retry answers are served from the moment the app boots whether or not the
-    # key resolved: a service that is waiting for its key takes no delivery (`retry_until_signed` on its routes),
-    # reports itself not ready, and heals in place when the key is published.
-    if signing is not None:
-        await signing.start()
-    # Restarts this pod's sidecar once one of its bus connections has closed for good, as daprd's do after a long bus
-    # outage (`lakehouse.bus_watchdog`); None where the chart names this pod no bus.
-    bus_watchdog = await start_bus_watchdog()
-    # The worker is the service's whole job: it starts once the emitters and the signing key it uses exist, and takes no
-    # task while that key is unresolved, since what a pass emits could not be signed.
-    # The worker drains inside its own context, after the probes report the pod as stopping and before what it uses
-    # stops; a worker that cannot start leaves those stopped all the same.
     try:
-        async with running_worker(
-            settings, ready=lambda: signing is None or signing.ready, emitter=app.state.lineage_emitter, control=app.state.control_emitter
-        ) as task_queue:
+        settings = get_settings()
+        # Fail closed if behind a Dapr sidecar but the app-token is unset: the write-event route would otherwise be an
+        # open forged-commit path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
+        assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
+        async with standing(app, settings), _lanes_queue(settings) as task_queue:
             app.state.task_queue = task_queue
             app.state.startup_complete = True
             try:
                 yield
             finally:
-                _disarm_drain()
                 app.state.shutting_down = True
     finally:
-        if bus_watchdog is not None:
-            await bus_watchdog.stop()
-        if signing is not None:
-            await signing.stop()
-        if store_session is not None:
-            await store_session.stop()
-        if dapr_client is not None:
-            with suppress(Exception):
-                await dapr_client.close()
+        _disarm_drain()
+
+
+def _lanes_queue(settings: MaintenanceSettings) -> AbstractAsyncContextManager[TaskQueue | None]:
+    """The queue's connection, held only while the write-event lane is served: nothing else here publishes to it, and a
+    process that serves no lane reads no bus credential."""
+    return connected_queue(settings) if settings.arrival_enabled and settings.lineage_topic else nullcontext()
+
+
+async def _ready(_request: object) -> Readiness:
+    """Nothing of this process's own to report: it signs nothing, and its lane's door reads its keys per delivery."""
+    return Readiness(status=ReadinessStatus.ready)
 
 
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12). Logging before the app exists, the docs
@@ -162,7 +73,7 @@ app = build_lance_service_app(
     audit_enabled=get_settings().audit_enabled,
     lifespan=lifespan,
     log=log,
-    ready_check=signing_ready_check(),
+    ready_check=_ready,
 )
 
 # The write-event subscription (POST /maintenance-arrival), registered only when the lane is enabled.

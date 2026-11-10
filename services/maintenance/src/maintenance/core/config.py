@@ -121,6 +121,9 @@ class MaintenanceSettings(SignatureDoorSettings, StoreIdentitySettings, BaseSett
     #: `terminationGracePeriodSeconds`; a task cut short goes to another replica once its heartbeat stops. A pass still
     #: running when the drain ends ends its replica (`Worker.drain`), since its heartbeat ends with the drain.
     drain_seconds: float = Field(default=50.0, gt=0, alias="MAINTENANCE_DRAIN_SECONDS")
+    #: The port the worker's process serves its probes on (:mod:`maintenance.worker`), for the kubelet and for its
+    #: sidecar's health check, which is what lets the sidecar leave when the worker does.
+    worker_port: int = Field(default=8001, ge=1, le=65535, alias="MAINTENANCE_WORKER_PORT")
     #: The audit's schedule, a NATS message schedule (ADR-51): the drift report without the orphan scan, its repairs, the
     #: release and the lost-task backstop run once per firing on one replica, whatever the replica count.
     audit_schedule: str = Field(default="@hourly", alias="MAINTENANCE_AUDIT_SCHEDULE")

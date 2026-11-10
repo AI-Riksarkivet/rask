@@ -42,12 +42,11 @@ def catalog_and_maintenance(
     monkeypatch: pytest.MonkeyPatch,
     *,
     env: dict[str, str],
-    control: Any = None,  # noqa: ANN401 — the maintenance app's ControlEmitter, as the test captures it
     catalog_control: Any = None,  # noqa: ANN401 — the catalog app's ControlEmitter, as the test captures it
 ) -> Generator[TwoServices]:
     """Both apps over a fresh control bucket, with ``env`` over the shared settings and project-less.
 
-    ``control`` and ``catalog_control`` replace the two apps' control emitters. Maintenance holds no OpenFGA client: it
+    ``catalog_control`` replaces the catalog's control emitter. Maintenance holds no OpenFGA client: it
     asks the catalog's doors, which a test routes to this catalog (`maintenance_vend_doors.catalog_doors`).
     """
     bucket = f"two-{uuid.uuid4().hex[:10]}"
@@ -99,8 +98,6 @@ def catalog_and_maintenance(
             act_as(catalog, "alice")
             monkeypatch.setattr(catalog_app.state, "fga", store)
             monkeypatch.setattr(catalog_app.state, "lineage_emitter", lineage, raising=False)
-            if control is not None:
-                monkeypatch.setattr(maintenance_app.state, "control_emitter", control, raising=False)
             if catalog_control is not None:
                 monkeypatch.setattr(catalog_app.state, "control_emitter", catalog_control, raising=False)
             yield TwoServices(catalog, maintenance, store, s3)
