@@ -284,16 +284,21 @@ def test_a_values_file_naming_what_the_chart_does_not_declare_fails_the_render(t
 
 
 def _render_refusal(*flags: str) -> str | None:
-    """The message the render refuses ``flags`` with, a template's own or the values schema's, or ``None`` when it renders."""
+    """What the render refuses ``flags`` with, or ``None`` when it renders: a template's own message, or, for a value the
+    values schema refuses, ``schema refuses <dotted path>``. The schema's sentence is helm's and differs between helm
+    releases (measured: 3.16.4 writes ``- a.b: Must be greater than or equal to 60``, 3.22.0 ``- at '/a/b': minimum: got
+    10, want 60``), so only the value it names is read."""
     try:
         chart_render.render_text(*flags)
     except subprocess.CalledProcessError as refused:
-        found = re.search(r"execution error at \([^)]*\): (.+)", refused.stderr) or re.search(r"- (at '[^']+': .+)", refused.stderr)
-        return found.group(1).strip() if found else refused.stderr
+        if (template := re.search(r"execution error at \([^)]*\): (.+)", refused.stderr)) is not None:
+            return template.group(1).strip()
+        if (pointer := re.search(r"^- at '/([^']+)': ", refused.stderr, re.MULTILINE)) is not None:
+            return f"schema refuses {pointer.group(1).replace('/', '.')}"
+        if (dotted := re.search(r"^- ([A-Za-z0-9_.]+): ", refused.stderr, re.MULTILINE)) is not None:
+            return f"schema refuses {dotted.group(1)}"
+        return refused.stderr
     return None
-
-
-_SCHEDULE = "^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$"
 
 
 @pytest.mark.parametrize(
@@ -313,16 +318,11 @@ _SCHEDULE = "^(@(hourly|daily|weekly|monthly|yearly)|[^ ]+( [^ ]+){5})$"
             "would be killed with its pass still running",
             id="a-drain-the-grace-cannot-hold",
         ),
-        pytest.param("maxPassSeconds=10", "at '/maintenance/queue/maxPassSeconds': minimum: got 10, want 60", id="a-pass-bound-the-worker-refuses"),
-        pytest.param("ackWaitSeconds=2", "at '/maintenance/queue/ackWaitSeconds': minimum: got 2, want 3", id="an-ack-wait-no-heartbeat-fits-in"),
-        pytest.param(
-            "auditSchedule=@every 30m",
-            f"at '/maintenance/queue/auditSchedule': '@every 30m' does not match pattern '{_SCHEDULE}'",
-            id="an-interval-each-reassertion-would-restart",
-        ),
-        pytest.param(
-            "auditSchedule=bogus", f"at '/maintenance/queue/auditSchedule': 'bogus' does not match pattern '{_SCHEDULE}'", id="a-schedule-nats-refuses"
-        ),
+        pytest.param("maxPassSeconds=10", "schema refuses maintenance.queue.maxPassSeconds", id="a-pass-bound-the-worker-refuses"),
+        pytest.param("maxPassSeconds=60", None, id="a-pass-bound-the-worker-takes"),
+        pytest.param("ackWaitSeconds=2", "schema refuses maintenance.queue.ackWaitSeconds", id="an-ack-wait-no-heartbeat-fits-in"),
+        pytest.param("auditSchedule=@every 30m", "schema refuses maintenance.queue.auditSchedule", id="an-interval-each-reassertion-would-restart"),
+        pytest.param("auditSchedule=bogus", "schema refuses maintenance.queue.auditSchedule", id="a-schedule-nats-refuses"),
     ],
 )
 def test_a_queue_value_the_worker_cannot_run_with_fails_the_render(value: str, refusal: str | None) -> None:
