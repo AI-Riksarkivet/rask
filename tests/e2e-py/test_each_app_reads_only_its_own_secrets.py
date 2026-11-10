@@ -58,15 +58,18 @@ def _run(*args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, input=stdin, capture_output=True, text=True, check=False, timeout=chaos.SETTLE_SECONDS)  # noqa: S603 — a fixed tool, argv built here
 
 
-def _sidecars() -> dict[str, str]:
-    """app -> the Deployment that runs its sidecar, for each app the `lance-secrets` component is scoped to that the release
-    runs a pod of. A Deployment that asks for a pod and has none running stays, and fails the ask."""
+def _sidecars() -> dict[str, dict[str, str]]:
+    """app -> each Deployment that runs its sidecar and that Deployment's own container, for each app the `lance-secrets`
+    component is scoped to that the release runs a pod of. One app may run in several Deployments (maintenance's web pods
+    and its worker pods share one app id), and every one of them is asked. A Deployment that asks for a pod and has none
+    running stays, and fails the ask."""
     scopes = set(json.loads(chaos.kubectl("get", "components.dapr.io", "lance-secrets", "-o", "json")).get("scopes") or [])
-    running: dict[str, str] = {}
+    running: dict[str, dict[str, str]] = {}
     for deployment in json.loads(chaos.kubectl("get", "deployments", "-o", "json"))["items"]:
-        app = ((deployment["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
+        template = deployment["spec"]["template"]
+        app = ((template.get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
         if isinstance(app, str) and app in scopes and deployment["spec"].get("replicas", 1):
-            running[app] = deployment["metadata"]["name"]
+            running.setdefault(app, {})[deployment["metadata"]["name"]] = template["spec"]["containers"][0]["name"]
     return running
 
 
@@ -103,16 +106,16 @@ def test_each_sidecar_serves_its_app_only_its_own_secrets() -> None:
     assert sidecars, "the release runs no app the store is scoped to"
     assert sidecars.keys() <= SIDECAR_READS.keys(), f"the store is scoped to {sorted(sidecars.keys() - SIDECAR_READS.keys())}, which this test does not ask"
     found: dict[str, object] = {}
-    for app, deployment in sorted(sidecars.items()):
+    for app, deployment, container in sorted((app, name, container) for app, held in sidecars.items() for name, container in held.items()):
         own, field, foreign = SIDECAR_READS[app]
-        done = _run("exec", f"deployment/{deployment}", "-c", app, "--", "python", "-c", _ASK_THE_SIDECAR, own, foreign)
-        assert done.returncode == 0, f"{app}'s pod could not ask its sidecar: {done.stderr.strip()[-300:]}"
+        done = _run("exec", f"deployment/{deployment}", "-c", container, "--", "python", "-c", _ASK_THE_SIDECAR, own, foreign)
+        assert done.returncode == 0, f"{deployment}'s pod could not ask its sidecar: {done.stderr.strip()[-300:]}"
         answers = json.loads(done.stdout)
         status, fields = answers[own]
         if status != 200 or field not in fields:
-            found[f"{app} reading its own {own}"] = answers[own]
+            found[f"{deployment} reading its app's own {own}"] = answers[own]
         if answers[foreign][0] != 403:
-            found[f"{app} reading {foreign}"] = answers[foreign][0]
+            found[f"{deployment} reading {foreign}"] = answers[foreign][0]
     assert not found, f"a sidecar served a secret its app does not own, or refused one it does: {found}"
 
 
